@@ -419,6 +419,13 @@ While recovery is held, `configuration.inspect` may observe the exact existing
 worker and publish its actual loaded plan, even when it differs from the saved
 request. This read never starts a worker, changes settings or settles the operation;
 Stop or replacement of the observed worker prevents stale publication.
+An idle operation-bound error can also retain passive settings-freshness markers
+after its worker is gone. Once the host proves no worker, preparation, unsettled
+configuration task, refresh or runtime activity remains, it retires only that
+obsolete mount freshness. The operation's busy/input fence, original request,
+native evidence and unknown or saved-but-unverified outcome remain unchanged.
+This permits the existing recovery and app-update checks to assess their own
+evidence; it neither authorizes recovery nor makes component activation safe.
 For UI, user or internal originals, a current Full agent, qualified child or
 trusted system can reconcile and resume through the same recovery owner. Ask
 cannot substitute a new grant for that operator-origin authority. Resume retains

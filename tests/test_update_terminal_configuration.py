@@ -94,6 +94,128 @@ async def test_terminal_native_no_effect_is_quiescent_without_consuming_original
     assert not f.app.runtime.workers and not f.transport.calls
 
 
+@pytest.mark.parametrize('unknown', [False, True])
+async def test_absent_held_owner_clears_only_obsolete_freshness_before_targeted_read(terminal, monkeypatch, unknown):
+    from test_targeted_configuration_recovery import manager, invoke
+    f = terminal
+    f.owner = f.session
+    source = await manager(f)
+    if unknown:
+        receipt_path(f.attempt, home=f.app.data_dir).write_text(json.dumps(
+            seal(f.attempt, 'unknown', terminal=True)))
+    f.session.update(configurationPending=True, fileAccessPending=True,
+        configurationPendingRevision=7, configurationRefresh={'phase': 'pending', 'revision': 7})
+    before = originals(f)
+    # This is the actual public cross-owner read: the obsolete file marker
+    # rejects it before any native receipt can be observed.
+    from amplifier_web.service import AppError
+    with pytest.raises(AppError, match='Targeted recovery requires'):
+        await invoke(f, source, 'read', includeRecovery=True)
+    stop = AsyncMock(side_effect=AssertionError('No absent worker may be retired'))
+    start = AsyncMock(side_effect=AssertionError('Freshness cannot mount held work'))
+    drain = AsyncMock(side_effect=AssertionError('Freshness cannot drain held input'))
+    monkeypatch.setattr(f.app.runtime, 'stop', stop)
+    monkeypatch.setattr(f.app.runtime, 'start', start)
+    monkeypatch.setattr(f.app.collaboration, 'drain', drain)
+    await f.app.refresh_configuration(f.session['id'])
+    assert f.session['configurationPending'] is False
+    assert not f.session.get('fileAccessPending') and 'configurationRefresh' not in f.session
+    assert f.session['configurationPendingRevision'] == 7
+    assert f.session['configurationBusy'] and originals(f) == before
+    assert f.manager.app_busy() is unknown
+    result = (await invoke(f, source, 'read', includeRecovery=True))['result']
+    assert result['nativeEffect'] == ('unknown' if unknown else 'saved_not_mounted')
+    assert originals(f) == before and f.manager.busy()
+    await f.app.refresh_configuration(f.session['id'])
+    assert originals(f) == before
+    stop.assert_not_awaited()
+    start.assert_not_awaited()
+    drain.assert_not_awaited()
+    assert not f.transport.calls and not f.transport.inputs
+
+
+@pytest.mark.parametrize('fault', ['worker', 'preparing', 'preparation-record', 'task', 'lock', 'observer',
+    'queued', 'applying', 'different-fence', 'missing-request', 'refresh', 'child', 'ownership'])
+async def test_held_freshness_retains_markers_when_absence_is_unproved(terminal, monkeypatch, fault):
+    f = terminal
+    f.session.update(configurationPending=True, fileAccessPending=True, configurationPendingRevision=7)
+    release = asyncio.Event()
+    task = None
+    if fault == 'worker':
+        f.app.runtime.workers[f.session['id']] = {'process': SimpleNamespace(returncode=0)}
+    elif fault == 'preparing':
+        lock = asyncio.Lock(); await lock.acquire(); f.app.runtime._locks[f.session['id']] = lock
+    elif fault == 'preparation-record':
+        f.app.runtime._preparations[f.session['id']] = {'owner': 'retained'}
+    elif fault == 'task':
+        task = asyncio.create_task(release.wait())
+        f.app.management.pending_config_tasks[f.session['id']] = task
+    elif fault == 'lock':
+        await f.app.management.lock.acquire()
+    elif fault == 'observer':
+        monkeypatch.setattr(f.app.runtime, 'has_pending_operations', lambda: None)
+    elif fault in {'queued', 'applying'}:
+        f.session['pendingConfiguration']['phase'] = fault
+    elif fault == 'different-fence':
+        f.session['configurationOperationFence'] = 'different-operation'
+    elif fault == 'missing-request':
+        f.session['pendingConfiguration'].pop('requestHash')
+    elif fault == 'refresh':
+        f.session['configurationRefresh'] = {'phase': 'applying', 'revision': 7}
+    elif fault == 'child':
+        f.session['workers'] = [{'status': 'working'}]
+    else:
+        f.session['ownership'] = {'status': 'blocked'}
+    before = copy.deepcopy(f.session)
+    stop = AsyncMock(side_effect=AssertionError('Held freshness cannot retire runtime'))
+    monkeypatch.setattr(f.app.runtime, 'stop', stop)
+    try:
+        await f.app.refresh_configuration(f.session['id'])
+        assert f.session == before
+        stop.assert_not_awaited()
+    finally:
+        release.set()
+        if task:
+            await task
+        f.app.runtime._preparations.clear()
+
+
+async def test_restart_retires_stale_mount_freshness_not_held_configuration(terminal):
+    from amplifier_web.service import AppService
+    from amplifier_web.updates import UpdateManager
+    f = terminal
+    f.session.update(configurationPending=True, fileAccessPending=True, configurationPendingRevision=7,
+        configurationRefresh={'phase': 'pending', 'revision': 7})
+    before = originals(f)
+    home, workspace, sid = f.app.data_dir, f.app.default_workspace, f.session['id']
+    await f.app.dispatch('session.create', {'title': 'Unselected held owner sentinel'})
+    assert f.app.state['selectedSessionId'] != sid
+    f.app._save_changes(sessions={sid}, globals={'selectedSessionId'})
+    await f.app.close()
+    runtime = RuntimeManager()
+    runtime.start = AsyncMock(side_effect=AssertionError('Restart must not mount held work'))
+    runtime.stop = AsyncMock(side_effect=AssertionError('Absent held owner needs no retirement'))
+    runtime.send = AsyncMock(side_effect=AssertionError('Restart must not deliver held input'))
+    app = AppService(home, runtime, workspace=workspace)
+    app.management = Management(app)
+    app.update_manager = UpdateManager(app)
+    try:
+        await asyncio.gather(*list(app.tasks))
+        session = app._session(sid)
+        # Startup itself must retire freshness, even for an unselected owner.
+        assert session['configurationBusy'] and session['configurationPending'] is False
+        assert not session.get('fileAccessPending') and 'configurationRefresh' not in session
+        assert originals(SimpleNamespace(app=app, session=session)) == before
+        assert app.update_manager.busy() and not app.update_manager.app_busy()
+        runtime.start.assert_not_awaited()
+        runtime.stop.assert_not_awaited()
+        runtime.send.assert_not_awaited()
+        await app.refresh_configuration(sid)
+        assert originals(SimpleNamespace(app=app, session=session)) == before
+    finally:
+        await app.close()
+
+
 async def test_app_gate_presentation_and_idle_notification_use_same_assessment(terminal, monkeypatch):
     from amplifier_web import update_report
     f = terminal

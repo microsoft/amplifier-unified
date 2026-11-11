@@ -5172,10 +5172,10 @@ class AppService:
                 self.update_manager.notify_idle(settled_session_id=session['id'])
 
 
-    def _unmounted_legacy_refresh(self, session):
+    def _unmounted_held_refresh(self, session):
         """Prove only that passive freshness has no owned mount to retire.
 
-        The unbound settings operation remains unknown and fenced. Never send
+        The settings operation remains unresolved and fenced. Never send
         this case through runtime retirement, whose completion releases busy.
         Called synchronously under the service lock; unavailable evidence holds.
         """
@@ -5183,8 +5183,20 @@ class AppService:
         ownership = session.get('ownership', {})
         if not isinstance(ownership, dict) or ownership.get('status') not in {None, 'available'}:
             return False
-        if (pending.get('phase') != 'error' or pending.get('recoveryRequired') is not True
-                or pending.get('operationId') or session.get('configurationOperationFence')):
+        operation = pending.get('operationId')
+        if pending.get('phase') != 'error':
+            return False
+        if operation:
+            # This is freshness of an absent mount, not operation recovery.
+            # Keep the original payload, evidence and input fence even when its
+            # native outcome is unknown; no effect is authorized by this proof.
+            if (not pending.get('requestHash')
+                    or session.get('configurationOperationFence') != operation):
+                return False
+            preparations = getattr(self.runtime, '_preparations', None)
+            if not isinstance(preparations, dict) or preparations:
+                return False
+        elif pending.get('recoveryRequired') is not True or session.get('configurationOperationFence'):
             return False
         if session.get('configurationRefresh', {}).get('phase') not in {None, 'pending'}:
             return False
@@ -5214,7 +5226,7 @@ class AppService:
     def _claim_configuration_refresh(self,session):
         """Reserve an idle runtime under the service lock before deferring it."""
         if (session.get('historyManaged') and not session.get('fileAccessPending')) or not session.get('configurationPending') or session['status'] not in {'idle','stopped','interrupted','error'}:return
-        if session.get('configurationBusy') and not self._unmounted_legacy_refresh(session):return
+        if session.get('configurationBusy') and not self._unmounted_held_refresh(session):return
         if session.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:return
         workers=getattr(self.runtime,'workers',None)
         if self.runtime is None or isinstance(workers,dict) and session['id'] not in workers:
