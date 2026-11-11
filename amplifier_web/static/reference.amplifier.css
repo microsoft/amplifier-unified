@@ -364,6 +364,13 @@ body,
   margin-top: 20px;
 }
 
+/* The native action, not an overlay or its label, owns the touch target. */
+@media (pointer: coarse) {
+  #amp-one .a-dialog-actions button {
+    min-height: 44px;
+  }
+}
+
 #amp-one .a-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

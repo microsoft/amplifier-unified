@@ -26,14 +26,15 @@ const capture=name=>page.screenshot({path:join(artifacts,`amplifier-canvas-${nam
 const canvasDiagnostics=()=>page.evaluate(()=>{
  const describe=node=>{
   const style=getComputedStyle(node),r=node.getBoundingClientRect();
-  return {tag:node.tagName,id:node.id,class:node.className,label:node.getAttribute('aria-label'),hidden:node.hidden,inert:node.inert,
+  return {tag:node.tagName,id:node.id,class:node.className,label:node.getAttribute('aria-label'),haspopup:node.getAttribute('aria-haspopup'),hidden:node.hidden,inert:node.inert,
+   scrollWidth:node.scrollWidth,clientWidth:node.clientWidth,
    rects:node.getClientRects().length,box:{x:r.x,y:r.y,width:r.width,height:r.height},
    display:style.display,visibility:style.visibility,opacity:style.opacity,pointerEvents:style.pointerEvents,
    transition:style.transition,hover:node.matches(':hover')};
  };
  const panel=document.querySelector('.a-canvas-panel');
  return {controls:panel?.dataset.controls,pinned:panel?.dataset.pinned,
-  nodes:[...document.querySelectorAll('.a-canvas-head,.a-canvas-artifact-toolbar,#canvas-options,.a-canvas-toolbar,[aria-label="Copy canvas source"]')].map(node=>{
+  nodes:[...document.querySelectorAll('.a-work-header,.a-layout,.a-nav-slot,.a-nav-resize,.a-conversation,.a-composer,.a-compose-configuration,.a-model-trigger,.a-model-popover,.a-canvas-panel,.a-canvas-resize,.a-canvas-head,.a-canvas-artifact-toolbar,.a-canvas-body,.a-canvas-html,#canvas-options,.a-canvas-toolbar,[aria-label="Copy canvas source"]')].map(node=>{
    const ancestors=[];for(let parent=node.parentElement;parent;parent=parent.parentElement){ancestors.push(describe(parent));if(parent===panel)break}
    return {...describe(node),ancestors};
   })};
@@ -96,39 +97,51 @@ try{
  assert.equal(header.height,52);assert.ok(Math.abs(body.x-iframe.x)<1&&Math.abs(body.width-iframe.width)<1);assert.ok(Math.abs(body.y-iframe.y)<1);assert.ok(Math.abs(iframe.y+iframe.height-950)<1);
  await separator.focus();await page.keyboard.press('End');await settled();
  const expanded=await box('.a-canvas-panel'),chat=await box('.a-conversation');assert.ok(expanded.width>1000);assert.ok(chat.width>=360&&chat.width<=361);
- const composer=await box('.a-composer');assert.ok(composer.x>=chat.x&&composer.x+composer.width<=chat.x+chat.width);assert.ok(await page.locator('.a-compose-bottom').evaluate(el=>el.scrollWidth<=el.clientWidth));
- await page.getByRole('button',{name:'Model and reasoning settings'}).click();
- const models=await box('.a-model-popover');assert.ok(models.x>=0&&models.x+models.width<=1600); // Compact selectors are positioned in the viewport.
- await page.getByRole('button',{name:'Close chat options',exact:true}).click();
+ const composer=await box('.a-composer');assert.ok(composer.x>=chat.x&&composer.x+composer.width<=chat.x+chat.width,'.a-composer stays inside the 360px conversation');
+ // The compact composer owns a separate configuration row, not the removed
+ // bottom toolbar. Its options branch is not selected by the window width.
+ const configuration=page.locator('.a-composer .a-compose-configuration');
+ assert.equal(await configuration.count(),1,'The composer owns one .a-compose-configuration row');
+ assert.ok(await configuration.evaluate(el=>el.scrollWidth<=el.clientWidth),'.a-compose-configuration does not overflow at the chat minimum width');
+ const modelSettings=configuration.getByRole('button',{name:'Model and reasoning settings',exact:true});
+ assert.equal(await modelSettings.count(),1,'.a-compose-configuration contains the Model and reasoning settings trigger');
+ const compact=await modelSettings.getAttribute('aria-haspopup')==='dialog';
+ assert.equal(compact,true,'ComposerOptions selects compact chat options even in a 1600px window with a 360px chat');
+ await modelSettings.click();
+ const modelDialog=page.getByRole('dialog',{name:'Model for this chat',exact:true});await modelDialog.waitFor({state:'visible'});
+ const models=await modelDialog.boundingBox();assert.ok(models&&models.x>=0&&models.x+models.width<=1600,'Model for this chat stays within the viewport, not the conversation containing block');
+ const closeModelSettings=modelDialog.getByRole('button',{name:compact?'Close chat options':'Close model settings',exact:true});
+ assert.equal(await closeModelSettings.count(),1,`Model for this chat exposes the ${compact?'compact chat-options':'model-settings'} close action`);
+ await closeModelSettings.click();await modelDialog.waitFor({state:'hidden'});
  await capture('wide');
  // Mouse drag reaches the same bounds and persists only its completed preference.
  const handle=await separator.boundingBox();await page.mouse.move(handle.x+handle.width/2,handle.y+80);await page.mouse.down();await page.mouse.move(handle.x+200,handle.y+80,{steps:6});await page.mouse.up();await settled();
- assert.ok((await box('.a-canvas-panel')).width<expanded.width-150);
+ assert.ok((await box('.a-canvas-panel')).width<expanded.width-150,'Dragging Resize canvas right reduces the right-hand .a-canvas-panel by over 150px');
  await patch({navPinned:true,navExpanded:true});await settled();
  const nav=page.getByRole('separator',{name:'Resize navigation'});await nav.focus();await page.keyboard.press('End');await settled();
- assert.ok((await box('.a-nav-slot')).width>700);assert.ok((await box('.a-canvas-panel')).width>=300);assert.ok((await box('.a-conversation')).width>=360);
- await nav.focus();await page.keyboard.press('Home');await separator.focus();await page.keyboard.press('End');await settled();assert.equal(Math.round((await box('.a-nav-slot')).width),216);assert.equal(Math.round((await box('.a-conversation')).width),360);
+ assert.ok((await box('.a-nav-slot')).width>700,'Resize navigation End gives .a-nav-slot the remaining width');assert.ok((await box('.a-canvas-panel')).width>=300,'Navigation resize preserves the 300px Canvas minimum');assert.ok((await box('.a-conversation')).width>=360,'Navigation resize preserves the 360px chat minimum');
+ await nav.focus();await page.keyboard.press('Home');await separator.focus();await page.keyboard.press('End');await settled();assert.equal(Math.round((await box('.a-nav-slot')).width),216,'Resize navigation Home restores the 216px minimum');assert.equal(Math.round((await box('.a-conversation')).width),360,'Resize canvas End retains the 360px chat minimum beside pinned navigation');
  const wideBody=await box('.a-canvas-body'),wideFrame=await box('.a-canvas-html');
  await detailsButton.click();await details.waitFor({state:'visible'});await settled();assert.equal(await toolbarsMatch(true),true);
- assert.equal(await page.locator('.a-canvas-content').getAttribute('data-details-overlay'),'false');
+ assert.equal(await page.locator('.a-canvas-content').getAttribute('data-details-overlay'),'false','Wide .a-canvas-content uses inline Details, not the narrow overlay');
  const detailsBody=await box('.a-canvas-body');
- assert.equal(detailsBody.y,wideBody.y);assert.equal(detailsBody.height,wideBody.height);assert.ok(detailsBody.width<wideBody.width,'Wide Details takes width, not reader height');
- await closeDetails.click();await page.locator('#canvas-options').waitFor({state:'hidden'});await settled();assert.deepEqual(await box('.a-canvas-html'),wideFrame);
+ assert.equal(detailsBody.y,wideBody.y,'Wide Details preserves .a-canvas-body top');assert.equal(detailsBody.height,wideBody.height,'Wide Details preserves .a-canvas-body height');assert.ok(detailsBody.width<wideBody.width,'Wide Details takes width, not reader height');
+ await closeDetails.click();await page.locator('#canvas-options').waitFor({state:'hidden'});await settled();assert.deepEqual(await box('.a-canvas-html'),wideFrame,'Closing wide Details restores the same iframe box');
  await page.getByRole('button',{name:'Focus canvas',exact:true}).click();await page.mouse.move(500,400);await patch({canvasControlsExpanded:false});await settled();
- assert.deepEqual(await box('.a-canvas-panel'),await focusedBounds());assert.equal(await page.locator('.a-conversation').evaluate(el=>el.inert),true);
- assert.equal(await frame.getByRole('button',{name:'1',exact:true}).count(),1);await frame.getByRole('button',{name:'1',exact:true}).click();
+ assert.deepEqual(await box('.a-canvas-panel'),await focusedBounds(),'Focused Canvas fills the viewport below .a-work-header');assert.equal(await page.locator('.a-conversation').evaluate(el=>el.inert),true,'Focused Canvas makes the background conversation inert');
+ assert.equal(await frame.getByRole('button',{name:'1',exact:true}).count(),1,'Canvas focus retains the running iframe counter');await frame.getByRole('button',{name:'1',exact:true}).click();
  await capture('focus');
- await page.getByRole('button',{name:'Exit canvas focus',exact:true}).focus();await page.keyboard.press('Escape');await settled();assert.equal(await page.locator('.a-canvas-panel').getAttribute('data-focused'),'false');assert.equal(await frame.getByRole('button',{name:'2',exact:true}).count(),1);assert.equal(await page.locator('.a-conversation').evaluate(el=>el.inert),false);
+ await page.getByRole('button',{name:'Exit canvas focus',exact:true}).focus();await page.keyboard.press('Escape');await settled();assert.equal(await page.locator('.a-canvas-panel').getAttribute('data-focused'),'false','Host-UI Escape exits Canvas focus');assert.equal(await frame.getByRole('button',{name:'2',exact:true}).count(),1,'Exiting focus retains iframe interaction state');assert.equal(await page.locator('.a-conversation').evaluate(el=>el.inert),false,'Exiting Canvas focus releases conversation inertness');
  // Agent uses the same header-preserving focus action; close resets focus for subsequent reopen.
- await patch({canvasFocused:true});await action('canvas.close',{});await action('canvas.reopen',{});assert.equal(await page.locator('.a-canvas-panel').getAttribute('data-focused'),'false');
+ await patch({canvasFocused:true});await action('canvas.close',{});await action('canvas.reopen',{});assert.equal(await page.locator('.a-canvas-panel').getAttribute('data-focused'),'false','canvas.close clears focus before canvas.reopen restores the split');
  for(const width of [1050,800,740,700,390]){
   await page.setViewportSize({width,height:844});await settled();
-  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth&&document.documentElement.scrollHeight<=innerHeight));
-  const canvas=await box('.a-canvas-panel');assert.ok(canvas.x>=0&&canvas.x+canvas.width<=width);
-  if(width>=800)assert.ok((await box('.a-conversation')).width>=360);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth&&document.documentElement.scrollHeight<=innerHeight),`Document does not overflow the ${width}px viewport`);
+  const canvas=await box('.a-canvas-panel');assert.ok(canvas.x>=0&&canvas.x+canvas.width<=width,`.a-canvas-panel stays within the ${width}px viewport`);
+  if(width>=800)assert.ok((await box('.a-conversation')).width>=360,`.a-conversation retains its 360px minimum at ${width}px`);
  }
  await capture('narrow');
- await patch({canvasFocused:true});await settled();assert.deepEqual(await box('.a-canvas-panel'),await focusedBounds());await page.getByRole('button',{name:'Exit canvas focus',exact:true}).click();
+ await patch({canvasFocused:true});await settled();assert.deepEqual(await box('.a-canvas-panel'),await focusedBounds(),'Agent-requested narrow Canvas focus preserves .a-work-header');await page.getByRole('button',{name:'Exit canvas focus',exact:true}).click();
  assert.deepEqual(errors,[]);console.log('Flexible canvas passed: empty-pane separator, minimum widths, drag/keyboard resize, primary actions and Details, edge-to-edge, live focus/escape/restore, agent actions and narrow layouts.');
 }catch(error){
  // Keep the original assertion and failure. Hidden ancestors and separate
