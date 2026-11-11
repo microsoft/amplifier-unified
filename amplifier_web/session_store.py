@@ -578,6 +578,10 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
     effective = source_dir / "effective-configuration.json"
     if effective.is_file() and not bundle:
         copied["configuration.json"] = effective.read_text()
+    if "configuration.json" in copied:
+        from .host.components import portable_module_sources
+        copied["configuration.json"] = json.dumps(
+            portable_module_sources(json.loads(copied["configuration.json"]), home), indent=2)
     # UI message IDs remain stable, while canonical content bindings belong to
     # the independent target and its remapped native indices.
     from .automatic_history import display_identity

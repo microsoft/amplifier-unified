@@ -35,6 +35,11 @@ amplifier-unified reset --data-dir /path/to/unified-data
 5. Retires Unified's `updates`, `runtime`, `foundation`, and `source-store`
    directories to a recovery backup. This clears active version pointers,
    downloaded source edits, worker environments and failed update candidates.
+   Before retirement, converts legacy saved conversation module sources from
+   verified managed-cache paths to exact Git repository/commit/subdirectory
+   references. Both saved overrides and effective snapshots are covered; external
+   local sources and existing Git pins are unchanged. The freshly verified
+   installation prepares this conversion, not the installation being repaired.
    It clears only the saved update status in the application database, including
    interrupted-update fences; a database backup is taken first.
 6. Starts the generated service again, then runs `doctor` and `service status`.
@@ -56,6 +61,47 @@ repair. Custom/unmanaged service definitions require separate attention. Externa
 shared source stores are not cleared: unset `AMPLIFIER_SOURCE_STORE` before
 reset, and repair an externally configured store separately if necessary.
 
+### Saved plans and in-app cache reset
+
+The in-app **cache** reset uses the same pre-retirement conversion when it keeps
+conversations. Runtime-only reset does not convert plans. Selecting conversations
+as well retires their plans with their existing private backup instead.
+
+Conversion does not select today's bundle defaults, drop disabled modules or
+rewrite module configuration. It requires verified source metadata and a clean
+checkout at the recorded commit. An unreferenced damaged cache does not block
+reset. A referenced source that is missing, modified or unverifiable does block
+cache retirement; reset cannot reconstruct that source honestly. The error (in
+the CLI's private repair report) names the saved plan that needs attention.
+Redirected private configuration paths refuse conversion. Reset does not impose
+a separate plan-size limit; reads use the existing file's size.
+
+Reset checks module declaration `source` fields, including nested agents and
+spawn tools, and explicit root/agent context-file maps. A context-file path still
+inside a retiring directory stops reset before cache moves: module provenance
+does not prove how to reconstruct that resource. Opaque module configuration
+(including `tool-skills.config.cache_dir`), prompts and log paths are preserved,
+not reinterpreted as executable sources or rewritten by the host.
+
+Pending configuration requests with those declared source/resource dependencies
+must be resolved through their original operation first. Successful application
+and cancellation remove the queue file; retained finished operation records are
+history and do not block reset. A remaining queue file is not proof of completion.
+Reset never rewrites a retained request or sealed receipt, clears its hold, or
+replays the change.
+
+All conversions are prepared before saved plans are changed. Original plan bytes
+are retained in the CLI recovery directory or the in-app private backup. If plan
+application or cache retirement fails before logical state changes, the changed
+plans and already moved cache directories are restored. Once the in-app reset
+begins catalog, history or settings publication, a failure may follow a committed
+database change. It retains the completed filesystem changes and recovery backup,
+reports failure and does not attempt a file-only undo or claim reset success.
+This is not a fallback that runs code from reset backups.
+After a successful reset, normal runtime preparation fetches the exact saved
+source revisions; unavailable repositories or credentials can still prevent that
+preparation.
+
 ## If the launcher itself is broken
 
 Reset normally works even when application dependencies or an active update
@@ -75,7 +121,9 @@ curl --proto '=https' --tlsv1.2 -fsSL \
 Use Python 3.10+ for this recovery script. uv obtains Python 3.13 for the new app.
 The script and its sibling retention policy use only the standard library, with
 the same options and safeguards as the installed command. Keep both files from
-the same reviewed revision together; no ordinary app dependencies are imported.
+the same reviewed revision together; no ordinary app dependencies are imported
+into the emergency script. Saved-plan conversion runs only in the freshly
+verified installation's isolated interpreter.
 
 ### Public downloads on a device with restricted GitHub sign-in
 

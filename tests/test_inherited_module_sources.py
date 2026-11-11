@@ -14,6 +14,7 @@ from amplifier_web.host.session import module_source
 from amplifier_web.managed_chats import allocate
 from amplifier_web.session_creation import apply, prepare, template
 from amplifier_web.shared_settings import read_yaml, settings_paths, update_settings
+from test_runtime_controls import managed_module_source
 
 
 @pytest.fixture
@@ -295,3 +296,39 @@ async def test_old_prepared_source_without_session_selector_needs_no_stamp(tmp_p
     assert template(service, target)[1] == review
     child_config = read_config(target['workspace'], home=service.data_dir, session_id=target['id'])
     assert selected(await prepared(plan, child_config), 'provider-fixture', paths['A']) == 'A'
+
+
+@pytest.mark.parametrize('selector', [None, 'modules', 'overrides', 'providers'])
+def test_inheritance_seals_portable_plan_and_source_settings(managed_module_source, tmp_path, selector):
+    c = managed_module_source
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    source = {'id': 'portable-parent', 'bundle': 'fixture', 'workspace': str(workspace)}
+    target = {'id': 'portable-child', 'bundle': 'fixture', 'workspace': str(workspace)}
+    directory = c.home / 'sessions' / source['id']
+    directory.mkdir(parents=True)
+    row = {'module': 'provider-fixture', 'id': 'exact-account', 'source': str(c.module),
+           'config': {'api_key': '${EXACT_ACCOUNT_KEY}'}}
+    original = {'providers': [row], 'agents': {'child': {'providers': [copy.deepcopy(row)]}},
+                'context': {'not-a-module': str(c.module)}}
+    effective = directory / 'effective-configuration.json'
+    effective.write_text(json.dumps(original))
+    before = effective.read_bytes()
+    settings = ({'sources': {'modules': {'provider-fixture': str(c.module)}}} if selector == 'modules'
+                else {'overrides': {'provider-fixture': {'source': str(c.module)}}} if selector == 'overrides'
+                else {'config': {'providers': [copy.deepcopy(row)]}} if selector == 'providers' else {})
+    if settings:
+        update_settings(session_path(source), lambda s: s.update(settings))
+    service = SimpleNamespace(data_dir=c.home)
+    config, review = template(service, source)
+    for node in (config['plan'], config['plan']['agents']['child']):
+        assert node['providers'][0]['source'] == c.portable
+    assert config['plan']['context'] == original['context']
+    if selector:
+        assert str(c.module) not in json.dumps(config['sourceSettings'])
+        assert c.portable in json.dumps(config['sourceSettings'])
+    apply(service, target, config)
+    saved = json.loads((c.home / 'sessions' / target['id'] / 'configuration.json').read_text())
+    assert saved == config['plan']
+    assert template(service, source)[1] == review
+    assert effective.read_bytes() == before
