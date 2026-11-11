@@ -15,7 +15,7 @@ def definitions(schema, string):
             'Current authenticated Full root operators may target other registered own chats. '
             'expectedRevision is nextMessageRevision, not the app revision. Saved is not mounted; application is validated on genuine input.', value),
         'conversation.configuration': ('Read only saved bundle/model choices, nextMessageRevision and configuration hold category for an explicit chat. '
-            'No runtime, private plan, authority, draft or conversation history is read.',
+            'No runtime demand or history hydration. Private plan, authority, draft and conversation history are not returned.',
             schema({'sessionId': string(200)}, ['sessionId'])),
     }
 
