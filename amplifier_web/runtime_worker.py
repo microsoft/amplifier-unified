@@ -868,10 +868,11 @@ class Worker:
                 pass
             startup_capture = StartupCapture()
             with startup_timing.phase('worker.imports'):
+                from amplifier_web.runtime_qualification import required_activation_gate
+                ActivationGate = required_activation_gate()
                 from amplifier_web.host.session import prepare_manager
                 from amplifier_web.execution_events import ExecutionEvents
                 from amplifier_web.runtime_controls import RuntimeControls
-                from amplifier_foundation.session.activation import ActivationGate
                 from amplifier_web.shared_state import configuration_stamp
                 from amplifier_module_loop_live.runtime import Runtime
             self.home = app_home()
