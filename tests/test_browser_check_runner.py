@@ -287,11 +287,12 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     sidebar_ids = sidebar_controls_browser_addition(rows, set())
     spacing_ids = action_spacing_browser_addition(rows, set())
     historical_rows = [row for row in rows
-                       if row['id'] not in navigation_ids | sidebar_ids | spacing_ids
+                       if row['id'] not in navigation_ids | sidebar_ids
                        and not (canvas_additions | breadbin_addition | question_fade_addition | context_addition | immediate_addition | delivery_addition | waiting_addition | resume_addition).intersection(row['command'])]
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
     additions = {
+        "action-spacing": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/action-spacing"},
         "state-stream": {},
         "client-traffic": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/client-traffic"},
         "assignment-adoption": {},
@@ -380,9 +381,9 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     recovery_ids = {row['id'] for row in recovery_additions}
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in historical_rows if row['id'] not in additions and row['id'] not in recovery_ids]
-    assert len(original) == 65 and len(historical_rows) == 132
+    assert len(original) == 65 and len(historical_rows) == 133
     # Preserve the preceding total after validating all exact additive owners.
-    assert len([row for row in rows if row['id'] not in navigation_ids | sidebar_ids | spacing_ids | {'context-inspector-layout', 'delivery-warning', 'legacy-outbox-notice', 'delivery-reconciliation', 'delivery-new-chat', 'navigation-waiting', 'canvas-versions', 'question-resume'}]) == 138
+    assert len([row for row in rows if row['id'] not in navigation_ids | sidebar_ids | {'context-inspector-layout', 'delivery-warning', 'legacy-outbox-notice', 'delivery-reconciliation', 'delivery-new-chat', 'navigation-waiting', 'canvas-versions', 'question-resume'}]) == 139
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -1131,9 +1132,12 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     waiting_addition = navigation_waiting_browser_addition(plan['scenarios'], readiness_scripts)
     delivery_addition = delivery_warning_browser_addition(plan['scenarios'], readiness_scripts)
     resume_addition = question_resume_browser_addition(plan['scenarios'], readiness_scripts)
+    spacing = 'tests/action-spacing-browser.mjs'
+    assert spacing in extended_scripts - readiness_scripts
+    assert sum(row['command'] == ['node', spacing] for row in plan['scenarios']) == 1
     # Freeze all three prior counts; validate each new owner before subtracting
     # the additions so missing or duplicated coverage cannot disappear.
-    previous_scripts = ((readiness_scripts | extended_scripts) - relocated_readiness.keys() - {state_stream, update_delivery}
+    previous_scripts = ((readiness_scripts | extended_scripts) - relocated_readiness.keys() - {state_stream, update_delivery, spacing}
                         - provider_additions - breadbin_addition - canvas_additions - question_fade_addition - context_addition - immediate_addition - delivery_addition - waiting_addition - resume_addition)
     assert len(previous_scripts - {attachment, cancellation, shared_landing, tool_details, tool_previews, attachment_experience, pin_reorder, approval, dormant, shared_work} - feature_additions - voice_additions) == 146
     assert len(previous_scripts - {shared_work, 'tests/delegate-work-stream-browser.mjs', 'tests/client-traffic-browser.mjs'} - voice_additions) == 164

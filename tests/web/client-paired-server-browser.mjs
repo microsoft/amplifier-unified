@@ -33,15 +33,19 @@ const artifact=process.env.AMPLIFIER_TEST_ARTIFACTS||join(stateParent,'paired-br
 await mkdir(artifact,{recursive:true});
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 
-async function qualifyLegacyNotice({page,composer,history,actions,privateRequests,screenshot}){
+async function qualifyQuietRetainedCopies({page,composer,history,actions,privateRequests,screenshot,base}){
  const payloadKey='amplifier.messageOutbox.v1',metadataKey='amplifier.legacyOutboxNotice.v1';
- const text='This tab retains earlier message copies with no verified host identity. Their delivery is unknown. Nothing was sent again.';
+ const oldNotices=[
+  'This tab retains earlier message copies with no verified host identity. Their delivery is unknown. Nothing was sent again.',
+  'Earlier pending messages have no verified host identity. They remain saved in this browser and were not sent again.',
+ ];
  const draft='Unfinished paired-server draft';
  const original=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  const action=async(name,args)=>{const result=await page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);assert.equal(result.accepted,true);return result};
  // Create/select through the actual host, never a substituted state response.
- // Only notice presentation is new coverage; the existing send/reconnect journey
- // above and message-delivery-browser own delivery/retry acceptance.
+ // This extension checks quiet retention, not a replacement recovery surface.
+ // Existing send/reconnect checks and message-delivery-browser keep their own
+ // scoped delivery/retry acceptance; nothing here adopts an unbound copy.
  await action('session.create',{title:'Retained-copy navigation control'});
  const other=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  assert.notEqual(other,original);
@@ -68,54 +72,79 @@ async function qualifyLegacyNotice({page,composer,history,actions,privateRequest
  await page.evaluate(([payload,metadata,value])=>{
   sessionStorage.setItem(payload,value);sessionStorage.removeItem(metadata);
  },[payloadKey,metadataKey,raw]);
- const notice=page.locator('[data-part="legacy-outbox-notice"]'),button=notice.getByRole('button');
- async function check(expanded){
-  await expect(notice).toBeVisible();await expect(button).toHaveCount(1);
-  await expect(button).toHaveAttribute('type','button');
-  await expect(button).toHaveAttribute('aria-expanded',String(expanded));
-  await expect(button).toHaveAccessibleName(expanded?'Hide notice':'Retained copies (2)');
-  if(expanded)await expect(notice.getByRole('status')).toHaveText(text);
-  else await expect(notice.getByText(text,{exact:true})).toHaveCount(0);
-  assert.equal((await stored()).raw,raw,'Notice operations preserve the exact retained payload bytes');
-  assert.equal(await page.locator('body').evaluate(node=>node.textContent.includes('paired-private-retained-')),false);
+ const checkpoints=[];
+ async function check(label,selected=original,expectedDraft=draft){
+  // Positive readiness first: an absent banner in an unmounted/failed app is
+  // not evidence. Observe the real selected view and usable composer each time.
+  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId)).toBe(selected);
+  await expect(composer).toBeVisible();await expect(composer).toBeEditable();
+  await expect(composer).toHaveText(expectedDraft);
+  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.draft||'')).toBe(expectedDraft);
+  await expect(page.locator('[data-part="legacy-outbox-notice"]')).toHaveCount(0);
+  for(const text of oldNotices)await expect(page.getByText(text,{exact:true})).toHaveCount(0);
+  await expect(page.getByText(/^Retained copies(?: \(\d+\))?$/)).toHaveCount(0);
+  await expect(page.getByRole('button',{name:/^Retained copies(?: \(\d+\))?$/})).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Hide notice',exact:true})).toHaveCount(0);
+  assert.equal((await stored()).raw,raw,'Quiet retention preserves the exact raw payload, including whitespace');
+  assert.equal((await stored()).metadata,null,'No legacy notice preference is created');
+  assert.equal(await page.locator('body').evaluate(node=>node.outerHTML.includes('paired-private-retained-')),false);
+  for(const row of retained)await expect(page.locator(`[data-input-id="${row.commandId}"]`)).toHaveCount(0);
   assert.deepEqual(privateRequests,[],'No retained message, attachment or document is fetched or posted');
   assert.deepEqual(actions.slice(actionStart).filter(row=>row.action.startsWith('conversation.')||
-   ['message.edit','session.delete','session.archive','attachment.add','attachment.remove'].includes(row.action)),[],
-  'Notice operations do not check, resend, edit or delete retained work');
-  assert.deepEqual(await history(),before,'Notice presentation and selection preserve canonical messages and runtime counters');
+   ['message.edit','session.create','session.delete','session.archive','attachment.add','attachment.remove'].includes(row.action)),[],
+  'Retained copies cause no check, resend, edit, delete or conversation creation');
+  assert.deepEqual(await history(),before,'Quiet retention and selection preserve canonical messages and runtime counters');
+  checkpoints.push(label);
  }
- async function reload(expanded){
-  await page.reload();await showFixtureConversation(page);await check(expanded);
-  await expect(composer).toHaveText(draft);
-  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.draft)).toBe(draft);
+ async function reload(label,selected=original,expectedDraft=draft){
+  await page.reload();await showFixtureConversation(page);
+  await check(label,selected,expectedDraft);
  }
- async function toggle(expanded,key){
-  const handle=await button.elementHandle();
-  try{
-   if(key){await button.focus();await page.keyboard.press(key)}else await button.click();
-   await check(expanded);await expect(composer).toHaveText(draft);
-   assert.ok(await handle.evaluate(node=>node.isConnected&&node===document.querySelector('[data-part="legacy-outbox-notice"] button')),
-    'The same button remains discoverable for reopen');
-  }finally{await handle?.dispose()}
- }
- await reload(true);await screenshot('legacy-expanded');
- await toggle(false);
- const metadata=(await stored()).metadata;
- assert.ok(metadata&&metadata.includes('paired-unbound-unknown'));
- assert.ok(!metadata.includes('paired-private-retained-'),'Notice metadata contains no payload');
- await screenshot('legacy-hidden');await reload(false);
- await toggle(true,'Enter');await toggle(false,'Space');
- await action('session.select',{id:other});await check(false);
- await action('session.select',{id:original});await check(false);
- await expect(composer).toHaveText(draft);
+ await reload('mount-retained-copies');await screenshot('retained-copies-quiet-desktop');
+ await action('view.update',{patch:{navWidth:418}});
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.navWidth)).toBe(418);
+ await check('unrelated-view-update');
+ await action('session.select',{id:other});await check('other-chat',other,'');
+ await action('session.draft',{});await check('new-chat',null,'');
+ await reload('new-chat-reload',null,'');
+ await action('session.select',{id:original});await check('original-draft-restored');
+
+ // Exercise the same owned real SSE disconnect route with the retained rows
+ // loaded. This is a fresh passive connection check, never a repeated input.
+ const transport=await page.evaluate(()=>({
+  opens:streamProbe.reduce((n,source)=>n+source.opens,0),
+  baselines:streamProbe.reduce((n,source)=>n+source.frames.state,0),
+  clientId:window.amplifier.getState().client.id,
+ }));
+ const response=await page.request.post(base+'/fixture/disconnect',{data:{clientId:transport.clientId}});
+ assert.equal(response.status(),200);assert.equal((await response.json()).disconnected,true);
+ await expect.poll(()=>page.evaluate(()=>streamProbe.reduce((n,source)=>n+source.opens,0)),{timeout:15000}).toBeGreaterThan(transport.opens);
+ await expect.poll(()=>page.evaluate(()=>streamProbe.reduce((n,source)=>n+source.frames.state,0)),{timeout:15000}).toBeGreaterThan(transport.baselines);
+ await check('real-sse-reconnect');
+
  retained[0]={...retained[0],id:'paired-new-unbound-identity'};
- raw=serialize(retained); // Same count, new identity must not inherit dismissal.
+ raw=serialize(retained); // Explicit fixture injection only; no dismissal is needed.
  await page.evaluate(([key,value])=>sessionStorage.setItem(key,value),[payloadKey,raw]);
- assert.equal((await stored()).metadata,metadata);
- await reload(true);await screenshot('legacy-new-row');
- assert.equal((await stored()).metadata,metadata,'Resurfacing is not a journal or metadata rewrite');
+ await reload('new-unbound-id-remains-quiet');
+
+ const viewport=page.viewportSize();
+ try{
+  await page.setViewportSize({width:390,height:844});
+  await showFixtureConversation(page,{navPinned:false});
+  await check('mobile-quiet');
+  await expect(composer).toBeInViewport();
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),
+   'Quiet retained copies do not introduce horizontal overflow on mobile');
+  // No removed notice control remains to activate. Keyboard focus/navigation in
+  // the existing composer must remain usable without changing or submitting it.
+  await composer.focus();await page.keyboard.press('ArrowLeft');await page.keyboard.press('ArrowRight');
+  await expect(composer).toBeFocused();await check('composer-keyboard-draft-preserved');
+  await screenshot('retained-copies-quiet-mobile');
+ }finally{await page.setViewportSize(viewport)}
  return {passed:true,retainedCount:2,payloadBytesPreserved:true,privatePayloadNeverRequested:true,
-  hideReopenReload:true,chatSwitchPreserved:true,sameCountNewIdentityResurfaced:true,
+  warningAbsent:true,badgeAbsent:true,checkpoints,newChatRemainedUncreated:true,
+  chatSwitchPreserved:true,sameCountNewIdentityStayedQuiet:true,realSSEReconnectPreserved:true,
+  mobileWidth:390,composerKeyboardFocusPreserved:true,
   draftPreserved:true,extraSendsRetriesEditsDeletes:0,canonicalHistoryPreserved:true};
 }
 
@@ -219,13 +248,13 @@ try{
  assert.notEqual(await page.evaluate(()=>window.amplifier.getState().client.id),clientId,'Reload creates a new writable client identity');
  assert.deepEqual(await history(),before,'Reconnect/reload preserve canonical history and do not execute work again');
  assert.equal(sends.length,2);assert.equal(new Set(sends.map(row=>row.id)).size,2);
- const legacyNotice=await qualifyLegacyNotice({page,composer,history,actions,privateRequests,screenshot});
- assert.equal(sends.length,2,'Notice interactions did not add a send');
+ const quietRetainedCopies=await qualifyQuietRetainedCopies({page,composer,history,actions,privateRequests,screenshot,base});
+ assert.equal(sends.length,2,'Retained copies did not add a send');
  assert.deepEqual(errors,[]);
  result={passed:true,qualification,identity,build,
   authRejectsMissingAndInvalidCredential:true,sseSelectedByFixture:true,realSSEDeltaObserved:true,
   sends:2,distinctAcceptedCommandIds:2,historyDigest:hash(JSON.stringify(before.sessions)),historyPreserved:true,
-  assistantRenderedAfterSendAndReload:true,draftSurvivedReconnectAndReload:true,legacyNotice,screenshots,
+  assistantRenderedAfterSendAndReload:true,draftSurvivedReconnectAndReload:true,quietRetainedCopies,screenshots,
   limits:['Synthetic runtime/providers, not native execution or model calls',
    installedPackage?'Node-free Python host; Node remains the browser test driver. Server revision is externally declared and bound to installed Python hashes; dependencies are not requalified.':
     'Source server composition, not an unmodified published wheel',

@@ -457,6 +457,7 @@ async def test_preparing_saved_chat_does_not_change_recency_until_actual_context
 
 @pytest.mark.parametrize("mutation", ["append", "delete", "replace", "symlink"])
 async def test_out_of_band_native_change_blocks_later_checkpoint(mounted_host, mutation):
+    from amplifier_foundation.session.transcript_guard import NativeTranscriptConflict
     h = mounted_host
     rows = [{"role": "user", "content": "first"}]
     h.store.save("native-root", rows, {})
@@ -479,7 +480,7 @@ async def test_out_of_band_native_change_blocks_later_checkpoint(mounted_host, m
         h.path.symlink_to(target)
     native_after = h.path.read_bytes() if h.path.exists() else None
     h.context.messages.append({"role": "assistant", "content": "stale in-memory answer"})
-    with pytest.raises(host.NativeTranscriptConflict):
+    with pytest.raises(NativeTranscriptConflict):
         await h.capabilities["live.checkpoint"]("completed")
     assert (h.path.read_bytes() if h.path.exists() else None) == native_after
     assert not h.checkpoint.exists()

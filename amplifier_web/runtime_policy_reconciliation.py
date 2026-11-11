@@ -154,7 +154,7 @@ class Collector:
             data = json.loads(path.read_text())
             bindings.setdefault((source_key(data['git_url'], 'HEAD')[0], data['commit']), set()).add(data['ref'])
         inspected, packages, constraints, manifests = {}, {}, {}, {}
-        constraint_origins, constraint_inputs = {}, {}
+        constraint_origins, constraint_inputs, runtime_siblings = {}, {}, {}
         for name, source in sorted(batch.names.items()):
             name, source = package_name(name), Path(source)
             package = {'status': 'unresolved'}
@@ -234,6 +234,7 @@ class Collector:
             sibling_dev = selected_sibling_dev_sources(content, source, root, batch.names)
             sibling_runtime = selected_runtime_sibling_sources(
                 content, source, root, packages[name], batch.names, packages)
+            runtime_siblings[name] = sibling_runtime
             for dependency, declarations in constraint_declarations(
                     content, prepared_local_sources=sibling_runtime, runtime_batch=True).items():
                 if dependency in sibling_dev:
@@ -264,7 +265,8 @@ class Collector:
             package['authoredConstraints'] = constraint_origins[name]
         from .selected_runtime_dependencies import selected
         dependencies = selected({name: content for name, content in manifests.items()
-                                 if packages[name].get('status') in {'selected', 'explicit-pin'}})
+                                 if packages[name].get('status') in {'selected', 'explicit-pin'}},
+                                prepared_local_sources=runtime_siblings)
         for name, package in dependencies.items():
             packages.setdefault(name, package)
         return {'version': VERSION, 'configuration': configuration(config), 'packages': packages,
@@ -276,7 +278,8 @@ class Collector:
                     'manifestSha256': hashlib.sha256(content).hexdigest(),
                     'project': {key: value for key, value in tomllib.loads(content.decode()).get('project', {}).items()
                                 if key in {'name', 'version', 'dependencies', 'optional-dependencies', 'dynamic'}},
-                    'constraints': constraint_declarations(content, runtime_batch=True)}
+                    'constraints': constraint_declarations(content,
+                        prepared_local_sources=runtime_siblings.get(name, ()), runtime_batch=True)}
                     for name, content in manifests.items()},
                 # Private preparation evidence, never copied into update diagnostics.
                 'batchPaths': {name: str(path) for name, path in batch.names.items()},
@@ -388,7 +391,7 @@ def selected_sibling_dev_sources(content, source, root, selected):
 
 
 def selected_runtime_sibling_sources(content, source, root, identity, selected, packages):
-    """Prove a local uv development mapping denotes the selected Git sibling.
+    """Prove a local uv development mapping denotes the declared Git sibling.
 
     Runtime and optional direct Git requirements remain restrictions. Only the
     redundant local tool.uv.sources entry is excluded from the --no-sources
@@ -421,17 +424,17 @@ def selected_runtime_sibling_sources(content, source, root, identity, selected, 
     aliases = [package_name(name) for name in sources]
     for name, entry in sources.items():
         name = package_name(name)
-        if (aliases.count(name) != 1 or name not in selected or name not in requirements or not isinstance(entry, dict)
-                or set(entry) != {'path', 'editable'} or entry['editable'] is not True
-                or not isinstance(entry['path'], str) or Path(entry['path']).is_absolute()):
+        if (aliases.count(name) != 1 or name not in requirements or not isinstance(entry, dict)
+                or set(entry) - {'path', 'editable'} or not isinstance(entry.get('editable', False), bool)
+                or not isinstance(entry.get('path'), str) or Path(entry['path']).is_absolute()):
             continue
-        target_identity = packages.get(name, {})
-        if (target_identity.get('status') != 'selected'
+        target_identity = packages.get(name)
+        if target_identity is not None and (target_identity.get('status') != 'selected'
                 or any(target_identity.get(key) != identity.get(key) for key in ('url', 'ref', 'revision'))):
             continue
         target = (source / entry['path']).resolve()
         target_root = next((path for path in (target, *target.parents) if (path / '.git').exists()), None)
-        if (target != Path(selected[name]).resolve() or target_root != root
+        if ((name in selected and target != Path(selected[name]).resolve()) or target_root != root
                 or not target.is_relative_to(root)):
             continue
         target_manifest = target / 'pyproject.toml'

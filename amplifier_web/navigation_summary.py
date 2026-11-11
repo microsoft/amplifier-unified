@@ -34,10 +34,19 @@ def activity(session, unread=False, *, error_reviewed=False, blocked=False, task
         return {'kind': 'paused', 'label': 'Stopped' if status in {'stopped', 'cancelled'} else 'Paused'}
     if blocked or task.get('status') == 'blocked' or status == 'blocked':
         from .navigation_waiting import project
-        waiting = project(db, session, task)
+        # A reviewed historical runtime error is not a current dependency
+        # failure. Leave the retained error/status untouched.
+        display_session = ({**session, 'status': 'idle'}
+                           if error_reviewed and status in {'error', 'failed'} else session)
+        waiting = project(db, display_session, task)
         if waiting:
-            return {'kind': 'waiting', 'label': 'Waiting for another chat', 'waiting': waiting}
-        return {'kind': 'attention', 'label': 'Work blocked'}
+            result = {'kind': waiting['kind'], 'label': waiting['label'], 'waiting': waiting}
+            if waiting['kind'] == 'attention':
+                result['attentionType'] = 'decision' if waiting['phase'] == 'decision' else 'error'
+            return result
+        # No evidence of failure or a specific dependency. Neutral saved work,
+        # not an invented healthy wait or a request for human intervention.
+        return {'kind': 'idle', 'label': 'Blocked — details unavailable'}
     if unread:
         return {'kind': 'unread', 'label': 'New response'}
     return {'kind': 'idle', 'label': 'Idle'}

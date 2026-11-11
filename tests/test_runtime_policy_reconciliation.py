@@ -320,6 +320,68 @@ async def test_selected_sibling_dev_path_is_not_a_runtime_pin(selected, change):
         assert report['packages']['fixture-context']['status'] != 'selected'
 
 
+@pytest.mark.parametrize('module_root', [False, True])
+@pytest.mark.parametrize('editable', [None, False, True])
+async def test_runtime_git_sibling_keeps_one_policy_through_dependency_collection(
+        selected, monkeypatch, module_root, editable):
+    report = await runtime_sibling_report(selected, monkeypatch, module_root=module_root, editable=editable)
+    package = report['packages']['fixture-dependency']
+    assert package['status'] == 'selected'
+    assert package['url'] == URL
+    assert package['ref'] == 'main'
+    assert package['subdirectory'] == 'modules/dependency'
+    requirements = report['runtimeRequirements'][NAME]
+    assert requirements['project']['dependencies'] == [
+        'fixture-dependency @ git+' + URL + '@main#subdirectory=modules/dependency']
+    assert requirements['constraints']['fixture-dependency'] == [{
+        'url': URL, 'ref': 'main', 'refKind': 'rev', 'subdirectory': 'modules/dependency'}]
+
+
+@pytest.mark.parametrize('case', ['fork', 'pin', 'conditional', 'extras', 'subdirectory',
+    'wrong-name', 'dynamic', 'nested-repository', 'outside', 'alternate-module', 'explicit-local'])
+async def test_runtime_sibling_mapping_does_not_waive_source_choices(selected, monkeypatch, case):
+    report = await runtime_sibling_report(selected, monkeypatch, case=case)
+    assert report['packages']['fixture-dependency']['status'] != 'selected'
+    if case != 'explicit-local':
+        assert None in report['runtimeRequirements'][NAME]['constraints']['fixture-dependency']
+
+
+async def runtime_sibling_report(s, monkeypatch, *, module_root=False, editable=None, case='valid'):
+    import importlib.metadata
+    from test_selected_runtime_dependencies import dist
+    parent, target = s.root / 'modules/loop', s.root / 'modules/dependency'
+    parent.mkdir(parents=True); target.mkdir()
+    requirement = 'fixture-dependency @ git+' + URL + '@main#subdirectory=modules/dependency'
+    if case == 'fork': requirement = requirement.replace(URL, URL + '-fork')
+    if case == 'pin': requirement = requirement.replace('@main', '@' + OLD)
+    if case == 'conditional': requirement += ' ; python_version > "1"'
+    if case == 'extras': requirement = requirement.replace('fixture-dependency @', 'fixture-dependency[extra] @')
+    if case == 'subdirectory': requirement = requirement.replace('modules/dependency', 'elsewhere')
+    path = '../../../outside' if case == 'outside' else '../dependency'
+    mapping = '{path=' + json.dumps(path) + (',editable=' + str(editable).lower() if editable is not None else '') + '}'
+    (parent / 'pyproject.toml').write_text('[project]\nname="' + NAME + '"\nversion="1"\n'
+        'dependencies=[' + json.dumps(requirement) + ']\n[tool.uv.sources]\nfixture-dependency=' + mapping + '\n')
+    (target / 'pyproject.toml').write_text('[project]\nname="' +
+        ('another-package' if case == 'wrong-name' else 'fixture-dependency') + '"\nversion="1.0"\n' +
+        ('dynamic=["dependencies"]\n' if case == 'dynamic' else ''))
+    git(s.root, 'add', 'modules'); git(s.root, 'commit', '-m', 'runtime Git dependency with local contributor mapping')
+    head = git(s.root, 'rev-parse', 'HEAD')
+    s.marker.write_text(json.dumps({'git_url': URL, 'ref': 'main', 'commit': head}))
+    s.batch.names = {NAME: parent}
+    if module_root:
+        s.batch.names['fixture-dependency'] = target
+    if case == 'nested-repository':
+        git(target, 'init', '-b', 'main')
+    if case == 'alternate-module':
+        s.batch.names['fixture-dependency'] = s.home / 'other-local-source'
+    if case == 'explicit-local':
+        s.batch.names['fixture-dependency'] = target
+        s.collector.local_sources.add(target)
+    monkeypatch.setattr(importlib.metadata, 'distributions', lambda: [dist(
+        'fixture-dependency', revision=head, subdirectory='modules/dependency')])
+    return await s.collector.report(s.batch, s.config)
+
+
 async def test_preliminary_collection_allows_only_recognized_artifacts_before_alignment(selected):
     from amplifier_web import runtime_source_alignment as alignment
     from test_updates_cache import pyc

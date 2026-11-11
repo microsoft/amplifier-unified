@@ -14,15 +14,30 @@ PACKAGE = Path(__file__).resolve().parents[1] / "amplifier_web"
 
 
 def test_apply_settings_does_not_require_server_dependencies():
+    import amplifier_foundation
+
     # Use a fresh interpreter so a server module imported by another test cannot
     # mask an accidental dependency. Workers intentionally do not install aiohttp.
     runner = textwrap.dedent("""
         import importlib.util, sys
         from types import SimpleNamespace
         sys.path.insert(0, sys.argv[1])
+        sys.path.insert(0, sys.argv[2])
+        # Initialize the selected producer before simulating an older API.
+        # New Foundation versions export these classes during their own import;
+        # this check concerns the app's dependency-preparation import boundary.
+        import amplifier_foundation.session as native_session
+        for name in ('ActivationGate', 'NativeTranscriptGuard', 'NativeTranscriptConflict'):
+            if hasattr(native_session, name):
+                delattr(native_session, name)
         sys.modules['aiohttp'] = None
+        # Dependency preparation must remain importable in a retained worker
+        # before an included update installs the execution-only session APIs.
+        sys.modules['amplifier_foundation.session.activation'] = None
+        sys.modules['amplifier_foundation.session.transcript_guard'] = None
         assert importlib.util.find_spec('aiohttp') is None
-        from amplifier_web.host.session import _apply_settings
+        from amplifier_web.host.session import _apply_settings, prepare_dependencies
+        assert callable(prepare_dependencies)
         config = SimpleNamespace(settings={}, providers=[])
         ordinary = SimpleNamespace(tools=[], providers=[], hooks=[], session={}, agents={})
         assert _apply_settings(ordinary, config).tools == []
@@ -34,11 +49,13 @@ def test_apply_settings_does_not_require_server_dependencies():
         assert result.tools[0]['config']['browser']['host_adapter'] is True
         assert result.tools[1]['config']['observed_control'] is True
         assert sys.modules['aiohttp'] is None
+        assert sys.modules['amplifier_foundation.session.transcript_guard'] is None
         assert 'amplifier_web.ui_use' not in sys.modules
         assert 'amplifier_web.device_connections' not in sys.modules
     """)
     result = subprocess.run(
-        [sys.executable, '-I', '-c', runner, str(PACKAGE.parent)],
+        [sys.executable, '-I', '-c', runner, str(PACKAGE.parent),
+         str(Path(amplifier_foundation.__file__).resolve().parent.parent)],
         capture_output=True, text=True, timeout=15,
     )
     assert result.returncode == 0, result.stderr + result.stdout
@@ -51,15 +68,19 @@ def test_worker_scripts_do_not_expose_host_site_packages(tmp_path, entrypoint, r
     package.mkdir(parents=True)
     runtime = tmp_path / "runtime-site-packages"
     runtime.mkdir()
-    # The runtime owns Foundation; the isolated script may import its history
-    # types without making the host site-packages directory visible.
+    # The runtime owns Foundation; the isolated script may check its required
+    # session APIs without making the host site-packages directory visible.
     foundation = runtime / "amplifier_foundation" / "session"
     foundation.mkdir(parents=True)
     (foundation.parent / "__init__.py").write_text("")
     (foundation / "__init__.py").write_text("")
     (foundation / "history.py").write_text("class SessionHistoryStore: pass\n")
     (foundation / "jsonl.py").write_text("class TranscriptIndex: pass\n")
-    for name in (entrypoint, "runtime_protocol.py", "message_delivery.py", "response_completion.py", "ownership.py", "__init__.py", "runtime_bootstrap.py", "update_diagnostics.py"):
+    (foundation / "activation.py").write_text("class ActivationGate: pass\n")
+    (foundation / "transcript_guard.py").write_text(
+        "class NativeTranscriptGuard: pass\nclass NativeTranscriptConflict(RuntimeError): pass\n"
+    )
+    for name in (entrypoint, "runtime_protocol.py", "message_delivery.py", "response_completion.py", "ownership.py", "__init__.py", "runtime_bootstrap.py", "update_diagnostics.py", "runtime_qualification.py", "runtime_environment.py"):
         if (PACKAGE / name).exists():
             shutil.copy2(PACKAGE / name, package / name)
     shutil.copytree(PACKAGE.parent / "amplifier_operations", outer / "amplifier_operations")

@@ -242,7 +242,8 @@ def workspace_counts(directory, state, archive='active'):
         entry['recentActivityAt'] = max(entry['recentActivityAt'],recent or 0)
         entry['activityCounts'][kind] = entry['activityCounts'].get(kind,0)+count
         if kind == 'attention':
-            category = {'Work blocked':'blocked','Approval requested':'decision','Answer requested':'decision'}.get(label,'error')
+            category = {'Work blocked':'blocked','Approval requested':'decision','Answer requested':'decision',
+                        'Dependency decision requested':'decision'}.get(label,'error')
             entry['activityCounts'][category] = entry['activityCounts'].get(category,0)+count
     return result
 

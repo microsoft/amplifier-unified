@@ -146,8 +146,8 @@ conflicting acknowledgement cannot retire the outbox.
 Passive checks do not occupy the mutation queue, so they cannot delay Stop.
 New outbox entries retain their original nonsecret host/account and native-source
 namespace. Projection and acknowledgement require that exact namespace. Legacy
-entries without it remain stored with an explicit notice, rather than being
-silently assigned to the currently connected account or sent again.
+entries without it remain stored and inert, without being presented as a current
+chat delivery problem or silently assigned to the connected account or sent again.
 
 An input that left the resident message window may still have positive canonical
 runtime history, even when its command receipt is absent or unreadable. The

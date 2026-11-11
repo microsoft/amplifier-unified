@@ -7,36 +7,45 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from amplifier_web.runtime_qualification import RuntimeDependencyError, required_activation_gate
+from amplifier_web.runtime_qualification import RuntimeDependencyError, require_session_api
 
 
-@pytest.mark.parametrize('installed', [None, SimpleNamespace()])
-def test_missing_activation_api_requires_explicit_component_update(monkeypatch, installed):
-    monkeypatch.setitem(sys.modules, 'amplifier_foundation.session.activation', installed)
+@pytest.mark.parametrize('module,installed', [
+    ('activation', None),
+    ('activation', SimpleNamespace()),
+    ('transcript_guard', None),
+    ('transcript_guard', SimpleNamespace(NativeTranscriptConflict=RuntimeError)),
+    ('transcript_guard', SimpleNamespace(NativeTranscriptGuard=object)),
+])
+def test_missing_session_api_requires_explicit_component_update(monkeypatch, module, installed):
+    monkeypatch.setitem(sys.modules, 'amplifier_foundation.session.' + module, installed)
     with pytest.raises(RuntimeDependencyError, match='Settings > Updates'):
-        required_activation_gate()
+        require_session_api()
 
 
-def test_required_api_is_the_loaded_canonical_owner():
-    from amplifier_foundation.session.activation import ActivationGate
-
-    assert required_activation_gate() is ActivationGate
+def test_required_api_accepts_the_loaded_canonical_owner():
+    assert require_session_api() is None
 
 
-def test_unrelated_import_failure_is_not_reported_as_missing_api(monkeypatch):
+@pytest.mark.parametrize('error', [
+    ModuleNotFoundError('private dependency detail', name='unrelated_dependency'),
+    ImportError('unrelated initialization failure'),
+])
+def test_unrelated_import_failure_is_not_reported_as_missing_api(monkeypatch, error):
     import importlib
 
     def unavailable(name):
-        raise ModuleNotFoundError('private dependency detail', name='unrelated_dependency')
+        raise error
 
     monkeypatch.setattr(importlib, 'import_module', unavailable)
-    with pytest.raises(ModuleNotFoundError) as caught:
-        required_activation_gate()
-    assert caught.value.name == 'unrelated_dependency'
+    with pytest.raises(type(error)) as caught:
+        require_session_api()
+    assert caught.value is error
 
 
-@pytest.mark.parametrize('available', [False, True])
-def test_final_update_probe_requires_api_before_mount(tmp_path, monkeypatch, capsys, available):
+@pytest.mark.parametrize('missing', ['activation', 'transcript_guard', None])
+def test_final_update_probe_requires_api_before_mount(tmp_path, monkeypatch, capsys, missing):
+    available = missing is None
     import importlib.util
     from amplifier_web.update_diagnostics import PROBE_PREFIX
 
@@ -51,7 +60,7 @@ def test_final_update_probe_requires_api_before_mount(tmp_path, monkeypatch, cap
                         if name in {'amplifier_app_cli', 'amplifier_loop_live_cli', 'amplifier_workspace'}
                         else find_spec(name))
     if not available:
-        monkeypatch.setitem(sys.modules, 'amplifier_foundation.session.activation', None)
+        monkeypatch.setitem(sys.modules, 'amplifier_foundation.session.' + missing, None)
         with pytest.raises(SystemExit) as caught:
             runpy.run_module('amplifier_web.update_probe', run_name='__main__')
         assert caught.value.code == 1
@@ -68,7 +77,8 @@ def test_final_update_probe_requires_api_before_mount(tmp_path, monkeypatch, cap
         assert facts['errorType'] == 'RuntimeDependencyError'
 
 
-async def test_old_worker_refuses_before_native_ownership_or_history(tmp_path, monkeypatch):
+@pytest.mark.parametrize('missing', ['activation', 'transcript_guard'])
+async def test_old_worker_refuses_before_native_ownership_or_history(tmp_path, monkeypatch, missing):
     from amplifier_foundation.session import SharedSessionStore
     from amplifier_web.runtime_worker import Worker
 
@@ -88,7 +98,7 @@ async def test_old_worker_refuses_before_native_ownership_or_history(tmp_path, m
     monkeypatch.setattr(SharedSessionStore, 'acquire', forbidden)
     monkeypatch.setattr('amplifier_web.history_revision.recover_pending', forbidden)
     monkeypatch.setattr('amplifier_web.host.session.prepare_manager', forbidden)
-    monkeypatch.setitem(sys.modules, 'amplifier_foundation.session.activation', None)
+    monkeypatch.setitem(sys.modules, 'amplifier_foundation.session.' + missing, None)
     events = []
     monkeypatch.setattr('amplifier_web.runtime_worker.publish', events.append)
     worker = Worker()
