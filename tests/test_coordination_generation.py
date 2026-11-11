@@ -109,7 +109,7 @@ async def test_two_distinct_roots_without_grant_inherit_and_return_once(app):
 
 
 @pytest.mark.parametrize('complete_after_capture', [False, True])
-async def test_fresh_creation_keeps_completed_history_but_not_new_completion(app, monkeypatch):
+async def test_fresh_creation_keeps_completed_history_but_not_new_completion(app, monkeypatch, complete_after_capture):
     from amplifier_web.task_continuity import publish_task_observation
     from test_task_continuity import controls, create
     source = app.state['sessions'][0]

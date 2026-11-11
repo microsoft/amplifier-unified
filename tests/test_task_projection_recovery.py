@@ -217,3 +217,36 @@ async def test_different_task_revision_is_ordered_by_current_native_owner(app, m
         assert native.state_path().read_bytes() == saved
     finally:
         await native.close()
+
+
+@pytest.mark.parametrize('saved_authority', ['current', 'missing', 'corrupt'])
+async def test_unrelated_high_revision_cannot_replace_current_task(app, monkeypatch, saved_authority):
+    source = app.state['sessions'][0]
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(app.data_dir))
+    native = controls(source['id'])
+    try:
+        await create(native)
+        current = native.tasks.canonical_snapshot()
+        task_continuity.publish_task_observation(app, source['id'], current)
+        before = copy.deepcopy((source['task'], app.state['runtimeControl'][source['id']]))
+        if saved_authority == 'missing':
+            native.state_path().unlink()
+        elif saved_authority == 'corrupt':
+            native.state_path().write_text('{broken')
+        old = {**current['task'], 'id': 'unrelated-old-task', 'revision': 73, 'status': 'completed'}
+        publication, revision = task_continuity.publish_task_observation(app, source['id'], {'task': old})
+        assert publication == {'status': 'superseded'} and revision == current['task']['revision']
+        assert (source['task'], app.state['runtimeControl'][source['id']]) == before
+    finally:
+        await native.close()
+
+
+def test_same_task_progress_never_reads_control_history(tmp_path, monkeypatch):
+    old = {'id': 'same-task', 'revision': 3, 'status': 'active'}
+    session = {'id': 'one', 'task': old}
+    service = SimpleNamespace(data_dir=tmp_path, state={'runtimeControl': {
+        'one': {'task.get': {'task': old}}}})
+    monkeypatch.setattr(task_continuity, '_load_control',
+                        Mock(side_effect=AssertionError('ordinary task progress must not read persisted history')))
+    assert task_continuity.observe_task(service, session, {'task': {**old, 'revision': 4}}) == (True, 4)
+    assert task_continuity.observe_task(service, session, {'task': old}) == (False, 4)
