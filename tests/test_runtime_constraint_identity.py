@@ -1,6 +1,7 @@
 """Restriction compatibility must not invent package-selection authority."""
 import json
 import hashlib
+import shutil
 from itertools import permutations
 
 import pytest
@@ -77,9 +78,31 @@ def test_same_manifest_constraint_alternatives_keep_unknown_and_do_not_select():
     assert None in policy.constraint_declarations(raw)[NAME]
 
 
+def immutable_shared_selection(s, monkeypatch):
+    """Match a shared-store object's immutable marker and separate ref binding."""
+    head = git(s.root, 'rev-parse', 'HEAD')
+    store = s.home / 'source-store'
+    root = store / 'objects/repository' / head
+    root.parent.mkdir(parents=True)
+    shutil.move(str(s.root), root)
+    s.batch.names = {name: root / path.relative_to(s.root)
+                     for name, path in s.batch.names.items()}
+    s.root = root
+    s.marker = root / '.amplifier_cache_meta.json'
+    s.marker.write_text(json.dumps({'git_url': URL, 'ref': head, 'commit': head, 'immutable': True}))
+    bindings = s.stage / 'foundation/cache/.source-bindings'
+    bindings.mkdir(parents=True)
+    binding = bindings / 'fixture.json'
+    binding.write_text(json.dumps({'git_url': URL, 'ref': 'main', 'commit': head}))
+    monkeypatch.setenv('AMPLIFIER_SOURCE_STORE', str(store))
+    return binding
+
+
+@pytest.mark.parametrize('storage', ['cache', 'shared'])
 @pytest.mark.parametrize('alias_fork', [False, True])
 @pytest.mark.parametrize('optional', [False, True])
-async def test_runtime_git_sibling_keeps_its_dependency_but_not_redundant_local_uv_mapping(selected, alias_fork, optional):
+async def test_runtime_git_sibling_keeps_its_dependency_but_not_redundant_local_uv_mapping(
+        selected, monkeypatch, storage, alias_fork, optional):
     s = selected
     child = s.root / 'modules/tool'; child.mkdir(parents=True)
     (child / 'pyproject.toml').write_text(
@@ -91,8 +114,55 @@ async def test_runtime_git_sibling_keeps_its_dependency_but_not_redundant_local_
     git(s.root, 'add', 'modules'); git(s.root, 'commit', '-m', 'runtime sibling and dev mapping')
     s.marker.write_text(json.dumps({'git_url': URL, 'ref': 'main', 'commit': git(s.root, 'rev-parse', 'HEAD')}))
     s.batch.names['fixture-tool'] = child
+    if storage == 'shared':
+        immutable_shared_selection(s, monkeypatch)
+    before = s.marker.read_bytes(), (s.root / 'modules/tool/pyproject.toml').read_bytes()
     report = await s.collector.report(s.batch, s.config)
     assert report['packages'][NAME]['status'] == ('authored-constraint' if alias_fork else 'selected')
+    checked = {NAME: {'url': URL, 'ref': 'main', 'subdirectory': '',
+                      'revision': git(s.root, 'rev-parse', 'HEAD')}}
+    if not alias_fork:
+        alignment.verify_checked_selection(checked, report, exact=True)
+        assert report['packages'][NAME]['authoredConstraints'][0]['declarations'] == [{
+            'url': URL, 'ref': 'main', 'refKind': 'rev', 'subdirectory': ''}]
+    else:
+        with pytest.raises(ValueError):
+            alignment.verify_checked_selection(checked, report, exact=True)
+    assert before == (s.marker.read_bytes(), (s.root / 'modules/tool/pyproject.toml').read_bytes())
+    assert not any(any(verb in cmd for verb in ('fetch', 'checkout', 'reset', 'clean', 'install')) for cmd in s.commands)
+
+
+@pytest.mark.parametrize('case', ['missing-binding', 'wrong-commit', 'wrong-ref', 'wrong-repository',
+                                  'conflicting-ref', 'local', 'pin'])
+async def test_shared_sibling_development_mapping_cannot_supply_source_authority(selected, monkeypatch, case):
+    s = selected
+    child = s.root / 'modules/tool'; child.mkdir(parents=True)
+    ref = s.old if case == 'pin' else 'main'
+    (child / 'pyproject.toml').write_text(
+        '[project]\nname="fixture-tool"\nversion="1"\n'
+        'dependencies=["' + NAME + ' @ git+' + URL + '@' + ref + '"]\n'
+        '[tool.uv.sources]\n' + NAME + '={path="../..",editable=true}\n')
+    git(s.root, 'add', 'modules'); git(s.root, 'commit', '-m', 'protected sibling')
+    s.batch.names['fixture-tool'] = child
+    binding = immutable_shared_selection(s, monkeypatch)
+    value = json.loads(binding.read_text())
+    if case == 'missing-binding':
+        binding.unlink()
+    elif case in {'wrong-commit', 'wrong-ref', 'wrong-repository'}:
+        value[{'wrong-commit': 'commit', 'wrong-ref': 'ref', 'wrong-repository': 'git_url'}[case]] = {
+            'wrong-commit': s.old, 'wrong-ref': 'stable', 'wrong-repository': URL + '-fork'}[case]
+        binding.write_text(json.dumps(value))
+    elif case == 'conflicting-ref':
+        s.collector.observe('git+' + URL + '@stable', s.config)
+    elif case == 'local':
+        s.collector.local_sources.add(s.root)
+    before = s.marker.read_bytes()
+    checked = {NAME: {'url': URL, 'ref': 'main', 'subdirectory': '',
+                      'revision': git(s.root, 'rev-parse', 'HEAD')}}
+    with pytest.raises(ValueError):
+        await alignment.checked_batch_sources(s.batch, s.collector, s.config, checked)
+    assert before == s.marker.read_bytes()
+    assert not any(any(verb in cmd for verb in ('fetch', 'checkout', 'reset', 'clean', 'install')) for cmd in s.commands)
 
 
 @pytest.mark.parametrize('change', [

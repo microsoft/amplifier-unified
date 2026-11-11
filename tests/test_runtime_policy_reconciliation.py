@@ -535,14 +535,15 @@ async def test_host_component_selection_obeys_source_policy_boundaries(selected,
     assert (URL, 'unused') not in s.collector.references
 
 
-def test_previous_host_component_observation_receipt_is_rechecked(selected, monkeypatch):
+@pytest.mark.parametrize('previous_version', [2, 4])
+def test_previous_host_component_observation_receipt_is_rechecked(selected, monkeypatch, previous_version):
     s = selected
     monkeypatch.setattr('amplifier_web.host.config.read_config', lambda *a, **kw: s.config)
     oldrow = row()
     receipt = s.home / 'updates/baseline-runtime'
     receipt.mkdir()
     receipt.joinpath(migration.RECEIPT).write_text(json.dumps({
-        'version': 1, 'selectionVersion': 2, 'configuration': migration.configuration(s.config),
+        'version': 1, 'selectionVersion': previous_version, 'configuration': migration.configuration(s.config),
         'remaining': migration.legacy_candidates([oldrow]),
         'decisions': {NAME: 'unselected'}, 'offeredPackages': []}))
     assert migration.pending(s.home, None, [oldrow]) is not None
