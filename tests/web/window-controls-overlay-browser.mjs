@@ -56,16 +56,11 @@ try{
   const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
   const app=page.locator('#amp-one');
   const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
-  const presentation=async patch=>{const change=await page.evaluate(async patch=>{
+  const presentation=patch=>page.evaluate(async patch=>{
     const state=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
     const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:state.revision,composition:{...state.effectiveComposition,presentation:{...state.effectiveComposition.presentation,...patch}}});
-    if(!prepared.accepted)throw Error(JSON.stringify(prepared));
-    const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:state.revision,changeId:prepared.result.id});
-    if(!applied.accepted)throw Error(JSON.stringify(applied));
-    return {revision:state.revision+1,commandId:applied.result.commandId};
+    await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:state.revision,changeId:prepared.result.id});
   },patch);
-   await page.waitForFunction(({patch,change})=>{const a=window.amplifier.getState().appearance;return window.amplifier.getShellState()?.revision===change.revision&&Object.entries(patch).every(([key,value])=>a.effective[key]===value&&a.renderedPreferences[key]===value)&&(!change.commandId||a.command?.id===change.commandId&&a.command.status==='stored')},{patch,change});
-  };
   const geometry=async(rect,visible=true)=>{
     await page.evaluate(([rect,visible])=>window.__simulatedWco(rect,visible),[rect,visible]);
     if(!visible){await expect(app).not.toHaveAttribute('data-window-controls-overlay','true');return}
@@ -78,7 +73,6 @@ try{
     await expect.poll(()=>page.locator(selector).evaluate((header,rect)=>{
       const safe=Math.max(48,rect.y+rect.height),stacked=document.getElementById('amp-one').dataset.windowControlsOverlayStacked==='true';
       const b=header.getBoundingClientRect();
-      if(header.closest('.a-canvas-panel[data-focused=true]'))return b.top>=safe-1&&Math.abs(b.x)<1&&Math.abs(b.width-innerWidth)<1;
       return stacked?b.top>=safe-1:Math.abs(b.x)<1&&Math.abs(b.width-innerWidth)<1&&Math.abs(b.y-rect.y)<1;
     },rect)).toBe(true);
     const controls=await page.locator(selector).evaluate((header,rect)=>[...header.querySelectorAll('button,a,input,select,textarea,summary,[role=button]')].filter(el=>el.getClientRects().length).map(el=>{
@@ -90,33 +84,27 @@ try{
   const centeredChrome=async(selector,rect)=>{
     if(await app.getAttribute('data-window-controls-overlay-stacked')==='true')return;
     const facts=await page.locator(selector).evaluate((header,rect)=>{
-      const box=header.getBoundingClientRect(),focused=!!header.closest('.a-canvas-panel[data-focused=true]');
-      const band=focused?{top:box.top,bottom:box.bottom}: {top:rect.y,bottom:rect.y+rect.height};
-      const center=(band.top+band.bottom)/2;
+      const center=rect.y+rect.height/2;
       return [...header.querySelectorAll('.a-work-brand img,.a-work-heading>strong,.a-work-heading>svg,button:not(.a-work-menu-items button):not(.a-canvas-tabs button),button>svg')]
         .filter(el=>el.getClientRects().length&&!el.closest('.a-work-menu-items'))
-        .map(el=>{const b=el.getBoundingClientRect();return {name:el.getAttribute('aria-label')||el.tagName,delta:Math.abs(b.y+b.height/2-center),top:b.top,bottom:b.bottom,band}});
+        .map(el=>{const b=el.getBoundingClientRect();return {name:el.getAttribute('aria-label')||el.tagName,delta:Math.abs(b.y+b.height/2-center),top:b.top,bottom:b.bottom}});
     },rect);
     assert.ok(facts.length>0,'No rendered chrome alignment targets');
     for(const fact of facts){
-      assert.ok(fact.delta<=1,'Chrome not centered in its header band: '+JSON.stringify({selector,rect,fact}));
-      assert.ok(fact.top>=fact.band.top-1&&fact.bottom<=fact.band.bottom+1,'Chrome exceeds its header band: '+JSON.stringify(fact));
+      assert.ok(fact.delta<=1,'Chrome not centered on native strip: '+JSON.stringify({selector,rect,fact}));
+      assert.ok(fact.top>=rect.y-1&&fact.bottom<=rect.y+rect.height+1,'Chrome exceeds native strip: '+JSON.stringify(fact));
     }
   };
   const continuousChrome=async(selector,rect)=>{
     const facts=await page.locator(selector).evaluate(header=>{
       const style=getComputedStyle(header),box=header.getBoundingClientRect();
-      return {x:box.x,y:box.y,width:box.width,height:box.height,focused:!!header.closest('.a-canvas-panel[data-focused=true]'),background:style.backgroundColor,image:style.backgroundImage};
+      return {x:box.x,y:box.y,width:box.width,height:box.height,background:style.backgroundColor,image:style.backgroundImage};
     });
-    const safe=Math.max(48,rect.y+rect.height);
-    assert.equal(facts.x,0);
-    if(facts.focused){assert.ok(facts.y>=safe);assert.equal(facts.height,52)}
-    else{assert.equal(facts.y,rect.y);assert.ok(facts.height>=safe-rect.y)}
-    assert.equal(facts.width,(await page.viewportSize()).width);
+    assert.equal(facts.x,0);assert.equal(facts.y,rect.y);
+    assert.equal(facts.width,(await page.viewportSize()).width);assert.ok(facts.height>=Math.max(48,rect.y+rect.height)-rect.y);
     // Raster evidence, not just correct-looking computed styles: the bottom
     // of the band must actually paint under the reserved native side areas.
-    const sampleY=facts.focused?facts.y+facts.height-2:safe-2;
-    const pixel=x=>page.screenshot({clip:{x,y:sampleY,width:1,height:1}});
+    const pixel=x=>page.screenshot({clip:{x,y:Math.max(48,rect.y+rect.height)-2,width:1,height:1}});
     const center=await pixel(rect.x+2),left=await pixel(2),right=await pixel((await page.viewportSize()).width-2);
     assert.deepEqual(left,center,'Unpainted band below left native controls');
     assert.deepEqual(right,center,'Unpainted band below right native controls');
@@ -133,13 +121,13 @@ try{
       for(const rect of [{x:80,y:0,width:width-80,height:32},{x:86,y:0,width:width-180,height:38},{x:0,y:0,width:width-140,height:32},{x:80,y:0,width:width-80,height:24},{x:70,y:8,width:width-210,height:52}]){
         await geometry(rect);
         for(const reserved of [0,16]){
-          await action('appearance.preview',{name:'Header decoration clearance',css:`#amp-one{--a-header-decoration-height:${reserved}px}`});
+          await action('theme.preview',{name:'Header decoration clearance',css:`#amp-one{--a-header-decoration-height:${reserved}px}`});
           await clearHeader('.a-work-header',rect);await centeredChrome('.a-work-header',rect);
           const stacked=await app.getAttribute('data-window-controls-overlay-stacked')==='true';
           const actual=await page.locator('.a-work-header').evaluate(el=>el.getBoundingClientRect().height);
           assert.ok(actual>=Math.max(48,rect.y+rect.height)-rect.y+reserved-1,'Reserved strip must have layout space');
           if(!stacked)assert.equal(Math.round(actual),Math.max(48,rect.y+rect.height)-rect.y+reserved);
-          await action('appearance.preview.cancel',{});
+          await action('theme.revert');
         }
       }
     }
@@ -168,18 +156,7 @@ try{
       await geometry(rect);await clearHeader('.a-work-header',rect);await centeredChrome('.a-work-header',rect);
       await action('view.update',{patch:{canvasFocused:true}});await expect(page.locator('.a-canvas-panel')).toHaveAttribute('data-focused','true');
       await clearHeader('.a-canvas-panel[data-focused=true] .a-canvas-head',rect);await centeredChrome('.a-canvas-panel[data-focused=true] .a-canvas-head',rect);
-      const [containerHeaderBox,focusedHeaderBox]=await Promise.all([
-        page.locator('.a-work-header').boundingBox(),
-        page.locator('.a-canvas-panel[data-focused=true] .a-canvas-head').boundingBox(),
-      ]);
-      assert.ok(containerHeaderBox&&focusedHeaderBox&&focusedHeaderBox.y>=containerHeaderBox.y+containerHeaderBox.height-1,
-        'Focused Canvas header overlaps the visible container header: '+JSON.stringify({containerHeaderBox,focusedHeaderBox}));
-      // Focus fills below the container header; its genuine visibility toggle
-      // remains reachable while the other background controls are inert.
-      await expect(page.locator('.a-work-header')).toBeVisible();
-      const toggle=page.locator('#canvas-toggle');
-      await expect(toggle).toBeVisible();
-      assert.ok(await toggle.evaluate(el=>{const b=el.getBoundingClientRect();return el.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))}),'Container Canvas toggle is occluded while focused');
+      await expect(page.locator('.a-work-header')).toBeHidden();
       const exit=page.getByRole('button',{name:'Exit canvas focus',exact:true});
       assert.ok(await exit.evaluate(el=>{const b=el.getBoundingClientRect();return el.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))}),'Focused header control is occluded');
       await expect(frame.getByRole('textbox',{name:'Retained note'})).toHaveValue('Do not remount');
@@ -209,20 +186,18 @@ try{
   const macRect={x:86,y:0,width:1100,height:38};await geometry(macRect);
   await presentation({scheme:'dark'});
   const aurora=(await action('theme.read',{id:'builtin:aurora'})).result;
-  await action('appearance.preview',{name:aurora.name,css:aurora.css});
-  // Reference supplies an explicit chrome token; opaque native bands must
-  // still paint continuously without the optional artwork join.
-  await expect(app).toHaveAttribute('data-window-chrome-blend','false');
+  await action('theme.preview',{name:aurora.name,css:aurora.css});
+  await expect(app).toHaveAttribute('data-window-chrome-blend','true');
   await continuousChrome('.a-work-header',macRect);
   await page.screenshot({path:out+'/mac-chrome-aurora-dark.png'});
   await action('view.update',{patch:{canvasFocused:true}});
   await continuousChrome('.a-canvas-panel[data-focused=true] .a-canvas-head',macRect);
-  await action('view.update',{patch:{canvasFocused:false}});await action('appearance.preview.cancel',{});
+  await action('view.update',{patch:{canvasFocused:false}});await action('theme.revert');
   // Test the reported boundary itself, not just paint inside the title band.
   // Temporarily hide existing layout content to sample the backdrop without
   // panel borders/shadows; no stylesheet or shipped paint rule is injected.
   const backdropImage='linear-gradient(90deg, rgb(70, 40, 100), rgb(30, 90, 110))';
-  await action('appearance.preview',{name:'Joined root artwork',css:`#amp-one{--a-chrome-bg:initial;--a-bg:rgb(20,30,40);background-color:var(--a-bg);background-image:${backdropImage}}#amp-one [data-part="header"]{background-color:var(--a-bg)}`});
+  await action('theme.preview',{name:'Joined root artwork',css:`#amp-one{--a-bg:rgb(20,30,40);background-color:var(--a-bg);background-image:${backdropImage}}`});
   await expect(app).toHaveAttribute('data-window-chrome-blend','true');
   const layout=page.locator('#amp-one>.a-layout');await layout.evaluate(el=>el.hidden=true);
   const row=y=>page.screenshot({clip:{x:0,y,width:1280,height:1}});
@@ -237,24 +212,24 @@ try{
   await layout.evaluate(el=>el.hidden=false);await plain.close();
   await page.screenshot({path:out+'/joined-background-with-content.png'});
   // Resolved header paint, not the palette token, owns the join color.
-  await action('appearance.preview',{name:'Matching paint outside palette',css:`#amp-one{--a-chrome-bg:initial;background-color:rgb(80,90,100)!important;background-image:${backdropImage}}#amp-one .a-work-header{background:rgb(80,90,100)!important}`});
+  await action('theme.preview',{name:'Matching paint outside palette',css:`#amp-one{background-color:rgb(80,90,100)!important;background-image:${backdropImage}}#amp-one .a-work-header{background:rgb(80,90,100)!important}`});
   await expect(app).toHaveAttribute('data-window-chrome-blend','true');
   await layout.evaluate(el=>el.hidden=true);
   samePaint(await row(47),await row(48),'Join incorrectly used the palette instead of painted header');
   await layout.evaluate(el=>el.hidden=false);
   await presentation({decorations:false});await expect(app).toHaveAttribute('data-window-chrome-blend','false');
   await presentation({decorations:true});await expect(app).toHaveAttribute('data-window-chrome-blend','true');
-  await action('appearance.preview',{name:'Explicit custom chrome',css:`#amp-one{--a-chrome-bg:rgb(20,30,40);background-image:${backdropImage}}`});
+  await action('theme.preview',{name:'Explicit custom chrome',css:`#amp-one{--a-chrome-bg:rgb(20,30,40);background-image:${backdropImage}}`});
   await expect(app).toHaveAttribute('data-window-chrome-blend','false');
-  await action('appearance.preview',{name:'Header-local custom chrome',css:`#amp-one{--a-chrome-bg:initial;background-image:${backdropImage}}#amp-one .a-work-header{--a-chrome-bg:var(--a-bg)}`});
+  await action('theme.preview',{name:'Header-local custom chrome',css:`#amp-one{background-image:${backdropImage}}#amp-one .a-work-header{--a-chrome-bg:var(--a-bg)}`});
   await expect(app).toHaveAttribute('data-window-chrome-blend','false');
-  await action('appearance.preview',{name:'Transparent custom header',css:`#amp-one{--a-chrome-bg:initial;background-image:${backdropImage}}#amp-one .a-work-header{background:transparent!important}`});
+  await action('theme.preview',{name:'Transparent custom header',css:`#amp-one{background-image:${backdropImage}}#amp-one .a-work-header{background:transparent!important}`});
   await expect(app).toHaveAttribute('data-window-chrome-blend','false');
-  await action('appearance.preview.cancel',{});
+  await action('theme.revert');
   // A single full-width paint also preserves gradient continuity. Compare
   // rendered pixels against the same gradient in a plain viewport-wide box.
   const gradient='linear-gradient(90deg, rgb(240, 20, 20), rgb(20, 20, 240))';
-  await action('appearance.preview',{name:'Gradient chrome regression',css:`#amp-one .a-work-header,#amp-one .a-canvas-panel[data-focused=true] .a-canvas-head{background:${gradient}!important}`});
+  await action('theme.preview',{name:'Gradient chrome regression',css:`#amp-one .a-work-header,#amp-one .a-canvas-panel[data-focused=true] .a-canvas-head{background:${gradient}!important}`});
   await expect.poll(()=>page.locator('.a-work-header').evaluate(el=>getComputedStyle(el).backgroundImage)).toBe(gradient);
   await expect(app).toHaveAttribute('data-window-chrome-blend','false');
   const reference=await context.newPage();
@@ -268,15 +243,12 @@ try{
   await expect(page.locator('.a-canvas-panel')).toHaveAttribute('data-focused','true');
   await page.evaluate(()=>document.activeElement?.blur());
   await expect(page.getByRole('tooltip')).toHaveCount(0);
-  const focusedBox=await page.locator('.a-canvas-panel[data-focused=true] .a-canvas-head').boundingBox();
-  assert.ok(focusedBox&&focusedBox.y>=Math.max(48,macRect.y+macRect.height));
-  const focusedBand={...band,y:Math.floor(focusedBox.y+focusedBox.height-2)};
-  samePaint(await page.screenshot({clip:focusedBand}),expectedBand,'Focused Canvas gradient restarted across its full-width header');
-  await reference.close();await action('view.update',{patch:{canvasFocused:false}});await action('appearance.preview.cancel',{});
+  samePaint(await page.screenshot({clip:band}),expectedBand,'Focused Canvas gradient restarted at native boundary');
+  await reference.close();await action('view.update',{patch:{canvasFocused:false}});await action('theme.revert');
   const rect={x:80,y:0,width:1200,height:32};await geometry(rect);
   const chatActions=page.getByRole('button',{name:'Chat',exact:true});
   await expect(chatActions.locator('.lucide-message-square-more')).toHaveCount(0);
-  await expect(chatActions.locator('.lucide-message-circle')).toHaveCount(1);
+  await expect(chatActions.locator('.lucide-sliders-horizontal')).toHaveCount(1);
   await chatActions.focus();await page.keyboard.press('Enter');
   const menu=page.getByRole('group',{name:'Chat',exact:true});await expect(menu).toBeVisible();
   await expect(menu.getByRole('button',{name:'Rename',exact:true})).toBeFocused();
@@ -292,27 +264,22 @@ try{
     assert.ok(palette.result.items.some(row=>row.id===id));
     const theme=(await action('theme.read',{id})).result;
     for(const scheme of ['light','dark']){
-      await presentation({scheme});await action('appearance.preview',{name:theme.name,css:theme.css});
+      await presentation({scheme});await action('theme.preview',{name:theme.name,css:theme.css});
       await expect(app).toHaveAttribute('data-theme-scheme',scheme);await geometry(macRect);
       await clearHeader('.a-work-header',macRect);await centeredChrome('.a-work-header',macRect);
       await action('view.update',{patch:{canvasFocused:true}});await centeredChrome('.a-canvas-panel[data-focused=true] .a-canvas-head',macRect);
       await action('view.update',{patch:{canvasFocused:false}});
       await page.screenshot({path:out+'/'+id.split(':')[1]+'-'+scheme+'.png'});
       await geometry(rect);
-      await action('appearance.preview.cancel',{});
+      await action('theme.revert');
     }
   }
   // Persist a CSS skin that changes geometry as well as paint. Host safety rules
   // must win the former without flattening the latter, including after reload.
   const skin=(await action('theme.read',{id:'builtin:graphite'})).result.css+'\n#amp-one .a-work-header{position:relative;margin:0;width:100%;min-height:80px;background:rgb(21,37,51)!important}';
-  const saved=(await action('theme.save',{name:'Saved WCO geometry skin',css:skin,description:'Synthetic WCO paint and geometry regression'})).result;
+  const saved=(await action('theme.save',{name:'Saved WCO geometry skin',css:skin})).result;
   const savedTheme=(await action('theme.read',{id:saved.id})).result;
-  const preferences=(await action('appearance.preferences.read')).result;
-  const scope=preferences.activeScope,profile=scope==='client'?preferences.local:preferences.shared;
-  await action('appearance.preferences.update',{scope,generation:preferences.generation,expectedRevision:profile.revision,
-   ...(scope==='client'?{expectedStorageVersion:profile.storageVersion}:{}),patch:{appearanceId:savedTheme.id}});
-  await page.waitForFunction(id=>{const a=window.amplifier.getState().appearance;return a.theme.id===id&&a.effective.appearanceId===id},savedTheme.id);
-  await clearHeader('.a-work-header',rect);
+  await action('theme.apply',{name:savedTheme.name,css:savedTheme.css});await clearHeader('.a-work-header',rect);
   assert.equal(await page.locator('.a-work-header').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(21, 37, 51)');
   // Only interactive parts are excluded. Passive title text and the large
   // flex wrapper must remain drag surfaces, even in a saved custom skin.

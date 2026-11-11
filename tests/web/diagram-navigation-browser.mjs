@@ -42,17 +42,14 @@ async function readyLayout(artifact,kind,content,{undersize=false}={}){
    const sample=()=>{
     const state=window.amplifier.getState(),view=state.canvasWorkspace?.views?.find(row=>row.viewId===target.viewId);
     const stage=document.querySelector('[data-canvas-view="primary"] .a-diagram-stage'),image=stage?.querySelector('img');
-    const panel=stage?.closest('[data-part="canvas"]'),reader=stage?.closest('.a-canvas-reader'),viewer=stage?.closest('.a-canvas-viewer');
+    const panel=stage?.closest('[data-part="canvas"]'),viewer=stage?.closest('.a-canvas-viewer');
     if(state.canvas?.id!==target.resourceId||state.canvas.kind!==kind||state.canvas.content!==content||
      !Object.entries(target).every(([key,value])=>view?.[key]===value)||
      view.activation?.status!=='ready'||view.renderReports?.preview?.status!=='ready'||
-     !image?.complete||!image.naturalWidth||getComputedStyle(image).visibility!=='visible'||!panel||!reader||!viewer||
+     !image?.complete||!image.naturalWidth||getComputedStyle(image).visibility!=='visible'||!viewer||
      panel.querySelector('.a-canvas-result:not(.success)'))return null;
     const rect=node=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height}};
-    const scroll=node=>({clientWidth:node.clientWidth,clientHeight:node.clientHeight,scrollWidth:node.scrollWidth,scrollHeight:node.scrollHeight});
-    return {box:rect(stage),picture:rect(image),body:rect(viewer),reader:rect(reader),pane:rect(panel),
-     viewport:{x:0,y:0,width:innerWidth,height:innerHeight},
-     outerScroll:{page:scroll(document.scrollingElement),reader:scroll(reader),viewer:scroll(viewer)},src:image.src};
+    return {box:rect(stage),picture:rect(image),body:rect(viewer),src:image.src};
    };
    let previous=sample();
    for(let frame=0;frame<3;frame++){
@@ -68,20 +65,6 @@ async function readyLayout(artifact,kind,content,{undersize=false}={}){
  // Stability is independent of acceptance: a stable undersized stage must fail
  // the same fit checks, not be polled until it happens to satisfy them.
  readyLayouts.push({kind,target,undersize,...layout});
- // Fit relative to an oversized viewer is not containment within the real pane.
- for(const [name,child,parent] of [
-  ['pane',layout.pane,layout.viewport],['reader',layout.reader,layout.pane],
-  ['viewer',layout.body,layout.reader],['standalone stage',layout.box,layout.body],
- ]){
-  assert.ok(child.width>0&&child.height>0&&child.x>=parent.x-1&&child.y>=parent.y-1&&
-   child.x+child.width<=parent.x+parent.width+1&&child.y+child.height<=parent.y+parent.height+1,
-   `${kind} ${name} stays within its containing surface: ${JSON.stringify({child,parent})}`);
- }
- // Panning/zooming belongs to the standalone stage, not an overflowing reader or page.
- for(const [name,scroll] of Object.entries(layout.outerScroll)){
-  assert.ok(scroll.scrollWidth<=scroll.clientWidth+1&&scroll.scrollHeight<=scroll.clientHeight+1,
-   `${kind} does not require outer ${name} scrolling: ${JSON.stringify(scroll)}`);
- }
  return layout;
 }
 async function recordPan(kind,phase,assertionImageBox=null){

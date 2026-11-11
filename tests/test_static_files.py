@@ -2,7 +2,6 @@
 import asyncio
 from contextlib import asynccontextmanager
 import gzip
-from pathlib import Path
 import re
 import ssl
 
@@ -112,11 +111,11 @@ async def test_tls_disconnect_does_not_break_later_file_request(tmp_path):
 
 
 async def test_bundled_index_tls_and_auth_boundaries(tmp_path):
-    from amplifier_web import server as app_server
+    from amplifier_web.server import create_app
     from test_service import Runtime
 
-    app = await app_server.create_app(tmp_path / 'app', runtime=Runtime(), voice=False,
-                                      background_updates=False, background_work=False, preload_providers=False)
+    app = await create_app(tmp_path / 'app', runtime=Runtime(), voice=False,
+                           background_updates=False, background_work=False, preload_providers=False)
     async with file_host(tmp_path, app=app) as (server, client, _):
         async with client.get(server.make_url('/'), allow_redirects=False) as response:
             assert response.status == 307
@@ -133,16 +132,5 @@ async def test_bundled_index_tls_and_auth_boundaries(tmp_path):
         async with client.get(server.make_url(asset), headers=headers) as response:
             assert response.status == 200
             assert len(await response.read()) > 1000
-        reference_url = server.make_url('/reference.amplifier.css')
-        async with client.get(reference_url, allow_redirects=False) as response:
-            assert response.status == 307
-        async with client.get(reference_url, headers={**headers, 'Accept-Encoding': 'identity'},
-                              allow_redirects=False) as response:
-            assert response.status == 200
-            assert response.content_type == 'text/css'
-            reference = Path(app_server.__file__).parent / 'static/reference.amplifier.css'
-            expected = reference.read_bytes()
-            assert expected
-            assert await response.read() == expected
         async with client.get(server.make_url('/'), headers={**headers, 'Host': 'untrusted.test'}) as response:
             assert response.status == 403

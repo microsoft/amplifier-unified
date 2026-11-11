@@ -18,25 +18,7 @@ try{
  page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));
  await page.goto(url);await showFixtureConversation(page,{navPinned:false});await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
  const clientId=await page.evaluate(()=>window.amplifier.shellClientId);
- const proposals=new Map();
- const action=async(name,args={})=>{
-  const receipt=await page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
-  assert.equal(receipt.accepted,true,name+': '+JSON.stringify(receipt.error||receipt));
-  if(name==='shell.changes.prepare')proposals.set(receipt.result.id,args.composition);
-  if(name==='shell.changes.apply'){
-   const composition=proposals.get(args.changeId);assert.ok(composition,'Apply a proposal prepared in this journey');
-   // A mixed component/presentation receipt can precede browser storage and
-   // activation. Observe the ACK, then compare the complete intended instances.
-   await page.waitForFunction(({revision,composition,commandId})=>{
-    const shell=window.amplifier.getShellState(),a=window.amplifier.getState().appearance;
-    return shell?.revision===revision&&
-     Object.entries(composition.presentation).every(([key,value])=>JSON.stringify(a.effective[key])===JSON.stringify(value)&&JSON.stringify(a.renderedPreferences[key])===JSON.stringify(value))&&
-     (!commandId||a.command?.id===commandId&&a.command.status==='stored');
-   },{revision:args.expectedRevision+1,composition,commandId:receipt.result.commandId});
-   assert.deepEqual(await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition.instances),composition.instances);
-  }
-  return receipt;
- };
+ const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const inspect=()=>action('shell.inspect',{clientId}).then(row=>row.result);
  const openPreferences=async()=>{await page.locator('[data-settings-section="advanced"]').click();await page.locator('[data-settings-destination="shell:preferences"]').click()};
  const change=async composition=>{const current=await inspect();const prepared=await action('shell.changes.prepare',{clientId,expectedRevision:current.revision,composition});return {clientId,expectedRevision:current.revision,changeId:prepared.result.id}};

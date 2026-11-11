@@ -6,7 +6,6 @@ Conversation data and runtime ownership remain with AppService/Foundation.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
 import asyncio
 import copy
 import hashlib
@@ -157,72 +156,33 @@ class ShellModules:
 
     def put(self, kind, identity, value):
         self.db.execute('INSERT OR REPLACE INTO shell_records VALUES (?,?,?)', (kind, identity, encoded(value)))
-        if not getattr(self, '_transaction_depth', 0):
-            self.db.commit()
-
-    @contextmanager
-    def transaction(self):
-        """One SQLite owner for preference persistence and mixed activation."""
-        depth = getattr(self, '_transaction_depth', 0)
-        name = 'shell_unit_' + str(depth)
-        self.db.execute('SAVEPOINT ' + name)
-        self._transaction_depth = depth + 1
-        try:
-            yield
-            self.db.execute('RELEASE SAVEPOINT ' + name)
-        except BaseException:
-            self.db.execute('ROLLBACK TO SAVEPOINT ' + name)
-            self.db.execute('RELEASE SAVEPOINT ' + name)
-            if depth == 0:
-                self._pending_notifications = set()
-            raise
-        finally:
-            self._transaction_depth = depth
-        if depth == 0:
-            pending = getattr(self, '_pending_notifications', set())
-            self._pending_notifications = set()
-            for identity in pending:
-                try:
-                    self.notify(identity)
-                except Exception as exc:
-                    # Publication cannot roll back an already committed SQLite
-                    # effect or the matching private mirror. Retain a retry
-                    # witness; the next read/transaction can refresh the client.
-                    import logging
-                    logging.getLogger(__name__).warning('Shell publication after commit failed: %s', type(exc).__name__)
-                    self._pending_notifications.add(identity)
-
-    def effective_composition(self, client, identity=None):
-        preview = client.get('preview')
-        composition = copy.deepcopy(preview['composition'] if preview else client['composition'])
-        if hasattr(self.service, 'appearance'):
-            from .appearance_preferences import compose_values
-            identity = identity or self.service.clients.current.get()
-            values = compose_values(self.service.appearance.values(identity),
-                                    composition['presentation'] if preview else {})
-            composition['presentation'] = {key: value for key, value in values.items()
-                                            if key in COMPOSITION['properties']['presentation']['properties']}
-        return composition
+        self.db.commit()
 
     def client(self, identity):
         saved = self.get('client', identity)
         if saved is not None:
-            # Presentation values from the superseded composition store are not
-            # preference inputs. Keep independent module/layout identities.
-            saved['composition']['presentation'] = {}
             return saved
         # Migrate legacy navigation defaults once. Subsequent commands in
         # another client must not overwrite this client's filters or pages.
         baseline = {key: copy.deepcopy(value) for key, value in self.service.state['view'].items() if key in VIEW_KEYS | {'navWorkspaceBrowseFor'}}
         composition = copy.deepcopy(DEFAULT)
+        appearance = self.get('preferences', 'appearance')
+        if appearance is None:
+            # One-time adoption of the most recently used committed appearance
+            # from versions which only saved it per browser document.
+            row = self.db.execute("SELECT value FROM shell_records WHERE kind='client' AND json_extract(value, '$.composition.presentation') != '{}' ORDER BY rowid DESC LIMIT 1").fetchone()
+            appearance = json.loads(row[0])['composition']['presentation'] if row else {}
+            if appearance:
+                self.put('preferences', 'appearance', appearance)
+        # Experimental transcript folding is a view choice, never inherited by
+        # an unrelated browser from the shared look-and-feel defaults.
+        composition['presentation'] = {key: value for key, value in appearance.items()
+                                       if key != 'collapseInterimReplies'}
         saved = {'revision': 0, 'composition': composition, 'baselineView': baseline, 'views': {}, 'preview': None, 'lastGood': copy.deepcopy(composition), 'reported': None}
         self.put('client', identity, saved)
         return saved
 
     def notify(self, identity):
-        if getattr(self, '_transaction_depth', 0):
-            self._pending_notifications = getattr(self, '_pending_notifications', set()) | {identity}
-            return
         # Ordinary snapshots retain this token if a full queue drops the shell
         # event. A host epoch also repairs reconnects after a restart.
         self.change_tokens[identity] = self.change_tokens.get(identity, 0) + 1
@@ -342,7 +302,7 @@ class ShellModules:
 
     def inspect(self, identity, *, snapshots=False, recovery=False, navigation_resources=None, bundled=False):
         client = self.client(identity)
-        composition = DEFAULT if recovery else self.effective_composition(client, identity)
+        composition = DEFAULT if recovery else client['preview']['composition'] if client['preview'] else client['composition']
         result = {'clientId': identity, 'apiVersion': API, **client, 'effectiveComposition': composition, 'resolvedInstances': components.resolved(composition),
                   'slots': {'navigation': {'label': 'Navigation', 'maximum': 12, 'defaults': ['builtin.workspaces', 'builtin.chats']}, **copy.deepcopy(components.SLOTS)},
                   'componentCommands': components.commands(), 'packages': {}}
@@ -371,7 +331,7 @@ class ShellModules:
         return result
 
     def snapshot(self, client, instance, *, identity=None, navigation_resources=None):
-        value = self.navigation(client, instance, identity=identity, navigation_resources=navigation_resources) if instance['slot'] == 'navigation' else components.snapshot(self, client, instance, identity=identity)
+        value = self.navigation(client, instance, identity=identity, navigation_resources=navigation_resources) if instance['slot'] == 'navigation' else components.snapshot(self, client, instance)
         return {**value, 'generation': client['views'].get(instance['id'], {}).get('generation', 0)}
 
     def recent_key(self, client, instance, identity=None):
@@ -613,8 +573,7 @@ class ShellModules:
             if cached is not None:
                 return cached
             if action not in {'shell.command', 'shell.packages.validate'}:
-                with self.transaction():
-                    return self.dispatch_locked(action, args, origin, command_id)
+                return self.dispatch_locked(action, args, origin, command_id)
             if action == 'shell.command':
                 client = self.client(identity)
                 instance = self.command_instance(client, args)
@@ -625,9 +584,8 @@ class ShellModules:
                     # Derive from the live effective composition and apply in
                     # one owner unit. A preview can change without changing the
                     # committed revision; a pre-await snapshot is not CAS.
-                    with self.transaction():
-                        receipt = self.presentation_command(client, instance, args, origin)
-                        self.remember_command(action, args, origin, command_id, receipt)
+                    receipt = self.presentation_command(client, instance, args, origin)
+                    self.remember_command(action, args, origin, command_id, receipt)
                     return receipt
         if action == 'shell.packages.validate':
             digest = args['digest']
@@ -691,24 +649,11 @@ class ShellModules:
             fail('Invalid presentation patch: ' + exc.message)
         if set(values) != {'patch', 'expectedRevision'} or values['expectedRevision'] != client['revision']:
             fail('Inspect the current composition revision before updating presentation.', 409)
-        effective = self.effective_composition(client, args['clientId'])
-        # Carry the actual requested patch. Copying effective Global fields here
-        # would overwrite unrelated choices in an inactive retained browser profile.
-        composition = {**effective, 'presentation': copy.deepcopy(values['patch'])}
+        effective = client['preview']['composition'] if client.get('preview') else client['composition']
+        composition = {**effective, 'presentation': {**effective['presentation'], **values['patch']}}
         target = {'clientId': args['clientId'], 'expectedRevision': client['revision']}
         prepared = self.dispatch_locked('shell.changes.prepare', {**target, 'composition': composition}, origin, None)
         return self.dispatch_locked('shell.changes.apply', {**target, 'changeId': prepared['result']['id']}, origin, None)
-
-    def presentation_patch(self, identity, patch, origin):
-        """Existing public layout controls use the identical preparation owner."""
-        self.service.appearance.attached(identity)
-        client = self.client(identity)
-        composition = self.effective_composition(client, identity)
-        composition = {**composition, 'presentation': copy.deepcopy(patch)}
-        target = {'clientId': identity, 'expectedRevision': client['revision']}
-        with self.transaction():
-            prepared = self.dispatch_locked('shell.changes.prepare', {**target, 'composition': composition}, origin, None)
-            return self.dispatch_locked('shell.changes.apply', {**target, 'changeId': prepared['result']['id']}, origin, None)
 
     def command_instance(self, client, args):
         instance = self.instance(client, args['instanceId'])
@@ -761,27 +706,7 @@ class ShellModules:
             self.put('client', identity, client)
             self.notify(identity)
 
-    def check_preference_activation(self, identity, change):
-        client = self.client(identity)
-        if client['revision'] != change['expectedRevision']:
-            fail('Shell composition changed while browser storage was pending.', 409)
-        prepared = self.get('change', change['changeId'])
-        if (not prepared or prepared['clientId'] != identity
-                or change['action'] != 'shell.changes.revert' and prepared['baseRevision'] != client['revision']):
-            fail('Prepared preference composition is stale.', 409)
-        self.service.appearance.check_revision_fence(identity, change['preferenceFence'])
-        composition = prepared['before'] if change['action'] == 'shell.changes.revert' else prepared['composition']
-        deferred = self.transition(client, composition)
-        if deferred:
-            fail(deferred['reason'], 409)
-
-    def activate_preference_change(self, identity, change):
-        self.check_preference_activation(identity, change)
-        return self.dispatch_locked(change['action'], {
-            'clientId': identity, 'expectedRevision': change['expectedRevision'],
-            'changeId': change['changeId']}, 'ui', None, preference_ack=True)
-
-    def dispatch_locked(self, action, args, origin, command_id, *, preference_ack=False):
+    def dispatch_locked(self, action, args, origin, command_id):
         """Caller owns service.lock; no recursion or await in this unit."""
         identity = args.get('clientId')
         client = self.client(identity) if identity else None
@@ -874,8 +799,6 @@ class ShellModules:
                 self.check_composition(args['composition'])
                 change_id = str(uuid.uuid4())
                 result = {'id': change_id, 'clientId': identity, 'baseRevision': client['revision'], 'before': client['composition'], 'composition': args['composition'], 'status': 'prepared'}
-                if args['composition']['presentation']:
-                    result['preferenceFence'] = self.service.appearance.revision_fence(identity)
                 self.put('change', change_id, result)
             else:
                 if action == 'shell.recover':
@@ -884,8 +807,10 @@ class ShellModules:
                     composition['presentation'] = copy.deepcopy(client['composition']['presentation'])
                 else:
                     change = self.get('change', args['changeId'])
-                    if not change or change['clientId'] != identity:
+                    if not change or change.get('clientId') != identity:
                         fail('Prepared change not found for this client.', 404)
+                    if 'preferenceFence' in change or 'preferenceUndoId' in change:
+                        fail('This change belongs to the retired appearance profiles. Prepare a new shell change.', 409)
                     if action != 'shell.changes.revert' and change['baseRevision'] != client['revision']:
                         fail('Prepared change is stale.', 409)
                     composition = change['before'] if action == 'shell.changes.revert' else change['composition']
@@ -894,31 +819,6 @@ class ShellModules:
                     return {'accepted': False, 'result': deferred, 'error': deferred['reason'], 'status': 409, 'code': 'shell_change_deferred'}
                 if action == 'shell.recover':
                     self.check_composition(composition)
-                elif action != 'shell.changes.revert' and composition['presentation']:
-                    self.service.appearance.check_revision_fence(identity, change.get('preferenceFence'))
-                if action not in {'shell.recover', 'shell.changes.preview'} and not preference_ack:
-                    preferences = self.service.appearance
-                    if action == 'shell.changes.revert' and change.get('preferenceUndoId'):
-                        result = preferences.undo({'undoId': change['preferenceUndoId']}, identity,
-                            shell_change={'action': action, 'changeId': args['changeId'],
-                                          'expectedRevision': client['revision'],
-                                          'preferenceFence': preferences.revision_fence(identity)})
-                        receipt = {'accepted': True, 'result': result}
-                        self.remember_command(action, args, origin, command_id, receipt)
-                        self.notify(identity)
-                        return receipt
-                    patch = composition['presentation']
-                    if patch:
-                        # These checks deliberately occur AFTER revision,
-                        # preparation and dirty-instance transition admission.
-                        result = preferences.client_edit(identity, patch,
-                            shell_change={'action': action, 'changeId': args['changeId'],
-                                          'expectedRevision': client['revision'],
-                                          'preferenceFence': change['preferenceFence']})
-                        receipt = {'accepted': True, 'result': result}
-                        self.remember_command(action, args, origin, command_id, receipt)
-                        self.notify(identity)
-                        return receipt
                 previous = client['preview']['composition'] if client.get('preview') else client['composition']
                 before = {item['id']: item for item in components.resolved(previous)}
                 after = {item['id']: item for item in components.resolved(composition)}
@@ -940,9 +840,12 @@ class ShellModules:
                 if action == 'shell.changes.preview':
                     client['preview'] = {'id': args['changeId'], 'composition': composition}
                 else:
-                    # Persistent presentation lives in the scoped preference
-                    # owner, not a second shared/new-window composition store.
-                    client['composition'] = {**composition, 'presentation': {}}
+                    # Only a committed appearance change updates new-window defaults.
+                    # Recovering an older tab must not overwrite a newer preference.
+                    if action != 'shell.recover' and client['composition']['presentation'] != composition['presentation']:
+                        self.put('preferences', 'appearance', {key: value for key, value in composition['presentation'].items()
+                                                              if key != 'collapseInterimReplies'})
+                    client['composition'] = composition
                     client['preview'] = None
                     client['revision'] += 1
                 client['reported'] = None

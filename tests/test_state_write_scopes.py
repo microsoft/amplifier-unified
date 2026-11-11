@@ -19,6 +19,7 @@ async def app(tmp_path):
     ('view.update', {'patch':{'draft':'A saved draft'}}),
     ('attention.read', {'ids':[]}),
     ('settings.update', {'patch':{'notifications':False}}),
+    ('theme.reset', {}),
     ('session.rename', {'title':'Renamed'}),
     ('session.archive', {}),
     ('session.restore', {}),
@@ -45,45 +46,6 @@ async def test_command_scope_is_durable_and_matches_complete_reconciliation(app,
     assert scoped==complete
     duplicate=await app.dispatch(action,args,command_id='scoped',include_state=False)
     assert duplicate['duplicate']
-
-
-async def test_shared_preferences_are_revision_fenced_durable_and_do_not_checkpoint_chats(app, monkeypatch):
-    from amplifier_web.service import AppError
-
-    before = load(app.db)
-    revision = app.appearance.shared()['revision']
-    args = {'scope': 'shared', 'expectedRevision': revision, 'patch': {'scheme': 'dark'}}
-    writes = []
-    original = app.shell.put
-    def capture(kind, identity, value):
-        writes.append((kind, identity))
-        return original(kind, identity, value)
-    def no_checkpoint():
-        raise AssertionError('Shared preferences must not checkpoint app/chat records')
-    with monkeypatch.context() as patch:
-        patch.setattr(app, '_save', no_checkpoint)
-        patch.setattr(app.shell, 'put', capture)
-        receipt = await app.dispatch('appearance.preferences.update', args,
-                                     command_id='scoped-preferences', include_state=False)
-        result = receipt['result']
-        assert receipt['accepted'] and result['stored'] and not result['activated']
-        assert result['revision'] == revision + 1
-        assert writes == [('preferences', 'reference-v1'), ('change', result['undoId']),
-                          ('command', 'scoped-preferences')]
-        committed_writes = list(writes)
-        assert await app.dispatch('appearance.preferences.update', args,
-                                  command_id='scoped-preferences', include_state=False) == receipt
-        with pytest.raises(AppError, match='Shared preferences changed') as error:
-            await app.dispatch('appearance.preferences.update', {
-                **args, 'patch': {'decorations': False}}, include_state=False)
-        assert error.value.status == 409 and writes == committed_writes
-    durable = app.shell.get('preferences', 'reference-v1')
-    from amplifier_web.appearance_preferences import DEFAULTS
-    assert durable['revision'] == revision + 1 and durable['values'] == {**DEFAULTS, 'scheme': 'dark'}
-    assert load(app.db) == before
-    app._save()
-    assert load(app.db) == before
-    assert app.shell.get('preferences', 'reference-v1') == durable
 
 
 @pytest.mark.parametrize('kind,payload', [

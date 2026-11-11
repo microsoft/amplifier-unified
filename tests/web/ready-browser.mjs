@@ -87,7 +87,7 @@ try{
  for(const file of ['tests/web/ready-browser.mjs','tests/web/ready-runtime.mjs','tests/web/fixture-lifecycle.mjs',
   'tests/web/browser-chat-pages.mjs','.build/web-client/tests/composer-test-helpers.mjs',
   'tests/fixtures/empty_host_ui_server.py','.build/web-client/src/chat-presentation.css',
-  '.build/web-client/src/conversation-rail.css','.build/web-client/src/reference.css','amplifier_web/appearances/ready.amplifier.css']){
+  '.build/web-client/src/conversation-rail.css','amplifier_web/appearances/ready.amplifier.css']){
   report.sourceSha256[file]=hash(await readFile(join(root,file)));
  }
  // Candidate CSS is read only at qualification time, not derived from another
@@ -135,16 +135,8 @@ try{
   return route.continue();
  });
  page.on('pageerror',error=>{if(report.errors.length<30)report.errors.push(error.message.slice(0,2000))});
- let expectedUndoRejection=null;report.expectedHttpErrors=[];
- page.on('response',response=>{
-  if(response.status()<400)return;
-  const path=new URL(response.url()).pathname,request=response.request();
-  const body=path==='/api/actions'&&request.method()==='POST'?request.postDataJSON():null;
-  const row={path:path.slice(0,300),status:response.status()};
-  if(expectedUndoRejection&&body?.action==='appearance.preferences.undo'&&body.args?.undoId===expectedUndoRejection&&response.status()===409){
-   if(report.expectedHttpErrors.length<4)report.expectedHttpErrors.push(row);
-  }else if(report.httpErrors.length<30)report.httpErrors.push(row);
- });
+ page.on('response',response=>{if(response.status()>=400&&report.httpErrors.length<30)
+  report.httpErrors.push({path:new URL(response.url()).pathname.slice(0,300),status:response.status()})});
  const action=async(name,args={})=>{
   const receipt=await page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
   assert.equal(receipt.accepted,true,name+': '+JSON.stringify(receipt.error||receipt));return receipt;
@@ -155,41 +147,26 @@ try{
   return {settings:s.settings,view:s.view,selectedSessionId:s.selectedSessionId,selectedWorkspaceId:s.selectedWorkspaceId,
    presentation:shell.effectiveComposition.presentation};
  });
- // Selection/preview/Undo no longer own any view fields. Compare the complete
- // private view, including editor drafts, without legacy bookkeeping exclusions.
- const changePresentation=async(value,replace)=>{const change=await page.evaluate(async({value,replace})=>{
+ // Apply owns exactly these two view fields. Keep all other view keys,
+ // including editor drafts, in the preservation comparison.
+ const unaffectedByApply=({view,...rest})=>{
+  const {themeUndo,themePreview,...unaffectedView}=view;
+  return {...rest,view:unaffectedView};
+ };
+ const changePresentation=(value,replace)=>page.evaluate(async({value,replace})=>{
   const s=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
   const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:s.revision,
    composition:{...s.effectiveComposition,presentation:replace?value:{...s.effectiveComposition.presentation,...value}}});
   if(!prepared.accepted)throw Error('Presentation prepare refused: '+JSON.stringify(prepared.error));
   const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:s.revision,changeId:prepared.result.id});
   if(!applied.accepted)throw Error('Presentation apply refused: '+JSON.stringify(applied.error));
-  return {changeId:prepared.result.id,baseRevision:s.revision,appliedRevision:s.revision+1,
-   status:applied.result.status,commandId:applied.result.commandId,
-   presentation:replace?value:{...s.effectiveComposition.presentation,...value}};
+  return {changeId:prepared.result.id,baseRevision:s.revision,appliedRevision:applied.result.revision,
+   status:applied.result.status};
  },{value,replace});
-  // An awaiting-storage receipt has no committed shell revision. Admission
-  // still owns baseRevision+1; wait for storage ACK and effective readback.
-  await page.waitForFunction(change=>{
-   const shell=window.amplifier.getShellState(),a=window.amplifier.getState().appearance;
-   return shell?.revision===change.appliedRevision&&
-    Object.entries(change.presentation).every(([key,value])=>JSON.stringify(a.effective[key])===JSON.stringify(value)&&JSON.stringify(a.renderedPreferences[key])===JSON.stringify(value))&&
-    (!change.commandId||a.command?.id===change.commandId&&a.command.status==='stored');
-  },change);
-  return change;
- };
  const presentation=patch=>changePresentation(patch,false);
  // Restoration replaces the complete saved presentation, including absent keys.
  // Merging an empty original would retain the temporary scheme/decorations.
  const replacePresentation=value=>changePresentation(value,true);
- const select=async appearanceId=>{
-  const current=(await action('appearance.preferences.read')).result;
-  const scope=current.activeScope,profile=scope==='client'?current.local:current.shared;
-  const receipt=await action('appearance.preferences.update',{scope,generation:current.generation,expectedRevision:profile.revision,
-   ...(scope==='client'?{expectedStorageVersion:profile.storageVersion}:{}),patch:{appearanceId}});
-  await page.waitForFunction(id=>{const a=window.amplifier.getState().appearance;return a.effective.appearanceId===id&&a.theme.id===id},appearanceId);
-  return receipt.result;
- };
  const settled=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  const app=page.locator('#amp-one'),pane=page.locator('[data-part="messages"]');
  const input=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
@@ -384,8 +361,7 @@ try{
    assert.equal(rgb(row.footer)[3],0);assert.equal(row.footerImage,'none');assert.equal(row.footerShadow,'none');
    assert.deepEqual(row.footerBorder,['0px','0px','0px','0px']);
    assert.ok(row.footerTop>=row.bodyBottom,'Footer stays outside body paint');
-   assert.deepEqual(row.padding,row.role==='assistant'?['8px','14px','8px','14px']:['11px','16px','11px','16px'],
-    `${row.role} body retains shared padding at ${width}px`);
+   if(row.role==='assistant')assert.deepEqual(row.padding,width===390?['12px','12px','12px','12px']:['16px','20px','16px','20px']);
   }
   check('bubbles',{rows});
  };
@@ -419,7 +395,7 @@ try{
  assert.equal(listing.items.filter(row=>row.id==='builtin:ready').length,1);
  assert.equal(ready.name,'Breadbin');assert.equal(ready.source,'built-in');assert.equal(ready.css,css);
  assert.equal(ready.fingerprint,report.cssSha256,'Served builtin CSS fingerprint matches exact source resource');
- assert.deepEqual((await state()).appearance.theme,initial.appearance.theme);assert.deepEqual(await preferences(),beforeListing);
+ assert.deepEqual((await state()).theme,initial.theme);assert.deepEqual(await preferences(),beforeListing);
  assert.doesNotMatch(css,/(?:-webkit-)?mask-image\s*:/i,'Candidate inherits the native transcript mask');
  check('library',{id:ready.id,name:ready.name,source:ready.source,resource:'amplifier_web/appearances/ready.amplifier.css',
   servedCssSha256:ready.fingerprint,passive:true});
@@ -450,52 +426,39 @@ try{
  await expect(pane.locator('.a-message.a-assistant')).toHaveCount(1);await expect(input).toHaveDraft('');
  const draft='Keep this synthetic unsent draft across READY appearance and navigation.';
  await input.fill(draft);
- const beforeApply=await preferences(),priorTheme=(await state()).appearance.theme;
- const priorPreferences=(await action('appearance.preferences.read')).result;
- const independent=value=>{const {appearanceId,...rest}=value;return rest};
+ const beforeApply=await preferences(),priorTheme=(await state()).theme;
  phase('candidate-apply');
- const selected=await select(ready.id);assert.ok(selected.undoId,'Shared preference receipt supplies conditional Undo');
- await expect.poll(async()=>hash((await state()).appearance.theme.css)).toBe(report.cssSha256);
+ await action('theme.apply',{name:ready.name,css:ready.css});
+ await expect.poll(async()=>hash((await state()).theme.css)).toBe(report.cssSha256);
  await page.waitForFunction(css=>[...document.querySelectorAll('#amp-one > style')].some(node=>node.textContent===css),css);
  const applied=await state(),appliedPreferences=await preferences();
- assert.equal(applied.appearance.theme.id,ready.id);assert.equal(applied.appearance.theme.name,ready.name);assert.equal(applied.appearance.theme.css,ready.css);
- assert.equal(applied.appearance.preview,null,'No local preview was introduced by selection');
- assert.deepEqual(appliedPreferences,beforeApply,
+ assert.deepEqual(applied.theme,{name:ready.name,css:ready.css},'Apply commits the exact candidate name and CSS');
+ assert.equal(applied.view.themePreview,false,'Apply ends preview mode');
+ assert.deepEqual(unaffectedByApply(appliedPreferences),unaffectedByApply(beforeApply),
   'Apply preserves every unrelated view field, draft, selection, setting and presentation preference');
- assert.deepEqual(independent(applied.appearance.effective),independent(priorPreferences.effective),'Selection changes no independent preference');
- assert.deepEqual(applied.appearance.local.values,priorPreferences.local.values,'Global selection does not publish or rewrite the retained browser profile');
- assert.equal(applied.appearance.activeScope,priorPreferences.activeScope,'Selecting an appearance never selects another profile');
- assert.equal(applied.appearance.writeScope,priorPreferences.writeScope,'The single write destination remains unchanged');
- assert.equal(applied.appearance.source.scope,priorPreferences.source.scope,'The single source remains unchanged');
+ assert.ok(applied.view.themeUndo?.before?.$resource,'Undo retains the prior theme resource');
+ assert.match(applied.view.themeUndo.after,/^[a-f0-9]{64}$/,'Undo identifies the applied theme');
  await expect(input).toHaveDraft(draft);
  // Exercise the canonical guard and restoration rather than reproducing the
  // backend fingerprint or trusting that an opaque resource ID is the right one.
- await action('appearance.preferences.undo',{undoId:selected.undoId});
- await page.waitForFunction(id=>window.amplifier.getState().appearance.theme.id===id,priorTheme.id);
+ await action('theme.revert');
  const reverted=await state();
- assert.deepEqual(reverted.appearance.theme,priorTheme,'Undo restores the exact selected library entry');
- assert.equal(reverted.appearance.preview,null);
- assert.deepEqual(await preferences(),beforeApply);
- expectedUndoRejection=selected.undoId;
- const refused=page.waitForResponse(response=>{const request=response.request();if(!response.url().endsWith('/api/actions')||request.method()!=='POST')return false;const body=request.postDataJSON();return body?.action==='appearance.preferences.undo'&&body.args?.undoId===selected.undoId});
- try{
-  await assert.rejects(()=>action('appearance.preferences.undo',{undoId:selected.undoId}),/Newer shared preferences/,'A consumed revision-bound Undo cannot be replayed');
-  assert.equal((await refused).status(),409);
- }finally{expectedUndoRejection=null}
- assert.deepEqual(report.expectedHttpErrors,[{path:'/api/actions',status:409}],'Retain the exact intentional guard rejection, not a swallowed browser failure');
- assert.deepEqual((await state()).appearance.theme,priorTheme);
+ assert.deepEqual(reverted.theme,priorTheme,'Undo restores the exact theme that preceded Apply');
+ assert.equal(Object.hasOwn(reverted.view,'themeUndo'),false,'Successful Undo clears its consumed record');
+ assert.equal(reverted.view.themePreview,false);
+ assert.deepEqual(unaffectedByApply(await preferences()),unaffectedByApply(beforeApply));
  await expect(input).toHaveDraft(draft);
- const reselected=await select(ready.id);assert.ok(reselected.undoId);assert.notEqual(reselected.undoId,selected.undoId);
+ await action('theme.apply',{name:ready.name,css:ready.css});
  const reapplied=await state();
- assert.deepEqual(reapplied.appearance.theme,applied.appearance.theme,'Reselection restores the exact candidate for the matrix');
- assert.equal(reapplied.appearance.preview,null);
- assert.deepEqual(await preferences(),beforeApply);
+ assert.deepEqual(reapplied.theme,applied.theme,'Reapply restores the exact candidate for the matrix');
+ assert.equal(reapplied.view.themePreview,false);
+ assert.deepEqual(reapplied.view.themeUndo,applied.view.themeUndo,'Undo binds the same prior and applied themes');
+ assert.deepEqual(unaffectedByApply(await preferences()),unaffectedByApply(beforeApply));
  await expect(input).toHaveDraft(draft);
  await page.waitForFunction(css=>[...document.querySelectorAll('#amp-one > style')].some(node=>node.textContent===css),css);
  snapshot('apply-invariance',{selectedSessionId:longId,draft,
-  preferencesSha256:hash(JSON.stringify(beforeApply)),
-  appearanceBookkeepingChecked:['appearance.theme','appearance.preview','effective','activeScope','source.scope','writeScope','local.values'],
-  undoVerifiedBy:'shared preference receipt undoId, conditional Undo/replay rejection/reselection'});
+  preferencesSha256:hash(JSON.stringify(unaffectedByApply(beforeApply))),
+  themeBookkeepingChecked:['themeUndo','themePreview'],undoVerifiedBy:'fixture Apply/Revert/Reapply'});
  const originalPresentation=beforeApply.presentation;
  const user=()=>pane.locator('.a-message.a-user > .a-message-body');
  const assistant=()=>pane.locator('.a-message.a-assistant > .a-message-body');
@@ -653,7 +616,7 @@ try{
  const {presentation:beforePresentation,...otherBeforeRestore}=compositionBeforeRestore;
  const {presentation:afterPresentation,...otherAfterRestore}=compositionAfterRestore;
  assert.deepEqual(otherAfterRestore,otherBeforeRestore,'Restoring presentation preserves every other composition field');
- const final=await state();assert.equal(final.selectedSessionId,longId);assert.equal(hash(final.appearance.theme.css),report.cssSha256);
+ const final=await state();assert.equal(final.selectedSessionId,longId);assert.equal(hash(final.theme.css),report.cssSha256);
  assert.deepEqual(final.settings,beforeApply.settings,'Settings remain unchanged');
  const libraryIdentity=items=>items.map(({id,name,source,fingerprint})=>({id,name,source,fingerprint}));
  assert.deepEqual(libraryIdentity((await action('theme.list')).result.items),libraryIdentity(listing.items),'No library originals edited');
