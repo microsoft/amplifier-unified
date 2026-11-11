@@ -1,61 +1,108 @@
-# Complete themes and presentation preferences
+# Reference appearances and scoped preferences
 
-The [appearance and interaction contract](appearance-contract.md) defines the
-whole-app design language, waiting/saving states, detail levels and accessibility.
-This document describes the currently supported theme authoring API.
+The [web appearance contract](appearance-contract.md) owns interaction guarantees.
+The [November 9 design](../ux/decisions/20261109-appearances.md) explains the
+replacement of full-skin snapshots. Discover installed `appearance.*`, `theme.*`
+and `shell.*` schemas before acting; a source document does not upgrade a host.
 
-Discover `theme.*` and `shell.*` schemas from the running host before authoring.
-`theme.preview` and `theme.apply` accept exactly one of:
+## One foundation, intentional differences
 
-- `definition`: a complete version 1 theme. It starts from the host's built-in
-  skin, never the previous theme's decoration.
-- `tokens`: a partial palette edit preserving the current skin and background.
-  On a structured theme, it updates both light and dark palettes.
-- `css`: a complete existing-style CSS skin. This remains supported.
+Reference supplies the web client's neutral palette, type roles, controls and
+component defaults. It is always loaded, including in previews and thumbnails.
+Ordinary gallery entries are small CSS deltas over `reference-v1`; Reference
+itself is available through advanced/recovery controls, not an ordinary card.
+Omission means use Reference, never retain the previous appearance's CSS.
 
-All three require a `name`. A definition contains `version: 1` and a `palette`
-with `light` and `dark` objects. Each palette must supply all ten six-digit hex
-colors: `bg`, `surface`, `soft`, `ink`, `muted`, `line`, `accent`, `tint`, `green`
-and `danger`. Choose readable foreground/surface combinations in both modes.
+Appearances own palettes, font-role choices, material, artwork and supported
+geometry. Shared components own behavior, scrolling, focus, responsive safety
+and accessibility safeguards. A repeated functional repair belongs in that shared
+owner, not in every delta. Package fingerprints identify authored bytes; actual
+rendering also depends on the foundation/build and effective preferences.
 
-The optional `background` object contains `light` and `dark` CSS
-`background-image` values. These can be `none`, gradients, repeating patterns,
-or embedded PNG/JPEG/WebP data URLs accepted by the skin validator. Optional
-`size`, `position`, and `repeat` values default to `cover`, `center` and
-`no-repeat`. Remote URLs, SVG data URLs, extra declarations and imports are
-rejected. The palette's `bg` is the fallback when embedded artwork cannot load.
-Omitting `background` explicitly gives a flat background. A chooser should use
-these same values in its swatches and use the actual host preview to confirm
-whole-shell rendering; a hand-drawn thumbnail alone is not preview acceptance.
+The semantic palette is `--a-bg`, `--a-surface`, `--a-soft`, `--a-ink`,
+`--a-muted`, `--a-line`, `--a-accent`, `--a-on-accent`, `--a-tint`, `--a-green`
+and `--a-danger`. Set readable pairs in explicit light and dark scheme rules.
+Use `--a-font-ui`, `--a-font-heading`, `--a-font-chat` and `--a-font-code`
+for distinct roles; `--a-font` is the UI alias for existing consumers.
+`--a-background-art` supplies optional artwork above the opaque `--a-bg`
+fallback. Prefer these supported roles to copying component selectors.
 
-Preview is scoped to the targeted attached browser client. Applying a theme
-changes the existing app-wide committed skin. `theme.revert` restores the
-previous committed theme. Keep that scope explicit when multiple clients are
-attached; changing a theme does not change their conversation selection.
+## Preference scope and preview
 
-The shell composition's `presentation` accepts `scheme` (`light`, `dark`, or
-`system`) and `decorations` (boolean, default true). Change these with the
-existing prepare/preview/apply/revert protocol. Turning decorations off hides
-background artwork without editing the theme, so turning it on restores it.
-These are client presentation preferences, separate from the committed skin.
-Appearance settings expose the same decoration preference to the user.
+One **Global / This browser** selector chooses the complete active profile.
+Global belongs to the authenticated host owner on this installation, not a new
+multiuser or cross-host synchronization service. The browser profile and active
+source cover tabs in the same browser profile under the server-supplied
+host/owner namespace. The library stays global regardless of selection source.
 
-Canvas Apps can request the same structured `theme.preview` / `theme.apply`
-payloads through their declared host actions. The host compiles and validates
-at request time, so approval applies the exact reviewed stylesheet. Existing
-request review, cancellation, stale revisions and client targeting still apply.
+`appearance.preferences.read` returns Global values/revision, the target client's
+complete browser profile mirror, effective values and one active source. A client ID routes
+a request; it does not authenticate its owner. Readbacks exclude private editor
+drafts. Discover `appearance.preferences.update` for current fields, scope and
+revision requirements. A shared patch changes only its named fields; a stale
+edit conflicts rather than replacing unrelated values.
 
-On reload, a small per-tab cache colors the loading screen using the last
-committed scheme and colors. It contains no transcript or raw stylesheet. The
-app waits for its authoritative shell preferences before rendering the shell;
-previews are never saved into this loading-screen cache.
+A local patch or source switch is a command to the intended browser, not a
+server-persisted browser setting. Admission, local storage and browser acknowledgement are distinct.
+`appearance.client.report` supplies the bounded mirror and command result under
+the admitted client/generation. `false` and empty supported collections are
+values. The complete browser profile never inherits individual Global fields.
+First use initializes it from Global; later switches preserve both independent
+sets. Storage loss returns to Global; storage failure is explicit and never
+falls back to a Global write. Disconnect is not storage loss.
+
+`appearance.preview` validates an exact named CSS delta for an attached client.
+It does not select or save a package. `appearance.preview.cancel` leaves
+preferences and editor work intact. `appearance.preferences.undo` conditionally
+reverses a committed preference edit without overwriting intervening changes.
+Browser-wide preference updates must not replace another tab's active preview
+or dirty editor. Preview state is not a committed startup preference.
+
+Ordinary selection changes only `appearanceId`. Scheme, decorations, detail and
+other choices retain their values in the active profile. Suggested experience
+profiles are a future package slice, not implied support in this styling format:
+their accepted interaction requires separate explicit preview/apply of field
+changes, preserving the active profile and personal/accessibility choices.
+
+## Presentation fields
+
+Discover eligible fields from `appearance.preferences.update`. Scheme accepts
+`light`, `dark` or `system`; decorations is a boolean independent of operational
+feedback. Existing public shell presentation controls remain client-targeted:
+eligible changes use the same local preference owner and persistence result,
+not a competing shared composition preference. Mixed composition changes retain
+their revision/dirty-instance activation fences: pass those checks before
+issuing the local command, then activate the mixed composition atomically only
+after the admitted browser generation acknowledges successful persistence.
+
+The defaults below are baseline defaults, not cross-profile inheritance.
+An omitted patch field is unchanged in the selected profile.
+Explicit `false` and empty supported collections remain values.
+
+- `planPlacement`: `composer` (default, Above composer), `inline` (Inline in chat),
+  `active` (Above composer while working), or `overview` (Chat overview only).
+  Placement changes presentation, not the Plan's underlying reports.
+- `executionVisibility`: optional `step`, `turn` and `conversation` booleans.
+  Explicit entries override Reveal for that scope; baseline presentation applies
+  where no value is configured. UI edits preserve entries for other scopes.
+- `executionMetrics`: allowlisted array of `elapsedSeconds`, `grossInputTokens`,
+  `outputTokens`, `grossTotalTokens`, `cacheReadTokens`, `cacheWriteTokens`,
+  `reasoningTokens`, `voiceSeconds`, `costUsd` and `calls`. The baseline selects all
+  supported fields; an empty array selects none. Updates replace the selection.
+- `conversationStatus`: optional boolean, default false. Its compact status uses
+  demand-refreshed usage snapshots, not background accounting polling. Hidden
+  conversation totals do not initiate an accounting read.
+
+The [Plan](appearance-contract.md#chat-plan-placement) and
+[metrics](appearance-contract.md#execution-metrics) promises own preserved meaning,
+truthful availability and bounded export data.
 
 ## Window chrome
 
 The compact application header uses `--a-chrome-bg` and `--a-chrome-ink` when
-supplied by a CSS appearance, falling back to the existing `--a-bg` and
-`--a-ink` tokens. These are optional CSS properties, not new required fields
-in the version 1 theme schema. Native-control clearance and drag exclusions
+supplied by a CSS appearance, falling back to `--a-bg` and `--a-ink`.
+These are optional delta properties, not package manifest fields.
+Native-control clearance and drag exclusions
 remain host-owned; a skin must not position controls under native buttons.
 
 The page's `theme-color` follows the resolved, painted header on preview,
@@ -83,6 +130,32 @@ on/off, a new theme clearing earlier artwork, revert, reload, and preservation
 of unsent drafts and conversations. `tests/web/theme-definitions-browser.mjs`
 exercises the production browser against a disposable host. It makes no model
 calls and does not establish acceptance on a deployed user host.
+
+`--a-header-decoration-height` reserves an optional strip below native PWA
+controls (0–24px, default 0). The web shell owns usable titlebar geometry and
+control centering. Paint header decoration within that strip and set the token
+to zero with decorations off. This does not simulate native OS controls or prove
+dragging; browser fixtures qualify only the published geometry API.
+
+## Global presentation hooks
+
+The root `#amp-one` exposes read-only presentation facts, never authorization,
+control disabling or acknowledgements:
+
+| Hook | Meaning |
+| --- | --- |
+| `.a-app-active` / `data-app-activity="active"` | Admitted non-internal chat/delegate execution, preparation/history loading, or a canonical long operation is pending; independent of selected chat or mounted transcript. |
+| `.a-app-idle` / `data-app-activity="idle"` | The connected authoritative baseline currently reports no such activity. Unfinished saved tasks alone are not active execution. |
+| `.a-app-activity-unknown` / `data-app-activity="unknown"` | Activity unavailable, stream disconnected or baseline missing; an open socket does not qualify retained state. Neither old active nor old idle is a current fact. |
+| `.a-app-attention` / `data-app-attention="unread"` | Canonical global unread attention exists; not every unread item requires approval. `none` means no unread items, not all decisions resolved. |
+| `.a-app-disconnected` / `data-app-connection="disconnected"` | Host state stream disconnected; no claim about internet or provider credentials. |
+
+The projection consumes the existing incremental session index and canonical
+operation/attention owners. It does not hydrate dormant history, scan DOM, poll
+for animation or treat metadata/refresh/internal bookkeeping as execution.
+Normal authentication/revision fences apply; no second status or acknowledgement
+store is introduced. The [interaction contract](appearance-contract.md#visual-rules)
+owns restrictions on optional activity artwork.
 
 ## Optional shape and spacing tokens
 
@@ -116,8 +189,8 @@ CSS appearances may tune `--a-transcript-fade-top` and
 The host clamps fade lengths to 0–48px and at most half the viewport height.
 Classic scrollbar gutters retain opaque mask coverage; overlay scrollbars expose
 no layout gutter, so their edge rendering needs platform-specific inspection.
-These are optional CSS properties, not fields in
-the version 1 theme schema. Prefer omission to copying the mask or deriving
+These are optional delta properties, not package manifest fields.
+Prefer omission to copying the mask or deriving
 overflow from a theme. Never add an unconditional transcript mask, an overlay
 that covers the final message, or theme-owned scroll listeners. Remove duplicate
 mask rules from bundled skins when the shared fallback is in place; do not
@@ -141,12 +214,12 @@ The main screen also consumes these optional CSS tokens:
 | `--a-navigation-pad` | Navigation's top padding; control target sizes stay unchanged. |
 | `--a-navigation-art` | Navigation background image/gradient. |
 | `--a-navigation-art-size`, `--a-navigation-art-repeat` | Artwork sizing and repetition. |
-| `--a-conversation-art` | Optional quiet artwork across the top 240px of the conversation. |
+| `--a-conversation-art` | Optional quiet conversation artwork; defaults to the top 240px. |
+| `--a-conversation-art-size`, `--a-conversation-art-repeat`, `--a-conversation-art-position` | Conversation artwork sizing, repetition and initial position; defaults to `100% 240px`, `no-repeat` and `0 0`. These affect paint only, not panel geometry. |
 | `--a-canvas-art` | Canvas header artwork. |
 
-Aurora uses 10px gaps, 22px interior corners and a faint glow; Atelier uses
-7px gaps, 10px corners and paper-like edges; Graphite uses 4px gaps, 4px corners
-and a fine grid. The original Amplifier appearance retains its continuous frame.
+Aurora, Atelier and Graphite demonstrate different frame materials and geometry;
+Amplifier keeps its own treatment over the same Reference foundation.
 Theme changes remeasure panel space immediately, including previews. Narrow
 screens use an uninterrupted surface; focused and overlay canvases stay square.
 The background-artwork switch hides these panel decorations as well as root
@@ -163,109 +236,80 @@ operational feedback remain unchanged.
 
 ### Create, edit, delete and share
 
-Open **Settings → Appearance → Save, import & export themes**. The ordinary
-Appearance cards choose a shared committed look immediately. In the library,
-selecting a card previews it only in your attached browser. Leaving Appearance
-or closing Settings clears that preview. Library operations never apply CSS.
+Open **Settings → Appearance** to choose a look. One sidebar-style **Global /
+This browser** selector chooses which complete settings set to use and edit.
+Both choices show the exact same controls; reversible changes autosave to the
+selected source with Undo. No per-row scope, exception badge or browser subpage
+is needed. Merely opening or leaving Settings writes nothing. Mark the selected
+gallery appearance once without a redundant selected-name pill. Advanced appearance
+and authoring/library controls belong at the bottom. Authoring/library
+controls are separate from selection. Saving, importing, exporting or deleting a
+package never publishes preferences. A temporary preview belongs only to its
+target tab and can be cancelled independently of the saved entry or editor draft.
 
 | Intent | Settings | Shared agent action |
 | --- | --- | --- |
-| Create or copy | Expand **Advanced customization**, name the CSS, choose **Save as copy**. | `theme.save({name, css, description})` |
-| Import | **Upload appearance** accepts portable `.css` or an appearance ZIP; it keeps embedded metadata. | `theme.import({css})` or `theme.import({packageBase64})`; supply exactly one. Optional `name`/`description` override metadata; `fallbackName` names CSS files with no embedded name. |
-| Edit | Select an entry, choose **Edit**, change name/description/CSS, then **Update saved appearance**. | Read with `theme.read({id})`, then `theme.update({id, expectedFingerprint, name, css, description})`. |
+| Create or copy | Name the CSS delta and save a copy. | `theme.save({name, css, description})` |
+| Import | Upload an appearance ZIP with manifest, delta and declared assets/notices. | `theme.import({packageBase64})`; discover optional metadata overrides. |
+| Edit | Read an entry and retain its fingerprint with the editor draft. | `theme.read({id})`, then `theme.update({id, expectedFingerprint, name, css, description})`. |
 | Delete | Select a saved entry, choose **Delete**, then **Confirm delete**. Export first to retain a copy. | `theme.delete({id, expectedFingerprint})` |
-| Export | **Export [selected name]** exports CSS; **Export [selected name] as ZIP** includes package assets and notices. Current-appearance controls use committed CSS, not edits or previews. | `theme.export({id, format: "css"})` (default) or `theme.export({id, format: "zip"})`; omit `id` for committed appearance. |
+| Export | Export a saved entry as ZIP, including assets and notices. | `theme.export({id})`; a saved ID is required. |
 
 `theme.list` returns metadata and fingerprints, without CSS. `theme.read` returns
-the current self-contained CSS and a `fingerprint` for that saved version. Keep that fingerprint with
+the resolved CSS delta and a `fingerprint` for that saved version. Keep that fingerprint with
 the editor draft; do not silently replace it with one from background refresh.
 Settings keeps the target, fingerprint, name, description and CSS together in a
-tab-private editor draft. Another client's Apply or a background library refresh
+tab-private editor draft. Another client's preference edit or a background library refresh
 cannot replace that draft. It survives visiting unrelated Settings sections,
 closing/reopening Settings and reloading the same tab through browser session
 storage. A storage failure is shown explicitly; keep that tab open and save a
 library copy. Previews do not resume automatically. The renderer uses the exact
 validated preview CSS, not whatever the editor contains after further edits.
-The preview banner and its confirmation apply that same snapshot, including
-agent-requested previews. **Apply appearance** in the editor remains a distinct
-action on the retained draft. Cancelling a preview does not discard that draft.
+Selecting saved work and previewing unsaved edits are distinct actions; a
+preference stores a library ID, never the editor's unsaved CSS. Cancelling a
+preview does not discard that draft.
 Reloading or duplicating a page ends its inherited preview, without cancelling
 another open page's preview or changing either page's saved preferences.
 Updates retain the saved ID, including a rename. A stale update or deletion fails
 with 409 and leaves the file unchanged: read it again, review differences, then
 decide which edits to retain. Included appearances are read-only; copy them instead.
-Deleting or updating a library entry leaves already-applied CSS intact across
-restarts. Apply an edited version separately.
+If a selected entry is unavailable, readback must identify that condition rather
+than claim an older CSS snapshot is the selected package. Reference supplies the
+usable recovery surface. Re-select a valid saved entry explicitly.
 
 Imports never silently overwrite another entry. Identical canonical uploads
 reuse the same ID; changed content creates another entry even with the same name.
 If an in-place update occupies an older export's content-based filename, importing
 that export uses a deterministic unused suffix. Reimporting the identical export
 reuses that entry instead of replacing the updated appearance.
-The portable file carries one leading metadata comment:
-
-```css
-/* amplifier-appearance: {"name":"Quiet Studio","description":"Warm surfaces and calm accents."} */
-#amp-one { --a-accent: #316653; }
-```
-
-Saving/exporting preserves metadata (including additional author-provided fields)
-without nesting headers. Imports accept UTF-8 with or without a BOM and LF or
-CRLF line endings. Export writes one canonical metadata header and retains the
-CSS body. Artwork and fonts must be embedded in the CSS; remote
-URLs, filesystem URLs, SVG data URLs and external imports are rejected by the
-same validator used for preview/apply. The file including metadata is limited to
-1 MB. Imports are published atomically; symlink files/directories, traversal IDs
+The ZIP manifest identifies its base, stylesheet, metadata, assets and notices.
+The authoring API's `css` is a delta body, not a second portable full-skin format.
+Remote URLs, filesystem URLs, SVG data URLs and external imports are rejected by
+the same validator used for preview. Runtime CSS is limited to 1 MB after asset
+resolution. Imports are published atomically; symlink files/directories, traversal IDs
 and nonregular files are rejected. Cooperating host writers serialize updates.
 An external editor should use the shared actions when it needs stale-write
 protection; arbitrary filesystem writers do not participate in that lock.
 
-Export returns the exact downloadable CSS in the action result and retains the
-existing attached-client download effect. With no ID, it preserves the established
-exact committed-CSS export. To share a named library entry, export it by ID and
-upload the file on the recipient's installation. This transfers a theme only,
+To share a named library entry, export it by ID and upload its ZIP on the
+recipient's installation. This transfers an appearance only,
 not shell layout, accessibility preferences, credentials or executable components.
 An import is validated, not certified accessible: preview both schemes, reduced
-motion, decorations off and a narrow layout before applying.
+motion, decorations off and a narrow layout before choosing it.
 
-Digital Rain is included as a complete packaged stylesheet with embedded artwork.
-It is loaded unchanged, rather than rebuilt using another preset's geometry.
-Bundled updates do not overwrite edited saved appearances.
-
-Lightline is an included, neutral architectural appearance: luminous ivory,
-platinum and graphite in light mode, obsidian and cyan in dark mode, a warm user bubble, monospaced
-chat and readable UI text. Its surface highlights are static. It inherits the
-shared transcript edges rather than supplying a permanent mask. Included means
-available to choose, not a new selection for existing users. Shipping it must not
-replace saved copies or change scheme, decorations or accessibility preferences.
-
-Both palettes have an intentional material reference, rather than treating light
-mode as a pastel inversion. The light treatment abstracts illuminated glass,
-white lacquer, acrylic and silver; dark uses obsidian with cyan edge light.
-The [production-design account](https://www.latimes.com/archives/la-xpm-2010-dec-18-la-hm-tron-movie-set-design-20101218-story.html)
-informed those materials, not sampled color values or copied imagery. Functional
-accent colors are readability adaptations. A reference does not replace contrast
-measurements and rendered review in either scheme.
-
-Breadbin is a static, home-computer-inspired appearance with warm ivory casing
-and deep violet accents in light mode, a blue-violet conversation screen and
-smoked casing in dark mode, and an optional four-color header edge. It uses
-system UI text and readable monospace conversation, not a bundled retro font.
-Keycap depth is paint only; pressed controls keep their dimensions. Message
-actions stay outside the bubble bodies, and transcript fades remain host-owned.
-Adding the bundled entry does not apply it or replace saved personal versions.
-
-For a bundled appearance change, keep qualification focused: confirm the packaged
-CSS and metadata load unchanged, preview the actual host in both schemes and a
-narrow layout, check decorations/reduced motion/forced colors and essential
-controls, then verify preview/apply/revert and saved-copy preservation. Record
-what ran and what remains unchecked; packaging alone is not visual acceptance.
+Bundled source treatments demonstrate intentional identity, not exceptions to
+shared behavior: Digital Rain's optional emerald artwork, Lightline's static
+architectural surfaces and warm user bubbles, and Breadbin's casing/violet screen
+and paint-only keycaps. All retain shared message-action and transcript mechanics.
+For a change, inspect actual packaged rendering in both schemes and narrow layout,
+preferences/accessibility, preview/selection/undo and preservation. Packaging or a
+reference image is not visual acceptance; record what remains unchecked.
 
 ## ZIP appearance packages
 
 Use an ordinary `.zip`, such as `quiet-studio.zip`. Contents define its type, not
-the filename. Version 1 transports a complete stylesheet, supported local assets
-and license notices. It is not a general archive viewer, plugin installer or
+the filename. Version 2 transports a `reference-v1` CSS delta, supported local
+assets and license notices. It is not a general archive viewer, plugin installer or
 portable shell composition.
 
 ```text
@@ -283,7 +327,8 @@ quiet-studio.zip
 ```json
 {
   "type": "appearance",
-  "formatVersion": 1,
+  "formatVersion": 2,
+  "base": "reference-v1",
   "name": "Quiet studio",
   "description": "Quiet surfaces with locally bundled assets.",
   "author": "Example author",
@@ -296,7 +341,7 @@ quiet-studio.zip
 }
 ```
 
-`type`, `formatVersion`, `name` and `stylesheet` are required. Optional descriptive
+`type`, `formatVersion`, `base`, `name` and `stylesheet` are required. Optional descriptive
 fields carry attribution, not a verified authorship claim. Every archive member
 must belong to the manifest, stylesheet, declared assets or declared notices.
 Unsupported versions and unknown manifest fields are rejected. Fonts require a
@@ -305,7 +350,7 @@ license grants the submitter every right they claim.
 
 Stylesheets reference declared assets relative to the stylesheet, for example
 `url("assets/background.png")`. Import rewrites those references into embedded
-data URLs before normal preview/apply validation. No remote fetch, extraction to
+data URLs before normal delta validation. No remote fetch, extraction to
 arbitrary paths or CSS import is performed. Supported assets are PNG, JPEG, WebP,
 WOFF and WOFF2; SVG, HTML, JavaScript and executable content are not package assets.
 Keep unmodified upstream font files and their copyright/license notices together.
@@ -322,10 +367,10 @@ absolute/backslash paths, duplicate names, links, special files, encrypted membe
 unsupported compression and corrupt streams. Runtime CSS retains the existing
 1 MB limit; an otherwise small compressed ZIP can still exceed that limit after
 embedding assets. Import is all-or-nothing and does not apply an appearance.
-Version 1 accepts ordinary ZIP32 STORED/DEFLATE records, including signed or
+The archive reader accepts ordinary ZIP32 STORED/DEFLATE records, including signed or
 unsigned data descriptors. ZIP64 and gaps between member records are unsupported.
 Conflicting notice bodies at the same path fail rather than silently replacing
-attribution. Package metadata in CSS exports carries complete retained notices.
+attribution.
 
 Library refresh still reads and hashes each bounded ZIP. A service-local cache
 retains at most 128 small validated summaries, keyed by exact archive-byte digest;
@@ -335,8 +380,20 @@ or claim constant-time polling.
 
 Read a saved package before editing or deleting it; its fingerprint protects the
 canonical saved package, including assets and notices. Library edits preserve
-package assets/notices. ZIP export preserves them, while CSS export remains
-self-contained and carries required notices. Saving or applying does not execute
-archive contents, change preferences or grant capabilities. Deleting the library
-entry does not remove the already-applied CSS. Existing CSS-only imports and
-default CSS export remain supported.
+package assets/notices, and ZIP export preserves them. Saving does not execute
+archive contents, change preferences or grant capabilities. There is no legacy
+CSS import/export, full-skin compiler, migration table or alternate renderer.
+
+## Source ownership
+
+Reference, component styles and browser preference persistence are authored in the
+selected `amplifier-client-web` repository (`src/reference.css`, `src/shell/` and
+the client's appearance modules). Unified owns validation, library storage and the
+service adapter in `amplifier_web`, the contracts here and host/browser/producer
+checks in `tests/web`. Client tests remain with the client; run them from the
+prepared `.build/web-client/tests` through the prepared client's test commands.
+Follow [the selected-client assembly guide](../../components/README.md) to refresh
+the delivery snapshot and build generated assets. `components/web-client` is a
+selected snapshot and `.build/web-client` is disposable prepared source, not
+another authoring owner; `amplifier_web/static` is generated output, not a
+canonical editing path.

@@ -1,0 +1,27 @@
+#amp-one[data-theme-scheme="light"] {
+  --a-bg: #f7f5f0;
+  --a-surface: #ffffff;
+  --a-soft: #edeae3;
+  --a-ink: #242d32;
+  --a-muted: #58636b;
+  --a-line: #c9ccc8;
+  --a-accent: #285e70;
+  --a-on-accent: #ffffff;
+  --a-tint: #e1eff2;
+  --a-green: #256440;
+  --a-danger: #ac2938;
+}
+
+#amp-one[data-theme-scheme="dark"] {
+  --a-bg: #171e24;
+  --a-surface: #202a32;
+  --a-soft: #29353e;
+  --a-ink: #eff2f3;
+  --a-muted: #b4c0c8;
+  --a-line: #51616c;
+  --a-accent: #9dd7e5;
+  --a-on-accent: #171e24;
+  --a-tint: #29444e;
+  --a-green: #9ad5ac;
+  --a-danger: #ffafb7;
+}

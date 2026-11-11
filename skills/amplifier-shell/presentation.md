@@ -7,13 +7,13 @@ installed contracts below; do not invent a single appearance-package API.
 1. Call `shell.inspect` for the target client. Record its revision, composition,
    package availability and browser status. Query affected instances with
    `shell.query`. Use the current schemas rather than copying an old payload.
-2. For module order, visibility, supported layout, or presentation tokens, form
+2. For module order, supported layout, or extension configuration, form
    a complete proposed composition preserving unaffected instance IDs and
    settings. Prepare it with `shell.changes.prepare` and the inspected revision.
    Existing modules can have multiple instances where their contract permits.
 3. Preview the returned change, inspect its browser report, then apply within
    the user's requested scope. Preview does not commit a composition. For a
-   custom CSS skin, discover the theme service's current actions and use those.
+   custom CSS delta, discover the appearance and theme services' current actions.
 4. Reinspect after activation. An `awaiting-browser` receipt is not completion.
    Confirm the matching revision mounted, and verify the intended interaction.
    If stale, inspect and prepare again; do not repeatedly force old revisions.
@@ -39,32 +39,36 @@ installed schemas and SDK explicitly expose them.
 
 ## Themes
 
-Follow the [appearance and interaction contract](../../docs/shell/appearance-contract.md)
-for busy/disabled states, detail levels, motion, contrast and focus. Pending
-activity does not authorize tinting or locking an entire region. Theme changes
-must preserve the user's accessibility and detail preferences.
+Load [appearance-authoring](../appearance-authoring/SKILL.md) for visual treatment
+and portable assets. It links the interaction contract, current theme API and
+examples; do not duplicate its styling procedures here. Components still own
+focus, scrolling, responsive safety and action semantics. Theme selection does
+not authorize other preference or runtime changes.
 
-Use `definition` for a new complete theme, `tokens` for an intentional partial
-palette edit, or `css` for a full legacy-compatible skin. Do not apply only a
-palette and claim the old theme's decorative background has been replaced.
-Read [the theme contract](../../docs/shell/themes.md) for both palettes,
-background values, preview scope, the separate `presentation.decorations`
-preference, and verification. Discover the installed action schemas first.
+Reference is always loaded; a theme package supplies only its intentional CSS
+delta over `reference-v1`. Discover `theme.*` for shared library authoring/import/
+export, and `appearance.*` for selection, scope, preview and conditional undo.
+Do not submit a complete skin or use library operations to select a look.
+Shared Reference/component fixes are authored in the selected `amplifier-client-web`
+repository, not Unified's delivery snapshot or disposable prepared client. Follow
+the source-ownership section of the linked preference/package guide.
 
-For custom skins, use [appearance-authoring](../appearance-authoring/SKILL.md).
-Inspect the baseline CSS and actual DOM before overriding message bodies, the
-inner composer surface or logo filters; preserve outer actions and layout.
-Transcript overflow fades are a shared primitive, not theme-owned artwork:
-inherit the conditional defaults and preserve keyboard-visible focus, active
-editing, forced colors, scrollbar gutter, navigator and composer. Pointer or
-programmatic focus on a non-visible review container alone does not disable fades.
-Do not add permanent masks or reposition children to accommodate them. Keep
-background artwork separate and away from controls.
+One **Global / This browser** selector chooses the complete active preference
+profile and write destination. Inspect `appearance.preferences.read` and preserve
+unrelated values. First use copies resolved Global settings; later switches retain
+both independent profiles. No saved browser field inherits later Global changes;
+`false` and empty collections remain meaningful values. Returning to Global never
+publishes or deletes the retained browser profile. A browser-local command is not
+committed until that admitted browser generation acknowledges successful
+persistence. Storage failure never becomes a Global write.
 
-Lightline is an included static architectural appearance, not a forced selection.
-Bundled additions and shared-style updates must leave saved user copies, committed
-custom CSS and independent presentation/accessibility preferences untouched.
+Composition still has its own revision, dirty-state fences and lifecycle.
+Discover which presentation fields the installed host routes to the browser-local
+preference owner. Mixed changes must pass those fences before issuing a local
+command and activate atomically only on its successful persistence acknowledgement.
+Preview/cancel leaves committed preferences and private editor work intact;
+conditional undo does not overwrite an intervening edit.
 
-A theme chooser is an agent-created conversation surface demonstration, not a
-required shipped app. Reuse its surface ID while refining it and preserve its
-state. Use host preview/apply actions for both user and agent selections.
+Discover actual target schemas before acting: documentation shipped with a newer
+build does not upgrade an older host. See [the preference and package guide](
+../../docs/shell/themes.md) for current boundaries and package rules.
