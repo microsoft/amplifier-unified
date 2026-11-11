@@ -30,13 +30,14 @@ def git_source(value):
             'ref': ref, 'subdirectory': fragments.get('subdirectory', [''])[0]}
 
 
-def selected(manifests, *, distributions=None, environment=None):
+def selected(manifests, *, distributions=None, environment=None, prepared_local_sources=None):
     from .runtime_environment import package_name
     from .runtime_policy_reconciliation import compatible_constraint, exact_constraint_pin
     from .runtime_source_policy import constraint_declarations
     from .updates import source_key, pinned
 
     environment = default_environment() if environment is None else environment
+    prepared_local_sources = prepared_local_sources or {}
     installed = {}
     duplicates = set()
     for dist in importlib.metadata.distributions() if distributions is None else distributions:
@@ -61,7 +62,10 @@ def selected(manifests, *, distributions=None, environment=None):
         # A contributor's uv source can restrict a dependency without selecting
         # it. Preserve every restriction separately; missing selection there is
         # not unknown identity when another reachable requirement selects it.
-        for dependency, declarations in constraint_declarations(content, runtime_batch=True).items():
+        # Reuse the collector's same-repository sibling proof; do not reinterpret
+        # a verified development-only mapping as a runtime source conflict here.
+        for dependency, declarations in constraint_declarations(content,
+                prepared_local_sources=prepared_local_sources.get(name, ()), runtime_batch=True).items():
             constraints.setdefault(dependency, []).extend(declarations)
             if any(exact_constraint_pin(item) for item in declarations):
                 constraint_evidence[dependency].add(json.dumps({

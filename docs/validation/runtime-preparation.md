@@ -68,8 +68,8 @@ order, eager restoration, provider selection or native-history authority.
 ## Startup cleanup ownership
 
 The final worker compatibility probe and ordinary worker startup require
-Foundation's canonical session activation API. Startup checks the actual loaded
-worker interpreter before acquiring native ownership, restoring history or
+Foundation's canonical session activation and transcript guard APIs. Startup
+checks the actual loaded worker interpreter before acquiring native ownership, restoring history or
 admitting input. An older retained generation receives bounded guidance to
 install included-component updates; its files and saved conversation remain
 unchanged. The ordinary updater prepares and qualifies a new generation before

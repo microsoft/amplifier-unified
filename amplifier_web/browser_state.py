@@ -260,8 +260,10 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
     if directory is not None and selected_row:
         from .navigation_summary import activity
         from .navigation_waiting import task_for, target_details, saved_task
+        from .attention import reviewed_session_errors
         selected_task = task_for(state, selected_row) or saved_task(directory.db, selected_row['id'])
-        result['selectedActivity'] = {**activity(selected_row, task=selected_task, db=directory.db),
+        result['selectedActivity'] = {**activity(selected_row, task=selected_task, db=directory.db,
+                                      error_reviewed=selected_row['id'] in reviewed_session_errors(derived.get('attention', {}))),
                                       'sessionId': selected_row['id']}
         if result['selectedActivity'].get('waiting'):
             result['selectedActivity']['waiting'] = target_details(directory.db, result['selectedActivity']['waiting'])

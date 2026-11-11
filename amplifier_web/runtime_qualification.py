@@ -20,24 +20,28 @@ class RuntimeDependencyError(RuntimeError):
     """The selected worker lacks an API required by the installed application."""
 
 
-def required_activation_gate():
+def require_session_api():
     """Check the loaded worker, without installing or changing its generation."""
     from importlib import import_module
 
-    module = 'amplifier_foundation.session.activation'
+    activation_module = 'amplifier_foundation.session.activation'
+    transcript_module = 'amplifier_foundation.session.transcript_guard'
     message = ('This conversation setup needs an included-component update. '
                'Open Settings > Updates and install the included updates, then retry. '
                'The saved runtime and conversation have not been changed.')
     try:
-        activation = import_module(module)
+        activation = import_module(activation_module)
+        transcript = import_module(transcript_module)
     except ModuleNotFoundError as error:
-        if error.name not in {'amplifier_foundation', 'amplifier_foundation.session', module}:
+        if error.name not in {'amplifier_foundation', 'amplifier_foundation.session',
+                              activation_module, transcript_module}:
             raise
         raise RuntimeDependencyError(message) from error
     gate = getattr(activation, 'ActivationGate', None)
-    if not isinstance(gate, type):
+    guard = getattr(transcript, 'NativeTranscriptGuard', None)
+    conflict = getattr(transcript, 'NativeTranscriptConflict', None)
+    if not (isinstance(gate, type) and isinstance(guard, type) and isinstance(conflict, type)):
         raise RuntimeDependencyError(message)
-    return gate
 
 
 def _file_url_path(parsed):

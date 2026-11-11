@@ -148,9 +148,9 @@ publication. Preserve those limits, the raw prior failures, and the source/run
 identities with any reported result. These affected checks are not a new routine
 release gate or permission to refresh installed user components.
 
-The current activation-API successor qualifies Foundation `82798feb` through
+The current session-API successor qualifies Foundation `4433e38a` through
 the ordinary included update and preserves rollback to the original generation.
-Separate cases keep the pre-API `c67e3ada` and explicitly pinned `a52ad155` bytes
+Separate cases keep the pre-guard `82798feb` and explicitly pinned `a52ad155` bytes
 unchanged and require compatibility refusal before adoption. Selecting the old
 generation again does not make it executable by the newer app; ordinary worker
 startup still checks the required API before native ownership or history access.
