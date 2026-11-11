@@ -346,17 +346,21 @@ async def test_accepted_schedule_before_start_is_settled_by_current_process(tmp_
     service,runtime,now,sid=await fixture(tmp_path,monkeypatch)
     manager=RuntimeManager(command=['unused'])
     row={'runtimeOwnerId':'process','emit':service.on_runtime_event}
-    runtime.workers={sid:row}
     try:
         record=await schedule(service,sid,now[0])
         now[0]+=61;await service.schedules.tick()
         run=service.schedules.store.runs(sid)[0]
         assert run['phase'] in {'accepted','running'}
+        # Preserve the fixture's task-control object through schedule admission;
+        # only process-exit delivery uses the real RuntimeManager owner map.
+        service.runtime=manager
+        manager.workers[sid]=row
         await manager._execution_ended(sid,row,'interrupted')
         assert service.schedules.store.run(sid,run['id'])['phase']=='unknown'
         assert service.schedules.store.get(sid,record['id'])['status']=='needs_review'
     finally:
-        runtime.workers.clear()
+        manager.workers.clear()
+        service.runtime=runtime
         await service.close()
 
 
