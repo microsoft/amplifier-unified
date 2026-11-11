@@ -26,7 +26,7 @@ test('Updates keeps its queued work and preferences without unrelated runtime er
  const html=render(fixture());
  assert.doesNotMatch(html,/Unsupported runtime control/);
  assert.match(html,/Waiting for 3 chats to finish/);
- assert.match(html,/View active work \(3\)/);
+ assert.match(html,/<summary>View update blockers \(3 reasons · 3 distinct chats\)<\/summary>/);
  assert.equal((html.match(/Conversation work is running or finishing/g)||[]).length,3);
  assert.match(html,/<option value="8" selected="">Every 8 hours<\/option>/);
  assert.match(html,/type="checkbox" data-action="settings.update" checked=""/);
