@@ -21,6 +21,34 @@ test('only versioned exact input evidence controls status; unrelated or malforme
   assert.equal(inputStatus({...message,inputStatus:inputStatusRecord}).phase,phase);
  }
 });
+test('saved native rows expose only exact nonambiguous versioned host evidence',()=>{
+ const saved={role:'user',displayOnly:true,nativeInputId:'native',delivery:{status:'accepted'}};
+ for(const phase of ['working','waiting','queued','included','done','failed','unknown']){
+  const evidence={version:1,inputId:'native',phase,basis:'observed',startedAt:100,updatedAt:142};
+  assert.deepEqual(inputStatus({...saved,inputStatus:evidence}),evidence);
+  assert.deepEqual(inputStatus({...saved,inputId:'native',inputStatus:evidence}),evidence);
+ }
+ const inputStatusRecord={version:1,inputId:'native',phase:'working',basis:'execution_observed'};
+ for(const [name,patch] of [
+  ['missing evidence',{}],
+  ['unbound evidence',{nativeInputId:undefined,inputStatus:inputStatusRecord}],
+  ['canonical id alone',{nativeInputId:undefined,inputId:'native',inputStatus:inputStatusRecord}],
+  ['blank native id',{nativeInputId:'',inputStatus:inputStatusRecord}],
+  ['whitespace native id',{nativeInputId:' ',inputStatus:{...inputStatusRecord,inputId:' '}}],
+  ['non-string native id',{nativeInputId:42,inputStatus:{...inputStatusRecord,inputId:42}}],
+  ['ambiguous binding',{nativeInputAmbiguous:true,inputStatus:inputStatusRecord}],
+  ['conflicting binding',{inputId:'other',inputStatus:inputStatusRecord}],
+  ['observation',{observation:{source:'amplifier-delegate'},inputStatus:inputStatusRecord}],
+  ['peer via',{via:'peer',inputStatus:inputStatusRecord}],
+  ['peer origin',{inputOrigin:'peer',inputStatus:inputStatusRecord}],
+  ['assistant',{role:'assistant',inputStatus:inputStatusRecord}],
+  ...[
+   {inputId:'other'}, {version:undefined}, {version:2}, {phase:'read'}, {basis:undefined}, {basis:42}, {basis:''}, {basis:' '}, {basis:'no_evidence'},
+  ].map(correction=>[JSON.stringify(correction),{inputStatus:{...inputStatusRecord,...correction}}]),
+ ])assert.equal(inputStatus({...saved,...patch}),null,name);
+ // Without a positive host record neither a receipt nor its absence fabricates status.
+ assert.equal(inputStatus({...saved,delivery:undefined}),null);
+});
 test('delivery recovery and steering retain their existing UI independently',()=>{
  for(const status of ['sending','failed','held','queued_for_update','unknown'])assert.equal(inputStatus({...message,delivery:{status}}),null);
  assert.equal(inputStatus({...message,delivery:undefined,steering:{disposition:'queued'}}),null);

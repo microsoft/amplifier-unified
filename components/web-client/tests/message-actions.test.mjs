@@ -18,6 +18,33 @@ test('status disclosure exposes timing and freezes historical/disconnected obser
  const queued=renderToStaticMarkup(React.createElement(InputStatus,{message:{...message,inputStatus:{version:1,inputId:'one',phase:'queued',basis:'steering_queued',updatedAt:142}}}));
  assert.match(queued,/Status observed/);assert.doesNotMatch(queued,/Execution observed/);
 });
+test('saved native status freezes at host observation even when connected and current',()=>{
+ const message={id:'native-window:status',role:'user',text:'Saved request',displayOnly:true,nativeInputId:'native',inputStatus:{version:1,inputId:'native',phase:'working',basis:'execution_observed',startedAt:100,updatedAt:142}};
+ const render=(message,props={})=>renderToStaticMarkup(React.createElement(MessageEntry,{message,session:{id:'chat'},state:{view:{}},act:()=>{},working:false,forkTurn:{messageId:'user',turn:42},...props}));
+ for(const connected of [true,false])for(const statusCurrent of [true,false]){
+  const html=render(message,{connected,statusCurrent});
+  assert.match(html,/data-input-phase="working"/);
+  assert.match(html,/Working last observed · saved history/);assert.doesNotMatch(html,/connection lost/);
+  assert.match(html,/Observed elapsed time 0:42/);assert.match(html,/Status observed/);
+  assert.match(html,/Execution observed for this exact input, not proof/);
+  assert.match(html,/Copy message as Markdown/);
+  assert.doesNotMatch(html,/Edit message|Fork conversation|Reply to|React to|a-inline-media/);
+ }
+ const done=render({...message,inputStatus:{...message.inputStatus,phase:'done',endedAt:150}});
+ assert.match(done,/Turn finished/);assert.match(done,/Observed elapsed time 0:50/);
+ assert.match(done,/not verification that every requested effect or task is complete/);
+ for(const patch of [
+  {inputStatus:undefined,delivery:{status:'accepted'}},
+  {inputStatus:undefined},
+  {nativeInputId:undefined,inputId:'native'},
+  {nativeInputAmbiguous:true},
+  {inputId:'other'},
+  {inputStatus:{...message.inputStatus,inputId:'other'}},
+  {observation:{source:'amplifier-delegate'}},
+  {via:'peer'},
+  {inputOrigin:'peer'},
+ ])assert.doesNotMatch(render({...message,...patch}),/a-input-status|data-input-phase/);
+});
 test('fork controls follow the last assistant entry in each completed user turn',()=>{
  const messages=[{id:'u1',role:'user',inputId:'1'},{id:'a1',role:'assistant'},{id:'a2',role:'assistant'},{id:'u2',role:'user',inputId:'2'},{id:'a3',role:'assistant'}];
  const session={status:'working',messages,execution:{turns:[{inputId:'1',phase:'completed'},{inputId:'2',phase:'running'}]}};

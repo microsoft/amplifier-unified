@@ -4,7 +4,7 @@ import {messageTime} from './message-time';
 import {hostNow} from './api';
 
 export function InputStatus({message,connected=true,current=true}){
- const status=inputStatus(message),live=status?.phase==='working'&&connected&&current;
+ const status=inputStatus(message),saved=message.displayOnly||!current,live=status?.phase==='working'&&connected&&!saved;
  const [now,setNow]=useState(hostNow);
  useEffect(()=>{
   if(!live)return;
@@ -13,8 +13,8 @@ export function InputStatus({message,connected=true,current=true}){
   return()=>clearInterval(timer);
  },[live,status?.inputId,status?.startedAt]);
  if(!status)return null;
- const duration=workingDuration(status,now,connected&&current);
- const label=status.phase==='working'&&!current?'Working last observed · saved history':statusLabel(status,connected);
+ const duration=workingDuration(status,now,connected&&!saved);
+ const label=status.phase==='working'&&saved?'Working last observed · saved history':statusLabel(status,connected);
  const observed=messageTime(status.startedAt||status.updatedAt);
  const explanation=status.phase==='received'?'The host received this input. Model inclusion and execution are not yet confirmed.':
   status.phase==='done'?'This input’s turn finished. This is not verification that every requested effect or task is complete.':

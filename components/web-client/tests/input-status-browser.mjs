@@ -61,6 +61,36 @@ try{
  input.inputStatus={...input.inputStatus,phase:'done'};await emit();await page.reload();
  await expect(page.locator('[data-message-id="input"] .a-input-status')).toHaveAttribute('data-input-phase','done');
  assert.equal(await page.evaluate(()=>window.fixtureNotifications.length),0);
+ // The host's bounded native transcript rows are display-only, but an exact
+ // native binding can carry authoritative saved observations (never a live clock).
+ const saved={id:'native-window:working',role:'user',displayOnly:true,nativeInputId:'saved',text:'Saved exact request.',inputStatus:{version:1,inputId:'saved',phase:'working',basis:'execution_observed',startedAt:now-100,updatedAt:now-58}};
+ const controls=[
+  ['no-evidence',{inputStatus:undefined,delivery:{status:'accepted'}}],
+  ['no-receipt',{inputStatus:undefined}],
+  ['unbound',{nativeInputId:undefined,inputId:'saved'}],
+  ['ambiguous',{nativeInputAmbiguous:true}],
+  ['conflict',{inputId:'other'}],
+  ['mismatched',{inputStatus:{...saved.inputStatus,inputId:'other'}}],
+  ['unversioned',{inputStatus:{...saved.inputStatus,version:undefined}}],
+  ['no-basis',{inputStatus:{...saved.inputStatus,basis:'no_evidence'}}],
+  ['observation',{observation:{source:'amplifier-delegate'}}],
+  ['peer',{via:'peer',inputOrigin:'peer'}],
+ ].map(([name,patch])=>({...saved,...patch,id:'native-window:'+name}));
+ const finished={...saved,id:'native-window:done',nativeInputId:'finished',inputStatus:{...saved.inputStatus,inputId:'finished',phase:'done',endedAt:now-50}};
+ state.sessions[0].messages=[input,saved,finished,...controls];await emit();
+ const savedRow=page.locator('[data-message-id="native-window:working"]'),savedStatus=savedRow.locator('.a-input-status');
+ const checkSaved=async()=>{
+  await expect(savedStatus).toHaveAttribute('data-input-phase','working');
+  await expect(savedStatus.locator('[role="status"]')).toHaveText('Working last observed · saved history');
+  await expect(savedStatus.locator('.a-input-duration')).toHaveText(' · 0:42');
+  await expect(page.locator('[data-message-id="native-window:done"] .a-input-status')).toHaveAttribute('data-input-phase','done');
+  await expect(page.locator('[data-message-id="native-window:done"] .a-input-duration')).toHaveText(' · 0:50');
+  for(const control of controls)await expect(page.locator(`[data-message-id="${control.id}"] .a-input-status`)).toHaveCount(0);
+  await expect(savedRow.getByRole('button',{name:'Copy message as Markdown'})).toHaveCount(1);
+  await expect(savedRow.getByRole('button',{name:/Edit message|Fork conversation|Reply to|React to/})).toHaveCount(0);
+ };
+ await checkSaved();await page.waitForTimeout(1200);await checkSaved();
+ await page.reload();await checkSaved();
  state.notificationSettings={desktop:true,needsInput:true};
  state.attention={items:[{id:'question:q1',sessionId:'other',fingerprint:'q1v1',detail:'Private question'}]};
  await emit();await expect.poll(()=>page.evaluate(()=>window.fixtureNotifications.length)).toBe(1);
@@ -74,6 +104,6 @@ try{
  await page.evaluate(()=>Object.defineProperty(document,'hidden',{configurable:true,get:()=>false}));
  assert.deepEqual(calls.filter(c=>['conversation.send','conversation.retry','approval.respond','message.react'].includes(c.action)),[]);
  assert.deepEqual(errors,[]);
- await writeFile(artifact+'/input-status-browser.json',JSON.stringify({passed:true,widths:[1280,390,320],cases:['receipt-not-read','unrelated-busy','observed-timer','draft-while-working','status-corrections','reload','touch-targets','opt-in-decision-notice','dedup','click-is-navigation-only','no-execution-or-approval'],calls,errors},null,2));
+ await writeFile(artifact+'/input-status-browser.json',JSON.stringify({passed:true,widths:[1280,390,320],cases:['receipt-not-read','unrelated-busy','observed-timer','draft-while-working','status-corrections','reload','touch-targets','native-saved-exact-evidence','native-saved-frozen-timer','native-saved-terminal','native-saved-no-fallback','native-saved-unbound-ambiguous-conflict','native-saved-malformed-evidence','native-saved-observation-peer-excluded','native-saved-copy-only','native-saved-reload','opt-in-decision-notice','dedup','click-is-navigation-only','no-execution-or-approval'],calls,errors},null,2));
  console.log('Input status browser passed (synthetic peer, no provider or push).');
 }finally{await browser?.close();await vite?.close()}
