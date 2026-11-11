@@ -24,7 +24,11 @@ try{
   await page.goto(target);await showFixtureConversation(page,{navPinned:false});
   const facts=await (await page.request.get(new URL('/api/fixture/peerFacts',target).href)).json();
   const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
-  await expect(composer).toHaveDraft('Unsent synthetic draft α');
+  // Drafts belong to each browser. A second context must not inherit the
+  // fixture's one-time legacy draft migration from the first browser.
+  const draft=`Unsent synthetic draft α at ${width}`;
+  await composer.fill(draft);
+  await expect(composer).toHaveDraft(draft);
   const before=await page.evaluate(()=>{const s=window.amplifier.getState();return {id:s.selectedSessionId,draft:s.view.draft}});
   const sourceRows=await page.evaluate(ids=>{const s=window.amplifier.getState(),session=s.sessions.find(x=>x.id===s.selectedSessionId);return {window:session.messageWindow,rows:session.messages.filter(row=>ids.includes(row.id)).map(row=>({id:row.id,inputId:row.inputId,via:row.via,inputOrigin:row.inputOrigin,attribution:row.attribution||null}))}},facts.originals);
   assert.deepEqual(sourceRows.rows.map(row=>row.id),facts.originals);
