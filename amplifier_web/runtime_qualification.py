@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.metadata
 import asyncio
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -26,21 +27,26 @@ def require_session_api():
 
     activation_module = 'amplifier_foundation.session.activation'
     transcript_module = 'amplifier_foundation.session.transcript_guard'
+    store_module = 'amplifier_foundation.session.shared_state'
     message = ('This conversation setup needs an included-component update. '
                'Open Settings > Updates and install the included updates, then retry. '
                'The saved runtime and conversation have not been changed.')
     try:
         activation = import_module(activation_module)
         transcript = import_module(transcript_module)
+        shared_state = import_module(store_module)
     except ModuleNotFoundError as error:
         if error.name not in {'amplifier_foundation', 'amplifier_foundation.session',
-                              activation_module, transcript_module}:
+                              activation_module, transcript_module, store_module}:
             raise
         raise RuntimeDependencyError(message) from error
     gate = getattr(activation, 'ActivationGate', None)
     guard = getattr(transcript, 'NativeTranscriptGuard', None)
     conflict = getattr(transcript, 'NativeTranscriptConflict', None)
-    if not (isinstance(gate, type) and isinstance(guard, type) and isinstance(conflict, type)):
+    store = getattr(shared_state, 'SharedSessionStore', None)
+    if not (isinstance(gate, type) and isinstance(guard, type) and isinstance(conflict, type)
+            and isinstance(store, type)
+            and inspect.iscoroutinefunction(getattr(store, 'acquire_async', None))):
         raise RuntimeDependencyError(message)
 
 
