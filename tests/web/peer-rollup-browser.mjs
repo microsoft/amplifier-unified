@@ -50,13 +50,27 @@ try{
   const geometry=await page.locator('article.a-peer-message').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return {id:n.dataset.messageId,x:r.x,y:r.y,width:r.width,height:r.height}}));
   const sourceButtons=await page.getByRole('button',{name:/^Preview source chat:/}).count();
   await page.screenshot({path:join(output,`peer-rollup-${width}.png`)});
+  let previewOpened=false;
+  if(sourceButtons===3){
+   const panel=page.getByRole('region',{name:'Read-only source chat preview'}).or(page.getByRole('dialog',{name:'Read-only source chat preview'}));
+   await original.getByRole('button',{name:'Preview source chat: Navigation design',exact:true}).click();
+   await expect(panel).toBeVisible();
+   await expect(panel.locator('[data-preview-message-id]')).toHaveCount(20);
+   await expect(panel.getByRole('button',{name:'Open chat',exact:true})).toBeEnabled();
+   await panel.getByRole('button',{name:'Refresh',exact:true}).click();
+   await expect(panel.locator('[data-preview-message-id]')).toHaveCount(20);
+   await panel.getByRole('button',{name:'Close source preview',exact:true}).press('Escape');
+   await expect(panel).toHaveCount(0);
+   assert.deepEqual(await page.evaluate(()=>{const s=window.amplifier.getState();return {id:s.selectedSessionId,draft:s.view.draft}}),before);
+   previewOpened=true;
+  }
   const after=await (await page.request.get(new URL('/api/fixture/peerFacts',target).href)).json();
   assert.deepEqual(after.effects,[]);assert.deepEqual(after.subprocesses,[]);
-  observations.push({width,partial,runCount,sourceButtons,ids,sourceRows,geometry,exactCopy:true,draftUnchanged:true,noRuntime:true});
+  observations.push({width,partial,runCount,sourceButtons,ids,sourceRows,geometry,exactCopy:true,draftUnchanged:true,noRuntime:true,previewOpened});
   await context.close();page=null;
  }
  // No runtime action is implied by reading, disclosure or Copy.
- assert.ok(!commands.some(name=>['conversation.send','worker.spawn','session.warm','approval.respond','peer.preview','session.select'].includes(name)));
+ assert.ok(!commands.some(name=>['conversation.send','worker.spawn','session.warm','approval.respond','session.select'].includes(name)));
  assert.deepEqual(errors,[]);
  writeFileSync(join(output,'peer-rollup-result.json'),JSON.stringify({observations,commands,errors},null,2)+'\n');
  assert.ok(observations.every(row=>row.runCount===1&&row.sourceButtons===3),'PEER_ROLLUP_BOUNDARY_FAILURE: unchanged adjacent originals lost their grouped/source presentation');

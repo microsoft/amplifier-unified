@@ -294,12 +294,23 @@ class PeerOriginals:
             key = (revision, wanted)
             entry = self.cache.get(key)
             if entry is None:
+                # Preview guards ask for one original from the displayed batch.
+                # Reuse its complete counts, not another whole-file scan per link.
+                for prior, candidate in reversed(self.cache.items()):
+                    if (prior[0] == revision and set(wanted[0]).issubset(prior[1][0])
+                            and set(wanted[1]).issubset(prior[1][1])):
+                        key, entry = prior, candidate
+                        break
+            if entry is None:
                 entry, validated_signature = project_detached(
                     source, lambda stream: self._scan(stream, wanted))
                 if validated_signature != signature:
                     raise ValueError('Peer original source changed.')
             selection, bodies = entry
-            result = selection.proof(_decode(bodies), revision)
+            result = Proof(_decode({mid: raw for mid, raw in bodies.items() if mid in wanted[0]}),
+                           {mid: selection.ids[mid] for mid in wanted[0]},
+                           {iid: selection.inputs[iid] for iid in wanted[1]},
+                           {iid: selection.native[iid] for iid in wanted[1]}, revision)
             if detached_signature(source) != signature:
                 raise ValueError('Peer original source changed.')
             if key in self.cache:

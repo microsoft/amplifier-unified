@@ -176,3 +176,120 @@ async def test_long_pages_keep_cursor_order_and_immediate_preview(app):
         meta = initial['messages'][-1]['attribution']['peer']
         result = await service.peer_preview.read({'proof': meta['proof']})
         assert result['page']['items']
+
+
+@pytest.mark.parametrize('field', ['id', 'inputId'])
+async def test_unpublished_offpage_edit_keeps_only_labelled_committed_snapshot(app, field):
+    service, source, receiving, mid = app
+    long_receiver(service, receiving)
+    windows = service.history.windows
+    with service.clients.bind('preview-client'):
+        prior = windows.project(receiving)
+        meta = prior['messages'][-1]['attribution']['peer']
+        provenance = prior['messageWindow']['coverage']['provenance']
+        assert provenance['basis'] == 'committed-snapshot'
+        assert provenance['liveHistoryChecked'] is False
+        receiving['messages'][10][field] = receiving['messages'][-1][field]
+        current = windows.project(receiving)
+        assert current['messages'] == prior['messages']
+        assert current['messageWindow']['coverage']['provenance'] == provenance
+        assert current['messageWindow']['globalInputUniqueness'] == 'unknown'
+        # The cursor reads the SAME snapshot, not the newly duplicated live row.
+        older = await windows.read(receiving['id'], before=prior['messageWindow']['before'])
+        assert older['items'][10].get(field) != receiving['messages'][10][field]
+        assert older['coverage']['provenance'] == provenance
+        # Fresh current read and action never inherit snapshot authority.
+        fresh = await windows.read(receiving['id'])
+        assert 'attribution' not in fresh['items'][-1]
+        with pytest.raises((AppError, ValueError)):
+            service.peer_preview.open({'proof': meta['proof'], 'sourceSessionId': receiving['id']}, 'ui')
+        service._publish()
+        latest = windows.project(receiving)
+        assert latest['messageWindow']['coverage']['provenance']['revision'] != provenance['revision']
+        assert 'attribution' not in latest['messages'][-1]
+        with pytest.raises(ValueError):
+            await windows.read(receiving['id'], before=prior['messageWindow']['before'])
+
+
+async def test_passive_snapshot_returns_detached_nested_rows_and_preserves_new_append(app):
+    service, source, receiving, mid = app
+    long_receiver(service, receiving)
+    with service.clients.bind('preview-client'):
+        row = shown(service, receiving, mid)
+        row['peerEnvelope']['purpose'] = 'Mutating a returned frame'
+        assert shown(service, receiving, mid)['peerEnvelope']['purpose'] != row['peerEnvelope']['purpose']
+        # Even identical last-row append must not hide a new canonical occurrence.
+        receiving['messages'].append(copy.deepcopy(receiving['messages'][-1]))
+        frame = service.history.windows.project(receiving)
+        assert [r['id'] for r in frame['messages'][-2:]] == [mid, mid]
+        assert all('attribution' not in r for r in frame['messages'][-2:])
+        assert 'provenance' not in frame['messageWindow']['coverage']
+
+
+def inline_receiver(service, receiving):
+    from amplifier_web.cold_display import ColdRecord, raw
+    from amplifier_web.resource_files import prepare
+    prepared = prepare(receiving['messages'])
+    service.db.execute('INSERT OR REPLACE INTO state_resources VALUES (?, ?)',
+                       (prepared.identity, prepared.text))
+    service.db.commit()
+    cold = ColdRecord({**raw(receiving), '_coldFields': {
+        'messages': {'$resource': prepared.identity, 'bytes': prepared.size}}}, service.db)
+    dict.pop(cold, 'messages', None)
+    service.state['sessions'] = [cold if r['id'] == receiving['id'] else r
+                                 for r in service.state['sessions']]
+    return cold, prepared
+
+
+async def test_inline_passive_reuse_never_hashes_or_fetches_whole_index(app, monkeypatch):
+    service, source, receiving, mid = app
+    long_receiver(service, receiving, count=2001)
+    receiving, prepared = inline_receiver(service, receiving)
+    windows = service.history.windows
+    with service.clients.bind('preview-client'):
+        await windows.load(receiving['id'])
+        assert shown(service, receiving, mid)['attribution']['peer']['available']
+        actual = windows._cold_source
+        def forbidden(*args):
+            raise AssertionError('Passive frame fetched the full cold index')
+        with monkeypatch.context() as patch:
+            patch.setattr(windows, '_cold_source', forbidden)
+            for i in range(5):
+                receiving['streaming'] = str(i)
+                assert shown(service, receiving, mid)['attribution']['peer']['available']
+            service.db.execute('CREATE TABLE unrelated_scalar(value INTEGER)')
+            service.db.commit()
+            assert 'attribution' not in shown(service, receiving, mid)
+        assert actual(receiving).identity == prepared.identity
+        await windows.load(receiving['id'])
+        assert shown(service, receiving, mid)['attribution']['peer']['available']
+
+
+@pytest.mark.parametrize('other_connection', [False, True])
+async def test_inline_same_length_corruption_never_reuses_proof(app, monkeypatch, other_connection):
+    import sqlite3
+    service, source, receiving, mid = app
+    long_receiver(service, receiving)
+    receiving, prepared = inline_receiver(service, receiving)
+    windows = service.history.windows
+    with service.clients.bind('preview-client'):
+        await windows.load(receiving['id'])
+        assert shown(service, receiving, mid)['attribution']['peer']['available']
+        connection = service.db
+        if other_connection:
+            path = next(row[2] for row in service.db.execute('PRAGMA database_list') if row[1] == 'main')
+            connection = sqlite3.connect(path)
+        try:
+            changed = prepared.text.replace('Navigation', 'Navigatiom')
+            assert len(changed) == len(prepared.text) and changed != prepared.text
+            connection.execute('UPDATE state_resources SET value=? WHERE id=?', (changed, prepared.identity))
+            connection.commit()
+            # The passive call performs no body read/hash even on invalidation.
+            with monkeypatch.context() as patch:
+                patch.setattr(windows, '_cold_source', lambda *a: (_ for _ in ()).throw(AssertionError('Passive fetch')))
+                assert 'attribution' not in shown(service, receiving, mid)
+            with pytest.raises(ValueError):
+                await windows.read(receiving['id'])
+        finally:
+            if other_connection:
+                connection.close()

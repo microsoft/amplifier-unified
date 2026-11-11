@@ -83,6 +83,12 @@ class TranscriptWindows:
     def peer_save_committed(self, identities):
         self._peer_failed.difference_update(identities)
 
+    def _database_epoch(self):
+        db = self.service.db
+        if db.in_transaction:
+            return None  # A rollback is not a reusable index witness.
+        return (id(db), db.execute('PRAGMA main.data_version').fetchone()[0], db.total_changes)
+
     @staticmethod
     def _peer_wanted(rows):
         from .peer_attribution import input_identity
@@ -160,6 +166,8 @@ class TranscriptWindows:
         self.initial.clear()
         self._peer_resident.clear()
         self._peer_failed.clear()
+        self.peer_originals.cache.clear()
+        self.peer_originals.retained_bytes = 0
         self.bytes = 0
 
     def bound_web(self):
@@ -243,6 +251,8 @@ class TranscriptWindows:
 
     def _saved_page(self, session, before, limit, *, committed=None):
         stamp = self._saved_stamp(session)
+        if committed is not None:
+            stamp = [session['id'], committed.prepared.identity]
         source = _digest(stamp)
         rows = committed.snapshot if committed is not None else session.get('messages', [])
         end = len(rows)
@@ -264,7 +274,13 @@ class TranscriptWindows:
                 'hasEarlier': bool(start), 'total': None, 'offset': None, 'scope': 'recent',
                 'revision': source, 'windowKey': _digest([source, start, end]),
                 'coverage': {'kind': 'saved-web', 'historyComplete': False}, 'unavailableRanges': gaps,
-                '_savedComplete': start == 0 and end == len(rows) and not gaps}
+                '_savedComplete': start == 0 and end == len(rows) and not gaps,
+                **({'_committedRevision': committed.prepared.identity,
+                    'coverage': {'kind': 'saved-web', 'historyComplete': False,
+                        'provenance': {'basis': 'committed-snapshot',
+                            'revision': committed.prepared.identity,
+                            'countsScope': 'requested-originals-global',
+                            'liveHistoryChecked': False}}} if committed is not None else {})}
 
     async def read(self, session_id, *, before=None, limit=100, native=False):
         if self.closed:
@@ -277,9 +293,16 @@ class TranscriptWindows:
             fence = self._fence(session_id)
             use_native = native or session.get('historyManaged') is True
             cold = self._cold_source(session) if not use_native else None
+            database_epoch = self._database_epoch() if cold is not None else None
+            committed = None
             if not use_native and cold is None:
+                if before is not None:
+                    cursor = self.reader._parse(before)
+                    entry = self._committed_messages(session)
+                    if entry is not None and cursor.get('source') == _digest([session_id, entry.prepared.identity]):
+                        committed = entry
                 # Canonical saved IDs, attachments and action authority survive.
-                page = self._saved_page(session, before, limit)
+                page = self._saved_page(session, before, limit, committed=committed)
         if use_native or cold is not None:
             if self.closed or len(self.jobs) >= 8:
                 raise ValueError('Saved message readers are busy. Try again.')
@@ -323,11 +346,14 @@ class TranscriptWindows:
         async with self.service.lock:
             current = self.service._session(session_id, hydrate=False)
             if (_source(current) != source or self._fence(session_id) != fence
-                    or cold is not None and self._cold_source(current) != cold):
+                    or cold is not None and self._cold_source(current) != cold
+                    or committed is not None and self._committed_messages(current) is not committed):
                 raise ValueError('The selected message source changed.')
             if wanted and cold is None:
                 try:
-                    proof = self._resident_proof(dict.get(current, 'messages', ()), wanted)
+                    proof = self._resident_proof(
+                        committed.snapshot if committed is not None else dict.get(current, 'messages', ()),
+                        wanted, (session_id, committed.prepared.identity) if committed is not None else None)
                 except (ValueError, OSError):
                     proof = None
             page['_peerChecked'] = bool(wanted)
@@ -336,13 +362,19 @@ class TranscriptWindows:
                 # Do not retain Detached.indexed: legacy inline resources can
                 # contain the entire history. Proof retains compact witnesses.
                 page['_peerSource'] = cold.identity if cold is not None else None
+                if cold is not None and proof.revision[1][0] == 'inline':
+                    # Validate bytes at this explicit read; passive projections
+                    # only reuse when no DB write could have changed the index.
+                    page['_peerIndexEpoch'] = (database_epoch if database_epoch is not None
+                        and database_epoch == self._database_epoch() else None)
                 size += len(json.dumps(proof.originals, ensure_ascii=False).encode())
             self._retain(session_id, page, size)
         return self._wire(page, session_id)
 
     def _wire(self, page, session_id):
         result = {key: copy.deepcopy(value) for key, value in page.items()
-                  if key not in {'items', '_peerProof', '_peerSource', '_peerChecked'}}
+                  if key not in {'items', '_peerProof', '_peerSource', '_peerChecked',
+                                 '_peerIndexEpoch', '_committedRevision'}}
         from .peer_attribution import derive
         # Attribution requires global duplicate checks. Only a complete bounded
         # saved set supplies that proof; neither a native suffix nor a partial
@@ -354,20 +386,29 @@ class TranscriptWindows:
             from .resource_files import detached_signature
             from .media_saved_aliases import _indexed_evidence
             current = self.service._session(session_id, hydrate=False)
-            cold = self._cold_source(current)
             try:
-                if (cold is None or cold.identity != page['_peerSource']
+                reference = dict.get(current, '_coldFields', {}).get('messages', {}).get('$resource')
+                if dict.__contains__(current, 'messages') or reference != page['_peerSource']:
+                    proof = None
+                elif proof.revision[1][0] == 'inline':
+                    if page.get('_peerIndexEpoch') is None or page['_peerIndexEpoch'] != self._database_epoch():
+                        proof = None
+                else:
+                    cold = self._cold_source(current)
+                    if (cold is None or cold.identity != page['_peerSource']
                         or (str(cold.directory) if cold.directory is not None else None,
                             cold.identity, *_indexed_evidence(cold.indexed)) != proof.revision[0]
                         or detached_signature(cold) != proof.revision[1]):
-                    proof = None
+                        proof = None
             except (ValueError, OSError):
                 proof = None
-        owner = {'id': session_id, 'messages': page['items']}
+        # Never expose a committed snapshot's nested dictionaries to a reader.
+        selected = copy.deepcopy(page['items'])
+        owner = {'id': session_id, 'messages': selected}
         if proof is not None and resolver is not None:
-            rows = resolver(owner, page['items'], proof=proof)
+            rows = resolver(owner, selected, proof=proof)
         else:
-            rows = derive(owner, page['items'],
+            rows = derive(owner, selected,
                           resolver if complete and not page.get('_peerChecked') else None)
         result['items'] = rows
         result.pop('_owner', None)
@@ -483,16 +524,23 @@ class TranscriptWindows:
                 raw_page = self._saved_page(session, None, 100)
                 wanted = self._peer_wanted(raw_page['items'])
                 if wanted and committed is not None:
+                    raw_page['_peerChecked'] = True
                     try:
                         saved_page = self._saved_page(session, None, 100, committed=committed)
-                        # A passive frame can contain uncommitted active text.
-                        # Never hide it or join its new bytes to old proof. The
-                        # proof describes the committed snapshot only; every
-                        # action rechecks current mutable originals explicitly.
-                        if raw_page['items'] == saved_page['items']:
+                        from .message_preparation import _same
+                        # Visibility check only, not a live global-uniqueness
+                        # witness. Return snapshot rows WITH snapshot counts.
+                        # Unpublished off-page edits do not relabel that snapshot
+                        # as current; explicit reads/actions always revalidate.
+                        if (len(dict.get(session, 'messages', ())) == len(committed.snapshot)
+                                and raw_page['unavailableRanges'] == saved_page['unavailableRanges']
+                                and _same(raw_page['items'], saved_page['items'], [100_000])):
+                            raw_page = saved_page
                             raw_page['_peerProof'] = self._resident_proof(
                                 committed.snapshot, wanted,
                                 (session['id'], committed.prepared.identity))
+                        else:
+                            raw_page['_peerChecked'] = True
                     except (ValueError, OSError):
                         pass
                 page = self._wire(raw_page, session['id'])

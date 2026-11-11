@@ -352,6 +352,21 @@ def test_inline_cache_retains_only_selected_bytes_not_the_detached_index(tmp_pat
     assert again.originals == {'peer': selected}
 
 
+def test_each_preview_original_reuses_its_displayed_batch(tmp_path, monkeypatch):
+    wanted = [original(f'peer-{index}') for index in range(20)]
+    source = source_for(tmp_path, [*filler(200), *wanted])
+    helper = PeerOriginals()
+    helper.cold(source, wanted)
+    def forbidden(*args):
+        raise AssertionError('A preview link rescanned its already-qualified owner')
+    monkeypatch.setattr(peer_originals, 'project_detached', forbidden)
+    for row in wanted:
+        proof = helper.cold(source, [row])
+        assert proof.originals == {row['id']: row}
+        assert proof.id_counts == {row['id']: 1}
+    assert len(helper.cache) == 1
+
+
 @pytest.mark.parametrize('resident', [False, True])
 def test_full_100_key_batch_is_admitted_without_caching_other_body_rows(tmp_path, resident):
     wanted = [original(f'peer-{index}') for index in range(100)]

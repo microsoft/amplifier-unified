@@ -30,12 +30,36 @@ requested window, resource ownership and file identity, not an unread prefix or
 the complete content digest. It never hydrates a whole cold execution, message or
 configuration body. A changed runtime transcript is offered as a separate,
 explicit read-only history view; it is not silently merged into saved web rows.
-Receipt-derived sender captions require a complete, budget-admitted saved message
-set with no omitted ranges. Partial saved pages and native windows remain neutral:
-a matching row within one page cannot prove global message/input uniqueness.
-Long saved histories need a separate bounded uniqueness receipt/index before
-those captions can be restored without a whole-history read. Existing canonical
-saved IDs and message actions do not depend on a display caption.
+Receipt-derived sender captions require complete, budget-admitted evidence for
+the requested original message IDs and input multiplicity, not merely a local
+page match. Saved pages can obtain that evidence through `PeerOriginals`: one
+metadata pass over the admitted owner, retaining only requested originals and
+counts. Cold resources reuse complete content-hash and file/index validation;
+no full message array is hydrated. The proof has an 8 MiB scan budget, 4 MiB
+record limit and 100 requested keys. Budget failure, gaps, malformed input or
+duplicates remain neutral. Native windows retain their existing neutral boundary.
+
+Passive resident windows may use the canonical, successfully committed
+`MessagePreparation` snapshot. Returned rows and multiplicity evidence come
+from that same content hash; `coverage.provenance` reports
+`basis: committed-snapshot`, its revision, `countsScope: requested-originals-global`
+and `liveHistoryChecked: false`. This is not a claim that unpublished mutable
+aliases are unchanged. A changed visible page or append stays visible as a
+neutral live frame; partial streaming responses keep their separate surface.
+Snapshot cursors read that same committed revision or refuse after replacement.
+Failed saves suppress snapshot attribution. Explicit current reads and preview
+actions validate fresh canonical originals, including off-page duplicates and
+nested alias changes, before and after awaited source reads.
+
+Cold file-backed proof hits recheck compact index/file witnesses. Legacy inline
+proofs use a connection-bound DB epoch captured around the explicit validated
+read. Any transaction or DB write invalidates inline passive attribution until
+an explicit reread, without fetching or hashing the whole inline history on each
+scalar update. Proof misses cost O(owner bytes/rows); warm passive resident reuse
+costs bounded page work. Proof caches have count and byte limits and retain no
+unrelated bodies. `globalInputUniqueness` remains `unknown`: proof for selected
+originals is not global proof of every native input. Saved IDs and message
+actions do not depend on a display caption; a cache never grants authority.
 
 Message cursors are authenticated by a service-owned key and bound to exact
 source/resource identity, source stamps and the applicable published owner fence.
