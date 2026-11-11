@@ -74,6 +74,12 @@ async def test_native_child_continues_after_parent_finished(app, tmp_path, monke
             await native_task.perform('task.complete', {'commandId': 'finished-A', 'expectedRevision': 1,
                 'condition': 'Ship the verified report', 'evidence': ['Original verified result']})
             completed_before = deepcopy(native_task.tasks.record())
+            # Finish A's scripted root turn before accepting B. Otherwise this
+            # fixture selects live steering, which its transport does not own.
+            await app.on_runtime_event('runtime.generation', {'sessionId': sid, 'rootSessionId': sid,
+                'event': 'generation.finished', 'generation_id': source['collaborationGeneration']['id'],
+                'disposition': 'manager_turn_finished', 'active_job_ids': []})
+            await app.on_runtime_event('runtime.status', {'sessionId': sid, 'status': 'idle'})
             # The real public send accepts B; no old input or objective is replayed.
             await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'New human work B'},
                                command_id='fresh-human-B')
@@ -129,7 +135,7 @@ async def test_native_child_continues_after_parent_finished(app, tmp_path, monke
     registry = await install_children(parent, prepared, runtime, SessionStore(tmp_path/'children'), approvals)
     ready, release = asyncio.Event(), asyncio.Event()
     calls, results = [], []
-    control = controls(sid)
+    control = native_task if native_task is not None else controls(sid)
     control.capacity.admit = worker.admit_model
     emissions = []
     def publish(event):
@@ -296,7 +302,7 @@ async def test_native_child_continues_after_parent_finished(app, tmp_path, monke
             assert len(cancelled) == 1 and cancelled[0]['phase'] == 'cancelled'
             assert cancelled[0]['usage']['totalTokens'] == cancelled[0]['usage']['costUsd'] == 0
         await control.close()
-        if native_task is not None:
+        if native_task is not None and native_task is not control:
             await native_task.close()
         await parent.cleanup()
 
