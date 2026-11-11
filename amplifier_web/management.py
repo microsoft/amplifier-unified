@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import copy
+from contextlib import ExitStack
 import json
 from pathlib import Path
 import time
@@ -39,6 +40,9 @@ class Management:
                 continue
             try:
                 record = self.configuration_record(session['id'], pending.get('operationId'))
+                if self.finish_saved_cancellation(session, record):
+                    restored.add(session['id'])
+                    continue
                 if pending.get('phase') == 'queued' and record['state']['stage'] == 'queued' and record['state']['effect'] == 'none':
                     self.schedule_configuration(session['id'])
                 elif pending.get('phase') in {'queued', 'applying'}:
@@ -541,11 +545,29 @@ class Management:
         if session.get('configurationOperationFence') != operation:
             return
         pending = session.get('pendingConfiguration', {})
+        saved_cancelled = pending.get('phase') == 'cancelled' and pending.get('stage') == 'saved_cancelled'
         held = bool(pending.get('recoveryRequired') or
-            pending.get('effect') != 'none' and pending.get('phase') != 'ready')
+            pending.get('effect') != 'none' and pending.get('phase') != 'ready' and not saved_cancelled)
         session['configurationBusy'] = held
         if not held:
             session.pop('configurationOperationFence', None)
+            if saved_cancelled and (session.get('configurationPending')
+                    or session.get('configurationRefresh', {}).get('phase') in {'queued', 'applying'}):
+                session['configurationBusy'] = True
+
+    def finish_saved_cancellation(self, session, record):
+        """Finish an already committed cancellation after interrupted publication."""
+        state = record['state']
+        if state.get('phase') != 'cancelled' or state.get('stage') != 'saved_cancelled':
+            return False
+        pending = session.get('pendingConfiguration', {})
+        if pending.get('operationId') != record['id']:
+            raise ValueError('The configuration cancellation no longer owns the pending operation.')
+        self.queued_path(session['id']).unlink(missing_ok=True)
+        pending.update(copy.deepcopy(state))
+        self.settle_configuration_fence(session, record['id'])
+        session.pop('pendingConfiguration', None)
+        return True
 
     def create_configuration_operation(self, session, config, command_id, authority, source):
         from .configuration_authority import CURRENT, fingerprint
@@ -1056,28 +1078,45 @@ class Management:
         elif action=='configuration.cancel':
             identity=self.session({'sessionId':args['id']})['id']
             operation = None
+            saved_cancellation = False
             async with self.service.lock:
-                current = self.service._session(identity)
-                pending = current.get('pendingConfiguration', {})
-                if pending.get('phase') == 'applying':
-                    raise ValueError('These changes are already applying.')
-                if pending:
-                    record = self.configuration_record(identity, pending.get('operationId'))
-                    operation = record['id']
-                    if record['state']['effect'] != 'none' and record['state']['phase'] != 'ready':
-                        raise ValueError('The original application outcome is unresolved. Cancellation cannot prove it had no effect.')
-                    if record['state']['phase'] != 'ready':
-                        self.configuration_transition(current, record['id'], phase='cancelled', stage='cancelled')
-                    self.settle_configuration_fence(current, record['id'])
-                task=self.pending_config_tasks.get(identity)
-                if task:task.cancel()
-                self.queued_path(identity).unlink(missing_ok=True)
-                current.pop('pendingConfiguration',None)
-                self.service._publish_changes(sessions={identity})
-            if operation:
+                # Keep native ownership through the operation commit and host
+                # publication, with no await or opportunity to start a writer.
+                with ExitStack() as boundary:
+                    current = self.service._session(identity)
+                    pending = current.get('pendingConfiguration', {})
+                    if pending.get('phase') == 'applying':
+                        raise ValueError('These changes are already applying.')
+                    if pending:
+                        record = self.configuration_record(identity, pending.get('operationId'))
+                        operation = record['id']
+                        saved_cancellation = self.finish_saved_cancellation(current, record)
+                        if (not saved_cancellation and record['state']['phase'] != 'ready'
+                                and record['state']['effect'] == 'saved_not_mounted'):
+                            from .configuration_recovery import check_saved_cancellation
+                            observed = boundary.enter_context(self.service.runtime.stopped_boundary(current))
+                            check_saved_cancellation(self, current, record)
+                            record = self.configuration_transition(current, operation,
+                                phase='cancelled', stage='saved_cancelled', recoveryRequired=False,
+                                error=None, detail='Saved settings retained; unfinished runtime load cancelled.',
+                                recovery_source={'action': action, 'boundary': observed})
+                            saved_cancellation = self.finish_saved_cancellation(current, record)
+                        elif not saved_cancellation:
+                            if record['state']['effect'] != 'none' and record['state']['phase'] != 'ready':
+                                raise ValueError('The original application outcome is unresolved. Cancellation cannot prove it had no effect.')
+                            if record['state']['phase'] != 'ready':
+                                self.configuration_transition(current, record['id'], phase='cancelled', stage='cancelled')
+                            self.settle_configuration_fence(current, record['id'])
+                    task=self.pending_config_tasks.get(identity)
+                    if task:task.cancel()
+                    self.queued_path(identity).unlink(missing_ok=True)
+                    current.pop('pendingConfiguration',None)
+                    self.service._publish_changes(sessions={identity})
+            if operation and not saved_cancellation:
                 from .configuration_continuation import release_boundary
                 await release_boundary(self, identity, operation)
-            self.background(self.service.collaboration.drain(identity))
+            if not saved_cancellation:
+                self.background(self.service.collaboration.drain(identity))
         elif action in {'configuration.inspect','configuration.apply','configuration.patchPlacement.bind'}:
             session=self.session({'sessionId':args['id']})
             applying = action != 'configuration.inspect'
