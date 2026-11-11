@@ -61,11 +61,14 @@ test('a local-only unknown message requires explicit intent before retrying its 
  assert.equal(retryCalls[0].inputId,'original');assert.equal(calls.length,1);
  await act(async()=>root.unmount());
 });
-test('known startup failure retries the saved identity without an uncertainty confirmation',async()=>{
- const calls=[],message={id:'m',inputId:'original',role:'user',text:'Request'},session={id:'chat',status:'error',messages:[message]};let root;
+test('known startup failure retries only the saved identity and preserves history without a draft write',async()=>{
+ const calls=[],message={id:'m',inputId:'original',role:'user',text:'Request',attachments:[{id:'file',name:'saved.txt'}]};
+ const session={id:'chat',status:'error',messages:[{id:'prior',role:'assistant',text:'Earlier response'},message]},before=structuredClone(session);let root;
  await act(async()=>{root=create(React.createElement(MessageDelivery,{message,session,delivery:{status:'failed'},localDelivery:{commandId:'original',status:'failed'},dispatch:async(action,args)=>{calls.push({action,args});return {result:{delivery:'accepted'}}},retry:()=>{throw Error('Must reuse saved input')}}))});
+ assert.deepEqual(calls,[]);
  await act(async()=>button(root,'Retry').props.onClick());
  assert.deepEqual(calls,[{action:'conversation.retry',args:{sessionId:'chat',inputId:'original',confirmUncertain:true}}]);
+ assert.deepEqual(session,before);
  assert.doesNotMatch(JSON.stringify(root.toJSON()),/could repeat that work/);
  await act(async()=>root.unmount());
 });

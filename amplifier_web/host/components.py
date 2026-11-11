@@ -10,7 +10,10 @@ import copy
 import importlib.metadata
 import importlib.util
 import json
+import os
 from pathlib import Path
+import re
+import subprocess
 from urllib.parse import unquote, urlsplit
 
 
@@ -67,13 +70,34 @@ def declarations(plan):
             yield from declarations(agent)
 
 
-async def prepare_bundle(bundle, **kwargs):
+async def prepare_bundle(bundle, *, source_home=None, **kwargs):
     """Activate nested declarations without treating access selectors as rosters.
 
     Foundation's ordinary preparation visits immediate agents only; its batched
     walk assumes every nested agents value is a mapping. Flatten an activation-
     only copy, then retain the exact executable plan and original bundle.
     """
+    if source_home is not None:
+        # Canonicalize before Foundation records source-qualified provider
+        # paths and before Core/modes capture the plan. Never relabel those
+        # hints after preparation or reverify repositories at checkpoints.
+        original = bundle.to_mount_plan()
+        plan = portable_module_sources(original, source_home)
+        # Keep the exact physical activation and source-policy observation.
+        # Foundation already retains original/effective provider hints; this
+        # translation exists only during this preparation, not at checkpoints.
+        physical = {(after['module'], after.get('source')): before['source']
+                    for before, after in zip(declarations(original), declarations(plan))
+                    if before.get('source') != after.get('source')}
+        if physical:
+            resolve = kwargs.get('source_resolver')
+            def source_resolver(module, source):
+                selected = physical.get((module, source), source)
+                return resolve(module, selected) if resolve is not None else selected
+            kwargs['source_resolver'] = source_resolver
+        for key in ('providers', 'tools', 'hooks', 'session', 'spawn', 'agents'):
+            if key in plan:
+                setattr(bundle, key, plan[key])
     projected = copy.copy(bundle)
     projected.agents = {}
     agent_names = {}
@@ -120,6 +144,106 @@ def git_source(source):
     path, at, revision = parsed.path.rpartition('@')
     repository = base[:-(len(revision) + 1)] if at else base
     return repository.removesuffix('.git'), base, fragment
+
+
+def portable_module_sources(plan, home):
+    """Replace verified managed checkout locations, not user source choices.
+
+    A saved mount plan outlives reset's generation directories. Retain its exact
+    repository/commit/subdirectory instead of that disposable location. Unknown,
+    changed or external local sources stay verbatim; this is not a repair or a
+    fallback to the current bundle. Inspect only roots used by this plan, once
+    per call, never the cache inventory or other conversations.
+    """
+    result = copy.deepcopy(plan)
+    if home is None or not isinstance(result, dict):
+        return result
+    home = Path(home).resolve()
+    # Qualification has its own app home but uses the explicitly selected
+    # shared store. Do not infer ownership from an arbitrary ancestor.
+    shared = os.environ.get('AMPLIFIER_SOURCE_STORE')
+    shared_objects = Path(shared).expanduser().resolve() / 'objects' if shared else None
+    inspected, converted = {}, {}
+
+    def git(root, *args):
+        return subprocess.check_output(
+            ['git', '--no-optional-locks', '--literal-pathspecs', '-C', str(root), *args],
+            stderr=subprocess.DEVNULL, text=True, timeout=10).strip()
+
+    for row in declarations(result):
+        source = row.get('source')
+        if not isinstance(source, str):
+            continue
+        if source in converted:
+            row['source'] = converted[source]
+            continue
+        converted[source] = source
+        try:
+            path = Path(source)
+            if source.startswith('file:'):
+                from amplifier_foundation.paths.resolution import parse_uri
+                parsed = parse_uri(source)
+                path = Path(parsed.path)
+                if parsed.subpath:
+                    path /= parsed.subpath
+            if not path.is_absolute():
+                continue
+            path = Path(os.path.normpath(path))
+            parts = path.relative_to(home).parts if path.is_relative_to(home) else ()
+            if shared_objects is not None and path.is_relative_to(shared_objects):
+                base = shared_objects
+            elif parts[:2] in {('foundation', 'cache'), ('source-store', 'objects')}:
+                base = home.joinpath(*parts[:2])
+            elif parts[:2] == ('updates', 'releases') and parts[3:5] == ('foundation', 'cache'):
+                base = home.joinpath(*parts[:5])
+            else:
+                continue
+            from ..staged_sources import owned_path
+            owned_path(path, base)
+            if not path.exists():
+                continue
+            root = path
+            while root != base and not (root / '.git').exists():
+                root = root.parent
+            if root == base:
+                continue
+            if root not in inspected:
+                from amplifier_foundation.sources.shared import clean_checkout
+                from ..updates import source_key
+                inspected[root] = None
+                metadata = owned_path(root / '.amplifier_cache_meta.json', base)
+                data = json.loads(metadata.read_text())
+                revision, url = data['commit'], data['git_url']
+                if base == shared_objects:
+                    from amplifier_foundation.sources.shared import SharedSourceStore
+                    if SharedSourceStore(shared_objects.parent).checkout(url, revision) != root:
+                        continue
+                remote = urlsplit(url)
+                if (remote.query or remote.fragment or remote.password
+                        or remote.scheme in {'http', 'https'} and remote.username
+                        or not re.fullmatch('[a-f0-9]{40}', revision)
+                        or Path(git(root, 'rev-parse', '--show-toplevel')).resolve() != root
+                        or git(root, 'rev-parse', 'HEAD') != revision
+                        or source_key(git(root, 'config', '--local', '--no-includes',
+                                          '--get', 'remote.origin.url'), 'HEAD')[0]
+                        != source_key(url, 'HEAD')[0]
+                        or not clean_checkout(root)):
+                    continue
+                inspected[root] = 'git+' + url + '@' + revision
+            reference = inspected[root]
+            if reference is None:
+                continue
+            suffix = path.relative_to(root).as_posix()
+            # Existing but untracked/ignored module directories cannot be
+            # reconstructed from the commit, even in an otherwise clean cache.
+            if suffix != '.' and not git(root, 'ls-tree', 'HEAD', '--', suffix):
+                continue
+            row['source'] = converted[source] = reference + ('#subdirectory=' + suffix if suffix != '.' else '')
+        except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+            # Provenance is optional evidence, never authority to discard local
+            # changes or manufacture a replacement for a retired legacy path.
+            continue
+    return result
 
 
 def installed_package_source(distribution_name, package_name):

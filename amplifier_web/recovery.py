@@ -1,15 +1,151 @@
 """Private full backups and reversible app-owned reset operations."""
 import asyncio
 import copy
+import hashlib
 import json
+import os
 from pathlib import Path
-import shutil
 import sqlite3
+import stat
 import tarfile
 import time
 import uuid
 
 PARTS={'runtime':['runtime'],'cache':['foundation/cache','updates/releases','updates/active.json'],'settings':['config','routing','bundles'],'conversations':['sessions']}
+
+CONFIGURATION_FILES = ('configuration.json', 'effective-configuration.json')
+
+
+def _read_reset_configuration(path, home):
+    """Read an existing plan, bounded by its own size, not a reset-only limit."""
+    if os.name == 'nt':
+        from .windows_files import _component, directory
+        _component(path.name)
+        with directory(path.parent, owned_root=home) as pinned:
+            # The public small-config reader has a 1 MiB ceiling. Keep the same
+            # pinned parents, ACL-checked existing handle and native reader,
+            # but bound this already persisted plan by that handle's size.
+            pinned._check()
+            handle = pinned._existing(path.name)
+            try:
+                info = pinned._api.info(handle, pinned.path / path.name, directory=False)
+                size = (info.size_high << 32) | info.size_low
+                content = pinned._api.read(handle, limit=size)
+            finally:
+                pinned._api.close(handle)
+            if len(content) != size:
+                raise ValueError('Saved configuration changed during reset.')
+            return content
+    from .staged_sources import owned_path
+    owned_path(path, home)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError('Reset configuration must be a private regular file: ' + str(path.relative_to(home)))
+        content = stream.read(info.st_size + 1)
+    if len(content) != info.st_size:
+        raise ValueError('Saved configuration changed during reset.')
+    return content
+
+
+def _retiring_reference(value, roots):
+    """Recognize one schema-owned local source/resource path without rewriting it."""
+    if not isinstance(value, str):
+        return False
+    if value.startswith('file:'):
+        from urllib.parse import parse_qs, urlsplit
+        from urllib.request import url2pathname
+        uri = urlsplit(value)
+        if uri.netloc not in ('', 'localhost'):
+            return False
+        value = url2pathname(uri.path)
+        subdirectory = parse_qs(uri.fragment).get('subdirectory', [])
+        if len(subdirectory) == 1:
+            value = str(Path(value) / subdirectory[0])
+    path = Path(os.path.normpath(value.split('#', 1)[0]))
+    if value.startswith('~/'):
+        path = path.expanduser()
+    return path.is_absolute() and any(path.is_relative_to(root) for root in roots)
+
+
+def _reset_plan_references(plan):
+    """Only executable declarations and explicit context-file maps own paths here."""
+    if not isinstance(plan, dict):
+        return
+    from .host.components import agent_roster, declarations
+    yield from (row.get('source') for row in declarations(plan))
+
+    def resources(node):
+        context = node.get('context')
+        if isinstance(context, dict):
+            yield from context.values()
+        for child in agent_roster(node.get('agents', {})).values():
+            if isinstance(child, dict):
+                yield from resources(child)
+    yield from resources(plan)
+
+
+def prepare_reset_configurations(home, targets):
+    """Precompute legacy plan conversion before losing managed source provenance.
+
+    No writes, downloads, mounting, request changes or cache inventory. Callers
+    own quiescence and rollback. Explicit context files cannot be reconstructed
+    from module provenance. Module config, prompt text and other opaque values
+    are not executable source declarations and remain their module's concern.
+    """
+    home = Path(home)
+    sessions = home / 'sessions'
+    if not sessions.exists() and not sessions.is_symlink():
+        return []
+    from .staged_sources import owned_path
+    owned_path(sessions, home)
+    roots = tuple(home / name for name in targets)
+    changes = []
+    for directory in sorted(sessions.iterdir()):
+        if not directory.is_dir():
+            continue
+        for name in (*CONFIGURATION_FILES, 'pending-configuration.json'):
+            path = directory / name
+            if not path.exists() and not path.is_symlink():
+                continue
+            before = _read_reset_configuration(path, home)
+            plan = json.loads(before)
+            if not any(_retiring_reference(value, roots) for value in _reset_plan_references(plan)):
+                continue
+            relative = str(path.relative_to(home))
+            if name == 'pending-configuration.json':
+                # Success/cancellation owners unlink this queue file. Their
+                # retained configuration-operations records are history, not
+                # reset inputs. A remaining queue is not proof of completion.
+                raise ValueError('Reset cannot retire sources used by pending configuration: ' + relative +
+                                 '. Resolve the original operation first; its request was not changed.')
+            from .host.components import declarations, portable_module_sources
+            converted = portable_module_sources(plan, home)
+            # Do not change managed sources which this reset is not retiring.
+            for old, new in zip(declarations(plan), declarations(converted), strict=True):
+                if 'source' in old and not _retiring_reference(old['source'], roots):
+                    new['source'] = old['source']
+            if any(_retiring_reference(value, roots) for value in _reset_plan_references(converted)):
+                raise ValueError('Reset cannot preserve ' + relative +
+                                 ': a retiring source is missing, changed or unverified, or an explicit '
+                                 'context resource still uses a retiring path. No cache was retired.')
+            after = json.dumps(converted, indent=2).encode('utf-8')
+            changes.append((path, before, after))
+    return changes
+
+
+def stage_reset_configurations(home, targets, destination):
+    """Fresh-install CLI bridge: private prepared output, not a second journal."""
+    from .host.config import write_private
+    home, destination = Path(home), Path(destination)
+    changes = prepare_reset_configurations(home, targets)
+    entries = []
+    for path, before, after in changes:
+        relative = path.relative_to(home)
+        write_private(destination / relative, after, owned_root=home)
+        entries.append({'path': relative.as_posix(), 'before': hashlib.sha256(before).hexdigest()})
+    write_private(destination / 'prepared.json', json.dumps(entries), owned_root=home)
 
 
 def bulk_sessions(service, *, include_native=False):
@@ -264,16 +400,38 @@ async def _reset(manager,args,operation=None):
             for key in ("setup_manager", "global_setup_manager"):
                 setup=getattr(manager,key,None)
                 if setup:await setup.close();setattr(manager,key,None)
+            changes = (await _settled_thread(prepare_reset_configurations, service.data_dir, targets)
+                       if 'cache' in parts and 'conversations' not in parts else [])
             result=await backup(service, publishing_locked=True, operation_id=operation)
             async with service.lock:
                 sessions=bulk_sessions(service, include_native=True) if 'conversations' in parts else []
                 retained=service.data_dir/'backups'/('reset-'+operation)
-                for name in targets:
-                    path=service.data_dir/name
-                    if path.is_symlink():raise ValueError('Refusing to reset a linked app directory')
-                    if path.exists():
-                        target=retained/name;target.parent.mkdir(parents=True,exist_ok=True)
-                        shutil.move(str(path),str(target))
+                from .host.config import write_private
+                for path, before, _ in changes:
+                    if _read_reset_configuration(path, service.data_dir) != before:
+                        raise ValueError('Saved configuration changed during reset; no cache was retired.')
+                moves, written = [], []
+                try:
+                    for path, before, after in changes:
+                        # Record before writing: an atomic replace can succeed
+                        # before its writer reports an error.
+                        written.append((path, before))
+                        write_private(path, after, owned_root=service.data_dir)
+                    for name in targets:
+                        path=service.data_dir/name
+                        if path.is_symlink():raise ValueError('Refusing to reset a linked app directory')
+                        if path.exists():
+                            target=retained/name;target.parent.mkdir(parents=True,exist_ok=True)
+                            path.rename(target)
+                            moves.append((path, target))
+                except BaseException:
+                    for original, saved in reversed(moves):
+                        saved.rename(original)
+                    for path, before in reversed(written):
+                        write_private(path, before, owned_root=service.data_dir)
+                    raise
+                # Catalog/history/settings writes below may commit before
+                # publication raises. File-only rollback is no longer safe.
                 if 'conversations' in parts:
                     for session in sessions:
                         service.history.hide_session(session)

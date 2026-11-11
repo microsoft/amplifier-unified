@@ -194,59 +194,6 @@ test('partial source results never turn a retained or awaiting component into al
  assert.equal(awaiting.title,'Components awaiting adoption');assert.equal(awaiting.tone,'working');
  assert.equal(updateOverview({...base,componentResults:[{id:'b',status:'updated'}]}).title,'You’re up to date');
 });
-const retainedOnly={phase:'checked',available:0,
- items:[{id:'retained',status:'check_failed',sourceUpdate:'failed',current:'a'.repeat(40)}],
- currentStatus:{status:'action-required',action:'install',actionRequired:true,
-  title:'Some components kept their working versions',
-  detail:'The working components are kept. Retry installation to try the failed sources again.'}};
-test('only the host install projection makes retained-only recovery installable without changing availability',()=>{
- for(const actionRequired of [true,false,undefined]){
-  const updates={...retainedOnly,currentStatus:{...retainedOnly.currentStatus,actionRequired}},before=structuredClone(updates);
-  const result=updateOverview(updates);
-  assert.equal(result.installable,true);assert.equal(result.blocked,false);assert.equal(result.busy,false);
-  assert.equal(result.current.action,'install');
-  assert.equal(result.title,updates.currentStatus.title);assert.equal(result.detail,updates.currentStatus.detail);
-  assert.equal(result.tone,'error');assert.equal(result.applicationResult,null);
-  assert.deepEqual(updates,before);
-  assert.equal(updates.available,0);assert.equal(updates.items[0].status,'check_failed');
-  assert.equal(updates.items[0].sourceUpdate,'failed');
- }
-});
-test('unknown, stale or missing retry targets never gain installability from failed rows or receipts',()=>{
- // The host removes the install projection for these cases; the client must not
- // reconstruct its receipt/selection/target eligibility from errors or row flags.
- for(const [reason,action] of [
-  ['unknown outcome','diagnostics'],['stale receipt','sources'],['missing target','sources'],
-  ['check required','check'],['no supported action',null],['missing action',undefined],['unrecognized action','retry'],
- ]){
-  const updates={...retainedOnly,currentStatus:{...retainedOnly.currentStatus,action,detail:reason},
-   error:'Source download failed. Try installation again.',
-   diagnostics:{lastFailure:{attemptId:'old',phase:'ecosystem-prepare',status:'failed'}}};
-  const before=structuredClone(updates),result=updateOverview(updates);
-  assert.equal(result.installable,false,reason);assert.equal(result.current.action,action,reason);
-  assert.deepEqual(updates,before);
- }
- for(const currentStatus of [null,undefined])assert.equal(updateOverview({...retainedOnly,currentStatus}).installable,false);
-});
-test('the host install projection does not bypass existing busy, pending or blocking boundaries',()=>{
- for(const patch of [
-  {phase:'checking'},{phase:'staging'},{phase:'validating'},{phase:'activating'},
-  {pendingApp:{}},{pendingRelease:'candidate'},{pendingSmartTools:[{previous:'tool'}]},
-  {pendingReplacement:{}},{pendingRestart:{requestStatus:'uncertain'}},
-  {sequence:{stage:'other',nextStage:'other'}},
- ]){
-  const result=updateOverview({...retainedOnly,...patch});
-  assert.equal(result.installable,true);assert.equal(result.busy,true,JSON.stringify(patch));
- }
- for(const patch of [
-  {pendingRestart:{requestStatus:'rejected'},phase:'error',error:'Restart failed'},
-  {sequence:{stage:'included',included:{issues:1}},includedCanProceed:false},
-  {application:{status:'update',canInstall:false}},
- ]){
-  const result=updateOverview({...retainedOnly,...patch});
-  assert.equal(result.installable,true);assert.equal(result.blocked,true,JSON.stringify(patch));
- }
-});
 test('partial source permission preserves pending adoption and unknown app boundaries',()=>{
  const updates={includedCanProceed:true,sequence:{stage:'included',included:{issues:1,available:1}},
   componentResults:[{id:'a',status:'failed'},{id:'b',status:'awaiting-adoption'}]};

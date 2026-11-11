@@ -450,9 +450,12 @@ class Management:
             or pending.get('phase') in {'error', 'applying'} and pending.get('effect', 'unknown') != 'none')
 
     @staticmethod
-    def configuration_readback_matches(expected, actual):
+    def configuration_readback_matches(expected, actual, *, home=None):
         from .configuration_readback import matches
-        return matches(expected, actual)
+        from .host.components import portable_module_sources
+        pair = portable_module_sources(
+            {'agents': {'expected': expected, 'actual': actual}}, home)['agents']
+        return matches(pair['expected'], pair['actual'])
 
     def queued_path(self,identity):
         return self.service.data_dir/'sessions'/identity/'pending-configuration.json'
@@ -583,6 +586,9 @@ class Management:
             raise ValueError('The configuration target was stopped or moved after admission. No change was applied.')
         if authority is None and source.get('origin') not in {'ui', 'user', 'internal'}:
             raise ValueError('The original agent configuration authority is missing.')
+        if source.get('action', 'configuration.apply') == 'configuration.apply':
+            from .host.components import portable_module_sources
+            config = portable_module_sources(config, self.service.data_dir)
         operation = str(uuid.uuid4())
         if self.configuration_record_path(session['id'], operation).exists():
             raise ValueError('Configuration operation identity already exists.')
@@ -1138,6 +1144,7 @@ class Management:
                     if not idle and not args.get('whenIdle'):
                         raise ValueError('Finish active work before changing this conversation configuration')
                     record = self.create_configuration_operation(current, args['config'], command_id, authority, source)
+                    args = {**args, 'config': record['request']['config']}
                     configuration_operation = record['id']
                     if idle:
                         current['configurationBusy'] = True
@@ -1360,11 +1367,14 @@ class Management:
                         # The worker acknowledgement is evidence to check, not
                         # authority to replace the immutable requested plan.
                         expected = self.configuration_record(session['id'], configuration_operation)['request']['config']
+                        from .host.components import portable_module_sources
+                        expected = portable_module_sources(expected, self.service.data_dir)
                         from .configuration_readback import inspect_loaded
                         inspected, readback_guard = await inspect_loaded(self, session, expected, operation_guard)
                         if 'configuration' in result and (
                                 not isinstance(result['configuration'], dict)
-                                or not self.configuration_readback_matches(expected, result['configuration'])):
+                                or not self.configuration_readback_matches(
+                                    expected, result['configuration'], home=self.service.data_dir)):
                             raise ValueError('Saved configuration acknowledgement does not match the original request. Its operation remains unresolved.')
                     if not placement:
                         result['configuration']=inspected

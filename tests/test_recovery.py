@@ -6,6 +6,8 @@ from amplifier_web.updates import UpdateManager
 from amplifier_web.runtime import RuntimeManager
 from amplifier_web.runtime_retention import DEFAULT_RETENTION
 from test_service import Runtime
+from test_reset import legacy_saved_plan
+from test_runtime_controls import managed_module_source
 
 async def test_full_backup_and_selected_reset_are_private_and_reversible(tmp_path):
     service=AppService(tmp_path/'app',Runtime(),workspace=tmp_path)
@@ -124,3 +126,213 @@ async def test_reset_skips_unknown_workspace_settings_and_hides_native_chats(tmp
     assert identity('untouched-project','historical-root') in service.state['hiddenNativeSessions']
     assert not service.state['sessions']
     await service.close()
+
+
+@pytest.mark.parametrize("failure", [None, "conversion", "write", "move"])
+async def test_in_app_cache_reset_converts_plans_or_restores_exact_originals(
+        tmp_path, monkeypatch, legacy_saved_plan, failure):
+    import json
+    from pathlib import Path
+    from amplifier_web import recovery
+    from amplifier_web.host import config
+    service = AppService(tmp_path / "app", Runtime(), workspace=tmp_path)
+    manager = Management(service)
+    service.management = manager
+    service.update_manager = UpdateManager(service)
+    saved = legacy_saved_plan(service.data_dir)
+    sentinel = service.data_dir / "foundation/cache/unreferenced"
+    sentinel.mkdir(parents=True)
+    (sentinel / "damaged").write_text("discard on success")
+    if failure == "conversion":
+        saved.metadata.write_text("{}")
+    elif failure == "write":
+        write = config.write_private
+        failed = False
+        def fail_write(path, text, **kwargs):
+            nonlocal failed
+            write(path, text, **kwargs)
+            if path == saved.paths[1] and not failed:
+                failed = True
+                raise OSError("fixture after atomic write")
+        monkeypatch.setattr(config, "write_private", fail_write)
+    elif failure == "move":
+        rename = Path.rename
+        def fail_move(path, target):
+            if path == service.data_dir / "updates/releases":
+                raise OSError("fixture cache move failure")
+            return rename(path, target)
+        monkeypatch.setattr(Path, "rename", fail_move)
+    try:
+        args = {"parts": ["cache"], "apply": True, "confirmation": "RESET"}
+        if failure:
+            with pytest.raises((ValueError, OSError)):
+                await recovery.reset(manager, args)
+            assert all(path.read_bytes() == saved.before for path in saved.paths)
+            assert saved.module.exists()
+            assert (sentinel / "damaged").exists()
+        else:
+            await recovery.reset(manager, args)
+            for path in saved.paths:
+                plan = json.loads(path.read_text())
+                assert plan["tools"][0]["source"] == saved.portable
+                assert plan["tools"][1]["config"] == saved.plan["tools"][1]["config"]
+            assert not saved.module.exists()
+            assert not sentinel.exists()
+            with tarfile.open(service.state["maintenance"]["backup"]) as archive:
+                for path in saved.paths:
+                    assert archive.extractfile(path.relative_to(service.data_dir).as_posix()).read() == saved.before
+    finally:
+        await service.close()
+
+
+@pytest.mark.parametrize("parts", [["runtime"], ["cache", "conversations"]])
+async def test_reset_does_not_convert_plans_when_not_retaining_them_across_cache_retirement(
+        tmp_path, legacy_saved_plan, parts):
+    from amplifier_web import recovery
+    service = AppService(tmp_path / "app", Runtime(), workspace=tmp_path)
+    manager = Management(service)
+    service.management = manager
+    service.update_manager = UpdateManager(service)
+    saved = legacy_saved_plan(service.data_dir)
+    saved.metadata.write_text("{}")
+    try:
+        await recovery.reset(manager, {"parts": parts, "apply": True, "confirmation": "RESET"})
+        if "conversations" in parts:
+            assert not any(path.exists() for path in saved.paths)
+            with tarfile.open(service.state["maintenance"]["backup"]) as archive:
+                assert archive.extractfile("sessions/legacy/configuration.json").read() == saved.before
+        else:
+            assert all(path.read_bytes() == saved.before for path in saved.paths)
+            assert saved.module.exists()
+    finally:
+        await service.close()
+
+
+@pytest.mark.parametrize("parts", [
+    ["cache"], ["cache", "settings"], ["cache", "conversations", "settings"],
+])
+async def test_reset_publication_failure_after_commit_does_not_undo_only_files(
+        tmp_path, monkeypatch, legacy_saved_plan, parts):
+    import json
+    from pathlib import Path
+    from amplifier_web import recovery
+    from amplifier_web.automatic_history import identity
+    from amplifier_web.session_files import project_slug
+    from amplifier_web.state_records import load
+
+    service = AppService(tmp_path / "app", Runtime(), workspace=tmp_path)
+    manager = Management(service)
+    service.management = manager
+    service.update_manager = UpdateManager(service)
+    await service.dispatch("session.create", {})
+    sid = service._session()["id"]
+    saved = legacy_saved_plan(service.data_dir)
+    settings = service.data_dir / "config/reset-sentinel.txt"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_bytes(b"original private settings")
+    service.state["updates"].update(release="old", pendingRelease="candidate", canRollback=True)
+    service.state["settings"]["updates"] = {"autoCheck": False, "autoInstall": False, "intervalHours": 24}
+    service._save()
+    publish = service._publish_full
+    committed = []
+
+    def publish_then_fail(*, reason):
+        publish(reason=reason)
+        # Read committed storage, not merely the in-memory reset projection.
+        committed.append(load(service.db))
+        raise OSError("fixture failure after reset publication committed")
+
+    monkeypatch.setattr(service, "_publish_full", publish_then_fail)
+    try:
+        with pytest.raises(OSError, match="after reset publication committed"):
+            await recovery.reset(manager, {"parts": parts, "apply": True, "confirmation": "RESET"})
+        assert len(committed) == 1
+        durable = load(service.db)
+        retained = Path(service.state["maintenance"]["retained"])
+        assert not saved.module.exists()
+        assert (retained / saved.module.relative_to(service.data_dir)).exists()
+        for state in (committed[0], durable):
+            assert state["updates"]["release"] is None
+            assert state["updates"]["pendingRelease"] is None
+            if "conversations" in parts:
+                assert sid not in {row["id"] for row in state["sessions"]}
+                assert identity(project_slug(tmp_path), sid) in state["hiddenNativeSessions"]
+            else:
+                assert sid in {row["id"] for row in state["sessions"]}
+            if "settings" in parts:
+                assert state["settings"]["updates"] == {
+                    "autoCheck": True, "autoInstall": False, "intervalHours": 4}
+        for path in saved.paths:
+            if "conversations" in parts:
+                assert not path.exists()
+                assert (retained / path.relative_to(service.data_dir)).read_bytes() == saved.before
+            else:
+                assert json.loads(path.read_text())["tools"][0]["source"] == saved.portable
+        if "settings" in parts:
+            assert not settings.exists()
+            assert (retained / settings.relative_to(service.data_dir)).read_bytes() == b"original private settings"
+        else:
+            assert settings.read_bytes() == b"original private settings"
+        with tarfile.open(service.state["maintenance"]["backup"]) as archive:
+            assert archive.extractfile("sessions/legacy/configuration.json").read() == saved.before
+    finally:
+        await service.close()
+
+
+async def test_legacy_plan_cold_mounts_after_actual_in_app_reset(
+        tmp_path, monkeypatch, managed_module_source):
+    """Real reset/backup followed by fresh Foundation resolution and Core mount."""
+    import json
+    import shutil
+    from pathlib import Path
+    from amplifier_foundation import Bundle
+    from amplifier_web import recovery
+    from amplifier_web.host.components import installed_package_source
+
+    c = managed_module_source
+    origin = tmp_path / "offline-origin"
+    shutil.copytree(c.root, origin)
+    code = origin / c.code.relative_to(c.root)
+    code.write_text(code.read_text().replace("VERSION = 1", "VERSION = 2"))
+    c.git("add", ".", cwd=origin)
+    c.git("commit", "-m", "advance main beyond the saved selection", cwd=origin)
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "url." + origin.as_uri() + ".insteadOf")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", c.url)
+    monkeypatch.setenv("GIT_ALLOW_PROTOCOL", "file")
+    monkeypatch.setenv("AMPLIFIER_SOURCE_STORE", str(tmp_path / "cold-store"))
+    service = AppService(c.home, Runtime(), workspace=tmp_path)
+    manager = Management(service)
+    service.management = manager
+    service.update_manager = UpdateManager(service)
+    path = c.home / "sessions/legacy/configuration.json"
+    path.parent.mkdir(parents=True)
+    original = json.dumps({"hooks": [{
+        "module": "hook-source-lifetime-fixture", "source": str(c.module)}]}).encode()
+    path.write_bytes(original)  # Legacy producer, deliberately not normalized.
+    mounted = None
+    try:
+        await recovery.reset(manager, {"parts": ["cache"], "apply": True,
+                                       "confirmation": "RESET"})
+        assert not c.module.exists()
+        with tarfile.open(service.state["maintenance"]["backup"]) as archive:
+            assert archive.extractfile("sessions/legacy/configuration.json").read() == original
+        saved = json.loads(path.read_bytes())
+        assert saved["hooks"][0]["source"] == c.portable
+        bundle = Bundle(name="cold-legacy", hooks=saved["hooks"], session={
+            "orchestrator": {"module": "loop-live", "source": installed_package_source(
+                "amplifier-module-loop-live", "amplifier_module_loop_live")},
+            "context": {"module": "context-simple", "source": installed_package_source(
+                "amplifier-module-context-simple", "amplifier_module_context_simple")},
+        })
+        prepared = await bundle.prepare(install_deps=False, strict=True,
+                                         cache_dir=tmp_path / "cold-cache")
+        mounted = await prepared.create_session(session_id="reset-legacy-qualified")
+        actual = mounted.coordinator.get_capability("fixture.source_lifetime")
+        assert actual["version"] == 1
+        assert Path(actual["file"]).is_relative_to(tmp_path / "cold-store")
+        assert path.read_bytes() != original
+    finally:
+        if mounted is not None:
+            await mounted.cleanup()
+        await service.close()

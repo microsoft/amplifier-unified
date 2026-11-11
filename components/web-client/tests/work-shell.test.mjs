@@ -6,8 +6,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {createServer} from 'vite';
 const vite=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {WorkNavigationContext,browsePatch}=await vite.ssrLoadModule('/src/work-navigation.js');
-const {WorkSurface,LiveChatActivity,WorkspaceFiles,AppFooter}=await vite.ssrLoadModule('/src/work-shell.jsx');
-const {ShellContext,ShellSlot}=await vite.ssrLoadModule('/src/shell/runtime.jsx');
+const {WorkSurface,LiveChatActivity,WorkspaceFiles}=await vite.ssrLoadModule('/src/work-shell.jsx');
 const {ConversationList,PinnedItems,useRecentShortcuts,ChatAgeFilter,ChatDetails}=await vite.ssrLoadModule('/src/shell/navigation-components.jsx');
 const {WorkspaceExplorer,WorkspaceRow}=await vite.ssrLoadModule('/src/workspace-explorer.jsx');
 const {WorkspaceDetails}=await vite.ssrLoadModule('/src/navigation-details.jsx');
@@ -390,128 +389,18 @@ test('collapsed navigation gives all space back, including between chat and canv
 test('collapsed sidebar toggle lives in the header without duplicate chat controls',()=>{
  const html=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{view:{}},session:{id:'a',title:'Chat'},presentation:{},act:host.dispatch})));
  assert.match(html,/Open navigation/);assert.doesNotMatch(html,/Chat controls/);
- assert.match(html,/aria-label="Chat"[^>]*><svg[^>]*lucide-info/);
+ assert.match(html,/aria-label="Chat"[^>]*><svg[^>]*lucide-message-circle/);
  assert.doesNotMatch(html,/<span>Overview<\/span>|lucide-ellipsis/);
  const expanded=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{view:{navPinned:true}},presentation:{},act:host.dispatch})));
  assert.doesNotMatch(expanded,/Open navigation/);
  const draft=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{workspaces:[workspace],selectedWorkspaceId:'b',view:{newSessionDraft:{workspace:'',location:{kind:'managed'}}}},presentation:{},act:host.dispatch})));
  assert.doesNotMatch(draft,/Research/);
- assert.doesNotMatch(draft,/aria-label="Chat"|Copy session ID/);
- assert.doesNotMatch(expanded,/aria-label="Chat"|Copy session ID/);
-});
-// Menu interaction is unit-owned here; the existing sidebar browser journey
-// owns native keyboard/focus, real clipboard boundaries and rendered notices.
-function menuDocument(){
- const previous=Object.getOwnPropertyDescriptor(globalThis,'document');
- Object.defineProperty(globalThis,'document',{configurable:true,value:{addEventListener(){},removeEventListener(){}}});
- return ()=>{if(previous)Object.defineProperty(globalThis,'document',previous);else delete globalThis.document};
-}
-const menuText=node=>typeof node==='string'?node:node.type==='svg'||node.props.className==='a-attention-badge'?'':node.children.map(menuText).join('');
-test('App options keeps builtin slot, destinations and badges in the requested divider-free order',async t=>{
- const restoreDocument=menuDocument();let root;const opened=[],calls=[];
- t.after(async()=>{try{if(root)await act(async()=>root.unmount())}finally{restoreDocument()}});
- const state={attention:{badgeUnread:2,settingsUnread:3}};
- await act(async()=>{root=create(React.createElement(AppFooter,{state,connected:true,open:name=>opened.push(name),act:(...args)=>calls.push(args)}))});
- const slot=root.root.findAllByType(ShellSlot).find(node=>node.props.name==='app.actions');
- assert.ok(slot);const trigger=()=>slot.find(node=>node.type==='button'&&node.props['aria-label']==='App options');
- assert.equal(trigger().props['aria-expanded'],false);
- assert.equal(trigger().findByProps({role:'status'}).children.join(''),'3');
- const labels=['Activity','Send feedback','Automations','What the agents see','Settings'];
- for(let index=0;index<labels.length;index++){
-  await act(async()=>trigger().props.onClick());
-  const group=slot.findByProps({role:'group'}),buttons=group.findAllByType('button');
-  assert.deepEqual(buttons.map(menuText),labels);assert.equal(group.findAllByType('hr').length,0);
-  assert.equal(buttons[0].findByProps({role:'status'}).children.join(''),'2');
-  assert.equal(buttons[4].findByProps({role:'status'}).children.join(''),'3');
-  await act(async()=>{buttons[index].props.onClick();group.props.onClick({target:{closest:()=>true}})});
-  assert.equal(trigger().props['aria-expanded'],false);
-  assert.equal(trigger().findByProps({role:'status'}).children.join(''),'3');
- }
- assert.deepEqual(opened,['activity','feedback','automation','agent','settings']);assert.deepEqual(calls,[]);
- // An intentionally empty app.actions composition must not grow builtin UI.
- await act(async()=>root.update(React.createElement(ShellContext.Provider,{value:{data:{resolvedInstances:[]}}},
-  React.createElement(AppFooter,{state,connected:true,open(){}}))));
- assert.equal(root.root.findAllByProps({'aria-label':'App options'}).length,0);
-});
-async function sessionCopyFixture(t,initial={id:'managed-record',runtimeSessionId:'runtime-id',nativeIdentity:'native-id',title:'Fixture',sessionKind:'root',location:{kind:'managed'}}){
- const restoreDocument=menuDocument();
- const previous=Object.getOwnPropertyDescriptor(globalThis,'navigator'),writes=[],gates=[],calls=[];
- let session=initial,root;
- const clipboard={writeText:text=>{writes.push(text);return new Promise((resolve,reject)=>gates.push({resolve,reject}))}};
- Object.defineProperty(globalThis,'navigator',{configurable:true,value:{clipboard}});
- const element=()=>render(React.createElement(WorkHeader,{state:{view:{}},session,presentation:{},act:(...args)=>calls.push(args),open:(...args)=>calls.push(args)}));
- t.after(async()=>{try{if(root)await act(async()=>root.unmount())}finally{
-  restoreDocument();if(previous)Object.defineProperty(globalThis,'navigator',previous);else delete globalThis.navigator;
- }});
- await act(async()=>{root=create(element())});
- const trigger=()=>root.root.find(node=>node.type==='button'&&node.props['aria-label']==='Chat');
- const group=()=>root.root.findByProps({role:'group','aria-label':'Chat'});
- return {writes,gates,calls,clipboard,root,trigger,group,
-  notice:()=>root.root.findByProps({className:'a-session-copy-notice'}).props.children,
-  open:async()=>{if(!trigger().props['aria-expanded'])await act(async()=>trigger().props.onClick())},
-  change:async next=>{session=next;await act(async()=>root.update(element()))},
-  begin:async(twice=false)=>{let completion;await act(async()=>{
-   const button=group().findAllByType('button')[0];
-   assert.equal(button.props.type,'button');completion=button.props.onClick();if(twice)button.props.onClick();
-   group().props.onClick({target:{closest:()=>true}});
-  });return {completion}},
- };
-}
-for(const [session,expected] of [
- [{id:'managed-record',runtimeSessionId:'runtime-id',nativeIdentity:'ignored-native',sessionKind:'root',location:{kind:'managed'}},'runtime-id'],
- [{id:'import-record',nativeIdentity:'native-id'},'native-id'],
- [{id:'record-only'},'record-only'],
-])test('Chat copies the underlying ID without a server command: '+expected,async t=>{
- const f=await sessionCopyFixture(t,session);await f.open();
- assert.deepEqual(f.group().findAllByType('button').map(menuText),[
-  'Copy session ID','Rename','Pin','Share or save','Chat info','Help & diagnostics','Advanced','Archive',
-  ...(session.location?.kind==='managed'?['Delete']:[]),
- ]);
- assert.equal(f.group().findAllByType('hr').length,1,'Only the App options divider is removed');
- const {completion}=await f.begin(true);
- assert.deepEqual(f.writes,[expected]);assert.equal(f.trigger().props['aria-expanded'],false);
- assert.equal(f.notice(),'Copying session ID…');
- await f.open();assert.equal(f.group().findAllByType('button')[0].props.disabled,true);
- await act(async()=>{f.gates[0].resolve();await completion});
- assert.equal(f.notice(),'Session ID copied.');assert.equal(f.group().findAllByType('button')[0].props.disabled,false);
- assert.deepEqual(f.calls,[]);
-});
-for(const [name,error,expected] of [
- ['unavailable',null,'Clipboard is unavailable in this browser. Session ID was not copied.'],
- ['denied',{name:'NotAllowedError'},'Clipboard access was denied. Session ID was not copied.'],
- ['security',{name:'SecurityError'},'Clipboard access was denied. Session ID was not copied.'],
- ['failed',Error('synthetic failure'),'Session ID could not be copied.'],
-])test('Chat copy reports '+name+' after closing the menu without a fallback',async t=>{
- const f=await sessionCopyFixture(t);if(!error)delete f.clipboard.writeText;
- await f.open();const {completion}=await f.begin();
- if(error)await act(async()=>f.gates[0].reject(error));
- await act(async()=>completion);
- assert.equal(f.trigger().props['aria-expanded'],false);assert.equal(f.notice(),expected);
- assert.deepEqual(f.calls,[]);assert.equal(f.writes.length,error?1:0);
- const status=f.root.root.findByProps({className:'a-session-copy-notice'});
- assert.equal(status.props.role,'status');assert.equal(status.props['aria-live'],'polite');assert.equal(status.props['aria-atomic'],'true');
-});
-for(const changedRuntime of [false,true])for(const failure of [false,true])test('late copy '+(failure?'failure':'success')+' cannot announce after changing '+(changedRuntime?'the runtime ID':'the session')+' and returning',async t=>{
- const original={id:'record-a',runtimeSessionId:'runtime-a'};
- const f=await sessionCopyFixture(t,original);await f.open();const {completion}=await f.begin();
- await f.change({id:changedRuntime?'record-a':'record-b',runtimeSessionId:'runtime-b'});assert.equal(f.notice(),'');
- await f.change(original);assert.equal(f.notice(),'');
- await f.open();const next=await f.begin();
- await act(async()=>{failure?f.gates[0].reject({name:'NotAllowedError'}):f.gates[0].resolve();await completion});
- assert.equal(f.notice(),'Copying session ID…','Old completion cannot clear the new pending result');
- await act(async()=>{f.gates[1].resolve();await next.completion});assert.equal(f.notice(),'Session ID copied.');
- await f.change({...original,runtimeSessionId:'restarted-runtime'});assert.equal(f.notice(),'');
- await f.open();const latest=await f.begin();
- assert.deepEqual(f.writes,['runtime-a','runtime-a','restarted-runtime']);assert.deepEqual(f.calls,[]);
- await f.change(undefined);assert.equal(f.root.root.findAllByProps({'aria-label':'Chat'}).length,0);
- await f.change(original);assert.equal(f.notice(),'');
- await act(async()=>{f.gates[2].resolve();await latest.completion});assert.equal(f.notice(),'');
 });
 test('browsing headers have no return control with or without a retained chat',()=>{
  for(const surface of ['home','workspace','workspaces','chats'])for(const narrow of [false,true])for(const session of [undefined,{id:'a',title:'Retained chat',status:'working'}]){
   const state={view:{workSurface:surface,workWorkspaceId:'b'},workspaces:[workspace]};
   const html=renderToStaticMarkup(render(React.createElement(WorkHeader,{state,session,narrow,presentation:{},act:host.dispatch})));
-  assert.doesNotMatch(html,/Back to chat|>Back<|Retained chat|Resume|Return to draft|Go to Home|aria-label="Chat"|Copy session ID/);
+  assert.doesNotMatch(html,/Back to chat|>Back<|Retained chat|Resume|Return to draft|Go to Home/);
   assert.match(html,/Open navigation/);
  }
 });

@@ -365,6 +365,8 @@ class RuntimeControls:
 
     def prepare_configuration(self, config):
         from .decision_accounts import logical_plan
+        from .host.components import portable_module_sources
+        validate_plan(config)
         previous = logical_plan(self.coordinator.config)
         stored = override_path(self.session.session_id)
         if stored.exists():
@@ -373,11 +375,18 @@ class RuntimeControls:
                 current = {identity(row) for row in previous.get(section, [])}
                 previous.setdefault(section, []).extend(
                     row for row in saved.get(section, []) if identity(row) not in current)
-        plan = restore_redactions(config, previous)
+        # The host seals portable sources before dispatch. Compare the edited
+        # and live declarations in one fresh provenance pass before restoring
+        # redacted fields; module/instance/source ownership stays exact.
+        pair = portable_module_sources(
+            {'agents': {'edited': config, 'previous': previous}}, app_home())['agents']
+        plan = restore_redactions(pair['edited'], pair['previous'])
         validate_plan(plan)
         return {key: value for key, value in plan.items() if key in PLAN_KEYS}
 
     def save_configuration(self, plan):
+        from .host.components import portable_module_sources
+        plan = portable_module_sources(plan, app_home())
         write_private(override_path(self.session.session_id), json.dumps(plan, indent=2))
         # A full mount-plan edit supersedes previous live module toggles.
         if self.state_path().exists():

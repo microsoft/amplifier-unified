@@ -13,6 +13,7 @@ from test_configuration_authority import revoke
 from test_queued_configuration_boundary import (
     boundary, ControlsTransport, operation, plan, queue, reach_apply, recovery, settle, scheduler_barrier,
 )
+from test_runtime_controls import managed_module_source
 
 
 def qualified_sources(home, *, reused=False, parent_id='parent'):
@@ -508,3 +509,77 @@ async def test_queued_saved_readback_reload_retains_fence_until_explicit_resume(
         assert fresh.calls == ['start', 'fixture-mounted', 'configuration.inspect'] and not fresh.inputs
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize('queued, lost_readback, legacy', [
+    (False, False, False), (True, False, False),
+    (True, True, False), (True, True, True),
+])
+async def test_portable_source_operation_seals_saves_and_finishes_readback(
+        boundary, managed_module_source, monkeypatch, queued, lost_readback, legacy):
+    """Real request/effect writers and readback; transport mounting is a fixture."""
+    from amplifier_web.configuration_authority import fingerprint
+    from amplifier_web.host import components
+    from amplifier_web.runtime_controls import public_config
+
+    b, c = boundary, managed_module_source
+    root = b.app.data_dir / c.root.relative_to(c.home)
+    root.parent.mkdir(parents=True)
+    c.root.rename(root)
+    module = root / c.module.relative_to(c.root)
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(b.app.data_dir))
+    b.runtime.coordinator.config['tools'][0].update(source=str(module))
+    b.runtime.coordinator.config['tools'][0]['config']['api_key'] = 'SYNTHETIC_EXACT_SECRET'
+    requested = public_config(b.runtime.coordinator.config)
+    requested['tools'][0]['config']['limit'] = 2
+    before = copy.deepcopy(requested)
+    control = b.runtime.control
+    lose = lost_readback
+
+    async def observed(sid, name, args, **kwargs):
+        result = await control(sid, name, args, **kwargs)
+        if name == 'configuration.inspect' and lose:
+            raise RuntimeError('Synthetic lost readback after portable save')
+        return result
+
+    b.runtime.control = observed
+    b.runtime.block_start = queued
+    b.owner['status'] = 'working' if queued else 'idle'
+    # Simulate a request sealed by the previous producer, not a rewritten
+    # historical request. Restore the real helper before any native dispatch.
+    with monkeypatch.context() as sealing:
+        if legacy:
+            sealing.setattr(components, 'portable_module_sources', lambda plan, home: copy.deepcopy(plan))
+        await b.app.management.perform('configuration.apply', {
+            'id': b.owner['id'], 'config': requested, 'whenIdle': queued})
+    if queued:
+        sealed_request = copy.deepcopy(operation(b)['request'])
+        b.queued_task = b.app.management.pending_config_tasks[b.owner['id']]
+        await reach_apply(b)
+        await settle(b)
+    else:
+        sealed_request = copy.deepcopy(operation(b)['request'])
+    saved = operation(b)
+    assert saved['request'] == sealed_request
+    assert sealed_request['payloadHash'] == fingerprint(sealed_request['config'])
+    assert sealed_request['config']['tools'][0]['source'] == (str(module) if legacy else c.portable)
+    assert requested == before
+    persisted = json.loads(override_path(b.owner['id']).read_text())
+    assert persisted['tools'][0]['source'] == c.portable
+    assert persisted['tools'][0]['config'] == {'limit': 2, 'api_key': 'SYNTHETIC_EXACT_SECRET'}
+    if lost_readback:
+        assert saved['state']['effect'] == 'saved_not_mounted'
+        assert saved['state']['phase'] == 'error'
+        attempts = copy.deepcopy(saved['attempts'])
+        native_receipt = receipt_path(attempts[-1]).read_bytes()
+        b.runtime.workers = {b.owner['id']: {'runtimeOwnerId': 'same-mounted-owner'}}
+        previous_calls = list(b.runtime.calls)
+        lose = False
+        await finish_resume(b, operator=True)
+        saved = operation(b)
+        assert saved['request'] == sealed_request and saved['attempts'] == attempts
+        assert receipt_path(attempts[-1]).read_bytes() == native_receipt
+        assert b.runtime.calls[len(previous_calls):] == ['configuration.inspect']
+    assert saved['state']['phase'] == 'ready' and saved['state']['effect'] == 'mounted'
+    assert not b.owner['configurationBusy']
+    assert b.runtime.calls.count('saved') == 1 and not b.runtime.inputs
