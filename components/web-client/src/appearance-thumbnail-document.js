@@ -24,5 +24,5 @@ html,body{margin:0;width:800px;height:520px;overflow:hidden}
 #amp-one.a-thumbnail-scene [data-part=composer-surface]{padding:12px;display:grid;gap:10px}
 #amp-one.a-thumbnail-scene .a-thumbnail-composer-actions{display:flex;justify-content:space-between;align-items:center}
 #amp-one.a-thumbnail-scene *,#amp-one.a-thumbnail-scene *::before,#amp-one.a-thumbnail-scene *::after{animation:none!important;transition:none!important;caret-color:transparent!important}
-</style></head><body><div id="amp-one" class="a-chat-shell a-approachable-shell a-thumbnail-scene" data-theme-scheme="${scheme}" data-decorations="on" style="color-scheme:${scheme}" inert data-thumbnail-scene="${thumbnailScene.version}">${markup}</div></body></html>`;
+</style></head><body><div id="amp-one" class="a-chat-shell a-approachable-shell a-thumbnail-scene" data-work-surface="chat" data-theme-scheme="${scheme}" data-decorations="on" style="color-scheme:${scheme}" inert data-thumbnail-scene="${thumbnailScene.version}">${markup}</div></body></html>`;
 }

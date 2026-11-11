@@ -43,12 +43,22 @@ try{
  const app=page.locator('#amp-one'),header=app.locator('[data-part=header]');
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const action=(name,args={})=>page.evaluate(async([name,args])=>{const result=await window.amplifier.dispatch(name,args);if(!result.accepted)throw Error(name+' refused');return result},[name,args]);
- const presentation=patch=>page.evaluate(async patch=>{
+ const presentation=async patch=>{const change=await page.evaluate(async patch=>{
   const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
   const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:shell.revision,composition:{...shell.effectiveComposition,presentation:{...shell.effectiveComposition.presentation,...patch}}});
   if(!prepared.accepted)throw Error('Prepare refused');
   const receipt=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:shell.revision,changeId:prepared.result.id});if(!receipt.accepted)throw Error('Apply refused');
+  if(receipt.result.status!=='awaiting-storage'||!receipt.result.commandId)throw Error('Presentation omitted its storage command');
+  return {revision:shell.revision+1,commandId:receipt.result.commandId};
  },patch);
+  await page.waitForFunction(({patch,change})=>{
+   const a=window.amplifier.getState().appearance;
+   return window.amplifier.getShellState().revision===change.revision&&
+    a.command?.id===change.commandId&&a.command.status==='stored'&&
+    Object.entries(patch).every(([key,value])=>a.effective[key]===value&&a.renderedPreferences[key]===value)&&
+    document.getElementById('amp-one')?.dataset.appearanceComposition===a.composition.id;
+  },{patch,change});
+ };
  const status=async(id,value)=>{const response=await page.request.post(url+'/fixture/appearance-status',{data:{sessionId:id,status:value}});assert.ok(response.ok())};
  const shot=async name=>{assert.ok(report.screenshots.length<8);const bytes=await page.screenshot({path:out+'/'+name+'.png'});report.screenshots.push({name,sha256:hash(bytes)})};
  const scanner=()=>header.evaluate(el=>{const style=getComputedStyle(el,'::after'),box=el.getBoundingClientRect();return {animation:style.animationName,duration:style.animationDuration,position:style.backgroundPosition,image:style.backgroundImage,height:parseFloat(style.height),top:box.bottom-parseFloat(style.bottom)-parseFloat(style.height)-2,bottom:box.bottom-parseFloat(style.bottom),display:style.display,content:style.content}});
@@ -70,7 +80,13 @@ try{
  await action('session.create');const selected=(await state()).selectedSessionId;
  await action('session.create');const other=(await state()).selectedSessionId;assert.notEqual(other,selected);
  await action('session.select',{id:selected});
- await action('theme.apply',{name:'Night Drive',css});
+ // This example is a document-local delta, not a saved library selection.
+ const preview=await action('appearance.preview',{name:'Night Drive',css});
+ await expect.poll(async()=>(await state()).appearance.preview?.id).toBe(preview.result.previewId);
+ const appearance=(await state()).appearance;
+ await expect(app).toHaveAttribute('data-appearance-composition',appearance.composition.id);
+ await expect.poll(()=>app.locator(':scope > style').evaluateAll((nodes,css)=>
+  nodes.some(node=>node.textContent===css),appearance.preview.theme.css)).toBe(true);
  await page.getByRole('textbox',{name:'Message Amplifier',exact:true}).fill('Retained Night Drive draft');
  await expect(app).toHaveAttribute('data-app-activity','idle');assert.equal((await measure('initial idle')).animation,'none');
  await status(other,'working');await expect(app).toHaveAttribute('data-app-activity','active');
