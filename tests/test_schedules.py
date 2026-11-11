@@ -204,7 +204,11 @@ async def test_pending_workers_and_runtime_exit_keep_outcomes_truthful(tmp_path,
         await app.on_runtime_event('runtime.status', {'sessionId': sid, 'status': 'idle'})
         now[0] += 60; await app.schedules.tick()
         next_run = app.schedules.store.runs(sid)[0]
-        await app.on_runtime_event('runtime.ended', {'sessionId': sid, 'status': 'stopped'})
+        with monkeypatch.context() as patch:
+            patch.setattr(app, 'runtime', SimpleNamespace(workers={sid: {'runtimeOwnerId': 'current-owner'}}))
+            await app.on_runtime_event('runtime.ended', {
+                'sessionId': sid, 'status': 'stopped', 'runtimeOwnerId': 'current-owner',
+            })
         assert app.schedules.store.run(sid, next_run['id'])['phase'] == 'unknown'
         assert app.schedules.store.get(sid, record['id'])['status'] == 'needs_review'
     finally: await app.close()
