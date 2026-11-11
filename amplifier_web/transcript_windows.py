@@ -70,6 +70,64 @@ class TranscriptWindows:
         self.closed = False
         self._epoch = 0
         self._fences = OrderedDict()
+        from .peer_originals import PeerOriginals
+        self.peer_originals = PeerOriginals()
+        self._peer_resident = OrderedDict()
+        self._peer_failed = set()
+
+    def peer_save_failed(self, identities):
+        entries = getattr(getattr(self.service, '_message_preparation', None), 'entries', {})
+        self._peer_failed.intersection_update(entries)
+        self._peer_failed.update(set(identities).intersection(entries))
+
+    def peer_save_committed(self, identities):
+        self._peer_failed.difference_update(identities)
+
+    @staticmethod
+    def _peer_wanted(rows):
+        from .peer_attribution import input_identity
+        return [row for row in rows if row.get('role') == 'user'
+                and row.get('source') != 'native' and input_identity(row)
+                and (row.get('via') == 'peer' or row.get('inputOrigin') == 'peer')]
+
+    def _committed_messages(self, session):
+        entries = getattr(getattr(self.service, '_message_preparation', None), 'entries', {})
+        entry = entries.get(session['id'])
+        return entry if (entry and entry.owner == id(session)
+                         and session['id'] not in self._peer_failed) else None
+
+    def _resident_proof(self, rows, wanted, revision=None):
+        if not wanted:
+            return None
+        key = (revision, tuple((row['id'], row.get('inputId'), row.get('nativeInputId'))
+                               for row in wanted)) if revision is not None else None
+        if key in self._peer_resident:
+            self._peer_resident.move_to_end(key)
+            return self._peer_resident[key][0]
+        proof = self.peer_originals.resident(rows, wanted)
+        if key is not None:
+            # Only canonical committed, detached snapshots supply revision.
+            # Mutable resident callers always do a fresh explicit-read scan.
+            size = len(json.dumps(proof.originals, ensure_ascii=False).encode())
+            self._peer_resident[key] = (proof, size)
+            while self._peer_resident and (len(self._peer_resident) > 16
+                    or sum(value[1] for value in self._peer_resident.values()) > 8 * 1024 * 1024):
+                self._peer_resident.popitem(last=False)
+        return proof
+
+    def exact_peer_original(self, session, message_id, input_id):
+        """Explicit preview guard: fresh current originals, never a display cache."""
+        wanted = [{'id': message_id, 'inputId': input_id}]
+        cold = self._cold_source(session)
+        if cold is None:
+            return self.peer_originals.resident(dict.get(session, 'messages', ()), wanted)
+        source, fence = _source(session), self._fence(session['id'])
+        proof = self.peer_originals.cold(cold, wanted)
+        current = self.service._session(session['id'], hydrate=False)
+        if (_source(current) != source or self._fence(session['id']) != fence
+                or self._cold_source(current) != cold):
+            raise ValueError('The original source changed.')
+        return proof
 
     def _fence(self, identity):
         value = self._fences.pop(identity, None)
@@ -100,6 +158,8 @@ class TranscriptWindows:
             await asyncio.gather(*tuple(self.jobs), return_exceptions=True)
         self.pages.clear()
         self.initial.clear()
+        self._peer_resident.clear()
+        self._peer_failed.clear()
         self.bytes = 0
 
     def bound_web(self):
@@ -181,10 +241,10 @@ class TranscriptWindows:
             raise ValueError('The complete original source is unavailable or changed.')
         return page['items']
 
-    def _saved_page(self, session, before, limit):
+    def _saved_page(self, session, before, limit, *, committed=None):
         stamp = self._saved_stamp(session)
         source = _digest(stamp)
-        rows = session.get('messages', [])
+        rows = committed.snapshot if committed is not None else session.get('messages', [])
         end = len(rows)
         if before is not None:
             try:
@@ -238,6 +298,20 @@ class TranscriptWindows:
                 page['_savedComplete'] = before is None and not page['hasEarlier'] and not page['unavailableRanges']
             page['_savedOwner'] = {'source': source, 'fence': fence,
                                    'resource': cold.identity if cold is not None else None}
+        proof = None
+        wanted = self._peer_wanted(page['items']) if not use_native else []
+        if wanted and cold is not None:
+            # One bounded complete proof for the requested keys, off the owner
+            # thread. Budget failure keeps display neutral, never page-local trust.
+            async def qualify():
+                try:
+                    return await asyncio.to_thread(self.peer_originals.cold, cold, wanted)
+                except (ValueError, OSError):
+                    return None
+            task = asyncio.create_task(qualify())
+            self.jobs.add(task)
+            task.add_done_callback(self._read_finished)
+            proof = await asyncio.shield(task)
         # Detach/size only this selected page outside writer exclusion.
         def prepare():
             detached = copy.deepcopy(page)
@@ -251,18 +325,50 @@ class TranscriptWindows:
             if (_source(current) != source or self._fence(session_id) != fence
                     or cold is not None and self._cold_source(current) != cold):
                 raise ValueError('The selected message source changed.')
+            if wanted and cold is None:
+                try:
+                    proof = self._resident_proof(dict.get(current, 'messages', ()), wanted)
+                except (ValueError, OSError):
+                    proof = None
+            page['_peerChecked'] = bool(wanted)
+            if proof is not None:
+                page['_peerProof'] = proof
+                # Do not retain Detached.indexed: legacy inline resources can
+                # contain the entire history. Proof retains compact witnesses.
+                page['_peerSource'] = cold.identity if cold is not None else None
+                size += len(json.dumps(proof.originals, ensure_ascii=False).encode())
             self._retain(session_id, page, size)
         return self._wire(page, session_id)
 
     def _wire(self, page, session_id):
-        result = {key: copy.deepcopy(value) for key, value in page.items() if key != 'items'}
+        result = {key: copy.deepcopy(value) for key, value in page.items()
+                  if key not in {'items', '_peerProof', '_peerSource', '_peerChecked'}}
         from .peer_attribution import derive
         # Attribution requires global duplicate checks. Only a complete bounded
         # saved set supplies that proof; neither a native suffix nor a partial
         # saved page may promote a single local match into global uniqueness.
         complete = result.pop('_savedComplete', False) is True
-        resolver = getattr(self.service.projections, 'resolver', None) if complete else None
-        rows = derive({'id': session_id, 'messages': page['items']}, page['items'], resolver)
+        resolver = getattr(self.service.projections, 'resolver', None)
+        proof = page.get('_peerProof')
+        if proof is not None and page.get('_peerSource') is not None:
+            from .resource_files import detached_signature
+            from .media_saved_aliases import _indexed_evidence
+            current = self.service._session(session_id, hydrate=False)
+            cold = self._cold_source(current)
+            try:
+                if (cold is None or cold.identity != page['_peerSource']
+                        or (str(cold.directory) if cold.directory is not None else None,
+                            cold.identity, *_indexed_evidence(cold.indexed)) != proof.revision[0]
+                        or detached_signature(cold) != proof.revision[1]):
+                    proof = None
+            except (ValueError, OSError):
+                proof = None
+        owner = {'id': session_id, 'messages': page['items']}
+        if proof is not None and resolver is not None:
+            rows = resolver(owner, page['items'], proof=proof)
+        else:
+            rows = derive(owner, page['items'],
+                          resolver if complete and not page.get('_peerChecked') else None)
         result['items'] = rows
         result.pop('_owner', None)
         saved_owner = result.pop('_savedOwner', None)
@@ -373,7 +479,23 @@ class TranscriptWindows:
                         'historyLoading': not failed, 'historyError': entry.get('error') if failed else None}
                 page = self._wire(retained[0], session['id'])
             else:
-                page = self._wire(self._saved_page(session, None, 100), session['id'])
+                committed = self._committed_messages(session)
+                raw_page = self._saved_page(session, None, 100)
+                wanted = self._peer_wanted(raw_page['items'])
+                if wanted and committed is not None:
+                    try:
+                        saved_page = self._saved_page(session, None, 100, committed=committed)
+                        # A passive frame can contain uncommitted active text.
+                        # Never hide it or join its new bytes to old proof. The
+                        # proof describes the committed snapshot only; every
+                        # action rechecks current mutable originals explicitly.
+                        if raw_page['items'] == saved_page['items']:
+                            raw_page['_peerProof'] = self._resident_proof(
+                                committed.snapshot, wanted,
+                                (session['id'], committed.prepared.identity))
+                    except (ValueError, OSError):
+                        pass
+                page = self._wire(raw_page, session['id'])
             return {'messages': page.pop('items'), 'messageWindow': page,
                     'nativeContinuation': entry.get('continuation', {'status': 'unknown'}),
                     'historyLoading': False, 'historyError': None}

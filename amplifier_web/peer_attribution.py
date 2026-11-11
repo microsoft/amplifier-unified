@@ -144,7 +144,7 @@ class PeerAttribution:
                 and request.get("target", {}).get("sessionId") == receipt.get("senderSessionId")
                 and request.get("senderSessionId") == receipt.get("target", {}).get("sessionId"))
 
-    def resolve(self, session, rows):
+    def resolve(self, session, rows, *, proof=None):
         result = [neutral(row) for row in rows]
         identities = {input_identity(row) for row in rows if row.get("role") == "user"} - {None}
         if not identities:
@@ -154,14 +154,24 @@ class PeerAttribution:
         retained = defaultdict(list)
         retained_native_counts = Counter()
         ids = Counter()
-        for message in session.get("messages", []):
+        if proof is not None:
+            from .peer_originals import Proof
+            if not isinstance(proof, Proof):
+                return result
+            originals = proof.originals.values()
+            ids.update(proof.id_counts)
+            retained_native_counts.update(proof.native_counts)
+        else:
+            originals = session.get("messages", [])
+        for message in originals:
             identity = input_identity(message)
             if identity in identities:
                 if message.get("source") == "native":
-                    retained_native_counts[identity] += 1
+                    if proof is None:
+                        retained_native_counts[identity] += 1
                 else:
                     retained[identity].append(message)
-            if isinstance(message.get("id"), str):
+            if proof is None and isinstance(message.get("id"), str):
                 ids[message["id"]] += 1
         native_counts = Counter(input_identity(row) for row in rows if row.get("source") == "native")
         page_ids = Counter(row["id"] for row in rows if isinstance(row.get("id"), str))
@@ -182,6 +192,7 @@ class PeerAttribution:
             receipt = receipts.get(identity)
             candidates = retained.get(identity, [])
             if (row.get("role") != "user" or not receipt or len(candidates) != 1
+                    or proof is not None and proof.input_counts.get(identity) != 1
                     or not isinstance(row.get("id"), str) or not row["id"]
                     or page_ids[row["id"]] != 1 or row.get("nativeInputAmbiguous")):
                 continue
