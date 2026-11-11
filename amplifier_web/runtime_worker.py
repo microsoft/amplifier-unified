@@ -871,7 +871,8 @@ class Worker:
                 from amplifier_web.host.session import prepare_manager
                 from amplifier_web.execution_events import ExecutionEvents
                 from amplifier_web.runtime_controls import RuntimeControls
-                from amplifier_web.shared_state import ActivationGate, configuration_stamp
+                from amplifier_foundation.session.activation import ActivationGate
+                from amplifier_web.shared_state import configuration_stamp
                 from amplifier_module_loop_live.runtime import Runtime
             self.home = app_home()
             report_directory = self.home / "runtime-reports" / config["id"]
