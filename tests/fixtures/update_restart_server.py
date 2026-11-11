@@ -19,8 +19,8 @@ async def serve():
         session.update(status='working', configurationBusy=True,
                        worktreeHandoffs=[{'id': 'retained-unknown', 'phase': 'unknown'}])
         await manager.publish(phase='app-staged', initialPreparation=False,
-            pendingApp={'revision': 'a'*40, 'generation': 'b'*32, 'attemptId': 'qualified-one'},
-            application={'status': 'update', 'canInstall': True, 'latest': 'v99.0.0'})
+            pendingApp={'revision': 'a'*40, 'generation': 'b'*32, 'attemptId': 'qualified-one', 'latest': 'v99.0.0'},
+            application={'status': 'update', 'canInstall': True, 'latest': 'v99.0.1'})
         # Exercise real action admission and asynchronous rejection without any
         # installation, runtime interruption, pointer promotion or host restart.
         await manager.lock.acquire()
@@ -39,7 +39,8 @@ async def serve():
                     service.state['updates']['pendingApp']['attemptId'] = 'qualified-two'
                 await manager.publish()
             return web.json_response({'calls': calls, 'unknown': session['configurationBusy'],
-                'target': service.state['updates']['forceRestartTarget']})
+                'target': service.state['updates']['forceRestartTarget'],
+                'result': service.state['updates'].get('forceRestartResult')})
         app.router.add_get('/fixture/update-restart', control)
         app.router.add_post('/fixture/update-restart', control)
         runner = web.AppRunner(app)

@@ -1,65 +1,95 @@
-# Appearances
+# Web appearances
 
-Appearances is Amplifier's umbrella term for the way people experience the app:
-its visual identity, arrangement, information hierarchy, components, artifact
-viewers and interaction feedback. A theme is one part of an Appearance.
+**Current direction: user-approved PR1916 rollback.** After the `.078` visual
+regression, restore the pre-cutover direction at
+`7cfb76cbbadbfdf19d6a142e2b6e910abe16ed07`. Reference and Global / This browser
+profiles are temporarily retired, not alternative active rendering paths.
+The [interaction contract](appearance-contract.md) owns observable promises;
+[Themes](themes.md) describes the restored complete-theme and format-1 API.
+The [November 9 design note](../ux/decisions/20261109-appearances.md) is retained
+as a superseded, deferred plan, not current authoring instructions or acceptance.
+Documentation alone does not establish installed or browser conformance.
 
-People should be able to describe the experience they want in ordinary language,
-choose an existing one, or ask an agent to create or adapt one. Examples include
-a quiet writing workspace, a compact research workspace with references nearby,
-and a visual workspace for comparing generated images. Each must remain a
-usable Amplifier experience, with the same underlying work and recovery paths.
+## The experience
+
+A person can choose, share or ask an agent to adapt a coherent web experience:
+its visual identity, arrangement, information hierarchy and interaction feedback.
+A quiet writing workspace and a detailed research workspace present the same
+underlying work, essential actions and truthful status.
+
+Appearances belong to the web client. Native and terminal clients retain their
+own presentation. A web appearance never changes agent execution, providers,
+tools, permissions, automation, conversation content or artifact identity.
 
 ## Contract
 
-An Appearance may compose:
+An Appearance may compose themes, supported layout and registered components,
+artifact viewers, information hierarchy and interaction feedback. These are
+separate published capabilities, not one atomic package API. Accessibility and
+personal preferences constrain every appearance; applying a theme must not
+silently change scheme, decorations, Reveal, permissions or automation.
+Required decisions and recovery remain discoverable.
 
-- Themes: light/dark palettes, typography, spacing, surfaces and optional artwork.
-- Layout and registered components: navigation, supported shell slots and viewers.
-- Information presentation: hierarchy, density, progressive disclosure and Reveal.
-- Interaction presentation: loading, saving, success, failure and attention states.
+The host owns behavior, security, drafts, conversation data, artifact versions
+and action semantics. Inline previews, galleries and Canvas retain the same
+saved artifact identity and version; changing views does not regenerate work.
 
-Accessibility and user preferences constrain every Appearance. Applying one
-must not silently change reduced motion, contrast, Reveal, account access, tool
-permissions or automation. Required decisions and recovery remain discoverable.
-See the [interaction contract](appearance-contract.md) for observable behavior.
+## One foundation, deliberate differences
 
-The host owns conversation data, execution, security, drafts, artifact versions,
-account status and action semantics. Customization consumes those owners through
-the published contracts; it must not recreate competing stores or bypass guards.
-Inline previews, galleries, fullscreen views and Canvas refer to the same saved
-artifact identity and version. A view change does not create or regenerate work.
+This heading retains the redesign's link target. Its Reference-delta proposal is
+deferred. The restored baseline supports complete themes and CSS skins, with the
+old built-in default when no legacy theme is available. Common functional repairs
+still belong in shared components; this does not require a Reference renderer or
+authorize rewriting saved custom CSS.
 
-## User and agent authoring
+## Global or browser settings
 
-The supported workflow is discover, propose, preview, verify, apply, and retain
-a way back. An agent targets the intended client, discovers the installed schemas
-and registered slots, preserves unaffected components and user drafts, and
-previews the requested change. Browser evidence must match the proposed revision.
-A successful schema check alone does not prove a working or accessible design.
-Changes use existing revision and dirty-edit guards. Revert restores presentation
-without rolling back conversation content or repeating an action.
+The Global / This browser selector and complete profiles are temporarily retired.
+The restored model has an app-wide committed theme and client-targeted temporary
+preview, with independent shell presentation preferences. Library save/import/
+update does not apply a theme; apply and revert use the established theme owner.
+No cross-host preference synchronization is implied.
 
-Users and agents use the same host operations. A user can ask for a different
-experience without learning CSS or component APIs; agents use those APIs on their
-behalf. Imported executable components retain their trust and capability rules.
+Preserve newer `shared-reference-v1`, browser-local profiles and format-2 saved
+libraries inert and undeleted. They do not seed or override the legacy path.
+If the old theme was removed by `.078`, use the safe old default; do not claim
+the personal theme was automatically migrated or recovered. See the
+[rollback boundary](appearance-contract.md#temporary-rollback-boundary).
+
+## Portable and extensible
+
+Legacy portable CSS and version-1 ZIP styling packages are re-enabled. The ZIP
+contains a complete stylesheet, supported images/fonts and attribution; it does
+not install components, layout, permissions, automation or user preferences.
+Unsupported contents fail explicitly without a library mutation.
+
+A single package spanning all appearance surfaces, a unified experience gallery,
+cross-device synchronization, arbitrary transcript/composer replacement and
+suggested experience profiles remain future work. Any extension needs explicit
+ownership, capabilities, persistence, accessibility, failure recovery, preview
+and revert contracts. Importing a package never grants executable capabilities.
+
+<a id="user-and-agent-authoring"></a>
+
+## Authoring and evidence
+
+People and agents use the same operations: discover, inspect, propose, preview,
+verify, apply and retain a way back. Identify the intended client and distinguish
+client-local preview from app-wide apply. Preserve unaffected components and
+drafts with revision and dirty-edit guards. A saved library entry, successful
+validation and observed browser activation are different facts.
+
+The [appearance-authoring skill](../../skills/appearance-authoring/SKILL.md) ships
+with the released interface; [amplifier-shell](../../skills/amplifier-shell/SKILL.md)
+covers supported composition. Package validation is not visual or accessibility
+certification. Compare realistic content in both schemes and exercise keyboard,
+narrow layout, reduced motion, forced colors and recovery.
 
 ## Shipped building blocks and remaining work
 
-Current contracts cover complete themes, preview/revert, client presentation,
-registered navigation modules, named component contributions and Canvas renderers.
-See [themes](themes.md), [components](components.md), and the [shell API](README.md).
-The [authoring skill](../../skills/amplifier-shell/SKILL.md) explains how agents use
-them. Internal `theme.*`, `shell.*` and `canvas.views.*` names remain API names.
-
-The version-1 ZIP package described in [themes](themes.md#zip-appearance-packages)
-bundles styling and supported assets only. It does not install components, layouts,
-permissions, automation, or user preferences. A root `appearance.json` identifies
-the type and version; a `.zip` suffix alone does not identify a valid appearance.
-
-A single portable Appearance package that atomically bundles all of these broader
-surfaces, a unified experience gallery, cross-device preference synchronization, arbitrary
-replacement of the transcript/composer, and universal conformance tooling are
-future work. Do not describe them as installed features. Each new customization
-surface needs explicit ownership, capabilities, persistence, accessibility,
-compatibility, failure recovery, preview and revert contracts before exposure.
+[Themes](themes.md), [components](components.md) and the [shell API](README.md)
+describe complete themes, preview/revert, client presentation, registered
+navigation modules, named contributions and Canvas renderers. The
+[design note's delivery plan](../ux/decisions/20261109-appearances.md#delivery-and-checks)
+is deferred with the redesign; it is not a new rollback test campaign or release
+gate. Source changes, qualification, publication and live adoption remain separate.

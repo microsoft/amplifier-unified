@@ -6,7 +6,7 @@ import pytest
 from amplifier_web.service import AppError
 from test_canvas_views import app, command, target, view
 from test_inline_artifacts import published
-from test_questions import create_question
+from test_questions import Runtime, create_question
 
 
 async def reference(app, current):
@@ -21,6 +21,40 @@ async def inline(app, source, mount, client='one'):
     args = {key: value for key, value in source.items() if key not in {'id', 'sessionId'}}
     return (await command(app, 'canvas.views.inline', {**args, 'resourceId': source['id'],
         'previewId': mount, 'presentationRequest': True}, client=client))['result']
+
+
+async def test_dismiss_answer_reminder_keeps_dirty_exact_review_and_history_pin(app):
+    runtime = Runtime()
+    runtime.failure = TimeoutError('Unconfirmed answer')
+    app.runtime = runtime
+    current = await published(app, '<p>Exact review</p>', 'html')
+    source = await reference(app, current)
+    sid, identity = source['sessionId'], source['questionId']
+    answered = (await command(app, 'question.answer', {
+        'sessionId': sid, 'id': identity, 'expectedRevision': 1, 'text': 'Saved choice'}))['result']
+    await command(app, 'canvas.select', {**source, 'presentation': 'inline', 'resetPreview': True})
+    opened = await inline(app, source, 'dirty-answered-review')
+    binding = target(opened)
+    await command(app, 'canvas.views.dirty', {**binding, 'dirty': True})
+    before = view(app, opened['viewId'])
+    cleared = (await command(app, 'question.dismiss', {
+        'sessionId': sid, 'id': identity, 'expectedRevision': answered['revision'],
+        'inputId': answered['delivery']['inputId']}))['result']
+    assert cleared['contentRevision'] == source['questionContentRevision']
+    assert cleared['delivery'] == answered['delivery']
+    assert view(app, opened['viewId']) == before
+    with app.clients.bind('one'):
+        assert app.canvas_views.canvas(opened['viewId'])['content'] == '<p>Exact review</p>'
+    for index in range(11):
+        await create_question(app, sid, prompt=f'Later question {index}')
+    assert identity in {q['id'] for q in app._session(sid)['questions']}
+    assert view(app, opened['viewId']) == before
+    assert len(runtime.sent) == 1
+    await command(app, 'canvas.views.dirty', {**binding, 'dirty': False})
+    await command(app, 'canvas.views.release', binding)
+    app.questions.sync({sid})
+    assert identity not in {q['id'] for q in app._session(sid)['questions']}
+    assert app.questions.store.get(sid, identity) == cleared
 
 
 async def test_question_transfer_releases_only_exact_client_version_and_source(app):

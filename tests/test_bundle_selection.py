@@ -218,7 +218,8 @@ async def test_unavailable_model_requires_explicit_reset_before_any_mutation(tmp
     assert not (home/'sessions/source/bundle-transition.json').exists()
 
 
-async def test_agent_direct_switch_reports_model_choice_then_retries_explicitly(tmp_path):
+async def test_agent_direct_switch_reports_model_choice_then_retries_explicitly(tmp_path, monkeypatch):
+    monkeypatch.setattr('amplifier_web.draft_defaults.resolve_defaults', saved_preview_fixture)
     class ModelRuntime(Runtime):
         async def control(self,sid,operation,args):
             if operation=='bundle.prepare' and not args.get('resetModel'):
@@ -242,7 +243,9 @@ async def test_agent_direct_switch_reports_model_choice_then_retries_explicitly(
         await settled(app)
         assert app._session()['bundle']=='work'
         assert 'selection' not in app._session()
-        assert not any(op=='bundle.preview' for _,op,_ in runtime.calls)
+        # Re-observe the reviewed old graph after candidate qualification,
+        # before retiring its worker.
+        assert sum(op=='bundle.preview' for _,op,_ in runtime.calls) == 1
     finally: await app.close()
 
 
@@ -383,7 +386,8 @@ async def test_replacement_resolves_characteristics_without_loading_saved_root(t
 
 
 @pytest.mark.parametrize('interruption', ['after-prepare', 'during-stop'])
-async def test_stopped_conversation_is_not_restarted_by_bundle_switch(tmp_path, interruption):
+async def test_stopped_conversation_is_not_restarted_by_bundle_switch(tmp_path, interruption, monkeypatch):
+    monkeypatch.setattr('amplifier_web.draft_defaults.resolve_defaults', saved_preview_fixture)
     from amplifier_web.bundle_actions import perform
     runtime = Runtime(); app = AppService(tmp_path, runtime=runtime, workspace=tmp_path)
     app.management = Management(app)
@@ -508,6 +512,7 @@ print('saved', flush=True)
 
 @pytest.mark.parametrize('revocation', ['after-prepare', 'during-stop'])
 async def test_revoked_bundle_authority_cannot_restart_worker(tmp_path, monkeypatch, revocation):
+    monkeypatch.setattr('amplifier_web.draft_defaults.resolve_defaults', saved_preview_fixture)
     from amplifier_web.bundle_actions import perform
     revoked = False
     def check():

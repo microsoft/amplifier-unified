@@ -807,8 +807,10 @@ class ShellModules:
                     composition['presentation'] = copy.deepcopy(client['composition']['presentation'])
                 else:
                     change = self.get('change', args['changeId'])
-                    if not change or change['clientId'] != identity:
+                    if not change or change.get('clientId') != identity:
                         fail('Prepared change not found for this client.', 404)
+                    if 'preferenceFence' in change or 'preferenceUndoId' in change:
+                        fail('This change belongs to the retired appearance profiles. Prepare a new shell change.', 409)
                     if action != 'shell.changes.revert' and change['baseRevision'] != client['revision']:
                         fail('Prepared change is stale.', 409)
                     composition = change['before'] if action == 'shell.changes.revert' else change['composition']

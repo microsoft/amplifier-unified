@@ -633,6 +633,10 @@ class AppService:
             self.state = load_working(self.db)
         from .managed_deletion import tombstones
         self._deleted_session_ids = {sid for row in tombstones(self.db) for sid in row['ids']}
+        # 0.78 removed this legacy value. Restore a usable default only when it
+        # is absent; Reference/profile records are retained, not migration input.
+        # An earlier custom skin that was already removed cannot be recovered.
+        self.state.setdefault('theme', {'name': 'Amplifier Unified', 'css': self.default_theme()})
         from .default_typography import upgrade_default
         upgrade_default(self.state, self.default_theme())
         from .settings_migration import migrate_settings
@@ -2661,7 +2665,7 @@ class AppService:
                     if include_state and getattr(self, '_progress_dirty', False):
                         self._commit_pending_progress()
                     saved_receipt = json.loads(previous[1])
-                    if action == 'question.answer':
+                    if action in {'question.answer', 'question.dismiss'}:
                         saved_receipt['result'] = self.questions.read('question.read', args)
                     return {**saved_receipt, **({'state': self.browser_state()} if include_state else {}), "duplicate": True}
             # A shielded task may have waited on history, configuration, creation
@@ -3501,6 +3505,8 @@ class AppService:
                     turn['phase'] = 'running'
                     turn['retriedAt'] = time.time()
                     turn.pop('endedAt', None)
+                    turn.pop('runtimeOwnerId', None)
+                    turn.pop('generationId', None)
                     pending.append((self._retry_message, (copy.deepcopy(session), message['text'], args['inputId'], original_status, original_turn, known_undelivered)))
             elif action == "conversation.stop":
                 session = self._session(args.get("sessionId"))
@@ -3641,6 +3647,14 @@ class AppService:
                         raise AppError(exc.message) from None
                 if patch.get('panel'):
                     patch['toolbarMenuOpen'] = False
+                if 'canvasDraft' in patch and not isinstance(patch['canvasDraft'], dict):
+                    raise AppError('Canvas settings must be an object.')
+                try:
+                    opens_delivery = patch.get('canvasDraft', {}).get('delivery') in {'outputs','publishing','permissions'}
+                except TypeError:
+                    raise AppError('Canvas delivery must name a destination.') from None
+                # Keep mixed-view validation independent of the retired profile
+                # protocol: invalid input must not partially mutate an editor.
                 if 'draft' in patch:
                     if not isinstance(patch['draft'], str):
                         raise AppError('Draft must be text.')
@@ -3655,6 +3669,13 @@ class AppService:
                         if rich is not None and rich is not ...:
                             rich = resolve_document(self._session(target) if target is not None else None,
                                                     rich, draft=True)
+                        rich = self.clients.prepare_draft(target, patch['draft'], rich)
+                    elif target:
+                        self._session(target, hydrate=False)
+                    elif self.state.get('selectedSessionId') is not None:
+                        raise AppError('Attach a client to save a draft without a conversation.')
+                if 'draft' in patch:
+                    if client_id is not None:
                         self.clients.draft(target, patch.pop('draft'), rich)
                     elif target:
                         self._session(target, hydrate=False)['draft'] = patch['draft']
@@ -3671,7 +3692,7 @@ class AppService:
                     patch['canvasDraft'] = {**patch.get('canvasDraft', self.state['view'].get('canvasDraft', {})), 'library': False}
                 elif patch.get('settingsCanvas') is False and self.state.get('canvas', {}).get('kind') == 'settings':
                     patch['canvasDraft'] = {**patch.get('canvasDraft', self.state['view'].get('canvasDraft', {})), 'library': True}
-                if patch.get('canvasDraft', {}).get('delivery') in {'outputs','publishing','permissions'}:
+                if opens_delivery:
                     self.state.setdefault('canvas', {})['open'] = True
                 self.state["view"].update(patch)
             elif action == 'feedback.excerpt.stage':
@@ -4109,7 +4130,7 @@ class AppService:
                 # Capture before returning to the HTTP task. Its later resumption
                 # may follow a publication that this client never subscribed to.
                 result['_deliveryStateRevision'] = (json.loads(saved[0]).get('_deliveryStateRevision') if saved else None) or self._state['revision']
-        if action == 'question.answer':result['result'] = self.questions.read('question.read', args)
+        if action in {'question.answer', 'question.dismiss'}:result['result'] = self.questions.read('question.read', args)
         return {**result, **({'state': self.browser_state()} if include_state else {})}
 
     async def _provision_workspace(self, identity, reconcile=False):
@@ -4379,7 +4400,7 @@ class AppService:
                     current['status'] = original_status
                     self._activity(current, original_status, 'Delivery confirmed. Amplifier already received this message.')
                     turn = next(t for t in current['execution']['turns'] if t['id'] == input_id)
-                    for key in ('phase', 'endedAt', 'retriedAt'):
+                    for key in ('phase', 'endedAt', 'retriedAt', 'runtimeOwnerId', 'generationId'):
                         if key in original_turn:
                             turn[key] = original_turn[key]
                         else:
@@ -4518,9 +4539,11 @@ class AppService:
                     self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(saved), input_id))
                 self._publish_changes(sessions={session['id']}, globals={'view'})
             from .worker_diagnostics import diagnostic_reference
+            from .session_health import startup_failure_details
             await self.on_runtime_event('runtime.error', {
                 'sessionId': session['id'], 'error': message, 'errorType': 'RuntimeStartupError',
                 'phase': 'worker_startup',
+                **startup_failure_details(vars(exc)),
                 **({'moduleFailures': exc.failures} if getattr(exc, 'failures', None) else {}),
                 **diagnostic_reference(exc),
             })
@@ -4856,18 +4879,28 @@ class AppService:
             elif kind == 'runtime.delivery' and 'peerAdmission' not in payload:
                 self._delivery(session, payload['inputId'], 'failed' if payload.get('delivery') == 'failed' else 'accepted')
             elif kind == "runtime.ended":
-                self.operations.interrupted(session["id"])
-                self.schedules.runtime_ended(session)
                 # A turn may finish before naming does; only the runtime host
                 # can confirm that no independent call can still be running.
-                if payload.get("sessionId") in {session["id"], session.get("runtimeSessionId")} and not payload.get("backgroundOnly"):
-                    settle_stream(session)
-                    interrupt_unfinished(session)
-                    from .execution import interrupt_owned_workers
-                    interrupt_owned_workers(session, payload.get('runtimeOwnerId'))
-                    if payload.get('reason') == 'shutdown' and session['status'] in {'working', 'starting', 'ready', 'stopping'}:
-                        session['status'] = 'interrupted'
+                # Keep the exact listed background outcome before generic
+                # owner-loss settlement makes its live nodes interrupted.
                 finish_background(session,payload.get("backgroundCallIds",[]),payload.get("status","interrupted"))
+                ended_foreground = False
+                if (payload.get("sessionId") in {session["id"], session.get("runtimeSessionId")}
+                        and payload.get('rootSessionId', session['id']) == session['id']
+                        and not payload.get("backgroundOnly")):
+                    from .execution import interrupt_owned_workers, interrupt_runtime_execution
+                    ended_foreground = interrupt_runtime_execution(session, payload.get('runtimeOwnerId'))
+                    if ended_foreground:
+                        settle_stream(session)
+                    current_process = getattr(self.runtime, 'workers', {}).get(session['id'], {})
+                    if (ended_foreground and not current_process or payload.get('runtimeOwnerId') and
+                            current_process.get('runtimeOwnerId') == payload['runtimeOwnerId']):
+                        # Controls and accepted schedules can precede the first
+                        # conversation generation. Confirm their current process,
+                        # not an unbound next input or an old process's late exit.
+                        self.operations.interrupted(session["id"])
+                        self.schedules.runtime_ended(session)
+                    interrupt_owned_workers(session, payload.get('runtimeOwnerId'))
             elif kind == 'runtime.ownership':
                 if payload.get('status') == 'blocked':
                     from .session_ownership import blocked
@@ -4968,8 +5001,10 @@ class AppService:
                     detail=str(failure)
                 startup = payload.get('errorType') == 'RuntimeStartupError' or payload.get('phase') == 'worker_startup'
                 error_type = payload.get('errorType') or (None if startup else session.get('turnErrorType'))
-                from .session_health import current_terminal_failure, failure_details
+                from .session_health import current_terminal_failure, failure_details, startup_failure_details
                 projected = failure_details(detail, error_type)
+                if startup:
+                    projected.update(startup_failure_details(payload))
                 existing = session.get('failure')
                 if startup and projected['category'] == 'unknown':
                     error_type = 'RuntimeStartupError'
@@ -5003,8 +5038,14 @@ class AppService:
                 event = {**payload, "at": time.time()}
                 session.setdefault("generations", []).append(event)
                 session["generations"] = session["generations"][-200:]
-                from .input_status import generation as observe_input_generation
+                from .input_status import generation as observe_input_generation, PREFIX
+                input_annotation = PREFIX + str(payload.get('initial_input_id', ''))
+                before_input = session.get('messageAnnotations', {}).get(input_annotation)
                 observe_input_generation(session, payload)
+                if (payload.get('event') == 'generation.started'
+                        and session.get('messageAnnotations', {}).get(input_annotation) is not before_input):
+                    from .execution import bind_runtime_turn
+                    bind_runtime_turn(session, payload)
                 from .response_completion import apply as apply_response_completion
                 apply_response_completion(session, payload)
                 root_generation = (payload.get('sessionId', session['id']) == session['id']
@@ -5148,7 +5189,8 @@ class AppService:
                 kind == 'runtime.status' and (payload.get('activityOnly') or
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (
                 kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
-            collaboration_changed = self.collaboration.observe(session, kind, payload)
+            collaboration_changed = (set() if kind == 'runtime.ended' and not ended_foreground
+                                     else self.collaboration.observe(session, kind, payload))
             if (kind == 'runtime.generation' and root_generation
                     and payload.get('event') == 'generation.failed'
                     and session.get('status') not in {'stopped', 'stopping'}):
@@ -5162,7 +5204,8 @@ class AppService:
                                    errorAt=failure['recordedAt'],
                                    error=failure['summary'] + ' ' + failure['guidance'])
             from .conversation_steering import observe as observe_steering
-            observe_steering(self, session, kind, payload)
+            if kind != 'runtime.ended' or ended_foreground:
+                observe_steering(self, session, kind, payload)
             if progress:
                 self._publish_progress(session_ids={session['id']},
                                        detail_only=kind in {'assistant.delta', 'execution.event'}, record_only=True,

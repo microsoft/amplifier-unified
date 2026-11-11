@@ -303,7 +303,9 @@ def command(service, action, args, origin):
         if not request or request['status'] != 'pending':
             fail('This host request was already resolved or superseded.', 409)
         if args['approve']:
-            if request['themeFingerprint'] != theme_fingerprint(state['theme']):
+            if request['action'] not in HOST_ACTIONS:
+                fail('This request belongs to retired appearance controls. Create a fresh request.', 409)
+            if request.get('themeFingerprint') != theme_fingerprint(state['theme']):
                 fail('The shell theme changed since this request. Create a fresh request.', 409)
             theme_command(service, request['action'], resource(db, request['input']['$resource']))
         request.update(status='applied' if args['approve'] else 'rejected', resolvedBy=origin)

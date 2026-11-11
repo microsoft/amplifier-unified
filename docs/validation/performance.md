@@ -61,6 +61,14 @@ their existing detached getter. Keep writer checks, continuity persistence,
 nested-edit detection and failed/cancelled anchor retries on both paths. Reject an
 asynchronous visitor without falling back after it may already have saved.
 
+Prepare copied Git index stat data only in new, unpublished source copies after their
+tracked-file modes and identities are final. Restore the copied metadata permissions
+before leaving the existing copy owner; linked/redirected Git layouts retain their
+ordinary admission checks. Keep worker verification read-only at both boundaries,
+including exact source-byte hashing and refusal of intervening mutations. Compare
+actual copy/publication paths and preserve source HEAD, staged blobs/modes, failure
+and cancellation cleanup; a manual index refresh is not production qualification.
+
 ## Separate current presentation from historical evidence
 
 Routine state carries the current fields its consumers need. Historical bodies

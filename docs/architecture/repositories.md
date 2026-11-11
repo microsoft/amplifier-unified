@@ -57,7 +57,7 @@ existing suitable repo if the inventory finds one.
 | `amplifier-canvas` (**new**) | Canvas bridge/documents/views, frontend renderers and shell integration | Capability package and renderer SDK; ordinary chat works with it absent, agents invoke the same public operations |
 | Voice/device capability owner | `voice*.py`, device dispatch; existing `amplifier-voice`, browser bridge | Reuse/evolve existing repos after comparison; media transport separate, exactly targeted permission and lifecycle |
 | Configuration/composition owner | Shared settings, bundles and provider discovery; Foundation overlap | Native mechanisms stay Foundation; extract product admin/catalog UI capability, not a second settings authority |
-| `amplifier-scheduling` (**new extraction or existing owner reuse**) | `amplifier_scheduling/`, schedules; compare `amplifier-drumbeat` | Durable schedule/trigger ownership and host admission interface; work runs with zero viewers |
+| `amplifier-scheduling` (**independently buildable library; repository delivery pending**) | [`amplifier_scheduling/`](../../amplifier_scheduling/README.md) owns recurrence, SQLite run admission and its pure tests; Unified still bundles its unchanged Python sources | Build wheel/sdist and exercise due identities, leases and unknown-outcome recovery without the app; host authorization, Stop, task admission and execution stay in Unified |
 | `amplifier-operations` (**new extraction**) | `amplifier_operations/`, durable questions/tasks | Durable operations API and capability; independent of a particular agent engine and frontend |
 | `amplifier-publishing` (**new extraction**) | `amplifier_publishing/` | Publishing library/capability and resources; own tests without an app boot |
 | Worktree/resource lifecycle owner (**proposed extraction**) | `amplifier_worktrees/`, `amplifier_web/task_environments.py` and their owning tools | Exact resource ownership, consumers, reconciliation and cleanup; archive does not destroy active work or review holds |
@@ -69,6 +69,12 @@ existing suitable repo if the inventory finds one.
 A package is ready to extract when it can state its input/output contract, data
 authority and independent fixture. Small size is not an objection. An extraction
 that still imports a sibling's private source has not completed its boundary.
+
+The scheduling library's first packaging step keeps one authored source and the
+current Unified imports. Its independent artifact does not introduce a daemon or
+claim a new release/default selection. `amplifier-drumbeat` is a separate automation
+engine built on `amplifier-agent`, not the owner of these native Unified schedule
+receipts. Reusing that engine would be a separate architecture decision.
 
 ## Dependency direction
 

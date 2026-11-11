@@ -652,10 +652,7 @@ async def _activate(manager, *, force=None, holds=None):
         from .update_drain import prepare
         if not await prepare(manager, release):return
         from .update_blockers import operation_holds
-        try:
-            held_configuration = operation_holds(manager.service)
-        except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
-            return
+        held_configuration = operation_holds(manager.service)
     manager.diagnostics.begin('application',revision,validated.get('attemptId') or release.get('attemptId'),
                               application_extras=validated.get('extras'))
     uv,executable,installed_python,previous=await manager.diagnostics.run('target-discovery',installed_target)

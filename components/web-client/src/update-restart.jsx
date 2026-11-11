@@ -23,54 +23,59 @@ export function UpdateBlockers({updates,act}){
    <ul>{items.map((item,index)=><li key={index}>{item.label}{item.sessionId&&<> — <button type="button" className="a-link" data-action="session.select" onClick={async()=>{const result=await act('session.select',{id:item.sessionId});if(result&&result.accepted!==false)await act('view.update',{patch:{panel:null,workSurface:'chat'}})}}>{item.title||'Open conversation'}</button></>}</li>)}</ul>
   </section>)}
   <p className="a-caption">Only current update blockers are listed. Configuration holds do not necessarily mean a chat is running, and can remain unresolved even when they no longer block an update. Restarting does not recover held settings or checkout handoffs.</p>
-  <UpdateRestart updates={updates} act={act}/>
  </details>;
 }
 
 export function UpdateRestart({updates,act}){
- const target=updates.forceRestartTarget;
+ const target=updates.forceRestartTarget?{...updates.forceRestartTarget}:null;
  const key=JSON.stringify(target||null);
- const [confirmation,setConfirmation]=React.useState(null),[submitting,setSubmitting]=React.useState(false),[error,setError]=React.useState('');
- const [request,setRequest]=React.useState(null);
- const button=React.useRef(null),cancelButton=React.useRef(null),restoreFocus=React.useRef(false);
- const current=confirmation?.key===key;
+ const [request,setRequest]=React.useState(null),[error,setError]=React.useState('');
+ const currentKey=React.useRef(null),pending=React.useRef(null);
+ const description=React.useId();
+ const version=updates.pendingApp?.latest?.replace(/^v/,'');
  const latest=updates.application?.latest?.replace(/^v/,'');
- const cancel=()=>{restoreFocus.current=true;setConfirmation(null);setError('')};
- React.useEffect(()=>{
-  if(confirmation)cancelButton.current?.focus();
-  else if(restoreFocus.current){restoreFocus.current=false;button.current?.focus()}
- },[confirmation]);
+ React.useLayoutEffect(()=>{
+  currentKey.current=key;pending.current=null;setRequest(null);setError('');
+  return ()=>{currentKey.current=null;pending.current=null};
+ },[key]);
  React.useEffect(()=>{
   const result=updates.forceRestartResult;
-  if(request&&result?.requestId===request.id&&result.status==='rejected'){
-   setSubmitting(false);setError(result.detail);setRequest(null);
-  }else if(request&&request.key!==key){setSubmitting(false);setRequest(null)}
+  if(request?.key===key&&currentKey.current===key&&request?.id&&result?.requestId===request.id&&result.status==='rejected'){
+   pending.current=null;setError(result.detail||'The restart was not accepted. Review the current update.');setRequest(null);
+  }
  },[request,key,updates.forceRestartResult]);
- const confirm=async()=>{
-  if(!current||submitting)return;
-  setSubmitting(true);setError('');
+ const restart=async()=>{
+  // Bind the gesture to the rendered target, not a target reread after a click.
+  // The ref also fences repeated events before React commits the busy state.
+  if(!target||currentKey.current!==key||pending.current)return;
+  const attempt={key,status:'pending'};
+  pending.current=attempt;setRequest(attempt);setError('');
+  const current=()=>currentKey.current===key&&pending.current===attempt;
+  const refused=detail=>{pending.current=null;setRequest(null);setError(detail||'The restart was not accepted. Review the current update.')};
+  const unknown=()=>{setRequest({...attempt,status:'unknown'});setError('Restart outcome is unknown. Check update status before taking another action.')};
   try{
-   const result=await act('updates.forceRestart',{...confirmation.target,confirm:true});
-   if(result?.accepted===false)throw Error(result.error||'The restart was not accepted. Review the current update.');
-   setRequest({id:result?.requestId,key:confirmation.key});
-   setConfirmation(null);
-  }catch(error){setError(error?.message||'The restart could not be confirmed. Check update status before trying again.');setSubmitting(false)}
+   const result=await act('updates.forceRestart',{...target,confirm:true},{propagateError:true});
+   if(!current())return;
+   if(result?.accepted===false){refused(result.error);return}
+   if(result?.accepted===true&&typeof result.requestId==='string'&&result.requestId){
+    setRequest({...attempt,id:result.requestId,status:'accepted'});
+   }else unknown();
+  }catch(error){
+   if(!current())return;
+   if(error?.accepted===false){refused(error.message);return}
+   // A lost response is not a refusal. Do not unlock the same target for replay.
+   unknown();
+  }
  };
- if(!target&&!confirmation)return null;
+ if(!target)return null;
  return <div className="a-update-force-restart">
-  {target&&!confirmation&&<button ref={button} type="button" className="a-soft" disabled={submitting} onClick={()=>{setError('');setConfirmation({key,target:{...target},version:updates.pendingApp?.latest?.replace(/^v/,'')})}}>Force restart…</button>}
-  {confirmation&&<div role="alertdialog" aria-label="Confirm update restart" onKeyDown={event=>{if(event.key==='Escape'&&!submitting){event.stopPropagation();cancel()}}}>
-   <p><strong>Interrupt active work and restart?</strong></p>
-   <p>{confirmation.version?`This restarts into prepared Amplifier ${confirmation.version}.`:'This restarts into the prepared update.'}</p>
-   {current&&latest&&confirmation.version&&latest!==confirmation.version&&<p>Amplifier {latest} is available, but this confirmation uses the prepared version above. Cancel and let the newer release finish preparing to use it instead.</p>}
-   <p>Running chats, background workers, tools, and calls will be interrupted. Saved conversation history and drafts will be kept. Interrupted work will not be replayed automatically.</p>
-   <p>Unresolved checkout handoffs will still require inspection after the restart.</p>
-   {!current&&<p role="alert">The staged update or host changed. Cancel and review the current update before confirming again.</p>}
-   <div className="a-dialog-actions">
-    <button type="button" className="a-primary" data-action="updates.forceRestart" disabled={!current||submitting} onClick={confirm}>{submitting?'Restart requested…':'Interrupt work and restart'}</button>
-    <button ref={cancelButton} type="button" className="a-soft" disabled={submitting} onClick={cancel}>Cancel</button>
-   </div>
-  </div>}
+  <div id={description}>
+   <p>{version?`Restart into prepared Amplifier ${version}.`:'Restart into the prepared update.'}</p>
+   {latest&&version&&latest!==version&&<p className="a-caption">Amplifier {latest} is available, but this action uses the prepared version above. Wait for the newer release to finish preparing to use it instead.</p>}
+   <p>Running chats, workers, tools, and calls will be interrupted. Saved history and drafts will be kept; interrupted work will not be replayed automatically.</p>
+   <p className="a-caption">Restarting does not recover held settings or checkout handoffs. You can wait for work to finish instead.</p>
+  </div>
+  <button type="button" className="a-soft" data-action="updates.forceRestart" aria-describedby={description} disabled={!!request} onClick={restart}>{request?.status==='unknown'?'Restart outcome unknown':request?'Restart requested…':'Interrupt work and restart'}</button>
   {error&&<p role="alert">{error}</p>}
  </div>;
 }

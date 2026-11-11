@@ -365,6 +365,8 @@ class RuntimeControls:
 
     def prepare_configuration(self, config):
         from .decision_accounts import logical_plan
+        from .host.components import portable_module_sources
+        validate_plan(config)
         previous = logical_plan(self.coordinator.config)
         stored = override_path(self.session.session_id)
         if stored.exists():
@@ -373,11 +375,18 @@ class RuntimeControls:
                 current = {identity(row) for row in previous.get(section, [])}
                 previous.setdefault(section, []).extend(
                     row for row in saved.get(section, []) if identity(row) not in current)
-        plan = restore_redactions(config, previous)
+        # The host seals portable sources before dispatch. Compare the edited
+        # and live declarations in one fresh provenance pass before restoring
+        # redacted fields; module/instance/source ownership stays exact.
+        pair = portable_module_sources(
+            {'agents': {'edited': config, 'previous': previous}}, app_home())['agents']
+        plan = restore_redactions(pair['edited'], pair['previous'])
         validate_plan(plan)
         return {key: value for key, value in plan.items() if key in PLAN_KEYS}
 
     def save_configuration(self, plan):
+        from .host.components import portable_module_sources
+        plan = portable_module_sources(plan, app_home())
         write_private(override_path(self.session.session_id), json.dumps(plan, indent=2))
         # A full mount-plan edit supersedes previous live module toggles.
         if self.state_path().exists():
@@ -614,8 +623,8 @@ class RuntimeControls:
                 if isinstance(captured,dict) and name in captured.get('connectionKeys',{}):
                     shared['connectionKey']=captured['connectionKeys'][name]
                 if mounted and isinstance(captured,dict) and name in captured.get('keys',{}):
-                    from .provider_catalog import configuration_key
-                    current=configuration_key(captured['workspace'],mounted['module'],mounted.get('config',{}),captured['sources'][name],home=captured['home'])
+                    from .provider_catalog import configuration_key, mounted_provider_config
+                    current=configuration_key(captured['workspace'],mounted['module'],mounted_provider_config(mounted),captured['sources'][name],home=captured['home'])
                     if current==captured['keys'][name]:shared['sharedCatalogKey']=current
                 listing = await model_list_info(provider)
                 rows.append({"id":name,**({"available":False,"failure":provider.failure} if isinstance(provider,UnavailableProvider) else {}),"module":mounted.get('module'),"catalogKey":catalog_key,**shared,"info":public_config(info, metadata=True),"configSchema":public_config(schema, metadata=True),

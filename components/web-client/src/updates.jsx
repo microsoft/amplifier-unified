@@ -9,7 +9,7 @@ import {RefreshCw,Download,Undo2,Check,ArrowUpCircle,AlertCircle,Pin,Clock3,Load
 import './updates.css';
 import {UpdateDiagnostics} from './update-diagnostics.jsx';
 import {UpdateSupport} from './update-support.jsx';
-import {UpdateBlockers} from './update-restart.jsx';
+import {UpdateBlockers,UpdateRestart} from './update-restart.jsx';
 import {SmartToolUpdateResults} from './smart-tool-update-results.jsx';
 import {ReleaseHistory,ReleaseNotices,UpdateReleaseSummary} from './release-notes.jsx';
 const sourceName=row=>row.label.split('/').pop().replace(/^amplifier-(bundle-|module-)/,'');
@@ -63,6 +63,7 @@ export function UpdateSettings({state,act}){
  const unread=(state.attention?.items||[]).filter(item=>item.page==='updates'&&!item.read),releaseUnread=unread.filter(item=>item.id.startsWith('release-notice:')),componentUnread=unread.filter(item=>!item.id.startsWith('release-notice:'));
  const updates=state.updates||{},options=state.settings?.updates||{},replacement=updates.pendingReplacement!=null;
  const overview=updateOverview(updates,options,state.attention?.items),busy=replacement||overview.active,pending=overview.pending;
+ const retryInstallation=overview.current?.action==='install';
  const intervalHours=options.intervalHours??4,legacyInterval=![1,4,8,24].includes(intervalHours);
  const application=updates.application||(updates.items||[]).find(item=>item.kind==='app')||{};
  const items=(updates.items||[]).filter(item=>item.kind!=='app'&&item.id!=='application');
@@ -109,11 +110,12 @@ export function UpdateSettings({state,act}){
   </div>
   <UpdateReleaseSummary updates={updates} application={application} overview={overview}/>
    {overview.waiting&&!overview.runnerOnlyPending&&<UpdateBlockers updates={updates} act={act}/>}
-  {overview.current?.actionRequired&&<div className="a-update-current-action">
+  <UpdateRestart updates={updates} act={act}/>
+  {(overview.current?.actionRequired||retryInstallation)&&<div className="a-update-current-action">
    {overview.current.component&&<p className="a-caption">Component: {overview.current.component}</p>}
-   <button className="a-soft" data-action={overview.current.action==='check'?'updates.check':'view.update'} aria-controls={overview.current.action==='check'?undefined:advancedId} aria-expanded={overview.current.action==='check'?undefined:detailsOpen} onClick={()=>overview.current.action==='check'?act('updates.check'):revealDetails(overview.current.action)}>{overview.current.action==='check'?(overview.current.component===(application.label||'Amplifier Unified')?'Check for updates':'Check current components'):overview.current.action==='sources'?'Review source details':'View update diagnostics'}</button>
+   {!retryInstallation&&<button className="a-soft" data-action={overview.current.action==='check'?'updates.check':'view.update'} aria-controls={overview.current.action==='check'?undefined:advancedId} aria-expanded={overview.current.action==='check'?undefined:detailsOpen} onClick={()=>overview.current.action==='check'?act('updates.check'):revealDetails(overview.current.action)}>{overview.current.action==='check'?(overview.current.component===(application.label||'Amplifier Unified')?'Check for updates':'Check current components'):overview.current.action==='sources'?'Review source details':'View update diagnostics'}</button>}
    {detailsNotice&&<p className="a-caption" role="status">{detailsNotice}</p>}
-   <p className="a-caption">The current installation is kept. Review the supported next step before retrying.</p>
+   <p className="a-caption">{retryInstallation?'The current installation is kept. Choose Retry installation to retry the retained components. Checking for updates does not install them.':'The current installation is kept. Review the supported next step before retrying.'}</p>
   </div>}
   <FailureDispositions state={state}/>
   {!unresolved.length&&overview.tone!=='working'&&<ReadWhenVisible item={unread.find(item=>item.id==='updates:error')} act={act}><ResultNotice phase={notice.phase} message={notice.phase==='error'?notice.message:''}/></ReadWhenVisible>}
@@ -122,7 +124,7 @@ export function UpdateSettings({state,act}){
   <ComponentResults results={results}/>
   {application.canInstall===false&&<p className="a-ai-hint" role="status">This is a development preview. App updates are deployed by its owner; this preview cannot replace the installed app.</p>}
   <div className="a-update-controls" data-part="update-controls">
-  <div className="a-dialog-actions"><button className={overview.installable?'a-soft':'a-primary'} disabled={checkDisabled} aria-describedby={checkDisabled&&disabledReason?"update-action-status":undefined} data-action="updates.check" onClick={()=>act('updates.check')}><RefreshCw className={overview.processing||updates.applicationCheckPending?"a-progress-spinner":undefined}/><span>{updates.applicationCheckPending?'Checking…':canRefreshQueued?'Check for newer release':canRefreshRunner?'Check for updates':controlsBusy?(overview.waiting?'Update queued':updates.phase==='checking'?'Checking…':'Finishing update…'):pending?'Waiting for update…':'Check for updates'}</span></button>{overview.installable&&!controlsBusy&&<button className="a-primary" disabled={overview.blocked} aria-describedby={disabledReason?"update-action-status":undefined} data-action="updates.install" onClick={()=>act('updates.install')}><Download/><span>{overview.tone==='error'?'Try update again':'Update Amplifier'}</span></button>}{controlsBusy&&<button className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:{panel:null}})}>Return to chat</button>}</div>
+  <div className="a-dialog-actions"><button className={overview.installable?'a-soft':'a-primary'} disabled={checkDisabled} aria-describedby={checkDisabled&&disabledReason?"update-action-status":undefined} data-action="updates.check" onClick={()=>act('updates.check')}><RefreshCw className={overview.processing||updates.applicationCheckPending?"a-progress-spinner":undefined}/><span>{updates.applicationCheckPending?'Checking…':canRefreshQueued?'Check for newer release':canRefreshRunner?'Check for updates':controlsBusy?(overview.waiting?'Update queued':updates.phase==='checking'?'Checking…':'Finishing update…'):pending?'Waiting for update…':'Check for updates'}</span></button>{overview.installable&&!controlsBusy&&<button className="a-primary" disabled={overview.blocked} aria-describedby={disabledReason?"update-action-status":undefined} data-action="updates.install" onClick={()=>act('updates.install')}><Download/><span>{retryInstallation?'Retry installation':overview.tone==='error'?'Try update again':'Update Amplifier'}</span></button>}{controlsBusy&&<button className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:{panel:null}})}>Return to chat</button>}</div>
   {updates.applicationCheckWarning&&<p className="a-caption" role="status">{updates.applicationCheckWarning}</p>}
   {controlsBusy&&<p className="a-caption">{overview.waiting?'You can close Settings. The update stays queued.':updates.pendingRestart?'This page updates automatically as the restart completes.':'You can keep working; this page will update automatically.'}</p>}
   <div className="a-update-simple-options"><label><input type="checkbox" data-action="settings.update" checked={options.autoCheck!==false&&options.autoInstall!==false} onChange={e=>change(e.target.checked?{autoCheck:true,autoInstall:true}:{autoInstall:false})}/>Keep Amplifier up to date</label><p className="a-caption">Restarts wait until your work is finished.</p></div>

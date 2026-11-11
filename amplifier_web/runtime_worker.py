@@ -1067,7 +1067,9 @@ class Worker:
                 if diagnostic:
                     exc.diagnostic_path = diagnostic
                 raise
-            error = {"type": "runtime.error", "error": f"{type(exc).__name__}: {exc}"}
+            from amplifier_web.worker_diagnostics import _startup_exception_facts
+            error = {"type": "runtime.error", "error": f"{type(exc).__name__}: {exc}",
+                     "startupFailureFacts": _startup_exception_facts(exc)}
             if diagnostic:
                 error["diagnosticReceipt"] = diagnostic.name
             from amplifier_web.module_failures import ConfiguredModuleError

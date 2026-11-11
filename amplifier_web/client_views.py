@@ -292,8 +292,9 @@ class ClientViews:
             self.dirty.add(identity)
         return self.records.get(identity) if identity is not None else None
 
-    def draft(self, session_id, text, document=...):
-        record = self.record()
+    def prepare_draft(self, session_id, text, document=...):
+        """Validate retained quoted commentary before a mixed view edit commits."""
+        record = self.records[self.current.get()]
         if document is ...:
             previous = record.get("draftDocuments", {}).get(session_id or "")
             old_text = record.get("drafts", {}).get(session_id or "", "")
@@ -305,6 +306,11 @@ class ClientViews:
                 document = copy.deepcopy(previous)
                 if text != old_text:
                     document['segments'].append({'type': 'text', 'text': text[len(old_text):]})
+        return document
+
+    def draft(self, session_id, text, document=...):
+        document = self.prepare_draft(session_id, text, document)
+        record = self.record()
         record.setdefault("drafts", {})[session_id or ""] = text
         documents = record.setdefault("draftDocuments", {})
         if document is None:

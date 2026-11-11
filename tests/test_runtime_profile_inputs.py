@@ -3,6 +3,7 @@
 import asyncio
 import copy
 import json
+import subprocess
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -608,6 +609,78 @@ async def test_cancel_retains_stage_while_to_thread_writer_finishes(
     assert len(written) == 1 and written[0].is_file()
     retained_attempt(h, "cancelled", "CancelledError")
     assert len(h.calls) == (0 if seam == "copy" else 3)
+
+
+@pytest.mark.parametrize('outcome', ['failure', 'cancellation'])
+async def test_index_preparation_cannot_publish_failed_or_cancelled_profile(
+    profile_inputs, monkeypatch, outcome,
+):
+    from amplifier_web import update_storage
+
+    h = profile_inputs
+    original = h.receipt / 'foundation/cache/source'
+    original.mkdir(parents=True)
+    def git(*args):
+        return subprocess.check_output(['git', *args], cwd=original)
+    git('init', '-b', 'main')
+    git('config', 'user.name', 'Fixture')
+    git('config', 'user.email', 'fixture@example.invalid')
+    (original / 'source.txt').write_text('unchanged source\n')
+    git('add', '.')
+    git('commit', '-m', 'fixture')
+    source_index = (original / '.git/index').read_bytes()
+    source_head, source_stage = git('rev-parse', 'HEAD'), git('ls-files', '--stage', '-z')
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    actual_run = subprocess.run
+    actual_copy = update_storage.copy_snapshot
+    copies = []
+
+    def refresh(command, **kwargs):
+        if command[-3:] != ['status', '--porcelain', '--untracked-files=no']:
+            return actual_run(command, **kwargs)
+        copied = Path(kwargs['cwd'])
+        assert copied != original and copied.is_relative_to(h.home / 'updates/releases')
+        copies.append(copied)
+        entered.set()
+        if outcome == 'failure':
+            raise subprocess.CalledProcessError(1, command)
+        assert release.wait(5)
+        return actual_run(command, **kwargs)
+
+    def copy(source, target):
+        try:
+            return actual_copy(source, target)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(update_storage.subprocess, 'run', refresh)
+    monkeypatch.setattr(update_storage, 'copy_snapshot', copy)
+    task = asyncio.create_task(runtime_profiles.ensure(h.home, h.generation, h.child('index')))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        if outcome == 'failure':
+            with pytest.raises(subprocess.CalledProcessError):
+                await task
+            status, error_type = 'failed', 'CalledProcessError'
+        else:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert not finished.is_set()
+            status, error_type = 'cancelled', 'CancelledError'
+        stage, attempt = retained_attempt(h, status, error_type)
+        assert copies == [stage / 'foundation/cache/source']
+        assert attempt['timings'][-1]['phase'] == 'source-snapshot'
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        assert await asyncio.to_thread(finished.wait, 5)
+    retained_attempt(h, status, error_type)
+    assert not h.calls  # No installer, probe or qualified generation publication.
+    assert (original / '.git/index').read_bytes() == source_index
+    assert git('rev-parse', 'HEAD') == source_head
+    assert git('ls-files', '--stage', '-z') == source_stage
+    assert (original / 'source.txt').read_text() == 'unchanged source\n'
 
 
 @pytest.mark.parametrize('declaration', ['added-default', 'added-shadowed'])

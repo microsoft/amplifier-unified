@@ -58,13 +58,25 @@ if request['mode'] == 'host':
                       'probeCredentialMatches':not expected_token or probe_config.get('github_token')==expected_token}))
 else:
     config = load_config(workspace, home=home)
-    if request['mode'] == 'composed_worker':
+    if request['mode'] in ('composed_worker', 'prepared_worker'):
         bundle = SimpleNamespace(providers=[], tools=[], hooks=[], agents={}, session={})
         _apply_settings(bundle, config)
         rows = bundle.providers
     else:
         rows = config.configured_connections
-    rows = expand_environment(rows)
+    if request['mode'] == 'prepared_worker':
+        from amplifier_web.provider_recording import apply_provider_recording
+        from amplifier_web.provider_environment import materialize_bundle_providers
+        plan = {'providers': rows}
+        apply_provider_recording(plan, enabled=request.get('recording', False))
+        bundle = SimpleNamespace(providers=plan['providers'], agents={})
+        prepared = SimpleNamespace(mount_plan=plan)
+        async def schema(module):
+            return request.get('schema', {'fields': []})
+        asyncio.run(materialize_bundle_providers(bundle, prepared, schema_loader=schema))
+        rows = prepared.mount_plan['providers']
+    else:
+        rows = expand_environment(rows)
     row = rows[0]
     row['config'].update(request.get('change', {}))
     if request.get('source'):
@@ -112,6 +124,96 @@ def process_identity(tmp_path, mode, **args):
     assert completed.returncode == 0, completed.stderr
     assert 'synthetic-account' not in completed.stdout
     return json.loads(completed.stdout)
+
+
+@pytest.mark.parametrize('module,flag', [('provider-openai', 'raw'), ('provider-litellm', 'raw_debug')])
+@pytest.mark.parametrize('explicit', [None, False, True])
+def test_recording_default_does_not_change_connection_but_explicit_config_does(tmp_path, monkeypatch, module, flag, explicit):
+    """Host catalog -> real recording/materialization -> real verify handler."""
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+    config = {'api_key': 'synthetic-account-a', 'base_url': 'https://endpoint-a.invalid',
+              **({flag: explicit} if explicit is not None else {})}
+    SettingsStore(tmp_path / 'app').update(tmp_path, 'global', lambda values: values.update(config={'providers': [
+        {'id': 'one', 'module': module, 'source': 'fixture-source', 'config': config}]}))
+    host = process_identity(tmp_path, 'host')
+    worker = process_identity(tmp_path, 'prepared_worker', expected=host['binding'], recording=True)
+    assert worker['verified'], worker
+    assert worker['binding'] == host['binding']
+    # Do not broadly ignore raw/raw_debug or any effective credential/endpoint.
+    for change in (
+        {'change': {'api_key': 'synthetic-account-b'}},
+        {'change': {'base_url': 'https://endpoint-b.invalid'}},
+        {'source': 'different-source'},
+        {'change': {flag: not (explicit if explicit is not None else True)}},
+    ):
+        other = process_identity(tmp_path, 'prepared_worker', expected=host['binding'], recording=True, **change)
+        assert not other['verified'], change
+
+
+@pytest.mark.parametrize('module,flag', [('provider-openai', 'raw'), ('provider-litellm', 'raw_debug')])
+@pytest.mark.parametrize('explicit', [None, False, True])
+def test_saved_inspected_recording_plan_keeps_model_picker_connection_eligible(
+        tmp_path, monkeypatch, module, flag, explicit):
+    import copy
+    from amplifier_web.provider_catalog import configured_binding, conversation_bindings
+    from amplifier_web.provider_recording import apply_provider_recording
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+    home = tmp_path / 'app'
+    row = {'module': module, 'instance_id': 'one', 'source': 'fixture-source',
+           'config': {'api_key': 'synthetic-account', 'base_url': 'https://endpoint.invalid',
+                      **({flag: explicit} if explicit is not None else {})}}
+    SettingsStore(home).update(tmp_path, 'global', lambda values: values.update(
+        config={'providers': [{'id': 'one', **row}]}))
+    key = configured_binding(home, tmp_path, 'one')
+    plan = {'providers': [copy.deepcopy(row)]}
+    apply_provider_recording(plan, enabled=True)
+    before = copy.deepcopy(plan)
+    saved = home / 'sessions' / 'source' / 'configuration.json'
+    saved.parent.mkdir(parents=True)
+    saved.write_text(json.dumps(plan))
+    providers = [{'id': 'one', 'connectionKey': key}]
+    assert conversation_bindings(home, tmp_path, 'source', providers) == {}
+    assert json.loads(saved.read_text()) == before
+    for patch in ({'api_key': 'another-account'}, {'base_url': 'https://another.invalid'},
+                  {flag: not (explicit if explicit is not None else True)}):
+        changed = copy.deepcopy(plan)
+        changed['providers'][0]['config'].update(patch)
+        saved.write_text(json.dumps(changed))
+        assert conversation_bindings(home, tmp_path, 'source', providers)['one']['eligible'] is False
+
+
+def test_recording_identity_projection_preserves_explicit_settings_and_mounted_plan(tmp_path):
+    import copy
+    from types import SimpleNamespace
+    from amplifier_web.provider_catalog import connection_key, mounted_catalog_keys, require_mounted_binding
+    from amplifier_web.provider_recording import apply_provider_recording
+    config = {'api_key': '${BINDING_TEST_KEY}', 'base_url': 'https://endpoint.invalid'}
+    row = {'module': 'provider-openai', 'instance_id': 'one', 'config': config}
+    # Explicit env witnesses use the normal guard after capture, not a retry.
+    from unittest.mock import patch
+    with patch.dict(os.environ, {'BINDING_TEST_KEY': 'synthetic-account-a'}):
+        expected = connection_key(tmp_path, row['module'], config, 'fixture-source')
+        plan = apply_provider_recording({'providers': [copy.deepcopy(row)]}, enabled=True)
+        before = copy.deepcopy(plan)
+        sources = {'one': 'fixture-source'}
+        keys = mounted_catalog_keys(None, tmp_path, plan['providers'], sources, binding=True)
+        coordinator = SimpleNamespace(config=plan, get_capability=lambda _: {
+            'connectionKeys': keys, 'workspace': tmp_path, 'sources': sources})
+        assert keys['one'] == expected
+        require_mounted_binding(coordinator, 'one', expected)
+        assert plan == before and plan['providers'][0]['config']['raw'] is True
+        with patch.dict(os.environ, {'BINDING_TEST_KEY': 'synthetic-account-b'}):
+            with pytest.raises(ValueError, match='credentials changed'):
+                require_mounted_binding(coordinator, 'one', expected)
+        for instance in ('missing', 'other'):
+            with pytest.raises(ValueError, match='mounted connection differs'):
+                require_mounted_binding(coordinator, instance, expected)
+        plan['providers'][0]['config']['raw'] = False
+        with pytest.raises(ValueError, match='credentials changed'):
+            require_mounted_binding(coordinator, 'one', expected)
+        # Explicit true is not host provenance and must stay identity-bearing.
+        explicit = {'module': row['module'], 'instance_id': 'one', 'config': {**config, 'raw': True}}
+        assert mounted_catalog_keys(None, tmp_path, [explicit], sources, binding=True)['one'] != expected
 
 
 @pytest.mark.parametrize('qualified', [False, True])

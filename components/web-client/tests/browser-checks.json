@@ -55,6 +55,17 @@
       }
     },
     {
+      "id": "retained-update-recovery",
+      "command": [
+        "node",
+        "tests/update-message-delivery-browser.mjs",
+        "--retained-recovery-only"
+      ],
+      "env": {
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/retained-update-recovery"
+      }
+    },
+    {
       "id": "delivery-warning",
       "command": [
         "node",

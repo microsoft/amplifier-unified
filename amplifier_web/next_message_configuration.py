@@ -21,7 +21,12 @@ def definitions(schema, string):
 
 
 def target(session):
-    return {key: session.get(key) for key in ('workspace', 'workingDirectory', 'executionRevision')}
+    # Native discovery can omit placement defaults; keyed admission supplies
+    # them after restart. Compare effective placement, not that representation.
+    # Never resolve against today's filesystem or renew the saved revision.
+    return {'workspace': session.get('workspace'),
+            'workingDirectory': session.get('workingDirectory') or session.get('workspace'),
+            'executionRevision': 0 if session.get('executionRevision') is None else session['executionRevision']}
 
 
 def pending_input(service, session):
@@ -150,7 +155,7 @@ def guard_for(service, captured, *, frozen=False):
         if service.assignments.blocked(current):
             raise RuntimeStartupError('The assignment is stopped. No input was sent.')
         if bundle:
-            if bundle.get('target') != placement:
+            if not isinstance(bundle.get('target'), dict) or target(bundle['target']) != placement:
                 raise ValueError('The saved bundle target moved. Choose its settings again.')
             try:
                 service.configuration_authority.check(bundle.get('authority'))
@@ -186,7 +191,8 @@ async def prepare(service, captured, *, frozen=False):
             checked = await resolve_defaults(service.data_dir, session['workspace'], pending['bundle'],
                 session_id=session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'],
                 replacement={'selection': session.get('selection'), 'replaceSavedSelection': True,
-                    'workingDirectory': session.get('workingDirectory')})
+                    'workingDirectory': session.get('workingDirectory')},
+                runtime_session=session)
             check()
             if not checked.get('modelCompatible') and not pending.get('resetModel'):
                 failure = {'code': 'incompatible-model', 'bundle': pending['bundle']}

@@ -39,9 +39,24 @@ async def test_passive_first_failure_selector(terminal):
         'availability': 'observed', 'firstFailure': None, 'savedComparison': 'not_observed'}
     assert detail['recovery']['resume']['savedComparison'] == 'match'
     assert detail['appUpdateQuiescence'] == {
-        'availability': 'observed', 'firstFailure': None, 'savedComparison': 'match'}
+        'availability': 'observed', 'firstFailure': None, 'savedComparison': 'not_observed'}
     assert originals(f) == before and not f.app.runtime.workers
     assert not f.transport.calls and not f.transport.inputs
+
+
+async def test_exact_app_observation_is_not_lost_after_report_cap(terminal):
+    f = terminal
+    prior = [{'id': f'earlier-held-{number}', 'status': 'error', 'configurationBusy': True,
+              'pendingConfiguration': {'phase': 'error'}} for number in range(101)]
+    f.app.state['sessions'][:0] = prior
+    try:
+        gate = update_blockers.assess(f.app, application=True)['observation']
+        assert len(gate['configurationHolds']) == 100 and gate['omittedConfigurationHolds'] >= 2
+        view = await read(f)
+        assert view['diagnostic']['appUpdateQuiescence'] == {
+            'availability': 'observed', 'firstFailure': None, 'savedComparison': 'not_observed'}
+    finally:
+        del f.app.state['sessions'][:len(prior)]
 
 
 @pytest.mark.parametrize('fault,code', [
@@ -84,9 +99,8 @@ async def test_recovery_first_failure_and_saved_availability(terminal, monkeypat
 
 
 @pytest.mark.parametrize('fault,code', [
-    ('freshness', 'update_hold'), ('worker', 'update_activity'),
-    ('unknown', 'native_terminal'), ('binding', 'update_binding'),
-    ('attempts', 'update_attempts')])
+    ('freshness', 'configuration-pending'), ('worker', 'mounted-worker'),
+    ('unknown', None), ('binding', None), ('attempts', None)])
 async def test_update_quiescence_is_independent_canonical_observation(terminal, fault, code):
     f = terminal
     if fault == 'freshness':
@@ -103,12 +117,9 @@ async def test_update_quiescence_is_independent_canonical_observation(terminal, 
         saved = json.loads(path.read_text()); saved['attempts'] = []
         path.write_text(json.dumps(saved))
     before = originals(f)
-    with pytest.raises(ValueError):
-        with observation() as baseline:
-            update_blockers.operation_snapshot(f.app, f.session)
     view = await read(f)
-    assert view['diagnostic']['appUpdateQuiescence'] == baseline
-    assert baseline['firstFailure'] == code
+    assert view['diagnostic']['appUpdateQuiescence'] == {
+        'availability': 'observed', 'firstFailure': code, 'savedComparison': 'not_observed'}
     assert originals(f) == before and not f.transport.calls
 
 
@@ -178,8 +189,8 @@ async def test_passive_same_recovery_io_order_and_no_effects(terminal, monkeypat
     view = await read(f, expected)
     # Diagnostic recovery evaluates the same two validations once each.
     assert calls[:len(baseline)] == baseline
-    # The separately requested app predicate performs its own existing observation.
-    assert calls[len(baseline):] == ['configuration_record', 'evidence', 'configuration_readback_matches']
+    # App quiescence no longer repeats recovery IO.
+    assert calls[len(baseline):] == []
     assert originals(f) == before and view['workReplayed'] is False
     assert not writes and set(f.app.tasks) == tasks
     assert f.app.configuration_authority.rows(f.session['id']) == grants
@@ -213,7 +224,7 @@ async def test_other_pending_operation_never_observes_replacement(terminal, monk
     supplied = args(f)
     f.session['pendingConfiguration']['operationId'] = 'new-operation'
     monkeypatch.setattr(recovery, 'evidence', lambda *a, **kw: pytest.fail('No replacement/native read'))
-    monkeypatch.setattr(update_blockers, 'operation_snapshot', lambda *a: pytest.fail('No replacement snapshot'))
+    monkeypatch.setattr(update_blockers, 'assess', lambda *a, **k: pytest.fail('No replacement observation'))
     with pytest.raises(AppError, match='cannot be verified'):
         await read(f, supplied)
 

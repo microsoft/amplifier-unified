@@ -220,10 +220,22 @@ def configuration_key(workspace, module, config, source=None, *, home=None):
         generation_identity(home) if home is not None else None])
 
 
+def mounted_provider_config(row):
+    """Hash provider intent, excluding only a proven host recording default.
+
+    Recording provenance is outside config. Explicit raw/raw_debug values remain
+    identity-bearing; neither the mounted plan nor its recording is changed.
+    """
+    from .provider_recording import apply_provider_recording
+    copied = copy.deepcopy(row)
+    apply_provider_recording({'providers': [copied]}, enabled=False)
+    return copied.get('config', {})
+
+
 def mounted_catalog_keys(home,workspace,rows,sources,*,binding=False):
     identity = connection_key if binding else configuration_key
     return {row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-'):
-        identity(workspace,row['module'],row.get('config',{}),
+        identity(workspace,row['module'],mounted_provider_config(row),
             sources[row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-')],home=home)
         for row in rows}
 
@@ -265,7 +277,7 @@ def conversation_bindings(home, workspace, session_id, providers, *, global_only
         if row is None or row.get('enabled') is False:
             result[provider['id']] = {'eligible':False,'reason':'This conversation does not include this configured connection.'}
             continue
-        key = connection_key(workspace,row['module'],row.get('config',{}),
+        key = connection_key(workspace,row['module'],mounted_provider_config(row),
             sources.get(provider['id']),home=home)
         if key != provider.get('connectionKey'):
             result[provider['id']] = {'eligible':False,
@@ -283,7 +295,7 @@ def require_mounted_binding(coordinator, instance, expected, *, catalog=False):
         rows = coordinator.config.get('providers', [])
         row = next((row for row in rows if (
             row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-')) == instance), None)
-        current = connection_key(captured['workspace'], row['module'], row.get('config', {}),
+        current = connection_key(captured['workspace'], row['module'], mounted_provider_config(row),
             captured['sources'].get(instance), home=captured.get('home')) if row else None
         if current != expected:
             raise ValueError('The saved connection credentials changed or are unavailable. No input was sent; review the connection and sign in again if needed.')

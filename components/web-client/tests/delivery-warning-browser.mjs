@@ -10,7 +10,7 @@ const artifact=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/delivery-warning';awa
 const message={id:'saved',inputId:'original',role:'user',text:'Keep this historical request and its reference.',attachments:[{id:'a',name:'reference.txt',size:12}],delivery:{status:'unknown',error:'Transport interrupted. Delivery is uncertain.'}};
 const session=id=>({id,title:id,sessionKind:'root',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[structuredClone(message)],workers:[]});
 let state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{navPinned:true},sessions:[session('chat'),session('other')],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',setup:{providers:[{id:'fixture',module:'provider-fixture',config:{default_model:'fixture-model'}}],providersLoadedAt:1,providersWorkspace:'/fixture'},canvas:{open:false}};
-const shell=createShellHttpFixture(()=>state),calls=[],pending=[],errors=[];let vite,browser,page,holdChecks=false;
+const shell=createShellHttpFixture(()=>state),calls=[],pending=[],restartPending=[],reminderPending=[],errors=[];let vite,browser,page,holdChecks=false;
 const outbox=()=>page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')||'[]'));
 const emit=async()=>{state.revision++;await page.evaluate(s=>window.emitState(s),shell.state())};
 const original=()=>page.locator('[data-input-id="original"]');
@@ -28,6 +28,8 @@ try{
   if(path==='/api/actions'&&route.request().method()==='GET')return route.fulfill({json:[]});
   if(path!=='/api/actions')return route.fulfill({json:{ok:true}});
   const body=route.request().postDataJSON();calls.push(body);
+  if(body.action==='updates.forceRestart'){restartPending.push({route,body});return}
+  if(body.action==='question.dismiss'){reminderPending.push({route,body});return}
   if(body.action==='conversation.delivery'){
    const target=state.sessions.find(session=>session.id===body.args.sessionId);
    const source={workspace:target.workspace||null,nativeIdentity:target.runtimeSessionId||target.nativeIdentity||target.id};
@@ -119,6 +121,31 @@ try{
  holdChecks=false;
  await expect(check).toBeEnabled();
  await expect(unknown.getByText('Delivery is still unconfirmed. Nothing was sent again; other work can continue.',{exact:true})).toBeVisible();
+  // Clearing a reminder is a separate durable presentation action, not delivery.
+  const clear=unknown.getByRole('button',{name:'Clear reminder',exact:true});
+  await expect(clear).toHaveAccessibleDescription(/Delivery status stays unchanged; nothing is sent again/);
+  await clear.focus();await clear.press('Enter');
+  await expect(unknown.getByRole('button',{name:'Please wait…',exact:true})).toBeDisabled();
+  await expect(unknown.getByRole('button',{name:'Check delivery',exact:true})).toBeDisabled();
+  await expect.poll(()=>reminderPending.length).toBe(1);
+  const failedClear=reminderPending.shift();
+  assert.deepEqual(failedClear.body.args,{sessionId:'chat',id:'unknown',expectedRevision:3,inputId:'input-unknown'});
+  await failedClear.route.fulfill({status:409,json:{accepted:false,error:'Fixture question revision changed.'}});
+  await expect(unknown.getByRole('alert')).toContainText('Fixture question revision changed');
+  await expect(clear).toBeEnabled();
+  await clear.press('Enter');await expect.poll(()=>reminderPending.length).toBe(1);
+  const cleared=reminderPending.shift();
+  assert.notEqual(cleared.body.id,failedClear.body.id,'A proven refusal permits a fresh explicit command');
+  state.sessions[0].questions[1]={...state.sessions[0].questions[1],revision:4,reminderDismissal:{inputId:'input-unknown',dismissedAt:123,origin:'ui',clientId:'fixture'}};state.revision++;
+  await cleared.route.fulfill({json:{accepted:true,state:shell.state()}});
+  await expect(page.locator('[data-part="questions"] [data-question-id="unknown"]')).toHaveCount(0);
+  await expect(page.locator('.a-question-notice')).toContainText('An answer was saved but not delivered');
+  await page.reload();
+  await expect(page.locator('[data-part="questions"] [data-question-id="unknown"]')).toHaveCount(0);
+  assert.equal(state.sessions[0].questions[1].delivery.status,'unknown');
+  assert.equal(state.sessions[0].questions[1].answer.text,'Saved choice unknown');
+  assert.equal(calls.filter(c=>c.action==='question.dismiss').length,2);
+  assert.equal(calls.filter(c=>c.action==='conversation.delivery'&&c.args.inputId==='input-unknown').length,1);
  await page.screenshot({path:artifact+'/saved-questions-mobile.png'});
  state.sessions[0].questions[1].delivery.status='accepted';await emit();
  await expect(page.locator('[data-part="questions"] [data-question-id="unknown"]')).toHaveCount(0);
@@ -129,33 +156,60 @@ try{
  // Multiple reasons for one chat stay visible, without becoming multiple chats.
  const target={hostInstanceId:'fixture-shell-host',revision:'a'.repeat(40),generation:'b'.repeat(32),attemptId:'fixture-update'};
  state.updates={phase:'app-staged',forceRestartTarget:target,pendingApp:{...target,latest:'v99.0.0'},
-  application:{id:'application',kind:'app',label:'Amplifier Unified',current:'99.0.0',latest:'v99.0.0',status:'current'},
+  application:{id:'application',kind:'app',label:'Amplifier Unified',current:'98.0.0',latest:'v99.0.1',status:'update'},
   blockers:[{kind:'conversation',label:'Fixture running conversation',sessionId:'chat',title:'chat'},
    {kind:'worker',label:'Fixture background worker',sessionId:'chat',title:'chat'},
    {kind:'configuration',label:'Fixture recovery hold',reasonCode:'operation-bound-recovery',sessionId:'other',title:'other'},
    {kind:'future-kind',label:'Fixture unknown blocker'}]};
  state.view={...state.view,panel:'settings',settingsSection:'maintenance',settingsExpanded:['updates']};await emit();
  const blockers=page.locator('[data-part="update-blockers"]'),summary=blockers.locator(':scope > summary');
+  const restart=page.getByRole('button',{name:'Interrupt work and restart',exact:true});
+  await expect(restart).toBeVisible();
+  await expect(restart).toHaveAccessibleDescription(/prepared Amplifier 99\.0\.0[\s\S]*will be interrupted[\s\S]*will not be replayed automatically/);
+  await page.locator('.a-update-force-restart').screenshot({path:artifact+'/restart-action-mobile.png'});
+  await expect(page.getByRole('alertdialog',{name:'Confirm update restart'})).toHaveCount(0);
+  assert.equal(calls.filter(c=>c.action==='updates.forceRestart').length,0);
  await expect(summary).toHaveText('View update blockers (4 reasons · 2 distinct chats)');
  await summary.focus();await summary.press('Enter');
  await expect(blockers.getByRole('region',{name:'Running, preparing, and background work'}).locator('li')).toHaveCount(2);
  await expect(blockers.getByRole('region',{name:'Configuration recovery holds'})).toContainText('Fixture recovery hold');
  await expect(blockers.getByRole('region',{name:'Other update blockers'})).toContainText('Fixture unknown blocker');
  await expect(blockers.locator('[data-action="session.select"]')).toHaveCount(3);
- const force=blockers.getByRole('button',{name:'Force restart…',exact:true});await force.focus();await force.press('Enter');
- const confirmation=blockers.getByRole('alertdialog',{name:'Confirm update restart'});
- await expect(confirmation.getByRole('button',{name:'Cancel',exact:true})).toBeFocused();
- await expect(confirmation).toContainText('will not be replayed automatically');
- await confirmation.press('Escape');await expect(confirmation).toHaveCount(0);await expect(force).toBeFocused();
- await force.press('Enter');state.updates.forceRestartTarget={...target,attemptId:'changed'};await emit();
- await expect(confirmation.getByRole('button',{name:'Interrupt work and restart',exact:true})).toBeDisabled();
- await confirmation.press('Escape');
+  await summary.press('Enter'); // Inspect-only disclosure closes without an effect.
+  await expect(restart).toBeVisible();
+  assert.equal(calls.filter(c=>c.action==='updates.forceRestart').length,0);
+  await restart.focus();await restart.press('Enter');
+  await expect(page.getByRole('button',{name:'Restart requested…',exact:true})).toBeDisabled();
+  await expect.poll(()=>restartPending.length).toBe(1);
+  assert.deepEqual(restartPending[0].body.args,{...target,confirm:true});
+  const refused=restartPending.shift();
+  await refused.route.fulfill({status:409,json:{accepted:false,error:'Fixture target changed. Review the update.'}});
+  await expect(page.getByRole('alert')).toContainText('Fixture target changed');
+  await expect(restart).toBeEnabled();
+  state.updates.forceRestartTarget={...target,attemptId:'changed'};await emit();
+  await expect(restart).toBeEnabled();
+  assert.equal(calls.filter(c=>c.action==='updates.forceRestart').length,1);
+  await restart.focus();await restart.press('Enter');
+  await expect.poll(()=>restartPending.length).toBe(1);
+  const accepted=restartPending.shift();
+  assert.deepEqual(accepted.body.args,{...target,attemptId:'changed',confirm:true});
+  await accepted.route.fulfill({json:{accepted:true,requestId:'restart-current',state:shell.state()}});
+  await expect(page.getByRole('button',{name:'Restart requested…',exact:true})).toBeDisabled();
+  state.updates.forceRestartResult={requestId:'restart-old',status:'rejected',detail:'Unrelated refusal'};await emit();
+  await expect(page.getByRole('button',{name:'Restart requested…',exact:true})).toBeDisabled();
+  state.updates.forceRestartResult={requestId:'restart-current',status:'rejected',detail:'Fixture work changed. Review before retrying.'};await emit();
+  await expect(restart).toBeEnabled();
+  await expect(page.getByRole('alert')).toContainText('Fixture work changed');
+  await summary.focus();await summary.press('Enter');
  await page.screenshot({path:artifact+'/update-blocker-groups-mobile.png'});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
- assert.equal(calls.filter(c=>c.action==='updates.forceRestart'||c.action==='question.answer'||c.action==='question.cancel'||c.action==='conversation.retry'||c.action==='configuration.apply').length,0);
+  assert.equal(calls.filter(c=>c.action==='updates.forceRestart').length,2);
+  state.updates.forceRestartTarget=null;await emit();
+  await expect(restart).toHaveCount(0);
+  assert.equal(calls.filter(c=>c.action==='question.answer'||c.action==='question.cancel'||c.action==='conversation.retry'||c.action==='configuration.apply').length,0);
  assert.equal(calls.filter(c=>c.action==='conversation.delivery'&&c.args.inputId.startsWith('input-')).length,1);
  assert.deepEqual(effects(),[]);
  assert.deepEqual(errors,[]);
- await writeFile(artifact+'/browser-result.json',JSON.stringify({passed:true,calls:calls.filter(c=>c.action.startsWith('conversation.')),effects:effects(),errors,attachmentPreserved:true,exactWindowIndependentReceipt:true,savedQuestionStates:['rejected','unknown','accepted'],explicitQuestionChecks:1,blockerReasons:4,distinctBlockerChats:2,keyboardDisclosureAndRestartCancel:true,staleRestartDisabled:true},null,2));
- console.log('Delivery warning browser passed: existing recovery cases plus saved question rejected/unknown/accepted, explicit keyboard check/no resend, grouped blockers with exact counts, keyboard disclosure/restart cancel and stale-target fence.');
+  await writeFile(artifact+'/browser-result.json',JSON.stringify({passed:true,calls:calls.filter(c=>c.action.startsWith('conversation.')||c.action==='updates.forceRestart'||c.action==='question.dismiss'),effects:effects(),errors,attachmentPreserved:true,exactWindowIndependentReceipt:true,savedQuestionStates:['rejected','unknown','accepted'],explicitQuestionChecks:1,durableReminderCleared:true,reminderRefusalPreserved:true,blockerReasons:4,distinctBlockerChats:2,oneExplicitRestartAction:true,preparedTargetAccessible:true,pendingBusy:true,matchingRejectionOnly:true,noAutomaticRestartOrResend:true},null,2));
+  console.log('Delivery warning browser passed: saved question states, explicit check/no resend, grouped blockers, one keyboard restart action with exact prepared target, pending busy/refusal and no automatic restart.');
 }finally{if(browser)await browser.close();if(vite)await vite.close()}

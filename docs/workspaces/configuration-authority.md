@@ -527,6 +527,9 @@ Codes are a closed vocabulary; unexpected read/validation failures report
 unavailable at the last reached check, never raw exceptions or private values.
 Later checks are not evaluated after a failure in that validation path.
 Only an already performed saved-plan comparison reports `match` or `mismatch`;
+the app-only quiescence observation uses the updater's current activity predicate,
+not a second recovery validation or saved-plan comparison. It may be clear while
+the historical effect remains unknown and input stays fenced.
 `loadedComparison` is always `not_observed`. The read does not inspect a runtime,
 refresh retained presentation, start or mount a worker, rewrite any operation,
 or authorize reconciliation, resumption, input delivery or component activation.

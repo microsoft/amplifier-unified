@@ -94,7 +94,7 @@ async function measuredRequest(path, options, timing) {
   if(actionAck&&!res.ok&&data.accepted!==false&&!readableError)throw invalidResponse();
   // A repeated command can return its original rejection inside an HTTP 200 receipt.
   const rejectionStatus=res.ok&&data.accepted===false?(Number.isInteger(data.status)&&data.status>=400&&data.status<600?data.status:400):res.status;
-  if(!res.ok || data.accepted===false) throw Object.assign(new Error(typeof data.error==='string'?data.error:data.error?.message||data.message||`Request failed (${rejectionStatus})`),{code:data.code,state:data.state,receipt:data.receipt,status:rejectionStatus});
+  if(!res.ok || data.accepted===false) throw Object.assign(new Error(typeof data.error==='string'?data.error:data.error?.message||data.message||`Request failed (${rejectionStatus})`),{code:data.code,state:data.state,receipt:data.receipt,status:rejectionStatus,accepted:data.accepted});
   if(actionAck&&data.accepted!==true)throw invalidResponse();
   if(historyScope&&data.state?.client?.kind==='web')data.state={...data.state,client:{...data.state.client,historyScope}};
   return data;

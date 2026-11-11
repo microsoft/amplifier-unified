@@ -186,6 +186,30 @@ def test_candidate_only_exact_constraint_preserves_separate_branch_policy():
     with pytest.raises(ValueError): verify_checked_selection({'a': policy}, selection, exact=True)
 
 
+@pytest.mark.parametrize('override',['amplifier-foundation','amplifier-foundation>=2',
+                                    'amplifier-foundation[extra]','amplifier-foundation; python_version>"1"'])
+def test_bare_override_retention_uses_verified_source_not_authored_constraints(override):
+    from amplifier_web.runtime_environment import toml_value
+    import tomllib
+    policy={'url':'https://example.invalid/foundation','ref':'main','revision':'a'*40,'subdirectory':''}
+    data={'project':{'name':'worker','version':'1','dependencies':['amplifier-foundation']},
+          'tool':{'uv':{'override-dependencies':[override],
+                       'sources':{'amplifier-foundation':{'git':policy['url'],'rev':'main'}}}}}
+    source=('\n'.join(json.dumps(k)+' = '+toml_value(v) for k,v in data.items())+'\n').encode()
+    if override!='amplifier-foundation':
+        with pytest.raises(ValueError,match='authored override'):
+            partial.pin_manifest(source,{'amplifier-foundation':policy})
+    else:
+        result=tomllib.loads(partial.pin_manifest(source,{'amplifier-foundation':policy}).decode())
+        assert result['tool']['uv']['sources']['amplifier-foundation']['rev']==policy['revision']
+        assert result['tool']['uv']['override-dependencies']==[
+            'amplifier-foundation @ git+'+policy['url']+'@'+policy['revision']]
+        data['tool']['uv']['sources']['amplifier-foundation']['git']='https://example.invalid/other'
+        changed=('\n'.join(json.dumps(k)+' = '+toml_value(v) for k,v in data.items())+'\n').encode()
+        with pytest.raises(ValueError,match='another selected source'):
+            partial.pin_manifest(changed,{'amplifier-foundation':policy})
+
+
 async def test_partial_receipt_blocks_unchanged_auto_retry_not_manual_or_new_revision(preparation):
     p = preparation
     await partial.stage_sources(p.manager, p.stage, p.rows)
@@ -195,6 +219,13 @@ async def test_partial_receipt_blocks_unchanged_auto_retry_not_manual_or_new_rev
         partial.retained_after_check(p.manager, rows, retry_retained=fresh)
         assert rows[0]['status'] == expected
     assert partial.read(p.stage)['results']['a']['status'] == 'failed'
+    row=rows[0]
+    row.update(status='update',latest=p.new['a'])
+    partial.retained_after_check(p.manager,[row],retry_retained=False)
+    assert row['status']=='check_failed'
+    partial.retained_after_check(p.manager,[row],retry_retained=True)
+    assert row['status']=='update'
+    assert partial.read(p.stage)['results']['a']['status']=='failed'
 
 
 async def test_new_unknown_availability_is_not_reclassified_from_history(preparation):
@@ -223,6 +254,24 @@ def test_failed_acquisition_needs_exact_revision_and_ordinary_availability_prove
     for change in ({"availabilityFailure": False}, {"eligible": False}, {"url": None},
                    {"ref": None}, {"status": "local_changes"}):
         assert not partial.availability({**row, **change})
+
+
+@pytest.mark.parametrize('desired',[None,'missing','main','a'*39])
+async def test_explicit_retry_needs_checked_desired_commit(preparation,desired):
+    p=preparation
+    await partial.stage_sources(p.manager,p.stage,p.rows)
+    p.pointer.write_text(json.dumps({'current':p.stage.name}))
+    value=partial.read(p.stage)
+    for result in value['results'].values():
+        if result['status']=='failed':
+            result['desired']=None if desired=='missing' else desired
+    (p.stage/partial.RECEIPT).write_text(json.dumps(value))
+    row={**next(r for r in p.rows if r['id']=='a'),'status':'check_failed',
+         'sourceUpdate':'failed','availabilityFailure':True}
+    row.pop('latest') if desired=='missing' else row.update(latest=desired)
+    before=dict(row)
+    partial.retained_after_check(p.manager,[row],retry_retained=True)
+    assert row==before
 
 
 @pytest.mark.parametrize('kind,revision', [('runtime', 'f'*64), ('registry', '2.0.3')])
