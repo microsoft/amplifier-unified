@@ -32,7 +32,10 @@ launcher. Each app generation runs as a contained child, not a detached helper.
 A non-inheritable lifetime job belongs to the launcher; closing its lifetime
 closes descendants. The actual app publishes its private run/PID/FILETIME/image
 receipt. A venv redirector's PID and Scheduler EnginePID are not accepted as the
-app's identity. A new process must join the launched child's native ancestry.
+app's identity. Each app launch reuses the canonical finite owned-process guard;
+the actual host must be a native member with the exact birth in that retained
+job. Even an app that fails before publishing its runtime identity needs the
+guard's confirmed root/descendant exit and finalized I/O before recovery.
 
 An ordinary update still uses canonical preparation, official wheel identity,
 installed graph verification, idle/drain guards and application-generation
@@ -57,6 +60,15 @@ not silently rewritten. Unknown effects and saved work are not replayed.
 These are implementation rules, not a claim that native update/rollback,
 sign-in/out or consumer download acceptance has completed. The Windows automatic
 update gate stays closed while those affected native controls are being qualified.
+
+Windows app preparation uses a compact `updates/a/<generation>` directory.
+Qualification and pointers retain the full source revision and attempt. The
+older `updates/applications/<revision>/<generation>` candidates remain in place
+and readable; ambiguous locations refuse rather than merging evidence. The
+bootstrap preflight must prove it resolves the same folder before promotion.
+This addresses Windows DLL loading's filename-length refusal, which can occur
+even after a successful Git checkout and Python package installation. It changes
+no registry long-path policy, package origins, source pins or user data roots.
 
 ## Process-local Proactor cleanup backport
 

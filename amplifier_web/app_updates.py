@@ -390,7 +390,8 @@ async def _stage(manager, *, selected=None, extras):
     revision=release['revision']
     if not re.fullmatch('[0-9a-f]{40}',revision):raise ValueError('Invalid release revision')
     generation=uuid.uuid4().hex
-    folder=manager.directory/'applications'/revision/generation
+    from .application_generations import directory
+    folder=directory(manager.home, revision, generation)
     folder.mkdir(parents=True,exist_ok=True,mode=0o700)
     env={**git_environment(),'UV_TOOL_DIR':str(folder/'tools'),'UV_TOOL_BIN_DIR':str(folder/'bin')}
     uv=shutil.which('uv')
@@ -593,8 +594,9 @@ async def _activate(manager, *, force=None, holds=None):
                 from .update_restart import RestartRejected
                 raise RestartRejected(message)
             return
-    folder=manager.directory/'applications'/revision
-    if generation:folder=folder/generation
+    from .application_generations import directory
+    folder=(directory(manager.home, revision, generation) if generation
+            else manager.directory/'applications'/revision)
     marker=folder/'validated.json'
     # Validate one snapshot before closing the runtime or touching the install.
     try:
@@ -677,7 +679,7 @@ async def _activate(manager, *, force=None, holds=None):
     can_promote = bool(generation and supports(bootstrap))
     if can_promote and artifact is not None:
         can_promote = await manager.diagnostics.run('bootstrap-artifact-compatibility',
-            can_read_candidate, process, bootstrap, helper_python, validated)
+            can_read_candidate, process, bootstrap, helper_python, validated, home=manager.home)
     if sys.platform == 'win32' and (not can_promote or artifact is None):
         raise ValueError('Windows updates require an official qualified immutable app generation; '
                          'the current installation was not replaced.')
