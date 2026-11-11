@@ -2,7 +2,10 @@
 
 Run with the candidate worker Python and a new disposable directory. No user
 session is opened and the fixture provider refuses all model requests.
+The default context is context-simple; --context context-managed selects that
+module from the candidate interpreter's prepared sources instead.
 """
+import argparse
 import asyncio
 import importlib.util
 import json
@@ -15,7 +18,12 @@ sys.path.insert(0, str(SOURCE))
 
 
 async def main():
-    root = Path(sys.argv[1]).resolve()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('root', type=Path)
+    parser.add_argument('--context', choices=('context-simple', 'context-managed'),
+                        default='context-simple')
+    args = parser.parse_args()
+    root = args.root.resolve()
     root.mkdir(parents=True, exist_ok=False)
     workspace = root / 'workspace'
     workspace.mkdir()
@@ -57,7 +65,8 @@ class FixtureProvider:
 async def mount(coordinator, config=None):
     await coordinator.mount('providers', FixtureProvider(), name='fixture')
 ''')
-    from amplifier_module_context_simple import __file__ as context_module
+    context_module = importlib.import_module(
+        'amplifier_module_' + args.context.replace('-', '_')).__file__
     bundle = root / 'fixture.yaml'
     bundle.write_text(f'''bundle:
   name: startup-fixture
@@ -65,7 +74,7 @@ session:
   orchestrator:
     module: loop-live
   context:
-    module: context-simple
+    module: {args.context}
     source: {Path(context_module).parent.parent}
 providers:
   - module: provider-fixture
