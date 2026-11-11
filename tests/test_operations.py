@@ -164,7 +164,9 @@ async def test_runtime_end_marks_only_unfinished_process_outcome_unknown(app, mo
     await app.operations.observe(sid, sid, final())
     await app.operations.observe(sid, sid, event("unfinished"))
     with monkeypatch.context() as patch:
-        patch.setattr(app.runtime, "workers", {sid: {"runtimeOwnerId": "current-owner"}})
+        patch.setattr(
+            app, "runtime", SimpleNamespace(workers={sid: {"runtimeOwnerId": "current-owner"}})
+        )
         await app.on_runtime_event(
             "runtime.ended",
             {"sessionId": sid, "status": "stopped", "runtimeOwnerId": "current-owner"},
