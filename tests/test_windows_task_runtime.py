@@ -48,7 +48,10 @@ def test_current_process_hint_keeps_exact_native_identity(monkeypatch, change):
     from amplifier_web import windows_files
     value = record(**change)
     monkeypatch.setattr(runtime.os, "getpid", lambda: 123)
-    monkeypatch.setattr(runtime, "process", lambda pid: record())
+    @contextmanager
+    def process(pid):
+        yield {**record(), "exited": lambda: False}
+    monkeypatch.setattr(runtime, "process", process)
     monkeypatch.setattr(windows_files, "address", Path)
     @contextmanager
     def directory(path, **kwargs):
@@ -222,6 +225,21 @@ def test_stop_writes_once_and_waits_for_exact_handle_exit(controls, monkeypatch)
         assert controls["writes"] == [(runtime.STOP, record())]
         controls["exited"] = True
     monkeypatch.setattr(runtime.time, "sleep", settle)
+    runtime.request_stop(spec())
+    assert controls["writes"] == [(runtime.STOP, record())]
+
+
+def test_late_stop_is_retained_after_exact_old_host_exit(controls):
+    controls["exited"] = True
+    runtime.request_stop(spec())
+    assert controls["writes"] == [(runtime.STOP, record())]
+
+
+def test_late_stop_is_retained_when_old_process_already_absent(controls, monkeypatch):
+    @contextmanager
+    def absent(pid):
+        yield None
+    monkeypatch.setattr(runtime, "process", absent)
     runtime.request_stop(spec())
     assert controls["writes"] == [(runtime.STOP, record())]
 

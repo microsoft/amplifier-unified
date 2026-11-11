@@ -637,7 +637,7 @@ def test_supervisor_normal_stop_does_not_restart_or_infer_generation(monkeypatch
     monkeypatch.setattr(service, "_read", lambda home: ({"state": 4, "instances": 1}, value))
     monkeypatch.setattr(service, "_launch_python", lambda spec: (spec.python, None))
     events = []
-    async def launch(spec, python, restart):
+    async def launch(spec, python, restart, **kwargs):
         events.append((spec, python, restart))
         return None, 0, False
     monkeypatch.setattr(service, "_launch_owned_host", launch)
@@ -647,6 +647,64 @@ def test_supervisor_normal_stop_does_not_restart_or_infer_generation(monkeypatch
     assert events == [(value, value.python, None)]
 
 
+@pytest.mark.parametrize("when", ["cleanup", "verification", "failed-verification", "failed-start", "restore", "restored-verification", "stale"])
+def test_late_owner_stop_fences_successor_and_restore_relaunch(monkeypatch, when):
+    from amplifier_web import windows_task_runtime as runtime, windows_app_recovery as recovery
+    value = spec(supervised=True)
+    old = {"schema": 1, "registration": value.registration_id, "run": "b" * 32,
+           "pid": 123, "created": "134000000000000001",
+           "image": r"C:\Python\pythonw.exe", "phase": "stopped"}
+    target = {"revision": "c" * 40, "generation": "d" * 32, "attemptId": "e" * 32}
+    request = {"schema": 1, "run": old, "target": target}
+    state = {"launches": 0, "selected": 0, "stop": None, "restores": 0}
+    monkeypatch.setattr(service, "_read", lambda home: ({"state": 4, "instances": 1}, value))
+    monkeypatch.setattr(runtime, "read_restart", lambda spec: request)
+    monkeypatch.setattr(runtime, "read", lambda spec, name: state["stop"])
+    def select(spec):
+        state["selected"] += 1
+        if state["selected"] == 3 and when == "restored-verification":
+            state["stop"] = old
+        if state["selected"] == 2:
+            if when in {"verification", "failed-verification"}:
+                state["stop"] = old
+            if when == "failed-verification":
+                raise ValueError("controlled candidate failure after Stop")
+            return value.python, target
+        return value.python, None
+    # Provide only the exact validated metadata read, not candidate IO.
+    class Folder:
+        def __truediv__(self, name):
+            assert name == "validated.json"
+            return SimpleNamespace(read_text=lambda: json.dumps(target))
+    def selected(spec):
+        python, observed = select(spec)
+        return python, {**observed, "folder": Folder()} if observed else None
+    monkeypatch.setattr(service, "_launch_python", selected)
+    async def launch(*args, **kwargs):
+        state["launches"] += 1
+        if state["launches"] == 1:
+            if when == "cleanup":
+                state["stop"] = old
+            elif when == "stale":
+                state["stop"] = {**old, "run": "f" * 32}
+            return old, runtime.RESTART_EXIT, False
+        if when in {"failed-start", "restore", "restored-verification"}:
+            if when == "failed-start":
+                state["stop"] = old
+            return None, 1, True
+        return {**old, "run": "a" * 32}, 0, False
+    monkeypatch.setattr(service, "_launch_owned_host", launch)
+    def restore(*args):
+        state["restores"] += 1
+        assert when in {"restore", "restored-verification"}
+        if when == "restore":
+            state["stop"] = old
+    monkeypatch.setattr(recovery, "restore", restore)
+    assert service._supervise(value) == 0
+    assert state["launches"] == (2 if when in {"failed-start", "restore", "restored-verification", "stale"} else 1)
+    assert state["restores"] == (1 if when in {"restore", "restored-verification"} else 0)
+
+
 @pytest.mark.parametrize("failure", ["timeout", "foreign-child", "reused-pid"])
 def test_supervisor_identity_failure_cannot_restart_or_restore(monkeypatch, failure):
     from amplifier_web import windows_task_runtime as runtime
@@ -654,7 +712,7 @@ def test_supervisor_identity_failure_cannot_restart_or_restore(monkeypatch, fail
     value = spec(supervised=True)
     monkeypatch.setattr(service, "_read", lambda home: ({"state": 4, "instances": 1}, value))
     monkeypatch.setattr(service, "_launch_python", lambda spec: (spec.python, None))
-    async def launch(*args):
+    async def launch(*args, **kwargs):
         raise service.WindowsServiceError(failure)
     monkeypatch.setattr(service, "_launch_owned_host", launch)
     monkeypatch.setattr(recovery, "restore", lambda *a: pytest.fail("Unknown launch cannot restore"))

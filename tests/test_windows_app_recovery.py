@@ -122,6 +122,23 @@ def test_updated_host_readiness_is_bounded_and_normal_stop_wins(transaction, mon
     assert len(stopped) == (1 if mode in {"timeout", "unknown-stop"} else 0)
 
 
+def test_old_run_stop_in_launch_gap_normally_stops_exact_successor(transaction, monkeypatch):
+    import asyncio
+    t = transaction
+    old = t.restart["run"]
+    current = {**old, "run": "0" * 32, "pid": 456, "created": "134000000000000002"}
+    actual = {**current, "exited": lambda: False}
+    monkeypatch.setattr(runtime, "read", lambda spec, name=runtime.RECEIPT:
+                        old if name == runtime.STOP else current)
+    stopped = []
+    monkeypatch.setattr(runtime, "request_stop", lambda spec, **kwargs:
+                        stopped.append((spec, kwargs)))
+    monkeypatch.setattr(recovery, "read", lambda *a: pytest.fail("Stop must precede readiness/ACK"))
+    assert asyncio.run(service._wait_updated_host(
+        t.spec, SimpleNamespace(done=lambda: False), actual, t.restart)) is False
+    assert stopped == [(t.spec, {"timeout": 30, "expected": current})]
+
+
 @pytest.mark.parametrize("change", [{"status": "success"}, {"status": []}, {"schema": True},
                                   {"registration": "0" * 32}, {"extra": "no command allowed"}])
 def test_recovery_record_has_no_arbitrary_command_or_success_protocol(transaction, change):

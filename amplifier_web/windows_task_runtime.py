@@ -94,7 +94,8 @@ def current_process_record(data_dir):
     value = validate(value, value.get("registration") if isinstance(value, dict) else None)
     if value["pid"] != os.getpid() or value["phase"] != "listening":
         return None
-    return value if matches(value, process(value["pid"])) else None
+    with process(value["pid"]) as actual:
+        return value if matches(value, actual) and not actual["exited"]() else None
 
 
 def publish(spec, value, name=RECEIPT):
@@ -290,7 +291,10 @@ def request_stop(spec, *, timeout=60, expected=None):
     if expected is not None and any(record[key] != expected[key] for key in _FIELDS - {"phase"}):
         raise RuntimeError("The expected task run changed; no stop request was sent.")
     with process(record["pid"]) as actual:
-        if actual is None or actual["exited"]():
+        if actual is None:
+            # Preserve owner intent across the old-host exit/successor boundary.
+            # This is a private run signal, not a claim of native tree settlement.
+            publish(spec, record, STOP)
             return
         if not matches(record, actual):
             raise RuntimeError("Task PID identity changed; no stop request was sent.")
@@ -303,6 +307,15 @@ def request_stop(spec, *, timeout=60, expected=None):
             if time.monotonic() >= deadline:
                 raise RuntimeError("Task did not finish normal shutdown; custody retained, no force-stop attempted.")
             time.sleep(0.1)
+
+
+def stop_requested(spec, record):
+    """Exact run-bound owner intent survives cleanup, never a later owner start."""
+    if record is None:
+        return False
+    request = read(spec, STOP)
+    return bool(record and request and all(
+        request[key] == record[key] for key in _FIELDS - {"phase"}))
 
 
 class Runner:
@@ -322,9 +335,7 @@ class Runner:
         publish(self.spec, self.record)
 
     def stop_requested(self):
-        request = read(self.spec, STOP)
-        # Phase changes do not change this run's identity.
-        return bool(request and all(request[key] == self.record[key] for key in _FIELDS - {"phase"}))
+        return stop_requested(self.spec, self.record)
 
     async def watch(self):
         from aiohttp.web_runner import GracefulExit
