@@ -9,6 +9,23 @@ test('commands send structured JSON to same origin and return server receipt',as
 test('server validation errors remain visible and do not report success',async()=>{
  const original=globalThis.fetch;try{globalThis.fetch=async()=>new Response(JSON.stringify({accepted:false,error:'Select a conversation first.'}),{status:400});await assert.rejects(request('/api/actions',{method:'POST',body:{}}),/Select a conversation first/);}finally{globalThis.fetch=original}
 });
+test('explicit action refusal metadata survives the API boundary for restart and reminder recovery',async()=>{
+ const original=globalThis.fetch;let calls=0;
+ try{
+  for(const action of ['updates.forceRestart','question.dismiss'])for(const status of [409,200]){
+   globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({accepted:false,status:409,error:'The target changed.',code:'stale_target'}),{status})};
+   await assert.rejects(request('/api/actions',{method:'POST',body:{action,args:{}}}),error=>{
+    assert.equal(error.accepted,false);assert.equal(error.status,409);assert.equal(error.code,'stale_target');
+    assert.notEqual(error.unconfirmed,true);return true;
+   });
+  }
+  globalThis.fetch=async()=>{calls++;throw new TypeError('Disconnected')};
+  await assert.rejects(request('/api/actions',{method:'POST',body:{action:'updates.forceRestart'}}),error=>{
+   assert.equal(error.accepted,undefined);assert.equal(error.unconfirmed,true);return true;
+  });
+  assert.equal(calls,5,'The API does not retry confirmed refusals or uncertain effects');
+ }finally{globalThis.fetch=original}
+});
 test('rejection identifies its request endpoint without retaining private query context',async()=>{
  const original=globalThis.fetch;
  try{

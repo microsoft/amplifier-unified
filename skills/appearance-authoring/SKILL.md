@@ -1,6 +1,6 @@
 ---
 name: appearance-authoring
-description: "Create, revise or package Amplifier Unified web appearances with light/dark support, scoped preview and recovery. Load for appearance authoring, not merely choosing a look. Component/layout authoring belongs to amplifier-shell."
+description: "Create, revise or package Amplifier Unified complete themes and CSS appearances with light/dark support and safe preview/revert. Load for appearance authoring, not merely choosing a look. Component/layout authoring belongs to amplifier-shell."
 ---
 
 # Author an appearance
@@ -16,39 +16,46 @@ Resolve companions from the returned `skill_directory`:
 
 ## Inspect scope and installed support
 
-Read app state and discover current schemas for `appearance.*` and `theme.*`; load `amplifier-shell`
+Read app state and discover current schemas for `theme.*`; load `amplifier-shell`
 for supported layout/components. Identify the intended browser, starting saved
 entry/fingerprint, effective presentation and revert path. Read bounded CSS and
 actual DOM/computed styles before overriding; never reconstruct truncated CSS.
 Use supported actions, not filesystem settings or database edits.
 
-Reference is always the foundation; a package contains styling differences over
-`reference-v1`, never a complete copy of the application. ZIP is the portable
-envelope. Read the linked API for the installed package version and limits.
-Library save/import/update do not choose an appearance. One **Global / This
-browser** choice selects the complete active preference profile.
+The user-approved PR1916 rollback temporarily retires Reference and Global /
+This browser profiles after the `.078` visual regression. Read the linked
+contract's rollback boundary: preserve `shared-reference-v1`, browser-local
+profiles and format-2 saved libraries inert and undeleted. Do not convert them,
+seed legacy preferences from them, or claim automatic recovery of the theme
+removed by `.078`. An absent legacy theme uses the safe old built-in default.
 
-Inspect the active profile, effective values and current revision.
-Local writes never publish Global values; selecting Global retains the browser
-profile for later use. Do not infer the source from the selected package or switch it
-as a side effect of authoring. Preserve unrelated presentation, Canvas work,
-drafts, providers, bundles and the person's selected skill policy.
+Inspect the committed theme, client presentation and current revision. Preview
+is client-scoped; apply changes the app-wide committed skin. Library save/import/
+update does not apply it. Preserve unrelated presentation, Canvas work, drafts,
+providers, bundles and the person's selected skill policy.
 
 ## Author intentional differences
 
-Author a small CSS delta over Reference, not copied base/component CSS. Omitted
-properties use the foundation, never the previous appearance. Repeated functional
-repairs belong in shared components. Do not use full-skin definitions, palette
-compiler inputs, legacy CSS imports or compatibility conversion.
+Choose exactly one input to `theme.preview` / `theme.apply`, with a name:
+- `definition`: a new version-1 theme with all ten colors in both palettes. It
+  starts from the built-in skin rather than inheriting prior artwork.
+- `tokens`: an intentional partial palette edit retaining the existing skin and
+  background; structured themes update both palettes.
+- `css`: a complete self-contained skin with light/dark styling.
 
-For source changes, Reference and browser modules belong to the selected
+Do not apply a palette-only edit and claim to have replaced the previous artwork.
+Portable CSS and format-1 ZIP styling packages are re-enabled. Reference deltas
+and format-2 packages are not current authoring inputs. Common functional repairs
+still belong in shared components, not duplicated theme workarounds.
+
+For source changes, styles and browser modules belong to the selected
 `amplifier-client-web` repository. Follow the linked API's source-ownership section
 and Unified's `components/README.md`; delivery snapshots and disposable prepared
 source are not another client authoring owner.
 
 Prefer semantic tokens, contrasting on-accent ink and stable parts over label,
-child-position or broad descendant selectors. Separate font roles and painted
-message bodies/composer surfaces from structural rows/actions. Keep scrolling,
+child-position or broad descendant selectors. Inspect actual font inheritance.
+Paint message bodies and inner composer surfaces, not structural rows or actions. Keep scrolling,
 responsive safety, control sizing, focus, overflow cues and lifecycle semantics
 with their shared owners; do not add masks, listeners or positioning workarounds.
 
@@ -57,7 +64,8 @@ functional feedback. Honor decorations off, reduced motion and forced colors.
 Use authorized, self-contained assets and neutral names; preserve attribution
 and font licenses. Prefer system stacks; additional fonts must earn their cost
 in realistic comparisons. No external URLs/imports or executable package content.
-Use supported ZIP assets/notices rather than duplicating the application.
+For format-1 ZIPs use a root `appearance.json`, complete local CSS and declared
+assets/notices. ZIP styling does not install components or shell composition.
 
 ## Preview, verify and deliver
 
@@ -66,19 +74,22 @@ requested scope. A preview, validated package or thumbnail is not visual proof.
 Check both schemes/system, narrow/zoom, decoration/accessibility preferences,
 keyboard focus, long chat/code, composer and actual busy/error/recovery states.
 Preserve unsent work without inspecting its private contents unless requested.
-This browser means the same browser profile, host and authenticated preference
-owner, not a single tab. When changing preference or persistence mechanisms,
-test Global clients, multiple tabs, complete independent browser values and
-source switching. Storage failure must stay a failure, never become a Global write.
+Verify that applying a theme leaves scheme, decorations, Reveal and accessibility
+preferences unchanged. Preserve other clients' conversation selection and make
+the app-wide apply scope explicit. When changing persistence for this rollback,
+check retained valid legacy themes, safe absent-theme defaults and inert newer
+data separately; a default is not proof of personal-theme recovery.
 
 Retain exact entry/revision/fingerprint identities. Keep library mutations,
-selection and preview distinct; use stale/dirty guards and conditional recovery.
-Cancel preview separately from conditional undo of a preference change. Ordinary
-selection changes only the look. Suggested experience profiles, if supported by
-the installed schema, require their own explicit review/apply and retain the
-active profile; do not infer support from an appearance's metadata.
-Do not export a preview/editor draft as saved work. Round-trip ZIP bytes through
-import before claiming portability. Discover action schemas rather than copying
+application and preview distinct; use stale/dirty guards and conditional recovery.
+`theme.revert` ends a preview first, otherwise reverses the client's last apply
+only if no newer theme replaced it. Saved-entry update/delete requires
+`expectedFingerprint` from `theme.read`; included themes are read-only, so copy
+them. Library updates/deletion leave committed CSS intact.
+Export by saved ID for that entry; omission means committed CSS, never the
+preview/editor draft. Default export is CSS; request `format: "zip"` for a
+format-1 package. Round-trip exported bytes through import before claiming
+portability. Discover action schemas rather than copying
 payloads from a different build. An uncertain effect needs its saved receipt and
 current state, not a new request identity.
 

@@ -40,7 +40,7 @@ assert.ok(!existsSync(out),'Existing proof is immutable; do not replay');
 assert.ok(existsSync(tmp)&&realpathSync(tmp).length<=64,'Require existing qualified short owned TMPDIR');
 assert.ok(/^[0-9a-f]{40}$/.test(flags['source-sha'])&&/^[0-9a-f]{40}$/.test(flags['base-sha']));
 for(const name of ['wheel-sha','css-sha','viewer-sha','harness-sha'])assert.match(flags[name],/^[0-9a-f]{64}$/);
-for(const [file,hash] of [['.build/web-client/src/reference.css',flags['css-sha']],['.build/web-client/src/canvas-viewer.jsx',flags['viewer-sha']],
+for(const [file,hash] of [['.build/web-client/src/unified.css',flags['css-sha']],['.build/web-client/src/canvas-viewer.jsx',flags['viewer-sha']],
  ['tests/web/embedded-diagram-browser.mjs',flags['harness-sha']]])assert.equal(digest(readFileSync(path.join(source,file))),hash,'Source byte mismatch: '+file);
 assert.equal(digest(readFileSync(fileURLToPath(import.meta.url))),flags['harness-sha'],'Executing a different harness');
 assert.equal(digest(readFileSync(beneath(flags.wheel))),flags['wheel-sha']);

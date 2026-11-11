@@ -15,7 +15,7 @@ import zlib
 import pytest
 
 from amplifier_web import appearance_packages as packages, theme_library
-from amplifier_web.service import AppError, validate_theme
+from amplifier_web.service import AppError, AppService, validate_theme
 from test_canvas_apps import app, dispatch
 
 
@@ -27,7 +27,7 @@ LICENSE = 'Example font license\nCopyright Example Contributors\nPermission is g
 WOFF = b'wOFF' + b'\0\1\0\0' + struct.pack('>I', 44) + b'\0' * 32
 WOFF2 = b'wOF2' + b'\0\1\0\0' + struct.pack('>I', 48) + b'\0' * 36
 MANIFEST = {
-    'type': 'appearance', 'formatVersion': 2, 'base': 'reference-v1', 'name': 'Paper',
+    'type': 'appearance', 'formatVersion': 1, 'name': 'Paper',
     'description': 'A portable look', 'author': 'Example Contributors', 'stylesheet': 'theme.css',
     'assets': [
         {'path': 'assets/paper.png', 'mediaType': 'image/png'},
@@ -122,16 +122,15 @@ async def read(app, row):
 
 
 async def exported(app, row=None, format='zip'):
-    assert format == 'zip' and row is not None
-    return await dispatch(app, 'theme.export', {'id': row['id']})
+    return await dispatch(app, 'theme.export', {'format': format, **({'id': row['id']} if row else {})})
 
 
 def test_manifest_compiles_assets_and_full_attribution_without_extraction():
     package = packages.load(raw_zip())
-    assert package.summary == {'format': 'zip', 'packageVersion': 2, 'base': 'reference-v1', 'assetCount': 2, 'licenseCount': 1}
-    body = package.css
-    assert package.manifest['name'] == 'Paper' and package.manifest['author'] == MANIFEST['author']
-    assert package.files['licenses/OFL.txt'].decode() == LICENSE
+    assert package.summary == {'format': 'zip', 'packageVersion': 1, 'assetCount': 2, 'licenseCount': 1}
+    meta, body = theme_library.metadata(package.css)
+    assert meta['name'] == 'Paper' and meta['author'] == MANIFEST['author']
+    assert meta[packages.NOTICE_KEY] == {'licenses/OFL.txt': LICENSE}
     assert f'data:image/png;base64,{base64.b64encode(PNG).decode()}' in body
     assert f'data:font/woff;base64,{base64.b64encode(WOFF).decode()}' in body
     assert 'url(assets/' not in body and 'url("assets/' not in body
@@ -242,12 +241,12 @@ def test_notice_comment_and_style_terminators_remain_text_and_roundtrip():
     files = contents(manifest=manifest)
     notice = LICENSE + 'A literal comment terminator */ and </style> in a notice.\n'
     files['licenses/OFL.txt'] = notice.encode()
-    package = packages.load(raw_zip(files))
-    css = package.css
-    assert package.manifest['author'] == manifest['author']
-    assert package.files['licenses/OFL.txt'].decode() == notice
+    css = packages.load(raw_zip(files)).css
+    meta, _ = theme_library.metadata(css)
+    assert meta['author'] == manifest['author']
+    assert meta[packages.NOTICE_KEY]['licenses/OFL.txt'] == notice
     assert '</style' not in css.lower()
-    assert packages.load(packages.encode(package.files)).files['licenses/OFL.txt'].decode() == notice
+    assert packages.from_css(css, 'Copy').files['licenses/OFL.txt'].decode() == notice
 
 
 @pytest.mark.parametrize('css', [
@@ -261,8 +260,7 @@ def test_empty_deep_or_oversized_stylesheet_is_rejected(css):
 
 
 @pytest.mark.parametrize('patch', [
-    {'type': 'bundle'}, {'formatVersion': 1}, {'formatVersion': True}, {'formatVersion': '2'},
-    {'base': 'unknown'}, {'legacyCSS': True},
+    {'type': 'bundle'}, {'formatVersion': 2}, {'formatVersion': True}, {'formatVersion': '1'},
     {'name': []}, {'name': ''}, {'name': 'a' * 101}, {'author': {}}, {'author': '\ud800'},
     {'description': []}, {'stylesheet': '../theme.css'}, {'stylesheet': 'theme.js'},
     {'assets': {}}, {'licenses': 'licenses/OFL.txt'},
@@ -340,7 +338,7 @@ def test_archive_links_and_special_files_are_rejected(mode):
     ('font/woff2', 'assets/font.woff2', WOFF2),
 ])
 def test_allowed_type_extension_and_signature(media, path, data):
-    manifest = {'type': 'appearance', 'formatVersion': 2, 'base': 'reference-v1', 'name': 'Signatures', 'stylesheet': 'theme.css',
+    manifest = {'type': 'appearance', 'formatVersion': 1, 'name': 'Signatures', 'stylesheet': 'theme.css',
                 'assets': [{'path': path, 'mediaType': media, 'license': 'licenses/test.txt'}],
                 'licenses': ['licenses/test.txt']}
     files = {'appearance.json': json.dumps(manifest).encode(), 'theme.css': b'#amp-one{color:red}',
@@ -551,13 +549,14 @@ def test_repeated_reference_amplification_and_license_metadata_are_bounded():
         packages.load(raw_zip(files))
     files = contents('#amp-one{color:red}')
     files['licenses/OFL.txt'] = b'L' * (packages.CSS_LIMIT + 1)
-    assert packages.load(raw_zip(files)).files['licenses/OFL.txt'] == files['licenses/OFL.txt']
+    with pytest.raises(AppError, match='1 MB'):
+        packages.load(raw_zip(files))
 
 
 async def test_import_export_result_and_download_effect_never_apply(app):
-    before, sid = app.appearance.shared(), app.state['selectedSessionId']
+    before, sid = deepcopy(app.state['theme']), app.state['selectedSessionId']
     saved = await imported(app)
-    assert saved['format'] == 'zip' and saved['packageVersion'] == 2
+    assert saved['format'] == 'zip' and saved['packageVersion'] == 1
     assert 'css' not in saved and 'base64' not in saved
     path = Path(saved['directory']) / saved['id'][6:]
     assert path.suffix == '.zip' and saved['fingerprint'] == hashlib.sha256(path.read_bytes()).hexdigest()
@@ -573,12 +572,12 @@ async def test_import_export_result_and_download_effect_never_apply(app):
     assert effect['content'] == {'base64': value['base64']}
     assert base64.b64decode(value['base64'], validate=True) == path.read_bytes()
     assert value['fingerprint'] == saved['fingerprint']
-    assert app.appearance.shared() == before and app.state['selectedSessionId'] == sid
+    assert app.state['theme'] == before and app.state['selectedSessionId'] == sid
     assert {item.name for item in path.parent.iterdir()} == {path.name}, 'No extracted assets or sidecars'
 
 
 async def test_canonical_zip_import_is_idempotent_ignores_container_filename_and_metadata(app):
-    first = await imported(app)
+    first = await imported(app, fallbackName='download.unrelated')
     reordered = raw_zip(dict(reversed(list(contents().items()))), compression=zipfile.ZIP_DEFLATED, comment=b'ignored')
     repeated = await imported(app, packageBase64=encoded(reordered))
     assert repeated['id'] == first['id'] and repeated['name'] == 'Paper'
@@ -593,16 +592,146 @@ async def test_canonical_zip_import_is_idempotent_ignores_container_filename_and
 async def test_import_exactly_one_input_schema_and_runtime_guard(app, args):
     with pytest.raises(AppError):
         await dispatch(app, 'theme.import', args)
-    with pytest.raises(AppError, match='version-2 ZIP'):
+    with pytest.raises(AppError, match='exactly one'):
         theme_library.import_appearance(app, args)
     assert not (app.data_dir / 'themes').exists()
 
 
 async def test_bad_package_never_allocates_storage_or_changes_css(app):
-    before = app.appearance.shared()
+    before = deepcopy(app.state['theme'])
     with pytest.raises(AppError):
         await imported(app, packageBase64=encoded(raw_zip({'notes.txt': b'not an appearance'})))
-    assert not (app.data_dir / 'themes').exists() and app.appearance.shared() == before
+    assert not (app.data_dir / 'themes').exists() and app.state['theme'] == before
+
+
+def notice_css(value, **meta):
+    return theme_library.portable(theme_library.MARKER + json.dumps({
+        **meta, packages.NOTICE_KEY: value,
+    }) + ' */\n#amp-one{color:red}', 'Paper')
+
+
+async def test_license_conflict_rejects_import_and_update_before_any_library_write(app):
+    conflict = notice_css({'licenses/OFL.txt': 'A different license body'})
+    with pytest.raises(AppError, match='conflicting license'):
+        await imported(app, packageBase64=encoded(raw_zip(contents(conflict))))
+    assert not (app.data_dir / 'themes').exists()
+    saved = await imported(app)
+    path = Path(saved['directory']) / saved['id'][6:]
+    before = path.read_bytes()
+    with pytest.raises(AppError, match='conflicting license'):
+        await dispatch(app, 'theme.update', {
+            'id': saved['id'], 'expectedFingerprint': saved['fingerprint'],
+            'name': 'Conflicting', 'css': conflict,
+        })
+    assert path.read_bytes() == before and list(path.parent.iterdir()) == [path]
+    assert (await read(app, saved))['fingerprint'] == saved['fingerprint']
+
+
+async def test_identical_license_merge_and_nonconflicting_notices_survive_copies_and_exports(app):
+    retained = {'licenses/OFL.txt': LICENSE, 'licenses/Additional.txt': 'Additional required attribution.\n'}
+    source = notice_css(retained)
+    saved = await imported(app, packageBase64=encoded(raw_zip(contents(source))))
+    original = await read(app, saved)
+    assert theme_library.metadata(original['css'])[0][packages.NOTICE_KEY] == retained
+    updated = (await dispatch(app, 'theme.update', {
+        'id': saved['id'], 'expectedFingerprint': saved['fingerprint'],
+        'name': 'Updated Paper', 'css': source + '\n#amp-one{color:blue}',
+    }))['result']
+    zip_value = (await exported(app, updated))['result']
+    assert theme_library.metadata(packages.load(base64.b64decode(zip_value['base64'])).css)[0][packages.NOTICE_KEY] == retained
+    css_value = (await exported(app, updated, 'css'))['result']['css']
+    copied = (await dispatch(app, 'theme.save', {'name': 'A copy', 'css': css_value}))['result']
+    copied_zip = packages.load(base64.b64decode((await exported(app, copied))['result']['base64']))
+    for path, body in retained.items():
+        assert copied_zip.files[path].decode() == body
+    assert theme_library.metadata(copied_zip.css)[0][packages.NOTICE_KEY] == retained
+
+
+@pytest.mark.parametrize('update_kind', ['header-free', 'retained-header', 'identical-notice', 'new-notice'])
+@pytest.mark.parametrize('manifest_author', [True, False])
+async def test_css_update_retains_full_notice_union_in_read_css_and_zip_exports(app, update_kind, manifest_author):
+    retained = {'licenses/OFL.txt': LICENSE, 'licenses/Additional.txt': 'Additional required attribution.\n'}
+    manifest = deepcopy(MANIFEST)
+    if not manifest_author:
+        del manifest['author']
+    author = manifest.get('author', 'Portable Contributors')
+    source = notice_css(retained, author=author)
+    saved = await imported(app, packageBase64=encoded(raw_zip(contents(source, manifest))))
+    original = await read(app, saved)
+    assert theme_library.metadata(original['css'])[0][packages.NOTICE_KEY] == retained
+    assert 'licenses/Additional.txt' not in manifest['licenses']
+    expected = dict(retained)
+    css = '#amp-one{color:blue}'
+    if update_kind == 'retained-header':
+        css = original['css'] + '\n' + css
+    elif update_kind == 'identical-notice':
+        css = notice_css({'licenses/Additional.txt': retained['licenses/Additional.txt']}) + '\n' + css
+    elif update_kind == 'new-notice':
+        incoming = {'licenses/New.txt': 'New required attribution.\n'}
+        expected.update(incoming)
+        css = notice_css(incoming) + '\n' + css
+    before_theme = deepcopy(app.state['theme'])
+    updated = (await dispatch(app, 'theme.update', {
+        'id': saved['id'], 'expectedFingerprint': saved['fingerprint'],
+        'name': 'Updated Paper', 'css': css,
+    }))['result']
+    current = await read(app, updated)
+    css_export = (await exported(app, updated, 'css'))['result']['css']
+    zip_export = (await exported(app, updated))['result']
+    raw = base64.b64decode(zip_export['base64'], validate=True)
+    package = packages.load(raw)
+    for value in (current['css'], css_export, package.css):
+        meta, body = theme_library.metadata(value)
+        assert meta[packages.NOTICE_KEY] == expected and meta['author'] == author
+        assert meta['name'] == 'Updated Paper'
+        assert body == theme_library.metadata(css)[1]
+        assert value.count(theme_library.MARKER) == 1
+    assert current['fingerprint'] == updated['fingerprint'] == hashlib.sha256(raw).hexdigest()
+    assert package.manifest['licenses'] == MANIFEST['licenses']
+    for path in ('assets/paper.png', 'assets/body.woff', 'licenses/OFL.txt'):
+        assert package.files[path] == contents()[path]
+    assert app.state['theme'] == before_theme
+
+
+@pytest.mark.parametrize('incoming,match', [
+    ({'licenses/Additional.txt': 'A different attribution.\n'}, 'conflicting license'),
+    ({'licenses/additional.txt': 'Additional required attribution.\n'}, 'conflict by case'),
+    ({'licenses/ADDITIONAL.txt': 'A different attribution.\n'}, 'conflict by case'),
+    ({'licenses/ofl.txt': LICENSE}, 'conflict by case'),
+])
+async def test_css_update_rejects_prior_notice_body_and_case_conflicts_atomically(app, incoming, match):
+    retained = {'licenses/OFL.txt': LICENSE, 'licenses/Additional.txt': 'Additional required attribution.\n'}
+    saved = await imported(app, packageBase64=encoded(raw_zip(contents(notice_css(retained)))))
+    path = Path(saved['directory']) / saved['id'][6:]
+    before, original = path.read_bytes(), await read(app, saved)
+    before_theme = deepcopy(app.state['theme'])
+    with pytest.raises(AppError, match=match):
+        await dispatch(app, 'theme.update', {
+            'id': saved['id'], 'expectedFingerprint': saved['fingerprint'],
+            'name': 'Conflicting', 'css': notice_css(incoming),
+        })
+    assert path.read_bytes() == before and list(path.parent.iterdir()) == [path]
+    assert await read(app, saved) == original
+    assert app.state['theme'] == before_theme
+
+
+@pytest.mark.parametrize('retained,incoming,match', [
+    ({f'licenses/Old-{i}.txt': 'Required attribution.\n' for i in range(124)},
+     {'licenses/New-1.txt': 'New attribution.\n', 'licenses/New-2.txt': 'Other attribution.\n'},
+     'too many retained'),
+    ({'licenses/Old.txt': 'L' * 550_000}, {'licenses/New.txt': 'N' * 550_000}, '1 MB'),
+])
+async def test_css_update_validates_combined_notice_bounds_before_publication(app, retained, incoming, match):
+    saved = await imported(app, packageBase64=encoded(raw_zip(contents(notice_css(retained)))))
+    path = Path(saved['directory']) / saved['id'][6:]
+    before, original = path.read_bytes(), await read(app, saved)
+    with pytest.raises(AppError, match=match):
+        await dispatch(app, 'theme.update', {
+            'id': saved['id'], 'expectedFingerprint': saved['fingerprint'],
+            'name': 'Too many notices', 'css': notice_css(incoming),
+        })
+    assert path.read_bytes() == before and list(path.parent.iterdir()) == [path]
+    assert await read(app, saved) == original
 
 
 async def test_unchanged_zip_listings_compile_once_cache_only_metadata_and_full_read_recompiles(app, monkeypatch):
@@ -618,7 +747,7 @@ async def test_unchanged_zip_listings_compile_once_cache_only_metadata_and_full_
         assert row['fingerprint'] == saved['fingerprint'] and 'css' not in row
     assert len(calls) == 1
     assert len(app._appearance_package_summaries) == 1
-    allowed = {'name', 'description', 'author', 'source', 'format', 'packageVersion', 'base', 'assetCount', 'licenseCount'}
+    allowed = {'name', 'description', 'source', 'tag', 'format', 'packageVersion', 'assetCount', 'licenseCount'}
     for cached in app._appearance_package_summaries.values():
         assert set(cached) == allowed
         assert len(json.dumps(cached)) < 2_000
@@ -685,6 +814,20 @@ async def test_zip_listing_summary_cache_is_bounded_and_eviction_revalidates(app
     assert digest in app._appearance_package_summaries
 
 
+async def test_builtin_and_legacy_css_can_export_valid_zip_without_mutating_library(app):
+    before = deepcopy(app.state['theme'])
+    value = (await exported(app, {'id': 'builtin:default'}))['result']
+    package = packages.load(base64.b64decode(value['base64']))
+    assert package.manifest['type'] == 'appearance' and package.manifest['formatVersion'] == 1
+    assert not (app.data_dir / 'themes').exists() and app.state['theme'] == before
+    saved = (await dispatch(app, 'theme.import', {'css': '#amp-one{color:red}', 'fallbackName': 'Legacy'}))['result']
+    assert saved['id'].endswith('.amplifier.css')
+    zipped = (await exported(app, saved))['result']
+    assert packages.load(base64.b64decode(zipped['base64'])).manifest['name'] == 'Legacy'
+    legacy = (await exported(app, saved, 'css'))['effects'][0]
+    assert legacy['mimeType'] == 'text/css' and isinstance(legacy['content'], str)
+    assert app.state['theme'] == before
+
 async def test_rename_and_css_update_preserve_original_assets_licenses_and_stale_fence(app):
     original = await imported(app)
     before = base64.b64decode((await exported(app, original))['result']['base64'])
@@ -707,7 +850,7 @@ async def test_rename_and_css_update_preserve_original_assets_licenses_and_stale
     assert new.manifest['name'] == 'Revised Paper'
     for path in ('assets/paper.png', 'assets/body.woff', 'licenses/OFL.txt'):
         assert new.files[path] == old.files[path]
-    assert new.files['licenses/OFL.txt'].decode() == LICENSE
+    assert theme_library.metadata(new.css)[0][packages.NOTICE_KEY]['licenses/OFL.txt'] == LICENSE
     # As with CSS, an in-place update keeps its historical ID. Importing this
     # changed canonical content uses its own content-derived import family.
     copied = await imported(app, packageBase64=value['base64'])
@@ -724,9 +867,45 @@ async def test_editor_can_update_compiled_css_without_losing_license_or_accumula
             'css': value['css'] + '\n#amp-one{color:blue}',
         }))['result']
         current = await read(app, row)
-        package = packages.load(base64.b64decode((await exported(app, row))['result']['base64']))
-        assert package.files['licenses/OFL.txt'].decode() == LICENSE
-        assert 'amplifier-appearance:' not in current['css']
+        assert current['css'].count(theme_library.MARKER) == 1
+        assert theme_library.metadata(current['css'])[0][packages.NOTICE_KEY] == {'licenses/OFL.txt': LICENSE}
+
+
+async def test_css_export_save_copy_and_zip_from_css_retain_author_notices_and_embedded_assets(app):
+    saved = await imported(app)
+    css = (await exported(app, saved, 'css'))['result']['css']
+    copy = (await dispatch(app, 'theme.save', {'name': 'Copy', 'css': css}))['result']
+    assert copy['id'].endswith('.amplifier.css')
+    copied = await read(app, copy)
+    meta = theme_library.metadata(copied['css'])[0]
+    assert meta['author'] == MANIFEST['author'] and meta[packages.NOTICE_KEY] == {'licenses/OFL.txt': LICENSE}
+    bundle = packages.load(base64.b64decode((await exported(app, copy))['result']['base64']))
+    assert bundle.files['licenses/OFL.txt'].decode() == LICENSE
+    assert bundle.manifest['author'] == MANIFEST['author'] and bundle.manifest['assets'] == []
+    assert 'data:image/png;base64,' in bundle.css and 'data:font/woff;base64,' in bundle.css
+
+
+async def test_delete_applied_package_survives_restart_and_no_id_exports_only_committed_css(app, tmp_path):
+    saved = await imported(app)
+    value = await read(app, saved)
+    await dispatch(app, 'theme.apply', {'name': value['name'], 'css': value['css']})
+    applied = deepcopy(app.state['theme'])
+    await dispatch(app, 'theme.preview', {'name': 'Unsaved', 'css': '#amp-one{color:green}'})
+    assert (await exported(app, format='css'))['effects'][0]['content'] == applied['css']
+    current_zip = packages.load(base64.b64decode((await exported(app))['result']['base64']))
+    assert 'color:green' not in current_zip.css
+    assert theme_library.metadata(current_zip.css)[0][packages.NOTICE_KEY] == {'licenses/OFL.txt': LICENSE}
+    await dispatch(app, 'theme.delete', {'id': saved['id'], 'expectedFingerprint': saved['fingerprint']})
+    assert app.state['theme'] == applied
+    await app.close()
+    restored = AppService(app.data_dir, workspace=tmp_path)
+    try:
+        assert restored.state['theme'] == applied
+        assert theme_library.export(restored)['css'] == applied['css']
+        raw = base64.b64decode(theme_library.export(restored, format='zip')['base64'])
+        assert packages.load(raw).files['licenses/OFL.txt'].decode() == LICENSE
+    finally:
+        await restored.close()
 
 
 @pytest.mark.parametrize('deleted_slot', [1, 2])
@@ -781,7 +960,7 @@ async def test_zip_symlink_and_special_file_library_protection(app, tmp_path):
     path.symlink_to(outside)
     for action, args in (
         ('theme.read', {'id': saved['id']}),
-        ('theme.export', {'id': saved['id']}),
+        ('theme.export', {'id': saved['id'], 'format': 'zip'}),
         ('theme.delete', {'id': saved['id'], 'expectedFingerprint': saved['fingerprint']}),
         ('theme.update', {'id': saved['id'], 'expectedFingerprint': saved['fingerprint'],
                           'name': 'No', 'css': '#amp-one{color:red}'}),
@@ -832,11 +1011,11 @@ async def test_zip_collision_lookup_only_opens_existing_bounded_family_members(a
     far_name = name[:-4] + '-1000.zip'
     (root / name).rename(root / far_name)
     (root / 'unrelated.zip').write_bytes(b'not an appearance')
-    opened, original = [], theme_library.read_package_bytes
+    opened, original = [], theme_library.read_package
     def inspect(path, descriptor):
         opened.append(path.name)
         return original(path, descriptor)
-    monkeypatch.setattr(theme_library, 'read_package_bytes', inspect)
+    monkeypatch.setattr(theme_library, 'read_package', inspect)
     with theme_library.directory(app, writing=True) as descriptor:
         assert theme_library.import_name(descriptor, name, content) == far_name
     assert opened == [far_name]

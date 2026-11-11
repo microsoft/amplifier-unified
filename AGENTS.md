@@ -123,9 +123,11 @@ with their owners instead of silently changing their promised behavior.
 
 Appearance work follows the [appearance contract](docs/shell/appearance-contract.md)
 and the shared-client consumer UX baseline. Keep ordinary settings focused on the
-user's choice; disclose browser-only exceptions without turning each row into a
-storage-scope form. Shared Reference fixes belong in the selected web client's
-common foundation; individual appearances supply intentional visual differences.
+user's choice. The user-approved PR1916 rollback temporarily retires Reference
+and Global / This browser profiles after the `.078` visual regression; use the
+restored complete-theme and format-1 library paths. Preserve newer saved data
+inert, not deleted or converted, and do not claim recovery of a removed theme.
+See the contract's rollback boundary before changing appearance persistence.
 
 ## Interactive archive boundary
 

@@ -148,6 +148,248 @@ async function qualifyQuietRetainedCopies({page,composer,history,actions,private
   draftPreserved:true,extraSendsRetriesEditsDeletes:0,canonicalHistoryPreserved:true};
 }
 
+async function qualifyAppearance({page,composer,history,actions,screenshot,base}){
+ const proof={passed:false,viewports:[],domSnapshots:[],stopInvocations:0,
+  stateOrigin:'Authenticated one-shot synthetic seed; actual installed host projection/HTTP/SSE'};
+ const prior=await history(),clientId=await page.evaluate(()=>window.amplifier.getState().client.id);
+ const request=page.context().request;
+ const historyReadbacks=[],historyEvidence=join(artifact,'appearance-history-readbacks.json');
+ const priorIds=prior.sessions.map(row=>row.id);
+ assert.equal(priorIds.length,2,'Bind both original accepted chat and empty navigation control before setup');
+ assert.equal(new Set(priorIds).size,2);
+ assert.equal(prior.sessions.filter(row=>row.title==='Retained-copy navigation control'&&row.messages.length===0).length,1);
+ async function exactHistory(sessionIds,label){
+  const response=await request.post(base+'/fixture/appearance-history',{data:{sessionIds}});
+  if(response.status()!==200){
+   historyReadbacks.push({label,requestedIds:sessionIds,status:response.status()});
+   await writeFile(historyEvidence,JSON.stringify(historyReadbacks,null,2)+'\n');
+  }
+  assert.equal(response.status(),200,'Every requested saved owner must exist; never accept partial history');
+  const {history:value,evidence}=await response.json();
+  assert.deepEqual(evidence.requestedIds,sessionIds);
+  assert.deepEqual(value.sessions.map(row=>row.id),sessionIds,'Exact owner order/cardinality, no omission or alias substitution');
+  assert.equal(evidence.source,'state_records.load_owner/session_projection.hydrate');
+  assert.equal(evidence.residencyUnchanged,true);assert.equal(evidence.selectionUnchanged,true);
+  assert.equal(new Set(evidence.residentRequestedIds).size,evidence.residentRequestedIds.length);
+  assert.ok(evidence.residentRequestedIds.every(id=>sessionIds.includes(id)));
+  historyReadbacks.push({label,requestedIds:sessionIds,returnedIds:value.sessions.map(row=>row.id),
+   nonresidentRequestedIds:sessionIds.filter(id=>!evidence.residentRequestedIds.includes(id)),
+   source:evidence.source,residencyUnchanged:true,selectionUnchanged:true,
+   messageCounts:value.sessions.map(row=>({id:row.id,count:row.messages.length})),historySha256:hash(JSON.stringify(value))});
+  await writeFile(historyEvidence,JSON.stringify(historyReadbacks,null,2)+'\n');
+  return value;
+ }
+ // Exercise the reader's closed/bounded request and missing-owner refusal.
+ // None of these controls may seed, admit, select or silently omit a record.
+ for(const data of [{sessionIds:[]},{sessionIds:[priorIds[0],priorIds[0]]},
+  {sessionIds:Array.from({length:65},(_,index)=>'unrequested-'+index)},
+  {sessionIds:priorIds,unexpected:true}]){
+  assert.equal((await request.post(base+'/fixture/appearance-history',{data})).status(),400);
+ }
+ assert.equal((await request.post(base+'/fixture/appearance-history',{
+  data:{sessionIds:[...priorIds,'missing-paired-fixture-owner']}})).status(),404);
+ const canonicalPrior=await exactHistory(priorIds,'before-seed');
+ assert.deepEqual(canonicalPrior,prior,'Exact committed read must match the original two-owner oracle before expansion');
+ assert.deepEqual((await exactHistory([...priorIds].reverse(),'reversed-exact-ids')).sessions,
+  [...canonicalPrior.sessions].reverse(),'Readback follows explicit identities, not resident/catalog ordering');
+ const unauthorized=await fetch(base+'/fixture/appearance',{method:'POST',redirect:'manual',
+  headers:{'Content-Type':'application/json'},body:JSON.stringify({clientId})});
+ assert.equal(unauthorized.status,307,'The actual host auth gate rejects unauthenticated fixture setup');
+ assert.ok(unauthorized.headers.get('location').startsWith('/login'));
+ const invalid=await request.post(base+'/fixture/appearance',{
+  headers:{Authorization:'Bearer deliberately-invalid-fixture-token'},data:{clientId},maxRedirects:0});
+ assert.equal(invalid.status(),307);assert.ok(invalid.headers().location.startsWith('/login'));
+ const malformed=await request.post(base+'/fixture/appearance',{data:{clientId,css:'not permitted'}});
+ assert.equal(malformed.status(),400,'The setup route accepts no arbitrary state, CSS or paths');
+ const frames=()=>page.evaluate(()=>streamProbe.reduce((n,source)=>n+source.frames['state-delta'],0));
+ const deltaBefore=await frames();
+ const attachmentRequests=[];
+ const observeAttachment=request=>{
+  if(new URL(request.url()).pathname.startsWith('/api/attachments/'))attachmentRequests.push(request.url());
+ };
+ page.on('request',observeAttachment);
+ const response=await request.post(base+'/fixture/appearance',{data:{clientId}});
+ assert.equal(response.status(),200);
+ const seed=await response.json();
+ assert.equal(seed.pinnedSessionIds.length,48);assert.equal(new Set(seed.pinnedSessionIds).size,48);
+ assert.equal(seed.messages,26);assert.match(seed.runtime,/no runtime start, send or native execution/);
+ const repeated=await request.post(base+'/fixture/appearance',{data:{clientId}});
+ assert.equal(repeated.status(),409,'A seed is not replayable');
+ const action=async(name,args)=>{
+  const receipt=await page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
+  assert.equal(receipt.accepted,true);return receipt;
+ };
+ await action('session.select',{id:seed.sessionId});
+ await action('view.update',{patch:{workSurface:'chat',navPinned:true,navExpanded:true,navWidth:320,
+  navSectionsCollapsed:[],navPinnedPage:0}});
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId)).toBe(seed.sessionId);
+ await expect.poll(frames).toBeGreaterThan(deltaBefore);
+ const selected=()=>page.evaluate(id=>window.amplifier.getState().sessions.find(row=>row.id===id),seed.sessionId);
+ await expect.poll(async()=>(await selected())?.messages?.length).toBe(26);
+ await expect.poll(async()=>(await selected())?.draftAttachments).toEqual([seed.attachment]);
+ const trackedIds=[...priorIds,...seed.pinnedSessionIds],ids=new Set(seed.pinnedSessionIds);
+ assert.equal(new Set(trackedIds).size,trackedIds.length,'Seed must not reuse any prior owner');
+ const seededHistory=await exactHistory(trackedIds,'after-seed');
+ assert.deepEqual(seededHistory.sessions.slice(0,priorIds.length),canonicalPrior.sessions,
+  'Appearance setup cannot rewrite the earlier accepted conversation history');
+ assert.deepEqual(seededHistory.sends,prior.sends);assert.deepEqual(seededHistory.edits,prior.edits);
+ assert.deepEqual(seededHistory.pins,[...prior.pins,...seed.pinnedSessionIds]);
+ const draft='Keep this paired appearance draft while inspecting the layout.';
+ await expect(composer).toBeEditable();await composer.fill(draft);
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.draft)).toBe(draft);
+ const actionStart=actions.length;
+ const pane=page.getByRole('log',{name:'Conversation messages'});
+ const scroll=locator=>locator.evaluate(node=>({top:node.scrollTop,height:node.scrollHeight,
+  client:node.clientHeight,remaining:node.scrollHeight-node.clientHeight-node.scrollTop}));
+ const rect=node=>{const r=node.getBoundingClientRect();return {left:r.left,right:r.right,
+  top:r.top,bottom:r.bottom,width:r.width,height:r.height}};
+ async function usable(locator,button=false){
+  await expect(locator).toBeVisible();if(button)await expect(locator).toBeEnabled();
+  const value=await locator.evaluate(node=>{
+   const r=node.getBoundingClientRect();
+   return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,
+    viewportWidth:innerWidth,viewportHeight:innerHeight,opacity:getComputedStyle(node).opacity,
+    hit:node.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))};
+  });
+  assert.ok(value.width>0&&value.height>0&&value.left>=-1&&value.right<=value.viewportWidth+1&&
+   value.top>=-1&&value.bottom<=value.viewportHeight+1&&value.hit&&value.opacity!=='0',
+  'Installed control must be visible, in viewport and unobscured: '+JSON.stringify(value));
+  return value;
+ }
+ async function capture(label){
+  const name='appearance-'+label,path=join(artifact,name+'.html');
+  await writeFile(path,await page.locator('#amp-one').evaluate(node=>node.outerHTML));
+  proof.domSnapshots.push(path);await screenshot(name);
+ }
+ async function retained(){
+  await expect(composer).toHaveText(draft);
+  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),seed.sessionId);
+  assert.deepEqual((await selected()).draftAttachments,[seed.attachment]);
+  assert.deepEqual(await exactHistory(trackedIds,'retained-'+historyReadbacks.length),seededHistory,
+   'Layout gestures cannot change any exact prior/seeded owner, pins or runtime counters');
+  assert.deepEqual(attachmentRequests,[],'A text attachment chip does not fetch its private content');
+  assert.deepEqual(actions.slice(actionStart).filter(row=>/^(conversation\.|worker\.|call\.)/.test(row.action)||
+   ['message.edit','session.select','session.create','session.delete','session.archive','attachment.add',
+    'attachment.remove','canvas.openAttachment','navigation.pinOrder'].includes(row.action)),[],
+  'No execution, history mutation, selection or attachment mutation during appearance checks');
+ }
+ const viewport=page.viewportSize();
+ try{
+  for(const width of [1280,390]){
+   const cell={width,execution:[]};proof.viewports.push(cell);
+   await page.setViewportSize({width,height:width===1280?900:844});
+   await showFixtureConversation(page,{navPinned:width===1280});
+   if(width===390)await action('view.update',{patch:{navExpanded:false}});
+   await expect(pane).toHaveAttribute('aria-busy','false');
+   await expect(composer).toBeEditable();
+   if(width===1280){
+    const sidebar=page.locator('#workspace-navigation .a-nav-content'),footer=page.locator('#workspace-navigation .a-work-footer');
+    await expect(sidebar.locator('.a-pinned-chats [data-session-id]')).toHaveCount(48);
+    const before=await scroll(sidebar),footerBefore=await usable(footer);
+    assert.ok(before.client>100&&before.height-before.client>600,'Installed sidebar genuinely overflows');
+    assert.equal(await footer.evaluate(node=>!!node.closest('.a-nav-content')),false);
+    const visibleRows=()=>sidebar.evaluate(node=>{
+     const box=node.getBoundingClientRect();
+     return [...node.querySelectorAll('.a-pinned-chats [data-session-id]')].filter(row=>{
+      const r=row.getBoundingClientRect();return r.top>=box.top&&r.bottom<=box.bottom;
+     }).map(row=>row.dataset.sessionId);
+    });
+    const beforeRows=await visibleRows(),transcriptBefore=await scroll(pane),box=await usable(sidebar);
+    assert.ok(beforeRows.length>0&&beforeRows.every(id=>ids.has(id)));
+    await sidebar.evaluate(node=>{
+     window.pairedSidebarScrolls=[];
+     node.addEventListener('scroll',event=>pairedSidebarScrolls.push({trusted:event.isTrusted,top:node.scrollTop}),{passive:true});
+    });
+    await page.mouse.move(box.left+box.width/2,box.top+box.height/2);await page.mouse.wheel(0,600);
+    await expect.poll(async()=>(await scroll(sidebar)).top).toBeGreaterThan(before.top+100);
+    const after=await scroll(sidebar),afterRows=await visibleRows();
+    assert.ok(afterRows.some(id=>!beforeRows.includes(id))&&afterRows.every(id=>ids.has(id)));
+    assert.ok(Math.abs((await scroll(pane)).top-transcriptBefore.top)<2,'Sidebar wheel does not scroll the transcript');
+    const events=await page.evaluate(()=>pairedSidebarScrolls);
+    assert.ok(events.some(row=>row.trusted&&row.top>before.top),'Real wheel-driven scroll events required');
+    const footerAfter=await usable(footer);
+    assert.ok(Math.abs(footerAfter.top-footerBefore.top)<2);
+    assert.ok((await sidebar.evaluate(rect)).bottom<=footerAfter.top+1);
+    cell.sidebar={before,after,beforeRows,afterRows,events,footerBefore,footerAfter,
+     footerButton:await usable(footer.getByRole('button',{name:'App options',exact:true}),true)};
+    await retained();await capture('desktop-sidebar');
+   }else await expect(page.locator('#workspace-navigation')).toBeHidden();
+
+   // Open the observed host-projected group. The real host uses deferred work
+   // pages and segment IDs, not the inline nodes of a synthetic HTTP fixture.
+   const summary=page.locator(`[data-part="execution"][data-turn-id="${seed.turnId}"] > button.a-execution-turn-line`);
+   await expect(summary).toHaveCount(1);
+   if(await summary.getAttribute('aria-expanded')==='false')await summary.click();
+   await expect(summary).toHaveAttribute('aria-expanded','true');
+   const complete=page.locator(`[data-node-id="${seed.completedNodeId}"] > .a-execution-action-line`);
+   const running=page.locator(`[data-node-id="${seed.runningNodeId}"] > .a-execution-action-line`);
+   await expect(complete.locator('.a-execution-complete[aria-label="Completed"]')).toHaveCount(1);
+   await expect(running.locator('.a-execution-complete')).toHaveCount(0);
+   await expect(running.locator('.a-execution-dot[aria-label="running"]')).toHaveCount(1);
+   for(const [name,line] of [['completed',complete],['running',running]]){
+    await line.scrollIntoViewIfNeeded();await usable(line,true);
+    const geometry=await line.evaluate(node=>{
+     const r=child=>{const b=child.getBoundingClientRect();return {left:b.left,right:b.right,top:b.top,bottom:b.bottom,width:b.width,height:b.height}};
+     const label=node.querySelector('.a-execution-label'),accounting=node.querySelector('.a-execution-accounting'),status=node.lastElementChild;
+     return {line:r(node),label:r(label),accounting:r(accounting),status:r(status),
+      accountingText:accounting.textContent,statusLabel:status.getAttribute('aria-label'),
+      opacity:getComputedStyle(status).opacity,scrollWidth:node.scrollWidth,clientWidth:node.clientWidth};
+    });
+    assert.ok(geometry.status.width>0&&geometry.status.height>0&&geometry.opacity!=='0');
+    assert.ok(geometry.accountingText.trim()&&geometry.accounting.width>0);
+    assert.ok(geometry.status.left>=geometry.label.right-1&&geometry.status.right<=geometry.line.right+1);
+    assert.ok(geometry.line.right-geometry.status.right<32,'Status is at the trailing edge');
+    assert.ok(geometry.accounting.right<=geometry.line.right+1&&geometry.accounting.bottom<=geometry.line.bottom+1);
+    if(width===390)assert.ok(geometry.accounting.top>=geometry.label.bottom-1);
+    else assert.ok(geometry.accounting.left>=geometry.label.right-1&&geometry.accounting.right<=geometry.status.left);
+    assert.ok(geometry.scrollWidth<=geometry.clientWidth+1);
+    cell.execution.push({name,...geometry});
+   }
+   await capture(width+'-execution');
+   const strip=page.locator('.a-composer .a-attachments'),chip=strip.locator(`[data-attachment-id="${seed.attachment.id}"]`);
+   const link=chip.locator('a'),remove=chip.getByRole('button',{name:'Remove '+seed.attachment.name,exact:true});
+   await expect(strip).toHaveAttribute('data-private','true');
+   await expect(link).toHaveAttribute('title',seed.attachment.name);await expect(link).toContainText(seed.attachment.preview);
+   const form=await page.locator('.a-composer').evaluate(rect),stripBox=await strip.evaluate(rect),
+    chipBox=await chip.evaluate(rect),labelBox=await link.evaluate(rect),removeBox=await usable(remove,true);
+   const clip=await link.evaluate(node=>({width:node.clientWidth,scroll:node.scrollWidth,
+    overflow:getComputedStyle(node).overflowX,ellipsis:getComputedStyle(node).textOverflow}));
+   assert.ok(clip.width>20&&clip.scroll>clip.width,'Real projected attachment text needs clipping');
+   assert.equal(clip.overflow,'hidden');assert.equal(clip.ellipsis,'ellipsis');
+   assert.ok(stripBox.left>=form.left&&stripBox.right<=form.right+1&&chipBox.right<=stripBox.right+1);
+   assert.ok(labelBox.right<=removeBox.left-4&&removeBox.right<=chipBox.right+1);
+   cell.attachment={form,strip:stripBox,chip:chipBox,label:labelBox,remove:removeBox,clip};
+   await usable(composer);cell.primary=await usable(page.locator('[data-part="composer-primary-action"]'),true);
+   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+
+   const paneBox=await usable(pane),extent=await scroll(pane);
+   assert.ok(extent.height-extent.client>800,'Long real host transcript is required');
+   await page.mouse.move(paneBox.left+paneBox.width/2,paneBox.top+paneBox.height/2);
+   await page.mouse.wheel(0,extent.height);
+   await expect.poll(async()=>Math.abs((await scroll(pane)).remaining)).toBeLessThan(2);
+   const bottom=await scroll(pane);await page.mouse.wheel(0,-450);
+   await expect.poll(async()=>(await scroll(pane)).remaining).toBeGreaterThan(200);
+   const reading=await scroll(pane),latest=page.getByRole('button',{name:'Jump to latest messages',exact:true}),
+    stop=page.getByRole('button',{name:'Stop response',exact:true});
+   cell.controls={progress:await usable(page.locator('.a-live-activity')),
+    stop:await usable(stop,true),latest:await usable(latest,true)};
+   await expect(page.locator('.a-live-activity strong')).toHaveText('Inspecting paired synthetic layout');
+   await retained();await capture(width+'-progress-stop-latest');
+   await latest.click();
+   await expect.poll(async()=>Math.abs((await scroll(pane)).remaining)).toBeLessThan(2);
+   const jumped=await scroll(pane);assert.ok(jumped.top>reading.top+200,'Latest must change real scrollTop');
+   await expect(latest).toHaveCount(0);cell.transcript={bottom,reading,jumped};
+   await composer.focus();await composer.press('ArrowLeft');await composer.press('ArrowRight');
+   await expect(composer).toBeFocused();await retained();await capture(width+'-draft-attachment');
+  }
+  proof.passed=true;proof.syntheticSessionIds=seed.pinnedSessionIds;
+  proof.historyEvidence=historyEvidence;proof.exactHistoryOwnerCount=trackedIds.length;
+  proof.historyAndRuntimeCountersPreserved=true;proof.attachmentContentNotFetched=true;
+  proof.limits=['Synthetic work state is not native execution', 'Stop and Remove are enabled/hit-tested, not invoked'];
+  return proof;
+ }finally{page.off('request',observeAttachment);await page.setViewportSize(viewport)}
+}
+
 const {base,stop}=await startFixture({command:process.env.AMPLIFIER_TEST_PYTHON,
  args:[...(installedPackage?['-I','-B']:[]),fileURLToPath(new URL('../../tests/fixtures/client_paired_server.py',import.meta.url)),
   '--server-root',serverRoot,'--assembly-record',recordPath,'--state-parent',stateParent],
@@ -250,11 +492,14 @@ try{
  assert.equal(sends.length,2);assert.equal(new Set(sends.map(row=>row.id)).size,2);
  const quietRetainedCopies=await qualifyQuietRetainedCopies({page,composer,history,actions,privateRequests,screenshot,base});
  assert.equal(sends.length,2,'Retained copies did not add a send');
+ const appearance=await qualifyAppearance({page,composer,history,actions,screenshot,base});
+ assert.equal(sends.length,2,'Appearance checks did not add a send');
+ assert.deepEqual(privateRequests,[],'Appearance checks did not expose retained copies');
  assert.deepEqual(errors,[]);
  result={passed:true,qualification,identity,build,
   authRejectsMissingAndInvalidCredential:true,sseSelectedByFixture:true,realSSEDeltaObserved:true,
   sends:2,distinctAcceptedCommandIds:2,historyDigest:hash(JSON.stringify(before.sessions)),historyPreserved:true,
-  assistantRenderedAfterSendAndReload:true,draftSurvivedReconnectAndReload:true,quietRetainedCopies,screenshots,
+  assistantRenderedAfterSendAndReload:true,draftSurvivedReconnectAndReload:true,quietRetainedCopies,appearance,screenshots,
   limits:['Synthetic runtime/providers, not native execution or model calls',
    installedPackage?'Node-free Python host; Node remains the browser test driver. Server revision is externally declared and bound to installed Python hashes; dependencies are not requalified.':
     'Source server composition, not an unmodified published wheel',

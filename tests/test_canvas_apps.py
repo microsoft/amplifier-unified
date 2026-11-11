@@ -9,9 +9,7 @@ MANIFEST = {'version': 1, 'stateSchema': {'type': 'object', 'properties': {
     'selected': {'type': 'string'}, 'note': {'type': 'string'}}, 'required': ['selected', 'note'], 'additionalProperties': False},
     'events': {'choose': {'schema': {'type': 'object', 'properties': {'value': {'type': 'string'}}, 'required': ['value']},
                           'updates': {'selected': 'value'}}},
-    'requests': {name: {'action': action, 'schema': {'type': 'object'}} for name, action in {
-        'preview': 'appearance.preview', 'apply': 'appearance.preferences.update',
-        'revert': 'appearance.preview.cancel'}.items()}}
+    'requests': {name: {'action': 'theme.' + name, 'schema': {'type': 'object'}} for name in ['preview', 'apply', 'revert']}}
 
 
 @pytest.fixture
@@ -133,81 +131,46 @@ async def test_conversation_scope_and_background_updates_do_not_retarget(app):
 
 async def test_reviewed_theme_actions_preview_apply_revert_and_no_replay(app):
     row = await create(app)
-    before = app.appearance.shared()
+    before = deepcopy(app.state['theme'])
     theme = {'name': 'Forest', 'css': '#amp-one{--a-accent:#287358}'}
     row = await edit(app, row, 'request', name='preview', input=theme)
     pending = row['app']['requests'][-1]
-    assert app.appearance.shared() == before
+    assert app.state['theme'] == before
     inspected = (await dispatch(app, 'canvas.apps.inspect', {'id': row['id'], 'requestId': pending['id']}))['result']
     assert inspected['requestInput'] == theme
     row = await edit(app, row, 'resolve', requestId=pending['id'], approve=True)
-    assert app.appearance.read('one')['preview']['theme']['css'] == theme['css']
-    assert app.appearance.read('two')['preview'] is None
-    assert app.appearance.shared() == before
-    row = await edit(app, row, 'request', name='apply', input={
-        'scope': 'shared', 'expectedRevision': 0, 'patch': {'appearanceId': 'reference'}})
+    assert app.clients.records['one']['view']['themePreview']
+    assert not app.clients.records['two']['view'].get('themePreview')
+    assert app.state['theme'] == before
+    row = await edit(app, row, 'request', name='apply', input=theme)
     row = await edit(app, row, 'resolve', requestId=row['app']['requests'][-1]['id'], approve=True)
-    assert app.appearance.shared()['values']['appearanceId'] == 'reference'
-    assert app.appearance.read('one')['preview'] is not None
+    assert app.state['theme'] == theme
+    assert not app.clients.records['one']['view']['themePreview']
     with pytest.raises(AppError, match='already resolved'):
         await edit(app, row, 'resolve', requestId=pending['id'], approve=True)
     row = await edit(app, row, 'request', name='revert', input={})
     row = await edit(app, row, 'resolve', requestId=row['app']['requests'][-1]['id'], approve=True)
-    assert app.appearance.read('one')['preview'] is None
-    assert app.appearance.shared()['values']['appearanceId'] == 'reference'
-    row = await edit(app, row, 'request', name='preview', input=theme)
+    assert app.state['theme'] == before
+    row = await edit(app, row, 'request', name='apply', input=theme)
     row = await edit(app, row, 'revise', content='refined')
     assert row['app']['requests'][-1]['status'] == 'superseded'
 
 
 async def test_stale_theme_request_and_undo_cannot_overwrite_another_client(app):
     row = await create(app)
-    row = await edit(app, row, 'request', name='apply', input={
-        'scope': 'shared', 'expectedRevision': 0, 'patch': {'scheme': 'dark'}})
-    await dispatch(app, 'appearance.preferences.update', {
-        'scope': 'shared', 'expectedRevision': 0, 'patch': {'scheme': 'light'}}, client='two')
-    with pytest.raises(AppError, match='Shared preferences changed'):
+    row = await edit(app, row, 'request', name='apply', input={'name': 'Forest', 'css': '#amp-one{color:green}'})
+    await dispatch(app, 'theme.apply', {'name': 'Other', 'css': '#amp-one{color:red}'}, client='two')
+    with pytest.raises(AppError, match='shell theme changed'):
         await edit(app, row, 'resolve', requestId=row['app']['requests'][-1]['id'], approve=True)
-    saved = (await dispatch(app, 'appearance.preferences.update', {
-        'scope': 'shared', 'expectedRevision': 1, 'patch': {'scheme': 'dark'}}))['result']
-    await dispatch(app, 'appearance.preferences.update', {
-        'scope': 'shared', 'expectedRevision': 2, 'patch': {'scheme': 'system'}}, client='two')
-    with pytest.raises(AppError, match='Newer shared'):
-        await dispatch(app, 'appearance.preferences.undo', {'undoId': saved['undoId']})
-
-
-async def test_approved_global_preferences_fan_out_like_ordinary_dispatch_only_after_approval(app):
-    row = await create(app)
-    before = app.appearance.shared()
-    tokens = {identity: app.shell.change_token(identity) for identity in ('one', 'two')}
-    row = await edit(app, row, 'request', name='apply', input={
-        'scope': 'shared', 'expectedRevision': before['revision'], 'patch': {'scheme': 'dark'}})
-    assert app.appearance.shared() == before
-    assert {identity: app.shell.change_token(identity) for identity in tokens} == tokens
-    row = await edit(app, row, 'resolve', requestId=row['app']['requests'][-1]['id'], approve=True)
-    result = row['app']['requests'][-1]['result']
-    assert result['stored'] and result['scope'] == 'shared' and not result['activated']
-    for identity in tokens:
-        assert app.shell.change_token(identity) != tokens[identity]
-        assert app.appearance.values(identity)['scheme'] == 'dark'
-    # Source selection is also reviewable, but an unapproved proposal never queues storage.
-    spec = deepcopy(MANIFEST)
-    spec['requests']['source'] = {'action': 'appearance.preferences.select', 'schema': {'type': 'object'}}
-    row = await edit(app, row, 'revise', content='With source selection', manifest=spec)
-    current = app.appearance.read('one')
-    row = await edit(app, row, 'request', name='source', input={
-        'generation': current['generation'], 'activeScope': 'client',
-        'expectedRevision': current['local']['revision'],
-        'expectedStorageVersion': current['local']['storageVersion'],
-        'expectedSharedRevision': current['shared']['revision']})
-    row = await edit(app, row, 'resolve', requestId=row['app']['requests'][-1]['id'], approve=False)
-    assert 'command' not in app.appearance.read('one')
-    assert app.appearance.read('one')['activeScope'] == 'shared'
+    await dispatch(app, 'theme.apply', {'name': 'Mine', 'css': '#amp-one{color:blue}'})
+    await dispatch(app, 'theme.apply', {'name': 'Other again', 'css': '#amp-one{color:red}'}, client='two')
+    with pytest.raises(AppError, match='applied theme changed'):
+        await dispatch(app, 'theme.revert', {})
 
 
 async def test_fork_copies_state_but_not_pending_actions(app):
     row = await create(app)
-    row = await edit(app, row, 'request', name='preview', input={'name': 'Forest', 'css': '#amp-one{color:green}'})
+    row = await edit(app, row, 'request', name='apply', input={'name': 'Forest', 'css': '#amp-one{color:green}'})
     await dispatch(app, 'session.fork', {'id': row['sessionId'], 'turn': 1})
     fork = app.clients.records['one']['selectedSessionId']
     copied = next(r for r in app.state['canvasArtifacts'] if r['sessionId'] == fork)
@@ -232,21 +195,27 @@ async def test_invalid_data_and_events_do_not_mutate_surface(app):
     row = await create(app)
     for action, args in [('state', {'patch': {'selected': 23}}), ('state', {'patch': {'__proto__': {}}}),
                          ('event', {'name': 'unknown', 'payload': {}}), ('event', {'name': 'choose', 'payload': {}}),
-                         ('request', {'name': 'preview', 'input': {'name': 'Network', 'css': '@import "https://example.com/x.css";'}})]:
+                         ('request', {'name': 'apply', 'input': {'name': 'Network', 'css': '@import "https://example.com/x.css";'}})]:
         with pytest.raises(AppError):
             await edit(app, row, action, **args)
         assert app.state['canvasArtifacts'][0]['app'] == row['app']
 
 
-async def test_preview_requests_review_exact_delta_without_a_palette_compiler(app):
+async def test_palette_requests_preserve_the_skin_and_review_exact_css(app):
     row = await create(app)
-    before = app.appearance.shared()
-    row = await edit(app, row, 'request', name='preview', input={'name': 'Forest', 'css': '#amp-one{--a-accent:#3e7052}'})
+    before = deepcopy(app.state['theme'])
+    row = await edit(app, row, 'request', name='preview', input={'name': 'Forest', 'tokens': {'accent': '#3e7052'}})
     request = row['app']['requests'][-1]
     reviewed = (await dispatch(app, 'canvas.apps.inspect', {'id': row['id'], 'requestId': request['id']}))['result']['requestInput']
-    assert reviewed['css'] == '#amp-one{--a-accent:#3e7052}'
+    assert reviewed['css'].startswith(before['css'].rstrip())
+    assert '#amp-one{--a-accent:#3e7052}' in reviewed['css']
     row = await edit(app, row, 'resolve', requestId=request['id'], approve=True)
-    assert app.appearance.read('one')['preview']['theme']['css'] == reviewed['css']
-    assert app.appearance.shared() == before
+    assert app.clients.records['one']['view']['themeDraft'] == reviewed['css']
+    assert app.state['theme'] == before
+    await dispatch(app, 'theme.apply', {'name': 'Forest', 'tokens': {'accent': '#3e7052'}})
+    assert app.state['theme']['css'] == reviewed['css']
+    for values in ({'accent': 'red;display:none'}, {'unknown': '#aabbcc'}, {}):
+        with pytest.raises(AppError):
+            await dispatch(app, 'theme.apply', {'name': 'Invalid', 'tokens': values})
     with pytest.raises(AppError):
-        await dispatch(app, 'appearance.preview', {'name': 'Ambiguous', 'tokens': {'accent': '#aabbcc'}, 'css': '#amp-one{}'})
+        await dispatch(app, 'theme.apply', {'name': 'Ambiguous', 'tokens': {'accent': '#aabbcc'}, 'css': '#amp-one{}'})

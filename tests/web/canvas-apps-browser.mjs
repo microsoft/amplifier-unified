@@ -2,10 +2,10 @@ import {showFixtureConversation} from './browser-chat-pages.mjs';
 import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
-import {appearanceSurface} from './fixtures/conversation-surface.mjs';
+import {themeSurface} from './fixtures/conversation-surface.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
@@ -21,7 +21,8 @@ try{
  await action('session.create',{});await action('view.update',{patch:{canvasControlsPinned:true,canvasWidth:650}});
  const draft='Keep this conversation draft through all theme changes';
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill(draft);await page.waitForFunction(draft=>window.amplifier.getState().view.draft===draft,draft);
- const source=appearanceSurface(),row=(await action('canvas.apps.create',source)).result,id=row.id;
+ const base=await readFile(root+'amplifier_web/static/unified.amplifier.css','utf8');
+ const source=themeSurface(base),row=(await action('canvas.apps.create',source)).result,id=row.id;
  const inspect=()=>action('canvas.apps.inspect',{id}).then(r=>r.result);
  const cas=async()=>{const r=await inspect();return {id,sessionId:r.sessionId,expectedRevision:r.app.revision,expectedStateRevision:r.app.stateRevision}};
  const frame=()=>page.locator('[data-canvas-view="primary"]').frameLocator('iframe').frameLocator('iframe');
@@ -32,35 +33,33 @@ try{
  // Same shared event path used by app_control; full caller-scope parity is covered in Python.
  await action('canvas.apps.event',{...await cas(),name:'choose',payload:{value:'ember'}});
  await expect(frame().getByRole('radio',{name:'Ember',exact:true})).toBeChecked();
- await action('canvas.apps.revise',{...await cas(),content:appearanceSurface(true).content});
+ await action('canvas.apps.revise',{...await cas(),content:themeSurface(base,true).content});
  await expect(frame().getByRole('heading',{name:'Your palette, refined.'})).toBeVisible();
  await expect(frame().getByRole('radio',{name:'Ember',exact:true})).toBeChecked();
  await expect(frame().getByRole('textbox')).toHaveValue('Keep the green, soften the contrast');
- assert.equal((await state()).canvasArtifacts.length,1);await expect(page.getByRole('tab',{name:'Your custom appearances',exact:true})).toHaveCount(1);
- const before=(await state()).appearance.theme;
+ assert.equal((await state()).canvasArtifacts.length,1);await expect(page.getByRole('tab',{name:'Your custom themes',exact:true})).toHaveCount(1);
+ const before=(await state()).theme;
  const originalAccent=await page.locator('#amp-one').evaluate(el=>getComputedStyle(el).getPropertyValue('--a-accent').trim());
- await frame().getByRole('button',{name:'Preview appearance',exact:true}).click();
- await page.getByRole('button',{name:'Review appearance change',exact:true}).click({timeout:10000}).catch(async e=>{console.log('host alerts',await page.getByRole('alert').allTextContents(),'frame status',await frame().locator('#status').textContent(),'requests',(await inspect()).app.requests);throw e});
+ await frame().getByRole('button',{name:'Preview',exact:true}).click();
+ await page.getByRole('button',{name:'Review theme change',exact:true}).click({timeout:10000}).catch(async e=>{console.log('host alerts',await page.getByRole('alert').allTextContents(),'frame status',await frame().locator('#status').textContent(),'requests',(await inspect()).app.requests);throw e});
  assert.equal(await page.locator('#amp-one').evaluate(el=>getComputedStyle(el).getPropertyValue('--a-accent').trim()),originalAccent);
- assert.deepEqual((await state()).appearance.theme,before);assert.equal((await state()).appearance.preview?.theme?.name,undefined);
+ assert.deepEqual((await state()).theme,before);assert.notEqual((await state()).view.themePreview,true);
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft(draft);
  const pendingPreview=(await inspect()).app.requests.find(r=>r.status==='pending');assert.ok(pendingPreview);
  await page.getByRole('region',{name:'Review requested theme change',exact:true}).getByRole('button',{name:'Back',exact:true}).click();
  assert.equal((await inspect()).app.requests.find(r=>r.id===pendingPreview.id).status,'pending');
  assert.equal(await page.locator('#amp-one').evaluate(el=>getComputedStyle(el).getPropertyValue('--a-accent').trim()),originalAccent);
- await page.getByRole('button',{name:'Review appearance change',exact:true}).click();
- await page.getByRole('button',{name:'Approve appearance change',exact:true}).click();
- await expect.poll(async()=>(await state()).appearance.preview?.theme?.name).toBe('Ember');
- assert.deepEqual((await state()).appearance.theme,before);
+ await page.getByRole('button',{name:'Review theme change',exact:true}).click();
+ await page.getByRole('button',{name:'Approve theme change',exact:true}).click();
+ await expect.poll(async()=>(await state()).view.themePreview).toBe(true);
+ assert.deepEqual((await state()).theme,before);
  await expect.poll(()=>page.frames().find(f=>f.url().includes('/document')).evaluate(()=>getComputedStyle(document.documentElement).getPropertyValue('--host-accent').trim())).toBe('#aa553c');
  assert.equal(await page.locator('#amp-one').evaluate(el=>getComputedStyle(el).getPropertyValue('--a-accent').trim()),'#aa553c');
- await frame().getByRole('button',{name:'End preview',exact:true}).click();
- await page.getByRole('button',{name:'Review appearance change',exact:true}).click();
- await page.getByRole('button',{name:'Approve appearance change',exact:true}).click();
- await expect.poll(async()=>(await state()).appearance.preview?.theme?.name).toBeUndefined();
- await expect.poll(()=>page.locator('#amp-one').evaluate(el=>getComputedStyle(el).getPropertyValue('--a-accent').trim())).toBe(originalAccent);
+ await frame().getByRole('button',{name:'Apply theme',exact:true}).click();
+ await page.getByRole('button',{name:'Review theme change',exact:true}).click();await page.getByRole('button',{name:'Approve theme change',exact:true}).click();
+ await expect.poll(async()=>(await state()).theme.name).toBe('Ember');
  // The iframe cannot resolve requests or call arbitrary host actions.
- await page.evaluate(()=>postMessage({type:'canvas-app',id:window.amplifier.getState().canvas.id,op:'request',requestId:'forged',args:{name:'preview',input:{name:'Forged',css:'#amp-one{color:red}'}}},'*'));
+ await page.evaluate(()=>postMessage({type:'canvas-app',id:window.amplifier.getState().canvas.id,op:'request',requestId:'forged',args:{name:'apply',input:{name:'Forged',css:'#amp-one{color:red}'}}},'*'));
  assert.equal((await inspect()).app.requests.length,2);
  const inner=page.frames().find(f=>f.url().includes('/document'));
  assert.equal(await inner.evaluate(()=>{try{return parent.document.body.textContent}catch{return 'isolated'}}),'isolated');
@@ -70,6 +69,8 @@ try{
  assert.deepEqual((await inspect()).app.requests.map(r=>({id:r.id,status:r.status})),effectsBeforeReload);
  await expect(frame().getByRole('radio',{name:'Ember',exact:true})).toBeChecked();
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft(draft);
+ await frame().getByRole('button',{name:'Revert',exact:true}).click();await page.getByRole('button',{name:'Review theme change',exact:true}).click();await page.getByRole('button',{name:'Approve theme change',exact:true}).click();
+ await expect.poll(async()=>(await state()).theme.name).toBe(before.name);
  const effectsBeforeRestore=(await inspect()).app.requests.map(r=>({id:r.id,status:r.status}));
  await action('canvas.apps.restore',{...await cas(),version:1});
  assert.deepEqual((await inspect()).app.requests.map(r=>({id:r.id,status:r.status})),effectsBeforeRestore);
@@ -77,15 +78,15 @@ try{
  await expect(frame().getByRole('radio',{name:'Ember',exact:true})).toBeChecked();
  assert.equal((await state()).canvasArtifacts.length,1);
  // Declining a request and revising its source cannot grant old approval authority.
- await frame().getByRole('button',{name:'Preview appearance',exact:true}).click();
+ await frame().getByRole('button',{name:'Preview',exact:true}).click();
  await expect(page.getByRole('button',{name:'Decline',exact:true})).toBeVisible();
  const declined=(await inspect()).app.requests.find(r=>r.status==='pending');
  await page.getByRole('button',{name:'Decline',exact:true}).click();
  await expect.poll(async()=>(await inspect()).app.requests.find(r=>r.id===declined.id).status).toBe('rejected');
  await assert.rejects(()=>cas().then(c=>action('canvas.apps.resolve',{...c,requestId:declined.id,approve:true})),/resolved|superseded/);
- assert.deepEqual((await state()).appearance.theme,before);
- await frame().getByRole('button',{name:'Preview appearance',exact:true}).click();
- await expect(page.getByRole('button',{name:'Review appearance change',exact:true})).toBeVisible();
+ assert.deepEqual((await state()).theme,before);
+ await frame().getByRole('button',{name:'Preview',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Review theme change',exact:true})).toBeVisible();
  const superseded=(await inspect()).app.requests.find(r=>r.status==='pending');
  // Protect a form edit even when its dirty declaration races a remote revision.
  const pendingCas=await cas(),clientId=(await state()).client.id;
@@ -96,7 +97,7 @@ try{
   await route.continue().catch(error=>{if(!page.isClosed())throw error});
  });
  await frame().getByRole('textbox').fill('Unacknowledged local input');
- const response=await page.request.post(url+'/api/actions',{headers:{'X-Amplifier-Client':clientId},data:{action:'canvas.apps.revise',args:{...pendingCas,content:appearanceSurface(true).content},id:'remote-race'}});
+ const response=await page.request.post(url+'/api/actions',{headers:{'X-Amplifier-Client':clientId},data:{action:'canvas.apps.revise',args:{...pendingCas,content:themeSurface(base,true).content},id:'remote-race'}});
  assert.equal(response.status(),200);
  await expect(page.getByRole('button',{name:/Discard unfinished input and load revision/})).toBeVisible();
  await expect(frame().getByRole('textbox')).toHaveValue('Unacknowledged local input');
@@ -106,12 +107,12 @@ try{
  await expect(frame().getByRole('heading',{name:'Your palette, refined.'})).toBeVisible();
  await expect(frame().getByRole('textbox')).toHaveValue('Keep the green, soften the contrast');
  await expect.poll(async()=>(await inspect()).app.requests.find(r=>r.id===superseded.id).status).toBe('superseded');
- await expect(page.getByRole('button',{name:'Review appearance change',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Review theme change',exact:true})).toHaveCount(0);
  await assert.rejects(()=>cas().then(c=>action('canvas.apps.resolve',{...c,requestId:superseded.id,approve:true})),/resolved|superseded/);
- assert.deepEqual((await state()).appearance.theme,before);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft(draft);
+ assert.deepEqual((await state()).theme,before);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft(draft);
  assert.deepEqual(errors,[]);
  await mkdir(root+'output/canvas-proof',{recursive:true});await page.screenshot({path:root+'output/canvas-proof/conversation-surface.png',fullPage:true});
- await writeFile(root+'output/canvas-proof/conversation-surface.json',JSON.stringify({passed:true,checks:['one tab','shared controls','input preservation','revision restore','appearance preview/cancel','refresh','composer draft','sandbox isolation']},null,2));
+ await writeFile(root+'output/canvas-proof/conversation-surface.json',JSON.stringify({passed:true,checks:['one tab','shared controls','input preservation','revision restore','theme preview/apply/revert','refresh','composer draft','sandbox isolation']},null,2));
  // A sandboxed document must not leak state by navigating its own frame.
  let navigationRequests=0;
  await page.route('https://canvas-network.invalid/**',async route=>{navigationRequests++;await route.fulfill({body:'unexpected navigation'})});

@@ -239,6 +239,8 @@ ACTION_DEFINITIONS = {
     "updates.reconcileManualHandoff": ("Verify an already completed manual Windows app handoff against the exact retained pre-effect refusal and the actual installed official wheel, owner, launcher, dependencies and pinned listener. Does not install, restart or promote. Preserves existing whole-sequence Install intent. Read updates.manualHandoffResults for the durable result; never replay an unknown request.", schema({"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(32)}, ["hostInstanceId","revision","generation","attemptId"])),
     "updates.rollback": ("Restore the previous ecosystem version when idle", schema()),
     "settings.update": ("Change voice, workspace or update defaults. Update checks support intervalHours 1, 4, 8 or 24.", schema({"patch": {"type": "object"}})),
+    "theme.apply": ("Apply a complete single-file CSS skin", schema({"name": string(100), "css": string(1000000)})),
+    "theme.reset": ("Restore the default skin", schema()),
     "state.export": ("Export app state and attached device views", schema()),
     "notification.request": ("Request notification permission on this device", schema()),
     "call.start": ("Start a realtime voice call on the connected browser", schema({"attemptId": string(200)}, [])),
@@ -334,7 +336,7 @@ from .shell_modules import ShellModules, definitions as shell_definitions
 ACTION_DEFINITIONS.update(shell_definitions(schema, string))
 from .canvas_views import CanvasViews, definitions as canvas_view_definitions
 ACTION_DEFINITIONS.update(canvas_view_definitions(schema, string))
-from .canvas_apps import definitions as canvas_app_definitions
+from .canvas_apps import definitions as canvas_app_definitions, THEME_TOKENS
 ACTION_DEFINITIONS.update(canvas_app_definitions(schema, string))
 from .canvas_versions import definitions as canvas_version_definitions
 ACTION_DEFINITIONS.update(canvas_version_definitions(schema, string))
@@ -400,8 +402,18 @@ from .test_queue import definitions as test_queue_definitions
 TEST_QUEUE_ACTIONS = _register_actions(test_queue_definitions(schema, string))
 from .portability import definitions as portability_definitions
 ACTION_DEFINITIONS.update(portability_definitions(schema, string))
-from .appearance_preferences import definitions as appearance_definitions
-ACTION_DEFINITIONS.update(appearance_definitions(schema, string))
+ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
+ACTION_DEFINITIONS['theme.revert'] = ('End a preview or undo this client’s last applied skin if it is still current.', schema({'clientId': string(100)}, []))
+for theme_action in ('theme.apply', 'theme.preview'):
+    ACTION_DEFINITIONS[theme_action] = (("Apply a complete theme definition or CSS skin, or patch the current palette." if theme_action == 'theme.apply' else "Preview a complete theme definition or CSS skin, or a palette patch, on an attached client."), ACTION_DEFINITIONS[theme_action][1])
+    theme_spec = ACTION_DEFINITIONS[theme_action][1]
+    theme_spec['properties']['tokens'] = {'type': 'object', 'minProperties': 1, 'additionalProperties': False,
+        'properties': {key: {'type': 'string', 'pattern': '^#[0-9a-fA-F]{6}$'} for key in THEME_TOKENS}}
+    from .themes import DEFINITION
+    theme_spec['properties']['definition'] = DEFINITION
+    theme_spec['required'] = ['name']
+    theme_spec['oneOf'] = [{'required': [key], 'not': {'anyOf': [{'required': [other]} for other in ('css', 'tokens', 'definition') if other != key]}}
+                           for key in ('css', 'tokens', 'definition')]
 
 
 
@@ -604,6 +616,7 @@ class AppService:
             "releaseNoticeStartVersion": __version__,
             "updates": {"initialPreparation": True},
             "settings": {"preferredVoice": "gpt-live-1", "fallbackVoice": "gpt-realtime-2.1", "bundle": "work", "workspace": self.default_workspace},
+            "theme": {"name": "Amplifier Unified", "css": self.default_theme()},
             "view": {"setupJourney":"welcome", "mode": "chat", "panel": None, "draft": "", "scheme": "system", "layout": "balanced"},
             "voice": {"status": "disconnected"}, "runtime": {"available": runtime is not None}, "devices": {}, "events": [],
         }
@@ -620,9 +633,12 @@ class AppService:
             self.state = load_working(self.db)
         from .managed_deletion import tombstones
         self._deleted_session_ids = {sid for row in tombstones(self.db) for sid in row['ids']}
-        # Appearance selection now resolves a library ID over Reference. A saved
-        # full-skin snapshot is not another renderer or a migration input.
-        self.state.pop('theme', None)
+        # 0.78 removed this legacy value. Restore a usable default only when it
+        # is absent; Reference/profile records are retained, not migration input.
+        # An earlier custom skin that was already removed cannot be recovered.
+        self.state.setdefault('theme', {'name': 'Amplifier Unified', 'css': self.default_theme()})
+        from .default_typography import upgrade_default
+        upgrade_default(self.state, self.default_theme())
         from .settings_migration import migrate_settings
         migrate_settings(self.data_dir, {self.default_workspace, *[s["workspace"] for s in self.state["sessions"] if not s.get("historyManaged") and s.get("workspace")]})
         if row and not self.state.get("sharedVoiceMigration"):
@@ -753,8 +769,6 @@ class AppService:
         self.event_log_view = EventLogView(self)
         from .client_views import ClientViews
         self.clients = ClientViews(self)
-        from .appearance_preferences import AppearancePreferences
-        self.appearance = AppearancePreferences(self)
         self._client_snapshots = {}
         from .browser_state import SnapshotCopies
         self._snapshot_copies = SnapshotCopies()
@@ -820,6 +834,13 @@ class AppService:
         self.status_emitter = create_status_emitter(self)
         from .conversation_models import bind_runtime
         bind_runtime(self)
+
+    def default_theme(self):
+        for name in ("unified.amplifier.css", "default-theme.css"):
+            path = Path(__file__).parent / "static" / name
+            if path.exists():
+                return path.read_text()
+        return "/* Amplifier Unified uses the app's bundled default styling. */"
 
     def _refresh_shared_preferences(self):
         from collections import OrderedDict
@@ -2329,7 +2350,7 @@ class AppService:
                 from .automatic_history import read_transcript
                 window = await asyncio.to_thread(read_transcript, copy.deepcopy(session), limit=None)
                 reveal_message = next((row for row in window["messages"] if row["id"] == args["messageId"]), None)
-        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'canvas.visibility', 'canvas.show', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView', 'smartTools.reviewView', 'smartTools.updateView', 'message.reply', 'message.replyClear', 'message.reveal'}) and 'clientId' in args and not (action == 'smartTools.viewStatus' and origin == 'agent'):
+        if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.show', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView', 'smartTools.reviewView', 'smartTools.updateView', 'message.reply', 'message.replyClear', 'message.reveal'}) and 'clientId' in args and not (action == 'smartTools.viewStatus' and origin == 'agent'):
             if client_id is None:
                 with self.clients.bind(args['clientId']):
                     return await self.dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
@@ -2370,8 +2391,6 @@ class AppService:
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action.startswith("shell."):
             return await self.shell.dispatch(action, args, origin, command_id)
-        if action.startswith("appearance."):
-            return await self.appearance.dispatch(action, args, origin, command_id)
         if action.startswith('terminal.'):
             manager = getattr(self, 'terminal_setup', None)
             if manager is None:
@@ -3350,10 +3369,11 @@ class AppService:
                     raise AppError('Choose Markdown to copy a conversation or create a readable snapshot.')
                 if action == 'theme.export':
                     from .theme_library import export
-                    diagnostic_result = export(self, args['id'])
-                    content = {'base64': diagnostic_result['base64']}
-                    mime = 'application/zip'
-                    filename = diagnostic_result['filename']
+                    diagnostic_result = export(self, args.get('id'), args.get('format', 'css'))
+                    zipped = diagnostic_result.get('format') == 'zip'
+                    content = {'base64': diagnostic_result['base64']} if zipped else diagnostic_result['css']
+                    mime = 'application/zip' if zipped else 'text/css'
+                    filename = diagnostic_result['filename'] if zipped or args.get('id') else 'amplifier-skin.css'
                 else:
                     if action == 'session.export':
                         from .work_diagnostics import export_session
@@ -3567,7 +3587,7 @@ class AppService:
                 patch = dict(args["patch"])
                 from .settings_navigation import route_legacy
                 patch = route_legacy(self.state, patch)
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "aiConnectionEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsRootVisit", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "canvasOverviewWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navSectionsCollapsed", "navRecentView", "navPinnedPage", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "feedbackCorrectionDraft", "feedbackLifecycleDraft", "diagnosticsDraft"}
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "aiConnectionEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsRootVisit", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "canvasOverviewWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navSectionsCollapsed", "navRecentView", "navPinnedPage", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "feedbackCorrectionDraft", "feedbackLifecycleDraft", "diagnosticsDraft"}
                 allowed.update({'navWorkspaceArchive', 'projectPermissionsDraft', 'planExpanded', 'settingsCanvas', 'setupJourney', 'navArchive', 'navCollection', 'navSort', 'navShowAgentCreated', 'navRecentLimit', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor', 'configurationDrafts', 'workWorkspaceSettings'})
                 allowed.update({'workHomeView', 'workHomeFilter', 'workHomeScope', 'workHomeQuery', 'workHomePages'})
                 allowed.add('workWorkspaceChats')
@@ -3631,8 +3651,8 @@ class AppService:
                     opens_delivery = patch.get('canvasDraft', {}).get('delivery') in {'outputs','publishing','permissions'}
                 except TypeError:
                     raise AppError('Canvas delivery must name a destination.') from None
-                # Validate the complete mixed view action before admitting an
-                # executable browser storage command or mutating editor state.
+                # Keep mixed-view validation independent of the retired profile
+                # protocol: invalid input must not partially mutate an editor.
                 if 'draft' in patch:
                     if not isinstance(patch['draft'], str):
                         raise AppError('Draft must be text.')
@@ -3652,12 +3672,6 @@ class AppService:
                         self._session(target, hydrate=False)
                     elif self.state.get('selectedSessionId') is not None:
                         raise AppError('Attach a client to save a draft without a conversation.')
-                presentation = {key: patch.pop(key) for key in ('scheme', 'layout') if key in patch}
-                if presentation:
-                    routed = self.shell.presentation_patch(client_id, presentation, origin)
-                    if not routed['accepted']:
-                        raise AppError(routed['error'], 409)
-                    diagnostic_result = routed['result']
                 if 'draft' in patch:
                     if client_id is not None:
                         self.clients.draft(target, patch.pop('draft'), rich)
@@ -3665,6 +3679,8 @@ class AppService:
                         self._session(target, hydrate=False)['draft'] = patch['draft']
                         if target != self.state.get('selectedSessionId'):
                             patch.pop('draft')
+                    elif self.state.get('selectedSessionId') is not None:
+                        raise AppError('Attach a client to save a draft without a conversation.')
                     else:
                         self.state['view']['newChatText'] = patch['draft']
                 if patch.get('settingsCanvas'):
@@ -3881,6 +3897,12 @@ class AppService:
                     diagnostic_result = theme_library.save(self, args)
                 else:
                     diagnostic_result = theme_library.mutate(self, args, deleting=action == 'theme.delete')
+            elif action in {'theme.apply', 'theme.preview', 'theme.revert'}:
+                from .canvas_apps import theme_command
+                theme_command(self, action, args)
+            elif action == "theme.reset":
+                self.state["theme"] = {"name": "Amplifier Unified", "css": self.default_theme()}
+                self.state["view"]["themePreview"] = False
             elif action == "notification.request":
                 effects.append({"type": "notification.request"})
             elif action in {"call.start", "call.mute", "call.end", "call.keepAwake", "call.resumeAudio"}:
@@ -5714,8 +5736,8 @@ class AppService:
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not receipt_mode)
             elif input_origin is not None and 'clientId' in action_args and (
-                    args['action'].startswith(('canvas.views.', 'canvas.apps.', 'appearance.'))
-                    or args['action'] == 'canvas.visibility'):
+                    args['action'].startswith(('canvas.views.', 'canvas.apps.'))
+                    or args['action'] in {'canvas.visibility', 'theme.preview', 'theme.revert'}):
                 # An explicit Canvas target is independent of screen consent.
                 canvas_client = action_args['clientId']
                 with self.clients.bind(canvas_client):

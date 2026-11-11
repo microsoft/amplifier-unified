@@ -26,6 +26,7 @@ TOTAL_LIMIT = 8_000_000
 MEMBER_LIMIT = 2_000_000
 MEMBER_COUNT = 128
 COMPRESSION_RATIO = 200
+NOTICE_KEY = 'packageNotices'
 MEDIA = {
     'image/png': ('.png',),
     'image/jpeg': ('.jpg', '.jpeg'),
@@ -123,15 +124,13 @@ def manifest_value(raw):
         reject('appearance.json must be UTF-8 JSON without a BOM.')
     if not isinstance(value, dict):
         reject('appearance.json must be an object.')
-    required = {'type', 'formatVersion', 'base', 'name', 'stylesheet'}
+    required = {'type', 'formatVersion', 'name', 'stylesheet'}
     if not required <= value.keys() or value.keys() - required - {'description', 'author', 'assets', 'licenses'}:
         reject('appearance.json contains missing or unsupported fields.')
     if value['type'] != 'appearance':
         reject('the manifest type must be appearance.')
-    if type(value['formatVersion']) is not int or value['formatVersion'] != 2:
-        reject('unsupported formatVersion; only version 2 is supported.')
-    if value['base'] != 'reference-v1':
-        reject('unsupported foundation; use reference-v1.')
+    if type(value['formatVersion']) is not int or value['formatVersion'] != 1:
+        reject('unsupported formatVersion; only version 1 is supported.')
     text(value['name'], 'name', 100)
     for key, limit in (('description', 240), ('author', 240)):
         if key in value:
@@ -312,20 +311,54 @@ def archive_files(raw):
         reject('the ZIP is malformed or has an invalid checksum: ' + str(exc)[:120])
 
 
-def stylesheet(css):
+def notices(css):
+    from .theme_library import metadata
+    value = metadata(css)[0].get(NOTICE_KEY, {})
+    if not isinstance(value, dict) or len(value) > MEMBER_COUNT - 2:
+        reject('portable license notices must be a bounded object.')
+    paths = set()
+    for path, body in value.items():
+        license_path(path)
+        license_text(body)
+        if path.casefold() in paths:
+            reject('portable license notice paths must be unique, including case.')
+        paths.add(path.casefold())
+    return value
+
+
+def merge_notices(*sources):
+    """Merge validated notice maps without replacing existing attribution."""
+    retained = {}
+    paths = {}
+    for source in sources:
+        for name, notice in source.items():
+            if name in retained and retained[name] != notice:
+                reject('conflicting license notice bodies for ' + name)
+            if name.casefold() in paths and paths[name.casefold()] != name:
+                reject('license notice paths conflict by case.')
+            retained[name] = notice
+            paths[name.casefold()] = name
+    if len(retained) > MEMBER_COUNT - 2:
+        reject('too many retained license notices for a portable appearance.')
+    return retained
+
+
+def stylesheet_metadata(css):
+    from .theme_library import metadata
     if not css.strip():
         reject('the stylesheet is empty.')
     if len(css.encode('utf-8')) > CSS_LIMIT:
         reject('the source stylesheet exceeds the 1 MB runtime limit.')
     if '</style' in css.lower():
         reject('a stylesheet must contain CSS only.')
-    return css
+    return metadata(css)
 
 
 def compile_css(css, manifest, files):
     """Rewrite URL tokens/URL-bearing string forms, not text or regex matches."""
     from .service import validate_theme
-    body = stylesheet(css)
+    from .theme_library import portable, MARKER
+    meta, body = stylesheet_metadata(css)
     try:
         rules = tinycss2.parse_stylesheet(body, skip_comments=False, skip_whitespace=False)
     except RecursionError:
@@ -395,11 +428,21 @@ def compile_css(css, manifest, files):
                 if children:
                     visit(children, depth + 1)
     visit(rules)
-    compiled = tinycss2.serialize(rules)
+    retained = merge_notices(notices(css), {
+        name: files[name].decode('utf-8') for name in manifest.get('licenses', [])
+    })
+    if sum(len(body.encode('utf-8')) for body in retained.values()) > CSS_LIMIT:
+        reject('compiled CSS including license notices exceeds the 1 MB runtime limit.')
+    if retained:
+        meta[NOTICE_KEY] = retained
+    if 'author' in manifest:
+        meta['author'] = manifest['author']
+    header = MARKER + json.dumps(meta, ensure_ascii=True).replace('*/', '*\\/').replace('<', '\\u003c') + ' */\n'
+    compiled = header + tinycss2.serialize(rules)
     if len(compiled.encode('utf-8')) > CSS_LIMIT:
         reject('compiled CSS including license notices exceeds the 1 MB runtime limit.')
     validate_theme(compiled)
-    return compiled
+    return portable(compiled, manifest['name'], manifest.get('description', ''))
 
 
 @dataclass(frozen=True)
@@ -410,7 +453,7 @@ class Package:
 
     @property
     def summary(self):
-        return {'format': 'zip', 'packageVersion': 2, 'base': 'reference-v1',
+        return {'format': 'zip', 'packageVersion': 1,
                 'assetCount': len(self.manifest.get('assets', [])),
                 'licenseCount': len(self.manifest.get('licenses', []))}
 
@@ -464,22 +507,41 @@ def encode(files):
 
 
 def with_metadata(package, name=None, description=None, css=None):
+    from .theme_library import metadata, MARKER
     manifest, files = dict(package.manifest), dict(package.files)
     if name is not None:
         manifest['name'] = name.strip()
     if description is not None:
         manifest['description'] = description
     if css is not None:
-        files[manifest['stylesheet']] = stylesheet(css).encode('utf-8')
+        meta, body = stylesheet_metadata(css)
+        previous, _ = metadata(package.css)
+        retained = merge_notices(notices(package.css), notices(css))
+        if retained:
+            meta[NOTICE_KEY] = retained
+        if 'author' not in meta and 'author' in previous:
+            meta['author'] = previous['author']
+        # Preserve attribution carried only by the validated portable header,
+        # not just the license files declared in the original manifest.
+        header = MARKER + json.dumps(meta, ensure_ascii=True).replace('*/', '*\\/').replace('<', '\\u003c') + ' */\n'
+        css = header + body
+        files[manifest['stylesheet']] = css.encode('utf-8')
     files['appearance.json'] = json.dumps(manifest, ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode('utf-8')
     return validate_files(files)
 
 
 def from_css(css, name, description=None):
-    """Library authoring wraps a named delta in the sole portable envelope."""
-    manifest = {'type': 'appearance', 'formatVersion': 2, 'base': 'reference-v1',
-                'name': name.strip(), 'description': description or '', 'stylesheet': 'theme.css',
-                'assets': [], 'licenses': []}
-    files = {'theme.css': stylesheet(css).encode('utf-8')}
+    """A CSS-only package keeps embedded assets and full portable license notices."""
+    from .theme_library import metadata, portable
+    css = portable(css, name, description)
+    meta, _ = metadata(css)
+    retained = notices(css)
+    manifest = {'type': 'appearance', 'formatVersion': 1, 'name': meta['name'],
+                'description': meta.get('description', ''), 'stylesheet': 'theme.css',
+                'assets': [], 'licenses': sorted(retained)}
+    if 'author' in meta:
+        manifest['author'] = meta['author']
+    files = {'theme.css': css.encode('utf-8'),
+             **{path: body.encode('utf-8') for path, body in retained.items()}}
     files['appearance.json'] = json.dumps(manifest, ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode('utf-8')
     return validate_files(files)
