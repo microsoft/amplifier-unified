@@ -569,7 +569,9 @@ async def test_refresh_preparation_never_imports_or_mounts_live_runtime(mounted_
     h = mounted_host
     original = builtins.__import__
     def guarded(name, *args, **kwargs):
-        if name.startswith('amplifier_module_loop_live') or name in {'children', 'storage'}:
+        if name.startswith('amplifier_module_loop_live') or name in {
+                'children', 'storage', 'amplifier_foundation.session.activation',
+                'amplifier_foundation.session.transcript_guard'}:
             raise AssertionError('Refresh preparation imported a live session before its sources froze')
         return original(name, *args, **kwargs)
     monkeypatch.setattr(builtins, '__import__', guarded)

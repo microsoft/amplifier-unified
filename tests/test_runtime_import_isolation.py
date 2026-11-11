@@ -21,8 +21,13 @@ def test_apply_settings_does_not_require_server_dependencies():
         from types import SimpleNamespace
         sys.path.insert(0, sys.argv[1])
         sys.modules['aiohttp'] = None
+        # Dependency preparation must remain importable in a retained worker
+        # before an included update installs the execution-only session APIs.
+        sys.modules['amplifier_foundation.session.activation'] = None
+        sys.modules['amplifier_foundation.session.transcript_guard'] = None
         assert importlib.util.find_spec('aiohttp') is None
-        from amplifier_web.host.session import _apply_settings
+        from amplifier_web.host.session import _apply_settings, prepare_dependencies
+        assert callable(prepare_dependencies)
         config = SimpleNamespace(settings={}, providers=[])
         ordinary = SimpleNamespace(tools=[], providers=[], hooks=[], session={}, agents={})
         assert _apply_settings(ordinary, config).tools == []
@@ -34,6 +39,7 @@ def test_apply_settings_does_not_require_server_dependencies():
         assert result.tools[0]['config']['browser']['host_adapter'] is True
         assert result.tools[1]['config']['observed_control'] is True
         assert sys.modules['aiohttp'] is None
+        assert sys.modules['amplifier_foundation.session.transcript_guard'] is None
         assert 'amplifier_web.ui_use' not in sys.modules
         assert 'amplifier_web.device_connections' not in sys.modules
     """)
