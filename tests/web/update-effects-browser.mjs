@@ -30,7 +30,7 @@ try{
  for(const [mode,label,code,linked] of [
   ['management-hold','Update waits for global configuration management to settle','management-lock-held',false],
   ['unobservable-hold','Update cannot verify global runtime activity','runtime-observer-unavailable',false],
-  ['operation-hold','Conversation configuration operation remains held for recovery','operation-bound-recovery',true]]){
+  ['mounted-worker-hold','Conversation runtime has not settled','mounted-worker',true]]){
   await receipt(mode);await expect(blockers).toContainText(label);
   await expect(blockers).not.toContainText('Conversation settings are being applied');
   await expect(blockers.getByRole('button',{name:'Settings test',exact:true})).toHaveCount(linked?1:0);

@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {mkdir,writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
+import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url)),out=process.env.AMPLIFIER_TEST_ARTIFACTS;
 if(!out)throw Error('Owned AMPLIFIER_TEST_ARTIFACTS is required');
 await mkdir(out,{recursive:true});
@@ -25,16 +26,9 @@ for(const [id,width,height,mode] of variants){
   await page.route('**/*',route=>{const url=new URL(route.request().url());if(['http:','https:'].includes(url.protocol)&&url.hostname!=='127.0.0.1'){external.push(url.origin);return route.abort()}return route.continue()});
   const activate=async control=>{await expect(control).toBeVisible();await expect(control).toBeEnabled();if(mode==='keyboard'){await control.focus();await expect(control).toBeFocused();await control.press('Enter')}else if(mode==='touch')await control.tap();else await control.click()};
   await page.goto(boot.url);await page.waitForSelector('#amp-one');
-  const settings=page.getByRole('button',{name:/^Settings(?: \d+ unread items)?$/});
-  if(!await settings.isVisible())await activate(page.getByRole('button',{name:'Open navigation',exact:true}));
-  await activate(settings);await expect(page.locator('.a-settings-experience')).toBeVisible();
-  await page.waitForFunction(()=>{const el=document.querySelector('.a-settings-experience');return el&&el.dataset.compact===String((el.closest('.a-overlay')||el).clientWidth<960)});
-  const panel=page.locator('.a-settings-experience');
-  for(let depth=0;await panel.getAttribute('data-compact')==='true'&&await panel.getAttribute('data-settings-index')!=='true';depth++){
-   if(depth>=6)throw Error('Settings Back did not reach index');const previous=await panel.getAttribute('data-settings-route');
-   await activate(panel.locator('.a-settings-mobile-head button').first());await expect(panel).not.toHaveAttribute('data-settings-route',previous);
-  }
-  await activate(page.locator('[data-settings-section="updates"]'));
+  // Use the selected client's maintained App options/Settings entry, with every
+  // gesture still owned by this pointer, keyboard or touch variant (no dispatch).
+  await openSettingsPage(page,'updates',{activate:(_label,control)=>activate(control)});
   await expect(page.locator('.a-settings-experience')).toHaveAttribute('data-settings-page','updates');
   const state=async()=>{const response=await page.request.get(boot.url+'/fixture/update-restart');assert.ok(response.ok());return response.json()};
   const blockers=page.locator('[data-part="update-blockers"]'),restart=page.locator('.a-update-force-restart'),entry=restart.locator('[data-action="updates.forceRestart"]');

@@ -7,6 +7,7 @@ import signal
 import sqlite3
 from pathlib import Path
 import tempfile
+from contextvars import ContextVar
 
 from aiohttp import web
 import settings_ui_server as fixture
@@ -21,15 +22,24 @@ class Runtime(fixture.Runtime):
         self.delivery_checks = []
         self.timeout_inputs = set()
         self.accepted_inputs = set()
+        self.action_context = ContextVar('questions_fixture_action', default=None)
+        self.effects = []
+
+    def observe_effect(self, effect, session, input_id=None):
+        if os.environ.get('AMPLIFIER_QUESTIONS_MODE') == 'dismiss':
+            self.effects.append({'effect': effect, 'sessionId': session['id'], 'inputId': input_id,
+                                 'source': copy.deepcopy(self.action_context.get())})
 
     async def start(self, session, emit, **kwargs):
         self.starts.append(session['id'])
+        self.observe_effect('start', session)
         if os.environ.get('AMPLIFIER_QUESTIONS_MODE') == 'dismiss':
             raise AssertionError('Clearing a reminder must not start a runtime.')
         await super().start(session, emit, **kwargs)
 
     async def send(self, session, text, input_id, emit):
         self.sent.append({'sessionId': session['id'], 'inputId': input_id, 'text': text})
+        self.observe_effect('send', session, input_id)
         if os.environ.get('AMPLIFIER_QUESTIONS_MODE') == 'dismiss':
             raise AssertionError('Clearing a reminder must not send an input.')
         if (session['id'], input_id) in self.timeout_inputs:
@@ -39,12 +49,15 @@ class Runtime(fixture.Runtime):
 
     async def delivery(self, session, input_id):
         self.delivery_checks.append({'sessionId': session['id'], 'inputId': input_id})
-        if os.environ.get('AMPLIFIER_QUESTIONS_MODE') == 'dismiss':
-            raise AssertionError('Clearing a reminder must not check delivery.')
+        self.observe_effect('delivery', session, input_id)
+        # MessageDelivery does a separate passive read when an unresolved
+        # transcript row mounts. Return unknown truthfully; do not hide that
+        # caller behind AssertionError (the host intentionally catches probes).
         return 'accepted' if (session['id'], input_id) in self.accepted_inputs else 'unknown'
 
     async def retry(self, session, text, input_id, emit):
         self.retries.append({'sessionId': session['id'], 'inputId': input_id})
+        self.observe_effect('retry', session, input_id)
         raise AssertionError('Delivery reconciliation must never retry an answer.')
 
 
@@ -68,7 +81,18 @@ async def main(home):
     reminders = []
     if os.environ.get('AMPLIFIER_QUESTIONS_MODE') == 'dismiss':
         # Pre-existing answers, not question.answer calls: this bounded mode
-        # exercises only dismissal and must make zero runtime/provider calls.
+        # exercises dismissal without runtime sends/starts/retries. Independent
+        # transcript-row recovery reads remain observable and input-correlated.
+        dispatch = service.dispatch
+        async def observed_dispatch(action, args=None, *positional, **kwargs):
+            token = runtime.action_context.set({
+                'action': action, 'args': copy.deepcopy(args or {}),
+                'commandId': kwargs.get('command_id')})
+            try:
+                return await dispatch(action, args, *positional, **kwargs)
+            finally:
+                runtime.action_context.reset(token)
+        service.dispatch = observed_dispatch
         for status in ('unknown', 'rejected'):
             created = await service.dispatch('session.create', {
                 'title': f'Saved answer {status}', 'workspace': str(home / 'workspace'),
@@ -132,6 +156,7 @@ async def main(home):
                     'SELECT value FROM questions WHERE session_id=? ORDER BY created_at, id', (observed_sid,))]
             finally:
                 saved.close()
+            persisted['runtimeEffects'] = runtime.effects
         return web.json_response({**persisted, 'sent': runtime.sent, 'questions': service.questions.store.all(observed_sid),
                                  'starts': runtime.starts, 'retries': runtime.retries,
                                  'deliveryChecks': runtime.delivery_checks,

@@ -5,9 +5,11 @@ import {mkdir,writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/update_restart_server.py',import.meta.url))]);
+const stopFixture=ownFixture(fixture,{label:'Update restart fixture'});
 const out=process.env.AMPLIFIER_TEST_ARTIFACTS||'/tmp/update-restart';
-let browser,page,log='';const result={status:'pending',realHTTP:true,activationEffects:false};
+let browser,page,failure,log='';const result={status:'pending',realHTTP:true,activationEffects:false};
 fixture.stderr.on('data',data=>log+=data);
 try{
  await mkdir(out,{recursive:true});
@@ -39,17 +41,31 @@ try{
   await page.setViewportSize({width,height:900});
   await expect(entry).toBeEnabled();await expect(entry).toHaveText('Interrupt work and restart');
   const target=(await evidence()).target;
-  let release;const held=new Promise(resolve=>release=resolve),requests=[];
-  const hold=async route=>{const body=route.request().postDataJSON();if(body?.action==='updates.forceRestart'){requests.push(body);await held}await route.continue()};
+  let release;const held=new Promise(resolve=>release=resolve),requests=[],active=new Set(),routeErrors=[];
+  const hold=route=>{
+   // Own every handler's completion and faults. Playwright's event emitter does
+   // not await rejected route callbacks on our behalf.
+   const handling=(async()=>{const body=route.request().postDataJSON();if(body?.action==='updates.forceRestart'){requests.push(body);await held}await route.continue()})();
+   const owned=handling.catch(error=>routeErrors.push(error)).finally(()=>active.delete(owned));
+   active.add(owned);return owned;
+  };
   await page.route('**/api/actions',hold);
-  const response=page.waitForResponse(r=>r.url().endsWith('/api/actions')&&r.request().method()==='POST'&&r.request().postDataJSON()?.action==='updates.forceRestart');
+  let responseValue,responseError;
+  const response=page.waitForResponse(r=>r.url().endsWith('/api/actions')&&r.request().method()==='POST'&&r.request().postDataJSON()?.action==='updates.forceRestart').then(value=>{responseValue=value},error=>{responseError=error});
   try{
    // Same-task repeated events exercise the synchronous ref fence, not only
    // React's subsequently committed disabled state. Narrow view uses a real click.
    if(width===1280)await entry.evaluate(button=>{button.click();button.click();button.click()});else await entry.click();
    await expect.poll(()=>requests.length).toBe(1);await expect(entry).toBeDisabled();
-  }finally{release();await page.unroute('**/api/actions',hold)}
-  const receipt=await(await response).json();assert.equal(receipt.accepted,true);assert.ok(receipt.requestId);
+  }finally{
+   release();
+   // Removing a still-held handler can auto-handle its Route before continue().
+   // Drain first, then unregister; handler faults are awaited failures.
+   await expect.poll(()=>active.size).toBe(0);await page.unroute('**/api/actions',hold);
+   if(routeErrors.length)throw new AggregateError(routeErrors,'Update restart route handling failed');
+  }
+  await response;if(responseError)throw responseError;
+  const receipt=await responseValue.json();assert.equal(receipt.accepted,true);assert.ok(receipt.requestId);
   await expect(restart.getByRole('alert')).toContainText('update operation');await expect(entry).toBeEnabled();
   const observed=await evidence();const last=observed.calls.at(-1);
   assert.deepEqual(last.args,{...target,confirm:true});assert.equal(last.requestId,receipt.requestId);assert.equal(observed.unknown,true);
@@ -60,12 +76,14 @@ try{
  }
  assert.equal((await evidence()).calls.length,2);assert.deepEqual(errors,[]);
  result.status='passed';result.checks={oneActionPlacement:true,inspectNoEffect:true,preparedNotLatest:true,synchronousBusyLatch:true,staleTargetBackendRefusal:true,exactReceipt:true,asyncRejectionRecovery:true,desktopAndMobile:true,unknownFencePreserved:true};
-}catch(error){result.status='failed';result.error=String(error);if(page)await page.screenshot({path:out+'/failed.png'});throw error}
+}catch(error){failure=error;result.status='failed';result.error=String(error);if(page)try{await page.screenshot({path:out+'/failed.png'})}catch(screenshotError){console.error('Failure screenshot:',screenshotError)}throw error}
 finally{
- try{await browser?.close()}
+ try{
+  await finishFixture({label:'Update restart fixture',originalError:failure,
+   close:[['Update restart browser',()=>browser?.close()]],
+   stop:async()=>{result.fixtureExit=await stopFixture()}});
+ }catch(error){result.status='failed';result.cleanupError=String(error);throw error}
  finally{
-  fixture.kill('SIGTERM');
-  await new Promise(resolve=>{if(fixture.exitCode!==null)return resolve();const timer=setTimeout(()=>{fixture.kill('SIGKILL');resolve()},5000);fixture.once('exit',()=>{clearTimeout(timer);resolve()})});
   result.fixtureLog=log;await writeFile(out+'/result.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));
  }
 }
