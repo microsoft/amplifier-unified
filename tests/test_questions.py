@@ -254,11 +254,12 @@ async def test_late_question_acceptance_reconciles_without_resend(tmp_path, even
         await app.close()
 
 
-@pytest.mark.parametrize('finish', ['timeout', 'cancel'])
+@pytest.mark.parametrize('finish', ['timeout', 'cancel', 'startup'])
 async def test_question_acceptance_wins_racing_send_finalizer(tmp_path, finish):
+    from amplifier_web.runtime import RuntimeStartupError
     runtime = Runtime()
     runtime.gate = asyncio.Event()
-    runtime.failure = TimeoutError('Late timeout')
+    runtime.failure = RuntimeStartupError('Late startup refusal') if finish == 'startup' else TimeoutError('Late timeout')
     app = AppService(tmp_path, runtime, workspace=tmp_path)
     task = None
     try:
@@ -603,6 +604,98 @@ async def test_definite_admission_rejection_preserves_answer_without_replay(tmp_
         retry = await app.dispatch('question.answer', args, command_id='rejected-delivery')
         assert retry['duplicate'] and retry['result']['delivery']['status'] == 'rejected'
         assert len(runtime.sent) == 1
+    finally:
+        await app.close()
+
+
+async def test_startup_dependency_rejection_preserves_answer_without_replay(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    from amplifier_web import runtime_profiles
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.update_diagnostics import CommandFailure
+
+    # Exercise the production preparation -> startup error -> _send receipt ->
+    # question finalizer, not a synthetic post-producer AppError alone.
+    facts = {'exitCode': 1, 'probe': {'ok': False, 'stage': 'prepare',
+        'errorType': 'RuntimeDependencyError', 'reason': 'dependency-unavailable',
+        'arbitrary': 'private-dependency-fixture'}}
+    prepare = AsyncMock(side_effect=CommandFailure(facts))
+    monkeypatch.setattr('amplifier_web.updates.active_release', lambda _: {'current': 'a' * 32})
+    monkeypatch.setattr(runtime_profiles, 'ensure', prepare)
+    runtime = RuntimeManager(retention={'prewarm_on_select': False})
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        q = await create_question(app, sid)
+        await app.dispatch('view.update', {'patch': {'draft': 'Keep my independent draft'}})
+        args = {'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Summary'}
+        saved = (await app.dispatch('question.answer', args, command_id='startup-answer'))['result']
+        input_id = 'question:' + q['id'] + ':answer'
+        assert saved['status'] == 'answered' and saved['revision'] == 2
+        assert saved['delivery']['inputId'] == input_id
+        assert saved['delivery']['status'] == 'rejected'
+        assert saved['delivery']['message'].count('RuntimeDependencyError:') == 1
+        assert app._session()['messages'][0]['delivery']['status'] == 'failed'
+        assert app.state['view']['draft'] == 'Keep my independent draft'
+        assert 'private-dependency-fixture' not in json.dumps(app.get_state())
+        duplicate = await app.dispatch('question.answer', args, command_id='startup-answer')
+        assert duplicate['duplicate'] and duplicate['result'] == saved
+        with pytest.raises(AppError, match='already closed'):
+            await app.dispatch('question.answer', args, command_id='another-startup-answer')
+        assert prepare.await_count == 1 and not runtime.workers
+    finally:
+        await app.close()
+    restored_runtime = RuntimeManager(retention={'prewarm_on_select': False})
+    restored = AppService(tmp_path, restored_runtime, workspace=tmp_path)
+    try:
+        duplicate = await restored.dispatch('question.answer', args, command_id='startup-answer')
+        assert duplicate['duplicate'] and duplicate['result'] == saved
+        assert len([m for m in restored._session(sid)['messages'] if m.get('inputId') == input_id]) == 1
+        assert prepare.await_count == 1 and not restored_runtime.workers
+    finally:
+        await restored.close()
+
+
+@pytest.mark.parametrize('change', [
+    'valid', 'wrong-input', 'wrong-session', 'missing-input', 'missing-session',
+    'unknown', 'accepted', 'missing-delivery', 'list', 'string', 'none',
+    'extra-field', 'wrong-code', 'not-app-error',
+])
+async def test_startup_non_delivery_requires_exact_bound_receipt(tmp_path, monkeypatch, change):
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    calls = []
+    async def send(session, text, input_id, *args, **kwargs):
+        calls.append(input_id)
+        receipt = {'delivery': 'failed', 'inputId': input_id, 'sessionId': session['id']}
+        if change == 'wrong-input':
+            receipt['inputId'] += ':other'
+        elif change == 'wrong-session':
+            receipt['sessionId'] += ':other'
+        elif change.startswith('missing-'):
+            receipt.pop({'missing-input': 'inputId', 'missing-session': 'sessionId',
+                         'missing-delivery': 'delivery'}[change])
+        elif change in {'unknown', 'accepted'}:
+            receipt['delivery'] = change
+        elif change == 'extra-field':
+            receipt['unvalidated'] = True
+        elif change in {'list', 'string', 'none'}:
+            receipt = {'list': [receipt], 'string': json.dumps(receipt), 'none': None}[change]
+        if change == 'not-app-error':
+            raise RuntimeError('Startup-like text is not delivery evidence')
+        raise AppError('Startup refusal', 503,
+                       code='other' if change == 'wrong-code' else 'worker_startup_failed',
+                       receipt=receipt)
+    monkeypatch.setattr(app, '_send', send)
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        q = await create_question(app, sid)
+        result = (await app.dispatch('question.answer', {
+            'sessionId': sid, 'id': q['id'], 'expectedRevision': 1, 'text': 'Summary'}))['result']
+        assert result['delivery']['status'] == ('rejected' if change == 'valid' else 'unknown')
+        assert result['status'] == 'answered'
+        assert calls == [result['delivery']['inputId']]
     finally:
         await app.close()
 

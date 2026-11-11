@@ -4489,7 +4489,8 @@ class AppService:
             # A failed retry says nothing about whether an earlier attempt ran.
             # Preserve proven non-delivery, but never erase prior uncertainty.
             delivery = 'unknown' if retry and not known_undelivered else 'failed'
-            message = str(exc) + (' Earlier delivery is still uncertain; checking does not resend it.' if delivery == 'unknown' else ' Your message has been saved.')
+            startup_message = str(exc)
+            message = startup_message + (' Earlier delivery is still uncertain; checking does not resend it.' if delivery == 'unknown' else ' Your message has been saved.')
             receipt = {'delivery': delivery, 'inputId': input_id, 'sessionId': session['id']}
             async with self.lock:
                 current = self._session(session['id'])
@@ -4497,7 +4498,8 @@ class AppService:
                 # error or the location of its private stderr log. Preserve
                 # that public detail, but never reuse an earlier attempt's
                 # error or expose the exception chain / stderr itself.
-                if current.get('error') and current.get('errorAt') != previous_error_at:
+                if (current.get('error') and current.get('errorAt') != previous_error_at
+                        and current['error'] != startup_message):
                     message += '\n\n' + current['error']
                 self._delivery(current, input_id, delivery)
                 if not retry:

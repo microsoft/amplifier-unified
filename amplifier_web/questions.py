@@ -366,7 +366,15 @@ class Questions:
             status, message = "unknown", "Delivery was interrupted. The saved answer has not been sent again."
             cancelled = True
         except Exception as exc:
-            status = "rejected" if isinstance(exc, AppError) and exc.code == "session_busy" else "unknown"
+            # Only this send's exact pre-input startup receipt proves that the
+            # saved answer was not delivered. Error text/code alone, malformed
+            # receipts and another session/input's failure remain uncertain.
+            startup_rejected = (
+                isinstance(exc, AppError) and exc.code == "worker_startup_failed"
+                and isinstance(exc.receipt, dict)
+                and exc.receipt == {"delivery": "failed", "inputId": input_id, "sessionId": session["id"]}
+            )
+            status = "rejected" if startup_rejected or isinstance(exc, AppError) and exc.code == "session_busy" else "unknown"
             message = str(exc)
         async with self.app.lock:
             record = self.store.get(session["id"], question_id)

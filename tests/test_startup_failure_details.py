@@ -204,6 +204,38 @@ async def test_failed_retry_without_new_worker_detail_does_not_reuse_old_error(t
         await app.close()
 
 
+@pytest.mark.parametrize('distinct', [False, True])
+async def test_startup_error_keeps_distinct_public_detail_without_exact_duplicate(tmp_path, distinct):
+    from amplifier_web.runtime import RuntimeStartupError
+
+    summary = 'The conversation worker could not start. No input was sent.'
+    detail = 'Startup details were saved locally to /safe/worker.log.' if distinct else summary
+    class Runtime:
+        async def send(self, session, text, input_id, emit):
+            await emit('runtime.error', {'sessionId': session['id'], 'error': detail,
+                                        'errorType': 'RuntimeStartupError', 'phase': 'worker_startup'})
+            raise RuntimeStartupError(summary) from ValueError('private-exception-chain')
+
+        async def close(self):
+            pass
+
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        with pytest.raises(AppError) as rejected:
+            await app.dispatch('conversation.send', {'text': 'Saved input'}, command_id='public-detail')
+        error = str(rejected.value)
+        assert error.count(summary) == 1
+        assert error.count(detail) == 1
+        assert 'Your message has been saved.' in error
+        assert 'private-exception-chain' not in error
+        assert app._session()['error'] == error
+        duplicate = await app.dispatch('conversation.send', {'text': 'Saved input'}, command_id='public-detail')
+        assert duplicate['duplicate'] and duplicate['error'] == error
+    finally:
+        await app.close()
+
+
 @pytest.mark.parametrize('detail, category, label', [
     ('AuthenticationError: provider authentication failed', 'authentication', 'AuthenticationError'),
     ('RateLimitError: provider limit reached', 'rate_limit', 'RateLimitError'),
