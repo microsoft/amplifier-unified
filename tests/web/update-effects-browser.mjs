@@ -76,8 +76,14 @@ try{
  await receipt('rollback-ready');
  // The only rollback control is within Advanced details; this is supplemental
  // coverage of a public entry, not ordinary-path credit for hidden internals.
+ // The fixture response precedes the browser's state update. A one-shot button
+ // visibility read can therefore toggle already-open details closed.
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().updates.canRollback)).toBe(true);
  const restore=updates.getByRole('button',{name:'Restore previous components',exact:true});
- if(!await restore.isVisible())await updates.locator('[data-part="ecosystem-update-details"]>summary').click();
+ const advanced=updates.locator('[data-part="ecosystem-update-details"]');
+ if(!await advanced.evaluate(element=>element.open))await advanced.locator(':scope>summary').click();
+ await expect(advanced).toHaveAttribute('open','');
+ await expect(restore).toBeVisible();await expect(restore).toBeEnabled();
  await restore.click();await expect(restore).toHaveCount(0);const after=await receipt();assert.equal(after.generation.active,'previous-generation');assert.deepEqual(after.calls.at(-1),{operation:'rollback',target:'previous-generation'});assert.deepEqual(after.messages,before.originalMessages);
  await page.getByRole('button',{name:'Close panel',exact:true}).click();await expect(composer).toHaveDraft('Keep my unsent update draft');assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),before.sessionId);assert.deepEqual(errors,[]);
  assert.equal(actions.filter(row=>['conversation.send','session.warm','updates.forceRestart'].includes(row.action)).length,0);
