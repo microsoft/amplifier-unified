@@ -110,11 +110,18 @@ class TranscriptWindows:
         if key in self._peer_resident:
             self._peer_resident.move_to_end(key)
             return self._peer_resident[key][0]
-        proof = self.peer_originals.resident(rows, wanted)
+        try:
+            proof = self.peer_originals.resident(rows, wanted)
+        except ValueError:
+            if key is None:
+                raise
+            # A deterministic refusal for immutable committed bytes is reusable
+            # too. Do not rescan the same malformed prefix on each scalar tick.
+            proof = None
         if key is not None:
             # Only canonical committed, detached snapshots supply revision.
             # Mutable resident callers always do a fresh explicit-read scan.
-            size = len(json.dumps(proof.originals, ensure_ascii=False).encode())
+            size = len(json.dumps(proof.originals, ensure_ascii=False).encode()) if proof else 0
             self._peer_resident[key] = (proof, size)
             while self._peer_resident and (len(self._peer_resident) > 16
                     or sum(value[1] for value in self._peer_resident.values()) > 8 * 1024 * 1024):

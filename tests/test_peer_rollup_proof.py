@@ -258,6 +258,7 @@ async def test_inline_passive_reuse_never_hashes_or_fetches_whole_index(app, mon
                 receiving['streaming'] = str(i)
                 assert shown(service, receiving, mid)['attribution']['peer']['available']
             service.db.execute('CREATE TABLE unrelated_scalar(value INTEGER)')
+            service.db.execute('INSERT INTO unrelated_scalar VALUES (1)')
             service.db.commit()
             assert 'attribution' not in shown(service, receiving, mid)
         assert actual(receiving).identity == prepared.identity
@@ -293,3 +294,26 @@ async def test_inline_same_length_corruption_never_reuses_proof(app, monkeypatch
         finally:
             if other_connection:
                 connection.close()
+
+
+async def test_passive_rejected_snapshot_is_not_rescanned_on_each_scalar(app, monkeypatch):
+    service, source, receiving, mid = app
+    long_receiver(service, receiving, count=2001)
+    receiving['messages'][1900]['source'] = 'x' * 201
+    service._publish()
+    windows = service.history.windows
+    actual = windows.peer_originals.resident
+    calls = []
+    def counted(rows, wanted):
+        calls.append(len(rows))
+        return actual(rows, wanted)
+    monkeypatch.setattr(windows.peer_originals, 'resident', counted)
+    with service.clients.bind('preview-client'):
+        for i in range(5):
+            receiving['streaming'] = str(i)
+            assert 'attribution' not in shown(service, receiving, mid)
+        assert calls == [2001]
+        receiving['messages'][1900].pop('source')
+        service._publish()
+        assert shown(service, receiving, mid)['attribution']['peer']['available']
+        assert calls == [2001, 2001]
