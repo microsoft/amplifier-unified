@@ -2,6 +2,29 @@
 
 Status: implementation design and trial preparation; **not a native Windows support claim**.
 
+## Consumer lifecycle completion
+
+The current user goal is a normal downloadable Windows application, not a
+developer bootstrap command. Installation must supply its private prerequisites;
+an information worker must not need WSL, Python, uv, Git, PowerShell 7, a compiler,
+or a command-pasting procedure. Normal launch uses a shortcut and a windowless
+owner-logon host. The selected lifetime is unchanged: survive browser/terminal
+closure while signed in, start at the next sign-in, stop at sign-out.
+
+The retained prototype and foreground qualification do not satisfy that promise.
+Acceptance also requires official download/installer identity, the actual ordinary
+user entry and browser trust/onboarding, managed cross-version update and rollback,
+restart after sign-in, and removal that preserves user data. Signing and download
+reputation must be reported separately; a publisher checksum is not a signature.
+No public support gate opens merely because a source fixture passes.
+
+The consumer candidate selects the installed `pythonw.exe` sibling for its
+Scheduled Task; it does not hide or keep a PowerShell process. Older exact
+`python.exe` task definitions remain inspectable for explicit replacement and
+rollback. Private runtime receipts still identify the actual host PID, exact
+creation time, process image and listening identity. Native windowless worker
+containment and full background lifetime remain affected qualification boundaries.
+
 ## Process-local Proactor cleanup backport
 
 `windows_proactor.py` carries CPython gh-160429's socket-shutdown correction
@@ -29,11 +52,133 @@ It does not authorize modifying a running user's interpreter or restarting a
 host. Deploy a separate qualified candidate with a normal rollback path; retain
 the prior application's evidence and unsent drafts.
 
+## Owner-logon candidate
+
+The selected personal-PC deployment is an **interactive-token Task Scheduler
+host**, not an SCM service: start at sign-in, survive terminal/browser closure,
+and stop at sign-out. It stores no Windows password, requests no elevation and
+does not run agent work as LocalSystem. The explicit prototype installer accepts
+`-Background`; the generated private shortcut selects that same mode.
+
+The installed `windows_installation` library composes the ordinary CLI config,
+TLS, `runtime prepare`, service install and service status operations. A second
+shortcut activation inspects/reopens the same owned task; it does not resync
+dependencies or replace another task. Occupied addresses and foreign task
+definitions are refusals, not permission to adopt or terminate a host.
+
+`runtime prepare/status` distinguishes two results:
+
+- With no AI account, prepare the declared baseline dependencies and installation
+  policy. Report `connectionRequired: true`, `workerReady: false`, no qualified
+  profiles and no inference. Do not invent a provider to pass a profile probe.
+- With a configured account, reuse the canonical updater's complete preparation,
+  no-model profile qualification and exact recorded-generation verification.
+  Activate only after that evidence matches.
+
+Both paths hold the existing exclusive repair lock. A running host holds it
+shared. Recorded dependencies are inspected without branch resolution or repair.
+Damaged receipts stay damaged and visible; shortcut use never refreshes them.
+
+The runner publishes a private registration/run/PID/birth/image receipt. Status
+joins that exact process, the native IPv4 listener table, the private leaf pin
+and authenticated app/data/version health, then rechecks currentness. Normal
+stop requests target only that exact run and wait for its cleanup; Task.Stop,
+force termination and port-based killing are not used. Logs retain a bounded
+128 KiB private tail.
+
+Prepared-account native checks cover real task registration/start, pinned
+health, same-process reopen, normal stop/restart, private logs and removal, plus
+accountless dependency preparation. These are **not** clean-account bootstrap,
+actual sign-in/sign-out, browser trust, automatic app upgrade or rollback
+acceptance. Existing native foreground Sol/file/Stop/history evidence remains
+separate. The public activation gate remains closed until those remaining
+boundaries are qualified. Script execution policy is respected: a policy refusal
+does not authorize changing it or executing the file through another route.
+
+### Fresh-guest prototype result
+
+A separately created Hyper-V guest now provides a genuine Windows 11 Enterprise
+Evaluation x64 / ordinary-user baseline. Before setup, `UnifiedTest` was
+non-administrative, Python/Git/uv/PowerShell 7 commands were absent, and the guest
+WSL feature was disabled. Hyper-V/WSL management on the **lab host** is not a
+prerequisite installed in the guest.
+
+The native prototype entry completed under that account with the default
+PowerShell `Restricted` policy unchanged. It acquired private verified tools and
+ordinary CPython 3.13.17, installed the same original 0.65.0 app wheel and frozen
+dependencies, and created the private launcher. A separate installed audit
+verified 65 noneditable distributions, five canonical full Git origins, 3,594
+hashed installed RECORD entries, all 928 hashed original app members, and
+single-link package files. Capsule delivery was **staged locally**, not downloaded
+from a published Unified release. No app wheel or frontend asset rebuild was
+needed for the bootstrap corrections.
+
+The installed canonical library then prepared the accountless baseline, created
+the user's real interactive-token/Limited sign-in task, and passed authenticated
+process/listener/leaf-pinned health. Same-process reopen did not prepare
+dependencies again. Normal stop, a new-run restart, and final normal stop passed;
+independent inspection found both exact processes gone and port 8942 empty.
+The stopped, enabled logon registration is deliberately retained for the pending
+real sign-out/sign-in check. Finite verification tasks were removed normally.
+No provider credential transfer, inference, browser entry or trust import occurred;
+the authenticated health path did use its canonical private **app control**
+credential. Do not describe that as zero credential reads.
+
+Failed attempts remain evidence: policy-refused script entry, unavailable Python
+download in the original helper catalog, long Git checkout paths, and a native
+entry receipt/check ordering error. Separate verification-helper errors (a
+nonexistent liveness helper and an eight-tick FILETIME rounding error from CIM)
+were corrected using the existing exact native process handle, without replaying
+startup or weakening identity checks. These are not product-failure fixes.
+
+**Still unqualified:** public HTTPS artifact delivery, signed/download reputation,
+browser trust and owner entry, real sign-in/sign-out, and cross-version automatic
+upgrade. The host desktop was locked and the supported controller refused capture;
+no substitute screenshot/keyboard route or lock-policy change was used.
+This is clean-account **prototype bootstrap and lifecycle evidence**, not the
+public “install on any Windows 11 PC” claim or permission to open its gates.
+
+### Clean-account entry correction
+
+The first genuine disposable Windows 11 account exposed a delivery defect:
+Windows PowerShell 5.1's default effective policy was `Restricted`, and the
+ordinary non-admin user's normal invocation of `install.ps1` refused with
+`PSSecurityException` before setup. The policy was not changed. That result
+supersedes any assumption that prepared-account script fixtures established
+zero-prerequisite installation.
+
+The prototype therefore adds a **native x64 executable entry**, built on a
+Windows build runner against the in-box .NET Framework 4.8. No compiler, Python,
+Git, uv, WSL, PowerShell 7 or script-policy change is required on the target.
+`scripts/windows_bootstrap_native.cs` performs bootstrap directly; it does not
+invoke PowerShell, load its automation engine, or repackage the refused script
+as an inline command. Its build preparer
+`scripts/windows_bootstrap_native.py` reuses the exact existing C# `InstallStorage`
+body and canonical helper/app pins at build time, rather than introducing a
+second private-filesystem policy.
+
+This is still an explicit **prototype**, not a public installation path.
+It requires a reviewed manifest digest and preserves the same capsule, frozen
+host graph, private helper/Python layout, installed audit and ordinary launcher.
+The optional `--capsule-file` input permits a staged, hash-verified candidate
+before publication; its receipt explicitly distinguishes that path from an
+official HTTPS download. Local staging is not public-download acceptance.
+`--background` selects the already-defined owner-logon mode; `--no-open`
+prepares setup without opening a browser or starting the app.
+
+Build-source preparation, compilation, restricted-policy execution, clean
+bootstrap, signed/download reputation, browser trust and actual sign-in/out
+remain separate evidence. An unsigned development executable is not a signed
+or SmartScreen-qualified release. Neither entry opens the public activation
+gate, silently changes trust, or qualifies automatic upgrades.
+
 ## Zero-prerequisite bootstrap prototype
 
-The requested direction is a single PowerShell paste for an ordinary Windows
+The initial direction was a single PowerShell paste for an ordinary Windows
 information worker, with **no curl, Git, Python, uv, WSL, PowerShell 7 or winget
-assumed**. `scripts/install.ps1` now has a separate explicit prototype entry:
+assumed**. The clean-account policy result above requires the native entry
+instead of routing around a refused script. The retained `scripts/install.ps1`
+has a separate explicit prototype entry:
 `-PrototypeManifestUrl` plus `-PrototypeManifestSha256`. The no-argument public
 release installer still requires its native-support record and retains its
 closed activation gate. A prototype manifest has `status: prototype`; it is
@@ -48,7 +193,7 @@ installation has run on a clean Windows account.
 ### Chosen prerequisite strategy
 
 1. The selected `pinned-vcs` mode always acquires root-local official uv
-   **0.12.18** and standard **MinGit
+   **0.13.7** and standard **MinGit
    2.56.0.windows.4** ZIPs. Verify pinned SHA-256 before extraction/execution;
    retain whole distributions, licenses and receipts. It does not rely on
    preinstalled developer tools. The retained `offline-wheels` mode may reuse
@@ -64,7 +209,8 @@ installation has run on a clean Windows account.
    origins; it does not replace them with locally built dependency wheels.
 4. Use an absolute Python/launcher and retained helper paths on every relaunch.
    No user/machine PATH, shell profile, default Python, registry registration,
-   service or Scheduler mutation is needed.
+   service or Scheduler mutation is needed for the retained foreground mode.
+   The explicit background mode registers only the owner-logon task described above.
 
 Official references: [uv standalone installation](https://docs.astral.sh/uv/getting-started/installation/),
 [uv unmanaged installer options](https://docs.astral.sh/uv/reference/installer/),
@@ -77,11 +223,20 @@ are a useful architecture/checksum precedent, not a dependency.
 Do not copy execution-policy bypasses from other projects.
 
 Pinned helper digests are those reported by the publishers' exact
-[uv release metadata](https://api.github.com/repos/astral-sh/uv/releases/tags/0.12.18)
+[uv release metadata](https://api.github.com/repos/astral-sh/uv/releases/tags/0.13.7)
 and [Git for Windows metadata](https://api.github.com/repos/git-for-windows/git/releases/tags/v2.56.0.windows.4).
 Publisher-served digests establish integrity, not independent signatures.
 uv verifies its own pinned python-build-standalone download digest; the exact
 Python patch and resulting interpreter still need native candidate checks.
+
+The genuine clean-account run found that the original bootstrap uv 0.12.18 has
+no bundled download for the selected CPython 3.13.17. Its Python-install child
+exited 2 before host installation. A read-only native catalog probe confirms
+uv 0.13.7 includes ordinary Windows x64 CPython 3.13.17; the helper is now pinned
+to that publisher's exact ZIP digest and source-license commit. The selected
+Python, original app wheel and frozen host dependencies do not change.
+The old prepared-account proof and failed bootstrap remain retained; a catalog
+entry alone is not successful interpreter installation or fresh-PC acceptance.
 
 ### Build and delivery interface — trial owner only
 
@@ -102,8 +257,19 @@ actual wheel identities, original app hash/size/metadata, registry lock hashes,
 five canonical full Git refs and the separate backend closure before creating
 output. The source-mode manifest and capsule identity must agree.
 
+The current prototype binds the **0.65.0** wheel built from the byte-verified
+`d9b26e7bb3c5270d377520b82e498111384e931d` app snapshot, SHA-256
+`2c7c7797513eaa5c85ba88937074c635d5cbc8af3a81454d9ab124f0814b977e`.
+Its host lock is `a430eea8399afdb460ea3755f656b9692dfa1ee7c696171e6251b7b7b40538c6`;
+the no-dev/no-editable/no-project/no-hashes uv export is
+`6249ca66ef434f47735286eed61756c4c37e1ead9de607c7724c3adb6b7ffeb5`.
+The native 65-distribution copy-based installation, all five real Git origins,
+installed RECORDs and original app payload were checked using the private pinned
+uv/MinGit tools. This supersedes the old 0.54.5 prototype recipe, not its retained
+evidence. It still does not establish clean-account or browser acceptance.
+
 ```sh
-python scripts/windows_bootstrap_capsule.py --source-mode pinned-vcs --wheelhouse /path/to/60-runtime-wheels --build-wheelhouse /path/to/6-build-wheels --lock /path/to/frozen/uv.lock --production-requirements /path/to/production-requirements.txt --inventory /path/to/reviewed-runtime-inventory.json --output /path/to/new-output --source 1c4ac3b4f9ed5d2d3f588f6fa6c74a119e439153 --version 0.54.5 --python EXACT_3.13_PATCH --url https://github.com/microsoft/amplifier-unified/releases/download/EXACT_PROTOTYPE_TAG/windows-prototype.zip
+python scripts/windows_bootstrap_capsule.py --source-mode pinned-vcs --wheelhouse /path/to/60-runtime-wheels --build-wheelhouse /path/to/6-build-wheels --lock /path/to/frozen/uv.lock --production-requirements /path/to/production-requirements.txt --inventory /path/to/reviewed-runtime-inventory.json --output /path/to/new-output --source d9b26e7bb3c5270d377520b82e498111384e931d --version 0.65.0 --python EXACT_3.13_PATCH --url https://github.com/microsoft/amplifier-unified/releases/download/EXACT_PROTOTYPE_TAG/windows-prototype.zip
 ```
 
 That is an owner-side build template, not a usable installation command or a
@@ -129,6 +295,8 @@ wrong refs/subdirectories, missing/extra wheels or changed hashes. It then uses:
 3. Read-only installed metadata auditing for exactly 65 distributions, no
    editables, all five real repository/commit/subdirectory origins and expected
    versions, then `uv pip check`, normal launcher validation and shortcut creation.
+   Both installation phases use explicit `--link-mode copy`: package payloads
+   must not share mutable file identity with the installer's cache.
 
 These flags were checked against
 [uv 0.12.18 CLI definitions](https://raw.githubusercontent.com/astral-sh/uv/0.12.18/crates/uv-cli/src/lib.rs),
@@ -152,8 +320,16 @@ Anonymous Git access disables credential helpers/configuration. Ordinary
 `USERPROFILE`, `HOMEDRIVE` and `HOMEPATH` stay inherited, not removed or redirected.
 No credentials are saved in the plan/receipt. On relaunch the wrapper restores
 root-local cache, tools, Python and absolute helper PATH. Bootstrap phase uv is
-**0.12.18**; the installed host's `uv==0.13.4` dependency is a distinct artifact,
+**0.13.7**; the installed host's `uv==0.13.4` dependency is a distinct artifact,
 not silently substituted into the install phase.
+
+The first full clean-account checkout also exposed Git's legacy path limit:
+the retained stderr reports `Filename too long` during Foundation checkout.
+This is not an established network/authentication failure. Bootstrap child
+environments now set `core.longpaths=true`; the launcher appends the same Git
+setting after any inherited caller configuration. It preserves existing
+credential settings, rejects malformed/oversized inherited configuration counts,
+and changes neither Windows long-path policy nor user/machine gitconfig.
 
 The original app wheel is a narrow allowed root artifact; this does not grant
 verified app Git identity for later optional-feature addition. Keep that
@@ -868,6 +1044,9 @@ than offering the unusable Windows password form.
 
 Implementation choice for the accepted lifetime: an interactive-token Scheduled Task under the owner SID,
 least privilege, with a user-logon trigger and no stored password.
+The November 7 clean-install follow-up explicitly selected this sign-in
+background host rather than an SCM service. It must not be advertised as an
+always-on Windows service or as surviving sign-out.
 Do not use LocalSystem or S4U to avoid account-password prompts.
 Use absolute executable/data/workspace/shared-state paths and explicit quoting.
 Configure indefinite execution, restart-on-failure and battery behavior
@@ -881,6 +1060,21 @@ network credentials and ownership. Do not pretend a logon task provides it.
 Integrate install/start/stop/restart/status/logs with existing lifecycle commands.
 Task registration is not health: verify version, data identity, authenticated
 response and actual task process. Preserve the single host/reset exclusion.
+The implementation candidate records the actual interpreter PID, exact native
+creation FILETIME, image, registration and random run identity in a private
+receipt. Readiness joins that receipt to the live listener and leaf-pinned
+authenticated health, then rechecks the run. `IRunningTask.EnginePID` is not the
+application PID. Normal stop publishes a private request bound to that exact run,
+allows aiohttp and the application to complete cleanup, and waits for the retained
+process handle and scheduler instance to finish. A timeout is not permission to
+call Task.Stop, force-kill a PID or start a replacement.
+
+Task output is private diagnostic content, not a public/secret-free receipt.
+The candidate keeps a 128 KiB UTF-8 tail, coalescing snapshot publication to at
+most once per second plus final close; neither normal status nor installer logs
+should copy its body. These changes are implementation candidates until their
+native task/host and clean-account installation checks pass. Public activation
+gates remain closed in the meantime.
 An occupied port or unrelated task must never be adopted or terminated.
 If policy blocks registration, explain the failure and offer explicit foreground
 `serve` once that path itself works; do not silently elevate or report turnkey success.
