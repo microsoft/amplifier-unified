@@ -206,6 +206,41 @@ class CleanupError(RuntimeError):
 # Retain kill-on-close lifelines on failed cleanup, even if a caller drops its
 # exception. No scheduler/restart/recovery policy is implemented here.
 _failed_owners = []
+_host_lifetime_jobs = []
+
+
+def contain_current_host():
+    """Bind this stable Windows launcher before it starts any app child.
+
+    This non-inheritable kill-on-close lifeline intentionally remains owned by
+    this process until OS exit. Its descendants cannot retain it or break away.
+    A supervisor crash/sign-out therefore cannot orphan a serving child.
+    Unlike finite WindowsOwnedProcess jobs, it is never force-closed while this
+    host is alive and never used to signal an unrelated PID.
+    """
+    _require_runtime()
+    native = _Native()
+    job = native.check(native.k.CreateJobObjectW(None, None))
+    handle = None
+    assigned = False
+    try:
+        native.configure(job)
+        # Exact self PID/FILETIME; no payload-supplied identity.
+        current = native.check(native.k.OpenProcess(0x00101101, False, os.getpid()))
+        handle = current
+        created = guard.creation_time(native.k, current)
+        native.check(native.k.AssignProcessToJobObject(job, current))
+        assigned = True
+        _host_lifetime_jobs.append((native, job))
+        if not native.member(job, current):
+            raise OSError("Host lifetime containment was not confirmed")
+        return {"pid": os.getpid(), "created": str(created), "killOnClose": True,
+                "inheritable": False}
+    finally:
+        if handle:
+            native.check(native.k.CloseHandle(handle))
+        if not assigned:
+            native.check(native.k.CloseHandle(job))
 
 
 async def _settle(task):

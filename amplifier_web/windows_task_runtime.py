@@ -23,6 +23,8 @@ import uuid
 LIMIT = 8192
 RECEIPT = "task-runtime.json"
 STOP = "task-stop.json"
+RESTART = "task-restart.json"
+RESTART_EXIT = 75
 LOG = "task-output.log"
 LOG_LIMIT = 128 * 1024
 _FIELDS = {"schema", "registration", "run", "pid", "created", "image", "phase"}
@@ -82,6 +84,50 @@ def publish(spec, value, name=RECEIPT):
         pinned.publish_private(name, json.dumps(value).encode("utf-8"), replace=True)
 
 
+def restart_record(value, registration):
+    if (not isinstance(value, dict) or set(value) != {"schema", "run", "target"}
+            or type(value["schema"]) is not int or value["schema"] != 1):
+        raise ValueError("Invalid Windows task restart request.")
+    run = validate(value["run"], registration)
+    if run["phase"] != "listening":
+        raise ValueError("Restart request must name a listening host.")
+    target = value["target"]
+    if (not isinstance(target, dict) or set(target) != {"revision", "generation", "attemptId"}
+            or any(not isinstance(target[key], str) or not re.fullmatch(pattern, target[key])
+                   for key, pattern in (("revision", "[a-f0-9]{40}"),
+                                        ("generation", "[a-f0-9]{32}"),
+                                        ("attemptId", "[a-f0-9]{32}")))):
+        raise ValueError("Invalid Windows task restart target.")
+    return {"schema": 1, "run": run, "target": dict(target)}
+
+
+def read_restart(spec):
+    from .windows_files import directory
+    root = _root(spec)
+    try:
+        with directory(root / "config/services", owned_root=root, create=False) as pinned:
+            raw = pinned.read_private(RESTART, limit=LIMIT)
+    except FileNotFoundError:
+        return None
+    return restart_record(json.loads(raw), spec.registration_id)
+
+
+def request_restart(spec, target):
+    """One exact current-host signal. Supervisor/readiness own the outcome."""
+    from .windows_files import directory
+    run = read(spec)
+    if run is None or run["phase"] != "listening" or run["pid"] != os.getpid():
+        raise RuntimeError("Only the current listening task host may request an app restart.")
+    with process(run["pid"]) as actual:
+        if not matches(run, actual) or actual["exited"]():
+            raise RuntimeError("Task host identity changed before its restart request.")
+        value = restart_record({"schema": 1, "run": run, "target": target}, spec.registration_id)
+        root = _root(spec)
+        with directory(root / "config/services", owned_root=root, create=False) as pinned:
+            pinned.publish_private(RESTART, json.dumps(value).encode(), replace=True)
+    return value
+
+
 @contextmanager
 def process(pid):
     """Retain a query/SYNCHRONIZE handle; access denied is not absence."""
@@ -127,6 +173,41 @@ def matches(record, observed):
     return bool(observed and record["pid"] == observed["pid"]
                 and record["created"] == observed["created"]
                 and PureWindowsPath(record["image"]) == PureWindowsPath(observed["image"]))
+
+
+def parent_pid(pid):
+    """Read native process ancestry; a venv redirector is not the app PID."""
+    if os.name != "nt":
+        raise RuntimeError("Process ancestry requires native Windows.")
+    from ctypes import wintypes as W
+    class Entry(C.Structure):
+        _fields_ = [("size", W.DWORD), ("usage", W.DWORD), ("pid", W.DWORD),
+                    ("heap", C.c_size_t), ("module", W.DWORD), ("threads", W.DWORD),
+                    ("parent", W.DWORD), ("priority", C.c_long), ("flags", W.DWORD),
+                    ("image", W.WCHAR * 260)]
+    kernel = C.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateToolhelp32Snapshot.argtypes = [W.DWORD, W.DWORD]
+    kernel.CreateToolhelp32Snapshot.restype = W.HANDLE
+    kernel.Process32FirstW.argtypes = [W.HANDLE, C.POINTER(Entry)]
+    kernel.Process32NextW.argtypes = [W.HANDLE, C.POINTER(Entry)]
+    kernel.CloseHandle.argtypes = [W.HANDLE]
+    handle = kernel.CreateToolhelp32Snapshot(2, 0)
+    if handle == C.c_void_p(-1).value:
+        raise C.WinError(C.get_last_error())
+    try:
+        entry = Entry()
+        entry.size = C.sizeof(entry)
+        more = kernel.Process32FirstW(handle, C.byref(entry))
+        while more:
+            if entry.pid == pid:
+                return entry.parent
+            more = kernel.Process32NextW(handle, C.byref(entry))
+        if C.get_last_error() != 18:
+            raise C.WinError(C.get_last_error())
+        raise ProcessLookupError("The child process is no longer in the native snapshot.")
+    finally:
+        if not kernel.CloseHandle(handle):
+            raise C.WinError(C.get_last_error())
 
 
 def observe(spec):
@@ -201,6 +282,7 @@ def request_stop(spec, *, timeout=60):
 class Runner:
     def __init__(self, spec):
         self.spec = spec
+        self.exit_code = 0
         with process(os.getpid()) as actual:
             if not actual or actual["exited"]():
                 raise RuntimeError("Cannot establish task runner process identity.")
@@ -220,7 +302,16 @@ class Runner:
 
     async def watch(self):
         from aiohttp.web_runner import GracefulExit
-        while not await asyncio.to_thread(self.stop_requested):
+        while True:
+            # Explicit normal stop wins if it races a restart for the same run.
+            if await asyncio.to_thread(self.stop_requested):
+                break
+            if getattr(self.spec, "supervised", False):
+                request = await asyncio.to_thread(read_restart, self.spec)
+                if (request and all(request["run"][key] == self.record[key]
+                                    for key in _FIELDS - {"phase"})):
+                    self.exit_code = RESTART_EXIT
+                    break
             await asyncio.sleep(0.25)
         self.phase("stopping")
         raise GracefulExit()

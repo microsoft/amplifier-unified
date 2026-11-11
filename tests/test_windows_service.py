@@ -513,6 +513,7 @@ def test_action_enters_existing_cli_in_same_process_with_exact_environment(backe
     monkeypatch.setattr(service.Path, "samefile", lambda *a: True)
     monkeypatch.setattr(cli, "_parse", lambda: "parsed")
     class Runner:
+        exit_code = 0
         def __init__(self, value):
             assert value == spec()
         def phase(self, phase):
@@ -589,7 +590,7 @@ def test_new_spec_freezes_lexical_paths_and_keeps_anonymous_choice(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     previous = spec(github_access="anonymous")
     result = service._new_spec(spec().data_dir, spec().workspace, SID, previous)
-    assert result == previous
+    assert result == replace(previous, supervised=True)
     monkeypatch.setenv("AMPLIFIER_GITHUB_ACCESS", "auto")
     assert service._new_spec(spec().data_dir, spec().workspace, SID, previous).github_access == "auto"
     monkeypatch.setattr(service.sys, "version_info", (3, 14))
@@ -612,6 +613,97 @@ def test_new_background_host_uses_installed_windowless_sibling(tmp_path, monkeyp
     assert service.owned_spec(service.task_xml(value), SID) == value
     # Older console definitions remain inspectable, not silently rewritten.
     assert service.owned_spec(service.task_xml(spec()), SID) == spec()
+
+
+@pytest.mark.parametrize("supervised", [False, True])
+def test_task_host_protocol_roundtrip_and_legacy_definition_identity(supervised):
+    value = spec(supervised=supervised)
+    raw = json.loads(base64.b64decode(value.encoded()))
+    assert raw.get("supervised", False) is supervised
+    assert ("supervised" in raw) is supervised
+    assert service.TaskSpec.decode(value.encoded()) == value
+    assert service.owned_spec(service.task_xml(value), SID) == value
+
+
+@pytest.mark.parametrize("supervised", [None, 1, "true", []])
+def test_unknown_supervision_protocol_is_not_adopted(supervised):
+    with pytest.raises(ValueError, match="protocol"):
+        spec(supervised=supervised)
+
+
+def test_supervisor_normal_stop_does_not_restart_or_infer_generation(monkeypatch):
+    from amplifier_web import windows_task_runtime as runtime
+    value = spec(supervised=True)
+    monkeypatch.setattr(service, "_read", lambda home: ({"state": 4, "instances": 1}, value))
+    monkeypatch.setattr(service, "_launch_python", lambda spec: (spec.python, None))
+    events = []
+    class Child:
+        pid = 123
+        def __init__(self, argv, **kwargs):
+            events.append((argv, kwargs))
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def wait(self):
+            return 0
+        def poll(self):
+            return None
+    monkeypatch.setattr(service.subprocess, "Popen", Child)
+    @contextmanager
+    def process(pid):
+        yield {"pid": pid, "created": "134000000000000001",
+               "image": r"C:\Python\pythonw.exe", "exited": lambda: True}
+    monkeypatch.setattr(runtime, "process", process)
+    records = [None, {"schema": 1, "registration": value.registration_id,
+        "run": "b" * 32, "pid": 123, "created": "134000000000000001",
+        "image": r"C:\Python\pythonw.exe", "phase": "starting"}]
+    monkeypatch.setattr(runtime, "read", lambda spec: records.pop(0))
+    @contextmanager
+    def log(spec):
+        yield SimpleNamespace(write=lambda *a: None)
+    monkeypatch.setattr(runtime, "PrivateLog", log)
+    monkeypatch.setattr(runtime, "read_restart", lambda spec: pytest.fail("normal stop must not request a restart"))
+    assert service._supervise(value) == 0
+    assert len(events) == 1
+    assert events[0][0] == [value.python, "-I", "-m", "amplifier_web.windows_service",
+                            "--host", value.encoded()]
+    assert events[0][1]["stdin"] == subprocess.DEVNULL
+    assert events[0][1]["cwd"] == value.workspace
+
+
+def test_unqualified_supervised_update_owner_is_closed_before_any_native_read(monkeypatch):
+    assert service.SUPERVISED_UPDATES_QUALIFIED is False
+    monkeypatch.setattr(service, "_read", lambda *a: pytest.fail("closed gate must not inspect native tasks"))
+    assert service.update_owner(spec().data_dir) is None
+
+
+@pytest.mark.parametrize("change", ["legacy", "instances", "missing", "other-pid", "starting"])
+def test_supervised_update_requires_the_actual_listening_host(monkeypatch, change):
+    from amplifier_web import application_generations, windows_task_runtime
+    value = spec(supervised=change != "legacy")
+    task = {"state": 4, "instances": 2 if change == "instances" else 1}
+    record = None if change == "missing" else {
+        "pid": os.getpid() + (1 if change == "other-pid" else 0),
+        "phase": "starting" if change == "starting" else "listening"}
+    monkeypatch.setattr(service, "SUPERVISED_UPDATES_QUALIFIED", True)
+    monkeypatch.setattr(service, "_read", lambda home: (task, value))
+    monkeypatch.setattr(windows_task_runtime, "observe", lambda spec: record)
+    monkeypatch.setattr(application_generations, "supports", lambda *a: pytest.fail("unverified owner cannot inspect candidate"))
+    assert service.update_owner(value.data_dir) is None
+
+
+def test_supervised_update_owner_preserves_stable_bootstrap(monkeypatch):
+    from amplifier_web import application_generations, windows_task_runtime
+    value = spec(supervised=True)
+    monkeypatch.setattr(service, "SUPERVISED_UPDATES_QUALIFIED", True)
+    monkeypatch.setattr(service, "_read", lambda home: ({"state": 4, "instances": 1}, value))
+    monkeypatch.setattr(windows_task_runtime, "observe",
+                        lambda spec: {"pid": os.getpid(), "phase": "listening"})
+    seen = []
+    monkeypatch.setattr(application_generations, "supports", lambda path: seen.append(str(path)) or True)
+    assert service.update_owner(value.data_dir) == value
+    assert len(seen) == 1
 
 
 def test_launch_roots_are_public_paths_not_arbitrary_environment():

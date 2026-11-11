@@ -73,3 +73,16 @@ def test_launcher_receipt_is_published_after_audit_before_launcher_reads_it():
     check = source.index('launcher,"--check"')
     shortcut = source.index("var shortcut=Shortcut(")
     assert audit < receipt < check < shortcut
+
+
+def test_background_shortcut_and_initial_launch_select_windowless_interpreter():
+    source = (SCRIPTS / "windows_bootstrap_native.cs").read_text()
+    assert source.count('background?Path.Combine(Path.GetDirectoryName(python),"pythonw.exe"):python') == 2
+    assert "shortcut.TargetPath=entry;" in source
+    assert 'Process.Start(new ProcessStartInfo(entry,' in source
+    assert "Installed windowless launcher missing." in source
+    launcher = (SCRIPTS / "windows_prototype_launch.py").read_text()
+    assert "if sys.stdin is None:" in launcher
+    assert "owner_notice(" in launcher
+    assert "Amplifier will not import it or bypass a browser warning." in launcher
+    assert "elif not args.check and sys.stdin.isatty():" in launcher

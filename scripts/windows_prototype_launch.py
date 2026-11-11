@@ -262,7 +262,19 @@ def launch_background(root: Path, receipt: dict) -> None:
         print("Local CA SHA-256: " + ":".join(f"{byte:02X}" for byte in fingerprint), flush=True)
         print(f"Public CA for review: {ca}", flush=True)
         print("Browser entry is pending trusted HTTPS. Setup never imports a certificate or bypasses a warning.", flush=True)
-        if sys.stdin.isatty():
+        if sys.stdin is None:
+            from amplifier_web.windows_installation import owner_notice
+            approved = owner_notice(
+                "Amplifier uses HTTPS for its private local connection. Windows does not yet trust "
+                "this installation's local certificate.\n\n"
+                "Open the Windows certificate viewer to review it? Certificate trust is your choice. "
+                "Amplifier will not import it or bypass a browser warning.\n\n"
+                "SHA-256: " + ":".join(f"{byte:02X}" for byte in fingerprint),
+                confirm=True)
+            if approved:
+                os.startfile(str(ca))
+                owner_notice("After finishing your certificate review, select OK to check the local connection again.")
+        elif sys.stdin.isatty():
             answer = input("Type REVIEW to open the public certificate for your own trust decision, or Enter to leave the host running: ")
             if answer == "REVIEW":
                 os.startfile(str(ca))
@@ -271,6 +283,10 @@ def launch_background(root: Path, receipt: dict) -> None:
         open_owned_browser(launcher, root, env)
     else:
         print("Host left running; browser entry remains pending your certificate decision.", flush=True)
+        if sys.stdin is None:
+            from amplifier_web.windows_installation import owner_notice
+            owner_notice("Amplifier is running in the background, but browser entry still needs trusted local HTTPS. "
+                         "Your work and settings are kept. Open Amplifier again after your certificate decision.")
     print(f'Normal stop: "{launcher}" --data-dir "{root / "app"}" service stop', flush=True)
     print("Removal: service uninstall stops/removes only the owned task; app data and trust are preserved.", flush=True)
 
@@ -299,7 +315,11 @@ def main() -> int:
             "your previous install was not replaced. Do not bypass TLS/ownership or retry unknown effects.",
             file=sys.stderr, flush=True,
         )
-        if not args.check and sys.stdin.isatty():
+        if not args.check and sys.stdin is None:
+            from amplifier_web.windows_installation import owner_notice
+            owner_notice("Amplifier could not finish opening. Your previous installation and data were not replaced. "
+                         "Keep the installation for support; do not repeat an uncertain installation or bypass a browser warning.")
+        elif not args.check and sys.stdin.isatty():
             try:
                 input("Press Enter to close this failed prototype launcher: ")
             except (EOFError, KeyboardInterrupt):

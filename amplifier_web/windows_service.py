@@ -23,6 +23,9 @@ import uuid
 import xml.etree.ElementTree as ET
 
 SOURCE = "amplifier-unified owner-logon v1"
+# Development admission remains closed until the supervised native transition
+# and recovery fixtures pass. Task registration alone cannot open this gate.
+SUPERVISED_UPDATES_QUALIFIED = False
 NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 LIMIT = 128 * 1024
 LAUNCH_ROOTS = {"AMPLIFIER_HOME", "AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH",
@@ -84,6 +87,7 @@ class TaskSpec:
     registration_id: str
     github_access: str = "auto"
     launch_roots: dict[str, str] = field(default_factory=dict)
+    supervised: bool = False
 
     def __post_init__(self):
         _sid(self.sid)
@@ -104,10 +108,17 @@ class TaskSpec:
             raise ValueError("Only declared public launch roots may be retained.")
         for value in self.launch_roots.values():
             _path(value)
+        if type(self.supervised) is not bool:
+            raise ValueError("Invalid task launch protocol.")
 
     def encoded(self) -> str:
         # Only public launch configuration, never credentials, goes into XML.
-        raw = json.dumps(asdict(self), ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        value = asdict(self)
+        if not self.supervised:
+            # Exact older durable definitions stay inspectable for an explicit
+            # replacement; omission is the original direct-host protocol.
+            value.pop("supervised")
+        raw = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         return base64.b64encode(raw.encode("ascii")).decode("ascii")
 
     @classmethod
@@ -423,7 +434,7 @@ def _new_spec(data_dir, workspace, sid, previous):
                     registration_id=previous.registration_id if previous else uuid.uuid4().hex,
                     github_access=("anonymous" if access == "anonymous" else
                                    previous.github_access if access is None and previous else "auto"),
-                    launch_roots=roots)
+                    launch_roots=roots, supervised=True)
 
 
 def _background_python():
@@ -547,6 +558,45 @@ def current_process_is_managed(data_dir) -> bool:
         return False
 
 
+def update_owner(data_dir):
+    """Require the actual supervised app, not merely a registered task."""
+    from .windows_task_runtime import observe
+    if not SUPERVISED_UPDATES_QUALIFIED:
+        return None
+    value, spec = _read(data_dir)
+    if (spec is None or not spec.supervised or value.get("state") != 4
+            or value.get("instances") != 1):
+        return None
+    record = observe(spec)
+    if not record or record["pid"] != os.getpid() or record["phase"] != "listening":
+        return None
+    # The task's stable bootstrap must support qualified immutable generations.
+    from .application_generations import supports
+    if not supports(Path(spec.python).parent.parent):
+        return None
+    return spec
+
+
+def request_update_restart(data_dir, target):
+    """Commit an exact private host signal, never claim successor readiness."""
+    from .windows_task_runtime import request_restart, read_restart
+    spec = update_owner(data_dir)
+    if spec is None:
+        raise WindowsServiceError("The current host is not a qualified supervised update owner.")
+    from .application_generations import active
+    selected = active(data_dir)
+    if (not selected or any(selected.get(key) != target.get(key)
+                            for key in ("revision", "generation"))):
+        raise WindowsServiceError("The promoted application generation changed.")
+    validated = json.loads((selected["folder"] / "validated.json").read_text())
+    if validated.get("attemptId") != target.get("attemptId"):
+        raise WindowsServiceError("The promoted qualification attempt changed.")
+    request = request_restart(spec, target)
+    if read_restart(spec) != request:
+        raise RuntimeError("The restart signal could not be confirmed; inspect its original receipt.")
+    return request
+
+
 def managed_restart_command() -> tuple[str, ...]:
     raise WindowsServiceError("Automatic Windows host restart is unavailable until exact task/host "
                               "process correlation is qualified. Use service restart from the owner launcher.")
@@ -572,17 +622,100 @@ def _run(encoded: str) -> None:
     os.environ["AMPLIFIER_WEB_HOME"] = spec.data_dir
     os.environ.update(spec.launch_roots)
     os.chdir(spec.workspace)
-    sys.argv = [spec.python, "--no-open", "--data-dir", spec.data_dir,
+    if spec.supervised:
+        from .windows_jobs import contain_current_host
+        contain_current_host()
+        raise SystemExit(_supervise(spec))
+    return _host(spec)
+
+
+def _launch_python(spec):
+    """Select only this installation's canonical verified app generation."""
+    from .application_generations import active, bootstrap_identity, verify_candidate
+    bootstrap = Path(spec.python).parent.parent
+    target = active(spec.data_dir)
+    if target is None:
+        return spec.python, None
+    if target.get("bootstrap") != bootstrap_identity(bootstrap):
+        raise WindowsServiceError("The application generation belongs to another installation.")
+    verify_candidate(target)
+    python = target["prefix"] / "Scripts/pythonw.exe"
+    if not python.is_file():
+        raise WindowsServiceError("The qualified windowless application entry is missing.")
+    return str(python), target
+
+
+def _supervise(spec):
+    """Scheduler owns one stable launcher; each app host has its own run.
+
+    This is not a detached restart helper. The launcher remains within the
+    owner's Scheduler lifetime and waits for each exact child to exit. A normal
+    close stops here. Only an exact private restart receipt selects another app.
+    """
+    from .windows_task_runtime import process, matches, read, read_restart, parent_pid, RESTART_EXIT
+    requested = None
+    while True:
+        value, installed = _read(spec.data_dir)
+        if installed != spec or value.get("state") != 4 or value.get("instances") != 1:
+            raise WindowsServiceError("The scheduled launch definition changed.")
+        python, target = _launch_python(spec)
+        if requested is not None:
+            if not target or any(target.get(key) != requested[key] for key in ("revision", "generation")):
+                raise WindowsServiceError("The requested application launch target changed.")
+            validated = json.loads((target["folder"] / "validated.json").read_text())
+            if validated.get("attemptId") != requested["attemptId"]:
+                raise WindowsServiceError("The application qualification attempt changed.")
+        # Only the actual app owns its private log; concurrent parent snapshots
+        # must not replace the child's final output or contend on publication.
+        previous_run = read(spec)
+        with subprocess.Popen([python, "-I", "-m", "amplifier_web.windows_service",
+                               "--host", spec.encoded()],
+                              cwd=spec.workspace, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)) as child:
+            # CPython's installed venv entry may be a redirector. Join the
+            # freshly published app receipt to that live child's ancestry;
+            # never mistake Scheduler EnginePID or Popen's PID for the host.
+            deadline = time.monotonic() + 60
+            while True:
+                record = read(spec)
+                if record and (not previous_run or record["run"] != previous_run["run"]):
+                    if record["pid"] != child.pid and parent_pid(record["pid"]) != child.pid:
+                        raise WindowsServiceError("The app receipt does not belong to this launched child.")
+                    break
+                if child.poll() is not None or time.monotonic() >= deadline:
+                    raise WindowsServiceError("The background host did not publish its new identity.")
+                time.sleep(0.1)
+            with process(record["pid"]) as actual:
+                if not actual:
+                    raise WindowsServiceError("The background host exited before identity was observed.")
+                if not matches(record, actual):
+                    raise WindowsServiceError("The launched host identity differs from its receipt.")
+                code = child.wait()
+                if code != RESTART_EXIT:
+                    return code
+                request = read_restart(spec)
+                if (not request or not matches(request["run"], actual)
+                        or not actual["exited"]()):
+                    raise WindowsServiceError("No exact completed host restart was recorded.")
+                requested = request["target"]
+                if target and all(target.get(key) == requested[key] for key in ("revision", "generation")):
+                    raise WindowsServiceError("The host requested its unchanged application generation.")
+
+
+def _host(spec):
+    """Run the actual application, not the stable Scheduler launcher."""
+    value, installed = _read(spec.data_dir)
+    python, _target = _launch_python(spec) if spec.supervised else (spec.python, None)
+    if (installed != spec or value.get("state") != 4
+            or not Path(sys.executable).samefile(python)):
+        raise WindowsServiceError("The actual host differs from the owned qualified task launch.")
+    sys.argv = [python, "--no-open", "--data-dir", spec.data_dir,
                 "--workspace", spec.workspace, "serve"]
-    # Keep this process as the host: a child or venv redirector PID must not
-    # masquerade as the scheduler's application process. Updates remain gated
-    # until the replacement/rollback entry has its own native qualification.
     from .windows_task_runtime import PrivateLog, Runner
     from .host_dependencies import prepare_environment
     from . import cli
     prepare_environment()
-    if not Path(sys.executable).samefile(spec.python):
-        raise WindowsServiceError("The running task interpreter differs from its definition.")
     runner = Runner(spec)
     with PrivateLog(spec) as log, redirect_stdout(log), redirect_stderr(log):
         try:
@@ -594,9 +727,23 @@ def _run(encoded: str) -> None:
             raise
         else:
             runner.phase("stopped")
+    return runner.exit_code
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3 or sys.argv[1] != "--run":
+    if len(sys.argv) != 3 or sys.argv[1] not in {"--run", "--host"}:
         raise SystemExit("This module is the owner-logon task action, not a service installer.")
-    _run(sys.argv[2])
+    if sys.argv[1] == "--run":
+        _run(sys.argv[2])
+    else:
+        _require_python()
+        spec = TaskSpec.decode(sys.argv[2])
+        if not spec.supervised or spec.sid != _owner():
+            raise WindowsServiceError("The owner-logon host protocol does not match.")
+        os.environ["PATH"] = spec.tool_path
+        os.environ["AMPLIFIER_SESSION_STATE_HOME"] = spec.state_home
+        os.environ["AMPLIFIER_GITHUB_ACCESS"] = spec.github_access
+        os.environ["AMPLIFIER_WEB_HOME"] = spec.data_dir
+        os.environ.update(spec.launch_roots)
+        os.chdir(spec.workspace)
+        raise SystemExit(_host(spec))

@@ -13,6 +13,20 @@ from pathlib import Path
 import socket
 
 
+def owner_notice(message, *, confirm=False):
+    """Ordinary signed-in-owner dialog; never a trust import or elevation."""
+    import ctypes
+    if os.name != "nt":
+        raise RuntimeError("The installation dialog requires native Windows.")
+    dialog = ctypes.WinDLL("user32", use_last_error=True).MessageBoxW
+    dialog.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint]
+    dialog.restype = ctypes.c_int
+    result = dialog(None, message, "Amplifier Unified", 0x40 | (0x4 if confirm else 0))
+    if not result:
+        raise OSError("The installation dialog could not be displayed.")
+    return result == 6 if confirm else True
+
+
 def listener_present(port=8942):
     if os.name == "nt":
         from .windows_task_runtime import listener_owners

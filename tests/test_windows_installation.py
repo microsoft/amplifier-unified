@@ -127,3 +127,30 @@ def test_failed_health_is_not_host_success_or_automatic_force_cleanup(installati
     with pytest.raises(RuntimeError, match="not ready"):
         run()
     assert calls == [("service", "status", "--wait", "60", "--json")]
+
+
+@pytest.mark.parametrize("result,expected", [(6, True), (7, False)])
+def test_windowless_notice_uses_owner_dialog_without_shell_or_trust_change(monkeypatch, result, expected):
+    import ctypes
+    calls = []
+    class Dialog:
+        def __call__(self, parent, message, title, flags):
+            calls.append((parent, message, title, flags))
+            return result
+    dialog = Dialog()
+    monkeypatch.setattr(setup.os, "name", "nt")
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **kw: SimpleNamespace(MessageBoxW=dialog), raising=False)
+    assert setup.owner_notice("Review the local certificate?", confirm=True) is expected
+    assert calls == [(None, "Review the local certificate?", "Amplifier Unified", 0x44)]
+    assert dialog.restype is ctypes.c_int
+
+
+def test_windowless_notice_failure_is_not_approval(monkeypatch):
+    import ctypes
+    class Dialog:
+        def __call__(self, *args):
+            return 0
+    monkeypatch.setattr(setup.os, "name", "nt")
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **kw: SimpleNamespace(MessageBoxW=Dialog()), raising=False)
+    with pytest.raises(OSError, match="could not be displayed"):
+        setup.owner_notice("Review?", confirm=True)

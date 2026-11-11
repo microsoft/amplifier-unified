@@ -220,12 +220,14 @@ namespace UnifiedBootstrap {
             foreach(ManagementObject cpu in search.Get()) Need(Convert.ToInt32(cpu["Architecture"],CultureInfo.InvariantCulture)==9,"AMD64 processor required.");
         }
         static string Shortcut(string python, string launcher, bool background) {
+            var entry=background?Path.Combine(Path.GetDirectoryName(python),"pythonw.exe"):python;
+            Need(File.Exists(entry),"Installed windowless launcher missing.");
             var path=Path.Combine(Storage.Root,"Launch Unified.lnk"); using(var file=Storage.CreateFile(path)) file.Flush(true);
             dynamic shell=Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell",true));
             try {
                 dynamic shortcut=shell.CreateShortcut(path);
                 try {
-                    shortcut.TargetPath=python; shortcut.Arguments="-I -B "+Quote(launcher)+(background?" --background":"");
+                    shortcut.TargetPath=entry; shortcut.Arguments="-I -B "+Quote(launcher)+(background?" --background":"");
                     shortcut.WorkingDirectory=Storage.Root; shortcut.Description="Experimental Amplifier Unified - owner sign-in background host";
                     shortcut.Save();
                 } finally { System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shortcut); }
@@ -301,7 +303,9 @@ namespace UnifiedBootstrap {
             }
             if(!noOpen) {
                 Stage="selected launcher";
-                Process.Start(new ProcessStartInfo(python,"-I -B "+Quote(launcher)+(background?" --background":"")) {UseShellExecute=true,WorkingDirectory=installRoot});
+                var entry=background?Path.Combine(Path.GetDirectoryName(python),"pythonw.exe"):python;
+                Need(File.Exists(entry),"Installed windowless launcher missing.");
+                Process.Start(new ProcessStartInfo(entry,"-I -B "+Quote(launcher)+(background?" --background":"")) {UseShellExecute=true,WorkingDirectory=installRoot});
             }
         }
         internal static int Main(string[] values) {

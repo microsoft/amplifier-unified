@@ -564,21 +564,24 @@ async def _activate(manager, *, force=None, holds=None):
                 from .update_restart import RestartRejected
                 raise RestartRejected('The earlier application handoff still needs verification. Its outcome and work gate were preserved.')
             return
-        message=('Automatic Windows application replacement is not available. '
-                 'The running host and prepared candidate are unchanged. '
-                 'Use a qualified manual installation handoff; restarting the '
-                 'current launcher alone does not install this candidate.')
-        manager.diagnostics.begin('application',revision,release.get('attemptId'),
-                                  application_extras=release.get('extras'))
-        manager.diagnostics.record('restart-capability','failed',
-                                   errorType='RuntimeError')
-        await manager.publish(phase='error',error=message,
-            detail='No application pointer, installed package, worker or process was replaced. '
-                   'The staged receipt is retained; automatic activation will not retry it.')
-        if force is not None:
-            from .update_restart import RestartRejected
-            raise RestartRejected(message)
-        return
+        from .windows_service import update_owner
+        owner = await asyncio.to_thread(update_owner, manager.home)
+        if owner is None or force is not None:
+            message=('Automatic Windows application replacement is not available. '
+                     'The running host and prepared candidate are unchanged. '
+                     'Use a qualified manual installation handoff; restarting the '
+                     'current launcher alone does not install this candidate.')
+            manager.diagnostics.begin('application',revision,release.get('attemptId'),
+                                      application_extras=release.get('extras'))
+            manager.diagnostics.record('restart-capability','failed',
+                                       errorType='RuntimeError')
+            await manager.publish(phase='error',error=message,
+                detail='No application pointer, installed package, worker or process was replaced. '
+                       'The staged receipt is retained; automatic activation will not retry it.')
+            if force is not None:
+                from .update_restart import RestartRejected
+                raise RestartRejected(message)
+            return
     folder=manager.directory/'applications'/revision
     if generation:folder=folder/generation
     marker=folder/'validated.json'
@@ -664,6 +667,9 @@ async def _activate(manager, *, force=None, holds=None):
     if can_promote and artifact is not None:
         can_promote = await manager.diagnostics.run('bootstrap-artifact-compatibility',
             can_read_candidate, process, bootstrap, helper_python, validated)
+    if sys.platform == 'win32' and (not can_promote or artifact is None):
+        raise ValueError('Windows updates require an official qualified immutable app generation; '
+                         'the current installation was not replaced.')
     if 'managed-browser' in extras:
         current_browser = await qualify_browser(manager, helper_python)
         if current_browser != validated.get('managedBrowser'):
@@ -814,6 +820,7 @@ async def _activate(manager, *, force=None, holds=None):
     manager.diagnostics.clear_failure()
     await manager.publish(phase='activating',pendingApp=None,pendingReplacement=None,appAvailable=False,error=None,
         pendingRestart={'version':validated['version'],'revision':revision,'attemptId':manager.diagnostics.state['attemptId'],
+                        **({'generation': generation} if sys.platform == 'win32' else {}),
                         'sourceInstanceId':manager.running_identity['instanceId'],'requestedAt':time.time(),
                         **({'updateIntent': intent} if intent is not None else {}),
                         **({'forceRestart':replacement['forceRestart']} if 'forceRestart' in replacement else {}),
@@ -922,9 +929,16 @@ async def request_managed_restart(manager):
     dispatched=False
     try:
         await asyncio.to_thread(prepare_managed_shutdown,manager.home)
-        command=managed_restart_command()
-        dispatched=True
-        result=await process(*command,timeout=30)
+        if sys.platform == 'win32':
+            from .windows_service import request_update_restart
+            target = {key: marker[key] for key in ('revision', 'generation', 'attemptId')}
+            dispatched = True
+            await asyncio.to_thread(request_update_restart, manager.home, target)
+            result = None
+        else:
+            command=managed_restart_command()
+            dispatched=True
+            result=await process(*command,timeout=30)
     except BaseException as error:
         if not isinstance(error,(Exception,asyncio.CancelledError)):raise
         facts={'durationMs':round((time.monotonic()-started)*1000),'errorType':exception_type(error)}

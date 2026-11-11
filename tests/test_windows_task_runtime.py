@@ -43,6 +43,66 @@ def test_record_retains_exact_64bit_time_and_detaches_dictionary():
     assert result["created"] == "134000000000000001"
 
 
+def restart(**changes):
+    return {"schema": 1, "run": record(), "target": {
+        "revision": "c" * 40, "generation": "d" * 32, "attemptId": "e" * 32}, **changes}
+
+
+@pytest.mark.parametrize("change", [
+    {"schema": True}, {"schema": 2}, {"extra": "not permitted"},
+    {"run": record(phase="stopped")}, {"run": record(created=134000000000000001)},
+    {"run": record(registration="f" * 32)}, {"target": None},
+    {"target": {"revision": "main", "generation": "d" * 32, "attemptId": "e" * 32}},
+    {"target": {"revision": "c" * 40, "generation": "d" * 32, "attemptId": "short"}},
+    {"target": {"revision": "c" * 40, "generation": "d" * 32, "attemptId": "e" * 32,
+                "command": "never execute caller arguments"}},
+])
+def test_restart_receipt_is_closed_exact_run_and_target(change):
+    with pytest.raises(ValueError):
+        runtime.restart_record(restart(**change), spec().registration_id)
+
+
+def test_restart_receipt_detaches_and_preserves_exact_birth():
+    value = restart()
+    result = runtime.restart_record(value, spec().registration_id)
+    assert result == value and result is not value
+    assert result["run"] is not value["run"] and result["target"] is not value["target"]
+    assert result["run"]["created"] == "134000000000000001"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", [True, False])
+async def test_supervised_host_closes_normally_with_distinct_restart_exit(monkeypatch, stop):
+    from aiohttp.web_runner import GracefulExit
+    runner = object.__new__(runtime.Runner)
+    runner.spec = SimpleNamespace(supervised=True)
+    runner.record, runner.exit_code = record(), 0
+    phases = []
+    runner.phase = phases.append
+    runner.stop_requested = lambda: stop
+    monkeypatch.setattr(runtime, "read_restart", lambda spec: restart())
+    with pytest.raises(GracefulExit):
+        await runner.watch()
+    assert runner.exit_code == (0 if stop else runtime.RESTART_EXIT)
+    assert phases == ["stopping"]
+
+
+@pytest.mark.asyncio
+async def test_prior_run_restart_never_restarts_the_current_host(monkeypatch):
+    runner = object.__new__(runtime.Runner)
+    runner.spec = SimpleNamespace(supervised=True)
+    runner.record, runner.exit_code = record(), 0
+    runner.phase = lambda *a: pytest.fail("a prior run cannot stop this host")
+    runner.stop_requested = lambda: False
+    monkeypatch.setattr(runtime, "read_restart", lambda spec: restart(run=record(run="f" * 32)))
+    async def stop_observing(delay):
+        raise asyncio.CancelledError
+    monkeypatch.setattr(runtime.asyncio, "sleep", stop_observing)
+    with pytest.raises(asyncio.CancelledError):
+        await runner.watch()
+    assert runner.exit_code == 0
+
+
 def test_control_files_use_only_existing_private_boundary(monkeypatch):
     from amplifier_web import windows_files
     events, files = [], {}
@@ -239,3 +299,14 @@ def test_native_listener_table_joins_only_actual_listening_process():
         assert runtime.listener_owned({"pid": os.getpid()}, "127.0.0.1", port)
         assert not runtime.listener_owned({"pid": os.getpid() + 1}, "127.0.0.1", port)
     assert os.getpid() not in runtime.listener_owners("127.0.0.1", port)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows Toolhelp process ancestry required")
+def test_native_ancestry_joins_real_child_without_environment_claims():
+    child = subprocess.Popen([sys.executable, "-I", "-S", "-c", "import time;time.sleep(1)"])
+    try:
+        assert runtime.parent_pid(child.pid) == os.getpid()
+        assert child.wait(timeout=10) == 0
+    finally:
+        if child.poll() is None:
+            child.wait(timeout=10)
