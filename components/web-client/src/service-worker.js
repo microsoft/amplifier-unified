@@ -29,3 +29,10 @@ self.addEventListener('fetch',event=>{
     }));
   }
 });
+self.addEventListener('notificationclick',event=>{
+  event.notification.close();
+  const id=event.notification.data?.sessionId;
+  if(typeof id!=='string'||!id||id.length>200||/[\u0000-\u001f\u007f]/.test(id))return;
+  // Explicit click opens only a same-origin chat link, not a command or approval.
+  event.waitUntil(self.clients.openWindow('/?chat='+encodeURIComponent(id)));
+});

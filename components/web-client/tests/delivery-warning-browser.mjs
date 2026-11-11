@@ -97,7 +97,65 @@ try{
  await expect(original()).toHaveCount(0);
  assert.deepEqual(effects(),[]);await expect(composer).toHaveDraft('Keep the next unsent thought');
  await page.reload();await expect.poll(async()=>(await outbox()).length).toBe(0);
+ // Saved questions distinguish a known non-delivery from an uncertain receipt.
+ // Reuse this mounted synthetic peer; never read or deliver a real user's answer.
+ const question=(id,status)=>({id,revision:3,contentRevision:1,status:'answered',prompt:'Choose a path',dependency:'',required:true,options:[],allowFreeText:true,
+  answer:{text:'Saved choice '+id,questionRevision:1},delivery:{status,inputId:'input-'+id,message:'Fixture startup detail'}});
+ state.sessions[0].questions=[question('rejected','rejected'),question('unknown','unknown')];await emit();
+ const rejected=page.locator('[data-question-id="rejected"]'),unknown=page.locator('[data-question-id="unknown"]');
+ await expect(rejected.getByText('Answer saved; not delivered.',{exact:true})).toBeVisible();
+ await expect(rejected.getByText('Fixture startup detail',{exact:true})).toBeVisible();
+ await expect(rejected.getByRole('button',{name:/Check delivery|Retry|Send again/})).toHaveCount(0);
+ await expect(unknown.getByText('Answer saved. Delivery is unconfirmed; it has not been sent again.',{exact:true})).toBeVisible();
+ assert.equal(calls.filter(c=>c.action==='conversation.delivery'&&c.args.inputId.startsWith('input-')).length,0);
+ holdChecks=true;
+ const check=unknown.getByRole('button',{name:'Check delivery',exact:true});
+ await check.focus();await check.press('Enter');
+ await expect(unknown.getByRole('button',{name:'Checking delivery…',exact:true})).toBeDisabled();
+ await expect.poll(()=>pending.length).toBe(1);
+ const questionCheck=pending.shift();
+ assert.deepEqual(questionCheck.body.args,{sessionId:'chat',inputId:'input-unknown'});
+ await questionCheck.route.fulfill({json:{accepted:true,result:{sessionId:'chat',inputId:'input-unknown',source:questionCheck.source,delivery:'unknown'},state:shell.state()}});
+ holdChecks=false;
+ await expect(check).toBeEnabled();
+ await expect(unknown.getByText('Delivery is still unconfirmed. Nothing was sent again; other work can continue.',{exact:true})).toBeVisible();
+ await page.screenshot({path:artifact+'/saved-questions-mobile.png'});
+ state.sessions[0].questions[1].delivery.status='accepted';await emit();
+ await expect(page.locator('[data-part="questions"] [data-question-id="unknown"]')).toHaveCount(0);
+ // The ordinary chat mounts active questions only. Accepted history rendering
+ // is qualified directly by questions-status.test.mjs, not an invented control.
+ await expect(page.locator('[data-part="questions"]')).not.toContainText('Saved choice unknown');
+ await expect(page.locator('.a-question-notice')).toContainText('An answer was saved but not delivered');
+ // Multiple reasons for one chat stay visible, without becoming multiple chats.
+ const target={hostInstanceId:'fixture-shell-host',revision:'a'.repeat(40),generation:'b'.repeat(32),attemptId:'fixture-update'};
+ state.updates={phase:'app-staged',forceRestartTarget:target,pendingApp:{...target,latest:'v99.0.0'},
+  application:{id:'application',kind:'app',label:'Amplifier Unified',current:'99.0.0',latest:'v99.0.0',status:'current'},
+  blockers:[{kind:'conversation',label:'Fixture running conversation',sessionId:'chat',title:'chat'},
+   {kind:'worker',label:'Fixture background worker',sessionId:'chat',title:'chat'},
+   {kind:'configuration',label:'Fixture recovery hold',reasonCode:'operation-bound-recovery',sessionId:'other',title:'other'},
+   {kind:'future-kind',label:'Fixture unknown blocker'}]};
+ state.view={...state.view,panel:'settings',settingsSection:'maintenance',settingsExpanded:['updates']};await emit();
+ const blockers=page.locator('[data-part="update-blockers"]'),summary=blockers.locator(':scope > summary');
+ await expect(summary).toHaveText('View update blockers (4 reasons · 2 distinct chats)');
+ await summary.focus();await summary.press('Enter');
+ await expect(blockers.getByRole('region',{name:'Running, preparing, and background work'}).locator('li')).toHaveCount(2);
+ await expect(blockers.getByRole('region',{name:'Configuration recovery holds'})).toContainText('Fixture recovery hold');
+ await expect(blockers.getByRole('region',{name:'Other update blockers'})).toContainText('Fixture unknown blocker');
+ await expect(blockers.locator('[data-action="session.select"]')).toHaveCount(3);
+ const force=blockers.getByRole('button',{name:'Force restart…',exact:true});await force.focus();await force.press('Enter');
+ const confirmation=blockers.getByRole('alertdialog',{name:'Confirm update restart'});
+ await expect(confirmation.getByRole('button',{name:'Cancel',exact:true})).toBeFocused();
+ await expect(confirmation).toContainText('will not be replayed automatically');
+ await confirmation.press('Escape');await expect(confirmation).toHaveCount(0);await expect(force).toBeFocused();
+ await force.press('Enter');state.updates.forceRestartTarget={...target,attemptId:'changed'};await emit();
+ await expect(confirmation.getByRole('button',{name:'Interrupt work and restart',exact:true})).toBeDisabled();
+ await confirmation.press('Escape');
+ await page.screenshot({path:artifact+'/update-blocker-groups-mobile.png'});
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ assert.equal(calls.filter(c=>c.action==='updates.forceRestart'||c.action==='question.answer'||c.action==='question.cancel'||c.action==='conversation.retry'||c.action==='configuration.apply').length,0);
+ assert.equal(calls.filter(c=>c.action==='conversation.delivery'&&c.args.inputId.startsWith('input-')).length,1);
+ assert.deepEqual(effects(),[]);
  assert.deepEqual(errors,[]);
- await writeFile(artifact+'/browser-result.json',JSON.stringify({passed:true,calls:calls.filter(c=>c.action.startsWith('conversation.')),effects:effects(),errors,attachmentPreserved:true,exactWindowIndependentReceipt:true},null,2));
- console.log('Delivery warning browser passed: dismiss/restore/reload/chat isolation/sending fence/pending check/mobile/retained draft and attachment/exact receipt outside window/no resend.');
+ await writeFile(artifact+'/browser-result.json',JSON.stringify({passed:true,calls:calls.filter(c=>c.action.startsWith('conversation.')),effects:effects(),errors,attachmentPreserved:true,exactWindowIndependentReceipt:true,savedQuestionStates:['rejected','unknown','accepted'],explicitQuestionChecks:1,blockerReasons:4,distinctBlockerChats:2,keyboardDisclosureAndRestartCancel:true,staleRestartDisabled:true},null,2));
+ console.log('Delivery warning browser passed: existing recovery cases plus saved question rejected/unknown/accepted, explicit keyboard check/no resend, grouped blockers with exact counts, keyboard disclosure/restart cancel and stale-target fence.');
 }finally{if(browser)await browser.close();if(vite)await vite.close()}
