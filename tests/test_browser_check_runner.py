@@ -3407,16 +3407,22 @@ def test_split_registry_initialization_preserves_order_and_binds_both_sources(tm
     assert not (tmp_path / '.build').exists(), 'Reading initial coverage must not prepare or execute the client'
 
 
-@pytest.mark.parametrize('fault', ['missing-client', 'duplicate-id', 'missing-order-id', 'duplicate-order-id', 'stale-prepared'])
+@pytest.mark.parametrize('fault', ['missing-client', 'duplicate-id', 'missing-order-id',
+                                  'extra-order-id', 'unknown-order-id', 'duplicate-order-id', 'stale-prepared'])
 def test_split_registry_never_falls_back_or_loses_coverage(tmp_path, fault):
     host, client, selection = owned_registry_fixture(tmp_path)
     if fault == 'missing-client':
         client.unlink()
     elif fault == 'duplicate-id':
         client.write_text(json.dumps({'schemaVersion': 1, 'scenarios': [scenario('host-case', 'pass')]}))
-    elif fault in {'missing-order-id', 'duplicate-order-id'}:
+    elif fault in {'missing-order-id', 'extra-order-id', 'unknown-order-id', 'duplicate-order-id'}:
         plan = json.loads(host.read_text())
-        plan['scenarioOrder'] = ['host-case'] if fault == 'missing-order-id' else ['host-case', 'host-case']
+        plan['scenarioOrder'] = {
+            'missing-order-id': ['host-case'],
+            'extra-order-id': ['client-case', 'host-case', 'extra-case'],
+            'unknown-order-id': ['client-case', 'extra-case'],
+            'duplicate-order-id': ['host-case', 'host-case'],
+        }[fault]
         host.write_text(json.dumps(plan))
     else:
         prepared = tmp_path / '.build/web-client'

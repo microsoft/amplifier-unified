@@ -26,8 +26,6 @@ GLOBAL_ACTIONS = {
     'settings.update': {'settings', 'workspaceDefaults', 'bundleDefaults'},
     'bundle.default': {'settings', 'bundleDefaults'},
     'theme.save': set(), 'theme.import': set(), 'theme.update': set(), 'theme.delete': set(),
-    'theme.apply': {'theme'}, 'theme.preview': set(),
-    'theme.revert': {'theme'}, 'theme.reset': {'theme'},
     'notification.request': set(),
     'runtime.retention.update': {'runtime'},
     'message.copy': set(), 'message.copyResult': set(),

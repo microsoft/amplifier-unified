@@ -121,6 +121,12 @@ released clients, custom components, and explicit public APIs have their own
 contracts and version policies. Preserve or deliberately revise those contracts
 with their owners instead of silently changing their promised behavior.
 
+Appearance work follows the [appearance contract](docs/shell/appearance-contract.md)
+and the shared-client consumer UX baseline. Keep ordinary settings focused on the
+user's choice; disclose browser-only exceptions without turning each row into a
+storage-scope form. Shared Reference fixes belong in the selected web client's
+common foundation; individual appearances supply intentional visual differences.
+
 ## Interactive archive boundary
 
 Keep archive feedback/navigation in the bundled interactive controls, not the

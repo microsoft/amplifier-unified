@@ -1,25 +1,24 @@
-"""A new document restores presentation/drafts, never a previous theme preview."""
+"""A new document never inherits another document's appearance preview."""
 from copy import deepcopy
-
-import pytest
 
 from test_canvas_apps import app, dispatch
 
 
-async def test_resumed_client_ends_theme_preview_without_changing_source_or_drafts(app):
-    committed = deepcopy(app.state['theme'])
-    await dispatch(app, 'view.update', {'patch': {
-        'draft': 'An unfinished conversation', 'scheme': 'dark', 'navWidth': 230,
-    }})
-    await dispatch(app, 'theme.preview', {'name': 'Temporary', 'css': '#amp-one{color:red}'})
+async def test_resumed_client_ends_preview_without_changing_source_or_drafts(app):
+    committed = app.appearance.shared()
+    await dispatch(app, 'view.update', {'patch': {'draft': 'An unfinished conversation', 'navWidth': 230}})
+    await dispatch(app, 'appearance.preview', {'name': 'Temporary', 'css': '#amp-one{color:red}'})
     source = deepcopy(app.clients.records['one'])
+    preview = deepcopy(app.appearance.read('one')['preview'])
     resumed = app.clients.attach('reloaded', resume='one')
-    assert resumed['view']['themePreview'] is False
-    assert app.clients.records['one'] == source, 'Another document keeps its own active preview'
-    for key in ('draft', 'scheme', 'navWidth', 'themeDraft', 'themeDraftName'):
+    assert app.appearance.read('reloaded')['preview'] is None
+    assert app.appearance.read('one')['preview'] == preview
+    assert app.clients.records['one'] == source
+    for key in ('draft', 'navWidth'):
         assert resumed['view'][key] == source['view'][key]
     assert resumed['selectedSessionId'] == source['selectedSessionId']
-    assert app.state['theme'] == committed
-    # Reattaching the same live document must not end a newly requested preview.
-    await dispatch(app, 'theme.preview', {'name': 'New preview', 'css': '#amp-one{color:blue}'}, client='reloaded')
-    assert app.clients.attach('reloaded')['view']['themePreview'] is True
+    assert app.appearance.shared() == committed
+    await dispatch(app, 'appearance.preview', {'name': 'New preview', 'css': '#amp-one{color:blue}'}, client='reloaded')
+    own = app.appearance.read('reloaded')['preview']
+    app.clients.attach('reloaded')
+    assert app.appearance.read('reloaded')['preview'] == own

@@ -119,7 +119,8 @@ class ClientViews:
             record.update(kind=kind, updatedAt=time.time(), deviceCommands=[])
             # A new document may restore its editor and preferences, but not an
             # uncommitted appearance preview from the document it copied.
-            record["view"]["themePreview"] = False
+            for key in ('themePreview', 'themeUndo', 'themeDraft', 'themeDraftName'):
+                record['view'].pop(key, None)
             # A new page mounts its own inline viewers. Copying their leases
             # would retain invisible frames and stale commands from the old tab.
             views = record.get('canvasViews', {})
@@ -292,8 +293,9 @@ class ClientViews:
             self.dirty.add(identity)
         return self.records.get(identity) if identity is not None else None
 
-    def draft(self, session_id, text, document=...):
-        record = self.record()
+    def prepare_draft(self, session_id, text, document=...):
+        """Validate retained quoted commentary before a mixed view edit commits."""
+        record = self.records[self.current.get()]
         if document is ...:
             previous = record.get("draftDocuments", {}).get(session_id or "")
             old_text = record.get("drafts", {}).get(session_id or "", "")
@@ -305,6 +307,11 @@ class ClientViews:
                 document = copy.deepcopy(previous)
                 if text != old_text:
                     document['segments'].append({'type': 'text', 'text': text[len(old_text):]})
+        return document
+
+    def draft(self, session_id, text, document=...):
+        document = self.prepare_draft(session_id, text, document)
+        record = self.record()
         record.setdefault("drafts", {})[session_id or ""] = text
         documents = record.setdefault("draftDocuments", {})
         if document is None:
@@ -394,6 +401,10 @@ class ClientViews:
                               "hostInstanceId": self.service.instance_id, "reconnect": "snapshot"}
         if record['kind'] == 'web':
             snapshot['client']['build'] = self.service.installed_build.project()
+            appearance = self.service.appearance.read(self.current.get())
+            snapshot['appearance'] = appearance
+            snapshot['view'] = {**snapshot.get('view', {}), **{
+                key: value for key, value in appearance['effective'].items() if key in ('scheme', 'layout')}}
         snapshot["computerVisual"] = self.service.computer_visual.project(self.current.get())
         snapshot["draftAttachments"] = copy.deepcopy(record.get("attachments", {}).get("", []))
         snapshot["attachmentDraftId"] = self.attachment_draft_id()

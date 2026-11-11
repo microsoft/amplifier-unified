@@ -1,184 +1,63 @@
-"""Portable CSS appearances, with bundled examples and a persistent user library."""
+"""Reference deltas: a shared ZIP library, independent of preference selection."""
 from __future__ import annotations
 
-import hashlib
-import json
-import os
-import stat
-import uuid
+import base64
 from collections import OrderedDict
 from contextlib import contextmanager
+import hashlib
 from importlib.resources import files
+import os
 from pathlib import Path
 import re
+import stat
 import threading
+import uuid
 
 from . import appearance_packages as packages
+from .errors import AppError
 
-LIMIT = 1_000_000
-MARKER = '/* amplifier-appearance: '
+LIMIT = packages.CSS_LIMIT
 PACKAGE_SUMMARY_CACHE_LIMIT = 128
 _PACKAGE_SUMMARY_LOCK = threading.Lock()
-TOKENS = ('bg', 'surface', 'soft', 'ink', 'muted', 'line', 'accent', 'tint', 'green', 'danger')
-RESOURCE_PRESETS = {
-    'digital-rain': {
-        'name': 'Digital Rain',
-        'description': 'Layered emerald code rain, with pale mint light and deep green dark modes.',
-        'palette': {'bg': '#e8f2eb', 'surface': '#f8fcf9', 'ink': '#143522', 'accent': '#176c3b', 'line': '#a5c2ae'},
-        'background': 'none',
-        'radius': '8px', 'heading': '"SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace', 'tag': 'Animated',
-    },
-    'lightline': {
-        'name': 'Lightline',
-        'description': 'Luminous ivory and platinum by day; obsidian and cyan by night. Fine architectural light paths, warm personal messages and readable monospace conversation. Static and self-contained.',
-        'palette': {'bg': '#efefec', 'surface': '#fffffc', 'ink': '#242a2e', 'accent': '#315d6b', 'line': '#a0a8aa'},
-        'background': 'none',
-        'radius': '8px', 'heading': 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif', 'tag': 'Architectural',
-    },
-    'ready': {
-        'name': 'Breadbin',
-        'description': 'Warm ivory casing, a violet conversation screen and a restrained four-color header edge. Static and self-contained.',
-        'palette': {'bg': '#d5c6a6', 'surface': '#f7f1e6', 'ink': '#332d28', 'accent': '#43367b', 'line': '#b6a88d'},
-        'background': 'none',
-        'radius': '5px', 'heading': 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        'tag': 'Retro / Hardware',
-    },
-}
-PRESETS = {
-    'aurora': {
-        'name': 'Aurora', 'description': 'Luminous color, rounded panels and a flowing aurora background.',
-        'light': ['#e8eef7','#ffffff','#f2f6fc','#172945','#526888','#cbd8e8','#5144c8','#e9e5ff','#176951','#ad3454'],
-        'dark': ['#11172a','#1c253a','#25314a','#eff4ff','#acbbd4','#3b4b67','#b8adff','#39315c','#7fdbc0','#ffadc0'],
-        'background': ['radial-gradient(ellipse at 5% 85%, #a5e5da 0%, transparent 55%), radial-gradient(ellipse at 90% 8%, #c9b2f3 0%, transparent 60%), linear-gradient(130deg, #e8f1fc, #dbe2f7)', 'radial-gradient(ellipse at 5% 85%, #153f4e 0%, transparent 55%), radial-gradient(ellipse at 90% 8%, #463168 0%, transparent 60%), linear-gradient(130deg, #11172a, #182237)'],
-        'radius': '22px', 'font': 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        'heading': 'inherit', 'tag': 'Atmospheric',
-        'geometry': {
-            'panel-gap': '10px',
-            'panel-radius': '22px',
-            'panel-border-width': '1px',
-            'panel-line': 'color-mix(in srgb,var(--a-line),transparent 12%)',
-            'panel-shadow': '0 0 18px color-mix(in srgb,var(--a-accent),transparent 94%)',
-            'navigation-pad': '20px',
-            'navigation-art': 'radial-gradient(ellipse at 0 0,color-mix(in srgb,var(--a-accent),transparent 90%),transparent 70%)',
-            'conversation-art': 'radial-gradient(ellipse at 100% 0,color-mix(in srgb,var(--a-accent),transparent 96%),transparent 65%)',
-            'canvas-art': 'linear-gradient(110deg,color-mix(in srgb,var(--a-accent),transparent 94%),transparent)',
-            'composer-radius': '24px',
-            'card-radius': '16px',
-            'control-radius': '12px',
-            'message-radius': '20px',
-            'message-gap': '26px',
-            'composer-pad': '14px',
-            'card-pad': '16px',
-            'surface-shadow': '0 3px 14px color-mix(in srgb,var(--a-accent),transparent 94%)',
-            'card-line': 'color-mix(in srgb,var(--a-line),transparent 25%)',
-        },
-    },
-    'atelier': {
-        'name': 'Atelier', 'description': 'Warm paper, editorial headings and quiet terracotta accents.',
-        'light': ['#eee8dc','#fffcf5','#f5efe4','#302b25','#716557','#d9cebc','#954c35','#f4e1d5','#316653','#ac3d3a'],
-        'dark': ['#24211d','#302b25','#3a332c','#f5ecdf','#c6b7a4','#51473b','#efaf8e','#523b2d','#94c4a9','#f3a09c'],
-        'background': ['none', 'none'], 'radius': '9px',
-        'font': '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        'heading': 'Georgia, "Times New Roman", serif', 'tag': 'Editorial',
-        'geometry': {
-            'panel-gap': '7px',
-            'panel-radius': '10px',
-            'panel-border-width': '1px',
-            'panel-line': 'var(--a-line)',
-            'panel-shadow': 'inset 0 2px 0 color-mix(in srgb,var(--a-line),transparent 65%)',
-            'navigation-pad': '22px',
-            'navigation-art': 'repeating-linear-gradient(0deg,transparent 0 31px,color-mix(in srgb,var(--a-line),transparent 85%) 31px 32px)',
-            'navigation-art-size': '100% 100%',
-            'conversation-art': 'linear-gradient(180deg,color-mix(in srgb,var(--a-soft),transparent 45%),transparent 140px)',
-            'canvas-art': 'linear-gradient(180deg,var(--a-soft),transparent)',
-            'composer-radius': '12px',
-            'card-radius': '8px',
-            'control-radius': '7px',
-            'message-radius': '12px',
-            'message-gap': '25px',
-            'composer-pad': '13px',
-            'card-pad': '15px',
-            'surface-shadow': '0 2px 0 color-mix(in srgb,var(--a-line),transparent 50%)',
-            'card-line': 'var(--a-line)',
-        },
-    },
-    'graphite': {
-        'name': 'Graphite', 'description': 'Precise edges, technical typography and a fine architectural grid.',
-        'light': ['#e9ecee','#fbfcfc','#f0f3f4','#202b31','#596a74','#ccd5da','#176179','#deedf2','#286446','#a23845'],
-        'dark': ['#14191c','#1e252a','#283238','#e4edf1','#a4b7c1','#40515a','#89d3e8','#223e48','#8bd3a3','#ffa8b2'],
-        'background': ['linear-gradient(#788e9912 1px, transparent 1px), linear-gradient(90deg, #788e9912 1px, transparent 1px)', 'linear-gradient(#a4b7c110 1px, transparent 1px), linear-gradient(90deg, #a4b7c110 1px, transparent 1px)'],
-        'radius': '5px', 'font': '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        'heading': '"SFMono-Regular", Consolas, "Liberation Mono", monospace', 'tag': 'Precise',
-        'geometry': {
-            'panel-gap': '4px',
-            'panel-radius': '4px',
-            'panel-border-width': '1px',
-            'panel-line': 'color-mix(in srgb,var(--a-line),var(--a-muted) 12%)',
-            'panel-shadow': 'none',
-            'navigation-pad': '12px',
-            'navigation-art': 'linear-gradient(color-mix(in srgb,var(--a-line),transparent 75%) 1px,transparent 1px),linear-gradient(90deg,color-mix(in srgb,var(--a-line),transparent 75%) 1px,transparent 1px)',
-            'navigation-art-size': '28px 28px',
-            'navigation-art-repeat': 'repeat',
-            'composer-radius': '8px',
-            'card-radius': '6px',
-            'control-radius': '5px',
-            'message-radius': '8px',
-            'message-gap': '22px',
-            'composer-pad': '11px',
-            'card-pad': '12px',
-            'surface-shadow': 'none',
-            'card-line': 'color-mix(in srgb,var(--a-line),var(--a-muted) 12%)',
-        },
-    },
+BUILTINS = {
+    'default': {'name': 'Amplifier', 'description': 'Blue and lilac, over Reference.'},
+    'aurora': {'name': 'Aurora', 'description': 'Luminous color and atmospheric materials.'},
+    'atelier': {'name': 'Atelier', 'description': 'Warm paper and editorial typography.'},
+    'graphite': {'name': 'Graphite', 'description': 'Precise edges and technical typography.'},
+    'digital-rain': {'name': 'Digital Rain', 'description': 'Optional emerald code-rain artwork.'},
+    'lightline': {'name': 'Lightline', 'description': 'Architectural light paths and quiet surfaces.'},
+    'ready': {'name': 'Breadbin', 'description': 'Ivory casing and a violet conversation screen.'},
 }
 
 
 def definitions(schema, string):
     content = {'name': string(100), 'css': string(LIMIT), 'description': string(240)}
     target = {'id': string(240), 'expectedFingerprint': {'type': 'string', 'pattern': '^[a-f0-9]{64}$'}}
-    importing = schema({**content, 'fallbackName': string(100),
-                        'packageBase64': string(packages.PACKAGE_BASE64_LIMIT)}, [])
-    importing['oneOf'] = [{'required': ['css'], 'not': {'required': ['packageBase64']}},
-                          {'required': ['packageBase64'], 'not': {'required': ['css']}}]
     return {
-        'theme.list': ('List bundled and saved appearances without applying them.', schema()),
-        'theme.read': ('Read a bundled or saved appearance, including its current fingerprint.', schema({'id': string(240)}, ['id'])),
-        'theme.save': ('Validate and save a portable CSS appearance in the shared library without applying it.',
-                       schema(content, ['name', 'css'])),
-        'theme.import': ('Import exactly one of portable CSS (1 MB) or a base64 ZIP appearance (4 MB raw, at most 5,333,336 base64 characters) without applying or overwriting an entry. A root appearance.json identifies a ZIP; retains metadata unless supplied.',
-                         importing),
-        'theme.update': ('Update a saved appearance in place using the fingerprint from theme.read. Bundled appearances are read-only. Does not change applied CSS.',
+        'theme.list': ('List bundled and saved Reference deltas without selecting them.', schema()),
+        'theme.read': ('Read an exact library delta, metadata and saved fingerprint.', schema({'id': string(240)}, ['id'])),
+        'theme.save': ('Validate and save a named Reference delta as ZIP; does not select it.', schema(content, ['name', 'css'])),
+        'theme.import': ('Validate a version-2 Reference ZIP before adding it to the shared library; never selects it.',
+                         schema({'packageBase64': string(packages.PACKAGE_BASE64_LIMIT), 'name': string(100), 'description': string(240)}, ['packageBase64'])),
+        'theme.update': ('Update a saved ZIP at its exact fingerprint, preserving declared assets and notices.',
                          schema({**content, **target}, ['id', 'expectedFingerprint', 'name', 'css'])),
-        'theme.delete': ('Delete only a saved library entry using its current fingerprint. Applied CSS remains intact.',
-                         schema(target, ['id', 'expectedFingerprint'])),
-        'theme.export': ('Export a bundled or saved appearance by id, or the applied appearance when id is omitted. Includes portable metadata; never exports an unsaved draft or preview.',
-                         schema({'id': string(240), 'format': {'enum': ['css', 'zip']}}, [])),
+        'theme.delete': ('Delete an exact saved ZIP; preference selection is not changed.', schema(target, ['id', 'expectedFingerprint'])),
+        'theme.export': ('Export a saved or bundled library ID as ZIP; never exports a preview or draft.', schema({'id': string(240)}, ['id'])),
     }
 
 
+def fingerprint(css):
+    return hashlib.sha256(css.encode('utf-8')).hexdigest()
+
+
 def preset(service, identity):
-    if identity in RESOURCE_PRESETS:
-        return {'id': 'builtin:' + identity, 'source': 'built-in',
-                **RESOURCE_PRESETS[identity],
-                'css': files('amplifier_web').joinpath('appearances', identity + '.amplifier.css').read_text(encoding='utf-8')}
-    if identity == 'default':
-        return {'id': 'builtin:default', 'name': 'Amplifier', 'description': 'The original blue and lilac appearance.',
-                'css': service.default_theme(), 'source': 'built-in', 'tag': 'Original',
-                'palette': {'bg': '#edf1ff', 'surface': '#ffffff', 'ink': '#202e50', 'accent': '#5842df', 'line': '#e4e8f5'},
-                'background': 'linear-gradient(135deg, #edf1ff, #dbd2ff)', 'radius': '16px', 'heading': 'inherit'}
-    item = PRESETS[identity]
-    rules = ['#amp-one{' + ';'.join('--a-' + key + ':' + value for key, value in item['geometry'].items()) + '}']
-    for index, mode in enumerate(('light', 'dark')):
-        palette = dict(zip(TOKENS, item[mode]))
-        declarations = ';'.join('--a-' + key + ':' + value for key, value in palette.items()) + ';--a-radius:' + item['radius']
-        rules.append(f'#amp-one[data-theme-scheme="{mode}"]{{{declarations};background-color:var(--a-bg);background-image:{item["background"][index]};background-size:{"28px 28px" if identity == "graphite" else "cover"};font-family:{item["font"]}}}')
-    rules.append(f'#amp-one h1,#amp-one h2,#amp-one h3,#amp-one .a-brand{{font-family:{item["heading"]};letter-spacing:{"-.03em" if identity == "atelier" else "-.015em"}}}')
-    if identity == 'graphite':
-        rules.append('#amp-one .a-bubble,#amp-one .a-soft,#amp-one .a-primary{border-radius:6px}#amp-one .a-brand{font-size:20px}')
-    return {'id': 'builtin:' + identity, 'name': item['name'], 'description': item['description'],
-            'source': 'built-in', 'css': service.default_theme() + '\n' + '\n'.join(rules),
-            'palette': dict(zip(TOKENS, item['light'])), 'background': item['background'][0],
-            'radius': item['radius'], 'heading': item['heading'], 'tag': item['tag']}
+    if identity not in BUILTINS:
+        raise AppError('Appearance not found.', 404)
+    css = files('amplifier_web').joinpath('appearances', identity + '.amplifier.css').read_text(encoding='utf-8')
+    from .service import validate_theme
+    validate_theme(css)
+    return {'id': 'builtin:' + identity, **BUILTINS[identity], 'source': 'built-in', 'base': 'reference-v1',
+            'css': css, 'fingerprint': fingerprint(css), 'readOnly': True}
 
 
 def folder(service):
@@ -187,8 +66,6 @@ def folder(service):
 
 @contextmanager
 def directory(service, *, create=False, writing=False):
-    """Anchor file operations to one real library directory, never a symlink."""
-    from .errors import AppError
     root = folder(service)
     if create:
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -200,7 +77,6 @@ def directory(service, *, create=False, writing=False):
         raise AppError('The appearance library must be a real directory, not a link.') from exc
     try:
         if create or writing:
-            # Serialize cooperating library writers across host processes.
             import fcntl
             fcntl.flock(descriptor, fcntl.LOCK_EX)
         yield descriptor
@@ -208,79 +84,11 @@ def directory(service, *, create=False, writing=False):
         os.close(descriptor)
 
 
-def fingerprint(css):
-    return hashlib.sha256(css.encode('utf-8')).hexdigest()
-
-
-def metadata(css):
-    """Remove existing portable headers rather than nesting them on each save."""
-    meta = {}
-    css = css.removeprefix('\ufeff')
-    while css.startswith(MARKER):
-        header = re.match(re.escape(MARKER) + r'(.*?) \*/(?:\r?\n|$)', css, re.DOTALL)
-        if not header:
-            break
-        try:
-            value = json.loads(header[1])
-        except (ValueError, TypeError):
-            break
-        if not isinstance(value, dict):
-            break
-        # The outer header is authoritative for older, already-nested exports.
-        meta = {**value, **meta}
-        css = css[header.end():]
-    return meta, css
-
-
-def portable(css, name, description=None):
-    from .service import AppError, validate_theme
-    validate_theme(css)
-    meta, body = metadata(css)
-    name = name.strip()
-    if not name:
-        raise AppError('Give this appearance a name.')
-    meta['name'] = name[:100]
-    if description is not None:
-        meta['description'] = description[:240]
-    else:
-        meta['description'] = str(meta.get('description') or '')[:240]
-    # JSON stays inside a CSS comment, including unusual imported names.
-    header = json.dumps(meta, ensure_ascii=True).replace('*/', '*\\/')
-    # New package notices can quote HTML examples. Keep them as comment text
-    # without changing the canonical bytes of ordinary legacy CSS metadata.
-    if '</style' in header.lower():
-        header = header.replace('<', '\\u003c')
-    content = MARKER + header + ' */\n' + body
-    if len(content.encode('utf-8')) > LIMIT:
-        raise AppError('Choose an appearance smaller than 1 MB.')
-    validate_theme(content)
-    return content
-
-
-def read_file(path, descriptor):
-    from .service import AppError, validate_theme
-    if path.name.endswith('.zip'):
-        raw, package = read_package(path, descriptor)
-        return package_row(path, raw, package)
-    fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
-    with os.fdopen(fd, encoding='utf-8', newline='') as stream:
-        info = os.fstat(stream.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_size > LIMIT:
-            raise AppError('This appearance is unavailable or exceeds 1 MB.')
-        css = stream.read(LIMIT + 1)
-    if len(css.encode('utf-8')) > LIMIT:
-        raise AppError('Choose an appearance smaller than 1 MB.')
-    validate_theme(css)
-    meta, _ = metadata(css)
-    name, description = meta.get('name'), meta.get('description', 'A saved appearance from your library.')
-    return {'id': 'saved:' + path.name, 'name': str(name or path.stem.removesuffix('.amplifier'))[:100],
-            'description': str(description)[:240],
-            'css': css, 'fingerprint': fingerprint(css), 'source': 'saved', 'tag': 'Your library'}
-
-
 def read_package_bytes(path, descriptor):
-    from .errors import AppError
-    fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
+    try:
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
+    except OSError as exc:
+        raise AppError('Appearance file is unavailable; links are not supported.', 404) from exc
     with os.fdopen(fd, 'rb') as stream:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_size > packages.PACKAGE_LIMIT:
@@ -297,24 +105,18 @@ def read_package(path, descriptor):
 
 
 def package_metadata(package):
-    return {'name': package.manifest['name'], 'description': package.manifest.get('description', ''),
-            'source': 'saved', 'tag': 'Your library', **package.summary}
+    return {key: package.manifest[key] for key in ('name', 'description', 'author') if key in package.manifest} | {
+        'source': 'saved', **package.summary}
 
 
 def package_row(path, raw, package):
-    return {'id': 'saved:' + path.name, **package_metadata(package),
-            'css': package.css, 'fingerprint': hashlib.sha256(raw).hexdigest()}
+    return {'id': 'saved:' + path.name, **package_metadata(package), 'css': package.css,
+            'fingerprint': hashlib.sha256(raw).hexdigest()}
 
 
 def package_listing_row(service, path, descriptor):
-    """Cache only validated small metadata, never CSS, manifest or asset bodies.
-
-    Each listing still performs one bounded no-follow read and SHA-256 per ZIP.
-    Exact bytes, not mtime/size, witness invalidation. Cold/changed bytes get full
-    archive/CSS validation; full theme.read always validates and compiles anew.
-    Each service retains at most 128 successful metadata summaries until eviction
-    or service disposal. Failed validation never populates this derived cache.
-    """
+    # Exact bounded ZIP reads/hashes witness invalidation; only small validated
+    # summaries are cached. Full reads always revalidate assets and delta CSS.
     raw = read_package_bytes(path, descriptor)
     digest = hashlib.sha256(raw).hexdigest()
     with _PACKAGE_SUMMARY_LOCK:
@@ -325,58 +127,92 @@ def package_listing_row(service, path, descriptor):
         if cached is not None:
             cache.move_to_end(digest)
             return {'id': 'saved:' + path.name, 'fingerprint': digest, **cached}
-    # Compile outside the metadata lock; concurrent cold misses may both validate.
-    metadata_row = package_metadata(packages.load(raw))
+    value = package_metadata(packages.load(raw))
     with _PACKAGE_SUMMARY_LOCK:
-        cache[digest] = metadata_row
+        cache[digest] = value
         cache.move_to_end(digest)
         while len(cache) > PACKAGE_SUMMARY_CACHE_LIMIT:
             cache.popitem(last=False)
-    return {'id': 'saved:' + path.name, 'fingerprint': digest, **metadata_row}
+    return {'id': 'saved:' + path.name, 'fingerprint': digest, **value}
 
 
 def saved_name(identity):
-    from .errors import AppError
     name = identity.removeprefix('saved:')
-    if (not identity.startswith('saved:') or Path(name).name != name
-            or not name.endswith(('.css', '.zip')) or '/' in name or '\\' in name or '\0' in name):
-        raise AppError('Choose a saved appearance from the library.', 404)
+    if (not identity.startswith('saved:') or Path(name).name != name or not name.endswith('.zip')
+            or any(char in name for char in '/\\\0')):
+        raise AppError('Choose a saved ZIP appearance from the library.', 404)
     return name
 
 
 def read(service, identity):
-    from .errors import AppError
-    if identity.startswith('builtin:') and identity[8:] in ('default', *PRESETS, *RESOURCE_PRESETS):
-        row = preset(service, identity[8:])
-        return {**row, 'fingerprint': fingerprint(row['css'])}
+    if identity.startswith('builtin:'):
+        return preset(service, identity[8:])
     name = saved_name(identity)
     try:
         with directory(service) as descriptor:
-            return read_file(Path(name), descriptor)
+            raw, package = read_package(Path(name), descriptor)
+            return package_row(Path(name), raw, package)
     except (OSError, UnicodeError) as exc:
         raise AppError('Appearance not found.', 404) from exc
 
 
+def resolve(service, identity):
+    """Selected presentation only: exact-byte invalidation, at most eight deltas.
+
+    Publication never walks the library or history. Each resolution still reads
+    and hashes the selected bounded file; unchanged bytes avoid decompression and
+    validation. Explicit theme.read always revalidates the complete package.
+    """
+    if identity.startswith('builtin:'):
+        key = identity[8:]
+        if key not in BUILTINS:
+            raise AppError('Appearance not found.', 404)
+        css = files('amplifier_web').joinpath('appearances', key + '.amplifier.css').read_text(encoding='utf-8')
+        digest = fingerprint(css)
+        raw = None
+    else:
+        name = saved_name(identity)
+        with directory(service) as descriptor:
+            raw = read_package_bytes(Path(name), descriptor)
+        digest = hashlib.sha256(raw).hexdigest()
+    cache = getattr(service, '_resolved_appearances', None)
+    if cache is None:
+        cache = service._resolved_appearances = OrderedDict()
+    key = (identity, digest)
+    if key not in cache:
+        if raw is None:
+            from .service import validate_theme
+            validate_theme(css)
+            row = {'id': identity, **BUILTINS[identity[8:]], 'source': 'built-in',
+                   'base': 'reference-v1', 'css': css, 'fingerprint': digest, 'readOnly': True}
+        else:
+            row = package_row(Path(name), raw, packages.load(raw))
+        cache[key] = row
+        while len(cache) > 8:
+            cache.popitem(last=False)
+    cache.move_to_end(key)
+    return dict(cache[key])
+
+
 def listing(service):
-    from .errors import AppError
-    rows = [preset(service, key) for key in ('default', *PRESETS, *RESOURCE_PRESETS)]
-    errors = []
+    rows, errors = [], []
+    for key in BUILTINS:
+        try:
+            rows.append(preset(service, key))
+        except (OSError, AppError) as exc:
+            errors.append({'name': 'builtin:' + key, 'message': str(exc)})
     root = folder(service)
     if root.exists() or root.is_symlink():
         with directory(service) as descriptor:
-            for name in sorted(os.listdir(descriptor), key=str.casefold):
-                if not name.endswith(('.css', '.zip')):
+            for name in sorted(os.listdir(descriptor), key=str.lower):
+                if not name.endswith('.zip'):
                     continue
                 try:
-                    rows.append(package_listing_row(service, Path(name), descriptor) if name.endswith('.zip')
-                                else read_file(Path(name), descriptor))
+                    rows.append(package_listing_row(service, Path(name), descriptor))
                 except (OSError, UnicodeError, AppError) as exc:
                     errors.append({'name': name, 'message': str(exc)})
-    for row in rows:
-        css = row.pop('css', None)
-        if 'fingerprint' not in row:
-            row['fingerprint'] = fingerprint(css)
-    return {'items': rows, 'errors': errors, 'directory': str(root)}
+    return {'items': [{key: value for key, value in row.items() if key != 'css'} for row in rows],
+            'errors': errors, 'directory': str(root)}
 
 
 def slug(name):
@@ -384,12 +220,11 @@ def slug(name):
 
 
 def publish(descriptor, name, content, *, replace=False):
-    from .errors import AppError
     temporary = '.' + uuid.uuid4().hex + '.tmp'
     fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600, dir_fd=descriptor)
     try:
         with os.fdopen(fd, 'wb') as stream:
-            stream.write(content if isinstance(content, bytes) else content.encode('utf-8'))
+            stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
         if replace:
@@ -398,12 +233,7 @@ def publish(descriptor, name, content, *, replace=False):
             try:
                 os.link(temporary, name, src_dir_fd=descriptor, dst_dir_fd=descriptor, follow_symlinks=False)
             except FileExistsError:
-                try:
-                    existing = (read_package(Path(name), descriptor)[0] if isinstance(content, bytes)
-                                else read_file(Path(name), descriptor)['css'])
-                except (OSError, UnicodeError, AppError) as exc:
-                    raise AppError('This library file is unavailable. Nothing was replaced.') from exc
-                if existing != content:
+                if read_package_bytes(Path(name), descriptor) != content:
                     raise AppError('A different appearance already uses this file name.') from None
         os.fsync(descriptor)
     finally:
@@ -418,59 +248,26 @@ def summary(service, row):
 
 
 def import_name(descriptor, name, content):
-    """An updated entry may still own its old content-addressed file name."""
-    from .errors import AppError
-    extension = '.zip' if isinstance(content, bytes) else '.amplifier.css'
-    stem = name.removesuffix(extension)
-    candidates = {name if index == 1 else f'{stem}-{index}{extension}': index
-                  for index in range(1, 1001)}
+    # In-place edits keep identity, so the original content filename can be
+    # occupied by different bytes. Reuse identical imports even beyond a gap.
+    stem = name.removesuffix('.zip')
+    candidates = {name if index == 1 else f'{stem}-{index}.zip': index for index in range(1, 1001)}
     occupied = set()
-    # Inspect only existing members of this bounded collision family. A deleted
-    # earlier slot must not hide an identical later import or change its identity.
     with os.scandir(descriptor) as entries:
         for entry in entries:
             if (index := candidates.get(entry.name)) is not None:
                 occupied.add(index)
     for index in sorted(occupied):
-        candidate = name if index == 1 else f'{stem}-{index}{extension}'
-        try:
-            existing = (read_package(Path(candidate), descriptor)[0] if isinstance(content, bytes)
-                        else read_file(Path(candidate), descriptor)['css'])
-        except FileNotFoundError:
-            occupied.discard(index)
-            continue
-        except (OSError, UnicodeError, AppError) as exc:
-            raise AppError('This library file is unavailable. Nothing was replaced.') from exc
-        if existing == content:
+        candidate = name if index == 1 else f'{stem}-{index}.zip'
+        if read_package_bytes(Path(candidate), descriptor) == content:
             return candidate
     for index in range(1, 1001):
         if index not in occupied:
-            return name if index == 1 else f'{stem}-{index}{extension}'
+            return name if index == 1 else f'{stem}-{index}.zip'
     raise AppError('Too many appearances share this import identity. Choose another name.')
 
 
-def save(service, args):
-    meta, _ = metadata(args['css'])
-    name = args.get('name', str(meta.get('name') or args.get('fallbackName') or 'Imported appearance'))[:100]
-    content = portable(args['css'], name, args.get('description'))
-    name = metadata(content)[0]['name']
-    digest = fingerprint(content)[:16]
-    filename = f'{slug(name)}-{digest}.amplifier.css'
-    with directory(service, create=True) as descriptor:
-        filename = import_name(descriptor, filename, content)
-        publish(descriptor, filename, content)
-        return summary(service, read_file(Path(filename), descriptor))
-
-
-def import_appearance(service, args):
-    from .errors import AppError
-    if ('css' in args) == ('packageBase64' in args):
-        raise AppError('Import exactly one of css or packageBase64.')
-    if 'css' in args:
-        return save(service, args)
-    package = packages.load(packages.decode_input(args['packageBase64']))
-    # A ZIP manifest always supplies a name; fallbackName is for metadata-free CSS.
-    package = packages.with_metadata(package, args.get('name'), args.get('description'))
+def save_package(service, package):
     content = packages.encode(package.files)
     filename = f"{slug(package.manifest['name'])}-{hashlib.sha256(content).hexdigest()[:16]}.zip"
     with directory(service, create=True) as descriptor:
@@ -479,61 +276,45 @@ def import_appearance(service, args):
         return summary(service, package_row(Path(filename), content, package))
 
 
+def save(service, args):
+    return save_package(service, packages.from_css(args['css'], args['name'], args.get('description')))
+
+
+def import_appearance(service, args):
+    if 'css' in args or 'packageBase64' not in args:
+        raise AppError('Import a version-2 ZIP using packageBase64.')
+    package = packages.load(packages.decode_input(args['packageBase64']))
+    return save_package(service, packages.with_metadata(package, args.get('name'), args.get('description')))
+
+
 def mutate(service, args, *, deleting=False):
-    from .errors import AppError
     filename = saved_name(args['id'])
     with directory(service, writing=True) as descriptor:
         try:
-            package = None
-            if filename.endswith('.zip'):
-                raw, package = read_package(Path(filename), descriptor)
-                previous = package_row(Path(filename), raw, package)
-            else:
-                previous = read_file(Path(filename), descriptor)
+            raw, package = read_package(Path(filename), descriptor)
         except (OSError, UnicodeError) as exc:
             raise AppError('Appearance not found.', 404) from exc
-        if previous['fingerprint'] != args['expectedFingerprint']:
+        if hashlib.sha256(raw).hexdigest() != args['expectedFingerprint']:
             raise AppError('This appearance changed. Read it again before updating or deleting it.', 409)
         if deleting:
             os.unlink(filename, dir_fd=descriptor)
             os.fsync(descriptor)
-            return {'id': args['id'], 'deleted': True, 'appliedAppearanceUnchanged': True}
-        if package is not None:
-            updated = packages.with_metadata(package, args['name'],
-                                             args.get('description', previous['description']), args['css'])
-            content = packages.encode(updated.files)
-        else:
-            content = portable(args['css'], args['name'], args.get('description', previous['description']))
+            return {'id': args['id'], 'deleted': True, 'preferencesUnchanged': True}
+        updated = packages.with_metadata(package, args['name'], args.get('description', package.manifest.get('description', '')), args['css'])
+        content = packages.encode(updated.files)
         publish(descriptor, filename, content, replace=True)
-        return summary(service, read_file(Path(filename), descriptor))
+        return summary(service, package_row(Path(filename), content, updated))
 
 
-def export(service, identity=None, format='css'):
-    from .errors import AppError
-    if format not in ('css', 'zip'):
-        raise AppError('Choose css or zip for an appearance export.')
-    if format == 'zip' and identity and identity.startswith('saved:') and saved_name(identity).endswith('.zip'):
-        try:
-            with directory(service) as descriptor:
-                raw, package = read_package(Path(saved_name(identity)), descriptor)
-        except (OSError, UnicodeError) as exc:
-            raise AppError('Appearance not found.', 404) from exc
-        return zip_export(identity, package.manifest['name'], raw)
-    if identity:
-        row = read(service, identity)
+def export(service, identity):
+    if identity.startswith('saved:'):
+        with directory(service) as descriptor:
+            raw, package = read_package(Path(saved_name(identity)), descriptor)
+        name = package.manifest['name']
     else:
-        row = service.state['theme']
-    # Preserve the established no-id export: exact committed CSS, not a preview.
-    css = portable(row['css'], row['name'], row.get('description')) if identity else row['css']
-    if format == 'zip':
-        package = packages.from_css(css, row['name'], row.get('description'))
-        return zip_export(identity, row['name'], packages.encode(package.files))
-    return {'id': identity, 'name': row['name'], 'css': css,
-            'fingerprint': fingerprint(css), 'filename': slug(row['name']) + '.amplifier.css'}
-
-
-def zip_export(identity, name, raw):
-    import base64
+        row = read(service, identity)
+        name = row['name']
+        raw = packages.encode(packages.from_css(row['css'], name, row.get('description')).files)
     return {'id': identity, 'name': name, 'format': 'zip', 'filename': slug(name) + '.zip',
             'mimeType': 'application/zip', 'base64': base64.b64encode(raw).decode('ascii'),
             'fingerprint': hashlib.sha256(raw).hexdigest()}

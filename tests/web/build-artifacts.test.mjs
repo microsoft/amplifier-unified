@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {createServer} from 'vite';
 
 test('closing a development server leaves packaged pages and build identity unchanged',async()=>{
- const paths=['login.html','build.json','unified.amplifier.css'].map(name=>fileURLToPath(new URL('../../amplifier_web/static/'+name,import.meta.url)));
+ const paths=['login.html','build.json','reference.amplifier.css'].map(name=>fileURLToPath(new URL('../../amplifier_web/static/'+name,import.meta.url)));
  const snapshot=async()=>Promise.all(paths.map(async path=>({bytes:await readFile(path),mtime:(await stat(path,{bigint:true})).mtimeNs})));
  const before=await snapshot();
  const server=await createServer({root:fileURLToPath(new URL('../../.build/web-client/',import.meta.url)),server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});

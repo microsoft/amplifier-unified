@@ -130,16 +130,17 @@ async def test_mixed_scope_checkpoint_and_restart_keep_all_records_and_private_d
     assert load(app.db)['revision'] == app.state['revision']
     assert app.db.execute('SELECT count(*) FROM state_records').fetchone()[0] > 0
     # Unknown global writer reconciles all records without losing scoped changes.
-    app._state['theme']['name'] = 'Changed global'
+    app._state['settings']['notifications'] = False
     app._publish()
     assert load(app.db)['revision'] == app.state['revision']
     durable = load_saved_state(app.db)
-    assert durable['theme']['name'] == 'Changed global'
+    assert durable['settings']['notifications'] is False
     # A stopped/crashed owner cannot retain its background SQLite writer lock.
     # Settle maintenance without checkpointing the records under test.
     await close_maintenance(app)
     await app.publishing.close()
     restored = app_factory(home=app.data_dir)
+    assert restored._state['settings']['notifications'] is False
     assert restored._session(rows[1]['id'])['messages'][0]['text'] == 'same length edit'
     assert restored.clients.records['0']['drafts'][rows[0]['id']] == 'private-0'
     assert restored.clients.records['1']['drafts'][rows[1]['id']] == 'private-1'
@@ -217,12 +218,12 @@ async def test_unrelated_private_draft_change_is_not_hidden_by_scoped_frame_reus
 async def test_unknown_pending_writer_never_becomes_sparse_after_later_delta(app_factory):
     from amplifier_web.state_records import load
     app, rows = chats(app_factory)
-    app._state['theme']['name'] = 'Unscoped edit'
+    app._state['settings']['notifications'] = False
     app._publish_progress()
     rows[0]['streaming'] = 'later delta'
     app._publish_progress(session_ids={rows[0]['id']}, detail_only=True, record_only=True)
     await app._flush_pending_progress()
-    assert load(app.db)['theme']['name'] == 'Unscoped edit'
+    assert load(app.db)['settings']['notifications'] is False
     assert load(app.db)['revision'] == app.state['revision']
 
 

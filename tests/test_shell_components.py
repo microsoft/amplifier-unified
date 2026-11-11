@@ -5,7 +5,8 @@ import pytest
 from amplifier_web.service import AppError
 from amplifier_web.shell_modules import DEFAULT
 from amplifier_web.shell_components import PROFILE
-from test_shell_modules import service as base_service, command, prepare, stage, record_validation
+from amplifier_web.appearance_preferences import DEFAULTS, compose_values
+from test_shell_modules import service as base_service, command, prepare, stage, record_validation, appearance_browser, ack_preferences
 
 
 @pytest.fixture
@@ -108,7 +109,7 @@ async def test_dirty_swap_defers_and_stale_component_commands_are_rejected(servi
         await command(service, 'shell.view.update', **target, patch={'choice':'late edit'})
 
 
-async def test_shared_presentation_path_is_idempotent_and_preserves_draft(service):
+async def test_presentation_path_waits_for_browser_storage_is_idempotent_and_preserves_draft(service, appearance_browser):
     digest = await component(service, capabilities=['shell.read','presentation.update'])
     await install(service, digest)
     observed = await query(service)
@@ -117,8 +118,18 @@ async def test_shared_presentation_path_is_idempotent_and_preserves_draft(servic
     first = await service.dispatch('shell.command', arguments, command_id='component-change')
     second = await service.dispatch('shell.command', arguments, command_id='component-change')
     assert first == second
+    assert first['result']['status'] == 'awaiting-storage'
+    assert not first['result']['stored'] and not first['result']['activated']
+    assert service.shell.client('browser-one')['revision'] == 1
+    assert service.appearance.read('browser-one')['local']['values'] is None
+    assert (await ack_preferences(service))['activated']
     assert service.shell.client('browser-one')['revision'] == 2
-    assert service.shell.client('browser-one')['composition']['presentation']['decorations'] is False
+    assert service.shell.client('browser-one')['composition']['presentation'] == {}
+    current = service.appearance.read('browser-one')
+    assert current['effective']['scheme'] == 'light' and current['effective']['decorations'] is False
+    assert current['local']['values'] == compose_values({'scheme': 'light', 'decorations': False})
+    assert current['shared']['values'] == DEFAULTS
+    assert await service.dispatch('shell.command', arguments, command_id='component-change') == first
     assert service.state['view']['draft'] == 'Keep this unsent message'
     with pytest.raises(AppError, match='revision'):
         await act(service, 'presentation.update', arguments['args'])

@@ -25,12 +25,12 @@ test('endpoint is checked before parsing POST JSON',()=>{
 
 test('valid POST actions count once despite response/route classification',()=>{
  const observer=createAppearanceRequestObserver();
- const first=request({body:{action:'theme.import',args:{packageBase64:'synthetic',fallbackName:'file'}}});
+ const first=request({body:{action:'theme.import',args:{packageBase64:'synthetic'}}});
  assert.equal(observer.matches(first,'theme.import'),true);
  observer.observe(first);observer.observe(first);
  assert.equal(observer.inspect(first).action,'theme.import');
  observer.observe(request({url:'http://fixture.invalid/api/actions?client=synthetic',body:{action:'theme.list'}}));
- assert.deepEqual(observer.actions,[{action:'theme.import',argsKeys:['packageBase64','fallbackName']},{action:'theme.list',argsKeys:[]}]);
+ assert.deepEqual(observer.actions,[{action:'theme.import',argsKeys:['packageBase64']},{action:'theme.list',argsKeys:[]}]);
  assert.doesNotThrow(()=>observer.assertHealthy());
 });
 

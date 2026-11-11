@@ -66,7 +66,7 @@ async def test_context_failure_survives_generic_wrapper_and_diagnostics(tmp_path
         await app.close()
 
 
-async def test_agent_surface_results_are_focused_and_authorized_theme_resolution_works(tmp_path):
+async def test_agent_surface_results_are_focused_and_authorized_appearance_preview_resolution_works(tmp_path):
     app = AppService(tmp_path/'app', workspace=tmp_path)
     try:
         await app.dispatch('session.create', {})
@@ -76,7 +76,7 @@ async def test_agent_surface_results_are_focused_and_authorized_theme_resolution
             await app.dispatch('session.select', {'id': sid})
         app.state['devices']['browser'] = {'clientId': 'browser', 'updatedAt': 2, 'visibleText': 'Long unrelated UI' * 10000}
         manifest = {'version': 1, 'stateSchema': {'type': 'object'}, 'events': {},
-                    'requests': {'apply': {'action': 'theme.apply', 'schema': {'type': 'object'}}}}
+                    'requests': {'preview': {'action': 'appearance.preview', 'schema': {'type': 'object'}}}}
         async def agent(name, args):
             return await app.app_bridge('dispatch', {'action': 'canvas.apps.'+name, 'args': args}, sid)
         response = await agent('create', {'title': 'Synthetic surface', 'content': '<p>Test</p>', 'manifest': manifest, 'initialState': {}})
@@ -86,10 +86,27 @@ async def test_agent_surface_results_are_focused_and_authorized_theme_resolution
         row = response['result']
         def cas(row):
             return {'id': row['id'], 'expectedRevision': row['app']['revision'], 'expectedStateRevision': row['app']['stateRevision']}
-        row = (await agent('request', {**cas(row), 'name': 'apply', 'input': {'name': 'Test palette', 'tokens': {'accent': '#224466'}}}))['result']
+        css = '#amp-one {--a-accent: #224466;}'
+        shared = app.appearance.shared()
+        row = (await agent('request', {**cas(row), 'name': 'preview',
+            'input': {'clientId': 'browser', 'name': 'Test palette', 'css': css}}))['result']
+        assert app.appearance.read('browser')['preview'] is None
         row = (await agent('resolve', {**cas(row), 'clientId': 'browser', 'requestId': row['app']['requests'][-1]['id'], 'approve': True}))['result']
-        assert app.state['theme']['name'] == 'Test palette'
+        with app.clients.bind('browser'):
+            main_state = app.browser_state()
+        preview = main_state['appearance']['preview']
+        assert preview['theme']['name'] == 'Test palette' and preview['theme']['css'] == css
+        outcome = row['app']['requests'][-1]['result']
+        assert outcome['status'] == 'awaiting-browser' and not outcome['activated']
+        assert outcome['previewId'] == preview['id']
+        assert app.appearance.shared() == shared
+        assert app.appearance.read('browser')['local']['values'] is None
         assert row['app']['requests'][-1]['resolvedBy'] == 'agent'
         assert (await agent('inspect', {'id': row['id']}))['result']['views'] == []
+        # Reading another browser's full state may materialize its Canvas view.
+        # Verify resolver effects first, then retain the browser-snapshot privacy check.
+        app.clients.attach('other-browser')
+        with app.clients.bind('other-browser'):
+            assert app.browser_state()['appearance']['preview'] is None
     finally:
         await app.close()
