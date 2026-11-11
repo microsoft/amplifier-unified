@@ -18,6 +18,7 @@ export function AdvancedSettings({sections,navigate,state}){
   {title:'Provider configuration',description:'Instance names, credentials, and custom providers.',page:'providers'},
   {title:'Bundles & modules',description:'Composition, discovery, defaults, and registries.',pages:['app-bundles','add-bundles','defaults','registries']},
   {title:'Tool connections',description:'MCP connections, installation sources, and authentication.',page:'tool-connections'},
+  {title:'Custom appearance',description:'Import, export, theme folders, and custom CSS.',page:'custom-appearance'},
   {title:'Performance & runtime',description:'Ready conversations and terminal access.',pages:['model-capacity','ready-conversations','automation','install-app']},
   {title:'Troubleshooting & recovery',description:'Diagnostics, backups, repair, and reset options.',pages:['diagnostics','repair','reset']},
  ];

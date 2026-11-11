@@ -23,8 +23,7 @@ GLOBAL_PAGES = {
     'testing':'Testing & resources', 'updates':'Updates', 'advanced':'Advanced', 'providers':'Provider configuration', 'routing':'Model rules',
     'app-bundles':'Configured bundles', 'add-bundles':'Discover bundles', 'defaults':'Conversation defaults',
     'registries':'Module & source registries', 'tool-connections':'Tool connections',
-    'custom-appearance':'Custom appearance',
-    'repair':'Backup & repair', 'reset':'Advanced recovery',
+    'custom-appearance':'Custom appearance', 'repair':'Backup & repair', 'reset':'Advanced recovery',
     'ready-conversations':'Ready conversations', 'automation':'Terminal & automation', 'install-app':'Install app'}
 
 def settings_state(state):

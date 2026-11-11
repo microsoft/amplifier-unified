@@ -27,7 +27,7 @@
 #amp-one .a-smart-source-summary p { margin: 8px 0; }
 #amp-one .a-smart-source-summary button { margin-top: 10px; }
 #amp-one .a-smart-path, #amp-one .a-smart-tool-id { display: block; font-size: var(--a-text-sm,13px); overflow-wrap: anywhere; color: var(--a-muted); }
-#amp-one .a-smart-tools pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--a-text-sm,13px)/1.6 var(--a-font-code); padding: 12px; border-radius: 9px; background: var(--a-soft); margin: 10px 0; }
+#amp-one .a-smart-tools pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--a-text-sm,13px)/1.6 ui-monospace, SFMono-Regular, monospace; padding: 12px; border-radius: 9px; background: var(--a-soft); margin: 10px 0; }
 #amp-one .a-smart-tools .a-smart-result { margin-top: 20px; min-width: 0; }
 #amp-one .a-smart-tools .a-smart-field > label { display: flex; flex-direction: row; align-items: baseline; justify-content: space-between; gap: 10px; }
 #amp-one .a-smart-required { font-size: var(--a-text-xs,12px); font-weight: 400; color: var(--a-muted); }

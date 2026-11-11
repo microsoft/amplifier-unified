@@ -4,9 +4,14 @@ export function appearanceMutationTarget(entry){
  return {id:entry.id,expectedFingerprint:entry.fingerprint};
 }
 
+const CSS_IMPORT_LIMIT=1_000_000;
 const PACKAGE_IMPORT_LIMIT=4_000_000;
 const PACKAGE_BASE64_LIMIT=Math.ceil(PACKAGE_IMPORT_LIMIT/3)*4;
 const BASE64_CHUNK_SIZE=0x8000;
+
+function appearanceFallbackName(fileName){
+ return String(fileName||'').replace(/\.amplifier\.css$|\.css$|\.zip$/i,'').slice(0,100)||'Imported appearance';
+}
 
 function encodeBase64(bytes){
  let binary='';
@@ -14,14 +19,22 @@ function encodeBase64(bytes){
  return btoa(binary);
 }
 
+export function appearanceImportArgs(fileName,css){
+ return {css,fallbackName:appearanceFallbackName(fileName)};
+}
+
 export async function appearanceImportFileArgs(file){
- if(!file||typeof file.arrayBuffer!=='function')throw Error('Choose a version-2 ZIP appearance package.');
+ if(!file||typeof file.arrayBuffer!=='function')throw Error('Choose a CSS file or ZIP appearance package.');
  if(!Number.isSafeInteger(file.size)||file.size<0)throw Error('Could not read the selected appearance file.');
- if(file.size>PACKAGE_IMPORT_LIMIT)throw Error('ZIP appearance packages must be 4 MB or smaller.');
+ if(file.size>PACKAGE_IMPORT_LIMIT)throw Error('Choose a CSS file up to 1 MB or a ZIP package up to 4 MB.');
  const bytes=new Uint8Array(await file.arrayBuffer());
- if(bytes.byteLength>PACKAGE_IMPORT_LIMIT)throw Error('ZIP appearance packages must be 4 MB or smaller.');
- if(bytes.length<4||bytes[0]!==0x50||bytes[1]!==0x4b)throw Error('Import a version-2 ZIP package based on Reference.');
- return {packageBase64:encodeBase64(bytes)};
+ if(bytes.byteLength>PACKAGE_IMPORT_LIMIT)throw Error('Choose a CSS file up to 1 MB or a ZIP package up to 4 MB.');
+ const fallbackName=appearanceFallbackName(file.name);
+ if(bytes.length>=2&&bytes[0]===0x50&&bytes[1]===0x4b)return {packageBase64:encodeBase64(bytes),fallbackName};
+ if(bytes.byteLength>CSS_IMPORT_LIMIT)throw Error('CSS appearances must be 1 MB or smaller.');
+ let css;
+ try{css=new TextDecoder('utf-8',{fatal:true}).decode(bytes)}catch{throw Error('CSS appearances must contain valid UTF-8 text.')}
+ return {css,fallbackName};
 }
 
 function decodeBase64(value){

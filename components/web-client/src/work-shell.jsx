@@ -68,16 +68,9 @@ export function WorkHeader({state,session,act,open,narrow,presentation,fileDropH
  const navOpen=navigationExpanded(state.view,navigationNarrow),header=useRef(null);
  useLayoutEffect(()=>{
   const node=header.current;if(!node)return;
-  const overlay=window.navigator?.windowControlsOverlay;let frame=null;
   const measure=()=>node.closest('#amp-one')?.style.setProperty('--a-navigation-top',`${node.getBoundingClientRect().bottom}px`);
-  const schedule=()=>{
-   if(frame!==null)window.cancelAnimationFrame(frame);
-   frame=window.requestAnimationFrame(()=>{frame=window.requestAnimationFrame(()=>{frame=null;measure()})});
-  };
-  // WCO mutates root CSS in its first frame. Read in the next frame even when
-  // this listener was mounted first; movement alone does not resize the header.
-  measure();const observer=new ResizeObserver(measure);observer.observe(node);window.addEventListener('resize',schedule);overlay?.addEventListener?.('geometrychange',schedule);
-  return()=>{observer.disconnect();window.removeEventListener('resize',schedule);overlay?.removeEventListener?.('geometrychange',schedule);if(frame!==null)window.cancelAnimationFrame(frame)};
+  measure();const observer=new ResizeObserver(measure);observer.observe(node);window.addEventListener('resize',measure);
+  return()=>{observer.disconnect();window.removeEventListener('resize',measure)};
  },[]);
  const title=surface==='home'?'Home':surface==='workspaces'?'All workspaces':surface==='chats'?'All chats':surface==='workspace'?workspace?.name||'Workspace':displayTitle;
  return <header ref={header} className="a-work-header" data-part="header" inert={!!state.view?.panel} {...fileDropHandlers}>

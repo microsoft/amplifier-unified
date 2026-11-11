@@ -1,12 +1,13 @@
-/* Structural chat rules stay host-owned. Appearance deltas supply paint. */
+/* Structural chat rules follow saved CSS skins, including skins from older releases.
+   Colors still come from the selected theme. */
 /* Message content owns the bubble; actions and channel metadata share one footer. */
 #amp-one .a-message.a-user,#amp-one.a-chat-shell .a-message.a-user{display:flex;flex-direction:column;align-items:flex-end;width:100%;max-width:880px;box-sizing:border-box;margin-left:auto;margin-right:auto;padding:0;border:0;background:none;border-radius:0}
-#amp-one .a-message-body{min-width:0;max-width:100%;padding:8px 14px}
-#amp-one .a-user>.a-message-body{box-sizing:border-box;max-width:min(80%,740px);padding:7px 14px;border-radius:18px 18px 4px 18px}
+#amp-one .a-message-body{min-width:0;max-width:100%}
+#amp-one .a-user>.a-message-body{box-sizing:border-box;max-width:min(80%,740px);padding:7px 14px;border-radius:18px 18px 4px 18px;background:var(--a-tint)}
 #amp-one .a-message-body>p:first-child,#amp-one .a-user>.a-message-body>.a-detail-text>p:first-child{margin-top:0}
 #amp-one .a-message-body>p:last-child,#amp-one .a-user>.a-message-body>.a-detail-text>p:last-child{margin-bottom:0}
 #amp-one .a-user>.a-message-body:has(.a-message-editor){width:min(100%,740px);max-width:100%}
-#amp-one .a-message-actions{display:flex;align-items:center;gap:5px;min-height:28px;max-width:100%;min-width:0;margin-top:4px}
+#amp-one .a-message-actions{max-width:100%;min-width:0;margin-top:4px}
 #amp-one .a-user>.a-message-actions{justify-content:flex-end}
 #amp-one .a-message-channel{font-size:12px;color:var(--a-muted);margin-inline:6px}
 #amp-one .a-message-attribution{display:block;box-sizing:border-box;min-width:0;max-width:100%;margin:4px 0 0;font-size:12px;line-height:1.5;color:var(--a-ink);white-space:normal;overflow-wrap:anywhere}
@@ -19,7 +20,7 @@
 #amp-one.a-chat-shell .a-live-activity strong{color:var(--a-muted);font-weight:400}
 
 /* Match the accent badges in light and dark skins, for all primary actions. */
-#amp-one.a-chat-shell .a-send{background:var(--a-accent);color:var(--a-on-accent)}
+#amp-one.a-chat-shell .a-send{background:var(--a-accent);color:var(--a-surface)}
 
 /* One totals line in Balanced; the extra breakdown belongs to Everything.
    These structural rules follow saved skins so older themes cannot recenter timing. */
@@ -54,50 +55,24 @@
  #amp-one[data-execution-detail="minimal"] .a-execution-content .a-execution-usage{display:none}
 }
 
-/* The editor owns formatting; Reference supplies shared typography tokens. */
-#amp-one .a-markdown-composer{box-sizing:border-box;position:relative;width:100%;min-width:0;min-height:44px;max-height:180px;padding:8px 2px;overflow-y:auto;white-space:pre-wrap;overflow-wrap:anywhere;word-wrap:break-word;font-family:var(--a-font-chat);font-size:var(--a-text-lg,16px);line-height:1.5;color:var(--a-ink);background:transparent;outline:none;tab-size:4}
+/* The editor owns formatting; saved skins supply colors and typography. */
+#amp-one .a-markdown-composer{box-sizing:border-box;position:relative;width:100%;min-width:0;min-height:44px;max-height:180px;padding:8px 2px;overflow-y:auto;white-space:pre-wrap;overflow-wrap:anywhere;word-wrap:break-word;font-family:inherit;font-size:var(--a-text-lg,16px);line-height:1.5;color:var(--a-ink);background:transparent;outline:none;tab-size:4}
 #amp-one .a-markdown-composer p{margin:0 0 .4em}
 #amp-one .a-markdown-composer>:last-child{margin-bottom:0}
 #amp-one .a-markdown-composer[data-empty=true]::before{content:'Ask Amplifier anything…';position:absolute;pointer-events:none;color:var(--a-muted)}
-#amp-one .a-markdown-composer h1,#amp-one .a-markdown-composer h2,#amp-one .a-markdown-composer h3,#amp-one .a-markdown-composer h4,#amp-one .a-markdown-composer h5,#amp-one .a-markdown-composer h6{line-height:1.25;margin:.45em 0 .25em;font-family:var(--a-font-heading)}
+#amp-one .a-markdown-composer h1,#amp-one .a-markdown-composer h2,#amp-one .a-markdown-composer h3,#amp-one .a-markdown-composer h4,#amp-one .a-markdown-composer h5,#amp-one .a-markdown-composer h6{line-height:1.25;margin:.45em 0 .25em;font-family:inherit}
 #amp-one .a-markdown-composer h1{font-size:1.5em}#amp-one .a-markdown-composer h2{font-size:1.3em}#amp-one .a-markdown-composer h3{font-size:1.15em}
 #amp-one .a-markdown-composer>:first-child{margin-top:0}
 #amp-one .a-markdown-composer ul,#amp-one .a-markdown-composer ol{margin:.3em 0;padding-left:1.5em}
 #amp-one .a-markdown-composer li>p{margin:0}
 #amp-one .a-markdown-composer blockquote{margin:.3em 0;padding-left:.8em;border-left:2px solid var(--a-line);color:var(--a-muted)}
 #amp-one .a-markdown-composer pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:.4em 0;padding:8px;border-radius:6px;background:var(--a-surface)}
-#amp-one .a-markdown-composer code{font-family:var(--a-font-code);font-size:.9em;background:var(--a-surface);color:inherit}
+#amp-one .a-markdown-composer code{font-family:ui-monospace,monospace;font-size:.9em;background:var(--a-surface);color:inherit}
 #amp-one .a-markdown-composer .ProseMirror-selectednode{outline:2px solid var(--a-accent)}
 #amp-one .a-composer-image-reference{color:var(--a-muted);border:1px solid var(--a-line);border-radius:4px;padding:0 4px}
 
 #amp-one .a-user .a-markdown>:first-child{margin-top:0}
 #amp-one .a-user .a-markdown>:last-child{margin-bottom:0}
-
-/* Shared block-copy geometry serves message Markdown and Canvas readers. */
-#amp-one .a-block-copy{min-width:0;max-width:100%;margin:14px 0}
-#amp-one .a-block-copy-control{display:flex;align-items:center;gap:8px;flex-wrap:wrap;white-space:normal}
-#amp-one .a-block-copy-control .a-soft{min-height:44px;padding:8px 12px;white-space:normal}
-#amp-one .a-block-copy-notice{font-size:var(--a-text-sm,13px);color:var(--a-muted);overflow-wrap:anywhere}
-#amp-one .a-block-copy>pre,#amp-one .a-block-copy>.a-canvas-code-block{margin-top:6px}
-#amp-one .a-copy-frame{position:relative;border:1px solid var(--a-line);border-radius:var(--a-card-radius);background:var(--a-surface)}
-#amp-one .a-block-copy-control.is-compact{position:relative}
-#amp-one .a-copy-frame>.a-block-copy-control.is-compact{position:absolute;top:4px;right:4px;z-index:1;justify-content:flex-end;max-width:calc(100% - 8px)}
-#amp-one .a-block-copy-control.is-compact .a-icon{width:36px;height:36px;flex-shrink:0}
-#amp-one .a-copy-frame>.a-block-copy-control .a-icon{background:var(--a-surface);border-radius:var(--a-control-radius)}
-#amp-one .a-block-copy-control.is-compact svg{width:16px;height:16px}
-#amp-one .a-block-copy-control.is-compact .a-block-copy-notice{position:absolute;right:40px;top:0;max-width:min(260px,60vw);width:max-content;padding:6px 8px;background:var(--a-surface);border:1px solid var(--a-line);border-radius:var(--a-control-radius);opacity:0;pointer-events:none}
-#amp-one .a-block-copy-control.is-compact:hover .a-block-copy-notice:not(:empty),#amp-one .a-block-copy-control.is-compact:focus-within .a-block-copy-notice:not(:empty),#amp-one .a-block-copy-control.is-compact[data-feedback=error] .a-block-copy-notice{opacity:1}
-#amp-one .a-copy-frame>blockquote{margin:0;padding:16px 52px 16px 16px}
-#amp-one .a-copy-frame:has(>blockquote),#amp-one .a-copy-frame:has(>.a-table-scroll){border:0;border-radius:0;background:transparent}
-#amp-one .a-copy-frame>.a-table-scroll th:last-child{padding-right:52px}
-#amp-one .a-copy-frame>.a-canvas-result{padding:16px 52px 16px 16px}
-#amp-one .a-copy-frame>pre,#amp-one .a-copy-frame>.a-canvas-code-block{margin:0;border:0;border-radius:inherit;padding:16px 52px 16px 16px;background:transparent}
-@media(pointer:coarse){#amp-one .a-copy-frame>.a-block-copy-control .a-icon{width:44px;height:44px}#amp-one .a-copy-frame>pre{padding-right:60px}}
-@media(hover:hover) and (pointer:fine){
- #amp-one .a-copy-frame>.a-block-copy-control{opacity:0;pointer-events:none}
- #amp-one .a-copy-frame:hover>.a-block-copy-control,#amp-one .a-copy-frame:focus-within>.a-block-copy-control,#amp-one .a-copy-frame>.a-block-copy-control[data-feedback=pending],#amp-one .a-copy-frame>.a-block-copy-control[data-feedback=error]{opacity:1;pointer-events:auto}
-}
-#amp-one .a-block-copy pre{max-width:100%;overflow:auto}
 
 /* Forwarded and scheduled inputs keep their canonical role, but are not the
    reader’s own messages. Their source is visible without hovering. */

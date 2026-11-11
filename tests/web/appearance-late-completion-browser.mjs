@@ -20,8 +20,7 @@ const action=(page,name,args={})=>page.evaluate(async([name,args])=>{
  return receipt;
 },[name,args]);
 const list=async page=>(await action(page,'theme.list')).result.items;
-const stored=page=>page.evaluate(()=>JSON.parse(sessionStorage.getItem(
- 'amplifier.appearance-editor.v2:'+window.amplifier.getState().appearance.namespace)));
+const stored=page=>page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.appearance-editor.v1')));
 const editor=page=>page.locator('.a-settings-page-content:not([hidden]) .a-appearance-advanced');
 const field=(page,id)=>editor(page).locator('#theme-'+id);
 const button=(page,name)=>page.getByRole('button',{name,exact:true});
@@ -31,9 +30,10 @@ async function openEditor(page){
 }
 async function fill(page,values){
  for(const [id,value] of Object.entries(values))await field(page,id).fill(value);
- await expect.poll(async()=>(await stored(page)).draft.name).toBe(values.name);
+ await expect.poll(async()=>(await stored(page)).name).toBe(values.name);
 }
 async function select(page,entry){
+ await button(page,'Preview '+entry.name).click();
  await button(page,'Edit '+entry.name).click();
  await expect(field(page,'name')).toHaveValue(entry.name);
 }
@@ -46,8 +46,7 @@ async function holdResponse(page,name){
  let captured=false;
  const timer=setTimeout(()=>arrived.reject(Error('The held '+name+' response did not arrive')),20000);
  const handler=async route=>{
-  const request=route.request(),body=request.method()==='POST'?request.postDataJSON():null;
-  if(captured||body?.action!==name)return route.continue();
+  if(captured||route.request().postDataJSON()?.action!==name)return route.continue();
   captured=true;
   try{
    const response=await route.fetch({timeout:15000}),receipt=await response.json();
@@ -83,14 +82,14 @@ try{
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  const options={viewport:{width:1440,height:1050},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}};
  const page=await browser.newPage(options),peer=await browser.newPage(options),errors=[],requests=[];
- page.on('request',request=>{if(request.url().endsWith('/api/actions')&&request.method()==='POST')requests.push(request.postDataJSON()?.action)});
+ page.on('request',request=>{if(request.url().endsWith('/api/actions'))requests.push(request.postDataJSON()?.action)});
  for(const client of [page,peer]){client.on('pageerror',error=>errors.push(error.message));await client.goto(url);await showFixtureConversation(client)}
  await action(page,'session.create');
  await openSettingsPage(page,'custom-appearance');
 
  for(const operation of ['save','update','delete']){
   const entry=await seed(page,'Held '+operation);
-  await expect(button(page,'Edit '+entry.name)).toBeVisible({timeout:12000});
+  await expect(button(page,'Preview '+entry.name)).toBeVisible({timeout:12000});
   await select(page,entry);
   const payload={name:'Submitted '+operation,description:'Submitted description',css:'#amp-one{--a-accent:#765abc}'};
   await fill(page,payload);
@@ -124,14 +123,14 @@ try{
 
  for(const operation of ['save','update','delete']){
   const entry=await seed(page,'Failed '+operation);
-  await expect(button(page,'Edit '+entry.name)).toBeVisible({timeout:12000});
+  await expect(button(page,'Preview '+entry.name)).toBeVisible({timeout:12000});
   await select(page,entry);
   await fill(page,{name:operation==='save'?'':'Retain failed '+operation,description:'Retain failure draft',css:'#amp-one{--a-accent:#998833}'});
   // A blank save name and stale update/delete fingerprints are real host
   // rejections. Neither may clear intent or leave the editor disabled.
   if(operation!=='save')await action(peer,'theme.update',{id:entry.id,expectedFingerprint:entry.fingerprint,name:'Changed by peer '+operation,description:'Peer update',css:'#amp-one{--a-accent:#334499}'});
   const expected=await stored(page),before=requests.filter(name=>name==='theme.'+operation).length;
-  const response=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().method()==='POST'&&response.request().postDataJSON()?.action==='theme.'+operation);
+  const response=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='theme.'+operation);
   await mutate(page,operation,entry);
   assert.ok(!(await response).ok(),'The host must reject this mutation');
   await list(page);

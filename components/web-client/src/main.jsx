@@ -34,8 +34,6 @@ import './window-controls-overlay.css';
 import {AppReloadContext,AppReloadNotice,useAppReload} from './app-reload.jsx';
 import {AppearanceSettings} from './appearance-settings';
 import {useAppearanceEditor} from './appearance-editor';
-import {appearancePreferenceMatches,createAppearancePreferenceClient,effectivePreferenceValue,sparseExecutionVisibilityPatch} from './appearance-preferences';
-import {appearanceComposition} from './appearance-composition';
 import {appearanceCatalogFor,clearAppearanceCatalogs} from './appearance-catalog';
 import {appAppearanceState} from './app-appearance-state';
 import {homePatch} from './adaptive-work.js';
@@ -106,9 +104,10 @@ import {isTopLevelChat} from './chat-navigation';
 import {SubagentHistory} from './subagent-history';
 import {McpAppThemeProvider} from './mcp-app-theme';
 const logo='/branding/icons/amplifier-icon-128.png';
+import defaultSkin from './unified.css?raw';
 import chatPresentationCss from './chat-presentation.css?raw';
 import './base.css';
-import './reference.css';
+import './unified.css';
 import './settings-experience.css';
 import responsiveNavigation from './responsive-navigation.css?raw';
 import './settings-mobile.css';
@@ -138,9 +137,8 @@ function App(){
  if(!destinationHistory.current)destinationHistory.current=createDestinationHistory({changed:setDestinationTrail});
  const deliveryAuthentication=useRef(0);
  useEffect(()=>onAuthenticationChange(scope=>{deliveryAuthentication.current++;destinationHistory.current.invalidate(scope);clearAppearanceCatalogs();setBootAttempt(value=>value+1)}),[]);
- const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[workerDraft,setWorkerDraft]=useState(''),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[uploading,setUploading]=useState(false);
- const [appearancePreferenceStatus,setAppearancePreferenceStatus]=useState({status:'idle'});
- const appearanceEditor=useAppearanceEditor(state?.appearance?.theme,'',{namespace:state?.appearance?.namespace});
+ const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Amplifier Unified'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[uploading,setUploading]=useState(false);
+ const appearanceEditor=useAppearanceEditor(state?.theme,defaultSkin);
  const visualClient=useRef(null),computerClient=useRef(null);const [visual,setVisual]=useState({status:'idle'}),[computerVisual,setComputerVisual]=useState({status:'idle'});
  const startingCall=useRef(false),[voiceStarting,setVoiceStarting]=useState(false);
  const outbox=useMessageOutbox(),deliveries=useRef(new Set()),sendQueue=useRef(Promise.resolve()),draftSaves=useRef(new WeakMap());
@@ -150,7 +148,7 @@ function App(){
  const workerSubmission=useRef({busy:false,revision:0}),[workerSending,setWorkerSending]=useState(false);
  const [awayFromBottom,setAwayFromBottom]=useState(false);
  const questionReviewState=useState({});
- const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),lastDraft=useRef(''),canvasVisibilityQueue=useRef(Promise.resolve()),commandQueue=useRef(Promise.resolve()),voiceControlQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
+ const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),canvasVisibilityQueue=useRef(Promise.resolve()),commandQueue=useRef(Promise.resolve()),voiceControlQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
  const [connectionFailure,setConnectionFailure]=useState(null);
  const chatLinkReceiver=useRef(null),[chatLink,setChatLink]=useState(null);
  const reportError=useCallback(error=>{
@@ -477,123 +475,6 @@ function App(){
   }
   return promise;
  },[acceptState,handleEffects,awaitState]);
- const appearancePreferenceClient=useRef(null);
- if(!appearancePreferenceClient.current)appearancePreferenceClient.current=createAppearancePreferenceClient({dispatch,onStatus:setAppearancePreferenceStatus});
- else appearancePreferenceClient.current.setDispatch(dispatch);
- const readAppearanceSnapshot=useCallback(async()=>{
-  const receipt=await dispatch('appearance.preferences.read',{});
-  if(receipt?.accepted!==true||!receipt.result)throw Error(receipt?.error||'Could not read appearance preferences.');
-  return receipt.result;
- },[dispatch]);
- const observeAppearanceSnapshot=useCallback(async(appearance)=>{
-  await appearancePreferenceClient.current.observe(appearance,{connected:appearance?.availability==='connected'});
-  return appearance;
- },[]);
- const readAppearancePreferences=useCallback(async()=>observeAppearanceSnapshot(await readAppearanceSnapshot()),[observeAppearanceSnapshot,readAppearanceSnapshot]);
- const updateAppearancePatch=useCallback(async(patch,options={})=>{
-  let current=await readAppearancePreferences();
-  const scope=options.scope||current.activeScope||'shared';
-  if(!['shared','client'].includes(scope))throw Error('Choose Global or This browser for this appearance.');
-  if(scope==='client'){
-   await appearancePreferenceClient.current.waitUntilReady();
-   current=await readAppearancePreferences();
-   if(current.local?.values===null)throw Error('Choose This browser before editing its appearance profile.');
-  }
-  const namespace=options.namespace??current.namespace,generation=options.generation??current.generation;
-  if(namespace!==current.namespace||generation!==current.generation)throw Error('The appearance document changed. Read the selected profile again.');
-  const revision=scope==='shared'?current.shared?.revision:current.local?.revision;
-  if(!Number.isSafeInteger(revision))throw Error('Appearance preferences changed. Read them again before editing.');
-  const expectedRevision=options.retry?revision:Number.isSafeInteger(options.expectedRevision)?options.expectedRevision:revision;
-  const args={scope,generation,expectedRevision,patch};
-  if(scope==='client'){
-   const expectedStorageVersion=options.retry?current.local.storageVersion:options.expectedStorageVersion??current.local.storageVersion;
-   if(typeof expectedStorageVersion!=='string')throw Error('Browser appearance storage is not ready. Read the selected profile again.');
-   args.expectedStorageVersion=expectedStorageVersion;
-  }
-  const receipt=await dispatch('appearance.preferences.update',args);
-  if(receipt?.accepted!==true||!receipt.result)throw Error(receipt?.error||'Could not save appearance preferences.');
-  const result=receipt.result;
-  if(scope==='client'&&result.status==='awaiting-storage'){
-   const latest=await readAppearancePreferences();
-   await observeAppearanceSnapshot(latest);
-   const stored=await appearancePreferenceClient.current.waitForCommand(result.commandId);
-   return {...stored,namespace,generation,revision:expectedRevision+1};
-  }
-  return {...result,namespace,generation};
- },[dispatch,observeAppearanceSnapshot,readAppearancePreferences]);
- const updateAppearancePreference=useCallback((field,value,options={})=>
-  updateAppearancePatch({[field]:value},options),[updateAppearancePatch]);
- const selectAppearanceProfile=useCallback(async(activeScope,gesture={})=>{
-  if(!['shared','client'].includes(activeScope))throw Error('Choose Global or This browser for this appearance.');
-  await appearancePreferenceClient.current.waitUntilReady();
-  const current=await readAppearancePreferences();
-  if(activeScope===current.activeScope)return {status:'unchanged',activeScope};
-  const namespace=gesture.namespace??current.namespace,generation=gesture.generation??current.generation;
-  if(namespace!==current.namespace||generation!==current.generation)throw Error('The appearance document changed. Read the selected profile again.');
-  const expectedRevision=Number.isSafeInteger(gesture.expectedRevision)?gesture.expectedRevision:current.local?.revision;
-  const expectedStorageVersion=gesture.expectedStorageVersion??current.local?.storageVersion;
-  if(!Number.isSafeInteger(expectedRevision)||typeof expectedStorageVersion!=='string')
-   throw Error('Browser appearance storage is not ready. Read the selected profile again.');
-  const args={generation,activeScope,expectedRevision,expectedStorageVersion};
-  if(activeScope==='client'&&current.local?.values===null){
-   const expectedSharedRevision=Number.isSafeInteger(gesture.expectedSharedRevision)
-    ?gesture.expectedSharedRevision:current.shared?.revision;
-   if(!Number.isSafeInteger(expectedSharedRevision))throw Error('Global appearance changed. Read it again before copying it to this browser.');
-   args.expectedSharedRevision=expectedSharedRevision;
-  }
-  const receipt=await dispatch('appearance.preferences.select',args);
-  if(receipt?.accepted!==true||!receipt.result)throw Error(receipt?.error||'Could not change the active appearance profile.');
-  const result=receipt.result;
-  if(result.status==='awaiting-storage'){
-   const latest=await readAppearancePreferences();
-   await observeAppearanceSnapshot(latest);
-   const stored=await appearancePreferenceClient.current.waitForCommand(result.commandId);
-   return {...stored,namespace,generation};
-  }
-  return {...result,namespace,generation};
- },[dispatch,observeAppearanceSnapshot,readAppearancePreferences]);
- const undoAppearancePreference=useCallback(async undoId=>{
-  const receipt=await dispatch('appearance.preferences.undo',{undoId});
-  if(receipt?.accepted!==true||!receipt.result)throw Error(receipt?.error||'Could not undo this appearance change.');
-  if(receipt.result.status==='awaiting-storage'){
-   const latest=await readAppearancePreferences();
-   await observeAppearanceSnapshot(latest);
-   return appearancePreferenceClient.current.waitForCommand(receipt.result.commandId);
-  }
-  return receipt.result;
- },[dispatch,observeAppearanceSnapshot,readAppearancePreferences]);
- const updatePresentation=useCallback(async patch=>{
-  const nextPatch={},rendered=state?.appearance?.renderedPreferences||{};
-  let changed=false;
-  for(const [field,value] of Object.entries(patch||{})){
-   const baseline=effectivePreferenceValue(field,rendered);
-   const next=field==='executionVisibility'
-    ?sparseExecutionVisibilityPatch(value,baseline):value;
-   if(field==='executionVisibility'&&next&&typeof next==='object'&&!Array.isArray(next)&&!Object.keys(next).length)continue;
-   if(!appearancePreferenceMatches(field,next,baseline))changed=true;
-   nextPatch[field]=next;
-  }
-  // A changed gesture keeps all explicitly requested fields: a field equal to
-  // Global can still differ in the retained browser profile that will be selected.
-  if(!changed)return {status:'unchanged'};
-  await appearancePreferenceClient.current.waitUntilReady();
-  const inspected=await dispatch('shell.inspect',{clientId});
-  if(inspected?.accepted!==true||!inspected.result?.composition||!Number.isSafeInteger(inspected.result.revision))
-   throw Error(inspected?.error||'Could not read the current shell composition.');
-  const current=inspected.result,target={clientId,expectedRevision:current.revision};
-  // The shell owner edits the retained browser profile and selects it in one
-  // storage-ACK transaction. Never fill unrequested fields from effective Global.
-  const prepared=await dispatch('shell.changes.prepare',{...target,composition:{...current.composition,presentation:nextPatch}});
-  if(prepared?.accepted!==true||!prepared.result?.id)throw Error(prepared?.error||'Could not prepare the presentation change.');
-  const applied=await dispatch('shell.changes.apply',{...target,changeId:prepared.result.id});
-  if(applied?.accepted!==true||!applied.result)throw Error(applied?.error||'Could not apply the presentation change.');
-  if(applied.result.status==='awaiting-storage'){
-   const latest=await readAppearancePreferences();
-   await observeAppearanceSnapshot(latest);
-   return appearancePreferenceClient.current.waitForCommand(applied.result.commandId);
-  }
-  return applied.result;
- },[dispatch,state?.appearance?.renderedPreferences,observeAppearanceSnapshot,readAppearancePreferences]);
  useEffect(()=>{
   for(const entry of outbox.entries){
    if(entry.sessionId||!entry.creation?.id||!outboxMatches(entry,deliveryScope(state,null)))continue;
@@ -603,7 +484,7 @@ function App(){
  },[state?.sessions,outbox.entries]);
  // Shell snapshots are server-scoped. An optimistic browse patch can arrive
  // before its queued action; refresh only after the server accepts that scope.
- const shell=useShell(serverState.current,dispatch,clientId,state,{onError:reportError,onRecovered:()=>setConnectionFailure(afterReconnect),updatePresentation});
+ const shell=useShell(serverState.current,dispatch,clientId,state,{onError:reportError,onRecovered:()=>setConnectionFailure(afterReconnect)});
  useEffect(()=>root.current?actionFeedback.current.attach(root.current):undefined,[!!state,shell.ready]);
  const act=useCallback((name,args={},meta={})=>dispatch(name,args,meta).catch(e=>{if(meta.propagateError)throw e;return reportError(e)}),[dispatch,reportError]);
  // Warm only the small catalog after attachment, without blocking chat startup
@@ -661,30 +542,11 @@ function App(){
   return()=>{alive=false;clearTimeout(timer);clearTimeout(retryTimer);controller.abort();source?.close();window.removeEventListener('online',wake);window.removeEventListener('pageshow',restored);document.removeEventListener('visibilitychange',visible);setFeedbackEventStream('closed')};
  },[acceptState,bootAttempt,reconnected,reportError]);
  useEffect(()=>{window.amplifier=Object.freeze({shellClientId:clientId,getShellState:()=>shell.data,getState:()=>({...pendingView.current.apply(latest.current),renderedView:visibleView(root.current,clientId)}),getActions:()=>catalog,dispatch,subscribe:fn=>{stateListeners.current.add(fn);return()=>stateListeners.current.delete(fn)}});return()=>{delete window.amplifier}},[catalog,dispatch,shell.data]);
- useEffect(()=>{const timer=setTimeout(publishView,300);return()=>clearTimeout(timer)},[state,draft,voice,publishView,shell.data]);
+ useEffect(()=>{const timer=setTimeout(publishView,300);return()=>clearTimeout(timer)},[state,draft,themeDraft,preview,voice,publishView,shell.data]);
  useEffect(()=>{let timer;const schedule=()=>{clearTimeout(timer);timer=setTimeout(publishView,200)};document.addEventListener('visibilitychange',schedule);document.addEventListener('selectionchange',schedule);document.addEventListener('focusin',schedule);document.addEventListener('input',schedule);window.addEventListener('resize',schedule);return()=>{clearTimeout(timer);document.removeEventListener('visibilitychange',schedule);document.removeEventListener('selectionchange',schedule);document.removeEventListener('focusin',schedule);document.removeEventListener('input',schedule);window.removeEventListener('resize',schedule)}},[publishView]);
  useEffect(()=>{if(!state)return;const serverDraft=state.view?.draft||'';if(serverDraft!==lastDraft.current){setDraft(serverDraft);lastDraft.current=serverDraft}},[state?.view?.draft,state?.selectedSessionId]);
- useEffect(()=>{
-  const appearance=state?.appearance;
-  if(!appearance){appearancePreferenceClient.current.disconnect();return}
-  void appearancePreferenceClient.current.observe(appearance,{connected:connected&&appearance.availability==='connected'})
-   .catch(error=>setAppearancePreferenceStatus({status:'failed',error:error.message}));
- },[state?.appearance,connected]);
- useEffect(()=>{
-  const refresh=()=>{void readAppearancePreferences().catch(error=>setAppearancePreferenceStatus({status:'failed',error:error.message}))};
-  window.addEventListener('amplifier-shell',refresh);window.addEventListener('amplifier-reconnected',refresh);
-  return()=>{window.removeEventListener('amplifier-shell',refresh);window.removeEventListener('amplifier-reconnected',refresh)};
- },[readAppearancePreferences]);
- useLayoutEffect(()=>{
-  const compositionId=state?.appearance?.composition?.id;if(!compositionId)return;
-  let first,second;
-  first=requestAnimationFrame(()=>{second=requestAnimationFrame(()=>{
-   if(latest.current?.appearance?.composition?.id===compositionId)
-    void appearancePreferenceClient.current.reportRendered(compositionId).catch(()=>{});
-  })});
-  return()=>{cancelAnimationFrame(first);if(second)cancelAnimationFrame(second)};
- },[state?.appearance?.composition?.id]);
- useEffect(()=>{const v=state?.view;if(!v)return;if(v.workerDraft!==undefined)setWorkerDraft(v.workerDraft);if(v.agentAction!==undefined)setAgentAction(v.agentAction);if(v.agentArgs!==undefined)setAgentArgs(v.agentArgs)},[state?.view?.workerDraft,state?.view?.agentAction,state?.view?.agentArgs]);
+ useEffect(()=>{if(!state)return;const key=state.theme?.name+'::'+state.theme?.css;if(key!==loadedTheme.current){const changed=loadedTheme.current!==null;setThemeDraft(state.theme?.css||defaultSkin);setThemeName(state.theme?.name||'Amplifier Unified');setPreview(false);loadedTheme.current=key;if(changed&&state.view?.themePreview)dispatch('view.update',{patch:{themePreview:false}}).catch(reportError)}},[state?.theme]);
+ useEffect(()=>{const v=state?.view;if(!v)return;if(v.workerDraft!==undefined)setWorkerDraft(v.workerDraft);if(v.themeDraft!==undefined)setThemeDraft(v.themeDraft);if(v.themeDraftName!==undefined)setThemeName(v.themeDraftName);if(v.themePreview!==undefined)setPreview(v.themePreview);if(v.agentAction!==undefined)setAgentAction(v.agentAction);if(v.agentArgs!==undefined)setAgentArgs(v.agentArgs)},[state?.view?.workerDraft,state?.view?.themeDraft,state?.view?.themeDraftName,state?.view?.themePreview,state?.view?.agentAction,state?.view?.agentArgs]);
  const detail=useConversationDetail(state?.sessions?.find(s=>s.id===state.selectedSessionId),()=>{stickToBottom.current=false;const pane=messagesPane.current;if(!pane)return;const top=pane.getBoundingClientRect().top,anchor=[...pane.querySelectorAll('[data-message-id]')].find(node=>node.getBoundingClientRect().bottom>top);if(anchor)historyScrollAnchor.current={sessionId:state.selectedSessionId,messageId:anchor.dataset.messageId,top:anchor.getBoundingClientRect().top}},dispatch);
  useEffect(()=>{if(detail.jumpRequest){const frame=requestAnimationFrame(()=>detail.jumpRequest.id==='latest'?chatScroll.current?.reveal():chatScroll.current?.jump(detail.jumpRequest.id));return()=>cancelAnimationFrame(frame)}},[detail.jumpRequest]);
  const session=detail.session,view=state?.view||{},mode=view.mode||'chat',activity=sessionStatus(session),working=activity.busy;
@@ -794,7 +656,7 @@ function App(){
   window.addEventListener('keydown',shortcut);
   return()=>window.removeEventListener('keydown',shortcut);
  },[act]);
- const dismissPanel=()=>act('view.update',{patch:{panel:null}});
+ const dismissPanel=()=>{setPreview(false);act('view.update',{patch:{panel:null,themePreview:false}})};
  const close=()=>settingsNavigation.current?settingsNavigation.current.close():dismissPanel();
  useEffect(()=>{
   if(!panel||!shell.ready)return;
@@ -804,7 +666,7 @@ function App(){
   const controls=()=>[...dialog.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href],summary')].filter(el=>el.getClientRects().length);
   if(!dialog.contains(document.activeElement)||!document.activeElement?.getClientRects().length)controls()[0]?.focus();
   const handler=e=>{
-   if(e.key==='Escape'){if(settingsNavigation.current)settingsNavigation.current.close();else act('view.update',{patch:{panel:null}})}
+   if(e.key==='Escape'){if(settingsNavigation.current)settingsNavigation.current.close();else {setPreview(false);act('view.update',{patch:{panel:null,themePreview:false}})}}
    if(e.key==='Tab'){const items=controls(),first=items[0],last=items.at(-1);if(!items.includes(document.activeElement)){e.preventDefault();(e.shiftKey?last:first)?.focus()}else if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus()}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus()}}
   };
   window.addEventListener('keydown',handler);
@@ -968,23 +830,18 @@ function App(){
  }
  async function startCall(){dictationControl.current?.cancel();if(state.voiceConfiguration?.available===false){await dispatch('view.update',{patch:{panel:'settings',settingsSection:'setup',settingsExpanded:['voice']}});return}if(startingCall.current)return;startingCall.current=true;setVoiceStarting(true);setError('');try{await ensureSession();await dispatch('view.update',{patch:{mode:'call'}});await dispatch('call.start',{})}catch(e){reportError(e)}finally{startingCall.current=false;setVoiceStarting(false)}}
  const callActive=!['idle','ended','error'].includes(voice.status||'idle');
- const appearance=state?.appearance||{};
- const composedAppearance=appearanceComposition(appearance);
- const activeCss=composedAppearance.css;
- const preview=!!appearance.preview;
- const presentation=composedAppearance.preferences;
- const requestedScheme=presentation.scheme||'system';
+ // Preview is an exact host-validated client snapshot, not the mutable editor.
+ // A committed change invalidates it immediately, before synchronization effects.
+ const committedThemeKey=state?.theme?.name+'::'+state?.theme?.css;
+ const previewSnapshot=preview&&loadedTheme.current===committedThemeKey&&state?.view?.themePreview&&typeof state.view.themeDraft==='string'
+  ?{name:state.view.themeDraftName||'Custom skin',css:state.view.themeDraft}:null;
+ const activeCss=previewSnapshot?.css??state?.theme?.css??'';
+ const presentation=shell.composition.presentation;
+ const requestedScheme=presentation.scheme||view.scheme;
  const scheme=requestedScheme==='system'?'light dark':requestedScheme||'light';
  const themeScheme=useThemeScheme(requestedScheme);
- const appearanceCacheLocal=appearance.local||{},appearanceCacheAck=appearancePreferenceClient.current?.getSnapshot().acknowledged;
- const appearanceCacheConfirmed=['ready','stored'].includes(appearancePreferenceStatus.status)&&appearance.availability==='connected'&&
-  appearanceCacheLocal.reported===true&&!appearanceCacheLocal.error&&
-  appearanceCacheAck?.namespace===appearance.namespace&&appearanceCacheAck?.generation===appearance.generation&&
-  appearanceCacheAck?.revision===appearanceCacheLocal.revision&&appearanceCacheAck?.storageVersion===appearanceCacheLocal.storageVersion&&
-  appearanceCacheAck?.activeScope===appearance.activeScope;
- useWindowChrome({root,shell,mode:themeScheme,compositionId:composedAppearance.id});
- useAppearanceCache({root,shell,scheme:requestedScheme,mode:themeScheme,preview,compositionId:composedAppearance.id,
-  activeScope:appearance.activeScope,storageVersion:appearanceCacheLocal.storageVersion,confirmed:appearanceCacheConfirmed,invalidate:!!appearanceCacheLocal.error});
+ useWindowChrome({root,state,shell,mode:themeScheme,css:activeCss});
+ useAppearanceCache({root,state,shell,scheme:requestedScheme,mode:themeScheme,preview,css:activeCss});
  useLayoutEffect(()=>bindWindowControlsOverlay(root.current),[shell.ready,!!state]);
  const newChatPending=!session&&outbox.entries.some(row=>outboxMatches(row,outboxSource)&&row.sessionId===null&&['sending','unknown'].includes(row.status));
  const responseActive=working||(session?.workers||[]).some(worker=>['queued','starting','working','running','stopping'].includes(worker.status));
@@ -1005,7 +862,7 @@ function App(){
  }});
  const settingsState={...state,view:{...state?.view,settingsCanvas:canvasSettingsVisible}};
  const settingsAct=(name,args={},meta={})=>act(name,name==='view.update'&&canvasSettingsVisible&&args.patch?.panel==='settings'?{...args,patch:{...args.patch,panel:null,settingsCanvas:true}}:args,meta);
- const settingsSurface=<SettingsExperience state={settingsState} session={settingsSession} act={settingsAct} dispatch={dispatch} open={open} close={()=>canvasSettingsVisible?act('canvas.tabClose',{id:state.canvas.id}):dismissPanel()} navigationRef={settingsNavigation} appearance={<AppearanceSettings state={state} appearance={appearance} act={dispatch} editor={appearanceEditor} preferenceStatus={appearancePreferenceStatus} onPreferenceChange={updateAppearancePreference} onPreferenceSelect={selectAppearanceProfile} onPreferenceUndo={undoAppearancePreference}/>}/>;
+ const settingsSurface=<SettingsExperience state={settingsState} session={settingsSession} act={settingsAct} dispatch={dispatch} open={open} close={()=>canvasSettingsVisible?act('canvas.tabClose',{id:state.canvas.id}):dismissPanel()} navigationRef={settingsNavigation} appearance={<AppearanceSettings state={state} shell={shell} act={dispatch} editor={appearanceEditor} preview={!!previewSnapshot} previewSnapshot={previewSnapshot} setPreview={setPreview} defaultSkin={defaultSkin}/>}/>;
  const browsing=workSurface(state)!=='chat';
  const browse=(surface,id=null)=>act('view.update',{patch:{...browsePatch(surface,id),navExpanded:false}});
  const visitHistory=async key=>{
@@ -1042,13 +899,13 @@ function App(){
  const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat,openRecordings,history:destinationTrail,visitHistory,visitRecent,
   sidebarView:view,updateSidebar:patch=>act('view.update',{patch}),
   home:(extra={})=>act('view.update',{patch:homePatch(presentation,extra,view)}),
-  setPresentation:patch=>updatePresentation(patch).catch(reportError)};
+  setPresentation:patch=>shell.setPresentation(patch).catch(reportError)};
  const previewVisible=!!peerPreview.active&&!browsing;
  const layoutState=browsing?{...settingsState,canvas:{...state?.canvas,open:false}}:previewVisible?{...settingsState,peerPreview:true,canvas:{...state?.canvas,open:true}}:settingsState;
  const renderMessage=(row,options={})=><MessageEntry key={row.id} message={row.message} session={session||{id:null}} state={state} connected={connected} statusCurrent={!detail.focused} act={act} stamp={nowLabel} working={working} forkTurn={turnEnds.get(row.id)} newest={newest.has(row.id)} retry={retryMessage} discard={discardMessage} dispatch={dispatch} {...options}/>;
  const renderRow=row=>row.kind==='artifacts'?<ArtifactLinks key={row.id} state={state} message={row.message} act={act} dispatch={dispatch}/>:row.kind==='work'?<ConversationWork key={row.id} row={row} data={execution} state={state} act={act} dispatch={dispatch} session={session} working={working} renderMessage={renderMessage}/>:row.kind==='peers'?<PeerRun key={row.id} row={row} session={session} state={state} renderMessage={renderMessage}/>:renderMessage(row);
  if(!state||!shell.ready)return <AppReloadContext.Provider value={appReload}><div className="boot"><AppReloadNotice/><img src={logo}/><h1>Amplifier</h1><p>{error||shell.error||'Connecting to your workspace…'}</p>{(error||shell.error)&&<><button onClick={()=>{setBootAttempt(value=>value+1);shell.refresh()}}>Retry connection</button><p><a href="?shell=recovery">Open recovery mode</a></p></>}</div></AppReloadContext.Provider>;
- return <PeerPresentation.Provider value={peerPresentation}><ArchiveContext.Provider value={archiveValue}><WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" {...appAppearanceState(state,connected,streamClient!==null)} data-work-surface={workSurface(state)} ref={root} data-appearance-composition={composedAppearance.id||undefined} data-layout={presentation.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||'standard'} data-execution-detail={presentation.executionDetail||presentation.interfaceDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">
+ return <PeerPresentation.Provider value={peerPresentation}><ArchiveContext.Provider value={archiveValue}><WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" {...appAppearanceState(state,connected,streamClient!==null)} data-work-surface={workSurface(state)} ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-execution-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">
   {activeCss&&<style>{activeCss}</style>}<ButtonTooltips rootRef={root}/>
   <style>{responsiveNavigation}</style><style>{workShellCss}</style><style>{windowControlsOverlayCss}</style><style>{chatPresentationCss}</style><style>{mainRefreshCss}</style><style>{canvasExperienceCss}</style><style>{compactComposerCss}</style>
   <div className="a-window-chrome-blend" aria-hidden="true"/>
@@ -1126,7 +983,7 @@ function App(){
 
    {panel==='worker'&&<form data-action="worker.spawn" onSubmit={submitWorker}><p>Tell the worker what to investigate or build. Results return to this conversation.</p><label htmlFor="worker-instruction">Work to delegate</label><textarea id="worker-instruction" value={workerDraft} data-action="view.update" onChange={e=>{workerSubmission.current.revision++;setWorkerDraft(e.target.value);act('view.update',{patch:{workerDraft:e.target.value}})}} placeholder="Review the project and propose a focused implementation plan…"/><div className="a-dialog-actions"><button className="a-primary" disabled={workerSending||!workerDraft.trim()}><GitBranch/>{workerSending?'Starting…':'Start worker'}</button></div></form>}
 
-   {panel==='agent'&&<><p>Every app control uses the same action interface. The agent can read the selected conversation, worker lanes, open panels, and nonprivate controls. Unsent messages, message edits and attachments are excluded from ordinary readback. When you ask for help with a draft, the agent can inspect that draft in this chat by explicitly selecting its browser.</p><div className="a-form-grid"><div><label>Local browser state (includes private input)</label><pre data-private="true" className="a-state-view">{pretty({...state,devices:Object.fromEntries(Object.entries(state.devices||{}).map(([id,device])=>[id,{clientId:device.clientId,viewport:device.viewport,controls:device.controls?.length,visibleTextLength:device.visibleText?.length,voice:device.voice,notificationPermission:device.notificationPermission}])),deviceCommands:(state.deviceCommands||[]).map(({id,type,origin,createdAt})=>({id,type,origin,createdAt})),appearance:{theme:{name:state.appearance?.theme?.name,css:`${state.appearance?.theme?.css?.length||0} characters`},compositionId:state.appearance?.composition?.id,renderedPreferences:state.appearance?.renderedPreferences,availability:state.appearance?.availability}})}</pre></div><div><label>Visible controls</label><pre data-private="true" className="a-state-view">{pretty(visibleView(root.current,clientId).controls?.map(c=>({label:c.label,action:c.action,disabled:c.disabled})))}</pre></div></div><label htmlFor="agent-action">Run an app action</label><select id="agent-action" value={agentAction} data-action="view.update" onChange={e=>{setAgentAction(e.target.value);act('view.update',{patch:{agentAction:e.target.value}})}}>{catalog.map(a=><option key={a.name||a.action} value={a.name||a.action}>{a.name||a.action}</option>)}</select><label htmlFor="agent-args">Arguments (JSON)</label><textarea id="agent-args" className="a-css-editor" style={{minHeight:100}} value={agentArgs} data-action="view.update" onChange={e=>{setAgentArgs(e.target.value);act('view.update',{patch:{agentArgs:e.target.value}})}}/><div className="a-dialog-actions"><button className="a-primary" data-action={agentAction} onClick={()=>{try{act(agentAction,JSON.parse(agentArgs))}catch(e){reportError(e)}}}>Run action</button><button className="a-soft" data-action="state.export" onClick={()=>act('state.export')}><Download/>Export app state</button></div><p className="a-caption">Also available to integrations as window.amplifier.getState(), getActions(), and dispatch().</p></>}
+   {panel==='agent'&&<><p>Every app control uses the same action interface. The agent can read the selected conversation, worker lanes, open panels, and nonprivate controls. Unsent messages, message edits and attachments are excluded from ordinary readback. When you ask for help with a draft, the agent can inspect that draft in this chat by explicitly selecting its browser.</p><div className="a-form-grid"><div><label>Local browser state (includes private input)</label><pre data-private="true" className="a-state-view">{pretty({...state,devices:Object.fromEntries(Object.entries(state.devices||{}).map(([id,device])=>[id,{clientId:device.clientId,viewport:device.viewport,controls:device.controls?.length,visibleTextLength:device.visibleText?.length,voice:device.voice,notificationPermission:device.notificationPermission}])),deviceCommands:(state.deviceCommands||[]).map(({id,type,origin,createdAt})=>({id,type,origin,createdAt})),theme:{name:state.theme?.name,css:`${state.theme?.css?.length||0} characters`},view:{...view,themeDraft:view.themeDraft?`${view.themeDraft.length} characters`:undefined}})}</pre></div><div><label>Visible controls</label><pre data-private="true" className="a-state-view">{pretty(visibleView(root.current,clientId).controls?.map(c=>({label:c.label,action:c.action,disabled:c.disabled})))}</pre></div></div><label htmlFor="agent-action">Run an app action</label><select id="agent-action" value={agentAction} data-action="view.update" onChange={e=>{setAgentAction(e.target.value);act('view.update',{patch:{agentAction:e.target.value}})}}>{catalog.map(a=><option key={a.name||a.action} value={a.name||a.action}>{a.name||a.action}</option>)}</select><label htmlFor="agent-args">Arguments (JSON)</label><textarea id="agent-args" className="a-css-editor" style={{minHeight:100}} value={agentArgs} data-action="view.update" onChange={e=>{setAgentArgs(e.target.value);act('view.update',{patch:{agentArgs:e.target.value}})}}/><div className="a-dialog-actions"><button className="a-primary" data-action={agentAction} onClick={()=>{try{act(agentAction,JSON.parse(agentArgs))}catch(e){reportError(e)}}}>Run action</button><button className="a-soft" data-action="state.export" onClick={()=>act('state.export')}><Download/>Export app state</button></div><p className="a-caption">Also available to integrations as window.amplifier.getState(), getActions(), and dispatch().</p></>}
    {panel==='delete-session'&&<ChatDelete key={session?.id} id={session?.id} act={dispatch} cancel={close}/>}{(panel==='settings'||panel==='appearance')&&settingsSurface }
   </section></div>}
  </div></AppReloadContext.Provider></ShellContext.Provider></WorkNavigationContext.Provider></ArchiveContext.Provider></PeerPresentation.Provider>;

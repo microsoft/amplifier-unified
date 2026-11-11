@@ -69,31 +69,28 @@ try{
  async function progress(label){
   const stopReceipt=await action('conversation.stop',{sessionId},'sr01-stop-'+label);
   assert.equal(stopReceipt.accepted,true);
-  // Editor drafts are browser-tab session data, never view state. Keep this
-  // queue probe on an unrelated harmless view write.
-  const value=label==='thumbnail';
-  const writeReceipt=await action('view.update',{patch:{toolbarMenuOpen:value}},'sr01-write-'+label);
+  const writeReceipt=await action('view.update',{patch:{themeDraftName:'SR01 '+label}},'sr01-write-'+label);
   assert.equal(writeReceipt.accepted,true);
   const facts=await (await page.request.get(url+'/fixture')).json();
   assert.ok(facts.stopped.includes(sessionId),'Stop reached the synthetic runtime');
   assert.deepEqual(facts.sent,[],'No conversation/model send');
   assert.deepEqual(facts.started,[],'No conversation/model start');
   report.checks.push({label,stopAccepted:true,writeAccepted:true,stops: facts.stopped.length,at:performance.now()});
-  return value;
+  return 'SR01 '+label;
  }
  const startupMarker=await progress('startup');assert.equal(startup.state.released,false);
  startup.release();
- await expect.poll(async()=>(await state()).view.toolbarMenuOpen).toBe(startupMarker);
+ await expect.poll(async()=>(await state()).view.themeDraftName).toBe(startupMarker);
  report.phase='held visible thumbnail';await openSettingsPage(page,'appearance');
- const card=page.locator('[data-appearance-card="builtin:digital-rain"]');await card.scrollIntoViewIfNeeded();
+ const card=page.getByRole('button',{name:'Use Digital Rain',exact:true});await card.scrollIntoViewIfNeeded();
  await waitHeld(thumbnail);
  const thumbMarker=await progress('thumbnail');assert.equal(thumbnail.state.released,false);
- const sameTheme=(await state()).appearance.theme;
+ const sameTheme=(await state()).theme;
  thumbnail.release();
  await expect(card.locator('[data-thumbnail-state=ready]')).toBeVisible();
  await expect(card.locator('[data-appearance-fingerprint]')).toHaveAttribute('data-appearance-fingerprint',thumbnail.state.fingerprint);
- assert.deepEqual((await state()).appearance.theme,sameTheme,'Late read cannot replace the selected appearance');
- assert.equal((await state()).view.toolbarMenuOpen,thumbMarker,'Late read cannot restore unrelated older view state');
+ assert.deepEqual((await state()).theme,sameTheme,'Late read cannot apply a theme');
+ assert.equal((await state()).view.themeDraftName,thumbMarker,'Late read cannot restore older view state');
  report.phase='preceding write barrier';
  const prior=hold('preceding ordered write',body=>body.id==='sr01-prior-write');
  const read=hold('read after preceding write',body=>body.id==='sr01-after-write-read');
@@ -101,7 +98,7 @@ try{
   window.sr01Pending={};
   const start=(key,action,args,id)=>{window.sr01Pending[key]=window.amplifier.dispatch(action,args,{id})
    .then(receipt=>({receipt}),error=>({error:String(error)}))};
-  start('write','view.update',{patch:{toolbarMenuOpen:false}},'sr01-prior-write');
+  start('write','view.update',{patch:{themeDraftName:'SR01 prior'}},'sr01-prior-write');
  });
  await waitHeld(prior);
  await page.evaluate(()=>{window.sr01Pending.read=window.amplifier.dispatch('theme.read',{id:'builtin:ready'},{id:'sr01-after-write-read'})
@@ -113,7 +110,7 @@ try{
  read.release();
  const pending=await page.evaluate(async()=>({write:await window.sr01Pending.write,read:await window.sr01Pending.read}));
  assert.equal(pending.write.receipt?.accepted,true);assert.equal(pending.read.receipt?.accepted,true);
- assert.equal((await state()).view.toolbarMenuOpen,marker);
+ assert.equal((await state()).view.themeDraftName,marker);
  for(const entry of holds)assert.equal(report.requests.filter(row=>row.id===entry.state.id).length,1,'No repeated held request');
  for(const row of report.checks){
   const entry=row.label==='startup'?startup:row.label==='thumbnail'?thumbnail:read;

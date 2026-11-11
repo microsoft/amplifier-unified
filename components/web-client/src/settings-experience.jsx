@@ -49,7 +49,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  // Keep visited editors mounted while the dialog is open. Private fields stay
  // in component memory, never in shared view state, when changing sections.
  const editors=useRef(new Map());
- const family=page=>['ai-connections','overview'].includes(page)?'ai-connections':page==='appearance'?'appearance':['smart-tools','tool-connections'].includes(page)?'smart-tools':['app-bundles','add-bundles','loaded-modules','share-bundle','registries'].includes(page)?'bundles':['notifications','diagnostics','history','permissions','automation','repair','reset'].includes(page)?'maintenance':page;
+ const family=page=>['ai-connections','overview'].includes(page)?'ai-connections':['appearance','custom-appearance'].includes(page)?'appearance':['smart-tools','tool-connections'].includes(page)?'smart-tools':['app-bundles','add-bundles','loaded-modules','share-bundle','registries'].includes(page)?'bundles':['notifications','diagnostics','history','permissions','automation','repair','reset'].includes(page)?'maintenance':page;
  const active=family(page);if(!index)editors.current.set(active,page);
  function renderPage(page){
  let content;
@@ -60,7 +60,8 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  else if(page==='privacy')content=<PrivacySettings state={state} navigate={navigate}/>;
  else if(page==='model-capacity')content=<ModelCapacitySettings act={dispatch||act} navigate={navigate}/>;
  else if(page==='advanced')content=<AdvancedSettings {...props} sections={sections} navigate={navigate}/>;
- else if(page==='appearance')content=<ShellSlot name="settings.appearance">{appearance}</ShellSlot>;
+ else if(page==='appearance')content=<ShellSlot name="settings.appearance">{React.isValidElement(appearance)?React.cloneElement(appearance,{simple:true,onAdvanced:()=>navigate('custom-appearance')}):appearance}</ShellSlot>;
+ else if(page==='custom-appearance')content=React.isValidElement(appearance)?React.cloneElement(appearance,{advancedOnly:true}):appearance;
  else if(page.startsWith('shell:'))content=<ShellSlot name="settings.section" instanceId={page.slice(6)}/>;
  else if(page==='workspaces')content=<WorkspaceSettings {...props} dispatch={dispatch||act}/>;
  else if(page==='workspace-starters')content=<StarterSettings {...props} dispatch={dispatch||act}/>;

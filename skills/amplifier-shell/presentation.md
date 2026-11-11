@@ -7,13 +7,13 @@ installed contracts below; do not invent a single appearance-package API.
 1. Call `shell.inspect` for the target client. Record its revision, composition,
    package availability and browser status. Query affected instances with
    `shell.query`. Use the current schemas rather than copying an old payload.
-2. For module order, supported layout, or extension configuration, form
+2. For module order, visibility, supported layout, presentation tokens or extension configuration, form
    a complete proposed composition preserving unaffected instance IDs and
    settings. Prepare it with `shell.changes.prepare` and the inspected revision.
    Existing modules can have multiple instances where their contract permits.
 3. Preview the returned change, inspect its browser report, then apply within
    the user's requested scope. Preview does not commit a composition. For a
-   custom CSS delta, discover the appearance and theme services' current actions.
+   custom CSS skin, discover the theme service's current actions.
 4. Reinspect after activation. An `awaiting-browser` receipt is not completion.
    Confirm the matching revision mounted, and verify the intended interaction.
    If stale, inspect and prepare again; do not repeatedly force old revisions.
@@ -45,29 +45,28 @@ examples; do not duplicate its styling procedures here. Components still own
 focus, scrolling, responsive safety and action semantics. Theme selection does
 not authorize other preference or runtime changes.
 
-Reference is always loaded; a theme package supplies only its intentional CSS
-delta over `reference-v1`. Discover `theme.*` for shared library authoring/import/
-export, and `appearance.*` for selection, scope, preview and conditional undo.
-Do not submit a complete skin or use library operations to select a look.
-Shared Reference/component fixes are authored in the selected `amplifier-client-web`
-repository, not Unified's delivery snapshot or disposable prepared client. Follow
-the source-ownership section of the linked preference/package guide.
+The user-approved PR1916 rollback temporarily retires Reference and Global /
+This browser profiles after the `.078` visual regression. Follow the
+[rollback boundary](../../docs/shell/appearance-contract.md#temporary-rollback-boundary):
+newer saved data stays inert and undeleted, never converted or used to seed the
+legacy path. Missing legacy themes use the safe old default, not a claimed
+automatic recovery of the theme removed by `.078`.
 
-One **Global / This browser** selector chooses the complete active preference
-profile and write destination. Inspect `appearance.preferences.read` and preserve
-unrelated values. First use copies resolved Global settings; later switches retain
-both independent profiles. No saved browser field inherits later Global changes;
-`false` and empty collections remain meaningful values. Returning to Global never
-publishes or deletes the retained browser profile. A browser-local command is not
-committed until that admitted browser generation acknowledges successful
-persistence. Storage failure never becomes a Global write.
+Discover `theme.*`. `theme.preview` / `theme.apply` take a name and exactly one
+of `definition` (a complete version-1 theme), `tokens` (an intentional partial
+palette edit retaining the skin/artwork), or `css` (a complete portable skin).
+Preview is client-scoped; apply commits app-wide. `theme.revert` ends a preview
+first, otherwise conditionally reverses the client's last apply. Saving or
+importing a library entry does not apply it. Portable CSS and format-1 ZIP
+import/export are restored; format-2 Reference deltas are not active inputs.
 
-Composition still has its own revision, dirty-state fences and lifecycle.
-Discover which presentation fields the installed host routes to the browser-local
-preference owner. Mixed changes must pass those fences before issuing a local
-command and activate atomically only on its successful persistence acknowledgement.
-Preview/cancel leaves committed preferences and private editor work intact;
-conditional undo does not overwrite an intervening edit.
+Composition retains its revision, dirty-state fences and lifecycle. Change
+scheme, decorations and other supported `presentation` fields through the
+existing shell prepare/preview/apply/revert protocol, independently of the theme.
+Keep previews, committed styling and private editor drafts distinct.
+Browser/shared-component source changes belong in `amplifier-client-web`, not
+Unified's selected snapshot or disposable prepared client; follow the linked
+guide's source ownership and two-repository delivery requirements.
 
 Discover actual target schemas before acting: documentation shipped with a newer
 build does not upgrade an older host. See [the preference and package guide](
