@@ -527,6 +527,35 @@ async def test_delayed_validation_refuses_before_start_and_keeps_intent(app, mon
     assert app._session()['bundle'] == 'anchors'
 
 
+@pytest.mark.parametrize('change', ['defaults-only', 'directory', 'revision', 'stop'])
+async def test_legacy_native_target_defaults_do_not_invent_a_move(app, change):
+    from amplifier_web.next_message_configuration import guard_for
+    from amplifier_web.runtime import RuntimeStartupError
+    current = app._session()
+    current.pop('workingDirectory', None)
+    current.pop('executionRevision', None)
+    await app.dispatch('conversation.configure', choices(app, bundle='work'))
+    # Intent already saved by older versions must work too, without rewriting
+    # or recapturing its target/authority from the current owner.
+    legacy = {'workspace': current['workspace'], 'workingDirectory': None, 'executionRevision': None}
+    current['pendingBundleSelection']['target'] = deepcopy(legacy)
+    current.update(workingDirectory=current['workspace'], executionRevision=0)
+    captured = deepcopy(current)
+    if change == 'directory':
+        current['workingDirectory'] += '/another'
+    elif change == 'revision':
+        current['executionRevision'] = 2  # moved away and back is still a move
+    elif change == 'stop':
+        current['interruptionRevision'] = 1
+    check = guard_for(app, captured)
+    if change == 'defaults-only':
+        check()
+    else:
+        with pytest.raises(RuntimeStartupError):
+            check()
+    assert current['pendingBundleSelection']['target'] == legacy
+
+
 async def test_reset_then_explicit_pin_does_not_silently_discard_pin(app):
     await app.dispatch('conversation.configure', choices(app, bundle='work', resetModel=True))
     selected = {'instance': 'one', 'model': 'chosen'}

@@ -150,6 +150,38 @@ def test_recording_default_does_not_change_connection_but_explicit_config_does(t
         assert not other['verified'], change
 
 
+@pytest.mark.parametrize('module,flag', [('provider-openai', 'raw'), ('provider-litellm', 'raw_debug')])
+@pytest.mark.parametrize('explicit', [None, False, True])
+def test_saved_inspected_recording_plan_keeps_model_picker_connection_eligible(
+        tmp_path, monkeypatch, module, flag, explicit):
+    import copy
+    from amplifier_web.provider_catalog import configured_binding, conversation_bindings
+    from amplifier_web.provider_recording import apply_provider_recording
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+    home = tmp_path / 'app'
+    row = {'module': module, 'instance_id': 'one', 'source': 'fixture-source',
+           'config': {'api_key': 'synthetic-account', 'base_url': 'https://endpoint.invalid',
+                      **({flag: explicit} if explicit is not None else {})}}
+    SettingsStore(home).update(tmp_path, 'global', lambda values: values.update(
+        config={'providers': [{'id': 'one', **row}]}))
+    key = configured_binding(home, tmp_path, 'one')
+    plan = {'providers': [copy.deepcopy(row)]}
+    apply_provider_recording(plan, enabled=True)
+    before = copy.deepcopy(plan)
+    saved = home / 'sessions' / 'source' / 'configuration.json'
+    saved.parent.mkdir(parents=True)
+    saved.write_text(json.dumps(plan))
+    providers = [{'id': 'one', 'connectionKey': key}]
+    assert conversation_bindings(home, tmp_path, 'source', providers) == {}
+    assert json.loads(saved.read_text()) == before
+    for patch in ({'api_key': 'another-account'}, {'base_url': 'https://another.invalid'},
+                  {flag: not (explicit if explicit is not None else True)}):
+        changed = copy.deepcopy(plan)
+        changed['providers'][0]['config'].update(patch)
+        saved.write_text(json.dumps(changed))
+        assert conversation_bindings(home, tmp_path, 'source', providers)['one']['eligible'] is False
+
+
 def test_recording_identity_projection_preserves_explicit_settings_and_mounted_plan(tmp_path):
     import copy
     from types import SimpleNamespace
