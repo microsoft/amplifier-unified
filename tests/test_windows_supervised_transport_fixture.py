@@ -114,6 +114,7 @@ def test_only_exact_transport_is_substituted_and_no_host_state_is_written(tmp_pa
     asyncio.run(check())
     assert [row[0] for row in calls] == ["read", "process"]
     assert not root.exists()
+    value.pop("readinessTimeout", None)
     value["failBeforeIdentity"] = True
     monkeypatch.setattr(update_readiness, "running_identity", lambda: {"revision": "c" * 40})
     with pytest.raises(RuntimeError, match="before runtime identity"):
