@@ -210,8 +210,12 @@ def rebind_provider_credentials(edited, authorized):
     Required-secret schema validation still runs after this in-memory resolution.
     """
     from .decision_accounts import logical_plan
-    result = logical_plan(edited)
-    authorized = logical_plan(authorized)
+    from .host.components import portable_module_sources
+    from .host.config import app_home
+    sources = portable_module_sources(
+        {"agents": {"edited": logical_plan(edited), "authorized": logical_plan(authorized)}},
+        app_home())["agents"]
+    result, authorized = sources["edited"], sources["authorized"]
     bound = False
 
     def restore(value, original):

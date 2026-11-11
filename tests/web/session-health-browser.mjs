@@ -27,6 +27,7 @@ try{
   await expect(page.getByText(moduleFailure?'Chat could not start.':'A turn stopped.',{exact:true})).toBeVisible();
   assert.ok((await page.getByRole('alert').filter({hasText:moduleFailure?'Chat could not start.':'A turn stopped.'}).boundingBox()).height<120);
  }
+ await expect(page.getByRole('button',{name:'Continue conversation',exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Conversation details',exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Copy session ID',exact:true})).toHaveCount(0);
  await page.screenshot({path:output+'compact-error.png'});
