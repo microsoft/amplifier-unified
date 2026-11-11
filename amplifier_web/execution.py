@@ -74,16 +74,25 @@ def interrupt_owned_workers(session, runtime_owner):
 
 
 def bind_runtime_turn(session, payload):
-    """Only observed native admission/generation can own a prepared public turn."""
+    """Reuse canonical native input ordering; transport arrival is not admission."""
+    from .input_status import PREFIX, identity, timestamp
     owner = payload.get('runtimeOwnerId')
-    if not owner:
+    exact = identity(payload.get('initial_input_id'))
+    at = timestamp(payload.get('observedAt'))
+    gen = identity(payload.get('generation_id'))
+    if not owner or not exact or not gen or at is None:
         return
-    inputs = payload.get('input_ids', []) if payload.get('event') == 'generation.started' else [payload.get('inputId')]
+    entry = session.get('messageAnnotations', {}).get(PREFIX + exact, {})
+    status = entry.get('inputStatus', {})
+    if (entry.get('_closed') or status.get('generationId') != gen
+            or entry.get('_generationStartedAt') != at
+            or payload.get('interruptionRevision', 0) != session.get('interruptionRevision', 0)):
+        return  # The canonical reducer rejected a stale, duplicate or pre-Stop start.
     for turn in session.get('execution', {}).get('turns', []):
-        if turn.get('inputId', turn['id']) in inputs:
+        if (turn.get('inputId', turn['id']) == exact
+                and at >= turn.get('retriedAt', turn.get('startedAt', 0))):
             turn['runtimeOwnerId'] = owner
-            if payload.get('generation_id'):
-                turn['generationId'] = payload['generation_id']
+            turn['generationId'] = gen
 
 
 def interrupt_runtime_execution(session, runtime_owner):
@@ -106,7 +115,7 @@ def interrupt_runtime_execution(session, runtime_owner):
     from .input_status import interrupt, PREFIX
     annotations = session.get('messageAnnotations', {})
     selected = {PREFIX + turn.get('inputId', turn['id']): annotations[PREFIX + turn.get('inputId', turn['id'])]
-                for turn in live if PREFIX + turn.get('inputId', turn['id']) in annotations
+                for turn in owned if PREFIX + turn.get('inputId', turn['id']) in annotations
                 and annotations[PREFIX + turn.get('inputId', turn['id'])].get('inputStatus', {}).get('generationId')
                     in (None, turn.get('generationId'))}
     interrupt({'messageAnnotations': selected})
@@ -129,7 +138,9 @@ def interrupt_runtime_execution(session, runtime_owner):
                 'category': 'execution_interrupted', 'summary': summary,
                 'guidance': 'Some actions may have finished. Review saved results before continuing; no work was replayed.',
                 'errorType': 'ExecutionInterrupted', 'recordedAt': ended})
-    return current_lost
+    # Process cleanup is required even if runtime.error/session.closed already
+    # settled the display, or its parent finished with unfinished native jobs.
+    return current is not None
 
 
 def interrupt_unfinished(session):
