@@ -28,6 +28,8 @@ import {ownershipState} from './ownership';
 import {hasNavigationResource} from './shell/navigation-demand';
 import {NavigationResourceStatus} from './shell/navigation-resource-status';
 import {DestinationHistory} from './destination-history.jsx';
+import {sessionIdentity} from './navigation-presentation';
+import {writeClipboardText} from './clipboard-copy';
 
 export function WorkDialog({label,onClose,children,initialFocus}){
  const ref=useRef(null);useModalFocus(ref,true,onClose);
@@ -51,12 +53,39 @@ function ActionMenu({label,children,icon=<MoreHorizontal/>,badge,caption}){
 export function AppFooter({state,connected,open,act}){
  return <div className="a-work-footer">
   <div className="a-footer-status"><ShellSlot name="app.status"><span className={`a-dot ${connected?'':'pending'}`} title={connected?'Connected':'Reconnecting'}/></ShellSlot><span>{connected?'Connected':'Reconnecting…'}</span><ShellSlot name="app.actions"><ActionMenu label="App options" badge={<AttentionBadge state={state} count={Math.max(state.attention?.badgeUnread??state.attention?.unread??0,state.attention?.settingsUnread??0)}/>}>
-   <button onClick={()=>open('automation')}><CalendarClock/><span>Automation</span></button>
    <button title="Activity and unread notifications" onClick={()=>open('activity')}><Bell/><span>Activity</span><AttentionBadge state={state}/></button>
+   <button onClick={()=>open('feedback')}><Bug/>Send feedback</button>
+   <button onClick={()=>open('automation')}><CalendarClock/><span>Automations</span></button>
+   <button onClick={()=>open('agent')}><ScanEye/>What the agents see</button>
    <button onClick={()=>open('settings')}><Settings/><span>Settings</span><AttentionBadge state={state} settings/></button>
-   <hr/>
-   <button onClick={()=>open('feedback')}><Bug/>Send feedback</button><button onClick={()=>open('agent')}><ScanEye/>What the agent sees</button>
   </ActionMenu></ShellSlot></div>
+ </div>;
+}
+function SessionActionMenu({session,children}){
+ const operation=useRef(null),[pending,setPending]=useState(false),[notice,setNotice]=useState('');
+ // The keyed owner is replaced on session/underlying-ID changes. An old write
+ // may still settle, but must not announce success or failure in a newer visit.
+ useLayoutEffect(()=>()=>{operation.current=null},[]);
+ async function copy(){
+  if(operation.current)return;
+  const current={};operation.current=current;setPending(true);setNotice('Copying session ID…');
+  try{
+   await writeClipboardText(sessionIdentity(session));
+   if(operation.current===current)setNotice('Session ID copied.');
+  }catch(error){
+   if(operation.current===current)setNotice(error?.name==='ClipboardUnavailable'
+    ?'Clipboard is unavailable in this browser. Session ID was not copied.'
+    :error?.name==='NotAllowedError'||error?.name==='SecurityError'
+     ?'Clipboard access was denied. Session ID was not copied.'
+     :'Session ID could not be copied.');
+  }finally{if(operation.current===current){operation.current=null;setPending(false)}}
+ }
+ return <div className="a-session-action-menu">
+  <ActionMenu label="Chat" icon={<Info/>}>
+   <button type="button" onClick={copy} disabled={pending} aria-busy={pending}><Copy/>Copy session ID</button>
+   {children}
+  </ActionMenu>
+  <span className="a-session-copy-notice" role="status" aria-live="polite" aria-atomic="true">{notice}</span>
  </div>;
 }
 export function WorkHeader({state,session,act,open,narrow,presentation,fileDropHandlers}){
@@ -82,7 +111,7 @@ export function WorkHeader({state,session,act,open,narrow,presentation,fileDropH
   </nav>
   <ShellSlot name="conversation.header">{surface!=='home'&&<nav className="a-work-heading" aria-label="Breadcrumb">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight aria-hidden="true"/></>}<strong title={title} aria-current="page" {...(surface==='chat'&&session?{role:'heading','aria-level':1,'data-part':'session-heading','data-session-id':session.id,tabIndex:-1}:{})}>{title}</strong></nav>}</ShellSlot>
   <div className="a-work-header-actions">
-   {!browsing&&session&&<><UIUseShortcut sessionId={session.id} act={act}/><ActionMenu label="Chat" icon={<MessageCircle/>}>
+   {!browsing&&session&&<><UIUseShortcut sessionId={session.id} act={act}/><SessionActionMenu key={JSON.stringify([session.id,sessionIdentity(session)])} session={session}>
     <button onClick={()=>open('chat-rename')}><Pencil/>Rename</button>
     <button data-action="session.pin" onClick={()=>act('session.pin',{id:session.id,pinned:!(state.pinnedSessionIds||[]).includes(session.id)})}><Pin/>{(state.pinnedSessionIds||[]).includes(session.id)?'Unpin':'Pin'}</button>
     <button onClick={()=>open('chat-share')}><Share2/>Share or save</button>
@@ -92,7 +121,7 @@ export function WorkHeader({state,session,act,open,narrow,presentation,fileDropH
     <hr/>
     <ArchiveButton chat={session} archived={Object.hasOwn(state.conversationOrganization?.archived||{},session.id)}/>
     {session.location?.kind==='managed'&&isTopLevelChat(session)&&<button className="a-danger" onClick={()=>open('delete-session')}><Trash2/>Delete</button>}
-   </ActionMenu><CanvasToggle state={state} act={act} layout={presentation.layout}/></>}
+   </SessionActionMenu><CanvasToggle state={state} act={act} layout={presentation.layout}/></>}
   </div>
  </header>;
 }
