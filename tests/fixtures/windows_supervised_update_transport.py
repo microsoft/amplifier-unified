@@ -5,9 +5,12 @@ candidate may include these exact bytes and invoke install(spec) before the real
 _host entry. Its source/policy/wheel hashes and this seam MUST be reported. This
 qualifies that fixture-host route, not public installer/launcher equivalence.
 
-Only release metadata, the selected tag lookup and artifact HTTP bytes change.
-Auth, owner/task/handle/graph checks, public actions, idle/Stop, stage/promotion,
-restart/readiness/rollback and process containment remain canonical.
+Release metadata, selected tag lookup and artifact HTTP bytes are substituted.
+The explicit readinessTimeout fault may additionally withhold HTTP health only
+in the selected successor, AFTER the app's ordinary authentication middleware.
+It cannot acknowledge readiness, change a Stop or write update/recovery state.
+Owner/task/handle/graph checks, public actions, idle/Stop, stage/promotion,
+readiness decisions/rollback and process containment remain canonical.
 """
 from __future__ import annotations
 
@@ -19,14 +22,17 @@ import re
 
 PLAN = "native-update-transport.json"
 FIELDS = {"schema", "kind", "target", "failBeforeIdentity"}
+OPTIONAL = {"readinessTimeout"}
 TARGET = {"version", "revision", "path", "sha256", "bytes"}
 
 
 def validate(value):
-    if (not isinstance(value, dict) or set(value) != FIELDS
+    if (not isinstance(value, dict) or not FIELDS <= set(value) <= FIELDS | OPTIONAL
             or type(value["schema"]) is not int or value["schema"] != 1
             or value["kind"] != "private-native-transport-fixture"
-            or type(value["failBeforeIdentity"]) is not bool):
+            or type(value["failBeforeIdentity"]) is not bool
+            or type(value.get("readinessTimeout", False)) is not bool
+            or value["failBeforeIdentity"] and value.get("readinessTimeout", False)):
         raise ValueError("Invalid private native transport fixture plan.")
     target = value["target"]
     if (not isinstance(target, dict) or set(target) != TARGET
@@ -71,6 +77,22 @@ def install(spec):
     identity = running_identity()
     if identity["revision"] == target["revision"] and value["failBeforeIdentity"]:
         raise RuntimeError("Controlled fixture target exits before runtime identity.")
+    unready = identity["revision"] == target["revision"] and value.get("readinessTimeout", False)
+    if unready:
+        from amplifier_web import server
+        from aiohttp import web
+        create_app = server.create_app
+        async def unready_app(*args, **kwargs):
+            app = await create_app(*args, **kwargs)
+            @web.middleware
+            async def withhold_health(request, handler):
+                if request.path == "/api/health":
+                    return web.json_response({"fixture": "readiness-withheld"}, status=503)
+                return await handler(request)
+            # Innermost: existing origin/identity/auth admission still runs.
+            app.middlewares.append(withhold_health)
+            return app
+        server.create_app = unready_app
     original_read = app_updates.github_read
     original_process = app_updates.process
     original_get = artifacts._get
@@ -107,5 +129,5 @@ def install(spec):
     app_updates.process = process
     artifacts._get = acquisition
     # No saved application/update/receipt/pointer writes occur in this entry.
-    return {"transportSubstituted": True, "publicAcceptance": False,
+    return {"transportSubstituted": True, "readinessWithheld": unready, "publicAcceptance": False,
             "target": {key: target[key] for key in ("version", "revision", "sha256", "bytes")}}
