@@ -44,7 +44,7 @@ try{
  input.inputStatus={version:1,inputId:'one',phase:'working',basis:'execution',startedAt:now-42,updatedAt:now};
  await emit();await expect(status).toHaveAttribute('data-input-phase','working');
  await expect(status.locator('.a-input-duration')).toContainText(/0:4|0:5|1:/);
- await expect(status.locator('summary')).toHaveAccessibleName(/^Working.*Observed elapsed time \d+:\d{2}/);
+ await expect(status.locator('summary')).toHaveAccessibleName(/^Working.*Observed elapsed time \d+:\d{2}.*Status observed /);
  await expect(composer).toHaveDraft('Another thought while working');
  await page.screenshot({path:artifact+'/status-desktop.png'});
  for(const width of [390,320]){
@@ -82,9 +82,9 @@ try{
  const savedRow=page.locator('[data-message-id="native-window:working"]'),savedStatus=savedRow.locator('.a-input-status');
  const checkSaved=async()=>{
   await expect(savedStatus).toHaveAttribute('data-input-phase','working');
-  await expect(savedStatus.locator('[role="status"]')).toHaveText('Working last observed · saved history');
+  await expect(savedStatus.locator('summary > [aria-live="polite"][aria-atomic="true"]')).toHaveText('Working last observed · saved history');
   await expect(savedStatus.locator('.a-input-duration')).toHaveText(' · 0:42');
-  await expect(savedStatus.locator('summary')).toHaveAccessibleName(/^Working last observed · saved history.*Observed elapsed time 0:42/);
+  await expect(savedStatus.locator('summary')).toHaveAccessibleName(/^Working last observed · saved history.*Observed elapsed time 0:42.*Status observed /);
   await expect(page.locator('[data-message-id="native-window:done"] .a-input-status')).toHaveAttribute('data-input-phase','done');
   await expect(page.locator('[data-message-id="native-window:done"] .a-input-duration')).toHaveText(' · 0:50');
   for(const control of controls)await expect(page.locator(`[data-message-id="${control.id}"] .a-input-status`)).toHaveCount(0);

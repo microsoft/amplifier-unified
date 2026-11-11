@@ -18,6 +18,22 @@ test('status disclosure exposes timing and freezes historical/disconnected obser
  const queued=renderToStaticMarkup(React.createElement(InputStatus,{message:{...message,inputStatus:{version:1,inputId:'one',phase:'queued',basis:'steering_queued',updatedAt:142}}}));
  assert.match(queued,/Status observed/);assert.doesNotMatch(queued,/Execution observed/);
 });
+test('status summary keeps a plain live phase label alongside accessible timing',()=>{
+ const message={role:'user',inputId:'one',inputStatus:{version:1,inputId:'one',phase:'working',basis:'execution_observed',startedAt:100,updatedAt:142}};
+ for(const [props,label] of [[{},'Working'],[{current:false},'Working last observed · saved history'],[{connected:false},'Working last observed · connection lost']]){
+  const html=renderToStaticMarkup(React.createElement(InputStatus,{message,...props}));
+  const summary=html.match(/<summary\b[^>]*>([\s\S]*?)<\/summary>/)?.[1];
+  assert.ok(summary);
+  // Static structure guards the Chromium name-from-content regression; the
+  // browser journey owns the computed name and keyboard disclosure proof.
+  assert.ok(summary.startsWith(`<span aria-live="polite" aria-atomic="true">${label}</span>`));
+  assert.doesNotMatch(summary,/role="status"|aria-hidden="true"/);
+  assert.doesNotMatch(html,/<summary[^>]*aria-label(?:ledby)?=/);
+  assert.match(summary,/<span aria-live="off" class="a-input-duration" aria-label="Observed elapsed time \d+:\d{2}">/);
+  assert.match(summary,/<time dateTime="1970-01-01T00:01:40.000Z" aria-label="Status observed [^"]+">/);
+  assert.equal(html.split(label).length-1,1); // No duplicated hidden announcer.
+ }
+});
 test('saved native status freezes at host observation even when connected and current',()=>{
  const message={id:'native-window:status',role:'user',text:'Saved request',displayOnly:true,nativeInputId:'native',inputStatus:{version:1,inputId:'native',phase:'working',basis:'execution_observed',startedAt:100,updatedAt:142}};
  const render=(message,props={})=>renderToStaticMarkup(React.createElement(MessageEntry,{message,session:{id:'chat'},state:{view:{}},act:()=>{},working:false,forkTurn:{messageId:'user',turn:42},...props}));

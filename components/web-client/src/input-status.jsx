@@ -24,7 +24,8 @@ export function InputStatus({message,connected=true,current=true}){
   'Status is based on observed events for this exact input.';
  return <details className="a-input-status" data-input-phase={status.phase}>
   <summary>
-  <span role="status">{label}</span>
+  {/* A nested status role excludes its text from Chromium's summary name. */}
+  <span aria-live="polite" aria-atomic="true">{label}</span>
   {duration&&<span aria-live="off" className="a-input-duration" aria-label={`Observed elapsed time ${duration}`}> · {duration}</span>}
   {observed&&<time dateTime={observed.iso} aria-label={`Status observed ${observed.full}`}> · {observed.text}</time>}
   </summary>
