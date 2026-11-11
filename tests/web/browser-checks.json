@@ -1280,6 +1280,8 @@
     "attachment-consumption",
     "attachment-experience",
     "message-delivery",
+    "input-status",
+    "action-spacing",
     "delivery-warning",
     "legacy-outbox-notice",
     "delivery-reconciliation",
