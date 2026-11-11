@@ -100,9 +100,14 @@ try{
   await expect(app).toHaveAttribute('data-app-activity',previousActivity);
   const previousSocket=sockets.at(-1);assert.ok(previousSocket,'Real state WebSocket is used');
   holdFrames=true;
+  let httpRecoveryResponses=0;
+  const observeRecovery=response=>{
+   if(new URL(response.url()).pathname==='/api/state'&&response.ok())httpRecoveryResponses++;
+  };
+  page.on('response',observeRecovery);
   try{
-   // Server state changes while the old browser snapshot is retained. The
-   // replacement connection must not claim that old active OR idle is current.
+   // Only WebSocket frames are held. HTTP recovery may advance the snapshot,
+   // but neither active nor idle is current before the stream baseline arrives.
    await status(other,next);
    previousSocket.closed=true;previousSocket.socket.close({code:1001});previousSocket.server.close({code:1001});
    await expect(app).toHaveAttribute('data-app-connection','disconnected');
@@ -113,7 +118,13 @@ try{
    await expect(app).toHaveAttribute('data-app-connection','connected');
    await expect.poll(()=>current.frames.some(message=>JSON.parse(String(message)).event==='state')).toBe(true);
    await expect(app).toHaveAttribute('data-app-activity','unknown');
-   assert.equal((await state()).appActivity.active,prior==='working','Old snapshot remains retained until baseline delivery');
+   // A normal read uses the action waiter's HTTP recovery when its state is
+   // missing (docs/browser-state-transport.md:344-363), not a fabricated snapshot.
+   await action('appearance.preferences.read');
+   assert.ok(httpRecoveryResponses>0,'The browser accepted a real HTTP recovery response while stream frames were held');
+   assert.equal((await state()).appActivity.active,next==='working','HTTP snapshot advances independently of the held stream baseline');
+   await expect(app).toHaveAttribute('data-app-connection','connected');
+   await expect(app).toHaveAttribute('data-app-activity','unknown');
    const unready=await measure('reconnect open after '+previousActivity);
    assert.equal(unready.animation,'none');assert.ok(!unready.image.includes('rgb(189, 119, 112)'),'Unknown has no active hotspot');
    const held=current.frames.splice(0);holdFrames=false;
@@ -122,8 +133,9 @@ try{
    await expect(app).toHaveAttribute('data-app-activity',expected);
    assert.equal((await state()).appActivity.active,next==='working');
    report.reconnects.push({prior:previousActivity,transportOpen:true,baselineHeld:true,
+    httpRecoveryResponses,httpSnapshotActivity:expected,
     during:'unknown',animation:unready.animation,heldFrames:held.length,after:expected});
-  }finally{holdFrames=false}
+  }finally{holdFrames=false;page.off('response',observeRecovery)}
  }
  // Local attention remains a native notice; decoration never acknowledges it.
  const created=await action('question.create',{sessionId:other,prompt:'Synthetic optional design check',required:false,dependency:'Synthetic appearance attention check'});

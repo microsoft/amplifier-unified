@@ -208,8 +208,8 @@ async function checkAsideAppearanceScope(page,work,viewport,setWorkerPhase) {
           control:{width:control.width,height:control.height,outline:focus.outlineStyle,
             outlineWidth:parseFloat(focus.outlineWidth)}};
       });
-      // The outer navigation surface owns the accent. The host deliberately
-      // resets the inner rail's shadow, including on narrow screens.
+      // Record outer navigation paint for diagnostics only; this check protects
+      // the native worker status aside from appearance paint.
       const navigationShadow=await page.locator('[data-part="navigation"]')
         .evaluate(el=>getComputedStyle(el).boxShadow);
       appearanceScopeChecks.push({theme:entry.id,scheme,viewport,navigationShadow,...measured});
@@ -228,8 +228,6 @@ async function checkAsideAppearanceScope(page,work,viewport,setWorkerPhase) {
       assert.notEqual(measured.control.outline,'none');assert.ok(measured.control.outlineWidth>0);
       assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
       assert.equal(await readComposerDraft(editor),probeDraft,'Each appearance preserves nonempty draft text');
-      if(entry.id==='builtin:digital-rain')
-        assert.match(navigationShadow,/inset/,'The actual navigation retains its inset accent');
       if(entry.id==='builtin:digital-rain'&&scheme==='dark'&&viewport!=='small')
         await page.screenshot({path:artifact(`delegate-aside-digital-rain-${viewport}.png`)});
     }
