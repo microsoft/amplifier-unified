@@ -14,10 +14,12 @@ from pathlib import Path
 import secrets
 import time
 import uuid
+from contextlib import nullcontext
 
 from .configuration_authority import fingerprint
 from .host.config import write_private
 from .runtime_controls import override_path, public_config
+from .configuration_diagnostics import PredicateFailure, checkpoint, observation, saved_comparison
 
 
 def definitions(schema, string):
@@ -26,6 +28,8 @@ def definitions(schema, string):
         "configuration.operation.read": (
             "Observe an explicitly targeted retained configuration operation without starting a runtime. Current Full root operators may target another root in the same workspace. commandId reads only an exact recovery command's redacted admission; missing evidence is unknown, not permission to retry. No payload, grant or secret is returned.",
             schema({**properties, "includeRecovery": {"type": "boolean"},
+                    "diagnostic": {"enum": ["first_failure"]},
+                    "expectedRevision": {"type": "integer", "minimum": 1},
                     "commandId": string(200)}, ["sessionId"])),
         **{f"configuration.operation.{name}": (
             description, schema({**properties, "expectedRevision": {"type": "integer", "minimum": 1}}))
@@ -346,21 +350,27 @@ def check_saved(management, session, record, attempt=None, observed=None):
 def check_saved_effect(management, session, record, attempt=None, observed=None):
     """Inspect the sealed save independently of permission to resume its load."""
     attempt = latest_attempt(record) if attempt is None else attempt
+    checkpoint("native_evidence_unavailable")
     observed = evidence(attempt, home=management.service.data_dir) if attempt and observed is None else observed
+    checkpoint("saved_terminal")
     if (record['request']['source'].get('action', 'configuration.apply') != 'configuration.apply'
             or record['state']['effect'] != 'saved_not_mounted'
             or not attempt or not observed or observed['effect'] != 'saved_not_mounted'
             or observed.get('terminal') is not True):
-        raise ValueError('Continuation requires the original terminal native save receipt; unknown or partial work stays held.')
+        raise PredicateFailure("saved_terminal", 'Continuation requires the original terminal native save receipt; unknown or partial work stays held.')
     native = session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
     if attempt.get('nativeSessionId') != native:
-        raise ValueError('The saved configuration native target changed.')
+        raise PredicateFailure("saved_target", 'The saved configuration native target changed.')
+    checkpoint("saved_plan")
     from .session_files import validate_id
     validate_id(native)
     path = management.service.data_dir / 'sessions' / native / 'configuration.json'
     saved = json.loads(path.read_text())
-    if not management.configuration_readback_matches(record['request']['config'], saved):
-        raise ValueError('The saved configuration changed after application; its operation remains unresolved.')
+    checkpoint("saved_comparison")
+    matches = management.configuration_readback_matches(record['request']['config'], saved)
+    saved_comparison(matches)
+    if not matches:
+        raise PredicateFailure("saved_comparison", 'The saved configuration changed after application; its operation remains unresolved.')
 
 
 def check_saved_cancellation(management, session, record):
@@ -441,37 +451,46 @@ def validate_recovery(management, session, record, attempt, observed, action, ar
     """One validation path for mutations and observational UI availability."""
     service = management.service
     pending = session.get("pendingConfiguration", {})
+    checkpoint("operation_revision")
     if pending.get("operationId") != record["id"] or args["expectedRevision"] != record["revision"]:
-        raise ValueError("The original configuration operation revision changed.")
+        raise PredicateFailure("operation_revision", "The original configuration operation revision changed.")
+    checkpoint("operation_phase")
     interrupted = (action.endswith(".reconcile")
         and record["state"]["phase"] == "applying"
         and record["state"]["stage"] == "interrupted")
     if record["state"]["phase"] != "error" and not interrupted:
-        raise ValueError("Only a settled failed configuration operation can be reconciled or resumed.")
+        raise PredicateFailure("operation_phase", "Only a settled failed configuration operation can be reconciled or resumed.")
+    checkpoint("configuration_task")
     task = management.pending_config_tasks.get(session["id"])
     if task is not None and not task.done() or management.lock.locked():
-        raise ValueError("The original configuration task has not settled.")
+        raise PredicateFailure("configuration_task", "The original configuration task has not settled.")
+    checkpoint("operation_fence")
     if (session.get('configurationOperationFence') not in {None, record['id']}
             or session.get('configurationBusy') and session.get('configurationOperationFence') != record['id']):
-        raise ValueError('Another configuration operation owns this conversation.')
+        raise PredicateFailure("operation_fence", 'Another configuration operation owns this conversation.')
     if operator is not None:
+        checkpoint("operator_authority")
         service.configuration_authority.check(operator)
+        checkpoint("target_idle")
         if (not management.configuration_idle({**session, 'pendingConfiguration': {}, 'configurationBusy': False})
                 or session.get('status') in {'stopped', 'stopping', 'interrupted'}
                 or service.assignments.blocked(session)):
-            raise ValueError('Targeted operator recovery requires the original target to be exclusively idle.')
+            raise PredicateFailure("target_idle", 'Targeted operator recovery requires the original target to be exclusively idle.')
+        checkpoint("target_ownership")
         if session.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
-            raise ValueError('The original target does not own execution here.')
+            raise PredicateFailure("target_ownership", 'The original target does not own execution here.')
+        checkpoint("native_target")
         if attempt and attempt.get('nativeSessionId') != (
                 session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']):
-            raise ValueError('The original native configuration target changed.')
+            raise PredicateFailure("native_target", 'The original native configuration target changed.')
     management.check_configuration_operation(session, record)
+    checkpoint("recovery_authority")
     recovery_authority = operator
     if origin not in {"ui", "user"} and operator is None:
         authority = record["request"]["authority"]
         if record["request"]["authorization"] != "grant":
             if not service.access_mode.full(session):
-                raise ValueError("Full access is required to continue an operator-started configuration operation.")
+                raise PredicateFailure("recovery_authority", "Full access is required to continue an operator-started configuration operation.")
             # The original UI/internal request stays immutable. Existing
             # resumptions retain current Full as an additional effect boundary;
             # neither an old revoked grant nor a stopped request is renewed.
@@ -485,41 +504,46 @@ def validate_recovery(management, session, record, attempt, observed, action, ar
                 session, grant, authority["effect"], authority["scope"])
             recovery_authority = {**authority, "peerGrants": authority.get("peerGrants", []) + peers}
     effect = record["state"]["effect"]
+    checkpoint("native_evidence")
     if action.endswith(".reconcile"):
         if attempt:
             if not observed:
-                raise ValueError("Native evidence is absent; the operation remains unknown.")
+                raise PredicateFailure("native_evidence", "Native evidence is absent; the operation remains unknown.")
             if observed["effect"] == "none" and observed.get("terminal") is not True:
-                raise ValueError("Native no-effect evidence is not terminal; the operation remains held.")
+                raise PredicateFailure("native_terminal", "Native no-effect evidence is not terminal; the operation remains held.")
             # Never downgrade acknowledged save/mount to an older no-effect receipt.
             if effect in {"saved_not_mounted", "mounted"} and observed["effect"] != effect:
-                raise ValueError("Native evidence conflicts with retained saved-state evidence.")
+                raise PredicateFailure("native_effect", "Native evidence conflicts with retained saved-state evidence.")
             effect = observed["effect"]
         elif effect != "none":
-            raise ValueError("Legacy operation lacks native binding; its outcome remains unknown.")
+            raise PredicateFailure("native_binding", "Legacy operation lacks native binding; its outcome remains unknown.")
     elif action.endswith(".resume"):
         if effect == 'saved_not_mounted':
             check_saved(management, session, record, attempt, observed)
         elif (record["state"]["effect"] != "none"
                 or attempt and (record["state"]["stage"] != "reconciled"
                     or not observed or observed["effect"] != "none" or not observed.get("terminal"))):
-            raise ValueError("Resume requires proven pre-write no-effect evidence; unknown or saved work is not repeated.")
+            raise PredicateFailure("resume_effect", "Resume requires proven pre-write no-effect evidence; unknown or saved work is not repeated.")
     else:
         raise ValueError("Unknown configuration recovery action")
     return effect, recovery_authority
 
 
-def recovery_status(management, session, record, attempt, observed, origin, operator=None):
+def recovery_status(management, session, record, attempt, observed, origin, operator=None, *, diagnostics=None):
     from .errors import AppError
     status = {"canReconcile": False, "canResume": False,
               "reason": "This change remains held. Its original permission, target or evidence is not currently valid."}
     for verb, key in (("reconcile", "canReconcile"), ("resume", "canResume")):
         try:
-            if origin not in {"ui", "user"} and operator is None:
-                management.service.configuration_authority.source(
-                    {"sessionId": session["id"]}, origin, session["id"], active=True, allow_descendant=True)
-            validate_recovery(management, session, record, attempt, observed,
-                "configuration.operation." + verb, {"expectedRevision": record["revision"]}, origin, operator)
+            with observation() if diagnostics is not None else nullcontext() as detail:
+                if diagnostics is not None:
+                    diagnostics[verb] = detail
+                checkpoint("recovery_source")
+                if origin not in {"ui", "user"} and operator is None:
+                    management.service.configuration_authority.source(
+                        {"sessionId": session["id"]}, origin, session["id"], active=True, allow_descendant=True)
+                validate_recovery(management, session, record, attempt, observed,
+                    "configuration.operation." + verb, {"expectedRevision": record["revision"]}, origin, operator)
             status[key] = True
         except (ValueError, OSError, KeyError, TypeError, AttributeError, AppError):
             pass  # Never publish raw errors, private paths, plan or authority.
@@ -548,25 +572,57 @@ def command(management, action, args, origin, caller, *, operator=None):
     else:
         service.configuration_authority.source({'sessionId': caller}, origin, caller, active=True)
         service.configuration_authority.check(operator)
+    diagnostic = args.get("diagnostic")
+    if diagnostic is not None and (diagnostic != "first_failure" or not action.endswith(".read")
+            or not args.get("operationId") or type(args.get("expectedRevision")) is not int
+            or args["expectedRevision"] < 1 or args.get("includeRecovery") is not True):
+        raise ValueError("First-failure observation requires an explicit operation, expected revision and includeRecovery.")
     if args.get('commandId') and not args.get('operationId'):
         raise ValueError('An exact command read requires an explicit operation.')
     session = service._session(args["sessionId"])
     pending = session.get("pendingConfiguration", {})
     operation = args.get("operationId") or pending.get("operationId")
     include_recovery = action.endswith(".read") and args.get("includeRecovery")
+    unavailable = "record_unavailable"
     try:
         record = management.configuration_record(session["id"], operation)
+        if diagnostic and (args["expectedRevision"] != record["revision"]
+                or pending.get("operationId") != operation or pending.get("revision") != record["revision"]):
+            raise DiagnosticRevisionChanged("The requested configuration observation revision changed. Nothing was retried.")
         attempt = latest_attempt(record)
+        unavailable = "native_evidence_unavailable"
         observed = evidence(attempt, home=service.data_dir) if attempt else None
+        unavailable = "record_unavailable"
         if include_recovery:
             result = public(record, observed)
-            result["recovery"] = recovery_status(management, session, record, attempt, observed, origin, operator)
+            detail = {} if diagnostic else None
+            result["recovery"] = recovery_status(management, session, record, attempt, observed, origin, operator,
+                diagnostics=detail)
+            if diagnostic:
+                from .update_blockers import operation_snapshot
+                from .errors import AppError
+                try:
+                    with observation() as update_detail:
+                        operation_snapshot(service, session)
+                except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError, AppError):
+                    pass
+                # Never use a retained presentation plan as loaded-worker proof.
+                result["diagnostic"] = {"schemaVersion": 1, "kind": diagnostic,
+                    "expectedRevision": args["expectedRevision"],
+                    "recovery": detail, "appUpdateQuiescence": update_detail,
+                    "loadedComparison": "not_observed"}
             if args.get('commandId'):
                 result['command'] = command_status(service, record, args['commandId'])
             return result
+    except DiagnosticRevisionChanged:
+        raise
     except (ValueError, OSError, KeyError, TypeError, AttributeError):
         if include_recovery:
             return {"sessionId": session["id"], "operationId": operation,
+                    **({"diagnostic": {"schemaVersion": 1, "kind": diagnostic,
+                        "expectedRevision": args["expectedRevision"],
+                        "availability": "unavailable", "firstFailure": unavailable,
+                        "loadedComparison": "not_observed"}} if diagnostic else {}),
                     "recovery": {"canReconcile": False, "canResume": False,
                         "reason": "The original operation or its evidence cannot be verified. Changes remain held; nothing was retried."}}
         raise
@@ -625,3 +681,7 @@ def command(management, action, args, origin, caller, *, operator=None):
     else:
         raise ValueError("Unknown configuration recovery action")
     return public(record, observed)
+
+
+class DiagnosticRevisionChanged(ValueError):
+    """Exact observation context is refused, never replaced by a newer one."""

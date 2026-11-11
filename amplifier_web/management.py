@@ -605,30 +605,37 @@ class Management:
 
     def check_configuration_operation(self, session, record):
         from .configuration_authority import fingerprint
+        from .configuration_diagnostics import PredicateFailure, checkpoint
         request = record['request']
+        checkpoint("continuation_intent")
         if request['source'].get('continuation'):
             from .configuration_continuation import intent_reason
             if reason := intent_reason(self.service, record):
-                raise ValueError(reason)
+                raise PredicateFailure("continuation_intent", reason)
+        checkpoint("placement_binding")
         if request['source'].get('action') == 'configuration.patchPlacement.bind':
             from .patch_placement import check_request
             check_request(self, session, record)
+        checkpoint("original_target")
         if (request['sessionId'] != session['id'] or request['workspace'] != session['workspace']
                 or request['workingDirectory'] != session.get('workingDirectory')
                 or request['executionRevision'] != session.get('executionRevision', 0)
                 or request['interruptionRevision'] != session.get('interruptionRevision', 0)):
-            raise ValueError('The original configuration target was stopped or moved. No delayed change was repeated.')
+            raise PredicateFailure("original_target", 'The original configuration target was stopped or moved. No delayed change was repeated.')
+        checkpoint("original_authority")
         if request['authorization'] == 'grant':
             if not request.get('authority'):
-                raise ValueError('The original configuration authority is missing.')
+                raise PredicateFailure("original_authority", 'The original configuration authority is missing.')
             self.service.configuration_authority.check(request['authority'])
         elif request['authorization'] not in {'ui', 'user', 'internal'} or request.get('authority') is not None:
-            raise ValueError('The original configuration authority cannot be verified.')
+            raise PredicateFailure("original_authority", 'The original configuration authority cannot be verified.')
+        checkpoint("retained_authority")
         for retained in record.get('resumptions', []):
             self.service.configuration_authority.check(retained)
+        checkpoint("original_payload")
         if (fingerprint(request['config']) != request['payloadHash']
                 or fingerprint(json.loads(self.queued_path(session['id']).read_text())) != request['payloadHash']):
-            raise ValueError('The original configuration payload changed. It was not applied.')
+            raise PredicateFailure("original_payload", 'The original configuration payload changed. It was not applied.')
 
     def schedule_configuration(self, identity):
         task = self.pending_config_tasks.get(identity)
