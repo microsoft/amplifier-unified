@@ -883,7 +883,8 @@ class Collaboration:
         if work_paused(self.service.state):
             return 'Host work is paused for an update.'
         if (source.get('interruptionRevision', 0) != receipt['sourceInterruptionRevision']
-                or task.get('status') in {'paused', 'blocked', 'completed'}):
+                or task.get('status') in {'paused', 'blocked'}
+                or task.get('status') == 'completed' and receipt.get('sourceTaskStatus') != 'completed'):
             return 'The requester or its assignment was stopped.'
         binding = {'taskId': receipt.get('sourceTaskId'), 'taskRevision': receipt.get('sourceTaskRevision')}
         # A later report describes already admitted work. Progress on the same
@@ -2400,6 +2401,7 @@ class Collaboration:
                 'sourceWorkingDirectory': metadata['workingDirectory'],
                 **lineage,
                 'sourceTaskId': task.get('id'), 'sourceTaskRevision': task.get('revision'),
+                'sourceTaskStatus': task.get('status'),
                 'sourceTaskContinuationEpoch': continuation_epoch(task),
                 "initialInputId": identity + ":brief", "detail": "Creation committed; preparation is owned by the service."}
             receipt['assignmentId'] = assignment_id

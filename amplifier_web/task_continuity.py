@@ -758,11 +758,22 @@ def observe_task(service, session, observation):
     """
     controls = service.state.setdefault("runtimeControl", {}).setdefault(session["id"], {})
     previous = controls.get("task.get", {})
-    current_revision = max((previous.get("task") or {}).get("revision", 0),
-                           (session.get("task") or {}).get("revision", 0))
+    known = [previous.get("task") or {}, session.get("task") or {}]
+    current_revision = max(row.get("revision", 0) for row in known)
     returned = observation["task"] or {}
     revision = returned.get("revision", 0)
-    if revision < current_revision:
+    different_task = any(row.get("id") and row.get("id") != returned.get("id") for row in known)
+    if different_task:
+        # Revisions order one native task lineage, not unrelated control files
+        # retained across placement/recovery. Confirm the exact current owner
+        # before either accepting a lower successor or a late higher old reply.
+        try:
+            canonical = _load_control(service, session, current_only=True)["task"] or {}
+        except ValueError:
+            return False, current_revision
+        if any(canonical.get(key) != returned.get(key) for key in ("id", "revision", "status")):
+            return False, current_revision
+    elif revision < current_revision:
         return False, current_revision
     from .navigation_waiting import wait_epoch, operation_refs
     # Derived display metadata only; never write it into native task authority.

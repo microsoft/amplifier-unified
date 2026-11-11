@@ -18,6 +18,8 @@ from test_assignments import app, start, limits, until
                    'dependency_block', 'human_block', 'overflow_inputs', 'old_run', 'replaced_run', 'terminated_run',
                    'replaced_same_generation', 'terminated_same_generation']]
     + [('work', 'finished'), ('work', 'new_parent'), ('model', 'unassigned'), ('model', 'unassigned_configuration')]
+    + [(operation, change) for operation in ['model', 'queued_model']
+       for change in ['completed_history', 'completed_current', 'paused_task']]
     + [('full_work', change) for change in ['finished', 'new_parent', 'stop', 'owner', 'assignment',
                                            'configuration', 'terminated_same_generation', 'replaced_same_generation']])
 async def test_native_child_continues_after_parent_finished(app, tmp_path, monkeypatch, operation, change):
@@ -60,9 +62,32 @@ async def test_native_child_continues_after_parent_finished(app, tmp_path, monke
         _, source = await assert_available_commission(app, source, item, 'native-child-commission')
         required = (await current_work(app, source))['required']
     sid = source['id']
+    native_task = None
+    completed_before = None
+    if change in {'completed_history', 'completed_current', 'paused_task'}:
+        from amplifier_web.task_continuity import publish_task_observation
+        from test_task_continuity import create
+        monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(app.data_dir))
+        native_task = controls(sid)
+        await create(native_task)
+        if change == 'completed_history':
+            await native_task.perform('task.complete', {'commandId': 'finished-A', 'expectedRevision': 1,
+                'condition': 'Ship the verified report', 'evidence': ['Original verified result']})
+            completed_before = deepcopy(native_task.tasks.record())
+            # The real public send accepts B; no old input or objective is replayed.
+            await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'New human work B'},
+                               command_id='fresh-human-B')
+            await until(lambda: bool(app.runtime.inputs))
+            fresh = next(row for row in source['messages'] if row.get('text') == 'New human work B')
+            from test_collaborative_workspaces import generation
+            await generation(app, source, 'new-human-generation', [fresh['inputId']])
+            assert app.runtime.inputs == [(sid, fresh['inputId'], 'New human work B')]
+        publish_task_observation(app, sid, native_task.tasks.canonical_snapshot())
     generation_id = source['collaborationGeneration']['id']
     original_input = source['collaborationGeneration']['inputIds'][0]
     parent = await prepared.create_session(session_id=sid, approval_system=approvals)
+    if native_task is not None:
+        parent.coordinator.session_state['task'] = deepcopy(native_task.tasks.record())
     parent.coordinator.register_capability('session.working_dir', str(tmp_path))
     native_events = []
     runtime = Runtime(sid, observer=native_events.append)
@@ -204,6 +229,14 @@ async def test_native_child_continues_after_parent_finished(app, tmp_path, monke
             manager.workers[sid] = {**owner, 'runtimeOwnerId': 'replacement'}
         elif change == 'release':
             worker.activation_gate.current_valid = False
+        elif change in {'completed_current', 'paused_task'}:
+            if change == 'completed_current':
+                await native_task.perform('task.complete', {'commandId': 'finished-current', 'expectedRevision': 1,
+                    'condition': 'Ship the verified report', 'evidence': ['Completed while child waited']})
+            else:
+                await native_task.perform('task.pause', {'commandId': 'paused-current', 'expectedRevision': 1})
+            parent.coordinator.session_state['task'] = deepcopy(native_task.tasks.record())
+            publish_task_observation(app, sid, native_task.tasks.canonical_snapshot())
         elif change in {'dependency_block', 'human_block'}:
             app.state.setdefault('runtimeControl', {}).setdefault(sid, {})['task.get'] = {'task': {
                 'id': 'task', 'revision': 2, 'status': 'blocked',
@@ -226,7 +259,8 @@ async def test_native_child_continues_after_parent_finished(app, tmp_path, monke
                     command_id='increase-capacity')
             app.coordination.notify()
         release.set()
-        allowed = change in {'finished', 'new_parent', 'dependency_block', 'overflow_inputs', 'old_run', 'unassigned'}
+        allowed = change in {'finished', 'new_parent', 'dependency_block', 'overflow_inputs', 'old_run',
+                             'unassigned', 'completed_history'}
         try:
             outcome = await asyncio.wait_for(task, 10)
         except (RuntimeError, asyncio.CancelledError) as exc:
@@ -234,6 +268,11 @@ async def test_native_child_continues_after_parent_finished(app, tmp_path, monke
         else:
             if allowed: assert outcome['output'] == 'child complete'
         assert calls == (['tool' if operation in {'tool', 'work', 'full_work'} else 'model'] if allowed else []), results
+        if completed_before is not None:
+            assert native_task.tasks.record() == completed_before
+            assert not await native_task.tasks.continuation_allowed()
+            assert source['task'] == completed_before
+            assert parent.coordinator.session_state['task'] == completed_before
         if operation == 'full_work' and allowed:
             # The real Worker/RuntimeManager bridge supplied this assignment;
             # no fitted Work proof or new parent input supplies Full authority.
@@ -257,6 +296,8 @@ async def test_native_child_continues_after_parent_finished(app, tmp_path, monke
             assert len(cancelled) == 1 and cancelled[0]['phase'] == 'cancelled'
             assert cancelled[0]['usage']['totalTokens'] == cancelled[0]['usage']['costUsd'] == 0
         await control.close()
+        if native_task is not None:
+            await native_task.close()
         await parent.cleanup()
 
 

@@ -188,3 +188,32 @@ async def test_changed_native_task_after_capture_still_refuses_without_rebinding
         assert target['task']['revision'] == 1
     finally:
         await native.close()
+
+
+@pytest.mark.parametrize('late_old_reply', [False, True])
+async def test_different_task_revision_is_ordered_by_current_native_owner(app, monkeypatch, late_old_reply):
+    """A retained high revision is not an ordering proof for another task ID."""
+    source = app.state['sessions'][0]
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(app.data_dir))
+    native = controls(source['id'])
+    try:
+        await create(native)
+        current = native.tasks.canonical_snapshot()
+        old = copy.deepcopy(current['task'])
+        old.update(id='retained-task', revision=73, status='completed')
+        # Model the stale host view surviving native control-state relocation.
+        source['task'] = old
+        app.state.setdefault('runtimeControl', {})[source['id']] = {'task.get': {'task': old}}
+        saved = native.state_path().read_bytes()
+        publication, revision = task_continuity.publish_task_observation(app, source['id'], current)
+        assert publication == {'status': 'published'} and revision == current['task']['revision']
+        assert source['task'] == current['task']
+        assert app.coordination.task(source['id']) == current['task']
+        if late_old_reply:
+            before = copy.deepcopy((source['task'], app.state['runtimeControl'][source['id']]))
+            publication, revision = task_continuity.publish_task_observation(app, source['id'], {'task': old})
+            assert publication == {'status': 'superseded'} and revision == current['task']['revision']
+            assert (source['task'], app.state['runtimeControl'][source['id']]) == before
+        assert native.state_path().read_bytes() == saved
+    finally:
+        await native.close()
