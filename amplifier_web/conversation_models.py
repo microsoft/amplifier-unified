@@ -115,6 +115,7 @@ async def select(management, session, requested):
             global_only=current.get('location',{}).get('kind')=='managed')
         current['selection'] = copy.deepcopy(selected)
         current['pendingModelSelection'] = copy.deepcopy(selected)
+        current.pop('pendingChoiceAuthority', None)  # Independent owner choice supersedes peer model intent.
         current['nextMessageRevision'] = current.get('nextMessageRevision', 0) + 1
         current['nextMessageStatus'] = 'saved'
         current.pop('nextMessageError', None)

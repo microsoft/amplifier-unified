@@ -1849,6 +1849,10 @@ class Collaboration:
                 args["sessionId"] = target
             if target == caller:
                 return None
+            if action == 'conversation.configure':
+                # The configuration owner captures Full, actual caller/target
+                # and peer ancestry before its commit. No other peer control.
+                return None
             if action == "conversation.send":
                 self.error("A user must explicitly authorize a current collaboration grant.")
             self.error("A user must explicitly perform this peer mutation; collaboration does not grant stop, worker or settings authority.")

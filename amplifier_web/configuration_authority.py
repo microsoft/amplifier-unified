@@ -430,6 +430,10 @@ class ConfigurationAuthority:
     def capture(self, action, args, origin, caller):
         if origin in {'ui', 'user'}:
             return None
+        from .conversation_configuration import capture
+        operator = capture(self.service, action, args, origin, caller)
+        if operator is not None:
+            return operator
         if action == 'settings.update':
             patch = args.get('patch', {})
             effects = []
@@ -442,7 +446,7 @@ class ConfigurationAuthority:
             return self._capture(action, args, origin, caller, ('host_defaults', 'global'))
         return self._capture(action, args, origin, caller)
 
-    def full_peer_authorities(self, source, inputs):
+    def full_peer_authorities(self, source, inputs, *, effect='runtime_configuration', scope='session', require_full=False):
         """Recovery's Full caller ceiling includes authenticated peer ancestry.
 
         Reuse retained collaboration lineage and Full revisions, not a grant
@@ -487,13 +491,15 @@ class ConfigurationAuthority:
                     self.error('The originating peer cannot supply current recovery authority.')
                 authority = {'sessionId': sender['id'], 'workspace': sender['workspace'],
                     'interruptionRevision': sender.get('interruptionRevision', 0),
-                    'effect': 'runtime_configuration', 'scope': 'session'}
+                    'effect': effect, 'scope': scope}
                 reviewed = ()
                 if self.service.access_mode.full(sender):
                     authority['accessRevision'] = self.service.access_mode.snapshot(sender)['revision']
                 else:
+                    if require_full:
+                        self.error('The originating peer cannot supply Full other-chat configuration authority.')
                     grant = next((row for row in self.eligible(sender) if self.valid(row, sender)
-                        and 'runtime_configuration' in row['effects'] and 'session' in row['scopes']), None)
+                        and effect in row['effects'] and scope in row['scopes']), None)
                     if grant is None:
                         self.error('The originating peer cannot supply current recovery authority.')
                     authority.update(grantId=grant['id'], grantRevision=grant['revision'])
@@ -582,6 +588,10 @@ class ConfigurationAuthority:
 
     def check(self, authority, *, workspace=None, scope=None):
         if authority is None:
+            return
+        if 'operatorConfiguration' in authority:
+            from .conversation_configuration import check
+            check(self.service, authority, workspace=workspace, scope=scope)
             return
         if 'chain' in authority:
             for item in authority['chain']:
