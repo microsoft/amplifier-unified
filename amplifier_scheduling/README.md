@@ -28,3 +28,48 @@ rather than being evicted into permission to repeat an old mutation. Methods
 perform no network operations; SQLite transactions never enclose provider or
 runtime waits. Bounded history means old direct run reads can become unavailable,
 not silently replaced by fabricated output.
+
+## Build and test independently
+
+This directory is the complete source project for the `amplifier-scheduling`
+Python distribution. It needs Python 3.13 or newer and an IANA timezone database.
+Windows installations declare `tzdata`; other platforms normally supply the
+database through the operating system. On a minimal system without it, install
+`tzdata` in the same Python environment.
+
+From this directory, in an owned development environment:
+
+```sh
+uv build
+uv venv .venv
+uv pip install --python .venv/bin/python "dist/amplifier_scheduling-0.1.0-py3-none-any.whl[test]"
+.venv/bin/python -m pytest -q tests
+```
+
+On Windows, use `.venv\Scripts\python.exe` for the interpreter paths. The wheel
+contains only this library and its distribution metadata; the source archive also
+contains its five policy/store tests. Those tests exercise DST gaps/folds, missed
+runs, owner changes, unknown outcomes, revision checks, command idempotency and
+retention using temporary SQLite databases. They require no app, native runtime,
+provider, account, network service or sibling checkout. To check an installed
+wheel, run these tests from a separate directory containing only the test file;
+do not add a source checkout to `PYTHONPATH`.
+
+## Ownership and delivery
+
+The Python files here are the sole implementation and the tests here are the sole
+policy/store test suite. Unified continues to bundle these same files and import
+`amplifier_scheduling`; its scheduler, authorization, Stop handling, execution
+admission and browser integration tests remain with Unified. There is no new
+scheduler process, Unified runtime dependency or database migration in this packaging
+step. The `0.1.0` component version is preparation metadata, not a publication or
+an independently selected Unified dependency.
+
+Use a separate environment for the standalone distribution for now. Do not
+install it alongside `amplifier-unified`: Unified still owns the same installed
+package files until a later dependency-selection change removes that overlap.
+
+A later history-preserving repository import can use this project directly.
+Independent publication and Unified's dependency selection are separate delivery
+steps. Existing schedule databases, run identities and uncertain outcomes retain
+their current authority throughout that transition.

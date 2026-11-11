@@ -53,9 +53,21 @@ artifacts = ["/amplifier_web/release-source.json"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "amplifier_scheduling", "amplifier_recall", "amplifier_outputs", "amplifier_worktrees", "amplifier_publishing", "amplifier_portability"]
+# The standalone scheduling project shares these same runtime sources.
+exclude = [
+    "/amplifier_scheduling/tests/**", "/amplifier_scheduling/build/**",
+    "/amplifier_scheduling/dist/**", "/amplifier_scheduling/.venv/**",
+    "/amplifier_scheduling/*.egg-info/**", "/amplifier_scheduling/pyproject.toml",
+    "/amplifier_scheduling/MANIFEST.in", "/amplifier_scheduling/LICENSE",
+    "/amplifier_scheduling/.gitignore",
+]
 
 [tool.hatch.build.targets.sdist]
-exclude = ["/.ci/**", "/components/web-client/**"]
+exclude = [
+    "/.ci/**", "/components/web-client/**",
+    "/amplifier_scheduling/build/**", "/amplifier_scheduling/dist/**",
+    "/amplifier_scheduling/.venv/**", "/amplifier_scheduling/*.egg-info/**",
+]
 
 [tool.hatch.build.targets.wheel.force-include]
 "bundle.yaml" = "amplifier_web/bundle_data/bundle.yaml"
@@ -110,4 +122,4 @@ artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "re
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["tests", "amplifier_scheduling/tests"]
