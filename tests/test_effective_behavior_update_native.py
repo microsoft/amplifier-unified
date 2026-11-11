@@ -33,8 +33,8 @@ ROOT=Path(__file__).resolve().parents[1]
 FURL='https://github.com/microsoft/amplifier-foundation'
 RURL='https://github.com/microsoft/amplifier-bundle-routing-matrix'
 OLD='a52ad1558419c828c86c0139b9b4bc351e3a618f'
-PRE_API='c67e3ada021a5bbb93df9567feb23e2a72c93f55'
-NEW='82798febe57899497eccd659c8657f8bd8960138'
+PRE_GUARD='82798febe57899497eccd659c8657f8bd8960138'
+NEW='4433e38a6ed6fd16f30483f09afcf380d4933619'
 ROLD='64138b9c544cbaddad6c24fd57f955da2c4e03ba'
 RNEW='574e864ec953d1729867becc7f1eef9c609f45ad'
 OUT=Path('/artifacts/effective-full')
@@ -149,12 +149,12 @@ def fixture_module(root, wheels, distribution, package):
     return root
 
 
-@pytest.mark.parametrize('case',['shared-rollback','missing-activation-api','old-pin','custom-pin','failed-qualification','dirty-source','retain-pin'])
+@pytest.mark.parametrize('case',['shared-rollback','missing-transcript-guard','old-pin','custom-pin','failed-qualification','dirty-source','retain-pin'])
 async def test_actual_check_install_qualifies_selected_app_behavior(tmp_path,monkeypatch,case):
     routing_target=ROLD if case in {'old-pin','retain-pin'} else RNEW
-    foundation_target=OLD if case=='retain-pin' else PRE_API if case=='missing-activation-api' else NEW
+    foundation_target=OLD if case=='retain-pin' else PRE_GUARD if case=='missing-transcript-guard' else NEW
     positive=case=='shared-rollback'
-    shared_case=case in {'shared-rollback','missing-activation-api'}
+    shared_case=case in {'shared-rollback','missing-transcript-guard'}
     global OUT
     artifacts=Path(os.environ.get('AMPLIFIER_EFFECTIVE_UPDATE_ROOT','/artifacts'))
     OUT=artifacts/'effective-full'/case
@@ -361,7 +361,7 @@ async def test_actual_check_install_qualifies_selected_app_behavior(tmp_path,mon
                 assert not any('"dependenciesPrepared": true' in text for text in probes)
             if case=='failed-qualification':
                 assert manager.diagnostics.state['lastFailure']['phase']=='ecosystem-compatibility'
-            if case in {'missing-activation-api','retain-pin'}:
+            if case in {'missing-transcript-guard','retain-pin'}:
                 # A valid retained source policy is not API compatibility. Freeze
                 # preserves its exact bytes; the final probe must refuse adoption.
                 failure=manager.diagnostics.state['lastFailure']
