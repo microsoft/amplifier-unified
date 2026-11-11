@@ -892,6 +892,16 @@ class Collaboration:
         return bool(hasattr(self.service.runtime, "collaboration_steer") and active.get("id") and not active.get("terminal"))
 
     def blocked_input(self, receipt, task):
+        # Canonical result returns already carry the saved wait and exact
+        # outcome claim, rechecked by guard(). They use the same bounded idle
+        # review admission as fresh dependency input, without resuming the goal.
+        if receipt.get('dependencyRequestId'):
+            return (receipt.get('origin') == 'system'
+                    and receipt.get('commandAction') == 'coordination.send'
+                    and receipt.get('mode') == 'auto'
+                    and bool(receipt.get('dependencyOutcomeRevision'))
+                    and 'taskContinuationEpoch' in receipt
+                    and task_matches(task, receipt) and dependency_blocked(task))
         return (receipt.get('blockedTaskInput') is True
                 and receipt.get('commandAction') == 'coordination.send'
                 and receipt.get('mode') in {'queue', 'auto'}
