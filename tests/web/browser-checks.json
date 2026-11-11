@@ -1277,6 +1277,7 @@
     "chat-title",
     "message-outbox",
     "update-message-delivery",
+    "retained-update-recovery",
     "attachment-consumption",
     "attachment-experience",
     "message-delivery",

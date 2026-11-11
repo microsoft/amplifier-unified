@@ -142,9 +142,21 @@ def bind_sources(plan, sources):
     visit(plan)
 
 
+def _child_source_plans(first, second, definitions):
+    """Validate projections before comparing portable source identities."""
+    from .host.components import portable_module_sources
+    from .host.config import app_home
+    plans = portable_module_sources({"agents": {
+        "first": logical_plan(first, definitions=definitions),
+        "second": logical_plan(second, definitions=definitions),
+    }}, app_home())["agents"]
+    return plans["first"], plans["second"]
+
+
 def check_child_sources(parent, overlay):
     """A same-account overlay cannot carry inherited credentials to another source."""
     definitions = catalogs()
+    parent, overlay = _child_source_plans(parent, overlay, definitions)
     for row in overlay.get("providers", []):
         for inherited in parent.get("providers", []):
             if identity(row) != identity(inherited):
@@ -162,10 +174,11 @@ def restore_child_accounts(plan, retained, authorized):
     """Resume the saved decision choices, binding only the same current account."""
     from .provider_environment import rebind_provider_credentials
     definitions = catalogs()
+    retained, authorized = _child_source_plans(retained, authorized, definitions)
     def selected(row):
         return row.get("module") in definitions and _applies(row, definitions[row["module"]])
-    saved = [row for row in logical_plan(retained).get("providers", []) if selected(row)]
-    current = [row for row in logical_plan(authorized).get("providers", []) if selected(row)]
+    saved = [row for row in retained.get("providers", []) if selected(row)]
+    current = [row for row in authorized.get("providers", []) if selected(row)]
     for row in saved:
         matches = [candidate for candidate in current
                    if candidate.get("enabled", True) and identity(candidate) == identity(row)

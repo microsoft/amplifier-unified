@@ -367,7 +367,8 @@ def check_saved_effect(management, session, record, attempt=None, observed=None)
     path = management.service.data_dir / 'sessions' / native / 'configuration.json'
     saved = json.loads(path.read_text())
     checkpoint("saved_comparison")
-    matches = management.configuration_readback_matches(record['request']['config'], saved)
+    matches = management.configuration_readback_matches(
+        record['request']['config'], saved, home=management.service.data_dir)
     saved_comparison(matches)
     if not matches:
         raise PredicateFailure("saved_comparison", 'The saved configuration changed after application; its operation remains unresolved.')
@@ -427,6 +428,8 @@ async def finish_saved(management, identity, operation):
                     saved_configuration_operation=operation)
             guard()
             expected = management.configuration_record(identity, operation)['request']['config']
+            from .host.components import portable_module_sources
+            expected = portable_module_sources(expected, service.data_dir)
             inspected, readback_guard = await inspect_loaded(management, session, expected, guard)
             async with service.lock:
                 readback_guard()

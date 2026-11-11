@@ -626,3 +626,660 @@ def test_agent_names_do_not_turn_nested_mounts_into_unbound_config_data(agent_na
     visible['agents'][agent_name]['providers'][0]['source'] = 'different-source'
     with pytest.raises(ValueError, match='redacted value cannot be used'):
         restore_redactions(visible, original)
+
+
+@pytest.fixture
+def managed_module_source(tmp_path, monkeypatch):
+    """Real Git identity in a synthetic retiring generation; no live data."""
+    import json
+    from types import SimpleNamespace
+
+    home = tmp_path / 'app'
+    root = home / 'updates/releases' / ('a' * 32) / 'foundation/cache/fixture'
+    module = root / 'modules/hook-source-lifetime-fixture'
+    package = module / 'amplifier_module_hook_source_lifetime_fixture'
+    package.mkdir(parents=True)
+    # Shared-source resolution validates the repository root before selecting
+    # the module subdirectory; both fixture commits must be valid repositories.
+    (root / 'bundle.yaml').write_text(
+        'bundle:\n  name: source-lifetime-fixture\n  version: 1.0.0\n')
+    (module / 'pyproject.toml').write_text(
+        '[project]\nname="amplifier-module-hook-source-lifetime-fixture"\n'
+        'version="1.0"\ndependencies=[]\n')
+    code = package / '__init__.py'
+    code.write_text(
+        "__amplifier_module_type__ = 'hook'\nVERSION = 1\n"
+        "async def mount(coordinator, config=None):\n"
+        "    coordinator.register_capability('fixture.source_lifetime', "
+        "{'version': VERSION, 'file': __file__})\n")
+    url = 'https://example.invalid/source-lifetime'
+
+    def git(*args, cwd=root):
+        return subprocess.check_output(['git', '-C', str(cwd), *args],
+                                       stderr=subprocess.DEVNULL, text=True).strip()
+
+    git('init', '-b', 'main')
+    git('config', 'user.name', 'Fixture')
+    git('config', 'user.email', 'fixture@example.invalid')
+    git('remote', 'add', 'origin', url + '.git')
+    git('add', '.')
+    git('commit', '-m', 'source lifetime fixture')
+    commit = git('rev-parse', 'HEAD')
+    metadata = root / '.amplifier_cache_meta.json'
+    metadata.write_text(json.dumps({'git_url': url, 'ref': 'main', 'commit': commit}))
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(home))
+    return SimpleNamespace(home=home, root=root, module=module, code=code, git=git,
+        url=url, commit=commit, metadata=metadata,
+        portable='git+' + url + '@' + commit + '#subdirectory=' + module.relative_to(root).as_posix())
+
+
+@pytest.mark.parametrize('spelling', ['path', 'file', 'file-subdirectory'])
+def test_configuration_save_keeps_exact_sources_without_generation_paths(managed_module_source, spelling):
+    import copy
+    import json
+    from amplifier_web.host.components import declarations
+    from test_task_continuity import controls
+
+    c = managed_module_source
+    source = (str(c.module) if spelling == 'path' else c.module.as_uri() if spelling == 'file'
+              else c.root.as_uri() + '#subdirectory=' + c.module.relative_to(c.root).as_posix())
+    mounted = {'source': source, 'config': {'api_key': 'SYNTHETIC_SECRET', 'limit': 7}}
+    plan = {
+        'session': {'orchestrator': {'module': 'loop-live', **mounted},
+                    'context': {'module': 'context-fixture', **mounted}},
+        'providers': [{'module': 'provider-fixture', 'id': 'exact-account', **mounted}],
+        'tools': [{'module': 'tool-fixture', **mounted},
+                  {'module': 'tool-disabled', 'enabled': False, **mounted}],
+        'hooks': [{'module': 'hook-fixture', **mounted}],
+        'spawn': {'tools': [{'module': 'tool-spawn', **mounted}]},
+        'agents': {'child': {'agents': {'nested': {'tools': [{'module': 'tool-child', **mounted}]}}}},
+        # Module-looking arbitrary config and resources are not declarations.
+        'context': {'policy': source},
+        'instruction': source,
+    }
+    plan['tools'][0]['config'] = {'nested': {'module': 'example', 'source': source}}
+    original = copy.deepcopy(plan)
+    evidence = [c.metadata, c.code, *(c.root / '.git' / name for name in ('HEAD', 'index', 'config'))]
+    before = [path.read_bytes() for path in evidence]
+    controller = controls('saved-sources')
+    controller.coordinator.config = copy.deepcopy(plan)
+    prepared = controller.prepare_configuration(public_config(plan))
+    expected = copy.deepcopy(plan)
+    for row in declarations(expected):
+        row['source'] = c.portable
+    assert prepared == expected
+    controller.save_configuration(prepared)
+    saved = controller.state_path().with_name('configuration.json')
+    assert json.loads(saved.read_text()) == expected
+    # Direct native writers also use the persistence boundary.
+    controller.save_configuration(plan)
+    assert json.loads(saved.read_text()) == expected
+    assert plan == original == controller.coordinator.config
+    assert [path.read_bytes() for path in evidence] == before
+
+
+def test_configuration_save_normalizes_base_cache_repository_root(managed_module_source):
+    from amplifier_web.host.components import portable_module_sources
+
+    c = managed_module_source
+    root = c.home / 'foundation/cache/fixture'
+    root.parent.mkdir(parents=True)
+    c.root.rename(root)
+    plan = {'hooks': [{'module': 'hook-fixture', 'source': str(root)}]}
+    saved = portable_module_sources(plan, c.home)
+    assert saved['hooks'][0]['source'] == 'git+' + c.url + '@' + c.commit
+
+
+@pytest.mark.parametrize('change', [
+    'external-local', 'unmanaged-local', 'dirty', 'staged', 'extra-source',
+    'head-mismatch', 'remote-mismatch', 'missing-metadata', 'missing-source',
+    'ignored-module', 'symlink', 'git-pin', 'credential-url',
+])
+def test_configuration_save_never_guesses_unverified_or_local_sources(
+        managed_module_source, tmp_path, change):
+    import json
+    from test_task_continuity import controls
+
+    c = managed_module_source
+    source = str(c.module)
+    if change in {'external-local', 'unmanaged-local'}:
+        destination = tmp_path / 'external' if change == 'external-local' else c.home / 'user-checkout'
+        c.root.rename(destination)
+        source = str(destination / c.module.relative_to(c.root))
+    elif change == 'dirty':
+        c.code.write_text(c.code.read_text().replace('VERSION = 1', 'VERSION = 9'))
+    elif change == 'staged':
+        previous = c.code.read_text()
+        c.code.write_text(previous.replace('VERSION = 1', 'VERSION = 9'))
+        c.git('add', str(c.code.relative_to(c.root)))
+        c.code.write_text(previous)  # HEAD/worktree match; the index still differs.
+    elif change == 'extra-source':
+        (c.module / 'extra.py').write_text('custom = True\n')
+    elif change == 'head-mismatch':
+        metadata = json.loads(c.metadata.read_text())
+        c.metadata.write_text(json.dumps({**metadata, 'commit': 'f' * 40}))
+    elif change == 'remote-mismatch':
+        c.git('remote', 'set-url', 'origin', 'https://other.invalid/source-lifetime')
+    elif change == 'missing-metadata':
+        c.metadata.unlink()
+    elif change == 'missing-source':
+        c.root.rename(tmp_path / 'retired-checkout')
+    elif change == 'ignored-module':
+        path = c.root / 'ignored-local-module'
+        path.mkdir()
+        (path / 'module.py').write_text('custom = True\n')
+        with (c.root / '.git/info/exclude').open('a') as handle:
+            handle.write('\nignored-local-module/\n')
+        source = str(path)
+    elif change == 'symlink':
+        alias = c.root.parent / 'alias'
+        alias.symlink_to(c.root, target_is_directory=True)
+        source = str(alias / c.module.relative_to(c.root))
+    elif change == 'git-pin':
+        source = 'git+https://other.invalid/explicit@v1.2#subdirectory=custom'
+    elif change == 'credential-url':
+        url = c.url.replace('https://', 'https://SYNTHETIC_SECRET@')
+        c.git('remote', 'set-url', 'origin', url)
+        metadata = json.loads(c.metadata.read_text())
+        c.metadata.write_text(json.dumps({**metadata, 'git_url': url}))
+    plan = {'hooks': [{'module': 'hook-source-lifetime-fixture', 'source': source,
+                       'enabled': False, 'config': {'keep': [1, 2, 3]}}]}
+    controller = controls('preserved-sources')
+    controller.save_configuration(plan)
+    assert json.loads(controller.state_path().with_name('configuration.json').read_text()) == plan
+
+
+async def test_configuration_save_uses_shared_object_identity_not_its_moving_binding(
+        managed_module_source, monkeypatch):
+    import json
+    from amplifier_foundation.sources.shared import SharedSourceStore
+    from amplifier_web.host.components import portable_module_sources
+
+    c = managed_module_source
+    store = SharedSourceStore(c.home / 'source-store')
+    obj = await store.bind(c.root.parent, c.url, 'main', c.commit, existing=c.root)
+    source = str(obj / c.module.relative_to(c.root))
+    before = (obj / '.amplifier_cache_meta.json').read_bytes()
+    plan = {'hooks': [{'module': 'hook-source-lifetime-fixture', 'source': source}]}
+    saved = portable_module_sources(plan, c.home)
+    assert saved['hooks'][0]['source'] == c.portable
+    assert json.loads(before)['commit'] == c.commit
+    assert (obj / '.amplifier_cache_meta.json').read_bytes() == before
+    # No cross-call cache: changed evidence must be observed at the next save.
+    monkeypatch.setattr('amplifier_foundation.sources.shared.clean_checkout', lambda root: False)
+    assert portable_module_sources(plan, c.home) == plan
+
+
+@pytest.mark.parametrize('count', [1, 50])
+def test_configuration_source_inspection_is_once_per_used_root(managed_module_source, monkeypatch, count):
+    from amplifier_foundation.sources import shared
+    from amplifier_web.host.components import portable_module_sources
+
+    c = managed_module_source
+    inspected = []
+    original = shared.clean_checkout
+
+    def observed(root):
+        inspected.append(root)
+        return original(root)
+
+    monkeypatch.setattr(shared, 'clean_checkout', observed)
+    plan = {'hooks': [{'module': 'hook-fixture', 'id': str(i), 'source': str(c.module)}
+                      for i in range(count)]}
+    result = portable_module_sources(plan, c.home)
+    assert [row['source'] for row in result['hooks']] == [c.portable] * count
+    assert inspected == [c.root]
+
+
+async def test_saved_module_source_prepares_after_reset_moves_generation(managed_module_source, tmp_path, monkeypatch):
+    """Real save, offline Git resolution, Foundation prepare and Core mount.
+
+    On the old producer this reaches ModuleActivationError at the retired path.
+    The candidate must load the saved commit, not the newer remote main branch.
+    """
+    import json
+    import shutil
+    import sys
+    from amplifier_foundation import Bundle
+    from amplifier_web.host.components import installed_package_source
+    from test_task_continuity import controls
+
+    c = managed_module_source
+    origin = tmp_path / 'offline-origin'
+    shutil.copytree(c.root, origin)
+    code = origin / c.code.relative_to(c.root)
+    code.write_text(code.read_text().replace('VERSION = 1', 'VERSION = 2'))
+    c.git('add', str(code.relative_to(origin)), cwd=origin)
+    c.git('commit', '-m', 'newer remote main must not replace saved commit', cwd=origin)
+    assert c.git('rev-parse', 'HEAD', cwd=origin) != c.commit
+    # Rewrite only this synthetic URL in child Git processes; never use network
+    # or change the machine's Git settings. All caches are task-local.
+    monkeypatch.setenv('GIT_CONFIG_COUNT', '1')
+    monkeypatch.setenv('GIT_CONFIG_KEY_0', 'url.' + origin.as_uri() + '.insteadOf')
+    monkeypatch.setenv('GIT_CONFIG_VALUE_0', c.url)
+    monkeypatch.setenv('GIT_ALLOW_PROTOCOL', 'file')
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+    monkeypatch.setenv('AMPLIFIER_SOURCE_STORE', str(tmp_path / 'new-source-store'))
+    monkeypatch.setattr(sys, 'dont_write_bytecode', True)
+    controller = controls('reset-source')
+    controller.save_configuration({'hooks': [
+        {'module': 'hook-source-lifetime-fixture', 'source': str(c.module)}]})
+    saved = json.loads(controller.state_path().with_name('configuration.json').read_text())
+    # The same directory move as reset; no backup search or module-name fallback.
+    (c.home / 'updates').rename(tmp_path / 'retired-updates')
+    assert not c.module.exists()
+    bundle = Bundle(name='saved-source', hooks=saved['hooks'], session={
+        'orchestrator': {'module': 'loop-live', 'source': installed_package_source(
+            'amplifier-module-loop-live', 'amplifier_module_loop_live')},
+        'context': {'module': 'context-simple', 'source': installed_package_source(
+            'amplifier-module-context-simple', 'amplifier_module_context_simple')},
+    })
+    prepared = await bundle.prepare(install_deps=False, strict=True, cache_dir=tmp_path / 'fresh-cache')
+    session = await prepared.create_session(session_id='reset-source-qualified')
+    try:
+        mounted = session.coordinator.get_capability('fixture.source_lifetime')
+        assert mounted['version'] == 1
+        assert Path(mounted['file']).is_relative_to(tmp_path / 'new-source-store')
+        assert saved['hooks'][0]['source'] == c.portable
+    finally:
+        await session.cleanup()
+        await controller.close()
+
+
+@pytest.mark.parametrize('case', ['no-home', 'logical-only'])
+def test_portable_sources_without_managed_paths_need_no_foundation_or_git(tmp_path, monkeypatch, case):
+    import builtins
+    from amplifier_web.host.components import portable_module_sources
+
+    plan = {'tools': [{'module': 'tool-fixture', 'source':
+        str(tmp_path / 'app/foundation/cache/missing') if case == 'no-home'
+        else 'git+https://example.invalid/fixture@explicit-pin'}]}
+    imported = builtins.__import__
+
+    def checked(name, *args, **kwargs):
+        if name.startswith('amplifier_foundation'):
+            pytest.fail('Logical sources must not inspect Foundation caches')
+        return imported(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', checked)
+    monkeypatch.setattr(subprocess, 'check_output',
+                        lambda *a, **kw: pytest.fail('Logical sources must not invoke Git'))
+    assert portable_module_sources(plan, None if case == 'no-home' else tmp_path / 'app') == plan
+
+
+@pytest.mark.parametrize('changed', [None, 'module', 'instance', 'revision', 'dirty'])
+def test_portable_redacted_edit_requires_exact_verified_owner(managed_module_source, changed):
+    import copy
+    from test_task_continuity import controls
+
+    c = managed_module_source
+    controller = controls('portable-redactions')
+    original = {'session': {'orchestrator': {'module': 'loop-live'},
+                            'context': {'module': 'context-simple'}},
+                'providers': [{'module': 'provider-fixture', 'instance_id': 'chosen',
+                    'source': str(c.module), 'config': {'api_key': 'SYNTHETIC_EXACT_SECRET'}}]}
+    controller.coordinator.config = copy.deepcopy(original)
+    edited = public_config(original)
+    row = edited['providers'][0]
+    row['source'] = c.portable
+    if changed == 'dirty':
+        c.code.write_text(c.code.read_text().replace('VERSION = 1', 'VERSION = 9'))
+    elif changed in {'module', 'instance'}:
+        row['module' if changed == 'module' else 'instance_id'] = 'different'
+    elif changed == 'revision':
+        row['source'] = c.portable.replace(c.commit, 'f' * 40)
+    if changed:
+        with pytest.raises(ValueError, match='redacted value cannot be used'):
+            controller.prepare_configuration(edited)
+    else:
+        saved = controller.prepare_configuration(edited)
+        assert saved['providers'][0]['source'] == c.portable
+        assert saved['providers'][0]['config']['api_key'] == 'SYNTHETIC_EXACT_SECRET'
+    assert controller.coordinator.config == original
+
+
+@pytest.mark.parametrize('bound', [False, True])
+async def test_effective_snapshot_and_inspection_use_portable_sources(managed_module_source, bound, monkeypatch):
+    import copy
+    import json
+    from amplifier_foundation import Bundle
+    from amplifier_web.host.components import prepare_bundle
+    from amplifier_web.provider_environment import HOST_CREDENTIAL
+    from test_task_continuity import controls
+
+    c = managed_module_source
+    controller = controls('effective-sources')
+    provider = {'module': 'provider-fixture', 'source': str(c.module),
+                'config': {'api_key': 'SYNTHETIC_SECRET'}}
+    plan = {'providers': [provider], 'agents': {'child': {'providers': [copy.deepcopy(provider)]}},
+            'tools': [{'module': 'tool-fixture', 'source': str(c.module)}],
+            'context': {'data': str(c.module)}}
+    bundle = Bundle(name='portable-snapshot', providers=plan['providers'], agents=plan['agents'],
+                    tools=plan['tools'])
+    prepared = await prepare_bundle(bundle, source_home=c.home, install_deps=False, strict=True,
+        cache_dir=c.home / 'foundation/cache', source_resolver=lambda module, source: str(c.module))
+    controller.coordinator.config = {**prepared.mount_plan, 'context': plan['context']}
+    original = copy.deepcopy(controller.coordinator.config)
+    controller.coordinator.register_capability('web.provider_credentials_bound', bound)
+    monkeypatch.setattr(subprocess, 'check_output',
+                        lambda *a, **kw: pytest.fail('A checkpoint/read must not invoke Git'))
+    controller.persist()
+    saved = json.loads(controller.state_path().with_name('effective-configuration.json').read_text())
+    for node in (saved, saved['agents']['child']):
+        assert node['providers'][0]['source'] == c.portable
+        assert node['providers'][0]['config']['api_key'] == (HOST_CREDENTIAL if bound else 'SYNTHETIC_SECRET')
+    inspected = controller.configuration()
+    assert inspected['plan']['tools'][0]['source'] == c.portable
+    assert inspected['modules'][0]['source'] == c.portable
+    assert saved['context'] == plan['context']
+    assert controller.coordinator.config == original
+
+
+@pytest.mark.parametrize('changed', [None, 'module', 'instance', 'revision', 'dirty'])
+def test_portable_inherited_credential_binding_requires_exact_source(managed_module_source, changed):
+    """Covers the credential-owner integration required by portable snapshots."""
+    import copy
+    from amplifier_web.provider_environment import credential_bindings, rebind_provider_credentials
+    from amplifier_web.host.components import portable_module_sources
+
+    c = managed_module_source
+    row = {'module': 'provider-fixture', 'instance_id': 'chosen',
+           'source': str(c.module), 'config': {'api_key': 'SYNTHETIC_EXACT_SECRET'}}
+    authorized = {'providers': [row], 'agents': {'child': {'providers': [copy.deepcopy(row)]}}}
+    edited = credential_bindings(portable_module_sources(authorized, c.home))
+    if changed == 'dirty':
+        c.code.write_text(c.code.read_text().replace('VERSION = 1', 'VERSION = 9'))
+    elif changed in {'module', 'instance'}:
+        edited['agents']['child']['providers'][0]['module' if changed == 'module' else 'instance_id'] = 'different'
+    elif changed == 'revision':
+        edited['agents']['child']['providers'][0]['source'] = c.portable.replace(c.commit, 'f' * 40)
+    before = copy.deepcopy((edited, authorized))
+    if changed:
+        with pytest.raises(ValueError, match='instance/source'):
+            rebind_provider_credentials(edited, authorized)
+    else:
+        restored, bound = rebind_provider_credentials(edited, authorized)
+        assert bound
+        for node in (restored, restored['agents']['child']):
+            assert node['providers'][0]['source'] == c.portable
+            assert node['providers'][0]['config']['api_key'] == 'SYNTHETIC_EXACT_SECRET'
+    assert (edited, authorized) == before
+
+
+def test_narrow_patch_save_preserves_historical_plan_hash(managed_module_source):
+    import json
+    from amplifier_web.configuration_authority import fingerprint
+    from test_task_continuity import controls
+
+    c = managed_module_source
+    controller = controls('narrow-placement')
+    plan = {'tools': [{'module': 'tool-apply-patch', 'source': str(c.module),
+                       'config': {'working_dir': '/explicit-workspace'}}]}
+    expected = fingerprint(plan)
+    controller.save_patch_placement(plan)
+    saved = json.loads(controller.state_path().with_name('configuration.json').read_text())
+    assert fingerprint(saved) == expected
+    assert saved['tools'][0]['source'] == str(c.module)
+
+
+def test_portable_readback_equivalence_is_source_only_and_requires_provenance(managed_module_source):
+    import copy
+    from amplifier_web.management import Management
+
+    c = managed_module_source
+    expected = {'tools': [{'module': 'tool-fixture', 'source': str(c.module),
+                          'config': {'path': str(c.module)}}]}
+    actual = copy.deepcopy(expected)
+    actual['tools'][0]['source'] = c.portable
+    assert not Management.configuration_readback_matches(expected, actual)
+    assert Management.configuration_readback_matches(expected, actual, home=c.home)
+    actual['tools'][0]['config']['path'] = c.portable
+    assert not Management.configuration_readback_matches(expected, actual, home=c.home)
+    actual['tools'][0]['config']['path'] = str(c.module)
+    c.metadata.unlink()
+    assert not Management.configuration_readback_matches(expected, actual, home=c.home)
+
+
+@pytest.mark.parametrize('qualification', [False, True])
+@pytest.mark.parametrize('change', [None, 'local', 'wrong-object', 'unselected-store', 'revision', 'instance', 'dirty'])
+async def test_provider_binding_uses_only_exact_configured_shared_object(
+        managed_module_source, tmp_path, monkeypatch, qualification, change):
+    """The real qualifier and live-plan entry share the explicit store, not home."""
+    import copy
+    import shutil
+    from amplifier_foundation import Bundle
+    from amplifier_foundation.sources.shared import SharedSourceStore
+    from amplifier_web.host.config import HostConfig
+    from amplifier_web.host.session import apply_runtime_plan
+    from amplifier_web.provider_environment import credential_bindings, rebind_provider_credentials
+
+    c = managed_module_source
+    store = SharedSourceStore(tmp_path / 'selected-shared-store')
+    home = c.home / 'updates/releases/qualification' if qualification else c.home
+    obj = await store.bind(home / 'foundation/cache', c.url, 'main', c.commit, existing=c.root)
+    source = obj / c.module.relative_to(c.root)
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(home))
+    monkeypatch.setenv('AMPLIFIER_SOURCE_STORE', str(store.root))
+    row = {'module': 'provider-fixture', 'instance_id': 'selected',
+           'source': str(source), 'config': {'api_key': 'SYNTHETIC_EXACT_CREDENTIAL'}}
+    session = {'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}}
+    authorized = {'session': session, 'providers': [row],
+                  'agents': {'child': {'providers': [copy.deepcopy(row)]}}}
+    edited = credential_bindings(authorized)
+    for node in (edited, edited['agents']['child']):
+        node['providers'][0]['source'] = c.portable
+    if change in {'local', 'wrong-object'}:
+        # Metadata and Git alone do not make a local checkout a store object.
+        destination = (tmp_path / 'independent-local' if change == 'local'
+                       else store.root / 'objects/not-the-selected-identity')
+        shutil.copytree(c.root, destination)
+        for node in (authorized, authorized['agents']['child']):
+            node['providers'][0]['source'] = str(destination / c.module.relative_to(c.root))
+    elif change == 'unselected-store':
+        monkeypatch.setenv('AMPLIFIER_SOURCE_STORE', str(tmp_path / 'different-store'))
+    elif change == 'revision':
+        edited['agents']['child']['providers'][0]['source'] = c.portable.replace(c.commit, 'f' * 40)
+    elif change == 'instance':
+        edited['agents']['child']['providers'][0]['instance_id'] = 'other'
+    elif change == 'dirty':
+        code = obj / c.code.relative_to(c.root)
+        code.chmod(0o600)
+        code.write_text(code.read_text().replace('VERSION = 1', 'VERSION = 9'))
+    before = copy.deepcopy((edited, authorized))
+    bundle = Bundle(name='shared-provider', session=session, providers=authorized['providers'],
+                    agents=authorized['agents'])
+    config = HostConfig(home, tmp_path, {}, home / 'foundation')
+    if change:
+        with pytest.raises(ValueError, match='instance/source'):
+            rebind_provider_credentials(edited, authorized)
+        with pytest.raises(ValueError, match='instance/source'):
+            apply_runtime_plan(bundle, edited, config, tmp_path)
+    else:
+        rebound, bound = rebind_provider_credentials(edited, authorized)
+        assert bound
+        # Explicit config.home governs the host entry even if its caller has a
+        # different ambient home. The selected source store remains explicit.
+        monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'unrelated-ambient-home'))
+        mounted = apply_runtime_plan(bundle, edited, config, tmp_path)
+        assert mounted._host_provider_credentials_bound
+        for node in (rebound, rebound['agents']['child'], mounted.to_mount_plan(),
+                     mounted.agents['child']):
+            assert node['providers'][0]['source'] == c.portable
+            assert node['providers'][0]['config']['api_key'] == 'SYNTHETIC_EXACT_CREDENTIAL'
+    assert (edited, authorized) == before
+
+
+async def test_prepared_sources_keep_exact_resolver_and_git_free_checkpoints(
+        managed_module_source, tmp_path, monkeypatch):
+    """Real Foundation/Core/configurator and production checkpoint hooks, no model."""
+    import copy
+    import json
+    import shutil
+    import sys
+    from types import SimpleNamespace
+    from amplifier_core import HookResult
+    from amplifier_foundation import Bundle, SessionConfigurator
+    from amplifier_web.host.components import prepare_bundle, installed_package_source
+    from amplifier_web.host.session import install_checkpoint_hooks
+    from amplifier_web.runtime_controls import RuntimeControls
+
+    c = managed_module_source
+    monkeypatch.setattr(sys, 'dont_write_bytecode', True)
+    provider = c.root / 'modules/provider-portable-checkpoint-fixture'
+    package = provider / 'amplifier_module_provider_portable_checkpoint_fixture'
+    package.mkdir(parents=True)
+    (provider / 'pyproject.toml').write_text(
+        '[project]\nname="amplifier-module-provider-portable-checkpoint-fixture"\n'
+        'version="1.0"\ndependencies=[]\n')
+    (package / '__init__.py').write_text(
+        'from amplifier_core.models import ProviderInfo\n'
+        '__amplifier_module_type__ = "provider"\n'
+        'class Provider:\n'
+        '    name = "fixture"\n'
+        '    def get_info(self):\n'
+        '        return ProviderInfo(id="fixture", display_name="Fixture", defaults={"model": "offline"})\n'
+        '    def get_config_schema(self): return {"fields": []}\n'
+        '    async def list_models(self): return []\n'
+        '    def parse_tool_calls(self, response): return []\n'
+        '    async def complete(self, request, **kwargs): raise AssertionError("No model calls")\n'
+        'async def mount(coordinator, config=None):\n'
+        '    await coordinator.mount("providers", Provider(), name="fixture")\n')
+    c.git('add', str(provider.relative_to(c.root)))
+    c.git('commit', '-m', 'checkpoint fixture provider')
+    revision = c.git('rev-parse', 'HEAD')
+    metadata = json.loads(c.metadata.read_text())
+    c.metadata.write_text(json.dumps({**metadata, 'commit': revision}))
+    prefix = 'git+' + c.url + '@' + revision + '#subdirectory='
+    provider_uri = prefix + provider.relative_to(c.root).as_posix()
+    hook_uri = prefix + c.module.relative_to(c.root).as_posix()
+    agents = {}
+    for i in range(9):
+        root = c.root.parent / f'copy-{i}'
+        shutil.copytree(c.root, root)
+        agents[f'worker-{i}'] = {'hooks': [
+            {'module': 'hook-source-lifetime-fixture', 'source': str(root / c.module.relative_to(c.root))}]}
+    bundle = Bundle(name='portable-checkpoints', agents=agents, providers=[{
+        'module': 'provider-portable-checkpoint-fixture', 'instance_id': 'fixture',
+        'source': str(provider), 'config': {'model': 'offline', 'options': {'limit': 1}}}],
+        session={
+            'orchestrator': {'module': 'loop-live', 'source': installed_package_source(
+                'amplifier-module-loop-live', 'amplifier_module_loop_live')},
+            'context': {'module': 'context-simple', 'source': installed_package_source(
+                'amplifier-module-context-simple', 'amplifier_module_context_simple')},
+        })
+
+    observed_sources = []
+    def source_resolver(module, source):
+        # Canonical display must not change the source policy's observation or
+        # fetch a second checkout merely to adopt a new mount-plan spelling.
+        observed_sources.append((module, source))
+        return source
+
+    async def preparation_failed(failure):
+        raise failure.error
+
+    prepared = await prepare_bundle(bundle, source_home=c.home, install_deps=False, strict=True,
+        cache_dir=tmp_path / 'preparation-cache', source_resolver=source_resolver,
+        provider_failure_policy=preparation_failed)
+    assert prepared.mount_plan['providers'][0]['source'] == provider_uri
+    assert bundle.agents['worker-0']['hooks'][0]['source'] == hook_uri
+    assert ('provider-portable-checkpoint-fixture', str(provider)) in observed_sources
+    assert all(not source.startswith('git+') for _, source in observed_sources)
+    # Both keys are owned by Foundation preparation, not a new host alias table.
+    for hint in (str(provider), provider_uri):
+        assert prepared.resolver.resolve('provider-portable-checkpoint-fixture', hint).resolve() == provider
+    sources = prepared.resolver.prepared_sources()
+    session = await prepared.create_session(session_id='portable-checkpoint-root')
+    coordinator = session.coordinator
+    runtime = SimpleNamespace(session_id=session.session_id, generation=None, queued_inputs=0)
+    configurator = SessionConfigurator(session, prepared)
+    coordinator.register_capability('web.configurator', configurator)
+    coordinator.register_capability('web.prepared', prepared)
+    coordinator.register_capability('web.agent_definitions', copy.deepcopy(coordinator.config['agents']))
+    controls = RuntimeControls(session, runtime)
+    checkpoints = []
+
+    async def checkpoint(*, timing=None, transcript_required=True):
+        checkpoints.append(transcript_required)
+        coordinator.get_capability('web.controls.persist')()
+
+    install_checkpoint_hooks(coordinator, runtime, checkpoint)
+    effective = controls.state_path().with_name('effective-configuration.json')
+    borrowed = coordinator.config['providers'][0]['config']['options']
+    try:
+        with monkeypatch.context() as hot:
+            hot.setattr(subprocess, 'check_output',
+                        lambda *a, **kw: pytest.fail('Checkpoint/inspection invoked Git'))
+            hot.setattr('amplifier_web.host.components.portable_module_sources',
+                        lambda *a, **kw: pytest.fail('Checkpoint/inspection reverified sources'))
+            for i in range(20):
+                borrowed['limit'] = i
+                await coordinator.hooks.emit('tool:post', {'session_id': session.session_id})
+                await coordinator.hooks.emit('tool:error', {'session_id': session.session_id})
+                await controls.checkpoint()
+                saved = json.loads(effective.read_text())
+                assert saved['providers'][0]['source'] == provider_uri
+                assert saved['providers'][0]['config']['options']['limit'] == i
+                assert controls.configuration()['plan']['agents']['worker-0']['hooks'][0]['source'] == hook_uri
+            assert len(checkpoints) == 40
+            # Real disable/restore paths retain the canonical agent declaration.
+            for enabled in (False, True):
+                await controls.perform('configuration.toggle', {
+                    'section': 'agents', 'name': 'worker-0', 'enabled': enabled})
+                assert json.loads(effective.read_text())['agents']['worker-0']['hooks'][0]['source'] == hook_uri
+            # A newly contributed declaration is not relabelled with a stale
+            # source alias. Only later explicit configuration admission verifies it.
+            async def contribute(event, data):
+                coordinator.config.setdefault('tools', []).append({
+                    'module': 'tool-new-fixture', 'source': str(c.module), 'config': {'keep': [1]}})
+                return HookResult()
+            coordinator.hooks.register('mode:activated', contribute, name='fixture-mode')
+            coordinator.session_state['mode_discovery'] = SimpleNamespace(
+                find=lambda name: SimpleNamespace(name=name), list_modes=lambda: [])
+            await controls.perform('mode.set', {'name': 'fixture-mode'})
+            assert controls.configuration()['plan']['tools'][-1]['source'] == str(c.module)
+            assert json.loads(effective.read_text())['tools'][-1]['source'] == str(c.module)
+        assert prepared.resolver.prepared_sources() == sources
+        calls = []
+        check_output = subprocess.check_output
+        def observed(*args, **kwargs):
+            calls.append(args[0])
+            return check_output(*args, **kwargs)
+        monkeypatch.setattr(subprocess, 'check_output', observed)
+        admitted = controls.prepare_configuration(controls.configuration()['plan'])
+        assert admitted['tools'][-1]['source'] == hook_uri and calls
+        calls.clear()
+        c.code.write_text(c.code.read_text().replace('VERSION = 1', 'VERSION = 9'))
+        changed = controls.prepare_configuration(controls.configuration()['plan'])
+        assert changed['tools'][-1]['source'] == str(c.module) and calls
+        assert coordinator.config['providers'][0]['config']['options'] is borrowed
+    finally:
+        await controls.close()
+        await session.cleanup()
+
+
+def test_decision_projection_keeps_portable_hint_and_exact_prepared_provider(managed_module_source):
+    from amplifier_foundation.bundle import BundleModuleResolver
+    from amplifier_web.decision_accounts import AccountResolver, DecisionAccounts, logical_plan
+    from amplifier_web.host.components import HostComponents
+    from amplifier_web.host.config import HostConfig
+    from amplifier_web.host.session import module_source
+
+    c = managed_module_source
+    config = HostConfig(c.home, c.home.parent, {'sources': {'modules': {
+        'provider-fixture': str(c.module), 'hook-fixture': str(c.module)}}}, c.home / 'foundation')
+    row = {'module': 'provider-fixture', 'instance_id': 'selected', 'source': c.portable,
+           'config': {'chat_enabled': False, 'decisions': {'enabled': True}, 'api_key': 'SYNTHETIC_KEY'}}
+    definitions = {'provider-fixture': {'module': 'hook-fixture'}}
+    accounts = DecisionAccounts({'providers': [row]}, None,
+        lambda module, source: module_source(config, False, module, source, HostComponents(), portable=True),
+        definitions=definitions)
+    assert accounts.aliases == {('hook-fixture', c.portable): 'provider-fixture'}
+    assert logical_plan(accounts.plan, definitions=definitions)['providers'] == [row]
+    prepared = BundleModuleResolver({'provider-fixture': c.module},
+        source_paths={('provider-fixture', c.portable): c.module,
+                      ('provider-fixture', str(c.module)): c.module})
+    resolver = AccountResolver(prepared, accounts.aliases)
+    assert resolver.resolve('hook-fixture', c.portable).resolve() == c.module
+    with pytest.raises(ValueError, match='authorized account'):
+        resolver.resolve('hook-fixture', c.portable.replace(c.commit, 'f' * 40))

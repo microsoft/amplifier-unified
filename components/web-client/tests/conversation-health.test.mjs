@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import React,{act as renderAct} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
+import {composerPrimaryAction} from '../src/composer.js';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {ConversationDetails,ConversationError}=await server.ssrLoadModule('/src/conversation-controls.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;test.after(()=>server.close());
@@ -53,7 +54,7 @@ test('dismissing a stopped connection acknowledges only its exact error and neve
 test('error banner opens recorded details through a shared action without retrying work',async()=>{
  const calls=[];
  let root;await renderAct(async()=>{root=create(React.createElement(ConversationError,{session:{id:'chat',error:'failed'},state:{},act:async(name,args)=>{calls.push({name,args});return {accepted:true}}}))});
- assert.equal(root.root.findAllByType('button').length,2);assert.equal(root.toJSON().props.className,'a-alert');
+ assert.equal(root.root.findAllByType('button').length,1);assert.equal(root.toJSON().props.className,'a-alert');
  await renderAct(async()=>root.root.findByProps({'data-action':'view.update'}).props.onClick());
  assert.deepEqual(calls,[{name:'view.update',args:{patch:{panel:'chat-error'}}}]);
  await renderAct(async()=>root.unmount());
@@ -169,24 +170,27 @@ test('a late diagnostic response cannot replace the report for a newer failure',
 });
 
 
-test('continuation is explicit, guarded against duplicate or active-work sends, and can retry failure',async()=>{
- const calls=[];let release,root,pending;
- const act=(name,args)=>{calls.push({name,args});return new Promise(resolve=>release=resolve)};
- const session={id:'chat',status:'error',error:'ValueError'};
- await renderAct(async()=>{root=create(React.createElement(ConversationError,{session,state:{},act}))});
- assert.deepEqual(calls,[]);
- const button=()=>root.root.findByProps({'data-action':'conversation.send'});
- await renderAct(async()=>{pending=button().props.onClick();button().props.onClick()});
- assert.equal(calls.length,1);assert.equal(button().props.disabled,true);
- assert.equal(calls[0].args.sessionId,'chat');assert.equal(calls[0].args.preserveDraft,true);
- await renderAct(async()=>{release(undefined);await pending});
- assert.match(JSON.stringify(root.toJSON()),/Could not send the continuation/);
- assert.equal(button().props.disabled,false);
- await renderAct(async()=>{pending=button().props.onClick()});
- await renderAct(async()=>{release({accepted:true});await pending});
- assert.equal(calls.length,2);
- await renderAct(async()=>root.update(React.createElement(ConversationError,{session:{...session,status:'working'},state:{},act})));
- assert.equal(button().props.disabled,true);
- await renderAct(async()=>button().props.onClick());assert.equal(calls.length,2);
- await renderAct(async()=>root.unmount());
-});
+for(const category of ['unknown','worker_startup','worker_exit','worker_communication','context_measurement']){
+ test(`${category} banner only opens details or dismisses; fresh follow-up stays in the composer`,async()=>{
+  const calls=[],item={id:'session:chat',fingerprint:'recorded-failure',read:false};
+  const session={id:'chat',status:'error',error:'Recorded failure',failure:{category},messages:[{id:'saved',role:'user',text:'Original request'}]};
+  const state={attention:{items:[item]},view:{draft:'My next instruction'}},before=structuredClone({session,state});
+  const act=async(name,args)=>{calls.push({name,args});return {accepted:true}};
+  let root;
+  try{
+   await renderAct(async()=>{root=create(React.createElement(ConversationError,{session,state,act}))});
+   assert.deepEqual(calls,[]);
+   assert.deepEqual(root.root.findAllByType('button').map(button=>button.props['data-action']),['view.update','attention.read']);
+   const rendered=JSON.stringify(root.toJSON());
+   assert.doesNotMatch(rendered,/Continue conversation|Could not send the continuation|Please continue from where/);
+   if(category==='worker_startup')assert.match(rendered,/This attempt did not send your message\. If it is marked Not sent, use Retry on that saved message\./);
+   for(const button of root.root.findAllByType('button'))await renderAct(async()=>button.props.onClick());
+   assert.deepEqual(calls,[
+    {name:'view.update',args:{patch:{panel:'chat-error'}}},
+    {name:'attention.read',args:{ids:['session:chat'],fingerprints:{'session:chat':'recorded-failure'}}}
+   ]);
+   assert.deepEqual({session,state},before);
+   assert.deepEqual(composerPrimaryAction({draft:state.view.draft}),{action:'conversation.send',label:'Send message',icon:'send',disabled:false});
+  }finally{await renderAct(async()=>root?.unmount())}
+ });
+}

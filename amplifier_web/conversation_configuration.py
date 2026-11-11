@@ -3,8 +3,16 @@ from pathlib import Path
 
 
 def binding(service, session):
-    return {**service.management.configuration_target_binding(session),
+    from .next_message_configuration import target
+    return {**service.management.configuration_target_binding(session), **target(session),
             'nativeSessionId': session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']}
+
+
+def saved_binding(value):
+    from .next_message_configuration import target
+    # Normalize only legacy placement defaults, preserving native identity,
+    # interruption and every other originally captured authority witness.
+    return {**value, **target(value)}
 
 
 def capture(service, action, args, origin, caller):
@@ -51,7 +59,7 @@ def check(service, authority, *, workspace=None, scope=None):
     """Check frozen identities before commit and again on genuine target input."""
     witness = authority['operatorConfiguration']
     source = service._session(witness['caller']['sessionId'], hydrate=False)
-    if (binding(service, source) != witness['caller']
+    if (binding(service, source) != saved_binding(witness['caller'])
             or source.get('configurationBusy') or source.get('fileAccessPending')
             or service.management.unresolved_configuration(source) or service.assignments.blocked(source)
             or workspace is not None and str(workspace) != witness['workspace']
@@ -59,7 +67,7 @@ def check(service, authority, *, workspace=None, scope=None):
         service.configuration_authority.error('The configuration operator or explicit target changed. Nothing was repeated.')
     if 'target' in witness:
         target = service._session(witness['target']['sessionId'], hydrate=False)
-        if (binding(service, target) != witness['target'] or target.get('sessionKind', 'root') != 'root'
+        if (binding(service, target) != saved_binding(witness['target']) or target.get('sessionKind', 'root') != 'root'
                 or target.get('fileAccessPending') or target.get('historyError')
                 or not Path(target['workspace']).is_dir()):
             service.configuration_authority.error('The saved configuration target moved or crossed Stop.')

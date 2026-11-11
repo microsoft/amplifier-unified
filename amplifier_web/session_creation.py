@@ -59,6 +59,19 @@ def source_settings(service, source, plan):
     if any(not isinstance(configured.module_sources.get(name), str) or not configured.module_sources[name]
            for name in needed):
         raise ValueError('The source session has an unsupported module source selection; no task was started.')
+    # These are declaration sources, not arbitrary strings in shared settings.
+    # Keep all three precedence layers while removing verified cache locations.
+    from .host.components import portable_module_sources
+    portable = portable_module_sources({
+        'tools': [{'module': name, 'source': value} for name, value in modules.items()],
+        'hooks': [{'module': name, **row} for name, row in overrides.items()],
+        'providers': providers}, service.data_dir)
+    if modules:
+        result['sources']['modules'] = {row['module']: row['source'] for row in portable['tools']}
+    if overrides:
+        result['overrides'] = {row['module']: {'source': row['source']} for row in portable['hooks']}
+    if providers:
+        result['config']['providers'] = portable['providers']
     return result
 
 
@@ -119,6 +132,8 @@ def template(service, source):
     if sources:
         config['sourceSettings'] = sources
     legacy = fingerprint(config)
+    from .host.components import portable_module_sources
+    config['plan'] = plan = portable_module_sources(plan, service.data_dir)
     config['controls'] = normalized_controls(controls, selection)
     categories = {key: config.get(key) for key in ('workspace', 'bundle', 'selection', 'sourceSettings', 'location')}
     from .runtime_controls import PLAN_KEYS
@@ -199,6 +214,8 @@ def apply(service, target, config):
         if any(configured.module_sources.get(name) != value for name, value in expected.items()):
             raise ValueError('The new conversation cannot preserve the reviewed module sources; no task was started.')
     # The existing configuration override/restore mechanism owns these files.
-    write_private(directory / 'configuration.json', json.dumps(config['plan']))
+    from .host.components import portable_module_sources
+    write_private(directory / 'configuration.json',
+                  json.dumps(portable_module_sources(config['plan'], service.data_dir)))
     write_private(directory / 'control-state.json', json.dumps(config['controls']))
     if config['selection']: target['selection'] = copy.deepcopy(config['selection'])

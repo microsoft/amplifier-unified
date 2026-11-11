@@ -149,7 +149,7 @@ def environment_repaired(manager, batch):
     import os
     import stat
     from .host.config import missing_environment_available
-    failure = manager.diagnostics.state.get('lastFailure') or {}
+    failure = batch.get('failure') or manager.diagnostics.state.get('lastFailure') or {}
     if ((batch.get('retry') or {}).get('mode') != 'changed-inputs'
             or failure.get('attemptId') != batch.get('attemptId')
             or (failure.get('reason') or failure.get('probe', {}).get('reason')) != 'missing-configured-environment'):
@@ -189,27 +189,20 @@ def environment_repaired(manager, batch):
         return False  # Absent/expired/malformed evidence never grants retry.
 
 
-def retry_decision(batch, key, *, now=None):
+def retry_decision(batch, key):
     retry = batch.get('retry') or {}
     if retry.get('mode') == 'inspect':
         return 'inspect'  # Changed inputs cannot prove an uncertain effect absent.
     if retry.get('inputKey') != key:
         return None
-    if retry.get('mode') in {'changed-inputs', 'inspect'}:
-        return retry['mode']
-    if retry.get('retryAt', 0) > (time.time() if now is None else now):
-        return 'backoff'
-    return None
+    # Saved legacy deadlines/counters are not evidence of a changed input.
+    # The same failure owner admits a deliberate Install; Check and ticks do not.
+    return 'changed-inputs' if retry else None
 
 
-def record_retry(batch, key, failure, previous=None):
-    reason = failure.get('reason') or failure.get('probe', {}).get('reason')
-    previous = previous or {}
-    count = previous.get('attempts', 0) + 1 if previous.get('inputKey') == key else 1
-    mode = ('inspect' if failure.get('status') == 'interrupted' else
-            'changed-inputs' if reason in DETERMINISTIC else 'backoff')
-    batch['retry'] = {'inputKey': key, 'mode': mode, 'attempts': count,
-                      'retryAt': time.time() + min(3600, 60 * 2 ** min(count - 1, 6))}
+def record_retry(batch, key, failure):
+    batch['retry'] = {'inputKey': key, 'mode':
+                      'inspect' if failure.get('status') == 'interrupted' else 'changed-inputs'}
 
 
 def pointer_witness(manager):
@@ -227,27 +220,27 @@ def pointer_witness(manager):
 
 def pending_preparation(diagnostics):
     """One unresolved component operation, independent of the display batch."""
-    if 'componentPreparation' in diagnostics:
-        return diagnostics['componentPreparation']
-    batch = diagnostics.get('batch', {})
+    batch = diagnostics.get('componentPreparation', diagnostics.get('batch', {}))
     return batch if (batch.get('retry') or {}).get('mode') == 'inspect' else None
 
 
 def retain_preparation(diagnostics):
     """Preserve exact existing proof before another domain replaces its batch."""
     import copy
-    if 'componentPreparation' in diagnostics:
+    if (diagnostics.get('componentPreparation', {}).get('retry') or {}).get('mode') == 'inspect':
         return
     batch = diagnostics.get('batch', {})
-    if (batch.get('retry') or {}).get('mode') != 'inspect':
+    if batch.get('kind') != 'ecosystem' or not batch.get('retry'):
         return
     terminal = next((row for row in reversed(diagnostics.get('events', []))
         if row.get('attemptId') == batch.get('attemptId') and
-        row.get('phase') == 'ecosystem-stage' and row.get('status') == 'interrupted'), None)
+        row.get('phase') == 'ecosystem-stage' and row.get('status') in {'failed','interrupted'}), None)
     diagnostics['componentPreparation'] = copy.deepcopy({
         'attemptId': batch.get('attemptId'), 'kind': batch.get('kind'),
         'revision': diagnostics.get('revision'), 'retry': batch.get('retry'),
-        'preparation': batch.get('preparation'), 'terminal': terminal})
+        'preparation': batch.get('preparation'), 'terminal': terminal,
+        'failure': diagnostics.get('lastFailure') if
+            diagnostics.get('lastFailure', {}).get('attemptId') == batch.get('attemptId') else None})
 
 
 async def candidate_copy(proof, operation, *args):
@@ -333,7 +326,7 @@ def failure_events(state):
     return rows
 
 
-def current(state, evidence=None, *, manual_verified=None):
+def current(state, evidence=None, *, manual_verified=None, explicit_retry=False):
     """Pure projection of operation/desired/active state; no IO and no read flags."""
     evidence = evidence or {}
     seq = state.get('sequence') or {}
@@ -372,9 +365,11 @@ def current(state, evidence=None, *, manual_verified=None):
     if retained and not state.get('available'):
         updated = sum(row.get('status') == 'updated' for row in outcomes)
         return result('action-required', 'Some components kept their working versions',
-                      f'{updated} source records updated; {len(retained)} retained after a source failure or dependency hold. '
-                      'New work uses the qualified combination. Check manually to retry; prior failures remain in history.',
-                      action='sources')
+                      f'{updated} source records updated; {len(retained)} retained after a source failure or dependency hold. ' +
+                      ('New work uses the qualified combination. Install explicitly to retry; prior failures remain in history.'
+                       if explicit_retry else
+                       'New work uses the qualified combination. Check source availability before retrying; prior failures remain in history.'),
+                      action='install' if explicit_retry else 'sources')
     local_changes = [r for r in state.get('items', []) if r.get('status') == 'local_changes']
     issues = [r for r in state.get('items', []) if r.get('status') == 'check_failed'
               and r.get('id') != 'application' and r.get('kind') != 'app']
@@ -455,8 +450,6 @@ def current(state, evidence=None, *, manual_verified=None):
         failure = max(remaining, key=lambda row: row.get('at', 0), default=diagnostics.get('lastFailure') or {})
         reason = failure.get('reason') or failure.get('probe', {}).get('reason')
         component = failure.get('package') or failure.get('probe', {}).get('package') or failure.get('component')
-        if retry.get('mode') == 'backoff' and retry.get('retryAt', 0) > time.time() and phase != 'interrupted':
-            return result('retrying', 'Update will retry later', 'The current installation is kept. A transient failure is waiting for a bounded retry; details remain in history.')
         if reason in DETERMINISTIC:
             return result('protected', 'Component source needs review',
                           failure_guidance(failure) or 'A source or configuration conflict prevented this update. Current components remain active. Review source settings or share diagnostics; unchanged automatic attempts are paused.',
@@ -506,15 +499,29 @@ def publish(manager):
             return
         evidence = {}
     state['currentStatus'] = current(state, evidence,
-        manual_verified=getattr(manager, '_manual_handoff_verified', None))
+        manual_verified=getattr(manager, '_manual_handoff_verified', None),
+        explicit_retry=(getattr(manager, '_update_health_configuration_revision', revision) == revision
+                        and getattr(manager, '_retained_retry_available', False)))
 
 
 async def refresh(manager):
     import asyncio
     revision = manager.service.state.get('configurationRevision')
     evidence = await asyncio.to_thread(active_evidence, manager)
+    from .update_partial import retained_after_check
+    from .update_sequence import verify_app_selection
+    def retry_action():
+        try:
+            rows = getattr(manager, 'inventory', [])
+            verify_app_selection(manager, rows)
+            return retained_after_check(manager, rows, retry_retained=False)
+        except (OSError, ValueError, TypeError, KeyError):
+            return False  # Missing/stale selection proof never offers a retry.
+    retry_available = await asyncio.to_thread(retry_action)
     if revision == manager.service.state.get('configurationRevision'):
         manager._active_update_evidence = evidence
         manager._update_health_configuration_revision = revision
+        manager._retained_retry_available = retry_available
     else:
         manager._active_update_evidence = {}
+        manager._retained_retry_available = False

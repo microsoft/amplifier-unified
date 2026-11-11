@@ -6,6 +6,7 @@ import pytest
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.session_store import fork_session, complete_tool_exchanges
 from amplifier_web.service import AppService, AppError
+from test_runtime_controls import managed_module_source
 
 
 def transcript():
@@ -103,6 +104,29 @@ def test_fork_keeps_full_system_tool_context_and_configuration_without_job_owner
     # Subsequent standalone checkpoints retain an explicitly forked system row.
     store.save('fork-session',messages,metadata)
     assert store.load('fork-session')[0][0]['role']=='system'
+
+
+@pytest.mark.parametrize('filename', ['configuration.json', 'effective-configuration.json'])
+def test_fork_retains_portable_module_identity_without_rewriting_source(managed_module_source, filename):
+    c = managed_module_source
+    src = {**source(), 'workspace': str(c.home.parent)}
+    store = SessionStore.for_app(c.home, src['workspace'])
+    store.save(src['id'], transcript(), {}, preserve_system=True)
+    directory = c.home / 'sessions' / src['id']
+    directory.mkdir(parents=True)
+    plan = {'tools': [{'module': 'tool-fixture', 'source': str(c.module),
+                       'config': {'path': str(c.module)}}],
+            'agents': {'worker': {'hooks': [{'module': 'hook-fixture', 'source': str(c.module)}]}}}
+    path = directory / filename
+    path.write_text(json.dumps(plan))
+    before = path.read_bytes()
+    fork_session(c.home, src, 'portable-fork')
+    saved = json.loads((c.home / 'sessions/portable-fork/configuration.json').read_text())
+    assert saved['tools'][0]['source'] == c.portable
+    assert saved['agents']['worker']['hooks'][0]['source'] == c.portable
+    assert saved['tools'][0]['config'] == plan['tools'][0]['config']
+    assert path.read_bytes() == before
+    assert store.load(src['id'])[0] == store.load('portable-fork')[0]
 
 
 def test_interrupted_calls_get_historical_error_receipts_not_replayed():

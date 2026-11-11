@@ -9,6 +9,7 @@ from amplifier_web.module_failures import ConfiguredModuleError
 from amplifier_web.provider_environment import credential_bindings, rebind_provider_credentials
 from amplifier_web.provider_isolation import ProviderIsolation
 from amplifier_web.runtime_controls import public_config
+from test_runtime_controls import managed_module_source
 
 
 DEFINITIONS = {"provider-fixture": "hooks-fixture-decisions"}
@@ -266,6 +267,123 @@ def test_child_resume_restores_saved_decisions_and_rebinds_only_current_exact_ac
     current["providers"][1]["source"] += "-changed"
     with pytest.raises(ValueError, match="no longer authorized"):
         accounts.restore_child_accounts(copy.deepcopy(current), saved, current)
+
+
+@pytest.mark.parametrize("scope", ["self", "named-agent"])
+@pytest.mark.parametrize("retained_form", ["logical", "projected"])
+def test_retained_child_portable_source_survives_admission_resume_and_projection(
+        managed_module_source, tmp_path, scope, retained_form):
+    """Use the same guard/composition/restore sequence as Children._execute_admitted."""
+    from amplifier_foundation.bundle import BundleModuleResolver
+    from amplifier_web.host.children import child_plan
+
+    c = managed_module_source
+    legacy = {**account(), "source": str(c.module)}
+    retained = credential_bindings({"providers": [legacy]})
+    if retained_form == "projected":
+        retained = project(retained).plan
+    path = tmp_path / "retained-child.json"
+    path.write_text(json.dumps(retained))
+    retained_bytes = path.read_bytes()
+    current = {**account(key="rotated-exact-account-key"), "source": c.portable}
+    current["config"]["decisions"]["enabled"] = False
+    parent_plan = {"providers": [current]}
+    if scope == "named-agent":
+        # A selected nested agent's declaration becomes this child's root
+        # overlay; the functions do not restore unrelated dormant agents.
+        parent_plan["agents"] = {"helper": {"providers": [copy.deepcopy(current)]}}
+    parent = project(parent_plan).plan
+    overlay = {"providers": [{"module": "provider-fixture", "instance_id": "one",
+                              "source": str(c.module)}]}
+    original = copy.deepcopy((parent, overlay, retained))
+    accounts.check_child_sources(parent, overlay)
+    plan = child_plan(parent, overlay)
+    current_overlay = parent.get("agents", {}).get("helper", {}) if scope == "named-agent" else {}
+    authorized = child_plan(parent, current_overlay)
+    before_authorized = copy.deepcopy(authorized)
+    restored = accounts.restore_child_accounts(plan, retained, authorized)
+    row = restored["providers"][0]
+    assert row["source"] == c.portable
+    assert row["instance_id"] == "one"
+    assert row["config"]["api_key"] == "rotated-exact-account-key"
+    assert row["config"]["decisions"] == legacy["config"]["decisions"]
+    assert authorized == before_authorized
+    assert (parent, overlay, retained) == original
+    assert path.read_bytes() == retained_bytes
+    # The resumed account must still resolve only its exact prepared source.
+    projection = project(restored)
+    resolver = accounts.AccountResolver(BundleModuleResolver(
+        {"provider-fixture": c.module},
+        source_paths={("provider-fixture", c.portable): c.module}),
+        projection.aliases)
+    assert resolver.resolve("hooks-fixture-decisions", c.portable).resolve() == c.module
+    assert accounts.logical_plan(projection.plan)["providers"] == restored["providers"]
+    assert ("hooks-fixture-decisions", str(c.module)) not in projection.aliases
+    with pytest.raises(ValueError, match="authorized account"):
+        resolver.resolve("hooks-fixture-decisions", c.portable.replace(c.commit, "f" * 40))
+
+
+@pytest.mark.parametrize("change", [
+    "revision", "instance", "module", "dirty", "missing-provenance",
+    "external-local", "disabled", "duplicate",
+])
+def test_retained_child_portable_equivalence_cannot_authorize_another_identity(
+        managed_module_source, tmp_path, change):
+    c = managed_module_source
+    retained = credential_bindings({"providers": [{**account(), "source": str(c.module)}]})
+    current = {"providers": [{**account(key="current-private-key"), "source": c.portable}]}
+    if change == "revision":
+        current["providers"][0]["source"] = c.portable.replace(c.commit, "f" * 40)
+    elif change == "instance":
+        current["providers"][0]["instance_id"] = "other"
+    elif change == "module":
+        current["providers"][0]["module"] = "provider-other"
+    elif change == "dirty":
+        c.code.write_text(c.code.read_text().replace("VERSION = 1", "VERSION = 9"))
+    elif change == "missing-provenance":
+        c.metadata.unlink()
+    elif change == "external-local":
+        local = tmp_path / "independent-local"
+        c.root.rename(local)
+        retained["providers"][0]["source"] = str(local / c.module.relative_to(c.root))
+    elif change == "disabled":
+        current["providers"][0]["enabled"] = False
+    else:
+        current["providers"].append(copy.deepcopy(current["providers"][0]))
+    before = copy.deepcopy((retained, current))
+    plan = copy.deepcopy(current)
+    with pytest.raises(ValueError, match="no longer authorized"):
+        accounts.restore_child_accounts(plan, retained, current)
+    assert plan == current
+    # Admission protects same-instance inherited credentials. A different
+    # instance is a separate declaration, not authority to resume the saved one.
+    if change not in {"instance", "disabled", "duplicate"}:
+        with pytest.raises(ValueError, match="inherited account source"):
+            accounts.check_child_sources(current, retained)
+    assert (retained, current) == before
+
+
+@pytest.mark.parametrize("operation", ["admit", "resume"])
+@pytest.mark.parametrize("nested", [False, True])
+def test_child_projection_validation_precedes_portable_equivalence(
+        managed_module_source, monkeypatch, operation, nested):
+    c = managed_module_source
+    old = {"providers": [{**account(), "source": str(c.module)}]}
+    forged = project(old).plan
+    # Even an equivalent portable URI is not permission to fix a mismatched
+    # hook/envelope/record projection before its existing validation runs.
+    forged["hooks"][0]["source"] = c.portable
+    if nested:
+        forged = {"providers": [account()], "agents": {"helper": forged}}
+    before = copy.deepcopy(forged)
+    monkeypatch.setattr("amplifier_web.host.components.portable_module_sources",
+                        lambda *a, **kw: pytest.fail("Projection must validate first"))
+    with pytest.raises(ValueError, match="logical account/source"):
+        if operation == "admit":
+            accounts.check_child_sources(old, forged)
+        else:
+            accounts.restore_child_accounts(copy.deepcopy(old), forged, old)
+    assert forged == before
 
 
 def test_real_core_child_decision_hook_and_resume(tmp_path):
