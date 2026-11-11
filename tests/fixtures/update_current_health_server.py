@@ -121,7 +121,8 @@ async def main(home):
             args=(*args[:-2],str(remote),new)
         return await original_process(*args,**kwargs)
     async def application():
-        if retry['enabled']:return {**state['application'],'status':'current'}
+        if retry['enabled']:return {**state['application'],'id':'application','kind':'app',
+                                   'label':'Amplifier Unified','status':'current'}
         return await original_check()
     async def build(*args,**kwargs):
         if not retry['enabled']:return await original_build(*args,**kwargs)
@@ -158,6 +159,11 @@ async def main(home):
                 'pendingRelease':state.get('pendingRelease'),
                 'candidateValidated':bool(candidate and (manager.directory/'releases'/candidate/'validated.json').exists()),
                 'failure':{name:failure.get(name) for name in ('phase','status','errorType')},
+                'inventory':[{name:item.get(name) for name in
+                    ('id','status','current','latest','eligible','availabilityFailure','sourceUpdate','appSelection')}
+                    for item in manager.inventory],
+                'retainedRetryAvailable':getattr(manager,'_retained_retry_available',False),
+                'checkError':state.get('error'),
                 'available':state.get('available'),'status':state['currentStatus']}
     async def transition(request):
         if request.headers.get('Authorization')!='Bearer fixture-browser-control-token':raise web.HTTPForbidden()

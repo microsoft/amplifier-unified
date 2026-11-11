@@ -58,7 +58,7 @@ try{
   for(const path of new Set(paths))await verifiedBody(path,component.assets[path.slice(1)]);
   result.servedEntrypointAssetHashes=true;result.selectedClient=component.source;result.clientBuild=component.build;
  }
- const errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(boot.url);await page.waitForSelector('#amp-one');await openSettingsPage(page,'updates');
+ const errors=result.pageErrors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(boot.url);await page.waitForSelector('#amp-one');await openSettingsPage(page,'updates');
  const panel=page.locator('[data-part="updates"]'),status=page.locator('[data-part="application-update"]').first();
  await expect(status).toContainText('You’re up to date');await expect(panel.locator('.a-update-current-action')).toHaveCount(0);
  assert.equal((await (await page.request.get(boot.url+'/fixture/current-update')).json()).originalHistoryUnchanged,true);
@@ -136,8 +136,12 @@ try{
   const response=await page.request.get(boot.url+'/fixture/current-update');assert.ok(response.ok());
   return (await response.json()).retry;
  };
+ result.retryTransitions=[];
  for(const mode of ['known','unknown','missing','stale','live-configuration']){
-  await transition('retry-'+mode);
+  const receipt=await transition('retry-'+mode);
+  result.retryTransitions.push({mode,...receipt});
+  assert.equal(receipt.status.action,mode==='known'?'install':receipt.status.action,
+   'The real host must certify a known retained retry before checking its button');
   if(mode==='known')await expect(retryButton).toBeVisible();
   else await expect(retryButton).toHaveCount(0);
   const observation=await observeRetry();
