@@ -173,6 +173,14 @@ it can change the conclusion. Keep diagnostic collection bounded and sensitive
 receipts private. Public evidence uses synthetic data, counts and hashes rather
 than transcript bodies, credentials or private environment details.
 
+The automatic private `startup-timing.json` receipt records
+`worker.runtime.verify.before_prepare` and `worker.runtime.verify.after_prepare`
+only when the worker calls the existing runtime verification at those boundaries.
+These fixed labels preserve caller overrides, source checks and mutation refusal;
+they record no paths or configuration. A row proves that call ran; a missing row
+alone cannot distinguish a skipped branch from startup failing before the call.
+They do not retrospectively attribute gaps in earlier receipts.
+
 `AMPLIFIER_RUNTIME_TIMING=1` is a startup-only, explicit opt-in for content-free
 worker preparation and checkpoint phases in the existing bounded timing ring.
 It records context view/factory, surface preparation, provider budget/refit and
