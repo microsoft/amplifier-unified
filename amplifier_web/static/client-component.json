@@ -3,7 +3,7 @@
   "kind": "unified-web-static-artifact",
   "source": {
     "repository": "https://github.com/microsoft/amplifier-client-web",
-    "revision": "71c6662820b6aeb2dbddf24a1cef0becc84f262c"
+    "revision": "49d9ff3501d64f1e8a59a9e5e445a8f4a2336d42"
   },
   "sharedInputs": {
     "source": {
