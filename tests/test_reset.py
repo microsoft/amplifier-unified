@@ -838,3 +838,21 @@ def test_cli_conversion_failure_does_not_suggest_network_repair(tmp_path, monkey
     assert moves == []
     assert all(path.read_bytes() == saved.before for path in saved.paths)
     assert saved.module.exists()
+
+
+@pytest.mark.skipif(not os.environ.get("AMPLIFIER_RESET_TEST_PREFIX"),
+                    reason="explicit isolated installed-package reset bridge")
+def test_cli_conversion_uses_fresh_installed_interpreter(tmp_path, legacy_saved_plan):
+    prefix = Path(os.environ["AMPLIFIER_RESET_TEST_PREFIX"])
+    home = tmp_path / "app"
+    saved = legacy_saved_plan(home)
+    backup = home / "reset-backups/fixture"
+    backup.mkdir(parents=True)
+    moves = []
+    # No command/provenance mocks: -I must import the installed candidate.
+    reset.prepare_saved_configurations(prefix, home, backup, reset.environment(), moves)
+    assert len(moves) == 2
+    for path in saved.paths:
+        assert json.loads(path.read_bytes())["tools"][0]["source"] == saved.portable
+        assert (backup / path.relative_to(home)).read_bytes() == saved.before
+    assert saved.module.exists()  # Conversion does not perform cache retirement.
