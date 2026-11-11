@@ -458,25 +458,28 @@ def retained_after_check(manager, rows, *, retry_retained):
     from .updates import active_release
     generation = active_release(manager.home).get('current')
     if not generation:
-        return
+        return False
     partial = read(manager.directory / 'releases' / generation)
     if not partial or partial.get('selection') != sorted({r['appSelection'] for r in rows if r.get('appSelection')}):
-        return
+        return False
     retained = {key(value['source']): value for value in partial['results'].values()
                 if value['status'] in {'failed', 'dependency-held'}}
+    retry_available = False
     for row in rows:
         prior = retained.get(key(row)) if row.get('url') and row.get('ref') else None
         if (not prior or prior['status'] not in {'failed', 'dependency-held'}
                 or not row.get('url') or key(row) != key(prior['source'])
                 or row.get('current') != prior['revision']):
             continue
-        # Only deliberate Install may retry this exact receipt-derived hold.
-        if (retry_retained and row.get('status') == 'check_failed'
-                and row.get('availabilityFailure') is True and row.get('sourceUpdate') == prior['status']
-                and isinstance(row.get('latest'), str) and re.fullmatch('[a-f0-9]{40}', row['latest'])
-                and row['latest'] != row['current']
-                and row.get('latest') == prior.get('desired')):
-            row.update(status='update')
         if not retry_retained and row.get('status') == 'update' and row.get('latest') == prior.get('desired'):
             row.update(status='check_failed', sourceUpdate=prior['status'], availabilityFailure=True,
                        detail='The working version is retained. Install explicitly to retry this source.')
+        # One predicate owns both the visible explicit action and its admission.
+        if (row.get('status') == 'check_failed' and row.get('eligible') is True
+                and row.get('availabilityFailure') is True and row.get('sourceUpdate') == prior['status']
+                and isinstance(row.get('latest'), str) and re.fullmatch('[a-f0-9]{40}', row['latest'])
+                and row['latest'] != row['current'] and row.get('latest') == prior.get('desired')):
+            retry_available = True
+            if retry_retained:
+                row.update(status='update')
+    return retry_available

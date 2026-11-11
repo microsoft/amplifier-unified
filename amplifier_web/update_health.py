@@ -326,7 +326,7 @@ def failure_events(state):
     return rows
 
 
-def current(state, evidence=None, *, manual_verified=None):
+def current(state, evidence=None, *, manual_verified=None, explicit_retry=False):
     """Pure projection of operation/desired/active state; no IO and no read flags."""
     evidence = evidence or {}
     seq = state.get('sequence') or {}
@@ -365,9 +365,11 @@ def current(state, evidence=None, *, manual_verified=None):
     if retained and not state.get('available'):
         updated = sum(row.get('status') == 'updated' for row in outcomes)
         return result('action-required', 'Some components kept their working versions',
-                      f'{updated} source records updated; {len(retained)} retained after a source failure or dependency hold. '
-                      'New work uses the qualified combination. Install explicitly to retry; prior failures remain in history.',
-                      action='sources')
+                      f'{updated} source records updated; {len(retained)} retained after a source failure or dependency hold. ' +
+                      ('New work uses the qualified combination. Install explicitly to retry; prior failures remain in history.'
+                       if explicit_retry else
+                       'New work uses the qualified combination. Check source availability before retrying; prior failures remain in history.'),
+                      action='install' if explicit_retry else 'sources')
     local_changes = [r for r in state.get('items', []) if r.get('status') == 'local_changes']
     issues = [r for r in state.get('items', []) if r.get('status') == 'check_failed'
               and r.get('id') != 'application' and r.get('kind') != 'app']
@@ -497,15 +499,29 @@ def publish(manager):
             return
         evidence = {}
     state['currentStatus'] = current(state, evidence,
-        manual_verified=getattr(manager, '_manual_handoff_verified', None))
+        manual_verified=getattr(manager, '_manual_handoff_verified', None),
+        explicit_retry=(getattr(manager, '_update_health_configuration_revision', revision) == revision
+                        and getattr(manager, '_retained_retry_available', False)))
 
 
 async def refresh(manager):
     import asyncio
     revision = manager.service.state.get('configurationRevision')
     evidence = await asyncio.to_thread(active_evidence, manager)
+    from .update_partial import retained_after_check
+    from .update_sequence import verify_app_selection
+    def retry_action():
+        try:
+            rows = getattr(manager, 'inventory', [])
+            verify_app_selection(manager, rows)
+            return retained_after_check(manager, rows, retry_retained=False)
+        except (OSError, ValueError, TypeError, KeyError):
+            return False  # Missing/stale selection proof never offers a retry.
+    retry_available = await asyncio.to_thread(retry_action)
     if revision == manager.service.state.get('configurationRevision'):
         manager._active_update_evidence = evidence
         manager._update_health_configuration_revision = revision
+        manager._retained_retry_available = retry_available
     else:
         manager._active_update_evidence = {}
+        manager._retained_retry_available = False
