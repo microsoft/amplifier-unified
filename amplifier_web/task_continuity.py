@@ -872,7 +872,8 @@ async def dispatch(service, operation, args, origin, command_id, include_state, 
         projected["publication"] = publication
         projected["currentRevision"] = current_revision
         projected["snapshotIsCurrent"] = (None if projected["currentRevision"] is None
-                                         else returned.get("revision", 0) == projected["currentRevision"])
+                                         else publication["status"] == "published"
+                                         and returned.get("revision", 0) == projected["currentRevision"])
         projected["currentRef"] = _ref("task.get", sid)
         if result.get("duplicate"):
             projected["duplicate"] = True

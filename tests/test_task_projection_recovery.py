@@ -250,3 +250,34 @@ def test_same_task_progress_never_reads_control_history(tmp_path, monkeypatch):
                         Mock(side_effect=AssertionError('ordinary task progress must not read persisted history')))
     assert task_continuity.observe_task(service, session, {'task': {**old, 'revision': 4}}) == (True, 4)
     assert task_continuity.observe_task(service, session, {'task': old}) == (False, 4)
+
+
+async def test_delayed_other_task_equal_revision_reply_is_not_current(app, monkeypatch):
+    source = app.state['sessions'][0]
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(app.data_dir))
+    native = controls(source['id'])
+    try:
+        await create(native)
+        await native.perform('task.update', {'commandId': 'progress-B', 'expectedRevision': 1,
+                                            'correction': 'Current task B'})
+        current = native.tasks.canonical_snapshot()
+        task_continuity.publish_task_observation(app, source['id'], current)
+        old = {**copy.deepcopy(current['task']), 'id': 'old-task-A', 'status': 'completed'}
+        receipt = {'commandId': 'old-task-reply', 'taskId': old['id'], 'revision': old['revision'],
+                   'action': 'task.complete', 'status': 'completed'}
+        saved = native.state_path().read_bytes()
+        async def delayed(*args, **kwargs):
+            return {'task': old, 'history': [], 'goal': None, 'receipt': copy.deepcopy(receipt)}
+        monkeypatch.setattr(app.runtime, 'control', delayed, raising=False)
+        monkeypatch.setattr(app.management, 'ensure_runtime', AsyncMock())
+        result = (await task_continuity.dispatch(app, 'task.complete', {
+            'sessionId': source['id'], 'expectedRevision': 1, 'condition': old['objective'],
+            'evidence': ['Historical result']}, 'agent', 'old-task-reply', False))['result']
+        assert result['publication'] == {'status': 'superseded'}
+        assert result['currentRevision'] == old['revision'] == current['task']['revision']
+        assert result['snapshotIsCurrent'] is False
+        assert result['task']['id'] == old['id'] and result['receipt'] == receipt
+        assert source['task'] == current['task']
+        assert native.state_path().read_bytes() == saved
+    finally:
+        await native.close()
