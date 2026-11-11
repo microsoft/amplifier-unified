@@ -229,7 +229,7 @@ try{
    assert.deepEqual(await sendFacts(test),{posts:[],sends:[],retries:[]},'Reload never replays a refused input');
    if(kind==='host'){
     const row=test.tab.locator('.a-user').filter({hasText:entry.text});
-    await expect(row.getByText('Not sent',{exact:true})).toBeVisible();
+    await expect(row.locator('.a-message-delivery')).toContainText('Not sent');
     await expect(row.getByRole('button',{name:'Check delivery',exact:true})).toHaveCount(0);
     await test.tab.screenshot({path:'/artifacts/delivery-not-posted-desktop.png'});
     await test.tab.setViewportSize({width:390,height:844});
