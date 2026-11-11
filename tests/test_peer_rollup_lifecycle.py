@@ -1,5 +1,6 @@
 """Event-controlled cold window/proof ownership, not elapsed-time cleanup proof."""
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import copy
 import threading
 
@@ -10,6 +11,23 @@ from test_peer_preview import app, make_cold
 from test_peer_rollup_proof import long_receiver
 
 
+@pytest.fixture(autouse=True)
+async def reader_executor(app):
+    """Exactly eight worker slots; readiness observers must use none of them."""
+    loop = asyncio.get_running_loop()
+    # Materialize the prior default through its public API before replacing it.
+    await loop.run_in_executor(None, lambda: None)
+    previous = loop._default_executor
+    owned = ThreadPoolExecutor(max_workers=8, thread_name_prefix='peer-lifecycle-test')
+    loop.set_default_executor(owned)
+    try:
+        yield
+    finally:
+        await app[0].history.windows.close()
+        loop.set_default_executor(previous)
+        owned.shutdown(wait=True)
+
+
 @pytest.mark.parametrize('stage', ['window', 'qualification'])
 @pytest.mark.parametrize('entrypoint', ['read', 'load'])
 async def test_close_drains_whole_cold_pipeline_without_late_cache_publication(app, monkeypatch, stage, entrypoint):
@@ -17,18 +35,19 @@ async def test_close_drains_whole_cold_pipeline_without_late_cache_publication(a
     long_receiver(service, receiving)
     receiving = make_cold(service, receiving, copy.deepcopy(receiving['messages']))
     windows = service.history.windows
-    window_entered, window_release = threading.Event(), threading.Event()
-    proof_entered, proof_release = threading.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    window_entered, window_release = asyncio.Event(), threading.Event()
+    proof_entered, proof_release = asyncio.Event(), threading.Event()
     original_window, original_proof = saved_message_window.read_saved_window, windows.peer_originals.cold
 
     def window(*args, **kwargs):
         result = original_window(*args, **kwargs)
-        window_entered.set()
+        loop.call_soon_threadsafe(window_entered.set)
         assert window_release.wait(10)
         return result
 
     def qualify(*args):
-        proof_entered.set()
+        loop.call_soon_threadsafe(proof_entered.set)
         assert proof_release.wait(10)
         return original_proof(*args)
 
@@ -38,10 +57,10 @@ async def test_close_drains_whole_cold_pipeline_without_late_cache_publication(a
         read = asyncio.create_task(getattr(windows, entrypoint)(receiving['id']))
         close = None
         try:
-            assert await asyncio.wait_for(asyncio.to_thread(window_entered.wait), 5)
+            await asyncio.wait_for(window_entered.wait(), 5)
             if stage == 'qualification':
                 window_release.set()
-                assert await asyncio.wait_for(asyncio.to_thread(proof_entered.wait), 5)
+                await asyncio.wait_for(proof_entered.wait(), 5)
             closing = asyncio.Event()
             async def drain():
                 closing.set()
@@ -50,7 +69,7 @@ async def test_close_drains_whole_cold_pipeline_without_late_cache_publication(a
             await closing.wait()  # close has set closed and yielded in its drain.
             assert windows.closed and not close.done()
             window_release.set()
-            assert await asyncio.wait_for(asyncio.to_thread(proof_entered.wait), 5)
+            await asyncio.wait_for(proof_entered.wait(), 5)
             assert not close.done(), 'Shutdown lost the physical qualification phase'
             with pytest.raises(ValueError, match='closed'):
                 await windows.read(receiving['id'])
@@ -74,8 +93,9 @@ async def test_eight_admissions_keep_same_jobs_across_phases_and_http_cancellati
     long_receiver(service, receiving)
     receiving = make_cold(service, receiving, copy.deepcopy(receiving['messages']))
     windows = service.history.windows
-    window_entered, window_release = threading.Event(), threading.Event()
-    proof_entered, proof_release = threading.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    window_entered, window_release = asyncio.Event(), threading.Event()
+    proof_entered, proof_release = asyncio.Event(), threading.Event()
     counts, mutex = {'window': 0, 'proof': 0}, threading.Lock()
     original_window, original_proof = saved_message_window.read_saved_window, windows.peer_originals.cold
 
@@ -84,7 +104,7 @@ async def test_eight_admissions_keep_same_jobs_across_phases_and_http_cancellati
         with mutex:
             counts['window'] += 1
             if counts['window'] == 8:
-                window_entered.set()
+                loop.call_soon_threadsafe(window_entered.set)
         assert window_release.wait(10)
         return result
 
@@ -92,7 +112,7 @@ async def test_eight_admissions_keep_same_jobs_across_phases_and_http_cancellati
         with mutex:
             counts['proof'] += 1
             if counts['proof'] == 8:
-                proof_entered.set()
+                loop.call_soon_threadsafe(proof_entered.set)
         assert proof_release.wait(10)
         return original_proof(*args)
 
@@ -101,13 +121,13 @@ async def test_eight_admissions_keep_same_jobs_across_phases_and_http_cancellati
     with service.clients.bind('preview-client'):
         readers = [asyncio.create_task(windows.read(receiving['id'])) for _ in range(8)]
         try:
-            assert await asyncio.wait_for(asyncio.to_thread(window_entered.wait), 5)
+            await asyncio.wait_for(window_entered.wait(), 5)
             admitted = set(windows.jobs)
             assert len(admitted) == 8
             with pytest.raises(ValueError, match='busy'):
                 await windows.read(receiving['id'])
             window_release.set()
-            assert await asyncio.wait_for(asyncio.to_thread(proof_entered.wait), 5)
+            await asyncio.wait_for(proof_entered.wait(), 5)
             assert windows.jobs == admitted, 'Stage two must not drop or reacquire admission'
             readers[0].cancel()
             with pytest.raises(asyncio.CancelledError):
