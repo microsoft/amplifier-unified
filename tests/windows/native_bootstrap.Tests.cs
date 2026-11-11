@@ -64,6 +64,27 @@ namespace UnifiedBootstrap {
             Need(NativeInstaller.Main(new string[0])==1);
             Need(NativeInstaller.Main(new[]{"--prototype-manifest"})==1);
             Need(NativeInstaller.Main(new[]{"--background","--background"})==1);
+            var app=new Dictionary<string,object>{{"name","amplifier-unified"},{"version","1.2.3"}};
+            var registry=new Dictionary<string,object>{{"name","registry-wheel"},{"version","2.0.0"}};
+            var git=new Dictionary<string,object>{{"name","amplifier-foundation"},{"version","1.0.0"},
+                {"url","https://github.com/microsoft/amplifier-foundation"},{"revision",new string('a',40)}};
+            Need(NativeInstaller.ConsumerRequirements(new object[]{app,registry,git})==
+                "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@"+new string('a',40)+"\nregistry-wheel==2.0.0\n");
+            var deserialized=json.DeserializeObject(json.Serialize(new object[]{app,registry}));
+            Need(NativeInstaller.ConsumerRequirements(deserialized)=="registry-wheel==2.0.0\n");
+            foreach(var bad in new object[]{
+                "not an array",new object[]{registry},new object[]{app,app},
+                new object[]{app,new Dictionary<string,object>{{"name","evil\ncommand"},{"version","1"}}},
+                new object[]{app,new Dictionary<string,object>{{"name","amplifier-foundation"},{"version","1"},
+                    {"url","https://other.invalid/source"},{"revision",new string('a',40)}}},
+                new object[]{app,new Dictionary<string,object>{{"name","amplifier-foundation"},{"version","1"},
+                    {"url","https://github.com/microsoft/amplifier-foundation"},{"revision",new string('a',40)},
+                    {"subdirectory","../escape"}}}
+            }) {
+                bool refused=false;
+                try{NativeInstaller.ConsumerRequirements(bad);}catch(Exception){refused=true;}
+                Need(refused);
+            }
             Console.WriteLine("{\"ok\":true,\"assertions\":"+assertions+",\"actualCSharpParserAndWindowsArgv\":true,\"networkOrInstallEffects\":false}");
             return 0;
         }

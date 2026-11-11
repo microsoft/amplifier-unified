@@ -18,6 +18,8 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
+using System.Windows.Forms;
+using System.Drawing;
 
 namespace UnifiedBootstrap {
     internal static class NativeInstaller {
@@ -234,6 +236,146 @@ namespace UnifiedBootstrap {
             } finally { System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shell); }
             Storage.HoldFile(path,false); return path;
         }
+        internal static string ConsumerRequirements(object value) {
+            Need(value is object[] || value is ArrayList,"Invalid consumer graph.");
+            var rows=((IEnumerable)value).Cast<object>().Take(257).ToArray();
+            Need(rows.Length>0 && rows.Length<=256,"Invalid consumer graph.");
+            var lines=new List<string>(); var names=new HashSet<string>(StringComparer.Ordinal);
+            foreach(var raw in rows) {
+                var row=raw as Dictionary<string,object>; Need(row!=null,"Invalid consumer component.");
+                string name=Text(row,"name"), version=Text(row,"version");
+                Need(Regex.IsMatch(name,@"^[a-z0-9][a-z0-9-]*$") && names.Add(name) &&
+                    Regex.IsMatch(version,@"^[A-Za-z0-9.!+_-]+$"),"Invalid consumer component identity.");
+                if(name=="amplifier-unified") continue;
+                if(row.ContainsKey("url")) {
+                    string url=Text(row,"url"), revision=Text(row,"revision");
+                    Need(Regex.IsMatch(url,@"^https://github\.com/microsoft/amplifier[-a-z0-9]*(?:\.git)?$") &&
+                        Regex.IsMatch(revision,"^[a-f0-9]{40}$"),"Unqualified consumer source.");
+                    string subdir=row.ContainsKey("subdirectory")?Text(row,"subdirectory"):"";
+                    Need(subdir=="" || (Regex.IsMatch(subdir,@"^[A-Za-z0-9_/-]+$") &&
+                        subdir.Split('/').All(p=>p!="" && p!="." && p!="..")),"Unsafe component subdirectory.");
+                    lines.Add(name+" @ git+"+url+"@"+revision+(subdir==""?"":"#subdirectory="+subdir));
+                } else lines.Add(name+"=="+version);
+            }
+            Need(names.Contains("amplifier-unified"),"Consumer app identity missing.");
+            lines.Sort(StringComparer.Ordinal); return String.Join("\n",lines)+"\n";
+        }
+        static string ConsumerShortcut(string python, string root) {
+            string entry=Path.Combine(Path.GetDirectoryName(python),"pythonw.exe");
+            Need(File.Exists(entry),"Installed windowless launcher missing.");
+            string path=Path.Combine(root,"Launch Unified.lnk");
+            using(var file=Storage.CreateFile(path)) file.Flush(true);
+            dynamic shell=Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell",true));
+            try {
+                dynamic shortcut=shell.CreateShortcut(path);
+                try {
+                    shortcut.TargetPath=entry;
+                    shortcut.Arguments="-I -m amplifier_web.windows_consumer --root "+Quote(root);
+                    shortcut.WorkingDirectory=Path.Combine(root,"workspace");
+                    shortcut.Description="Amplifier Unified - start or reopen your background app";
+                    shortcut.Save();
+                } finally {System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shortcut);}
+            } finally {System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shell);}
+            Storage.HoldFile(path,false);return path;
+        }
+        static string InstallConsumer(string encoded) {
+            Platform();
+            byte[] planBytes=Convert.FromBase64String(encoded);
+            Need(planBytes.Length<=262144,"Consumer plan exceeds limit.");
+            var plan=Json.Deserialize<Dictionary<string,object>>(Utf8.GetString(planBytes));
+            Need(plan!=null && Text(plan,"kind")=="windows-consumer-preview" &&
+                plan["schema"] is int && (int)plan["schema"]==1 &&
+                Regex.IsMatch(Text(plan,"source"),"^[a-f0-9]{40}$") &&
+                Regex.IsMatch(Text(plan,"version"),@"^\d+\.\d+\.\d+$") &&
+                Regex.IsMatch(Text(plan,"python"),@"^3\.13\.\d+$"),"Invalid consumer release plan.");
+            var artifact=Object(plan,"artifact");
+            string version=Text(plan,"version");
+            string name="amplifier_unified-"+version+"-py3-none-any.whl";
+            Need(Text(artifact,"url")=="https://github.com/microsoft/amplifier-unified/releases/download/v"+version+"/"+name &&
+                Regex.IsMatch(Text(artifact,"sha256"),"^[a-f0-9]{64}$"),"Invalid consumer artifact.");
+            string python=null,root=null,shortcut=null;
+            using(Storage=new InstallStorage(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData))) {
+                root=Storage.Root;LogPath=Path.Combine(root,"install.log");PrivateText(LogPath,"");
+                foreach(string relative in new[]{"app","shared","ownership","capture","import","workspace","cache","python","python-bin","tools","tool-bin","temp"})
+                    Storage.EnsureDirectory(Path.Combine(root,relative));
+                foreach(string relative in new[]{"","cache","python","python-bin","tools","tool-bin","temp"})
+                    Storage.EnableToolWrites(Path.Combine(root,relative));
+                Stage="verified private prerequisites";
+                string uv=Helper("uv",NativePins.UvUrl,NativePins.UvHash,"uv.exe");
+                string git=Helper("git",NativePins.GitUrl,NativePins.GitHash,"cmd\\git.exe");
+                foreach(var license in NativePins.UvLicenses) {
+                    string notice=Path.Combine(root,"uv",license.Key);
+                    CopyOrDownload(NativePins.UvLicenseSource+"/"+license.Key,notice,1048576);
+                    CheckHash(notice,license.Value);
+                }
+                Need(File.Exists(Path.Combine(root,"git","LICENSE.txt")),"MinGit license missing.");
+                var env=EnvironmentFor(uv,git);
+                env["AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH"]=Path.Combine(root,"capture");
+                env["AMPLIFIER_UNIFIED_IMPORT_HOME"]=Path.Combine(root,"import");
+                Stage="private ordinary Python";
+                string patch=Text(plan,"python");
+                Child(uv,new[]{"python","install",patch,"--no-bin","--no-registry"},env);
+                string basePython=Child(uv,new[]{"python","find","--no-project","--managed-python",patch},env);
+                Need(basePython.StartsWith(Path.Combine(root,"python")+"\\",StringComparison.OrdinalIgnoreCase),"Interpreter escaped private installation.");
+                Child(basePython,new[]{"-I","-S","-c","import sys,sysconfig,struct; assert sys.platform=='win32' and '.'.join(map(str,sys.version_info[:3]))==sys.argv[1] and sys.version_info[:2]==(3,13) and struct.calcsize('P')==8 and not sysconfig.get_config_var('Py_GIL_DISABLED')",patch},env);
+                Stage="verified application download";
+                string wheel=Path.Combine(root,name);CopyOrDownload(Text(artifact,"url"),wheel,134217728);
+                CheckHash(wheel,Text(artifact,"sha256"));
+                Need(artifact["bytes"] is int && new FileInfo(wheel).Length==(int)artifact["bytes"],"Consumer artifact size differs.");
+                string requirements=Path.Combine(root,"components.txt");
+                PrivateText(requirements,ConsumerRequirements(plan["graph"]));
+                Stage="qualified application installation";
+                Child(uv,new[]{"tool","install","--python",basePython,"--link-mode","copy",
+                    "--overrides",requirements,"--with-requirements",requirements,wheel},env);
+                python=Path.Combine(root,"tools","amplifier-unified","Scripts","python.exe");
+                Need(File.Exists(python),"Installed application interpreter missing.");
+                PrivateText(Path.Combine(root,"consumer-install.json"),Json.Serialize(new Dictionary<string,object>{
+                    {"schema",1},{"kind","windows-consumer-preview"},{"version",version},{"revision",Text(plan,"source")},
+                    {"artifact",new Dictionary<string,object>{{"url",Text(artifact,"url")},{"sha256",Text(artifact,"sha256")},{"path",wheel}}},
+                    {"graph",plan["graph"]},{"uv",uv},{"git",git}}));
+                Stage="installed source and package audit";
+                Child(python,new[]{"-I","-B","-m","amplifier_web.windows_consumer","--root",root,"--audit"},env);
+                Child(uv,new[]{"pip","check","--python",python},env);
+                shortcut=ConsumerShortcut(python,root);Storage.Validate();
+            }
+            Stage="background application setup";
+            var start=new ProcessStartInfo(Path.Combine(Path.GetDirectoryName(python),"pythonw.exe"),
+                "-I -m amplifier_web.windows_consumer --root "+Quote(root)) {
+                    UseShellExecute=true,WorkingDirectory=Path.Combine(root,"workspace")};
+            Process.Start(start);
+            return shortcut;
+        }
+        static int ConsumerWindow() {
+            Application.EnableVisualStyles();
+            if(MessageBox.Show("Install Amplifier Unified for your Windows account? Setup downloads private prerequisites. "+
+                "You do not need WSL, Python, Git or a terminal. This is an unsigned preview; Windows/browser trust "+
+                "is separate and no security policy will be bypassed.","Amplifier Unified Setup",
+                MessageBoxButtons.OKCancel,MessageBoxIcon.Information)!=DialogResult.OK) return 2;
+            using(var form=new Form {Text="Amplifier Unified Setup",ClientSize=new Size(540,140),
+                FormBorderStyle=FormBorderStyle.FixedDialog,MaximizeBox=false,MinimizeBox=false}) {
+                var label=new Label {Left=20,Top=20,Width=500,Height=55,Text="Preparing your private installation..."};
+                var bar=new ProgressBar {Left=20,Top=85,Width=500,Style=ProgressBarStyle.Marquee};
+                form.Controls.Add(label);form.Controls.Add(bar);
+                var timer=new System.Windows.Forms.Timer {Interval=250};
+                timer.Tick+=(sender,e)=>{label.Text="Installing: "+Stage+"\nKeep this window open. No administrator access is requested.";};
+                Task<string> work=null; int result=1;bool settled=false;
+                form.FormClosing+=(sender,e)=>{if(!settled)e.Cancel=true;};
+                form.Shown+=async(sender,e)=>{
+                    timer.Start();work=Task.Run(()=>InstallConsumer(NativePins.ConsumerPlan));
+                    try {
+                        string shortcut=await work;result=0;
+                        MessageBox.Show("Installation is prepared. Background startup and browser entry were requested.\n\n"+
+                            "Your private shortcut:\n"+shortcut+"\n\nA browser/certificate decision may still need your attention.",
+                            "Amplifier Unified",MessageBoxButtons.OK,MessageBoxIcon.Information);
+                    } catch(Exception) {
+                        MessageBox.Show("Setup stopped during "+Stage+". No automatic retry was attempted.\n\n"+
+                            (Storage==null?"No installation root was created.":"Partial files and private diagnostics remain in:\n"+Storage.Root),
+                            "Amplifier Unified Setup",MessageBoxButtons.OK,MessageBoxIcon.Error);
+                    } finally {settled=true;timer.Stop();form.Close();}
+                };
+                Application.Run(form);timer.Dispose();return result;
+            }
+        }
         static void Install(Dictionary<string,string> args, bool background, bool noOpen) {
             string manifest=null, digest=null;
             Need(args.TryGetValue("--prototype-manifest",out manifest) && args.TryGetValue("--manifest-sha256",out digest) &&
@@ -308,8 +450,10 @@ namespace UnifiedBootstrap {
                 Process.Start(new ProcessStartInfo(entry,"-I -B "+Quote(launcher)+(background?" --background":"")) {UseShellExecute=true,WorkingDirectory=installRoot});
             }
         }
+        [STAThread]
         internal static int Main(string[] values) {
             try {
+                if(values.Length==0 && NativePins.ConsumerPlan!="") return ConsumerWindow();
                 if(values.Length==1 && values[0]=="--self-test") {
                     Need(Quote("a b")=="\"a b\"" && Quote("a\\")=="\"a\\\\\"","Native quoting regression.");
                     Need(!OfficialAsset("https://github.com/microsoft/amplifier-unified/releases/download/main/a.zip",".zip"),"Moving asset accepted.");

@@ -86,3 +86,58 @@ def test_background_shortcut_and_initial_launch_select_windowless_interpreter():
     assert "owner_notice(" in launcher
     assert "Amplifier will not import it or bypass a browser warning." in launcher
     assert "elif not args.check and sys.stdin.isatty():" in launcher
+
+
+def consumer_plan():
+    artifact = {"url": "https://github.com/microsoft/amplifier-unified/releases/download/v1.2.3/amplifier_unified-1.2.3-py3-none-any.whl",
+                "sha256": "a" * 64, "bytes": 12345}
+    return {"schema": 1, "kind": "windows-consumer-preview", "source": "b" * 40,
+            "version": "1.2.3", "python": "3.13.17", "artifact": artifact,
+            "graph": [{"name": "amplifier-unified", "version": "1.2.3",
+                "url": "https://github.com/microsoft/amplifier-unified", "revision": "b" * 40,
+                "delivery": {key: artifact[key] for key in ("url", "sha256")}}]}
+
+
+def test_consumer_no_argument_plan_is_embedded_at_build_not_a_moving_download(tmp_path):
+    import base64
+    plan = consumer_plan()
+    raw = builder.consumer_plan(plan)
+    output = tmp_path / "consumer-build"
+    report = builder.prepare(SCRIPTS, output, consumer=plan)
+    pins = (output / "NativePins.cs").read_text()
+    assert 'ConsumerPlan="' + base64.b64encode(raw).decode() + '"' in pins
+    assert report["consumerPlanSha256"] == hashlib.sha256(raw).hexdigest()
+    assert "/target:winexe" in report["compilerOptions"]
+    assert report["source"] == plan["source"] and report["version"] == plan["version"]
+    assert not report["signed"] and not report["published"] and not report["consumerNativeAcceptance"]
+
+
+@pytest.mark.parametrize("change", ["source", "moving-app", "wrong-hash", "wrong-version",
+                                  "custom-repo", "source-type", "duplicate", "unsorted",
+                                  "arbitrary-command", "path-escape", "unknown-delivery"])
+def test_consumer_build_plan_refuses_unbound_or_executable_inputs(change):
+    plan = consumer_plan()
+    if change == "source":
+        plan["source"] = "main"
+    elif change == "moving-app":
+        plan["artifact"]["url"] = "https://github.com/microsoft/amplifier-unified/releases/latest/download/app.whl"
+    elif change == "wrong-hash":
+        plan["artifact"]["sha256"] = "x"
+    elif change == "wrong-version":
+        plan["graph"][0]["version"] = "2.0.0"
+    elif change == "custom-repo":
+        plan["graph"][0]["url"] = "https://github.com/other/app"
+    elif change == "source-type":
+        plan["graph"][0]["url"] = []
+    elif change == "duplicate":
+        plan["graph"].append(dict(plan["graph"][0]))
+    elif change == "unsorted":
+        plan["graph"].append({"name": "a-package", "version": "1.0"})
+    elif change == "arbitrary-command":
+        plan["command"] = "never execute"
+    elif change == "path-escape":
+        plan["graph"][0]["subdirectory"] = "../other"
+    else:
+        plan["graph"].append({"name": "z-package", "version": "1.0", "delivery": {}})
+    with pytest.raises(ValueError):
+        builder.consumer_plan(plan)
