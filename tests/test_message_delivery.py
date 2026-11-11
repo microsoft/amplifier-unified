@@ -118,6 +118,178 @@ def post_receipt(app, identity):
     return json.loads(app.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()[0])
 
 
+async def expected_source_other_chat(app):
+    """Capture A's input, then obtain the real selected-only browser frame for B."""
+    root = app._session()
+    await app.dispatch('view.update', {'patch': {'draft': 'Captured A input'}})
+    await app.dispatch('attachment.add', {
+        'sessionId': root['id'], 'name': 'keep.txt', 'base64': 'aGVsbG8='})
+    args = {'sessionId': root['id'], 'text': 'Captured A input',
+            'attachmentIds': [row['id'] for row in app.clients.attachments(root)],
+            'expectedSource': {'workspace': root.get('workspace') or None,
+                'nativeIdentity': root.get('runtimeSessionId') or root.get('nativeIdentity') or root['id']}}
+    await app.dispatch('session.create', {'title': 'Other selected chat'})
+    other = app._session()
+    await app.dispatch('view.update', {'patch': {'draft': 'Private B draft'}})
+    frame = app.browser_state()
+    assert frame['selectedSessionId'] == other['id']
+    assert [row['id'] for row in frame['sessions']] == [other['id']]
+    return root, other, args
+
+
+@pytest.mark.parametrize('identities', [
+    {}, {'nativeIdentity': 'native-source'},
+    {'runtimeSessionId': 'runtime-source', 'nativeIdentity': 'unused-fallback'},
+], ids=['public-id', 'native-id', 'runtime-precedence'])
+@pytest.mark.parametrize('with_witness', [False, True], ids=['public-omission', 'captured-witness'])
+async def test_send_expected_source_accepts_original_target_when_selected_frame_omits_it(
+        held_post, identities, with_witness):
+    app, runtime, _ = held_post
+    app._session().update(identities)
+    app.clients.attach('source-sender')
+    with app.clients.bind('source-sender'):
+        root, other, args = await expected_source_other_chat(app)
+        if not with_witness:
+            args.pop('expectedSource')
+        identity = 'source-input'
+        runtime.expect(identity)
+        runtime.release[identity].set()
+
+        receipt = await app.dispatch('conversation.send', args, command_id=identity)
+
+        assert receipt['accepted'] and receipt['sessionId'] == root['id']
+        assert receipt['delivery'] == 'accepted'
+        assert runtime.sent == [(root['id'], args['text'], identity)]
+        assert not other['messages']
+        assert app.state['selectedSessionId'] == other['id']
+        assert app.state['view']['draft'] == 'Private B draft'
+
+
+@pytest.mark.parametrize('field', ['workspace', 'runtimeSessionId', 'nativeIdentity'])
+async def test_send_expected_source_rejects_changed_omitted_target_without_input_or_draft_effects(
+        held_post, tmp_path, field):
+    app, runtime, _ = held_post
+    app.clients.attach('source-sender')
+    with app.clients.bind('source-sender'):
+        root, other, args = await expected_source_other_chat(app)
+        root[field] = str(tmp_path / 'changed-source') if field == 'workspace' else 'changed-native'
+        before = copy.deepcopy((root, other))
+        drafts = copy.deepcopy(app.clients.record()['drafts'])
+        attachments = copy.deepcopy(app.clients.record()['attachments'])
+
+        with pytest.raises(AppError) as failure:
+            await app.dispatch('conversation.send', args, command_id='changed-source')
+
+        assert failure.value.status == 409 and failure.value.code == 'delivery_target_changed'
+        assert (root, other) == before
+        assert not runtime.sent and not runtime.steered
+        assert app.clients.record()['drafts'] == drafts
+        assert app.clients.record()['attachments'] == attachments
+        assert app.state['selectedSessionId'] == other['id']
+        assert app.state['view']['draft'] == 'Private B draft'
+        assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('changed-source',)).fetchone() is None
+
+
+@pytest.mark.parametrize('boundary', ['history', 'configuration'])
+@pytest.mark.parametrize('field', ['workspace', 'runtimeSessionId', 'nativeIdentity'])
+async def test_send_expected_source_rechecks_canonical_target_after_wait(
+        held_post, tmp_path, monkeypatch, boundary, field):
+    app, runtime, _ = held_post
+    app.clients.attach('source-sender')
+    with app.clients.bind('source-sender'):
+        root, other, args = await expected_source_other_chat(app)
+        entered, release = asyncio.Event(), asyncio.Event()
+        owner, name = (app.history, 'ensure_loaded') if boundary == 'history' else (app, 'refresh_configuration')
+        original = getattr(owner, name)
+
+        async def wait_for_source_change(sid):
+            await original(sid)
+            entered.set()
+            await release.wait()
+
+        monkeypatch.setattr(owner, name, wait_for_source_change)
+        task = asyncio.create_task(app.dispatch('conversation.send', args, command_id='waiting-source'))
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            async with app.lock:
+                root[field] = str(tmp_path / 'changed-source') if field == 'workspace' else 'changed-native'
+                before = copy.deepcopy((root, other))
+                drafts = copy.deepcopy(app.clients.record()['drafts'])
+                attachments = copy.deepcopy(app.clients.record()['attachments'])
+            release.set()
+            with pytest.raises(AppError) as failure:
+                await task
+
+            assert failure.value.status == 409 and failure.value.code == 'delivery_target_changed'
+            assert (root, other) == before
+            assert not runtime.sent and not runtime.steered
+            assert app.clients.record()['drafts'] == drafts
+            assert app.clients.record()['attachments'] == attachments
+            assert app.state['selectedSessionId'] == other['id']
+            assert app.state['view']['draft'] == 'Private B draft'
+            assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('waiting-source',)).fetchone() is None
+        finally:
+            release.set()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize('field', ['workspace', 'runtimeSessionId', 'nativeIdentity'])
+async def test_send_expected_source_exact_receipt_replay_precedes_source_check(
+        held_post, tmp_path, field):
+    app, runtime, _ = held_post
+    root = app._session()
+    args = {'sessionId': root['id'], 'text': 'Original input',
+            'expectedSource': {'workspace': root['workspace'], 'nativeIdentity': root['id']}}
+    runtime.expect('source-replay')
+    runtime.release['source-replay'].set()
+    receipt = await app.dispatch('conversation.send', args, command_id='source-replay', include_state=False)
+    root[field] = str(tmp_path / 'changed-source') if field == 'workspace' else 'changed-native'
+    before = copy.deepcopy(root)
+    saved_receipt = post_receipt(app, 'source-replay')
+
+    duplicate = await app.dispatch('conversation.send', args, command_id='source-replay', include_state=False)
+
+    assert receipt['accepted'] and receipt['delivery'] == 'accepted'
+    assert duplicate == {**saved_receipt, 'duplicate': True}
+    replacement = {'workspace': root.get('workspace') or None,
+                   'nativeIdentity': root.get('runtimeSessionId') or root.get('nativeIdentity') or root['id']}
+    with pytest.raises(AppError, match='different contents') as failure:
+        await app.dispatch('conversation.send', {**args, 'expectedSource': replacement},
+                           command_id='source-replay', include_state=False)
+    assert failure.value.status == 409
+    assert root == before and post_receipt(app, 'source-replay') == saved_receipt
+    assert runtime.sent == [(root['id'], args['text'], 'source-replay')]
+    assert len(root['messages']) == 1
+
+
+@pytest.mark.parametrize('source', [
+    None, {}, {'workspace': None}, {'nativeIdentity': 'native'},
+    {'workspace': '', 'nativeIdentity': 'native'},
+    {'workspace': 1, 'nativeIdentity': 'native'},
+    {'workspace': '/workspace', 'nativeIdentity': ''},
+    {'workspace': '/workspace', 'nativeIdentity': None},
+    {'workspace': '/workspace', 'nativeIdentity': 'native', 'extra': True},
+])
+async def test_send_expected_source_schema_rejects_malformed_witness(held_post, source):
+    app, runtime, _ = held_post
+    root = app._session()
+    with pytest.raises(AppError) as failure:
+        await app.dispatch('conversation.send', {
+            'sessionId': root['id'], 'text': 'Not admitted', 'expectedSource': source},
+            command_id='malformed-source')
+    assert failure.value.status == 400
+    assert not root['messages'] and not runtime.sent
+    assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('malformed-source',)).fetchone() is None
+
+
+def test_send_expected_source_schema_accepts_null_workspace():
+    from jsonschema import validate
+    from amplifier_web.service import ACTION_DEFINITIONS
+    validate({'text': 'Input', 'expectedSource': {'workspace': None, 'nativeIdentity': 'native'}},
+             ACTION_DEFINITIONS['conversation.send'][1])
+
+
 @pytest.mark.parametrize('text', [
     '    print("indented")\n    return 1\n',
     'First line  \nSecond line  ',

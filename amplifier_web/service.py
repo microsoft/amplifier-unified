@@ -427,6 +427,10 @@ ACTION_DEFINITIONS.update(patch_placement_definitions(schema, string))
 from .next_message_configuration import definitions as next_message_definitions
 ACTION_DEFINITIONS.update(next_message_definitions(schema, string))
 ACTION_DEFINITIONS['conversation.send'][1]['properties']['expectedConfigurationRevision'] = {'type': 'integer', 'minimum': 0}
+ACTION_DEFINITIONS['conversation.send'][1]['properties']['expectedSource'] = schema({
+    'workspace': {'type': ['string', 'null'], 'minLength': 1, 'maxLength': 4000},
+    'nativeIdentity': {**string(220), 'minLength': 1},
+})
 
 from .settings_actions import definitions as settings_definitions, ACTIONS as SETTINGS_ACTIONS, NAVIGATION_ACTIONS as SETTINGS_NAVIGATION
 ACTION_DEFINITIONS.update(settings_definitions(schema, string))
@@ -2661,6 +2665,17 @@ class AppService:
             # existing receipt replay above and already accepted work stay intact.
             if admission_check is not None:
                 admission_check()
+            if action == 'conversation.send' and 'expectedSource' in args:
+                # The selected browser frame can omit this target after a queue
+                # wait. Compare the caller's captured source to its canonical
+                # owner under the mutation lock, not to the current selection.
+                target = self._session(args.get('sessionId'), hydrate=False)
+                source = {'workspace': target.get('workspace') or None,
+                          'nativeIdentity': target.get('runtimeSessionId') or
+                          target.get('nativeIdentity') or target['id']}
+                if args['expectedSource'] != source:
+                    raise AppError('The delivery target changed. This attempt did not send your message.',
+                                   409, code='delivery_target_changed')
             self.configuration_authority.check(configuration_authority)
             guard_history_action(self, action, args, origin, caller_session_id)
             if checked_session:

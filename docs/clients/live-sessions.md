@@ -107,11 +107,30 @@ conflicts with the URL is rejected. The SPA uses the same service dispatch throu
 `/api/actions`; session operations capture their target before awaiting history or
 runtime admission.
 
+`conversation.send` accepts an optional `expectedSource` object with exactly
+`{workspace, nativeIdentity}`: `workspace` is null or a nonempty path string
+(at most 4000 characters); `nativeIdentity` is a nonempty string (at most 220
+characters). Capture the target's `workspace || null` and effective native identity
+(`runtimeSessionId || nativeIdentity || id`) with the original submission, before
+client queue/checkpoint waits. The host compares them to the canonical target
+under its mutation lock, after exact command receipt replay and before fresh send
+mutation. Selection of another chat, including a bounded frame that omits the
+target, does not change this precondition. A source mismatch returns HTTP 409,
+`accepted:false`, `code:delivery_target_changed`, without admitting input, consuming
+drafts/attachments or sending to a runtime. This refuses only the current attempt;
+it cannot prove that an earlier uncertain attempt did not execute.
+Public clients may omit this precondition and retain their existing send behavior;
+it is not capability negotiation or an automatic fallback. Host/account
+authentication remains separate from this native-source witness.
+
 Keep the same command ID and arguments after an uncertain transport failure.
 Persisted receipts deduplicate retries by client, action, arguments, and origin.
 A changed command with the same ID is rejected. Command acceptance is distinct
 from a completed model/tool operation. Interrupted or uncertain work is never
 automatically rerun by attachment, reload, or SSE reconnection.
+When supplied, `expectedSource` remains part of those original arguments and their
+fingerprint. An exact retry reads its saved receipt even if the source has since
+changed; replacing the witness under the same command ID conflicts, not retargets.
 
 The bundled browser can dismiss a settled failed/uncertain delivery warning into
 reversible **Delivery details**. This stores only the exact chat/input identities

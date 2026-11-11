@@ -227,6 +227,39 @@ try{
    await test.tab.reload();await test.tab.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
    assert.equal((await localEntry(test.tab,entry.commandId)).status,'failed','Reload preserves known non-delivery');
    assert.deepEqual(await sendFacts(test),{posts:[],sends:[],retries:[]},'Reload never replays a refused input');
+   if(kind==='host'){
+    const row=test.tab.locator('.a-user').filter({hasText:entry.text});
+    await expect(row.getByText('Not sent',{exact:true})).toBeVisible();
+    await expect(row.getByRole('button',{name:'Check delivery',exact:true})).toHaveCount(0);
+    await test.tab.screenshot({path:'/artifacts/delivery-not-posted-desktop.png'});
+    await test.tab.setViewportSize({width:390,height:844});
+    await expect(row.getByRole('button',{name:'Retry',exact:true})).toBeVisible();
+    await test.tab.screenshot({path:'/artifacts/delivery-not-posted-mobile.png'});
+   }
+  }finally{
+   await test.owner.close();
+   await api('/fixture/source',{kind:'restore',sessionId:test.a});
+  }
+ }
+
+ // A's changed canonical binding is deliberately absent from the browser frame.
+ // The captured witness must be checked at fresh admission, not inferred from B.
+ for(const kind of ['native','workspace']){
+  const test=await openCase('offscreen-'+kind);
+  try{
+   const edit=await occupySendQueue(test),entry=await submit(test,'Offscreen canonical '+kind+' must refuse this payload.');
+   await select(test.tab,test.b);await omittedOwner(test.tab,test);
+   await api('/fixture/source',{kind,sessionId:test.a});
+   await omittedOwner(test.tab,test);
+   await release(edit);
+   await expect.poll(async()=>(await localEntry(test.tab,entry.commandId))?.status).toBe('failed');
+   const facts=await sendFacts(test);
+   assert.equal(facts.posts.length,1,'One attempted POST receives a definitive canonical refusal');
+   assert.equal(facts.posts[0].args.sessionId,test.a);
+   assert.ok(facts.posts[0].args.expectedSource.nativeIdentity,'The original canonical source travels with admission');
+   assert.deepEqual(facts.sends,[],'No input to either A or B after an offscreen rebind');
+   assert.deepEqual(facts.retries,[]);
+   assert.equal((await localEntry(test.tab,entry.commandId)).scope,entry.scope);
   }finally{
    await test.owner.close();
    await api('/fixture/source',{kind:'restore',sessionId:test.a});
