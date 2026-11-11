@@ -75,13 +75,19 @@ async def test_078_state_reopens_with_legacy_or_default_and_preserves_profiles(t
         await restored.close()
 
 
-async def test_format2_library_is_inert_but_preserved_and_format1_still_works(tmp_path, monkeypatch):
+@pytest.mark.parametrize('reference_base', [True, False])
+async def test_format2_library_is_inert_but_preserved_and_format1_still_works(tmp_path, monkeypatch, reference_base):
     monkeypatch.setattr(AppService, 'default_theme', lambda self: DEFAULT_CSS)
     service = AppService(tmp_path / 'data', workspace=tmp_path)
     root = theme_library.folder(service)
     root.mkdir()
     manifest = {'type': 'appearance', 'formatVersion': 2, 'base': 'reference-v1',
                 'name': 'Retained Reference delta', 'stylesheet': 'theme.css'}
+    if not reference_base:
+        manifest.pop('base')
+    # Real format-2 records hit the unsupported base-field guard first. Without
+    # that field, formatVersion itself must still fail; neither can be removed.
+    rejection = 'unsupported fields' if reference_base else 'formatVersion'
     newer = appearance_packages.encode({
         'appearance.json': json.dumps(manifest).encode(),
         'theme.css': b'#amp-one{--a-accent:#123456}',
@@ -92,9 +98,9 @@ async def test_format2_library_is_inert_but_preserved_and_format1_still_works(tm
         listing = theme_library.listing(service)
         assert not any(row['id'] == 'saved:' + path.name for row in listing['items'])
         assert path.read_bytes() == newer
-        with pytest.raises(AppError, match='formatVersion'):
+        with pytest.raises(AppError, match=rejection):
             theme_library.read(service, 'saved:' + path.name)
-        with pytest.raises(AppError, match='formatVersion'):
+        with pytest.raises(AppError, match=rejection):
             theme_library.mutate(service, {
                 'id': 'saved:' + path.name, 'expectedFingerprint': '0' * 64,
             }, deleting=True)
