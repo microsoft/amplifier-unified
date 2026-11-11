@@ -38,8 +38,11 @@ def current_layout_commands(source):
 
 def coverage_plan():
     plan = current_plan()
+    peer_rollup_addition(plan['scenarios'])
     rows = []
     for row in plan['scenarios']:
+        if row['id'] == 'peer-rollup':
+            continue  # Exact additive owner validated; frozen inventories stay frozen.
         row = {**row, 'command': [coverage_paths(part) for part in row['command']]}
         row.pop('cwd', None)
         if row['id'] == 'configuration-recovery-components':
@@ -51,6 +54,15 @@ def coverage_plan():
         rows.append(row)
     return {**plan, 'scenarios': rows}
 
+
+def peer_rollup_addition(rows):
+    expected = {'id': 'peer-rollup', 'command': ['node', 'tests/web/peer-rollup-browser.mjs'],
+                'env': {'PEER_PREVIEW_PARTIAL_RECEIVER': '1',
+                        'AMPLIFIER_PROOF_DIR': '{root}/output/browser-checks/peer-rollup'}}
+    selected = [row for row in rows if row['id'] == 'peer-rollup'
+                or any(part.endswith('/peer-rollup-browser.mjs') for part in row['command'])]
+    assert selected == [expected]
+    return {'peer-rollup'}
 
 def source_test(path):
     name = str(path).removeprefix('frontend/tests/').removeprefix('tests/')
@@ -3401,9 +3413,10 @@ def test_runner_executes_each_explicit_owner_cwd_without_changing_environment_ro
 def test_current_composed_registry_owns_every_executable_and_both_mixed_suites():
     plan = current_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], set(), current=True)
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids]
+    peer_ids = peer_rollup_addition(plan['scenarios'])
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | peer_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 148
-    assert len(plan['scenarios']) == 148 + len(navigation_ids)
+    assert len(plan['scenarios']) == 148 + len(navigation_ids) + len(peer_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 15
     sidebar_controls_browser_addition(plan['scenarios'], set(), current=True)
     action_spacing_browser_addition(plan['scenarios'], set(), current=True)

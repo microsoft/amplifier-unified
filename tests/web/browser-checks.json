@@ -1129,6 +1129,14 @@
       }
     },
     {
+      "id": "peer-rollup",
+      "command": ["node", "tests/web/peer-rollup-browser.mjs"],
+      "env": {
+        "PEER_PREVIEW_PARTIAL_RECEIVER": "1",
+        "AMPLIFIER_PROOF_DIR": "{root}/output/browser-checks/peer-rollup"
+      }
+    },
+    {
       "id": "peer-preview-header",
       "command": [
         "node",
@@ -1329,6 +1337,7 @@
     "compact-composer",
     "composer-panel-ownership",
     "peer-preview",
+    "peer-rollup",
     "peer-preview-header",
     "peer-preview-focus",
     "canvas-chrome",

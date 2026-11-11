@@ -70,6 +70,77 @@ class TranscriptWindows:
         self.closed = False
         self._epoch = 0
         self._fences = OrderedDict()
+        from .peer_originals import PeerOriginals
+        self.peer_originals = PeerOriginals()
+        self._peer_resident = OrderedDict()
+        self._peer_failed = set()
+
+    def peer_save_failed(self, identities):
+        entries = getattr(getattr(self.service, '_message_preparation', None), 'entries', {})
+        self._peer_failed.intersection_update(entries)
+        self._peer_failed.update(set(identities).intersection(entries))
+
+    def peer_save_committed(self, identities):
+        self._peer_failed.difference_update(identities)
+
+    def _database_epoch(self):
+        db = self.service.db
+        if db.in_transaction:
+            return None  # A rollback is not a reusable index witness.
+        return (id(db), db.execute('PRAGMA main.data_version').fetchone()[0], db.total_changes)
+
+    @staticmethod
+    def _peer_wanted(rows):
+        from .peer_attribution import input_identity
+        return [row for row in rows if row.get('role') == 'user'
+                and row.get('source') != 'native' and input_identity(row)
+                and (row.get('via') == 'peer' or row.get('inputOrigin') == 'peer')]
+
+    def _committed_messages(self, session):
+        entries = getattr(getattr(self.service, '_message_preparation', None), 'entries', {})
+        entry = entries.get(session['id'])
+        return entry if (entry and entry.owner == id(session)
+                         and session['id'] not in self._peer_failed) else None
+
+    def _resident_proof(self, rows, wanted, revision=None):
+        if not wanted:
+            return None
+        key = (revision, tuple((row['id'], row.get('inputId'), row.get('nativeInputId'))
+                               for row in wanted)) if revision is not None else None
+        if key in self._peer_resident:
+            self._peer_resident.move_to_end(key)
+            return self._peer_resident[key][0]
+        try:
+            proof = self.peer_originals.resident(rows, wanted)
+        except ValueError:
+            if key is None:
+                raise
+            # A deterministic refusal for immutable committed bytes is reusable
+            # too. Do not rescan the same malformed prefix on each scalar tick.
+            proof = None
+        if key is not None:
+            # Only canonical committed, detached snapshots supply revision.
+            # Mutable resident callers always do a fresh explicit-read scan.
+            size = len(json.dumps(proof.originals, ensure_ascii=False).encode()) if proof else 0
+            self._peer_resident[key] = (proof, size)
+            while self._peer_resident and (len(self._peer_resident) > 16
+                    or sum(value[1] for value in self._peer_resident.values()) > 8 * 1024 * 1024):
+                self._peer_resident.popitem(last=False)
+        return proof
+
+    def exact_peer_original(self, session, message_id, input_id):
+        """Explicit preview guard: fresh current originals, never a display cache."""
+        wanted = [{'id': message_id, 'inputId': input_id}]
+        cold = self._cold_source(session)
+        if cold is None:
+            return self.peer_originals.resident(dict.get(session, 'messages', ()), wanted)
+        source, fence = _source(session), self._fence(session['id'])
+        proof = self.peer_originals.cold(cold, wanted)
+        current = self.service._session(session['id'], hydrate=False)
+        if (_source(current) != source or self._fence(session['id']) != fence
+                or self._cold_source(current) != cold):
+            raise ValueError('The original source changed.')
+        return proof
 
     def _fence(self, identity):
         value = self._fences.pop(identity, None)
@@ -92,6 +163,18 @@ class TranscriptWindows:
         if not task.cancelled():
             task.exception()  # A cancelled HTTP waiter must not orphan failures.
 
+    async def _read_job(self, work):
+        # Admission and registration have no intervening await. One job owns
+        # window read, peer qualification and detachment until physical return.
+        if self.closed:
+            raise ValueError('Saved message readers are closed.')
+        if len(self.jobs) >= 8:
+            raise ValueError('Saved message readers are busy. Try again.')
+        task = asyncio.create_task(asyncio.to_thread(work))
+        self.jobs.add(task)
+        task.add_done_callback(self._read_finished)
+        return await asyncio.shield(task)
+
     async def close(self):
         self.closed = True
         # File reads have fixed byte/object bounds. Cancellation of an HTTP
@@ -100,6 +183,10 @@ class TranscriptWindows:
             await asyncio.gather(*tuple(self.jobs), return_exceptions=True)
         self.pages.clear()
         self.initial.clear()
+        self._peer_resident.clear()
+        self._peer_failed.clear()
+        self.peer_originals.cache.clear()
+        self.peer_originals.retained_bytes = 0
         self.bytes = 0
 
     def bound_web(self):
@@ -181,10 +268,12 @@ class TranscriptWindows:
             raise ValueError('The complete original source is unavailable or changed.')
         return page['items']
 
-    def _saved_page(self, session, before, limit):
+    def _saved_page(self, session, before, limit, *, committed=None):
         stamp = self._saved_stamp(session)
+        if committed is not None:
+            stamp = [session['id'], committed.prepared.identity]
         source = _digest(stamp)
-        rows = session.get('messages', [])
+        rows = committed.snapshot if committed is not None else session.get('messages', [])
         end = len(rows)
         if before is not None:
             try:
@@ -204,7 +293,13 @@ class TranscriptWindows:
                 'hasEarlier': bool(start), 'total': None, 'offset': None, 'scope': 'recent',
                 'revision': source, 'windowKey': _digest([source, start, end]),
                 'coverage': {'kind': 'saved-web', 'historyComplete': False}, 'unavailableRanges': gaps,
-                '_savedComplete': start == 0 and end == len(rows) and not gaps}
+                '_savedComplete': start == 0 and end == len(rows) and not gaps,
+                **({'_committedRevision': committed.prepared.identity,
+                    'coverage': {'kind': 'saved-web', 'historyComplete': False,
+                        'provenance': {'basis': 'committed-snapshot',
+                            'revision': committed.prepared.identity,
+                            'countsScope': 'requested-originals-global',
+                            'liveHistoryChecked': False}}} if committed is not None else {})}
 
     async def read(self, session_id, *, before=None, limit=100, native=False):
         if self.closed:
@@ -212,57 +307,125 @@ class TranscriptWindows:
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError('Choose 1 to 100 messages.')
         async with self.service.lock:
+            if self.closed:
+                raise ValueError('Saved message readers are closed.')
             session = self.service._session(session_id, hydrate=False)
             source = _source(session)
             fence = self._fence(session_id)
             use_native = native or session.get('historyManaged') is True
             cold = self._cold_source(session) if not use_native else None
+            committed = None
             if not use_native and cold is None:
+                if before is not None:
+                    cursor = self.reader._parse(before)
+                    entry = self._committed_messages(session)
+                    if entry is not None and cursor.get('source') == _digest([session_id, entry.prepared.identity]):
+                        committed = entry
                 # Canonical saved IDs, attachments and action authority survive.
-                page = self._saved_page(session, before, limit)
-        if use_native or cold is not None:
-            if self.closed or len(self.jobs) >= 8:
-                raise ValueError('Saved message readers are busy. Try again.')
+                page = self._saved_page(session, before, limit, committed=committed)
+        def read_and_prepare():
             if use_native:
-                work = asyncio.to_thread(_native_page, self.reader, source, before, limit)
-            else:
+                result = _native_page(self.reader, source, before, limit)
+            elif cold is not None:
                 from .saved_message_window import read_saved_window
-                work = asyncio.to_thread(read_saved_window, cold, self.reader, session_id=session_id,
-                                         fence=fence, before=before, limit=limit)
-            task = asyncio.create_task(work)
-            self.jobs.add(task)
-            task.add_done_callback(self._read_finished)
-            page = await asyncio.shield(task)
-        if not use_native:
-            if cold is not None:
-                page['_savedComplete'] = before is None and not page['hasEarlier'] and not page['unavailableRanges']
-            page['_savedOwner'] = {'source': source, 'fence': fence,
-                                   'resource': cold.identity if cold is not None else None}
-        # Detach/size only this selected page outside writer exclusion.
-        def prepare():
-            detached = copy.deepcopy(page)
+                result = read_saved_window(cold, self.reader, session_id=session_id,
+                                           fence=fence, before=before, limit=limit)
+            else:
+                result = page
+            if not use_native:
+                if cold is not None:
+                    result['_savedComplete'] = before is None and not result['hasEarlier'] and not result['unavailableRanges']
+                result['_savedOwner'] = {'source': source, 'fence': fence,
+                                        'resource': cold.identity if cold is not None else None}
+            proof = None
+            wanted = self._peer_wanted(result['items']) if not use_native else []
+            if wanted and cold is not None:
+                # This second phase stays in the SAME admitted physical job:
+                # cancellation/shutdown never loses it or admits a ninth worker.
+                try:
+                    proof = self.peer_originals.cold(cold, wanted)
+                except (ValueError, OSError):
+                    pass
+            detached = copy.deepcopy(result)
             size = len(json.dumps(detached, ensure_ascii=False, separators=(',', ':')).encode())
-            return detached, size
-        page, size = await asyncio.to_thread(prepare)
+            return detached, size, proof, wanted
+        page, size, proof, wanted = await self._read_job(read_and_prepare)
         if size > MAX_BYTES:
             raise ValueError('Saved message window exceeds the display budget.')
         async with self.service.lock:
+            if self.closed:
+                raise ValueError('Saved message readers are closed.')
             current = self.service._session(session_id, hydrate=False)
+            database_epoch = self._database_epoch() if cold is not None else None
             if (_source(current) != source or self._fence(session_id) != fence
-                    or cold is not None and self._cold_source(current) != cold):
+                    or cold is not None and self._cold_source(current) != cold
+                    or committed is not None and self._committed_messages(current) is not committed):
                 raise ValueError('The selected message source changed.')
+            if wanted and cold is None:
+                try:
+                    proof = self._resident_proof(
+                        committed.snapshot if committed is not None else dict.get(current, 'messages', ()),
+                        wanted, (session_id, committed.prepared.identity) if committed is not None else None)
+                except (ValueError, OSError):
+                    proof = None
+            page['_peerChecked'] = bool(wanted)
+            if proof is not None:
+                page['_peerProof'] = proof
+                # Do not retain Detached.indexed: legacy inline resources can
+                # contain the entire history. Proof retains compact witnesses.
+                page['_peerSource'] = cold.identity if cold is not None else None
+                if cold is not None and proof.revision[1][0] == 'inline':
+                    # Validate bytes at this explicit read; passive projections
+                    # only reuse when no DB write could have changed the index.
+                    # The exact index was just recaptured and compared to the
+                    # validated source under this exclusion. An unrelated write
+                    # during the worker need not suppress that fresh equality.
+                    # External writes racing this final recapture still fence it.
+                    page['_peerIndexEpoch'] = (database_epoch if database_epoch is not None
+                        and database_epoch == self._database_epoch() else None)
+                size += len(json.dumps(proof.originals, ensure_ascii=False).encode())
             self._retain(session_id, page, size)
         return self._wire(page, session_id)
 
     def _wire(self, page, session_id):
-        result = {key: copy.deepcopy(value) for key, value in page.items() if key != 'items'}
+        result = {key: copy.deepcopy(value) for key, value in page.items()
+                  if key not in {'items', '_peerProof', '_peerSource', '_peerChecked',
+                                 '_peerIndexEpoch', '_committedRevision'}}
         from .peer_attribution import derive
         # Attribution requires global duplicate checks. Only a complete bounded
         # saved set supplies that proof; neither a native suffix nor a partial
         # saved page may promote a single local match into global uniqueness.
         complete = result.pop('_savedComplete', False) is True
-        resolver = getattr(self.service.projections, 'resolver', None) if complete else None
-        rows = derive({'id': session_id, 'messages': page['items']}, page['items'], resolver)
+        resolver = getattr(self.service.projections, 'resolver', None)
+        proof = page.get('_peerProof')
+        if proof is not None and page.get('_peerSource') is not None:
+            from .resource_files import detached_signature
+            from .media_saved_aliases import _indexed_evidence
+            current = self.service._session(session_id, hydrate=False)
+            try:
+                reference = dict.get(current, '_coldFields', {}).get('messages', {}).get('$resource')
+                if dict.__contains__(current, 'messages') or reference != page['_peerSource']:
+                    proof = None
+                elif proof.revision[1][0] == 'inline':
+                    if page.get('_peerIndexEpoch') is None or page['_peerIndexEpoch'] != self._database_epoch():
+                        proof = None
+                else:
+                    cold = self._cold_source(current)
+                    if (cold is None or cold.identity != page['_peerSource']
+                        or (str(cold.directory) if cold.directory is not None else None,
+                            cold.identity, *_indexed_evidence(cold.indexed)) != proof.revision[0]
+                        or detached_signature(cold) != proof.revision[1]):
+                        proof = None
+            except (ValueError, OSError):
+                proof = None
+        # Never expose a committed snapshot's nested dictionaries to a reader.
+        selected = copy.deepcopy(page['items'])
+        owner = {'id': session_id, 'messages': selected}
+        if proof is not None and resolver is not None:
+            rows = resolver(owner, selected, proof=proof)
+        else:
+            rows = derive(owner, selected,
+                          resolver if complete and not page.get('_peerChecked') else None)
         result['items'] = rows
         result.pop('_owner', None)
         saved_owner = result.pop('_savedOwner', None)
@@ -295,6 +458,8 @@ class TranscriptWindows:
         return result
 
     async def load(self, session_id, *, only_if_changed=False):
+        if self.closed:
+            return
         try:
             await self._load(session_id, only_if_changed=only_if_changed)
         except asyncio.CancelledError:
@@ -302,6 +467,8 @@ class TranscriptWindows:
             raise
         except (ValueError, OSError):
             async with self.service.lock:
+                if self.closed:
+                    return
                 session = self.service._session(session_id, hydrate=False)
                 reference = dict.get(session, '_coldFields', {}).get('messages', {}).get('$resource')
                 self.initial[session_id] = {'status': 'unavailable', 'source': _source(session),
@@ -322,6 +489,8 @@ class TranscriptWindows:
             cold = self._cold_source(session) if not managed else None
             saved_source = [cold.identity if cold is not None else None, self._fence(session_id)]
         stamp = await asyncio.to_thread(revision, source) if source.get('nativeProject') else None
+        if self.closed:
+            return
         entry = self.initial.get(session_id)
         if (only_if_changed and entry and entry.get('stamp') == stamp
                 and entry.get('source') == source and entry.get('status') == 'ready'
@@ -329,6 +498,8 @@ class TranscriptWindows:
             return
         if not managed:
             page = await self.read(session_id) if cold is not None else None
+            if self.closed:
+                return
             self.initial[session_id] = {'status': 'ready', 'stamp': stamp,
                 'source': source, 'savedSource': saved_source,
                 **({'key': (session_id, page['windowKey'])} if page else {}),
@@ -342,12 +513,16 @@ class TranscriptWindows:
         self._notify(session_id)
         try:
             page = await self.read(session_id)
+            if self.closed:
+                return
             self.initial[session_id] = {'status': 'ready', 'stamp': stamp, 'source': source,
                                         'key': (session_id, page['windowKey'])}
         except asyncio.CancelledError:
             self.initial.pop(session_id, None)
             raise
         except (ValueError, OSError):
+            if self.closed:
+                return
             self.initial[session_id] = {'status': 'unavailable', 'stamp': stamp,
                 'error': 'Could not read this saved message window. Original files are unchanged.'}
         while len(self.initial) > MAX_PAGES:
@@ -373,7 +548,30 @@ class TranscriptWindows:
                         'historyLoading': not failed, 'historyError': entry.get('error') if failed else None}
                 page = self._wire(retained[0], session['id'])
             else:
-                page = self._wire(self._saved_page(session, None, 100), session['id'])
+                committed = self._committed_messages(session)
+                raw_page = self._saved_page(session, None, 100)
+                wanted = self._peer_wanted(raw_page['items'])
+                if wanted and committed is not None:
+                    raw_page['_peerChecked'] = True
+                    try:
+                        saved_page = self._saved_page(session, None, 100, committed=committed)
+                        from .message_preparation import _same
+                        # Visibility check only, not a live global-uniqueness
+                        # witness. Return snapshot rows WITH snapshot counts.
+                        # Unpublished off-page edits do not relabel that snapshot
+                        # as current; explicit reads/actions always revalidate.
+                        if (len(dict.get(session, 'messages', ())) == len(committed.snapshot)
+                                and raw_page['unavailableRanges'] == saved_page['unavailableRanges']
+                                and _same(raw_page['items'], saved_page['items'], [100_000])):
+                            raw_page = saved_page
+                            raw_page['_peerProof'] = self._resident_proof(
+                                committed.snapshot, wanted,
+                                (session['id'], committed.prepared.identity))
+                        else:
+                            raw_page['_peerChecked'] = True
+                    except (ValueError, OSError):
+                        pass
+                page = self._wire(raw_page, session['id'])
             return {'messages': page.pop('items'), 'messageWindow': page,
                     'nativeContinuation': entry.get('continuation', {'status': 'unknown'}),
                     'historyLoading': False, 'historyError': None}

@@ -1134,6 +1134,11 @@ class AppService:
                 acknowledge_saved_inputs(self.workspace_work, staged_work_inputs)
         except BaseException:
             self.db.rollback()
+            # Keep preparation reusable for retry, but never present the prior
+            # snapshot as fresh peer provenance after a failed owner save.
+            windows = getattr(getattr(self, 'history', None), 'windows', None)
+            if windows is not None:
+                windows.peer_save_failed(admitted_ids)
             for record, key, value in reversed(normalization_undo):
                 record[key] = value
             from .presentation_files import atomic_write, remove
@@ -1154,6 +1159,9 @@ class AppService:
             self._client_snapshot_preferences = {}
             raise
         self._message_preparation.committed(pending_messages, admitted_index, deleted_ids)
+        windows = getattr(getattr(self, 'history', None), 'windows', None)
+        if windows is not None:
+            windows.peer_save_committed(admitted_ids | deleted_ids)
         self._execution_preparation.committed(pending_execution, admitted_index, deleted_ids)
         self._execution_preparation.retain({sid for sid, row in admitted_index.items()
                                            if sid not in deleted_ids and dict.__contains__(row, 'execution')

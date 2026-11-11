@@ -211,6 +211,43 @@ async def test_complete_bounded_receiver_proof_is_immediately_usable(app, monkey
         assert not dict.__contains__(receiving, 'messages')
 
 
+@pytest.mark.parametrize('cold', [False, True])
+@pytest.mark.parametrize('message_count', [99, 101])
+async def test_adjacent_peer_pair_keeps_receipt_attribution_across_page_limit(
+        app, monkeypatch, cold, message_count):
+    """Unrelated older messages must not turn an exact peer pair into generic rows."""
+    from amplifier_web import cold_display
+    service, source, receiving, first_id = app
+    second = await agent_action(service, source, 'coordination.send', {
+        'sessionId': receiving['id'], 'mode': 'notify', 'text': CRLF}, 'peer-rollup-second')
+    originals = copy.deepcopy(receiving['messages'])
+    receiving['messages'] = [
+        {'id': f'earlier-{i}', 'role': 'assistant', 'text': f'Earlier answer {i}'}
+        for i in range(message_count - len(originals))
+    ] + originals
+    service._publish()
+    if cold:
+        receiving = make_cold(service, receiving, copy.deepcopy(receiving['messages']))
+    monkeypatch.setattr(cold_display, 'load', lambda *a: (_ for _ in ()).throw(AssertionError('Full hydrate')))
+    with service.clients.bind('preview-client'):
+        page = await service.history.windows.read(receiving['id'])
+        shown = page['items'][-2:]
+        assert [row['id'] for row in shown] == [first_id, second['messageId']]
+        assert [row['text'] for row in shown] == [TEXT, CRLF]
+        assert page['hasEarlier'] is (message_count > 100)
+        assert all(row.get('attribution', {}).get('peer', {}).get('available') for row in shown), [
+            {'id': row['id'], 'inputId': row.get('inputId'), 'attribution': row.get('attribution')}
+            for row in shown
+        ]
+        for row in shown:
+            meta = row['attribution']['peer']
+            assert meta['sourceId'] == source['id']
+            assert service.peer_preview.open(
+                {'proof': meta['proof'], 'sourceSessionId': receiving['id']}, 'ui')['accepted']
+    if cold:
+        assert not dict.__contains__(receiving, 'messages')
+
+
 @pytest.mark.parametrize('change', ['text', 'replaced', 'duplicate', 'receipt', 'partial', 'postread'])
 async def test_cold_proof_rechecks_canonical_original_and_receipt(app, monkeypatch, change):
     from amplifier_web import cold_display
