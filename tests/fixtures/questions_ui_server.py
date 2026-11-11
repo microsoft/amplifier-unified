@@ -1,7 +1,10 @@
 """Real service/browser question flow with a deterministic, isolated runtime."""
 import asyncio
+import copy
 import json
+import os
 import signal
+import sqlite3
 from pathlib import Path
 import tempfile
 
@@ -21,10 +24,14 @@ class Runtime(fixture.Runtime):
 
     async def start(self, session, emit, **kwargs):
         self.starts.append(session['id'])
+        if os.environ.get('AMPLIFIER_QUESTIONS_MODE') == 'dismiss':
+            raise AssertionError('Clearing a reminder must not start a runtime.')
         await super().start(session, emit, **kwargs)
 
     async def send(self, session, text, input_id, emit):
         self.sent.append({'sessionId': session['id'], 'inputId': input_id, 'text': text})
+        if os.environ.get('AMPLIFIER_QUESTIONS_MODE') == 'dismiss':
+            raise AssertionError('Clearing a reminder must not send an input.')
         if (session['id'], input_id) in self.timeout_inputs:
             raise TimeoutError('Synthetic answer acknowledgement timed out.')
         await asyncio.sleep(.15)
@@ -32,6 +39,8 @@ class Runtime(fixture.Runtime):
 
     async def delivery(self, session, input_id):
         self.delivery_checks.append({'sessionId': session['id'], 'inputId': input_id})
+        if os.environ.get('AMPLIFIER_QUESTIONS_MODE') == 'dismiss':
+            raise AssertionError('Clearing a reminder must not check delivery.')
         return 'accepted' if (session['id'], input_id) in self.accepted_inputs else 'unknown'
 
     async def retry(self, session, text, input_id, emit):
@@ -56,6 +65,32 @@ async def main(home):
     optional = await ask('What title would you like?')
     skipped = await ask('Would you like a subtitle?')
     network_attempts = []
+    reminders = []
+    if os.environ.get('AMPLIFIER_QUESTIONS_MODE') == 'dismiss':
+        # Pre-existing answers, not question.answer calls: this bounded mode
+        # exercises only dismissal and must make zero runtime/provider calls.
+        for status in ('unknown', 'rejected'):
+            created = await service.dispatch('session.create', {
+                'title': f'Saved answer {status}', 'workspace': str(home / 'workspace'),
+                'bundle': 'anchors', 'select': False})
+            target_sid = created['result']['sessionId']
+            record = (await service.app_bridge('dispatch', {'action': 'question.create', 'args': {
+                'prompt': f'Keep the saved {status} answer?', 'required': True,
+                'dependency': 'Synthetic previously answered decision'}}, target_sid))['result']
+            input_id = f"question:{record['id']}:answer"
+            provenance = {'via': 'fixture', 'sourceMessageId': f'saved-{status}-source'}
+            record.update(status='answered', revision=2,
+                answer={'text': f'Preserved {status} answer', 'optionId': None, 'questionRevision': 1,
+                        'answeredAt': record['createdAt'], 'provenance': provenance, 'artifacts': []},
+                delivery={'status': status, 'inputId': input_id, 'updatedAt': record['createdAt'],
+                          'message': f'Synthetic saved {status} evidence'})
+            service.questions.store.put(record)
+            service._message(service._session(target_sid), 'user', record['answer']['text'], 'question',
+                             inputId=input_id, questionId=record['id'], answerProvenance=copy.deepcopy(provenance),
+                             delivery={'status': status})
+            service.questions.sync({target_sid})
+            service._publish_changes(sessions={target_sid})
+            reminders.append(copy.deepcopy(record))
 
     async def reviews(request):
         if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
@@ -87,10 +122,20 @@ async def main(home):
 
     async def check(request):
         observed_sid = request.query.get('sessionId', sid)
-        return web.json_response({'sent': runtime.sent, 'questions': service.questions.store.all(observed_sid),
+        persisted = {}
+        if os.environ.get('AMPLIFIER_QUESTIONS_MODE') == 'dismiss':
+            # A separate read-only connection proves committed bytes, not just
+            # the resident question projection. Full host recovery has unit coverage.
+            saved = sqlite3.connect((service.data_dir / 'app.sqlite3').as_uri() + '?mode=ro', uri=True)
+            try:
+                persisted['persistedQuestions'] = [json.loads(row[0]) for row in saved.execute(
+                    'SELECT value FROM questions WHERE session_id=? ORDER BY created_at, id', (observed_sid,))]
+            finally:
+                saved.close()
+        return web.json_response({**persisted, 'sent': runtime.sent, 'questions': service.questions.store.all(observed_sid),
                                  'starts': runtime.starts, 'retries': runtime.retries,
                                  'deliveryChecks': runtime.delivery_checks,
-                                 'messages': [{key: message.get(key) for key in ('id', 'inputId', 'questionId', 'text', 'delivery')}
+                                 'messages': [{key: message.get(key) for key in ('id', 'inputId', 'questionId', 'text', 'delivery', 'answerProvenance')}
                                               for message in service._session(observed_sid)['messages']
                                               if message.get('role') == 'user'],
                                  'networkAttempts': len(network_attempts),
@@ -202,7 +247,8 @@ async def main(home):
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stopped.set)
-    print(json.dumps({'url': url, 'sessionId': sid, 'required': required['id'], 'optional': optional['id'], 'skipped': skipped['id']}), flush=True)
+    print(json.dumps({'url': url, 'sessionId': sid, 'required': required['id'], 'optional': optional['id'],
+                      'skipped': skipped['id'], 'reminders': reminders}), flush=True)
     try:
         await stopped.wait()
     finally:

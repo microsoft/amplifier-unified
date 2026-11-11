@@ -187,6 +187,77 @@ try{
   await saved;await expect(page.getByRole('dialog')).toHaveCount(0);
  };
  const check=async()=>await (await page.request.get(ready.url+'/fixture/check')).json();
+ if(process.env.AMPLIFIER_QUESTIONS_MODE==='dismiss'){
+  // Bounded pairing mode: preseeded saved answers, real HTTP dismissal only.
+  // The default journey below and its original negative controls are unchanged.
+  assert.deepEqual(ready.reminders.map(q=>q.delivery.status),['unknown','rejected']);
+  const actions=[],bodyOf=request=>{const raw=request.postDataJSON();return raw.action==='shell.command'?raw.args:raw};
+  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')actions.push(bodyOf(request))});
+  const observe=async sessionId=>{const response=await page.request.get(ready.url+'/fixture/check',{params:{sessionId}});assert.ok(response.ok());return response.json()};
+  const select=async id=>{assert.equal((await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),id)).accepted,true)};
+  const nav=id=>page.locator(`.a-nav-chat[data-session-id="${id}"] .a-navigation-status`).first();
+  const pendingBefore=(await check()).questions.find(q=>q.id===ready.required),reports=[];
+  await page.goto(ready.url);await showFixtureConversation(page);
+  for(const original of ready.reminders){
+   const {sessionId,id,delivery}=original,width=delivery.status==='unknown'?1280:390;
+   await page.setViewportSize({width:1280,height:900});await select(sessionId);
+   await expect(nav(sessionId)).toHaveAttribute('aria-label','Check answer delivery');
+   const item=card(id),clear=item.getByRole('button',{name:'Clear reminder',exact:true});
+   await expect(item).toBeVisible();await expect(clear).toBeEnabled();
+   await expect(clear).toHaveAccessibleDescription(/Delivery status stays unchanged; nothing is sent again/);
+   await expect(page.locator('.a-question-notice')).toContainText(delivery.status==='unknown'?'An answer needs delivery confirmation':'An answer was saved but not delivered');
+   await expect.poll(()=>page.evaluate(id=>window.amplifier.getState().attention.items.some(row=>row.id==='question:'+id),id)).toBe(true);
+   const draft=`Independent ${delivery.status} composer draft`;
+   const draftSaved=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().method()==='POST'&&bodyOf(response.request()).action==='view.update'&&bodyOf(response.request()).args?.patch?.draft===draft&&response.ok());
+   await composer().fill(draft);await draftSaved;
+   const before=await observe(sessionId);assert.deepEqual(before.questions,[original]);assert.deepEqual(before.persistedQuestions,[original]);
+   await page.setViewportSize({width,height:900});
+   assert.ok(await item.evaluate(element=>element.scrollWidth<=element.clientWidth+1),'Reminder fits the viewport');
+   if(output)await page.screenshot({path:join(output,`question-dismiss-${delivery.status}-${width}-before.png`)});
+   const response=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().method()==='POST'&&bodyOf(response.request()).action==='question.dismiss');
+   await clear.click();const wire=await response;assert.equal(wire.status(),200,await wire.text());const receipt=await wire.json();assert.equal(receipt.accepted,true);
+   const requests=actions.filter(row=>row.action==='question.dismiss'&&row.args.id===id);
+   assert.equal(requests.length,1);assert.ok(requests[0].id);
+   assert.deepEqual(requests[0].args,{sessionId,id,expectedRevision:original.revision,inputId:delivery.inputId});
+   await expect(item).toHaveCount(0);await expect(page.locator('.a-question-notice')).toHaveCount(0);await expect(composer()).toHaveDraft(draft);
+   await expect.poll(()=>page.evaluate(id=>window.amplifier.getState().attention.items.some(row=>row.id==='question:'+id),id)).toBe(false);
+   const after=await observe(sessionId),saved=after.questions[0];
+   assert.deepEqual(receipt.result,saved);assert.deepEqual(after.persistedQuestions,[saved]);
+   const unchanged=record=>Object.fromEntries(Object.entries(record).filter(([key])=>!['revision','updatedAt','reminderDismissal'].includes(key)));
+   assert.deepEqual(unchanged(saved),unchanged(original),'Dismissing preserves answer, provenance, delivery, dependency and content identity');
+   assert.equal(saved.revision,original.revision+1);assert.deepEqual(saved.reminderDismissal,{
+    inputId:delivery.inputId,dismissedAt:saved.updatedAt,origin:'ui',clientId:await page.evaluate(()=>window.amplifier.getState().client.id)});
+   for(const key of ['sent','starts','retries','deliveryChecks','messages'])assert.deepEqual(after[key],before[key],`Dismissal has no ${key} effect`);
+   await page.setViewportSize({width:1280,height:900});await expect(nav(sessionId)).toHaveAttribute('aria-label','Idle');
+   const inspectHistory=async()=>{
+    await history();await expect(item.getByText('Reminder cleared. The saved answer and delivery status are kept.',{exact:true})).toBeVisible();
+    await expect(item.locator('.a-question-result .a-markdown')).toHaveText(original.answer.text);
+    await expect(item).toContainText(delivery.status==='unknown'?'Delivery is unconfirmed':'Answer saved; not delivered.');
+    await expect(item).toContainText(delivery.message);await expect(item.getByRole('button',{name:'Clear reminder',exact:true})).toHaveCount(0);
+    await item.getByText('Original question & provenance',{exact:true}).click();
+    await expect(item).toContainText('Answer to question revision 1.');await expect(item.locator('.a-question-prompt')).toHaveText(original.prompt);
+    if(output)await page.screenshot({path:join(output,`question-dismiss-${delivery.status}-1280-history.png`)});
+    await close();
+   };
+   await inspectHistory();await page.reload();await showFixtureConversation(page);
+   await expect(item).toHaveCount(0);await expect(composer()).toHaveDraft(draft);await inspectHistory();
+   // Tear down the document and reopen; this is not a host restart.
+   await page.goto('about:blank');await page.goto(ready.url);await showFixtureConversation(page);await select(sessionId);
+   await expect(item).toHaveCount(0);await expect(composer()).toHaveDraft(draft);await inspectHistory();
+   const reopened=await observe(sessionId);assert.deepEqual(reopened.questions,[saved]);assert.deepEqual(reopened.persistedQuestions,[saved]);
+   for(const key of ['sent','starts','retries','deliveryChecks','messages'])assert.deepEqual(reopened[key],before[key],`Reopening has no ${key} effect`);
+   assert.equal(actions.filter(row=>row.action==='question.dismiss'&&row.args.id===id).length,1,'Reload/reopen cannot repeat dismissal');
+   reports.push({id,sessionId,inputId:delivery.inputId,delivery:delivery.status,revision:saved.revision,commandId:requests[0].id,width});
+  }
+  await select(ready.sessionId);await expect(card(ready.required)).toBeVisible();
+  await expect(card(ready.required).getByRole('button',{name:'Clear reminder',exact:true})).toHaveCount(0);
+  await expect(page.locator('.a-question-notice')).toContainText('3 questions need your answer');
+  await expect(nav(ready.sessionId)).toHaveAttribute('aria-label','Answer requested');
+  const final=await check();assert.deepEqual(final.questions.find(q=>q.id===ready.required),pendingBefore);
+  for(const key of ['sent','starts','retries','deliveryChecks'])assert.deepEqual(final[key],[],`Reminder-only mode must make zero ${key} calls`);
+  assert.deepEqual(actions.filter(row=>['question.answer','question.cancel','conversation.send','conversation.delivery','conversation.retry','session.warm','runtime.control'].includes(row.action)),[]);
+  if(output)await writeFile(join(output,'question-dismiss.json'),JSON.stringify({status:'passed',realHTTP:true,reports,runtimeEffects:0,limits:['Preseeded answers; no actual provider, host restart or late-acceptance campaign.','Persistence read through reopened SQLite connection; document reload/reopen, not full host recovery.']},null,2)+'\n');
+ }else{
  await page.goto(ready.url);await showFixtureConversation(page);
  await expect(card(ready.required)).toBeVisible();
  const uniqueQuestions=async()=>{for(const id of [ready.required,ready.optional,ready.skipped])await expect(card(id)).toHaveCount(1)};
@@ -852,6 +923,7 @@ try{
    assert.deepEqual((await observe()).sent,confirmed.sent,'Confirmed reload cannot replay work');
   }finally{await deliveryContext.close()}
  }
+ }
  assert.deepEqual(errors,[]);
 }catch(error){failure=error;throw error}
 finally{
@@ -867,4 +939,6 @@ finally{
    if(output)await writeFile(join(output,'fixture-exit.json'),JSON.stringify(exit,null,2)+'\n');
   }});
 }
-console.log('Durable questions browser passed: unique cards alongside handoff updates and reload, reconnect, explicit required/optional UI, option and free-text answers, cancellation, duplicate rejection, preserved draft, shared voice provenance, mobile layout, timeout retained across reload, late exact acceptance and passive delivery checks without replay on keyboard/touch.');
+console.log(process.env.AMPLIFIER_QUESTIONS_MODE==='dismiss'
+ ?'Reminder-only questions browser passed: exact real HTTP dismissal, unchanged unknown/rejected evidence and provenance, committed history after reload/reopen, independent drafts and required pending attention retained; zero runtime effects.'
+ :'Durable questions browser passed: unique cards alongside handoff updates and reload, reconnect, explicit required/optional UI, option and free-text answers, cancellation, duplicate rejection, preserved draft, shared voice provenance, mobile layout, timeout retained across reload, late exact acceptance and passive delivery checks without replay on keyboard/touch.');
