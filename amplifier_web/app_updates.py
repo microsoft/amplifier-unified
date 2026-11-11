@@ -683,7 +683,7 @@ async def _activate(manager, *, force=None, holds=None):
         await manager.diagnostics.run('replacement-artifact', asyncio.to_thread,
             artifacts.verify, artifact, validated['version'], revision)
     recovery = None
-    if can_promote and force is None and not selected:
+    if can_promote and force is None and (not selected or sys.platform == 'win32'):
         # Capture the serving graph and launch pointer BEFORE changing either.
         # In-place reinstalls have no untouched old environment to restore.
         from .app_features import running_application
@@ -705,6 +705,9 @@ async def _activate(manager, *, force=None, holds=None):
             # Lack of old-host proof does not invalidate a qualified candidate,
             # but cannot authorize reopening the old host after a failed probe.
             pass
+    if sys.platform == 'win32' and recovery is None:
+        raise ValueError('Windows activation requires a verified untouched previous installation for recovery; '
+                         'the running host and launch target were not changed.')
     async with manager.service.lock:
         if force is not None:
             from .update_restart import require
@@ -833,7 +836,7 @@ async def _activate(manager, *, force=None, holds=None):
     # detached process spawned by this in-process updater.
     from .deployment_service import current_process_is_unit_managed
     if current_process_is_unit_managed(manager.home):
-        await request_managed_restart(manager)
+        await request_managed_restart(manager, **({'recovery': recovery} if sys.platform == 'win32' else {}))
         return
     # A tiny stdlib helper waits until this host releases its port, then starts
     # the already-verified launcher. It does not execute a shell command.
@@ -909,7 +912,7 @@ async def restore_promoted_application(manager, promoted, recovery, bootstrap):
     return True
 
 
-async def request_managed_restart(manager):
+async def request_managed_restart(manager, *, recovery=None):
     """Queue an OS-owned restart; only a ready successor confirms completion.
 
     A service manager can stop this process before its client receives a reply.
@@ -933,7 +936,7 @@ async def request_managed_restart(manager):
             from .windows_service import request_update_restart
             target = {key: marker[key] for key in ('revision', 'generation', 'attemptId')}
             dispatched = True
-            await asyncio.to_thread(request_update_restart, manager.home, target)
+            await asyncio.to_thread(request_update_restart, manager.home, target, recovery)
             result = None
         else:
             command=managed_restart_command()

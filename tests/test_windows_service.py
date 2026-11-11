@@ -672,6 +672,40 @@ def test_supervisor_normal_stop_does_not_restart_or_infer_generation(monkeypatch
     assert events[0][1]["cwd"] == value.workspace
 
 
+@pytest.mark.parametrize("failure", ["timeout", "foreign-child", "reused-pid"])
+def test_supervisor_identity_failure_cannot_enter_an_unbounded_popen_exit(monkeypatch, failure):
+    from amplifier_web import windows_task_runtime as runtime
+    value = spec(supervised=True)
+    monkeypatch.setattr(service, "_read", lambda home: ({"state": 4, "instances": 1}, value))
+    monkeypatch.setattr(service, "_launch_python", lambda spec: (spec.python, None))
+    class Child:
+        pid = 123
+        def __init__(self, *args, **kwargs):
+            pass
+        def __enter__(self):
+            pytest.fail("Popen context exit would wait indefinitely after an identity failure")
+        def poll(self):
+            return None
+        def wait(self):
+            pytest.fail("An unverified child must not enter an unbounded wait")
+    monkeypatch.setattr(service.subprocess, "Popen", Child)
+    record = {"run": "b" * 32, "pid": 456 if failure == "foreign-child" else 123,
+              "created": "134000000000000001", "image": r"C:\Python\pythonw.exe"}
+    observations = iter([None, None if failure == "timeout" else record])
+    monkeypatch.setattr(runtime, "read", lambda spec: next(observations))
+    ticks = iter([0, 61])
+    monkeypatch.setattr(service.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(runtime, "parent_pid", lambda pid: 999)
+    @contextmanager
+    def process(pid):
+        yield {**record, "created": "134000000000000002", "exited": lambda: False}
+    monkeypatch.setattr(runtime, "process", process)
+    with pytest.raises(service.WindowsServiceError, match={
+        "timeout": "did not publish", "foreign-child": "does not belong", "reused-pid": "differs"
+    }[failure]):
+        service._supervise(value)
+
+
 def test_unqualified_supervised_update_owner_is_closed_before_any_native_read(monkeypatch):
     assert service.SUPERVISED_UPDATES_QUALIFIED is False
     monkeypatch.setattr(service, "_read", lambda *a: pytest.fail("closed gate must not inspect native tasks"))

@@ -25,6 +25,39 @@ rollback. Private runtime receipts still identify the actual host PID, exact
 creation time, process image and listening identity. Native windowless worker
 containment and full background lifetime remain affected qualification boundaries.
 
+### Stable launcher and update recovery
+
+The supervised candidate keeps the owner-logon task's `pythonw.exe` as a stable
+launcher. Each app generation runs as a contained child, not a detached helper.
+A non-inheritable lifetime job belongs to the launcher; closing its lifetime
+closes descendants. The actual app publishes its private run/PID/FILETIME/image
+receipt. A venv redirector's PID and Scheduler EnginePID are not accepted as the
+app's identity. A new process must join the launched child's native ancestry.
+
+An ordinary update still uses canonical preparation, official wheel identity,
+installed graph verification, idle/drain guards and application-generation
+promotion. Windows does not fall back to in-place replacement. Before the old
+host requests normal shutdown, it records the exact promoted/previous pointer,
+bootstrap and old installation identity/graph, and target revision/generation/
+attempt with its current run. An explicit stop wins over the restart request.
+The successor must obtain the existing private-pinned authenticated readiness
+acknowledgement. A launch or a listening socket alone is not update success.
+
+If that exact successor exits before acceptance, or fails bounded readiness and
+then completes its normal shutdown, the launcher may verify the untouched old
+installation and restore only the unchanged pointer it replaced. A changed
+target, graph, bootstrap, run or uncertain shutdown refuses recovery. A separate
+old-host readiness check must prove the original graph and authenticated data/
+process identity before reopening admission. It records `restart-rollback`, not
+a fabricated `restart-ack`, retains the failed update, and suppresses automatic
+retry of that same revision. Explicit installation or a changed published
+revision remains a separate ordinary request. User auto-update preferences are
+not silently rewritten. Unknown effects and saved work are not replayed.
+
+These are implementation rules, not a claim that native update/rollback,
+sign-in/out or consumer download acceptance has completed. The Windows automatic
+update gate stays closed while those affected native controls are being qualified.
+
 ## Process-local Proactor cleanup backport
 
 `windows_proactor.py` carries CPython gh-160429's socket-shutdown correction

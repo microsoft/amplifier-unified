@@ -68,9 +68,9 @@ def read(spec, name=RECEIPT):
     except FileNotFoundError:
         return None
     value = json.loads(raw)
-    if name == STOP and isinstance(value, dict) and value.get("registration") != spec.registration_id:
-        # A legitimate prior task registration can leave its old request. It
-        # cannot stop the successor and need not be deleted to launch it.
+    if isinstance(value, dict) and value.get("registration") != spec.registration_id:
+        # A removed task may leave its last runtime/stop record. Validate the
+        # closed old protocol, but never adopt it into a new registration.
         validate(value, value.get("registration"))
         return None
     return validate(value, spec.registration_id)
@@ -109,7 +109,10 @@ def read_restart(spec):
             raw = pinned.read_private(RESTART, limit=LIMIT)
     except FileNotFoundError:
         return None
-    return restart_record(json.loads(raw), spec.registration_id)
+    value = json.loads(raw)
+    registration = (value.get("run") or {}).get("registration") if isinstance(value, dict) and isinstance(value.get("run"), dict) else None
+    result = restart_record(value, registration)
+    return result if registration == spec.registration_id else None
 
 
 def request_restart(spec, target):

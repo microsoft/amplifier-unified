@@ -134,6 +134,26 @@ def test_control_files_use_only_existing_private_boundary(monkeypatch):
     assert events[0][1]["create"] is False and events[1][1]["create"] is True
 
 
+@pytest.mark.parametrize("name", [runtime.RECEIPT, runtime.STOP, runtime.RESTART])
+def test_reinstall_ignores_valid_prior_registration_but_not_malformed_records(monkeypatch, name):
+    from amplifier_web import windows_files
+    old = record(registration="f" * 32)
+    stored = restart(run=old) if name == runtime.RESTART else old
+    class Pinned:
+        def read_private(self, requested, *, limit):
+            assert requested == name and limit == runtime.LIMIT
+            return json.dumps(stored).encode()
+    @contextmanager
+    def directory(*args, **kwargs):
+        yield Pinned()
+    monkeypatch.setattr(windows_files, "address", PureWindowsPath)
+    monkeypatch.setattr(windows_files, "directory", directory)
+    assert (runtime.read_restart(spec()) if name == runtime.RESTART else runtime.read(spec(), name)) is None
+    old["created"] = 134000000000000001  # Lossy/unknown old records are not ignored.
+    with pytest.raises(ValueError):
+        runtime.read_restart(spec()) if name == runtime.RESTART else runtime.read(spec(), name)
+
+
 @pytest.fixture
 def controls(monkeypatch):
     state = {"record": record(), "exited": False, "writes": [], "actual": record()}

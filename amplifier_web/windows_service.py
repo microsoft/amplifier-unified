@@ -1,10 +1,9 @@
 """Owner-interactive Scheduled Task candidate, not Windows readiness attestation.
 
-Only Task Scheduler owns the host lifetime. The action enters the existing CLI
-in the same Python process; there is no detached child or independent supervisor.
-Task-engine PID is deliberately NOT treated as the host PID. Native sign-out,
-descendant cleanup, private logs and authenticated process correlation still need
-qualification before the ordinary launcher/update path can use this backend.
+Task Scheduler owns a stable windowless launcher and its contained app child.
+The actual host publishes its own identity, never Scheduler EnginePID or a venv
+redirector PID. Legacy direct-host definitions remain readable for replacement.
+Automatic updates stay gated until native transition/recovery qualification.
 """
 from __future__ import annotations
 
@@ -577,9 +576,9 @@ def update_owner(data_dir):
     return spec
 
 
-def request_update_restart(data_dir, target):
+def request_update_restart(data_dir, target, recovery=None):
     """Commit an exact private host signal, never claim successor readiness."""
-    from .windows_task_runtime import request_restart, read_restart
+    from .windows_task_runtime import request_restart, read_restart, read, restart_record
     spec = update_owner(data_dir)
     if spec is None:
         raise WindowsServiceError("The current host is not a qualified supervised update owner.")
@@ -591,7 +590,12 @@ def request_update_restart(data_dir, target):
     validated = json.loads((selected["folder"] / "validated.json").read_text())
     if validated.get("attemptId") != target.get("attemptId"):
         raise WindowsServiceError("The promoted qualification attempt changed.")
+    from .windows_app_recovery import prepare
+    restart = restart_record({"schema": 1, "run": read(spec), "target": target}, spec.registration_id)
+    prepare(spec, restart, recovery)
     request = request_restart(spec, target)
+    if request != restart:
+        raise RuntimeError("The restart host changed after its recovery binding was saved.")
     if read_restart(spec) != request:
         raise RuntimeError("The restart signal could not be confirmed; inspect its original receipt.")
     return request
@@ -625,7 +629,20 @@ def _run(encoded: str) -> None:
     if spec.supervised:
         from .windows_jobs import contain_current_host
         contain_current_host()
-        raise SystemExit(_supervise(spec))
+        try:
+            code = _supervise(spec)
+        except (OSError, ValueError, RuntimeError) as error:
+            # Do not let Scheduler's crash policy replay an uncertain handoff.
+            # The lifetime job closes with this process; status remains stopped,
+            # not healthy. Only a fresh ordinary owner action starts it again.
+            from .windows_files import address, directory
+            root = address(spec.data_dir)
+            with directory(root / "config/services", owned_root=root, create=False) as owned:
+                owned.publish_private("task-launcher-error.json", json.dumps({
+                    "schema": 1, "registration": spec.registration_id,
+                    "errorType": type(error).__name__, "acceptance": False}).encode(), replace=True)
+            code = 0
+        raise SystemExit(code)
     return _host(spec)
 
 
@@ -654,6 +671,7 @@ def _supervise(spec):
     """
     from .windows_task_runtime import process, matches, read, read_restart, parent_pid, RESTART_EXIT
     requested = None
+    restart = None
     while True:
         value, installed = _read(spec.data_dir)
         if installed != spec or value.get("state") != 4 or value.get("instances") != 1:
@@ -668,39 +686,77 @@ def _supervise(spec):
         # Only the actual app owns its private log; concurrent parent snapshots
         # must not replace the child's final output or contend on publication.
         previous_run = read(spec)
-        with subprocess.Popen([python, "-I", "-m", "amplifier_web.windows_service",
-                               "--host", spec.encoded()],
-                              cwd=spec.workspace, stdin=subprocess.DEVNULL,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)) as child:
-            # CPython's installed venv entry may be a redirector. Join the
-            # freshly published app receipt to that live child's ancestry;
-            # never mistake Scheduler EnginePID or Popen's PID for the host.
-            deadline = time.monotonic() + 60
-            while True:
-                record = read(spec)
-                if record and (not previous_run or record["run"] != previous_run["run"]):
-                    if record["pid"] != child.pid and parent_pid(record["pid"]) != child.pid:
-                        raise WindowsServiceError("The app receipt does not belong to this launched child.")
-                    break
-                if child.poll() is not None or time.monotonic() >= deadline:
-                    raise WindowsServiceError("The background host did not publish its new identity.")
-                time.sleep(0.1)
-            with process(record["pid"]) as actual:
-                if not actual:
-                    raise WindowsServiceError("The background host exited before identity was observed.")
-                if not matches(record, actual):
-                    raise WindowsServiceError("The launched host identity differs from its receipt.")
-                code = child.wait()
-                if code != RESTART_EXIT:
-                    return code
-                request = read_restart(spec)
-                if (not request or not matches(request["run"], actual)
-                        or not actual["exited"]()):
-                    raise WindowsServiceError("No exact completed host restart was recorded.")
-                requested = request["target"]
-                if target and all(target.get(key) == requested[key] for key in ("revision", "generation")):
-                    raise WindowsServiceError("The host requested its unchanged application generation.")
+        # Do not use Popen's context manager: its unbounded __exit__.wait()
+        # would defeat identity-startup timeouts. _run's retained lifetime job
+        # contains descendants if this launcher exits on an invalid observation.
+        child = subprocess.Popen([python, "-I", "-m", "amplifier_web.windows_service",
+                                  "--host", spec.encoded()],
+                                 cwd=spec.workspace, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        # CPython's installed venv entry may be a redirector. Join the freshly
+        # published app receipt to that live child's ancestry.
+        deadline = time.monotonic() + 60
+        while True:
+            record = read(spec)
+            if record and (not previous_run or record["run"] != previous_run["run"]):
+                if record["pid"] != child.pid and parent_pid(record["pid"]) != child.pid:
+                    raise WindowsServiceError("The app receipt does not belong to this launched child.")
+                break
+            if child.poll() is not None or time.monotonic() >= deadline:
+                raise WindowsServiceError("The background host did not publish its new identity.")
+            time.sleep(0.1)
+        with process(record["pid"]) as actual:
+            if not actual:
+                raise WindowsServiceError("The background host exited before identity was observed.")
+            if not matches(record, actual):
+                raise WindowsServiceError("The launched host identity differs from its receipt.")
+            failed_start = _wait_updated_host(spec, child, actual, restart) if requested is not None else False
+            code = child.wait()
+            if code != RESTART_EXIT:
+                if failed_start and requested is not None and actual["exited"]():
+                    # Only an exact exited successor may trigger rollback.
+                    # Unknown startup/ancestry observations remain fail-closed.
+                    from .windows_app_recovery import restore
+                    restore(spec, restart)
+                    requested = restart = None
+                    continue
+                return code
+            request = read_restart(spec)
+            if (not request or not matches(request["run"], actual)
+                    or not actual["exited"]()):
+                raise WindowsServiceError("No exact completed host restart was recorded.")
+            requested = request["target"]
+            restart = request
+            if target and all(target.get(key) == requested[key] for key in ("revision", "generation")):
+                raise WindowsServiceError("The host requested its unchanged application generation.")
+
+
+def _wait_updated_host(spec, child, actual, restart):
+    """Bound first readiness; use normal stop only for this exact new run."""
+    from . import windows_app_recovery as recovery, windows_task_runtime as runtime
+    deadline = time.monotonic() + 90
+    while True:
+        current = runtime.read(spec)
+        if not current or not runtime.matches(current, actual):
+            raise WindowsServiceError("The updated host identity changed before acceptance.")
+        stopped = runtime.read(spec, runtime.STOP)
+        if stopped and runtime.matches(stopped, actual) and stopped["run"] == current["run"]:
+            return False  # Explicit owner stop wins; do not relaunch it.
+        value = recovery.read(spec)
+        if not value or value["restart"] != restart:
+            raise WindowsServiceError("The updated host recovery binding changed.")
+        if value["status"] == "acknowledged":
+            return False
+        if child.poll() is not None and actual["exited"]():
+            return True
+        if time.monotonic() >= deadline:
+            runtime.request_stop(spec, timeout=30)
+            # An unconfirmed normal stop raises, never authorizes rollback.
+            if not actual["exited"]():
+                raise WindowsServiceError("The unready updated host has not exited.")
+            return True
+        time.sleep(0.25)
 
 
 def _host(spec):
