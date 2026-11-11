@@ -176,8 +176,8 @@ class AppearanceReferenceCssTests(unittest.TestCase):
         self.assertNotIn('background', user_body)
         self.assertIn('#amp-one :where(.a-user > .a-message-body)', css)
         canvas = (ROOT / "components/web-client/src/canvas-workspace.css").read_text(encoding="utf-8")
-        self.assertIn('.a-canvas-preview{padding:16px}', canvas)
-        self.assertIn('.a-canvas-preview:has(>.a-canvas-html){padding:0}', canvas)
+        self.assertRegex(canvas, r'\.a-canvas-preview\s*\{[^}]*\bpadding\s*:\s*16px\s*[;}]')
+        self.assertRegex(canvas, r'\.a-canvas-preview:has\(>\.a-canvas-html\)\s*\{[^}]*\bpadding\s*:\s*0\s*[;}]')
         self.assertRegex(css, r'\.task-list-item\s*\{\s*list-style:\s*none;')
         self.assertRegex(css, r'\.task-list-item > input\[type="checkbox"\]\s*\{\s*margin-inline-end:\s*0\.5em;')
 

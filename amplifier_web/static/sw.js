@@ -1,7 +1,7 @@
 /* Only public branding and the offline help page are cached. No app shell,
    authenticated pages, API responses, chats, attachments, or canvas documents. */
 const CACHE_PREFIX='amplifier-public-';
-const CACHE=CACHE_PREFIX+'3afd0e388877a856';
+const CACHE=CACHE_PREFIX+'5172cc5159d28209';
 const PUBLIC_FILES=[
   '/offline.html','/app-pages.css','/pwa.js','/manifest.webmanifest','/favicon.ico',
   '/branding/favicons/favicon.ico','/branding/favicons/favicon-32.png',
@@ -28,4 +28,11 @@ self.addEventListener('fetch',event=>{
       return cached||new Response('Amplifier is unavailable. Start the Python service and try again.',{status:503,headers:{'Content-Type':'text/plain'}});
     }));
   }
+});
+self.addEventListener('notificationclick',event=>{
+  event.notification.close();
+  const id=event.notification.data?.sessionId;
+  if(typeof id!=='string'||!id||id.length>200||/[\u0000-\u001f\u007f]/.test(id))return;
+  // Explicit click opens only a same-origin chat link, not a command or approval.
+  event.waitUntil(self.clients.openWindow('/?chat='+encodeURIComponent(id)));
 });
