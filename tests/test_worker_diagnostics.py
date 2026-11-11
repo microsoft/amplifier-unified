@@ -458,7 +458,8 @@ def test_command_failure_facts_known_types_do_not_format_arguments_or_process_pa
 
 
 @pytest.mark.parametrize('method,label', [
-    ('command', 'worker.command'), ('_command_serial', 'worker.command_serial')])
+    ('command', 'worker.command'), ('_command_serial', 'worker.command_serial'),
+    ('read', 'worker.stdin')])
 def test_command_failure_frame_labels_require_loaded_code_identity_not_equal_clones(method, label):
     import types
     from amplifier_web.runtime_worker import Worker
@@ -1226,6 +1227,27 @@ def test_worker_failure_witness_rejects_unknown_or_malformed_metadata(mutation):
     witness['workerFailure'] = {'source': 'execution', 'factsStatus': 'valid', **_command_facts_fixture()}
     mutation(witness['workerFailure'])
     assert validate_runtime_failure_witness(witness) is None
+
+
+def test_worker_failure_envelope_bounds_and_hostile_values_fail_closed(monkeypatch):
+    from amplifier_web import worker_diagnostics as diagnostics
+    class BadDict(dict):
+        def __iter__(self): raise AssertionError('private iterator')
+    class BadString(str):
+        def __eq__(self, other): raise AssertionError('private comparison')
+        def __hash__(self): raise AssertionError('private hash')
+    witness = _reader_witness_fixture()
+    worker = {'source': 'stdin', 'factsStatus': 'valid', **_command_facts_fixture()}
+    witness['workerFailure'] = worker
+    for bad in (BadDict(worker), {**worker, 'source': BadString('stdin')},
+                {**worker, 'factsStatus': BadString('valid')}, {**worker, 'errors': [worker]}):
+        assert diagnostics.validate_runtime_failure_witness({**witness, 'workerFailure': bad}) is None
+    result = diagnostics.validate_runtime_failure_witness(witness)
+    size = len(json.dumps(result).encode('utf-8'))
+    monkeypatch.setattr(diagnostics, '_COMMAND_MAX_BYTES', size)
+    assert diagnostics.validate_runtime_failure_witness(witness) == witness
+    monkeypatch.setattr(diagnostics, '_COMMAND_MAX_BYTES', size - 1)
+    assert diagnostics.validate_runtime_failure_witness(witness) is None
 
 
 async def test_executed_worker_publishes_original_failure_facts_before_shutdown(monkeypatch):

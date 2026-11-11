@@ -1315,9 +1315,10 @@ async def test_windows_communication_error_settles_children_only_after_confirmed
         await model.manager.close()
 
 
+@pytest.mark.parametrize('secondary', [None, 'valid', 'invalid', 'missing'])
 @pytest.mark.parametrize('facts_status', ['valid', 'invalid', 'missing'])
 async def test_windows_eof_preserves_originating_worker_failure_without_payload(
-        windows_runtime_model, facts_status):
+        windows_runtime_model, facts_status, secondary):
     from amplifier_web.runtime import encode_message
     from amplifier_web.worker_diagnostics import runtime_failure_witness
     model = windows_runtime_model
@@ -1332,6 +1333,12 @@ async def test_windows_eof_preserves_originating_worker_failure_without_payload(
     if facts_status != 'missing':
         event['failureFacts'] = facts if facts_status == 'valid' else {**facts, 'payload': 'private'}
     model.job.stdout.feed_data(encode_message(event))
+    if secondary is not None:
+        event = {'type': 'runtime.error', 'error': 'private secondary', 'failureSource': 'stdin'}
+        if secondary != 'missing':
+            event['failureFacts'] = ({'errors': [{'class': 'ValueError', 'frames': []}], 'truncated': False}
+                                     if secondary == 'valid' else {'private': 'body'})
+        model.job.stdout.feed_data(encode_message(event))
     model.job.finish()
     try:
         await asyncio.wait_for(asyncio.shield(row['reader']), 1)
@@ -3963,7 +3970,7 @@ def test_default_runtime_probe_diagnostic_privacy_bounds_and_schema(monkeypatch)
             fixture.validate_inner_report({**fixture.empty_inner_report(), 'diagnostic': value})
     # Observation itself can fail. It still cannot escape the outcome path or
     # authorize success; there is no private stringification as a fallback.
-    def broken(*args):
+    def broken(*args, **kwargs):
         raise PrivateError()
     monkeypatch.setattr(fixture, '_failure_facts', broken)
     fallback = fixture.parse_inner_output(b'')
@@ -4058,7 +4065,7 @@ async def test_default_runtime_probe_diagnostic_fault_keeps_failed_outer_owner(t
                           output_discarded=False, close=AsyncMock())
     monkeypatch.setattr(windows_jobs.WindowsOwnedProcess, 'start',
                         AsyncMock(side_effect=windows_jobs.CleanupError(job)))
-    def broken(*args):
+    def broken(*args, **kwargs):
         raise RuntimeError('private observer failure')
     monkeypatch.setattr(fixture, '_failure_facts', broken)
     outcome = await fixture.run_owned_probe(

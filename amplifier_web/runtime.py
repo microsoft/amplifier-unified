@@ -1156,13 +1156,16 @@ class RuntimeManager:
                     # Retain the originating worker error separately from the
                     # host's later EOF. Only closed facts survive; no worker
                     # prose/paths enter the causal witness or change admission.
-                    facts = validate_command_failure_facts(data.get('failureFacts'))
-                    source = data.get('failureSource')
-                    worker_failure = {
-                        'source': source if type(source) is str and source in {'execution', 'stdin'} else 'other',
-                        'factsStatus': 'valid' if facts is not None else
-                            'invalid' if 'failureFacts' in data else 'missing',
-                        **(facts if facts is not None else {'errors': [], 'truncated': False})}
+                    if worker_failure is None:
+                        # Shutdown can fail secondarily. Later/better-shaped
+                        # evidence must not replace the first observed cause.
+                        facts = validate_command_failure_facts(data.get('failureFacts'))
+                        source = data.get('failureSource')
+                        worker_failure = {
+                            'source': source if type(source) is str and source in {'execution', 'stdin'} else 'other',
+                            'factsStatus': 'valid' if facts is not None else
+                                'invalid' if 'failureFacts' in data else 'missing',
+                            **(facts if facts is not None else {'errors': [], 'truncated': False})}
                     failure = _worker_error(data)
                     diagnostic = None
                     startup = not row['ready'].done()
