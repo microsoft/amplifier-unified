@@ -14,24 +14,37 @@ import uuid
 PARTS={'runtime':['runtime'],'cache':['foundation/cache','updates/releases','updates/active.json'],'settings':['config','routing','bundles'],'conversations':['sessions']}
 
 CONFIGURATION_FILES = ('configuration.json', 'effective-configuration.json')
-CONFIGURATION_LIMIT = 1024 * 1024
 
 
 def _read_reset_configuration(path, home):
-    """Bound private plan reads; never follow a redirected session directory."""
+    """Read an existing plan, bounded by its own size, not a reset-only limit."""
     if os.name == 'nt':
-        from .windows_files import directory
+        from .windows_files import _component, directory
+        _component(path.name)
         with directory(path.parent, owned_root=home) as pinned:
-            return pinned.read_private(path.name, limit=CONFIGURATION_LIMIT)
+            # The public small-config reader has a 1 MiB ceiling. Keep the same
+            # pinned parents, ACL-checked existing handle and native reader,
+            # but bound this already persisted plan by that handle's size.
+            pinned._check()
+            handle = pinned._existing(path.name)
+            try:
+                info = pinned._api.info(handle, pinned.path / path.name, directory=False)
+                size = (info.size_high << 32) | info.size_low
+                content = pinned._api.read(handle, limit=size)
+            finally:
+                pinned._api.close(handle)
+            if len(content) != size:
+                raise ValueError('Saved configuration changed during reset.')
+            return content
     from .staged_sources import owned_path
     owned_path(path, home)
-    info = path.stat()
-    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-        raise ValueError('Reset configuration must be a private regular file: ' + str(path.relative_to(home)))
     with path.open('rb') as stream:
-        content = stream.read(CONFIGURATION_LIMIT + 1)
-    if len(content) > CONFIGURATION_LIMIT:
-        raise ValueError('Reset configuration exceeds 1 MiB: ' + str(path.relative_to(home)))
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError('Reset configuration must be a private regular file: ' + str(path.relative_to(home)))
+        content = stream.read(info.st_size + 1)
+    if len(content) != info.st_size:
+        raise ValueError('Saved configuration changed during reset.')
     return content
 
 
@@ -117,8 +130,6 @@ def prepare_reset_configurations(home, targets):
                                  ': a retiring source is missing, changed or unverified, or an explicit '
                                  'context resource still uses a retiring path. No cache was retired.')
             after = json.dumps(converted, indent=2).encode('utf-8')
-            if len(after) > CONFIGURATION_LIMIT:
-                raise ValueError('Converted reset configuration exceeds 1 MiB: ' + relative)
             changes.append((path, before, after))
     return changes
 
@@ -412,37 +423,39 @@ async def _reset(manager,args,operation=None):
                             target=retained/name;target.parent.mkdir(parents=True,exist_ok=True)
                             path.rename(target)
                             moves.append((path, target))
-                    if 'conversations' in parts:
-                        for session in sessions:
-                            service.history.hide_session(session)
-                        service.forget_session_records(row['id'] for row in sessions)
-                        service.state.update(sessions=[],selectedSessionId=None,runtimeControl={},sessionConfiguration={},history=[])
-                        # Commands own idempotent effect receipts, including this
-                        # reset's queued identity. Reset chats, never replay rights.
-                    if 'settings' in parts:
-                        from .updates import DEFAULT_CHECK_INTERVAL_HOURS
-                        service.state['settings']['updates']={'autoCheck':True,'autoInstall':False,'intervalHours':DEFAULT_CHECK_INTERVAL_HOURS}
-                        service._shared_preferences_stamp=None
-                        service._refresh_shared_preferences()
-                        service.state.update(setup={},bundles={},bundleDiscovery={},permissions={})
-                        service.state['notificationSettings']=manager.notifications.public()
-                        # Dormant owners have no mounted runtime to retire; their
-                        # next start reads the reset settings normally.
-                        for session in service.state['sessions']:
-                            if not session.get('historyManaged'):session['configurationPending']=True
-                    if 'cache' in parts:
-                        service.state['updates'].update(release=None,pendingRelease=None,canRollback=False,items=[],available=0)
-                        service.update_manager.inventory=[]
-                    service.state['updates'].update(phase='idle',pendingApp=None)
-                    result.update(retained=str(retained),resetOperationId=operation,detail='Selected app data reset. Backup and original files are retained privately; your workspaces and CLI data were untouched.')
-                    service.state['maintenance']=result
-                    service._publish_full(reason='Explicit reset of selected application stores')
                 except BaseException:
                     for original, saved in reversed(moves):
                         saved.rename(original)
                     for path, before in reversed(written):
                         write_private(path, before, owned_root=service.data_dir)
                     raise
+                # Catalog/history/settings writes below may commit before
+                # publication raises. File-only rollback is no longer safe.
+                if 'conversations' in parts:
+                    for session in sessions:
+                        service.history.hide_session(session)
+                    service.forget_session_records(row['id'] for row in sessions)
+                    service.state.update(sessions=[],selectedSessionId=None,runtimeControl={},sessionConfiguration={},history=[])
+                    # Commands own idempotent effect receipts, including this
+                    # reset's queued identity. Reset chats, never replay rights.
+                if 'settings' in parts:
+                    from .updates import DEFAULT_CHECK_INTERVAL_HOURS
+                    service.state['settings']['updates']={'autoCheck':True,'autoInstall':False,'intervalHours':DEFAULT_CHECK_INTERVAL_HOURS}
+                    service._shared_preferences_stamp=None
+                    service._refresh_shared_preferences()
+                    service.state.update(setup={},bundles={},bundleDiscovery={},permissions={})
+                    service.state['notificationSettings']=manager.notifications.public()
+                    # Dormant owners have no mounted runtime to retire; their
+                    # next start reads the reset settings normally.
+                    for session in service.state['sessions']:
+                        if not session.get('historyManaged'):session['configurationPending']=True
+                if 'cache' in parts:
+                    service.state['updates'].update(release=None,pendingRelease=None,canRollback=False,items=[],available=0)
+                    service.update_manager.inventory=[]
+                service.state['updates'].update(phase='idle',pendingApp=None)
+                result.update(retained=str(retained),resetOperationId=operation,detail='Selected app data reset. Backup and original files are retained privately; your workspaces and CLI data were untouched.')
+                service.state['maintenance']=result
+                service._publish_full(reason='Explicit reset of selected application stores')
         except BaseException:
             await service.discard_runtime(candidate)
             await manager.publish(updates={**service.state.get('updates',{}),'phase':'error','error':'Reset did not complete; retained originals are in backups.'})

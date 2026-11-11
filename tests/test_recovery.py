@@ -205,3 +205,74 @@ async def test_reset_does_not_convert_plans_when_not_retaining_them_across_cache
             assert saved.module.exists()
     finally:
         await service.close()
+
+
+@pytest.mark.parametrize("parts", [
+    ["cache"], ["cache", "settings"], ["cache", "conversations", "settings"],
+])
+async def test_reset_publication_failure_after_commit_does_not_undo_only_files(
+        tmp_path, monkeypatch, legacy_saved_plan, parts):
+    import json
+    from pathlib import Path
+    from amplifier_web import recovery
+    from amplifier_web.automatic_history import identity
+    from amplifier_web.session_files import project_slug
+    from amplifier_web.state_records import load
+
+    service = AppService(tmp_path / "app", Runtime(), workspace=tmp_path)
+    manager = Management(service)
+    service.management = manager
+    service.update_manager = UpdateManager(service)
+    await service.dispatch("session.create", {})
+    sid = service._session()["id"]
+    saved = legacy_saved_plan(service.data_dir)
+    settings = service.data_dir / "config/reset-sentinel.txt"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_bytes(b"original private settings")
+    service.state["updates"].update(release="old", pendingRelease="candidate", canRollback=True)
+    service.state["settings"]["updates"] = {"autoCheck": False, "autoInstall": False, "intervalHours": 24}
+    service._save()
+    publish = service._publish_full
+    committed = []
+
+    def publish_then_fail(*, reason):
+        publish(reason=reason)
+        # Read committed storage, not merely the in-memory reset projection.
+        committed.append(load(service.db))
+        raise OSError("fixture failure after reset publication committed")
+
+    monkeypatch.setattr(service, "_publish_full", publish_then_fail)
+    try:
+        with pytest.raises(OSError, match="after reset publication committed"):
+            await recovery.reset(manager, {"parts": parts, "apply": True, "confirmation": "RESET"})
+        assert len(committed) == 1
+        durable = load(service.db)
+        retained = Path(service.state["maintenance"]["retained"])
+        assert not saved.module.exists()
+        assert (retained / saved.module.relative_to(service.data_dir)).exists()
+        for state in (committed[0], durable):
+            assert state["updates"]["release"] is None
+            assert state["updates"]["pendingRelease"] is None
+            if "conversations" in parts:
+                assert sid not in {row["id"] for row in state["sessions"]}
+                assert identity(project_slug(tmp_path), sid) in state["hiddenNativeSessions"]
+            else:
+                assert sid in {row["id"] for row in state["sessions"]}
+            if "settings" in parts:
+                assert state["settings"]["updates"] == {
+                    "autoCheck": True, "autoInstall": False, "intervalHours": 4}
+        for path in saved.paths:
+            if "conversations" in parts:
+                assert not path.exists()
+                assert (retained / path.relative_to(service.data_dir)).read_bytes() == saved.before
+            else:
+                assert json.loads(path.read_text())["tools"][0]["source"] == saved.portable
+        if "settings" in parts:
+            assert not settings.exists()
+            assert (retained / settings.relative_to(service.data_dir)).read_bytes() == b"original private settings"
+        else:
+            assert settings.read_bytes() == b"original private settings"
+        with tarfile.open(service.state["maintenance"]["backup"]) as archive:
+            assert archive.extractfile("sessions/legacy/configuration.json").read() == saved.before
+    finally:
+        await service.close()

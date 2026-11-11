@@ -73,8 +73,8 @@ checkout at the recorded commit. An unreferenced damaged cache does not block
 reset. A referenced source that is missing, modified or unverifiable does block
 cache retirement; reset cannot reconstruct that source honestly. The error (in
 the CLI's private repair report) names the saved plan that needs attention.
-Plans larger than 1 MiB or redirected private
-configuration paths also refuse conversion.
+Redirected private configuration paths refuse conversion. Reset does not impose
+a separate plan-size limit; reads use the existing file's size.
 
 Reset checks module declaration `source` fields, including nested agents and
 spawn tools, and explicit root/agent context-file maps. A context-file path still
@@ -92,8 +92,12 @@ replays the change.
 
 All conversions are prepared before saved plans are changed. Original plan bytes
 are retained in the CLI recovery directory or the in-app private backup. If plan
-application or cache retirement fails, the changed plans and already moved cache
-directories are restored. This is not a fallback that runs code from reset backups.
+application or cache retirement fails before logical state changes, the changed
+plans and already moved cache directories are restored. Once the in-app reset
+begins catalog, history or settings publication, a failure may follow a committed
+database change. It retains the completed filesystem changes and recovery backup,
+reports failure and does not attempt a file-only undo or claim reset success.
+This is not a fallback that runs code from reset backups.
 After a successful reset, normal runtime preparation fetches the exact saved
 source revisions; unavailable repositories or credentials can still prevent that
 preparation.

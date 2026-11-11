@@ -551,9 +551,11 @@ def prepare_saved_configurations(prefix, home, backup, env, moves):
         path = home / relative
         if any(part.is_symlink() for part in (path, path.parent)):
             raise ValueError("Saved configuration is redirected; no cache was retired.")
+        observed = hashlib.sha256()
         with path.open("rb") as stream:
-            before = stream.read(1024 * 1024 + 1)
-        if len(before) > 1024 * 1024 or hashlib.sha256(before).hexdigest() != entry["before"]:
+            for chunk in iter(lambda: stream.read(65536), b""):
+                observed.update(chunk)
+        if observed.hexdigest() != entry["before"]:
             raise ValueError("Saved configuration changed during reset; no cache was retired.")
         prepared.append((path, backup / relative, destination / relative))
     for path, saved, staged in prepared:

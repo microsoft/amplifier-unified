@@ -592,23 +592,109 @@ def test_reset_preparation_preserves_external_and_nonretiring_source_paths(tmp_p
         assert [row["source"] for row in plan["tools"][2:]] == sources
 
 
-@pytest.mark.parametrize("problem", ["oversized", "linked"])
-def test_reset_preparation_refuses_unsafe_plan_reads(tmp_path, legacy_saved_plan, problem):
-    from amplifier_web.recovery import CONFIGURATION_LIMIT, prepare_reset_configurations
+def test_reset_preparation_refuses_linked_plan_reads(tmp_path, legacy_saved_plan):
+    from amplifier_web.recovery import prepare_reset_configurations
     home = tmp_path / "app"
     saved = legacy_saved_plan(home)
     path = saved.paths[0]
-    if problem == "oversized":
-        path.write_bytes(b" " * (CONFIGURATION_LIMIT + 1))
-    else:
-        external = tmp_path / "external-plan.json"
-        path.rename(external)
-        path.symlink_to(external)
+    external = tmp_path / "external-plan.json"
+    path.rename(external)
+    path.symlink_to(external)
     before = path.read_bytes()
     with pytest.raises(ValueError):
         prepare_reset_configurations(home, reset.REGENERABLE)
     assert path.read_bytes() == before
     assert saved.module.exists()
+
+
+@pytest.mark.parametrize("convert", [False, True])
+def test_cli_reset_accepts_large_saved_plans_without_a_reset_size_limit(
+        repair_tree, monkeypatch, legacy_saved_plan, convert):
+    from amplifier_web.host.components import declarations
+    from amplifier_web.recovery import prepare_reset_configurations
+    home, tool, bins = repair_tree
+    saved = legacy_saved_plan(home)
+    saved.plan["instruction"] = "x" * (2 * 1024 * 1024)
+    if not convert:
+        for i, row in enumerate(declarations(saved.plan)):
+            row["source"] = saved.portable if i % 2 else str(saved.external)
+    before = (json.dumps(saved.plan, indent=1) + "\n").encode()
+    for path in saved.paths:
+        path.write_bytes(before)
+    changes = prepare_reset_configurations(home, reset.REGENERABLE)
+    assert len(changes) == (2 if convert else 0)
+    assert all(path.read_bytes() == before for path in saved.paths)
+    monkeypatch.setenv("TEST_RESET_TOOLS", str(tool))
+    fake_install(monkeypatch)
+    backup = reset.repair(home, "uv", tool, bins, "trusted.whl", {}, None, True)
+    for path in saved.paths:
+        plan = json.loads(path.read_text())
+        assert plan["instruction"] == saved.plan["instruction"]
+        if convert:
+            assert plan["tools"][0]["source"] == saved.portable
+            assert (backup / path.relative_to(home)).read_bytes() == before
+        else:
+            assert path.read_bytes() == before
+    assert not saved.module.exists()
+
+
+@pytest.mark.parametrize("deny_file_acl", [False, True])
+def test_windows_reset_reader_uses_file_size_and_retains_private_handle_checks(
+        tmp_path, monkeypatch, deny_file_acl):
+    from contextlib import contextmanager
+    from amplifier_web import recovery, windows_files
+    home = tmp_path / "app"
+    path = home / "sessions/large/configuration.json"
+    content = json.dumps({"instruction": "x" * (2 * 1024 * 1024)}).encode()
+    calls = []
+
+    class API:
+        def info(self, handle, target, *, directory):
+            assert (handle, target, directory) in {
+                ("parent", path.parent, True), ("file", path, False)}
+            return SimpleNamespace(volume=1, index_high=0, index_low=2,
+                                   size_high=0, size_low=len(content))
+
+        def open(self, target):
+            assert target == path
+            calls.append("open")
+            return "file"
+
+        def validate_acl(self, handle, *, private):
+            assert private is True
+            calls.append("acl:" + handle)
+            if handle == "file" and deny_file_acl:
+                raise PermissionError("fixture private ACL denied")
+
+        def read(self, handle, *, limit):
+            assert handle == "file" and limit == len(content)
+            assert "acl:parent" in calls and "acl:file" in calls
+            calls.append("read")
+            return content
+
+        def close(self, handle):
+            assert handle == "file"
+            calls.append("close")
+
+    # Keep the real _check/_existing methods: only the OS boundary is a fixture.
+    pinned = object.__new__(windows_files.PinnedDirectory)
+    pinned.path, pinned._api = path.parent, API()
+    pinned._pins = [(path.parent, "parent", (1, 0, 2), True)]
+
+    @contextmanager
+    def directory(parent, *, owned_root):
+        assert parent == path.parent and owned_root == home
+        yield pinned
+
+    monkeypatch.setattr(windows_files, "directory", directory)
+    monkeypatch.setattr(recovery, "os", SimpleNamespace(name="nt"))
+    if deny_file_acl:
+        with pytest.raises(PermissionError, match="private ACL denied"):
+            recovery._read_reset_configuration(path, home)
+        assert "read" not in calls
+    else:
+        assert recovery._read_reset_configuration(path, home) == content
+    assert calls[-1] == "close"
 
 
 def test_reset_preserves_pending_configuration_and_sealed_request_identity(tmp_path, legacy_saved_plan):
