@@ -3,6 +3,7 @@ import argparse
 import asyncio
 import json
 from pathlib import Path
+import signal
 import tempfile
 from aiohttp import web
 import chat_ui_server as fixture
@@ -20,7 +21,7 @@ async def main(port):
         await service.dispatch('session.pin', {'id': session['id'], 'pinned': True})
         await service.dispatch('canvas.show', {'kind': 'markdown', 'title': 'Website refresh brief', 'content': '# A clearer first impression\n\nHelp a new visitor understand the product, see a useful example, and take their first step.\n\n## Proposed page structure\n\n1. **Welcome.** A short promise and one clear action.\n2. **See it in use.** Show a real task from question to useful result.\n3. **Go further.** Introduce tools, workspaces, and ways to customize.\n\n## One decision to make\n\nShould the opening example focus on everyday work or a specific audience?'})
         service.state['canvas']['open'] = False
-        await service.dispatch('view.update', {'patch': {'navPinned': True, 'navWidth': 240, 'scheme': 'light'}})
+        await service.dispatch('view.update', {'patch': {'navPinned': True, 'navWidth': 240}})
         service._save()
         runner = web.AppRunner(app)
         await runner.setup()
@@ -30,10 +31,16 @@ async def main(port):
         url = f'http://127.0.0.1:{actual}'
         app['allowed_origins'] = app['allowed_origins'] | {url}
         print(json.dumps({'url': url}), flush=True)
+        stopped = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, stopped.set)
         try:
-            await asyncio.Event().wait()
+            await stopped.wait()
         finally:
             await runner.cleanup()
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.remove_signal_handler(sig)
 
 
 if __name__ == '__main__':

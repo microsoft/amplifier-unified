@@ -75,8 +75,19 @@ The target AHP/ACP boundary follows [HP](host-protocol.v1.md) and [AP](agent-pro
    alongside cognitive load and keyboard/focus behavior. Frequently used actions
    may appear on independently scrolled surfaces when that avoids return travel;
    their labels and behavior remain consistent.
+   Everyday journeys serve non-specialists: use plain, outcome-oriented language,
+   useful defaults and familiar controls. A routine preference change does not
+   require a second decision about persistence, storage or synchronization.
+   Uncommon targeting and customization remain discoverable through secondary
+   controls. Where a whole-page source choice is offered, keep the same settings
+   UX in either source and identify the active source once rather than repeating
+   storage controls or exception badges beside every setting.
+   Disclosure is not hover-only or icon-only without an accessible name. Readable
+   text, usable targets and responsive reflow are required; neither excessive
+   whitespace nor shrinking text substitutes for a coherent hierarchy.
    Broken: two clicks to choose between two finishes, an unnecessary Save after a
-   harmless preference, or a crowded screen that makes the shortest path harder to find.
+   harmless preference, a scope selector beside every everyday setting, or a
+   crowded screen that makes the shortest path harder to find.
    Affected: everyone completing routine tasks.
 
 ## Not in v1
@@ -92,6 +103,10 @@ terminal evidence, delayed responses, failed/unknown delivery and keyboard opera
 For interaction changes, record the entry point, intended result, before/after
 action counts, and any justified disclosure or confirmation. Check keyboard
 equivalence and discoverability; few clicks alone do not establish good UX.
+For settings, exercise an ordinary value change, finding a less-common option,
+switching a supported Global/browser source without changing the other set,
+and recovering from a failed save. Check
+the actual layout at narrow widths and enlarged text, not only control presence.
 Document/link checks establish structure only; ratification establishes no implementation verdict.
 
 ## Open questions
@@ -103,6 +118,7 @@ Which existing names should be normalized without making platform commands unfam
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| 2026-11-10 | Clarify CX8's consumer-accessible defaults, secondary exception controls and readable hierarchy. | Product-owner appearance review; observable UX requirements, not implementation acceptance. |
 | 2026-10-20 | Identify desktop consumers and DC; preserve CX1–8. | [Desktop coordination record](../docs/clients/desktop-clients.md). |
 | 2026-10-20 | Apply the accepted Home/sidebar UX amendment. | [Product-owner decision](../docs/ux/decisions/20261020.md). |
 | 2026-10-13 | Add CX8: interaction economy without clutter or lost authority. | User direction: UX is golf; minimize strokes. |

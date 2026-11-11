@@ -195,7 +195,8 @@ async def test_reported_theme_envelope_has_executable_read_only_recovery(tmp_pat
         correction = result.error['recovery']
         assert correction == {'operation': 'list_actions', 'args': {'prefix': 'theme.'}}
         result = await tool.execute(correction)
-        assert result.success and 'theme.apply' in str(result.output)
+        assert result.success and 'theme.read' in str(result.output) and 'theme.save' in str(result.output)
+        assert 'theme.apply' not in str(result.output)
         bridge.assert_awaited_once_with('list_actions', {'prefix': 'theme.'})
     finally:
         await app.close()
@@ -205,7 +206,9 @@ async def test_malformed_mutation_suggests_discovery_and_never_echoes_action_arg
     bridge = AsyncMock()
     tool = await mounted_tool(bridge)
     result = await tool.execute({'operation': 'dispatch', 'parameters': {
-        'action': 'theme.apply', 'args': {'css': 'private payload'}}})
-    assert result.error['recovery'] == {'operation': 'list_actions', 'args': {'prefix': 'theme.'}}
+        'action': 'appearance.preview', 'args': {'name': 'Private draft', 'css': 'private payload'}}})
+    assert not result.success and result.error['effect'] == 'none'
+    assert result.error['recovery'] == {'operation': 'list_actions', 'args': {'prefix': 'appearance.'}}
     assert 'private payload' not in str(result.error)
+    assert 'Private draft' not in str(result.error)
     bridge.assert_not_awaited()

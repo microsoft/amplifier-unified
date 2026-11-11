@@ -46,6 +46,14 @@ remain ways into the same work, with the same essential actions. Neither density
 nor a change of interface changes what a status means or grants more authority.
 Clients express these promises in the form that fits their device.
 
+Consumer-level usability is the baseline, including for people who are not
+developers. Routine work and personalization use familiar controls, plain language
+and useful defaults without teaching storage, synchronization or agent internals.
+Expert capability stays available through discoverable secondary controls, not a
+parallel configuration task beside every everyday choice. Accessibility means
+readable, keyboard- and touch-usable journeys with low cognitive effort, not
+oversized controls or smaller text used to compensate for a poor layout.
+
 ### 3. Independent attention, shared work
 A person's selection, unfinished input and reading position persist locally in
 that client with no routine backend synchronization. Shared drafting or agent
@@ -112,6 +120,10 @@ the assessment says how much of it has actually been demonstrated.
   choices**, then can find that conversation again.
 - A person visits **2 conversations**, returns to their work overview, and
   reconstructs **0 previously chosen filters or reading positions** in that client.
+- A person changes an everyday preference without learning its storage model or
+  making a second persistence choice. Where Global and browser settings are
+  offered, one source choice uses the same familiar controls and preserves the
+  independent sets without changing other browsers' settings.
 
 ## Current desktop consumers
 
@@ -136,6 +148,7 @@ new CLI onboarding. The bundled web client supplies one setup experience.
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| 2026-11-10 | Make consumer-level usability and progressive disclosure explicit in principle 2. | Product-owner rejection of the appearance settings' repeated scope controls and excessive layout; design correction, not shipped acceptance. |
 | 2026-10-20 | Identify current Mac and planned Windows consumers; link shared desktop journeys. | Product-owner request for coordinated platform documentation. |
 | 2026-10-20 | Apply the accepted Home/sidebar UX amendment. | [Product-owner decision](../ux/decisions/20261020.md). |
 | 2026-10-02 | Adopt protocol boundaries, client-local state and independent repos. | [Family architecture direction](../architecture/README.md); implementation pending. |
