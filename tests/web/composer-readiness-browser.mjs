@@ -41,7 +41,7 @@ try{
  const savedRow=page.locator(`[data-message-id="${saved[0].id}"]`),status=savedRow.locator('.a-input-status');
  const checkSaved=async()=>{
   await expect(status).toHaveAttribute('data-input-phase','done');
-  await expect(status.getByRole('status')).toHaveText('Turn finished');
+  await expect(status.locator('summary > [aria-live="polite"][aria-atomic="true"]')).toHaveText('Turn finished');
   await expect(status.locator('.a-input-duration')).toHaveText(' · 0:42');
   await expect(savedRow.getByRole('button',{name:'Copy message as Markdown',exact:true})).toHaveCount(1);
   await expect(savedRow.locator('.a-message-actions button')).toHaveCount(1);

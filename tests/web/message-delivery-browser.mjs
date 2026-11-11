@@ -91,7 +91,7 @@ try{
  const noEvidence={version:1,inputId:'original-fixture-input',phase:'unknown',basis:'no_evidence'};
  const received=async()=>{
   await expect(status).toHaveAttribute('data-input-phase','received');
-  await expect(status.getByRole('status')).toHaveText('Received');
+  await expect(status.locator('summary > [aria-live="polite"][aria-atomic="true"]')).toHaveText('Received');
   await expect(duration).toHaveCount(0);
   assert.deepEqual((await retained()).inputStatus,noEvidence);
  };
@@ -121,7 +121,7 @@ try{
   phase:'working',basis:'generation_started',startedAt:started.observedAt,updatedAt:started.observedAt};
  const workingObserved=async()=>{
   await expect(status).toHaveAttribute('data-input-phase','working');
-  await expect(status.getByRole('status')).toHaveText('Working');
+  await expect(status.locator('summary > [aria-live="polite"][aria-atomic="true"]')).toHaveText('Working');
   await expect(duration).toBeVisible();await expect(duration).toHaveText(/ · \d+:\d{2}/);
   await expect.poll(async()=>(await savedInput())?.inputStatus).toEqual(working);
   const epoch=await page.evaluate(()=>window.amplifier.getState().sessions.find(s=>s.id===window.amplifier.getState().selectedSessionId).interruptionRevision);
@@ -142,7 +142,7 @@ try{
  const done={...working,phase:'done',basis:'generation_finished',updatedAt:finished.observedAt,endedAt:finished.observedAt};
  const finishedObserved=async()=>{
   await expect(status).toHaveAttribute('data-input-phase','done');
-  await expect(status.getByRole('status')).toHaveText('Turn finished');
+  await expect(status.locator('summary > [aria-live="polite"][aria-atomic="true"]')).toHaveText('Turn finished');
   await expect(duration).toHaveText(` · ${elapsed}`);
   await expect(duration).toHaveAttribute('aria-label',`Observed elapsed time ${elapsed}`);
   await expect.poll(async()=>(await savedInput())?.inputStatus).toEqual(done);
