@@ -42,11 +42,11 @@ async def test_real_post_provider_manager_exception_reaches_public_inspection(tm
     monkeypatch.delenv("AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH", raising=False)
     # Required imports: an unavailable real boundary is a failure, never a skip.
     from amplifier_module_loop_live.runtime import Input, Runtime
-    from amplifier_web.host.session import _NativeTranscriptGuard
+    from amplifier_foundation.session.transcript_guard import NativeTranscriptGuard
 
     native = tmp_path / 'private-transcript.jsonl'
     native.write_text('original\n')
-    guard = _NativeTranscriptGuard(native)
+    guard = NativeTranscriptGuard(native)
     expected_type = 'OSError' if cleanup_conflict else 'ValueError'
 
     paths = {name: Path(importlib.import_module("amplifier_module_" + name.replace("-", "_")).__file__).parent
@@ -268,7 +268,7 @@ def test_os_error_numbers_are_bounded_typed_facts_not_message_parsing():
 async def test_cleanup_context_capture_cannot_cross_current_execution(monkeypatch, boundary):
     from types import SimpleNamespace
     from amplifier_module_loop_live.failures import ManagerTurnError
-    from amplifier_web.host.session import NativeTranscriptConflict
+    from amplifier_foundation.session.transcript_guard import NativeTranscriptConflict
     worker = runtime_worker.Worker()
     worker.runtime = SimpleNamespace(stop_requested=False, generation={'id': 'g', 'input_ids': ['i']})
     terminal = {'generation_id': 'g', 'input_ids': ['i'], 'error_type': 'OSError',
