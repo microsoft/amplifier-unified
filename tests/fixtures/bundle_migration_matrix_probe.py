@@ -84,7 +84,14 @@ async def run(root, scenario):
             "replacement": kwargs.get("replacement"),
             "desiredBundle": kwargs.get("desired_bundle", False),
         })
-    draft_defaults.resolve_defaults = resolver
+    worker_command = [sys.executable, "-u", str(SOURCE / "amplifier_web/runtime_worker.py")]
+    if scenario == "production-probe":
+        # Keep the production resolver, subprocess, environment and candidate
+        # qualification entry. Only select the DTU's already installed graph;
+        # there is no immutable ecosystem generation in this offline fixture.
+        RuntimeManager._command = lambda self, *a, **kw: list(self.command or worker_command)
+    else:
+        draft_defaults.resolve_defaults = resolver
     processes = []
     spawn = asyncio.create_subprocess_exec
     async def observed_spawn(*args, **kwargs):
@@ -94,7 +101,7 @@ async def run(root, scenario):
     asyncio.create_subprocess_exec = observed_spawn
     def create():
         runtime = RuntimeManager(
-            command=[sys.executable, "-u", str(SOURCE / "amplifier_web/runtime_worker.py")],
+            command=worker_command,
             startup_timeout=45, retention={"prewarm_on_select": False},
         )
         app = AppService(home, workspace=workspace, runtime=runtime)

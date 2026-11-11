@@ -9,7 +9,7 @@ import pytest
 
 
 @pytest.mark.parametrize("scenario", [
-    "cold-none", "cold-empty", "cold-missing", "cold-restart", "native-restart",
+    "cold-none", "cold-empty", "cold-missing", "cold-restart", "native-restart", "production-probe",
     "warm-unpinned", "warm-pin", "warm-reset", "model-only", "peer-archived-cross",
 ])
 def test_saved_migration_reaches_completed_native_turn(tmp_path, scenario):
