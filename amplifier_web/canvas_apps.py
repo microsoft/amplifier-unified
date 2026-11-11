@@ -68,8 +68,8 @@ def validate(value, spec):
         fail('Surface data does not match its schema: ' + exc.message[:300])
 
 
-HOST_ACTIONS = {'theme.preview', 'theme.apply', 'theme.revert'}
-from .themes import TOKENS as THEME_TOKENS, theme_input
+HOST_ACTIONS = {'appearance.preview', 'appearance.preview.cancel',
+                'appearance.preferences.update', 'appearance.preferences.select', 'appearance.preferences.undo'}
 
 
 def manifest(value):
@@ -123,46 +123,12 @@ def definitions(schema, string):
                   schema({**cas, 'patch': {'type': 'object'}}, [*required, 'patch'])),
         'event': ('Invoke a declared event using the same host-side state updates as the user interface.',
                   schema({**cas, 'name': string(80), 'payload': {'type': 'object'}}, [*required, 'name', 'payload'])),
-        'request': ('Ask the host to preview, apply or revert a theme. Queues a reviewable request; does not execute it.',
+        'request': ('Ask for a scoped appearance edit or a document preview/cancel. Queues review, not execution or browser activation.',
                     schema({**cas, 'name': string(80), 'input': {'type': 'object'}}, [*required, 'name', 'input'])),
         'resolve': ('Approve or reject a pending host request. Agents may resolve changes already authorized by the user on an explicit attached clientId. Only the sandbox cannot call this action.',
                     schema({**cas, 'requestId': string(100), 'approve': {'type': 'boolean'}}, [*required, 'requestId', 'approve'])),
     }
     return {'canvas.apps.' + name: value for name, value in actions.items()}
-
-
-def theme_fingerprint(theme):
-    return hashlib.sha256(json.dumps(theme, sort_keys=True).encode()).hexdigest()
-
-
-def theme_command(service, action, args):
-    """Same implementation for ordinary controls, app_control and approved requests."""
-    from .service import validate_theme
-    view = service.state['view']
-    if action in {'theme.apply', 'theme.preview'}:
-        args = theme_input(service, args)
-        validate_theme(args['css'])
-        theme = {'name': args['name'] or 'Custom skin', 'css': args['css']}
-        for key in ('definition', 'palettePatch'):
-            if key in args:
-                theme[key] = copy.deepcopy(args[key])
-        if action == 'theme.preview':
-            if service.clients.record() is None:
-                fail('Attach a client for a theme preview.', 409)
-            view.update(themeDraft=theme['css'], themeDraftName=theme['name'], themePreview=True)
-        else:
-            view['themeUndo'] = {'before': put(service.db, service.state['theme']), 'after': theme_fingerprint(theme)}
-            service.state['theme'] = theme
-            view['themePreview'] = False
-    elif action == 'theme.revert':
-        if view.get('themePreview'):
-            view['themePreview'] = False
-        else:
-            undo = view.get('themeUndo')
-            if not undo or undo['after'] != theme_fingerprint(service.state['theme']):
-                fail('The applied theme changed, or there is no theme change to undo.', 409)
-            service.state['theme'] = resource(service.db, undo['before']['$resource'])
-            view.pop('themeUndo', None)
 
 
 def sync(service):
@@ -284,15 +250,14 @@ def command(service, action, args, origin):
             fail('Resolve the pending host requests first.', 409)
         payload = bounded(args['input'], 300_000)
         validate(payload, entry['schema'])
-        from .service import ACTION_DEFINITIONS, validate_theme
+        from .service import ACTION_DEFINITIONS
         validate(payload, ACTION_DEFINITIONS[entry['action']][1])
-        if entry['action'] in {'theme.preview', 'theme.apply'}:
-            payload = bounded(theme_input(service, payload), 300_000)
-            validate_theme(payload['css'])
+        if entry['action'] == 'appearance.preview':
+            from .appearance_packages import from_css
+            from_css(payload['css'], payload['name'])
         app['requests'] = (app['requests'] + [{'id': uuid.uuid4().hex, 'name': args['name'],
             'action': entry['action'], 'input': put(db, payload), 'status': 'pending', 'origin': origin,
-            'summary': payload.get('name', 'Previous theme'), 'at': time.time(),
-            'themeFingerprint': theme_fingerprint(state['theme'])}])
+            'summary': payload.get('name', 'Appearance preferences'), 'at': time.time()}])
         pending = [r for r in app['requests'] if r['status'] == 'pending']
         completed = [r for r in app['requests'] if r['status'] != 'pending'][-(20 - len(pending)):]
         app['requests'] = sorted(pending + completed, key=lambda r: r['at'])
@@ -303,10 +268,16 @@ def command(service, action, args, origin):
         if not request or request['status'] != 'pending':
             fail('This host request was already resolved or superseded.', 409)
         if args['approve']:
-            if request['themeFingerprint'] != theme_fingerprint(state['theme']):
-                fail('The shell theme changed since this request. Create a fresh request.', 409)
-            theme_command(service, request['action'], resource(db, request['input']['$resource']))
-        request.update(status='applied' if args['approve'] else 'rejected', resolvedBy=origin)
+            payload = resource(db, request['input']['$resource'])
+            identity = service.clients.current.get()
+            if payload.get('clientId', identity) != identity:
+                fail('Resolve the request in its intended client.', 409)
+            outcome = service.appearance.perform(request['action'], payload, identity, origin)
+            request['result'] = outcome
+            targets = list(service.clients.records) if outcome.get('scope') == 'shared' else [identity]
+            for target in targets:
+                service.shell.notify(target)
+        request.update(status='accepted' if args['approve'] else 'rejected', resolvedBy=origin)
     app['stateRevision'] += 1
     row['app'] = app
     sync(service)

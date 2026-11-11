@@ -44,7 +44,7 @@ try{
   return result;
  };
  const state=()=>page.evaluate(()=>window.amplifier.getState());
- const presentation=patch=>page.evaluate(async patch=>{
+ const presentation=async patch=>{const change=await page.evaluate(async patch=>{
   const state=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
   const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,
    expectedRevision:state.revision,composition:{...state.effectiveComposition,
@@ -53,7 +53,10 @@ try{
   const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,
    expectedRevision:state.revision,changeId:prepared.result.id});
   if(!applied.accepted)throw Error('Presentation application refused');
+  return {revision:state.revision+1,commandId:applied.result.commandId};
  },patch);
+  await page.waitForFunction(({patch,change})=>{const a=window.amplifier.getState().appearance;return window.amplifier.getShellState()?.revision===change.revision&&Object.entries(patch).every(([key,value])=>a.effective[key]===value&&a.renderedPreferences[key]===value)&&(!change.commandId||a.command?.id===change.commandId&&a.command.status==='stored')},{patch,change});
+ };
  await page.goto(url);
  await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
  await expect(page.locator('.a-home-filters')).toBeVisible();
@@ -77,7 +80,11 @@ try{
  report.themeSha256=createHash('sha256').update(theme.css).digest('hex');
  report.build=JSON.parse(await readFile(join(root,'amplifier_web/static/build.json'),'utf8'));
  const apply=async appearance=>{
-  await action('theme.apply',{name:appearance.name,css:appearance.css});
+  const current=(await action('appearance.preferences.read')).result;
+  const scope=current.activeScope,profile=scope==='client'?current.local:current.shared;
+  await action('appearance.preferences.update',{scope,generation:current.generation,expectedRevision:profile.revision,
+   ...(scope==='client'?{expectedStorageVersion:profile.storageVersion}:{}),patch:{appearanceId:appearance.id}});
+  await expect.poll(async()=>(await state()).appearance.theme.id).toBe(appearance.id);
   await page.waitForFunction(css=>[...document.querySelectorAll('#amp-one style')]
    .some(node=>node.textContent===css),appearance.css);
  };
@@ -113,16 +120,23 @@ try{
   const rect=el.getBoundingClientRect();
   return {styles,x:rect.x,width:rect.width,top:rect.top,height:rect.height};
  });
- const rain=()=>pane.evaluate(el=>{
-  const s=getComputedStyle(el);
+ // Follow only paint that can reach the actual scroller. A root animation
+ // behind an opaque landing cannot qualify the landing's artwork or motion.
+ const rainOn=target=>target.evaluate(el=>{
+  let owner=el,s=getComputedStyle(el);
+  for(let node=el;node;node=node.parentElement){
+   owner=node;s=getComputedStyle(node);
+   if(s.backgroundImage.includes('data:image/png')||s.backgroundImage!=='none'||!['transparent','rgba(0, 0, 0, 0)'].includes(s.backgroundColor))break;
+  }
   return {images:(s.backgroundImage.match(/data:image\/png/g)||[]).length,size:s.backgroundSize,
    animation:s.animationName,duration:s.animationDuration,timing:s.animationTimingFunction,
-   iterations:s.animationIterationCount,image:s.backgroundImage,
+   iterations:s.animationIterationCount,image:s.backgroundImage,position:s.backgroundPosition,owner:owner.id||owner.dataset.part||owner.tagName,
    before:getComputedStyle(el,'::before').content,after:getComputedStyle(el,'::after').content};
  });
+ const rain=()=>rainOn(pane);
  const checkRain=async(animated=true)=>{
   const value=await rain();
-  assert.equal(value.images,3,'Three PNG background layers on the actual scroller');
+  assert.equal(value.images,3,'Three PNG background layers visible on the actual scroller; never hidden ancestor artwork');
   for(const image of expectedImages)assert.ok(value.image.includes(image),'Landing reuses the shared PNGs');
   assert.equal(value.size,'512px 768px, 704px 960px, 896px 1152px');
   assert.equal(value.animation,animated?'digital-rain-drift':'none');
@@ -143,31 +157,46 @@ try{
    '.a-search-empty','.a-sidebar-filters','.a-caption','.a-home-content>p','.a-home-welcome'];
   const titles='.a-nav-chat-title,.a-nav-chat-title>span,'+
    '.a-workspace-label>span[data-scroll-title],.a-workspace-label>span[data-scroll-title]>span';
-  return {surface:getComputedStyle(document.querySelector('#amp-one')).getPropertyValue('--a-surface').trim(),
+  return {scheme:document.querySelector('#amp-one').dataset.themeScheme,surface:getComputedStyle(document.querySelector('#amp-one')).getPropertyValue('--a-surface').trim(),
    tint:getComputedStyle(document.querySelector('#amp-one')).getPropertyValue('--a-tint').trim(),
    soft:getComputedStyle(document.querySelector('#amp-one')).getPropertyValue('--a-soft').trim(),
-   blocks:selectors.flatMap(selector=>[...el.querySelectorAll(selector)].filter(visible).map(node=>({
-    selector,background:getComputedStyle(node).backgroundColor,image:getComputedStyle(node).backgroundImage}))),
+   blocks:selectors.flatMap(selector=>[...el.querySelectorAll(selector)].filter(visible).map(node=>{
+    const own=getComputedStyle(node),backing=[];
+    // A transparent wrapper is legitimate shared scaffolding if an opaque,
+    // image-free reading backing shields its text before the rain layer.
+    for(let parent=node;parent;parent=parent.parentElement){
+     const s=getComputedStyle(parent);backing.push({background:s.backgroundColor,image:s.backgroundImage});
+     if(s.backgroundImage!=='none'||!['transparent','rgba(0, 0, 0, 0)'].includes(s.backgroundColor))break;
+    }
+    return {selector,background:own.backgroundColor,image:own.backgroundImage,backing};
+   })),
    fonts:[...el.querySelectorAll('h1,h2,h3')].filter(visible).map(node=>getComputedStyle(node).fontFamily),
    titleFonts:[...el.querySelectorAll(titles)].filter(visible).map(node=>({
     selector:node.className||node.parentElement.className,font:getComputedStyle(node).fontFamily}))};
  });
- const rgb=hex=>{
+ const rgb=(token,scheme)=>{
+  const pair=token.match(/^light-dark\(\s*(#[\da-f]{6})\s*,\s*(#[\da-f]{6})\s*\)$/i);
+  const hex=pair?pair[scheme==='dark'?2:1]:token;
   assert.match(hex,/^#[0-9a-f]{6}$/i,'Expected opaque six-digit palette token');
   return `rgb(${[1,3,5].map(i=>parseInt(hex.slice(i,i+2),16)).join(', ')})`;
  };
  const checkReading=async()=>{
-  const reading=await solidAndMono(),palette=[rgb(reading.surface),rgb(reading.tint)];
+  const reading=await solidAndMono(),palette=[rgb(reading.surface,reading.scheme),rgb(reading.tint,reading.scheme)];
   assert.ok(reading.fonts.length>0,'Real landing headings rendered');
   for(const font of reading.fonts)assert.match(font,/mono|Menlo|Consolas/i);
   for(const title of reading.titleFonts)assert.match(title.font,/mono|Menlo|Consolas/i,
    `${title.selector} actual title span is monospace, including Focus layout`);
   for(const block of reading.blocks){
-   // Native search chrome uses the theme's opaque inset surface. Preserve that
-   // distinction instead of overriding production CSS to fit a surface-only oracle.
-   const allowed=block.selector==='.a-nav-search'?[...palette,rgb(reading.soft)]:palette;
-   assert.ok(allowed.includes(block.background),`${block.selector} must have a solid palette background: ${block.background}`);
-   assert.equal(block.image,'none',`${block.selector} keeps rain behind its reading surface`);
+   // Palette declarations are Reference deltas (light-dark may remain an
+   // unresolved custom-property spelling). Qualify resolved reading paint,
+   // not a regex over a six-digit token or an opaque wrapper requirement.
+   const backing=block.backing.at(-1);assert.ok(backing,block.selector+' has measured reading backing');
+   assert.equal(backing.image,'none',`${block.selector} keeps rain behind its reading surface`);
+   assert.match(backing.background,/^rgb\(|^rgba\([^)]*,\s*1\)$/,
+    `${block.selector} reading backing must be opaque: ${backing.background}`);
+   const allowed=block.selector==='.a-nav-search'?[...palette,rgb(reading.soft,reading.scheme)]:palette;
+   assert.ok(allowed.includes(backing.background),`${block.selector} retains an opaque reading-palette backing: ${backing.background}`);
+   assert.ok(block.backing.every(row=>row.image==='none'),block.selector+' text never overlays rain');
   }
   report.readingSelectors=[...new Set([...(report.readingSelectors||[]),...reading.blocks.map(block=>block.selector)])];
   return reading;
@@ -214,7 +243,7 @@ try{
   await checkRain();
   (report.unaffectedTabs??=[]).push({scheme,tabs:['work','files','details']});
  };
- const motionPosition=()=>pane.evaluate(el=>getComputedStyle(el).backgroundPosition);
+ const motionPosition=async()=>(await rain()).position;
  const mediaChecks=async()=>{
   await keyboardFocus();
   const before=await motionPosition();
@@ -222,11 +251,9 @@ try{
   await page.emulateMedia({reducedMotion:'reduce'});
   await expect.poll(async()=>(await rain()).animation).toBe('none');
   await checkRain(false);
-  assert.equal(await pane.evaluate(async el=>{
-   const before=getComputedStyle(el).backgroundPosition;
-   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-   return getComputedStyle(el).backgroundPosition===before;
-  }),true,'Reduced-motion rain stays static across rendered frames');
+  const stopped=await motionPosition();
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  assert.equal(await motionPosition(),stopped,'Reduced-motion rain stays static across rendered frames');
   await keyboardFocus();
   await presentation({decorations:false});
   await expect(page.locator('#amp-one')).toHaveAttribute('data-decorations','off');
@@ -293,14 +320,12 @@ try{
  });
  const chatBaseline=await chatGeometry();
  await apply(theme);
- const chatRain=await page.locator('[data-part="conversation"]').evaluate(el=>{
-  const s=getComputedStyle(el,'::before');
-  return {image:s.backgroundImage,size:s.backgroundSize,animation:s.animationName,
-   position:s.position,pointerEvents:s.pointerEvents};
- });
+ const chatRain=await rainOn(page.locator('[data-part="conversation"]'));
  assert.equal((chatRain.image.match(/data:image\/png/g)||[]).length,3);
  assert.equal(chatRain.animation,'digital-rain-drift');
- assert.equal(chatRain.position,'absolute');assert.equal(chatRain.pointerEvents,'none');
+ // Shared scaffold may paint directly rather than add an absolute pseudo.
+ // It must still leave the real composer target usable and retain geometry.
+ assert.ok(await input.evaluate(el=>{const b=el.getBoundingClientRect(),hit=document.elementFromPoint(b.x+b.width/2,b.y+b.height/2);return hit===el||el.contains(hit)}),'Rain does not occlude the composer');
  const art=await page.locator('#amp-one').evaluate(el=>getComputedStyle(el).getPropertyValue('--digital-rain-art'));
  const urls=art.match(/data:image\/png;base64,[A-Za-z0-9+/=]+/g)||[];
  assert.equal(urls.length,3);
@@ -317,7 +342,8 @@ try{
  assert.ok(Math.abs(chatCurrent.gap-chatBaseline.gap)<24,'No extra transcript flex child');
  await expect(input).toBeVisible();
  await apply(graphite);
- assert.notEqual(await page.locator('[data-part="conversation"]').evaluate(el=>getComputedStyle(el,'::before').animationName),'digital-rain-drift');
+ assert.equal((await rainOn(page.locator('[data-part="conversation"]'))).images,0);
+ assert.notEqual((await rainOn(page.locator('[data-part="conversation"]'))).animation,'digital-rain-drift');
  assert.deepEqual(report.errors,[]);
  report.chat={baseline:chatBaseline,current:chatCurrent,imagesDecoded:3};
  delete report.current;

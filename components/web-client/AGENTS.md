@@ -11,6 +11,9 @@ generated public branding/licenses and dependencies are disposable output. Do no
 edit them or load them into routine source review. Change canonical catalogs,
 SDK and branding with their Unified owner, then select a fresh exported lock here.
 
+`src/reference.css` is the shared appearance foundation. Gallery appearances
+contribute validated deltas, not replacement full skins.
+
 `npm test` owns client unit checks; `test:artifact-assets` checks built output.
 Named browser journeys and the client registry exercise synthetic client peers;
 `test:artifact` exercises an installed artifact. Unified owns actual host/browser,

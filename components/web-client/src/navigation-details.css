@@ -29,7 +29,7 @@
 #amp-one .a-navigation-copy>div{display:flex;align-items:center;justify-content:space-between;color:var(--a-muted);font-size:var(--a-text-xs,12px);text-transform:uppercase;letter-spacing:.04em}
 #amp-one .a-navigation-copy .a-icon{width:26px;height:26px}
 #amp-one .a-navigation-copy svg{width:13px;height:13px}
-#amp-one .a-navigation-copy code{display:block;font:var(--a-text-sm,13px)/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;white-space:normal;user-select:text;background:transparent;padding:0}
+#amp-one .a-navigation-copy code{display:block;font:var(--a-text-sm,13px)/1.7 var(--a-font-code);overflow-wrap:anywhere;white-space:normal;user-select:text;background:transparent;padding:0}
 #amp-one .a-navigation-copy small{display:block;font-size:var(--a-text-xs,12px);color:var(--a-muted);margin-top:4px}
 #amp-one .a-navigation-actions{display:flex;flex-wrap:wrap;gap:4px;padding-top:12px;margin-top:14px;border-top:1px solid var(--a-line)}
 #amp-one .a-navigation-actions>button{padding:7px 6px;font-size:var(--a-text-sm,13px);gap:5px;border-radius:6px}
@@ -37,7 +37,7 @@
 #amp-one .a-navigation-actions svg{width:13px;height:13px}
 #amp-one .a-navigation-flyout form{margin-top:12px}
 #amp-one .a-navigation-flyout input{min-width:0;width:100%;border:1px solid var(--a-line);border-radius:7px;padding:8px;background:var(--a-surface);color:var(--a-ink)}
-#amp-one .a-navigation-flyout .a-nav-chat-rename{max-height:none;height:auto}
+#amp-one .a-navigation-flyout .a-nav-chat-rename{display:flex;flex-wrap:wrap;gap:6px;padding:3px;max-height:none;height:auto}
 #amp-one .a-navigation-flyout .a-nav-chat-rename input{flex-basis:100%}
 #amp-one .a-nav-slot .a-navigation-back{color:var(--a-muted);gap:5px;font-size:var(--a-text-sm,13px);padding:6px 3px}
 #amp-one .a-nav-slot .a-navigation-back svg{width:13px;height:13px}

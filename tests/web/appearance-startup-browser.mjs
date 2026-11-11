@@ -25,6 +25,9 @@ try{
  await page.route('**/api/shell?*',async route=>{await gate;await route.continue()});
  await page.goto(url,{waitUntil:'domcontentloaded'});
  await expect(page.locator('.boot')).toBeVisible();
+ await page.waitForFunction(()=>Array.from(document.styleSheets).some(sheet=>{
+  try{return Array.from(sheet.cssRules).some(rule=>rule.cssText.includes('--a-bg:'))}catch{return false}
+ }),null,{timeout:5000});
  // State arrives while the conversation DOM is deliberately absent. Effects
  // must attach when the shell is ready even if that state never changes.
  await page.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);
@@ -33,6 +36,13 @@ try{
  assert.equal(await read(),false);
  release();await page.unrouteAll({behavior:'wait'});
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toBeVisible();
+ // The delayed shell must attach the new whole-profile storage bridge too,
+ // without requiring a preference mutation to trigger another snapshot.
+ const preferences=async()=>(await page.evaluate(()=>window.amplifier.dispatch('appearance.preferences.read',{}))).result;
+ await expect.poll(async()=>(await preferences()).local.reported).toBe(true);
+ assert.equal((await preferences()).activeScope,'shared');
+ assert.equal((await preferences()).local.values,null);
+ assert.equal((await preferences()).writeScope,'shared');
  await expect(page.locator('[data-message-id]')).toHaveCount(100);
  await expect.poll(read).toBe(true);
  const pane=page.getByRole('log',{name:'Conversation messages'});

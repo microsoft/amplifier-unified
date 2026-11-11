@@ -130,21 +130,33 @@ async function checkAsideAppearanceScope(page,work,viewport,setWorkerPhase) {
     const receipt=await page.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
     assert.equal(receipt.accepted,true,action);return receipt.result;
   };
-  const priorTheme=await page.evaluate(()=>window.amplifier.getState().theme);
+  const appearance=()=>action('appearance.preferences.read');
+  await expect.poll(async()=>(await appearance()).local.reported).toBe(true);
+  const priorAppearance=await appearance(),priorTheme=priorAppearance.theme;
+  const app=page.locator('#amp-one');
+  await expect(app).toHaveAttribute('data-appearance-composition',priorAppearance.composition.id);
+  const mountedCss=()=>app.locator(':scope > style').evaluateAll(nodes=>nodes.map(node=>node.textContent));
+  const priorCss=await mountedCss();
   const priorPresentation=await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition);
-  const present=async composition=>{
-    const applied=await page.evaluate(async composition=>{
-      const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
-      const prepared=await window.amplifier.dispatch('shell.changes.prepare',{
-        clientId,expectedRevision:shell.revision,composition});
-      if(!prepared.accepted)throw Error('Appearance-scope presentation prepare failed');
-      const receipt=await window.amplifier.dispatch('shell.changes.apply',{
-        clientId,expectedRevision:shell.revision,changeId:prepared.result.id});
-      if(!receipt.accepted)throw Error('Appearance-scope presentation apply failed');
-      if(!Number.isInteger(receipt.result.revision))throw Error('Appearance-scope apply omitted its revision');
-      return receipt.result.revision;
-    },composition);
-    await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState().revision)).toBe(applied);
+  const present=async patch=>{
+    const current=await appearance(),scope=current.activeScope;
+    const profile=scope==='client'?current.local:current.shared;
+    const receipt=await action('appearance.preferences.update',{
+      scope,generation:current.generation,expectedRevision:profile.revision,
+      ...(scope==='client'?{expectedStorageVersion:profile.storageVersion}:{}),patch});
+    if(scope==='client'){
+      assert.equal(receipt.status,'awaiting-storage');assert.equal(receipt.stored,false);
+      assert.ok(receipt.commandId,'A browser edit must identify its storage acknowledgement');
+      await expect.poll(async()=>{
+        const command=(await appearance()).command;
+        return command?.id===receipt.commandId?command.status:null;
+      }).toBe('stored');
+    }else{
+      assert.equal(receipt.status,'saved');assert.equal(receipt.stored,true);
+    }
+    const updated=await appearance();
+    for(const [key,value] of Object.entries(patch))assert.deepEqual(updated.effective[key],value);
+    await expect(app).toHaveAttribute('data-appearance-composition',updated.composition.id);
   };
   // This is the production DelegateStreamStatus <aside>, not injected markup.
   const status=work.getByRole('complementary',{name:'Review status',exact:true});
@@ -165,11 +177,11 @@ async function checkAsideAppearanceScope(page,work,viewport,setWorkerPhase) {
   assert.ok(builtins.some(row=>row.id==='builtin:digital-rain'),'The affected built-in must be exercised');
   for(const entry of builtins){
     const theme=await action('theme.read',{id:entry.id});
-    await action('theme.apply',{name:theme.name,css:theme.css});
+    await present({appearanceId:entry.id});
     await expect.poll(()=>page.locator('#amp-one > style').evaluateAll((nodes,css)=>
       nodes.some(node=>node.textContent===css),theme.css)).toBe(true);
     for(const scheme of ['light','dark']){
-      await present({...priorPresentation,presentation:{...priorPresentation.presentation,scheme}});
+      await present({scheme});
       await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',scheme);
       await status.scrollIntoViewIfNeeded();
       const details=status.getByRole('button',{name:'Review delegation details',exact:true});
@@ -196,8 +208,8 @@ async function checkAsideAppearanceScope(page,work,viewport,setWorkerPhase) {
           control:{width:control.width,height:control.height,outline:focus.outlineStyle,
             outlineWidth:parseFloat(focus.outlineWidth)}};
       });
-      // The outer navigation surface owns the accent. The host deliberately
-      // resets the inner rail's shadow, including on narrow screens.
+      // Record outer navigation paint for diagnostics only; this check protects
+      // the native worker status aside from appearance paint.
       const navigationShadow=await page.locator('[data-part="navigation"]')
         .evaluate(el=>getComputedStyle(el).boxShadow);
       appearanceScopeChecks.push({theme:entry.id,scheme,viewport,navigationShadow,...measured});
@@ -216,19 +228,18 @@ async function checkAsideAppearanceScope(page,work,viewport,setWorkerPhase) {
       assert.notEqual(measured.control.outline,'none');assert.ok(measured.control.outlineWidth>0);
       assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
       assert.equal(await readComposerDraft(editor),probeDraft,'Each appearance preserves nonempty draft text');
-      if(entry.id==='builtin:digital-rain')
-        assert.match(navigationShadow,/inset/,'The actual navigation retains its inset accent');
       if(entry.id==='builtin:digital-rain'&&scheme==='dark'&&viewport!=='small')
         await page.screenshot({path:artifact(`delegate-aside-digital-rain-${viewport}.png`)});
     }
   }
-  // Restore the exact composition, not a merge that leaves temporary keys.
-  await present(priorPresentation);
-  await action('theme.apply',{name:priorTheme.name,css:priorTheme.css});
-  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().theme)).toEqual(priorTheme);
-  await expect.poll(()=>page.locator('#amp-one > style').evaluateAll((nodes,css)=>
-    nodes.some(node=>node.textContent===css),priorTheme.css)).toBe(true);
-  assert.deepEqual(await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition),priorPresentation);
+  // Restore only the two edited preferences, then verify the complete profile,
+  // composition and mounted styles rather than reapplying a raw CSS snapshot.
+  await present({appearanceId:priorAppearance.effective.appearanceId,scheme:priorAppearance.effective.scheme});
+  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().appearance.theme)).toEqual(priorTheme);
+  assert.equal((await appearance()).activeScope,priorAppearance.activeScope);
+  assert.deepEqual((await appearance()).effective,priorAppearance.effective);
+  await expect.poll(mountedCss).toEqual(priorCss);
+  await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState().effectiveComposition)).toEqual(priorPresentation);
   assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
   assert.equal(await readComposerDraft(editor),probeDraft,'Restoration preserves the nonempty draft');
   await setWorkerPhase('completed');

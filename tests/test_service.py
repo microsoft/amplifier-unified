@@ -358,13 +358,15 @@ async def test_busy_admission_preserves_browser_draft_attachments_and_history(tm
 
 async def test_shared_agent_control_state_and_stale_revisions(service):
     before = service.get_state()
-    await service.app_bridge("dispatch", {"action": "view.update", "args": {"patch": {"scheme": "dark", "panel": "appearance"}}, "expectedRevision": before["revision"]}, before["selectedSessionId"])
-    assert service.get_state()["view"]["scheme"] == "dark"
+    # Generic view control and app CAS are independent of browser storage ACKs.
+    await service.app_bridge("dispatch", {"action": "view.update", "args": {"patch": {"navFilter": "Focused agent filter", "panel": "appearance"}}, "expectedRevision": before["revision"]}, before["selectedSessionId"])
+    assert service.get_state()["view"]["navFilter"] == "Focused agent filter"
+    assert service.get_state()["view"]["panel"] == "appearance"
     with pytest.raises(AppError, match="app changed"):
-        await service.dispatch("view.update", {"patch": {"scheme": "light"}}, expected_revision=before["revision"])
+        await service.dispatch("view.update", {"patch": {"navFilter": "Stale filter"}}, expected_revision=before["revision"])
     snapshot = service.get_state()
-    snapshot["view"]["scheme"] = "corrupted"
-    assert service.get_state()["view"]["scheme"] == "dark"
+    snapshot["view"]["navFilter"] = "corrupted"
+    assert service.get_state()["view"]["navFilter"] == "Focused agent filter"
 
 
 async def test_voice_pins_session_and_end_does_not_stop_work(service):
@@ -381,31 +383,75 @@ async def test_voice_pins_session_and_end_does_not_stop_work(service):
 
 
 async def test_skin_roundtrip_and_external_assets_rejected(service):
+    from amplifier_web.appearance_packages import decode_input, load
+
     css = '#amp-one {color: #4338f4; background: #e8eeff;}'
-    await service.dispatch("theme.apply", {"name": "Custom violet", "css": css}, origin="agent")
-    exported = await service.dispatch("theme.export", {})
-    assert exported["effects"][0]["content"] == css
+    before = service.appearance.read()['shared']
+    saved = (await service.dispatch("theme.save", {"name": "Custom violet", "css": css}, origin="agent"))['result']
+    assert service.appearance.read()['shared'] == before
+    await service.dispatch('appearance.preferences.update', {
+        'scope': 'shared', 'expectedRevision': before['revision'],
+        'patch': {'appearanceId': saved['id']}}, origin='agent')
+    selected = service.appearance.read()['shared']
+    exported = await service.dispatch("theme.export", {'id': saved['id']})
+    download = exported['effects'][0]
+    assert download['mimeType'] == 'application/zip'
+    package = load(decode_input(download['content']['base64']))
+    assert package.css == css and package.manifest['base'] == 'reference-v1'
+    assert package.manifest['formatVersion'] == 2
+    imported = (await service.dispatch('theme.import', {
+        'packageBase64': download['content']['base64']}))['result']
+    assert imported['fingerprint'] == saved['fingerprint']
+    assert (await service.dispatch('theme.read', {'id': imported['id']}))['result']['css'] == css
+    assert service.appearance.read()['shared'] == selected
     for bad in ['@import "https://example.com/a.css";', '#amp-one {background:url("https://example.com/x")}']:
         with pytest.raises(AppError):
             validate_theme(bad)
-    assert service.get_state()["theme"]["css"] == css
+        with pytest.raises(AppError):
+            await service.dispatch('theme.save', {'name': 'Rejected external asset', 'css': bad})
+    assert service.appearance.read()['theme']['id'] == saved['id']
+    assert service.appearance.read()['theme']['css'] == css
+    assert service.appearance.read()['shared'] == selected
 
 
-async def test_saved_skin_survives_changed_defaults_until_explicit_reset(tmp_path, monkeypatch):
+async def test_selected_delta_and_preferences_survive_restart_over_changed_foundation(tmp_path, monkeypatch):
+    from amplifier_web import themes
+    from amplifier_web.appearance_packages import decode_input, load
+
     saved = {"name": "Saved studio skin", "css": "/* Private palette */ #amp-one {--a-accent: #765432;}"}
     app = AppService(tmp_path, Runtime(), workspace=tmp_path)
-    await app.dispatch("theme.apply", saved, origin="agent")
+    row = (await app.dispatch('theme.save', saved, origin='agent'))['result']
+    await app.dispatch('appearance.preferences.update', {
+        'scope': 'shared', 'expectedRevision': app.appearance.shared()['revision'],
+        'patch': {'appearanceId': row['id'], 'scheme': 'dark', 'decorations': False}}, origin='agent')
+    previous = app.appearance.read()
     await app.close()
 
-    replacement = "#amp-one {--a-accent: #123456;}"
-    monkeypatch.setattr(AppService, "default_theme", lambda self: replacement)
+    foundation = previous['foundation']
+    replacement = {**foundation, 'build': {**foundation['build'],
+        'frontend': {**foundation['build']['frontend'], 'id': 'changed-reference-build'}}}
+    monkeypatch.setattr(themes, 'foundation', lambda service: replacement)
     restored = AppService(tmp_path, Runtime(), workspace=tmp_path)
     try:
-        assert restored.get_state()["theme"] == saved
-        exported = await restored.dispatch("theme.export", {}, origin="agent")
-        assert exported["effects"][0]["content"] == saved["css"]
-        await restored.dispatch("theme.reset", {}, origin="ui")
-        assert restored.get_state()["theme"] == {"name": "Amplifier Unified", "css": replacement}
+        current = restored.appearance.read()
+        assert current['shared'] == previous['shared']
+        assert current['theme']['id'] == row['id']
+        assert current['theme']['css'] == saved['css']
+        assert current['theme']['fingerprint'] == row['fingerprint']
+        # A saved delta stays exact; compatible foundation changes flow beneath it.
+        assert current['foundation'] == replacement
+        assert current['composition']['foundation'] == replacement
+        assert current['composition']['id'] != previous['composition']['id']
+        exported = await restored.dispatch("theme.export", {'id': row['id']}, origin="agent")
+        assert load(decode_input(exported['effects'][0]['content']['base64'])).css == saved['css']
+        await restored.dispatch('appearance.preferences.update', {
+            'scope': 'shared', 'expectedRevision': current['shared']['revision'],
+            'patch': {'appearanceId': 'reference'}}, origin='ui')
+        recovered = restored.appearance.read()
+        assert recovered['theme']['id'] == 'reference' and recovered['theme']['css'] == ''
+        assert recovered['effective']['scheme'] == 'dark'
+        assert recovered['effective']['decorations'] is False
+        assert recovered['foundation'] == replacement
     finally:
         await restored.close()
 

@@ -59,8 +59,8 @@ try{
  report.executionContract={version:contract.version,profileId:contract.profileId,source:contract.source};
  report.sourceSha256={};
  for(const file of ['tests/web/lightline-shared-browser.mjs','.build/web-client/src/chat-scroll.js',
-  '.build/web-client/src/conversation-rail.css','amplifier_web/appearances/lightline.amplifier.css',
-  'amplifier_web/appearances/digital-rain.amplifier.css','amplifier_web/theme_library.py'])
+  '.build/web-client/src/conversation-rail.css','.build/web-client/src/reference.css','amplifier_web/appearances/lightline.amplifier.css',
+  'amplifier_web/appearances/digital-rain.amplifier.css','amplifier_web/appearance_preferences.py'])
   report.sourceSha256[file]=hash(await readFile(join(root,file)));
  report.build=JSON.parse(await readFile(join(root,'amplifier_web/static/build.json'),'utf8'));
  fixture=spawn(python,[join(root,'tests/fixtures/empty_host_ui_server.py'),'--chat-controls'],
@@ -103,14 +103,17 @@ try{
   assert.equal(receipt.accepted,true,`${name}: ${JSON.stringify(receipt.error||receipt)}`);return receipt;
  };
  const state=()=>page.evaluate(()=>window.amplifier.getState());
- const presentation=patch=>page.evaluate(async patch=>{
+ const presentation=async patch=>{const change=await page.evaluate(async patch=>{
   const state=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
   const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:state.revision,
    composition:{...state.effectiveComposition,presentation:{...state.effectiveComposition.presentation,...patch}}});
   if(!prepared.accepted)throw Error('Presentation prepare refused: '+JSON.stringify(prepared.error));
   const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:state.revision,changeId:prepared.result.id});
   if(!applied.accepted)throw Error('Presentation apply refused: '+JSON.stringify(applied.error));
+  return {revision:state.revision+1,commandId:applied.result.commandId};
  },patch);
+  await page.waitForFunction(({patch,change})=>{const a=window.amplifier.getState().appearance;return window.amplifier.getShellState()?.revision===change.revision&&Object.entries(patch).every(([key,value])=>a.effective[key]===value&&a.renderedPreferences[key]===value)&&(!change.commandId||a.command?.id===change.commandId&&a.command.status==='stored')},{patch,change});
+ };
  const settled=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  const pane=page.locator('[data-part="messages"]'),app=page.locator('#amp-one');
  const input=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
@@ -157,8 +160,20 @@ try{
    surroundingBackground:background,outlineContrast};
  };
  const apply=async theme=>{
-  await action('theme.apply',{name:theme.name,css:theme.css});
-  await expect.poll(async()=>hash((await state()).theme.css)).toBe(hash(theme.css));
+  // Selection is a saved ID; an unsaved token experiment is a local preview.
+  // Cancel explicitly: selecting an ID is not a preview-cancellation action.
+  await action('appearance.preview.cancel',{});
+  if(theme.id){
+   const current=(await action('appearance.preferences.read')).result;
+   const scope=current.activeScope,profile=scope==='client'?current.local:current.shared;
+   await action('appearance.preferences.update',{scope,generation:current.generation,expectedRevision:profile.revision,
+    ...(scope==='client'?{expectedStorageVersion:profile.storageVersion}:{}),patch:{appearanceId:theme.id}});
+   await expect.poll(async()=>(await state()).appearance.theme.id).toBe(theme.id);
+   await expect.poll(async()=>hash((await state()).appearance.theme.css)).toBe(hash(theme.css));
+  }else{
+   await action('appearance.preview',{name:theme.name,css:theme.css});
+   await expect.poll(async()=>hash((await state()).appearance.preview?.theme?.css||'')).toBe(hash(theme.css));
+  }
   await page.waitForFunction(css=>[...document.querySelectorAll('#amp-one > style')].some(node=>node.textContent===css),theme.css);
  };
  const fade=()=>pane.evaluate(el=>{
@@ -223,7 +238,7 @@ try{
   }));
  });
  const bubbles=async(scheme,width,theme)=>{
-  const palette=Object.fromEntries([...theme.css.matchAll(/(--[\w-]+):light-dark\((#[\da-f]+),(#[\da-f]+)\)/gi)]
+  const palette=Object.fromEntries([...theme.css.matchAll(/(--[\w-]+)\s*:\s*light-dark\(\s*(#[\da-f]+)\s*,\s*(#[\da-f]+)\s*\)/gi)]
    .map(([,name,light,dark])=>[name,scheme==='light'?light:dark]));
   const rows=await pane.locator('.a-message.a-user:has(> .a-message-actions),.a-message.a-assistant:has(> .a-message-actions)')
    .evaluateAll(nodes=>nodes.slice(0,12).map(el=>{
@@ -231,26 +246,32 @@ try{
     const s=getComputedStyle(el),b=getComputedStyle(body),f=getComputedStyle(footer);
     return {role:el.classList.contains('a-user')?'user':'assistant',outer:s.backgroundColor,border:s.borderTopWidth,
      padding:s.paddingTop,shadow:s.boxShadow,body:b.backgroundColor,ink:b.color,bodyBorder:b.borderTopWidth,
-     bodyPadding:b.paddingTop,font:b.fontFamily,footer:f.backgroundColor,footerImage:f.backgroundImage,
+     bodyPadding:[b.paddingTop,b.paddingRight,b.paddingBottom,b.paddingLeft],font:b.fontFamily,footer:f.backgroundColor,footerImage:f.backgroundImage,
      footerBorder:f.borderTopWidth,bodyBottom:body.getBoundingClientRect().bottom,footerTop:footer.getBoundingClientRect().top};
    }));
   assert.ok(rows.some(row=>row.role==='user')&&rows.some(row=>row.role==='assistant'),'Actual user and assistant footer-bearing messages');
   for(const row of rows){
    assert.equal(row.outer,'rgba(0, 0, 0, 0)');assert.equal(row.border,'0px');assert.equal(row.padding,'0px');assert.equal(row.shadow,'none');
-   assert.equal(row.body,hexRgb(palette[row.role==='user'?'--ll-user':'--a-surface']));
-   assert.equal(row.ink,hexRgb(palette[row.role==='user'?'--ll-user-ink':'--a-ink']));
+   assert.equal(rgb(row.body)[3],1,'Reading bodies have opaque paint');
+   if(row.role==='assistant'){
+    assert.equal(row.body,hexRgb(palette['--a-surface']));assert.equal(row.ink,hexRgb(palette['--a-ink']));
+   }else{
+    const warm=rgb(row.body);assert.ok(warm[0]>warm[1]&&warm[1]>warm[2],'User body retains warm material contrast');
+   }
    assert.equal(row.bodyBorder,'1px');assert.match(row.font,/mono|Menlo|Consolas/i);
    assert.equal(row.footer,'rgba(0, 0, 0, 0)');assert.equal(row.footerImage,'none');assert.equal(row.footerBorder,'0px');
    assert.ok(row.footerTop>=row.bodyBottom,'Actions and metadata stay beneath, outside bubble paint');
-   if(row.role==='assistant')assert.equal(row.bodyPadding,width===390?'12px':'16px');
+   assert.deepEqual(row.bodyPadding,row.role==='assistant'?['8px','14px','8px','14px']:['11px','16px','11px','16px'],
+    `${row.role} body retains shared padding at ${width}px`);
    assert.ok(ratio(rgb(row.ink),rgb(row.body))>=4.5,'Actual bubble text contrast');
   }
   return rows;
  };
  const media=async(surface)=>{
   const target=surface==='chat'?page.locator('[data-part="conversation"]'):work;
-  const paint=()=>target.evaluate(el=>{const s=getComputedStyle(el);return {image:s.backgroundImage,position:s.backgroundPosition,animation:s.animationName}});
+  const paint=()=>target.evaluate(el=>{const s=getComputedStyle(el),root=getComputedStyle(document.getElementById('amp-one'));return {image:s.backgroundImage,position:s.backgroundPosition,animation:s.animationName,rootImage:root.backgroundImage,rootPosition:root.backgroundPosition,rootAnimation:root.animationName}});
   const normal=await paint();assert.equal(normal.animation,'none','Lightline paint is static');
+  assert.notEqual(normal.rootImage,'none','Reference renders Lightline root linework');assert.equal(normal.rootAnimation,'none');
   await settled();assert.deepEqual(await paint(),normal,'Static paint across actual frames');
   await page.emulateMedia({reducedMotion:'reduce'});await settled();assert.deepEqual(await paint(),normal);
   let baseline;
@@ -262,6 +283,7 @@ try{
   }
   await presentation({decorations:false});await expect(app).toHaveAttribute('data-decorations','off');
   await expect.poll(async()=>(await paint()).image).toBe('none');
+  await expect.poll(async()=>(await paint()).rootImage).toBe('none');
   const disabled=await paint();assert.equal(disabled.animation,'none');
   if(surface==='chat'){
    await checkFade('decorations-off middle','middle',{above:true,below:true});
@@ -284,23 +306,19 @@ try{
  assert.equal(lightline.source,'built-in');assert.equal(lightline.name,'Lightline');
  assert.equal(lightline.css,await readFile(join(root,'amplifier_web/appearances/lightline.amplifier.css'),'utf8'));
  assert.equal(lightline.fingerprint,hash(lightline.css));report.themeSha256=hash(lightline.css);
- assert.deepEqual((await state()).theme,initial.theme,'Listing/reading Lightline does not select or apply it');
+ assert.deepEqual((await state()).appearance.theme,initial.appearance.theme,'Listing/reading Lightline does not select or apply it');
  assert.equal((await state()).selectedSessionId,initial.selectedSessionId);
  assert.doesNotMatch(lightline.css,/mask-image\s*:/i,'Lightline inherits the shared primitive');
  assert.doesNotMatch(rain.css,/mask-image\s*:/i,'Digital Rain no longer owns a duplicate transcript mask');
- // Fixed dark colors protect the accepted dark palette, while the revised light
- // palette is checked by material/readability constraints rather than old cyan values.
- for(const [token,dark] of Object.entries({'--a-bg':'#050a10','--a-surface':'#0c151e','--a-soft':'#12222e',
-  '--a-ink':'#e1f1f7','--a-muted':'#9fb7c6','--a-line':'#355064','--a-accent':'#79e6ff','--a-tint':'#123441',
-  '--a-green':'#91dbb6','--a-danger':'#ffb2ba','--a-on-accent':'#041b25','--ll-user':'#2a2117',
-  '--ll-user-ink':'#ffe2b5','--ll-amber':'#e9b46c','--ll-edge':'#438ba4','--ll-trace':'#79e6ff12',
-  '--ll-glow':'#79e6ff16','--ll-sheen':'#e1f1f709','--ll-header':'#08121a'}))
-  assert.ok(lightline.css.includes(`${token}:light-dark(`)&&new RegExp(`${token}:light-dark\\([^,]+,${dark}\\)`).test(lightline.css),token+' accepted dark value');
+ // Reference owns the shared scaffold; this delta is not a frozen full skin.
+ // Exact source/fingerprint identity is retained above. Both palettes still
+ // face the same independent material, actual contrast and keyboard checks.
  await openSettingsPage(page,'appearance');
- await expect(page.getByRole('button',{name:'Use Lightline',exact:true})).toBeVisible();
- assert.deepEqual((await state()).theme,initial.theme,'Gallery availability alone does not apply Lightline');
- await page.getByRole('button',{name:'Use Lightline',exact:true}).click();
- await expect.poll(async()=>hash((await state()).theme.css)).toBe(report.themeSha256);
+ await expect(page.getByRole('radio',{name:'Lightline',exact:true})).toBeVisible();
+ assert.deepEqual((await state()).appearance.theme,initial.appearance.theme,'Gallery availability alone does not apply Lightline');
+ await page.getByRole('radio',{name:'Lightline',exact:true}).check();
+ await expect.poll(async()=>hash((await state()).appearance.theme.css)).toBe(report.themeSha256);
+ assert.equal((await state()).appearance.effective.appearanceId,lightline.id);
  await page.waitForFunction(css=>[...document.querySelectorAll('#amp-one > style')].some(node=>node.textContent===css),lightline.css);
  await page.getByRole('button',{name:/^Close (panel|settings)$/}).click();
  report.cases.push({kind:'library',id:lightline.id,availableWithoutSelection:true,appliedFromGallery:true,sha256:report.themeSha256});
@@ -336,6 +354,10 @@ try{
    report.current={scheme,width};await page.setViewportSize({width,height:1000});
    for(const surface of ['home','workspace']){
     await enter(surface);await noOverflow();
+    if(surface==='home'){
+     await expect(app.locator('.a-brand img')).toBeVisible();
+     await expect.poll(()=>app.locator('.a-brand img').evaluate(logo=>logo.complete&&logo.naturalWidth>0)).toBe(true);
+    }
     const focus=await keyboardFocus(work.getByRole('group',{name:'Work view',exact:true})
      .getByRole('button',{name:'Brief',exact:true}),`${surface} work-view`);
     if(width===1600){await media(surface);await shot(`lightline-${surface}-${scheme}`)}
@@ -351,15 +373,22 @@ try{
     const s=getComputedStyle(el);return {style:s.outlineStyle,width:parseFloat(s.outlineWidth)};
    });
    assert.notEqual(composerFocus.style,'none');assert.ok(composerFocus.width>=2,'Writing surface has a visible focus boundary');
-   const actual=await app.evaluate(el=>{const bg=getComputedStyle(el).backgroundColor;
-    return {background:bg,logo:getComputedStyle(el.querySelector('.a-brand img')).filter}});
+   const actual=await app.evaluate(el=>{const bg=getComputedStyle(el).backgroundColor,logo=el.querySelector('.a-brand img'),r=logo.getBoundingClientRect();
+    return {background:bg,logo:{complete:logo.complete,naturalWidth:logo.naturalWidth,width:r.width,height:r.height}}});
    if(scheme==='light'){
     const channels=rgb(actual.background).slice(0,3);assert.ok(channels.every(v=>v>=220)&&Math.max(...channels)-Math.min(...channels)<=10,'Neutral luminous light background');
     const assistant=painted.find(row=>row.role==='assistant'),white=rgb(assistant.body).slice(0,3),graphite=rgb(assistant.ink).slice(0,3);
     assert.ok(white.every(v=>v>=245)&&Math.max(...white)-Math.min(...white)<=5,'Neutral luminous white reading surface');
     assert.ok(graphite.every(v=>v<=60)&&Math.max(...graphite)-Math.min(...graphite)<=20,'Graphite reading text, not pastel ink');
-   }else assert.equal(actual.background,'rgb(5, 10, 16)');
-   assert.notEqual(actual.logo,'none','Normal light/dark logo treatment remains');
+   }else{
+    assert.ok(rgb(actual.background).slice(0,3).every(v=>v<=40),'Dark casing remains dark');
+    const assistant=painted.find(row=>row.role==='assistant');
+    assert.ok(rgb(assistant.body).slice(0,3).every(v=>v<=50),'Dark reading surface remains dark');
+    assert.ok(rgb(assistant.ink).slice(0,3).every(v=>v>=220),'Dark reading text remains luminous');
+   }
+   assert.ok(actual.logo.complete&&actual.logo.naturalWidth>0,'The real logo remains loaded; no full-skin filter spelling assumed');
+   if(width===1600)assert.ok(actual.logo.width>0&&actual.logo.height>0,'Desktop chat logo stays visible');
+   else await expect(app.locator('.a-work-brand')).toBeHidden(); // Shared narrow chat chrome omits the brand; Home above retains it.
    await checkFade(`${scheme}-${width}-top`,'top',{above:false,below:true});
    await checkFade(`${scheme}-${width}-middle`,'middle',{above:true,below:true});
    await checkFade(`${scheme}-${width}-end`,'end',{above:true,below:false});
@@ -413,8 +442,8 @@ try{
  await checkFade('below threshold 2',{remaining:2},{above:true,below:true});
  await checkFade('Latest threshold 80',{remaining:80},{above:true,below:true});
  await checkFade('Latest threshold 81',{remaining:81},{above:true,below:true});
- // Optional theme tokens travel through the real theme action and affect only
- // this disposable fixture's applied CSS, not any saved library entry.
+ // Optional tokens travel through the real local-preview action, not library
+ // mutation or a fabricated DOM style. Selection is restored separately.
  await apply({name:'Synthetic fade sizes',css:lightline.css+'\n#amp-one{--a-transcript-fade-top:9px;--a-transcript-fade-bottom:13px}'});
  await checkFade('author tokens','middle',{above:true,below:true,top:9,bottom:13});await apply(lightline);
 
@@ -491,7 +520,8 @@ try{
  assert.equal(inspection.sent.length,5,'Exactly four long-chat sends and one short-chat send, all synthetic');
  assert.deepEqual((await action('theme.list')).result.items.filter(row=>row.source!=='built-in'),
   listing.items.filter(row=>row.source!=='built-in'),'Saved appearances remain untouched');
- assert.equal(hash((await state()).theme.css),report.themeSha256);
+ assert.equal(hash((await state()).appearance.theme.css),report.themeSha256);
+ assert.equal((await state()).appearance.preview,null);
  assert.deepEqual(report.errors,[]);assert.deepEqual(report.httpErrors,[]);assert.deepEqual(report.externalRequests,[]);
  delete report.current;
 }catch(error){

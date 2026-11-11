@@ -1,142 +1,86 @@
 ---
 name: appearance-authoring
-description: "Create, revise, or package Amplifier Unified themes and CSS appearances with light/dark support and safe preview/revert. Load for custom appearance authoring, not for simply choosing an existing appearance. Shell component/layout authoring belongs to amplifier-shell."
+description: "Create, revise or package Amplifier Unified web appearances with light/dark support, scoped preview and recovery. Load for appearance authoring, not merely choosing a look. Component/layout authoring belongs to amplifier-shell."
 ---
 
 # Author an appearance
 
-Work inline so the user can review and steer. An appearance covers the whole
-application, not just its palette. The host owns behavior, accessibility, drafts,
-conversation data and action semantics.
+Work inline so the person can review and steer. Appearances change web
+presentation, never execution, permissions or the meaning of work.
 
-Resolve resources from the `skill_directory` returned by `load_skill`, not the
-working directory. Read [examples.md](examples.md) for payloads, selector lessons
-and a small acceptance run. Canonical references, relative to this directory:
-- [Appearance scope](../../docs/shell/appearances.md)
-- [Theme API and CSS tokens](../../docs/shell/themes.md)
+Resolve companions from the returned `skill_directory`:
+- [Appearance direction](../../docs/shell/appearances.md)
 - [Interaction contract](../../docs/shell/appearance-contract.md)
+- [Current API, tokens and package format](../../docs/shell/themes.md)
+- [Examples](examples.md), only when constructing an input or checking a result
 
-## 1. Inspect and bound the change
+## Inspect scope and installed support
 
-Read `app_control(operation="get_state")`; identify the intended connected client
-from current input/visible UI, its appearance, and relevant shell presentation.
-Discover `theme.*` and, only for layout/presentation changes, `shell.*` with
-`list_actions`. Follow `nextOffset` at the same catalog revision. For oversized
-schemas, follow `schemaRead` and assemble all schema pages before dispatch.
+Read app state and discover current schemas for `appearance.*` and `theme.*`; load `amplifier-shell`
+for supported layout/components. Identify the intended browser, starting saved
+entry/fingerprint, effective presentation and revert path. Read bounded CSS and
+actual DOM/computed styles before overriding; never reconstruct truncated CSS.
+Use supported actions, not filesystem settings or database edits.
 
-Use `theme.list` and `theme.read` to retain the exact starting CSS, saved id and
-fingerprint, plus the committed appearance and revert path. Read targeted CSS
-in bounded pages: embedded images can make a stylesheet exceed tool limits.
-Never reconstruct a truncated stylesheet. State the affected surfaces and files.
-Read the installed baseline styles as well as the saved skin. Check the actual
-DOM and computed styles before adding an override; a skin can duplicate or defeat
-a shared primitive even when its own CSS looks correct.
-Use supported theme actions, not filesystem settings or database edits. Preserve
-unrelated Canvas work, drafts, bundles, providers, skill budgets and exclusions.
-Offline authoring is allowed; label activation and browser review unverified.
+Reference is always the foundation; a package contains styling differences over
+`reference-v1`, never a complete copy of the application. ZIP is the portable
+envelope. Read the linked API for the installed package version and limits.
+Library save/import/update do not choose an appearance. One **Global / This
+browser** choice selects the complete active preference profile.
 
-**Success criteria:** Explicit target, current schemas, starting state and scope.
+Inspect the active profile, effective values and current revision.
+Local writes never publish Global values; selecting Global retains the browser
+profile for later use. Do not infer the source from the selected package or switch it
+as a side effect of authoring. Preserve unrelated presentation, Canvas work,
+drafts, providers, bundles and the person's selected skill policy.
 
-## 2. Author the smallest coherent treatment
+## Author intentional differences
 
-Choose exactly one theme input:
-- `definition`: a new version-1 theme with all ten colors in both palettes;
-  starts from the built-in skin rather than inheriting earlier artwork.
-- `tokens`: an intentional partial palette edit retaining the existing skin
-  and background; structured themes update both palettes.
-- `css`: a complete portable skin, including light/dark styling and optional
-  shape, spacing and panel tokens from the installed theme contract.
+Author a small CSS delta over Reference, not copied base/component CSS. Omitted
+properties use the foundation, never the previous appearance. Repeated functional
+repairs belong in shared components. Do not use full-skin definitions, palette
+compiler inputs, legacy CSS imports or compatibility conversion.
 
-Use semantic host tokens, including the contrasting on-accent foreground. Keep
-text readable, focus visible and touch targets usable. Prefer documented tokens
-over brittle DOM selectors. Scope CSS to `#amp-one` and stable `data-part`
-attributes. Inspect the actual DOM before font, bubble or layout overrides;
-inherited styles may lose to paragraph/span rules. Preserve native conversation
-layout and positioning. See the companion's failed-selector examples.
+For source changes, Reference and browser modules belong to the selected
+`amplifier-client-web` repository. Follow the linked API's source-ownership section
+and Unified's `components/README.md`; delivery snapshots and disposable prepared
+source are not another client authoring owner.
 
-Style bubble bodies, not outer message rows or their action footers. The inner
-composer surface is separate from its form, model selector and status. Keep
-artwork lines away from controls. Optional logo filters must reset in forced
-colors with selectors at least as specific as every light/dark filter rule.
+Prefer semantic tokens, contrasting on-accent ink and stable parts over label,
+child-position or broad descendant selectors. Separate font roles and painted
+message bodies/composer surfaces from structural rows/actions. Keep scrolling,
+responsive safety, control sizing, focus, overflow cues and lifecycle semantics
+with their shared owners; do not add masks, listeners or positioning workarounds.
 
-Let the host own transcript overflow cues, focus handling and scrollbar clearance.
-Keyboard-visible focus and active editing controls keep the transcript unmasked;
-pointer/programmatic focus on a non-visible container alone does not disable its
-fades. Omit fade tokens to inherit the shared defaults; use documented optional
-tokens only after checking installed support. Do not add unconditional masks,
-overlay fades, scroll listeners or child-positioning workarounds. Keep background
-artwork separate from the transcript mask.
+Author both palettes deliberately. Keep artwork readable and separate from
+functional feedback. Honor decorations off, reduced motion and forced colors.
+Use authorized, self-contained assets and neutral names; preserve attribution
+and font licenses. Prefer system stacks; additional fonts must earn their cost
+in realistic comparisons. No external URLs/imports or executable package content.
+Use supported ZIP assets/notices rather than duplicating the application.
 
-Use neutral, IP-independent names and only authorized, self-contained assets.
-For a reference-inspired appearance, ground both schemes in the reference.
-Keep the shared design language but choose materials and colors independently:
-do not make light mode a generic pastel inversion of a carefully authored dark
-mode. Record which details are observed and which are readability adaptations.
-Prefer system font stacks. Backgrounds may use accepted gradients or embedded
-PNG/JPEG/WebP data URLs, never external URLs, imports or SVG data URLs. Do not
-copy a brand's name, logo or proprietary artwork into a portable appearance.
-For multiple assets, use the versioned ZIP contract in the linked theme guide:
-root `appearance.json`, local CSS, declared images/WOFF fonts and license notices.
-The ZIP extension is not proof of type or safety. Retain author metadata and
-original notices on export. Compare realistic rendered specimens before adding
-a font family; avoid several similar families without a useful distinct role.
+## Preview, verify and deliver
 
-Do not change scheme, decorations, Reveal, reduced motion, contrast or permissions
-as a side effect of a theme. Busy regions must not pulse, tint or lock as a whole;
-preserve local status, errors, decisions, cancel and recovery. Components retain
-their host-owned pending/disabled semantics.
+Preview the exact proposal on the intended browser before committing within the
+requested scope. A preview, validated package or thumbnail is not visual proof.
+Check both schemes/system, narrow/zoom, decoration/accessibility preferences,
+keyboard focus, long chat/code, composer and actual busy/error/recovery states.
+Preserve unsent work without inspecting its private contents unless requested.
+This browser means the same browser profile, host and authenticated preference
+owner, not a single tab. When changing preference or persistence mechanisms,
+test Global clients, multiple tabs, complete independent browser values and
+source switching. Storage failure must stay a failure, never become a Global write.
 
-For supported composition changes, use `amplifier-shell` and the discovered
-prepare/preview/apply/revert protocol; preserve unaffected instance IDs. The
-styling ZIP does not bundle composition, executable components or arbitrary
-composer replacement.
+Retain exact entry/revision/fingerprint identities. Keep library mutations,
+selection and preview distinct; use stale/dirty guards and conditional recovery.
+Cancel preview separately from conditional undo of a preference change. Ordinary
+selection changes only the look. Suggested experience profiles, if supported by
+the installed schema, require their own explicit review/apply and retain the
+active profile; do not infer support from an appearance's metadata.
+Do not export a preview/editor draft as saved work. Round-trip ZIP bytes through
+import before claiming portability. Discover action schemas rather than copying
+payloads from a different build. An uncertain effect needs its saved receipt and
+current state, not a new request identity.
 
-**Success criteria:** Complete requested treatment with independent preferences
-and operational feedback preserved.
-
-## 3. Preview and check the real result
-
-Dispatch through `app_control(operation="dispatch", args={"action": ..., "args":
-{...}})` using the exact installed schema. Preview on the intended client before
-committing. Theme preview is client-scoped; applying commits the app-wide skin.
-Saving to the library does not apply it. Do not change unrelated clients'
-presentation or conversation selection.
-
-Check the exact proposed revision in the real browser: light/dark/system,
-decorations on/off, reduced motion, forced colors, narrow layout and zoom.
-Exercise keyboard focus, long chats, code, local busy/error states and required actions.
-Verify unsent drafts and dirty viewers remain intact without reading private
-draft content unless requested. Use disposable fixtures or authorized temporary
-preferences; restore those preferences after testing.
-
-**Success criteria:** Observed rendering and interactions match the proposal;
-schema acceptance, thumbnails and pending browser receipts are not visual proof.
-
-## 4. Save, share and retain recovery
-
-`theme.save` creates a copy; `theme.import` retains portable CSS or styling-ZIP metadata without
-applying or silently replacing an entry. `theme.update` and `theme.delete` use
-a saved id and fresh `expectedFingerprint` from `theme.read`; included appearances
-are read-only, so save a custom copy. Confirm destructive deletion with the user.
-Library updates/deletion do not change committed CSS. Export by id to share the
-saved version; export without id means the committed appearance, not a preview
-or editor draft. Round-trip the exported file through import before claiming
-portability. Use installed schemas; do not guess payload fields.
-
-For an authorized bundled addition, use the source-controlled stylesheet and
-metadata, not a migration of saved user copies. Lightline is the static
-architectural example; included does not mean changing anyone's selected skin
-or independent preferences. Keep packaging checks focused on the changed skin,
-shared primitives and actual host controls, not a new broad release gate.
-
-Apply only within the user's request. Reinspect committed state and browser
-status; check preview/apply parity, reload and revert when a safe test permits.
-Honor revision/dirty-edit guards. For uncertain effects inspect the retained
-receipt and current state; never resend under a new identity. A stale proposal
-needs fresh inspection, not a forced revision.
-
-Report the saved deliverable, applied scope, observed checks, remaining limits
-and usable revert path. Do not claim application or visual QA for an offline file.
-
-**Success criteria:** Verified requested state, or an explicitly offline artifact;
-unrelated settings and host-owned data remain unchanged.
+Report the deliverable, write scope, observed checks, limits and recovery path.
+Offline authoring is valid; label application and browser review unverified.
