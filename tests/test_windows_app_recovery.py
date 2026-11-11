@@ -95,6 +95,7 @@ def test_wrong_attempt_does_not_retire_parent_recovery(transaction):
 
 @pytest.mark.parametrize("mode", ["accepted", "failed", "owner-stop", "timeout", "changed-run", "changed-binding", "unknown-stop"])
 def test_updated_host_readiness_is_bounded_and_normal_stop_wins(transaction, monkeypatch, mode):
+    import asyncio
     t = transaction
     record = t.restart["run"]
     observed = {**record, "exited": lambda: mode in {"failed", "timeout"}}
@@ -111,13 +112,13 @@ def test_updated_host_readiness_is_bounded_and_normal_stop_wins(transaction, mon
             raise RuntimeError("Normal stop not confirmed")
     monkeypatch.setattr(runtime, "request_stop", stop)
     ticks = iter([0, 91])
-    monkeypatch.setattr(service.time, "monotonic", lambda: next(ticks))
-    child = SimpleNamespace(poll=lambda: 1 if mode == "failed" else None)
+    monkeypatch.setattr(service, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    finished = SimpleNamespace(done=lambda: mode == "failed")
     if mode in {"changed-run", "changed-binding", "unknown-stop"}:
         with pytest.raises(RuntimeError):
-            service._wait_updated_host(t.spec, child, observed, t.restart)
+            asyncio.run(service._wait_updated_host(t.spec, finished, observed, t.restart))
     else:
-        assert service._wait_updated_host(t.spec, child, observed, t.restart) is (mode in {"failed", "timeout"})
+        assert asyncio.run(service._wait_updated_host(t.spec, finished, observed, t.restart)) is (mode in {"failed", "timeout"})
     assert len(stopped) == (1 if mode in {"timeout", "unknown-stop"} else 0)
 
 

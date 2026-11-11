@@ -637,73 +637,111 @@ def test_supervisor_normal_stop_does_not_restart_or_infer_generation(monkeypatch
     monkeypatch.setattr(service, "_read", lambda home: ({"state": 4, "instances": 1}, value))
     monkeypatch.setattr(service, "_launch_python", lambda spec: (spec.python, None))
     events = []
-    class Child:
-        pid = 123
-        def __init__(self, argv, **kwargs):
-            events.append((argv, kwargs))
-        def __enter__(self):
-            return self
-        def __exit__(self, *args):
-            pass
-        def wait(self):
-            return 0
-        def poll(self):
-            return None
-    monkeypatch.setattr(service.subprocess, "Popen", Child)
-    @contextmanager
-    def process(pid):
-        yield {"pid": pid, "created": "134000000000000001",
-               "image": r"C:\Python\pythonw.exe", "exited": lambda: True}
-    monkeypatch.setattr(runtime, "process", process)
-    records = [None, {"schema": 1, "registration": value.registration_id,
-        "run": "b" * 32, "pid": 123, "created": "134000000000000001",
-        "image": r"C:\Python\pythonw.exe", "phase": "starting"}]
-    monkeypatch.setattr(runtime, "read", lambda spec: records.pop(0))
-    @contextmanager
-    def log(spec):
-        yield SimpleNamespace(write=lambda *a: None)
-    monkeypatch.setattr(runtime, "PrivateLog", log)
+    async def launch(spec, python, restart):
+        events.append((spec, python, restart))
+        return None, 0, False
+    monkeypatch.setattr(service, "_launch_owned_host", launch)
     monkeypatch.setattr(runtime, "read_restart", lambda spec: pytest.fail("normal stop must not request a restart"))
     assert service._supervise(value) == 0
     assert len(events) == 1
-    assert events[0][0] == [value.python, "-I", "-m", "amplifier_web.windows_service",
-                            "--host", value.encoded()]
-    assert events[0][1]["stdin"] == subprocess.DEVNULL
-    assert events[0][1]["cwd"] == value.workspace
+    assert events == [(value, value.python, None)]
 
 
 @pytest.mark.parametrize("failure", ["timeout", "foreign-child", "reused-pid"])
-def test_supervisor_identity_failure_cannot_enter_an_unbounded_popen_exit(monkeypatch, failure):
+def test_supervisor_identity_failure_cannot_restart_or_restore(monkeypatch, failure):
     from amplifier_web import windows_task_runtime as runtime
+    from amplifier_web import windows_app_recovery as recovery
     value = spec(supervised=True)
     monkeypatch.setattr(service, "_read", lambda home: ({"state": 4, "instances": 1}, value))
     monkeypatch.setattr(service, "_launch_python", lambda spec: (spec.python, None))
-    class Child:
-        pid = 123
-        def __init__(self, *args, **kwargs):
-            pass
-        def __enter__(self):
-            pytest.fail("Popen context exit would wait indefinitely after an identity failure")
-        def poll(self):
-            return None
-        def wait(self):
-            pytest.fail("An unverified child must not enter an unbounded wait")
-    monkeypatch.setattr(service.subprocess, "Popen", Child)
-    record = {"run": "b" * 32, "pid": 456 if failure == "foreign-child" else 123,
-              "created": "134000000000000001", "image": r"C:\Python\pythonw.exe"}
-    observations = iter([None, None if failure == "timeout" else record])
-    monkeypatch.setattr(runtime, "read", lambda spec: next(observations))
-    ticks = iter([0, 61])
-    monkeypatch.setattr(service.time, "monotonic", lambda: next(ticks))
-    monkeypatch.setattr(runtime, "parent_pid", lambda pid: 999)
+    async def launch(*args):
+        raise service.WindowsServiceError(failure)
+    monkeypatch.setattr(service, "_launch_owned_host", launch)
+    monkeypatch.setattr(recovery, "restore", lambda *a: pytest.fail("Unknown launch cannot restore"))
+    monkeypatch.setattr(runtime, "read_restart", lambda *a: pytest.fail("Unknown launch cannot restart"))
+    with pytest.raises(service.WindowsServiceError, match=failure):
+        service._supervise(value)
+
+
+@pytest.mark.parametrize("mode", ["normal", "pre-identity-exit", "foreign-member", "reused-pid",
+                                 "guard-error", "tree-not-empty", "io-not-finalized", "lost-output"])
+def test_owned_launch_never_infers_settlement_from_redirector_exit(monkeypatch, mode):
+    import asyncio
+    from amplifier_web import windows_jobs, windows_task_runtime as runtime
+    value = spec(supervised=True)
+    events, state = [], {"reads": 0, "exited": False}
+    record = {"schema": 1, "registration": value.registration_id, "run": "b" * 32,
+              "pid": 123, "created": "134000000000000001",
+              "image": r"C:\Python\pythonw.exe", "phase": "starting"}
+    class Stream:
+        async def read(self, size):
+            return b""
+    class Owner:
+        tree_empty = mode != "tree-not-empty"
+        io_finalized = mode != "io-not-finalized"
+        stdout = stderr = Stream()
+        stdin = SimpleNamespace(close=lambda: events.append("stdin-close"))
+        @classmethod
+        async def start(cls, argv, **kwargs):
+            assert argv == [value.python, "-I", "-m", "amplifier_web.windows_service",
+                            "--host", value.encoded()]
+            assert kwargs["trusted_python"] == sys._base_executable
+            assert kwargs["cwd"] == value.workspace
+            events.append("launch")
+            return cls()
+        def verify_member(self, pid, created):
+            assert (pid, created) == (record["pid"], int(record["created"]))
+            if mode == "foreign-member":
+                raise OSError("not in the exact owned job")
+            events.append("member")
+        async def wait(self):
+            state["exited"] = True
+            return SimpleNamespace(guard_returncode=1 if mode == "guard-error" else 0,
+                payload_returncode=1 if mode == "pre-identity-exit" else 0,
+                active_processes=0, output_discarded=mode == "lost-output")
+        async def close(self):
+            events.append("closed")
+    monkeypatch.setattr(windows_jobs, "WindowsOwnedProcess", Owner)
+    def read(spec):
+        state["reads"] += 1
+        return None if state["reads"] == 1 or mode == "pre-identity-exit" else record
+    monkeypatch.setattr(runtime, "read", read)
     @contextmanager
     def process(pid):
-        yield {**record, "created": "134000000000000002", "exited": lambda: False}
+        yield {**record, "created": "2" if mode == "reused-pid" else record["created"],
+               "exited": lambda: state["exited"]}
     monkeypatch.setattr(runtime, "process", process)
-    with pytest.raises(service.WindowsServiceError, match={
-        "timeout": "did not publish", "foreign-child": "does not belong", "reused-pid": "differs"
-    }[failure]):
-        service._supervise(value)
+    if mode not in {"normal", "pre-identity-exit"}:
+        with pytest.raises((OSError, service.WindowsServiceError)):
+            asyncio.run(service._launch_owned_host(value, value.python, None))
+    else:
+        observed, code, failed = asyncio.run(service._launch_owned_host(value, value.python, None))
+        assert (observed, code, failed) == ((None, 1, True) if mode == "pre-identity-exit"
+                                            else (record, 0, False))
+    assert events.count("launch") == events.count("closed") == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows launch guard and exact descendant settlement")
+def test_native_owned_background_failure_before_any_runtime_receipt(tmp_path):
+    import asyncio
+    from amplifier_web.windows_files import directory
+    # The installed host's controlled base has no app distribution. Do not
+    # manufacture an app receipt or replace an actual installation to fail it.
+    base = sys._base_executable
+    probe = subprocess.run([base, "-I", "-c",
+        "import importlib.util; print(importlib.util.find_spec('amplifier_web') is None)"],
+        capture_output=True, text=True, timeout=10, check=False)
+    if probe.returncode or probe.stdout.strip() != "True":
+        pytest.skip("This base interpreter already has the app; it is not the no-identity fixture")
+    home = tmp_path / "absent-app"
+    with directory(home / "config/services", owned_root=home, create=True):
+        pass
+    value = spec(python=base, data_dir=str(home), workspace=str(tmp_path), supervised=True)
+    observed, code, failed = asyncio.run(service._launch_owned_host(value, base, None))
+    assert observed is None and code != 0 and failed is True
+    # Successful return requires payload/guard/empty-tree/final-I/O checks.
+    assert not (home / "config/services/task-runtime.json").exists()
+    assert (home / "config/services/task-launcher-output.log").is_file()
 
 
 def test_unqualified_supervised_update_owner_is_closed_before_any_native_read(monkeypatch):
@@ -748,6 +786,46 @@ def test_launch_roots_are_public_paths_not_arbitrary_environment():
                   {"AMPLIFIER_HOME": "relative"}, {"UV_CACHE_DIR": "C:\\bad\npath"}):
         with pytest.raises(ValueError):
             spec(launch_roots=roots)
+
+
+@pytest.mark.parametrize("change", [None, "foreign-pid", "starting", "two-instances", "wrong-python"])
+def test_background_target_discovery_uses_exact_owned_task_not_uv_global_state(tmp_path, monkeypatch, change):
+    from pathlib import Path
+    from amplifier_web import application_generations, windows_files, windows_task_runtime
+    prefix = tmp_path / "private-host"
+    (prefix / "Scripts").mkdir(parents=True)
+    python = prefix / "Scripts/pythonw.exe"
+    python.write_bytes(b"test interpreter")
+    other = prefix / "Scripts/other.exe"
+    other.write_bytes(b"other")
+    value = spec(supervised=True)
+    # Native path/type/private checks are tested independently; this portable
+    # seam isolates actual task/host binding and never grants restart capability.
+    object.__setattr__(value, "python", str(python))
+    monkeypatch.setattr(service, "_read", lambda home: (
+        {"state": 4, "instances": 2 if change == "two-instances" else 1}, value))
+    monkeypatch.setattr(windows_task_runtime, "observe", lambda spec: {
+        "pid": os.getpid() + (1 if change == "foreign-pid" else 0),
+        "phase": "starting" if change == "starting" else "listening"})
+    monkeypatch.setattr(service.sys, "executable", str(other if change == "wrong-python" else python))
+    monkeypatch.setattr(service, "_launch_python", lambda spec: (str(python), None))
+    monkeypatch.setattr(windows_files, "address", Path)
+    seen = []
+    @contextmanager
+    def directory(path, **kwargs):
+        seen.append((path, kwargs))
+        yield SimpleNamespace(read_private=lambda name, limit: b"MZ launcher")
+    monkeypatch.setattr(windows_files, "directory", directory)
+    monkeypatch.setattr(application_generations, "bootstrap_identity",
+                        lambda path: {"prefix": str(path), "digest": "0" * 64})
+    if change is None:
+        assert service.installed_target(value.data_dir) == (prefix, prefix / "Scripts/amplifier-unified.exe")
+        assert len(seen) == 2
+        assert service.SUPERVISED_UPDATES_QUALIFIED is False
+    else:
+        with pytest.raises(service.WindowsServiceError):
+            service.installed_target(value.data_dir)
+        assert not seen
 
 
 def test_free_threaded_interpreter_is_not_ordinary_python(monkeypatch):

@@ -499,6 +499,17 @@ async def _activate_serialized(manager, *, force=None):
 async def installed_target():
     """Only replace the uv tool environment that owns this running host."""
     uv=shutil.which('uv')
+    background = None
+    if sys.platform == 'win32':
+        from .windows_service import installed_target as background_target
+        from .host.config import app_home
+        background = await asyncio.to_thread(background_target, app_home())
+    if background is not None:
+        if not uv:
+            raise ValueError('The private background installation is missing its uv helper.')
+        prefix, launcher = background
+        return uv, str(launcher), Path(sys.prefix) / 'Scripts/python.exe', {
+            'version': __version__, 'installation': str(prefix), 'source': None}
     # Avoid PATHEXT manufacturing ".EXE" in an otherwise canonical pathname.
     # The native owner deliberately compares exact component spellings.
     executable=shutil.which('amplifier-unified.exe' if os.name=='nt' else 'amplifier-unified')

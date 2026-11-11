@@ -8,6 +8,7 @@ Automatic updates stay gated until native transition/recovery qualification.
 from __future__ import annotations
 
 import base64
+import asyncio
 from dataclasses import asdict, dataclass, field
 from contextlib import redirect_stderr, redirect_stdout
 import json
@@ -29,7 +30,8 @@ NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 LIMIT = 128 * 1024
 LAUNCH_ROOTS = {"AMPLIFIER_HOME", "AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH",
                 "AMPLIFIER_UNIFIED_IMPORT_HOME", "UV_CACHE_DIR",
-                "UV_PYTHON_INSTALL_DIR", "UV_PYTHON_BIN_DIR"}
+                "UV_PYTHON_INSTALL_DIR", "UV_PYTHON_BIN_DIR", "UV_TOOL_DIR",
+                "UV_TOOL_BIN_DIR", "AMPLIFIER_SOURCE_STORE", "TEMP", "TMP"}
 ET.register_namespace("", NAMESPACE)
 
 
@@ -576,6 +578,37 @@ def update_owner(data_dir):
     return spec
 
 
+def installed_target(data_dir):
+    """Recognize this actual owned host, including a private non-uv bootstrap.
+
+    The restart capability gate is separate. This inspection never opens it or
+    permits in-place replacement. An unrelated task or foreground host cannot
+    make an arbitrary environment an update target.
+    """
+    from .windows_task_runtime import observe
+    from .windows_files import address, directory
+    from .application_generations import bootstrap_identity
+    value, spec = _read(data_dir)
+    if spec is None or not spec.supervised:
+        return None
+    if value.get("state") != 4 or value.get("instances") != 1:
+        raise WindowsServiceError("The background installation is not the current sole task instance.")
+    record = observe(spec)
+    if not record or record["pid"] != os.getpid() or record["phase"] != "listening":
+        raise WindowsServiceError("The current process is not the verified background host.")
+    python, _ = _launch_python(spec)
+    if not Path(sys.executable).samefile(python):
+        raise WindowsServiceError("The running app differs from the qualified background launch.")
+    bootstrap = address(Path(spec.python).parent.parent)
+    with directory(bootstrap, owned_root=bootstrap):
+        bootstrap_identity(bootstrap)
+    launcher = bootstrap / "Scripts/amplifier-unified.exe"
+    with directory(launcher.parent, owned_root=bootstrap) as pinned:
+        if not pinned.read_private(launcher.name, limit=1024 * 1024).startswith(b"MZ"):
+            raise WindowsServiceError("The background installation's app entry is invalid.")
+    return bootstrap, launcher
+
+
 def request_update_restart(data_dir, target, recovery=None):
     """Commit an exact private host signal, never claim successor readiness."""
     from .windows_task_runtime import request_restart, read_restart, read, restart_record
@@ -669,70 +702,117 @@ def _supervise(spec):
     owner's Scheduler lifetime and waits for each exact child to exit. A normal
     close stops here. Only an exact private restart receipt selects another app.
     """
-    from .windows_task_runtime import process, matches, read, read_restart, parent_pid, RESTART_EXIT
+    return asyncio.run(_supervise_owned(spec))
+
+
+async def _supervise_owned(spec):
+    from .windows_task_runtime import read_restart, RESTART_EXIT
     requested = None
     restart = None
     while True:
         value, installed = _read(spec.data_dir)
         if installed != spec or value.get("state") != 4 or value.get("instances") != 1:
             raise WindowsServiceError("The scheduled launch definition changed.")
-        python, target = _launch_python(spec)
+        try:
+            python, target = await asyncio.to_thread(_launch_python, spec)
+        except (OSError, ValueError, RuntimeError):
+            if requested is None:
+                raise
+            # No successor launch occurred. The exact old run/tree has already
+            # exited; restore still rechecks this attempt's unchanged pointer.
+            from .windows_app_recovery import restore
+            await asyncio.to_thread(restore, spec, restart)
+            requested = restart = None
+            continue
         if requested is not None:
             if not target or any(target.get(key) != requested[key] for key in ("revision", "generation")):
                 raise WindowsServiceError("The requested application launch target changed.")
             validated = json.loads((target["folder"] / "validated.json").read_text())
             if validated.get("attemptId") != requested["attemptId"]:
                 raise WindowsServiceError("The application qualification attempt changed.")
-        # Only the actual app owns its private log; concurrent parent snapshots
-        # must not replace the child's final output or contend on publication.
-        previous_run = read(spec)
-        # Do not use Popen's context manager: its unbounded __exit__.wait()
-        # would defeat identity-startup timeouts. _run's retained lifetime job
-        # contains descendants if this launcher exits on an invalid observation.
-        child = subprocess.Popen([python, "-I", "-m", "amplifier_web.windows_service",
-                                  "--host", spec.encoded()],
-                                 cwd=spec.workspace, stdin=subprocess.DEVNULL,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        # CPython's installed venv entry may be a redirector. Join the freshly
-        # published app receipt to that live child's ancestry.
+        record, code, failed_start = await _launch_owned_host(spec, python, restart)
+        if code != RESTART_EXIT:
+            if failed_start and requested is not None:
+                from .windows_app_recovery import restore
+                await asyncio.to_thread(restore, spec, restart)
+                requested = restart = None
+                continue
+            return code
+        request = read_restart(spec)
+        if not record or not request or any(request["run"][key] != record[key]
+                for key in ("registration", "run", "pid", "created", "image")):
+            raise WindowsServiceError("No exact completed host restart was recorded.")
+        requested = request["target"]
+        restart = request
+        if target and all(target.get(key) == requested[key] for key in ("revision", "generation")):
+            raise WindowsServiceError("The host requested its unchanged application generation.")
+
+
+async def _launch_owned_host(spec, python, restart):
+    """Reuse the canonical launch guard, including pre-identity tree settlement."""
+    from .windows_jobs import WindowsOwnedProcess
+    from . import windows_task_runtime as runtime
+    previous = runtime.read(spec)
+    owner = await WindowsOwnedProcess.start(
+        [python, "-I", "-m", "amplifier_web.windows_service", "--host", spec.encoded()],
+        cwd=spec.workspace, env=dict(os.environ), trusted_python=sys._base_executable)
+    owner.stdin.close()
+    # The host owns task-output.log. Drain startup output separately so neither
+    # a full pipe nor concurrent parent snapshots can stall/clobber that log.
+    tail = bytearray()
+    async def drain(stream):
+        while data := await stream.read(65536):
+            tail.extend(data)
+            del tail[:-LIMIT]
+    readers = [asyncio.create_task(drain(stream)) for stream in (owner.stdout, owner.stderr)]
+    finished = asyncio.create_task(owner.wait())
+    record = None
+    failed = False
+    try:
         deadline = time.monotonic() + 60
         while True:
-            record = read(spec)
-            if record and (not previous_run or record["run"] != previous_run["run"]):
-                if record["pid"] != child.pid and parent_pid(record["pid"]) != child.pid:
-                    raise WindowsServiceError("The app receipt does not belong to this launched child.")
+            current = runtime.read(spec)
+            if current and (not previous or current["run"] != previous["run"]):
+                record = current
+                # Actual native membership + exact birth, not EnginePID,
+                # redirector ancestry or a process-provided environment claim.
+                owner.verify_member(record["pid"], int(record["created"]))
                 break
-            if child.poll() is not None or time.monotonic() >= deadline:
+            if finished.done():
+                # No runtime receipt is still a known failed start when the
+                # owned guard confirms root exit AND its entire tree is empty.
+                failed = True
+                break
+            if time.monotonic() >= deadline:
                 raise WindowsServiceError("The background host did not publish its new identity.")
-            time.sleep(0.1)
-        with process(record["pid"]) as actual:
-            if not actual:
-                raise WindowsServiceError("The background host exited before identity was observed.")
-            if not matches(record, actual):
-                raise WindowsServiceError("The launched host identity differs from its receipt.")
-            failed_start = _wait_updated_host(spec, child, actual, restart) if requested is not None else False
-            code = child.wait()
-            if code != RESTART_EXIT:
-                if failed_start and requested is not None and actual["exited"]():
-                    # Only an exact exited successor may trigger rollback.
-                    # Unknown startup/ancestry observations remain fail-closed.
-                    from .windows_app_recovery import restore
-                    restore(spec, restart)
-                    requested = restart = None
-                    continue
-                return code
-            request = read_restart(spec)
-            if (not request or not matches(request["run"], actual)
-                    or not actual["exited"]()):
-                raise WindowsServiceError("No exact completed host restart was recorded.")
-            requested = request["target"]
-            restart = request
-            if target and all(target.get(key) == requested[key] for key in ("revision", "generation")):
-                raise WindowsServiceError("The host requested its unchanged application generation.")
+            await asyncio.sleep(0.1)
+        if record is not None:
+            with runtime.process(record["pid"]) as actual:
+                if not runtime.matches(record, actual):
+                    raise WindowsServiceError("The launched host identity differs from its receipt.")
+                if restart is not None:
+                    failed = await _wait_updated_host(spec, finished, actual, restart)
+                result = await finished
+                if not actual["exited"]():
+                    raise WindowsServiceError("The recorded host did not exit with its owned launch.")
+        else:
+            result = await finished
+        if (result.guard_returncode != 0 or result.payload_returncode is None
+                or result.active_processes != 0 or not owner.tree_empty or not owner.io_finalized
+                or result.output_discarded):
+            raise WindowsServiceError("The background host launch tree did not settle.")
+        return record, result.payload_returncode, failed
+    finally:
+        await owner.close()
+        await asyncio.gather(finished, *readers)
+        if tail:
+            from .windows_files import address, directory
+            home = address(spec.data_dir)
+            with directory(home / "config/services", owned_root=home, create=False) as pinned:
+                pinned.publish_private("task-launcher-output.log", bytes(tail), replace=True)
 
 
-def _wait_updated_host(spec, child, actual, restart):
+async def _wait_updated_host(spec, finished, actual, restart):
     """Bound first readiness; use normal stop only for this exact new run."""
     from . import windows_app_recovery as recovery, windows_task_runtime as runtime
     deadline = time.monotonic() + 90
@@ -748,15 +828,15 @@ def _wait_updated_host(spec, child, actual, restart):
             raise WindowsServiceError("The updated host recovery binding changed.")
         if value["status"] == "acknowledged":
             return False
-        if child.poll() is not None and actual["exited"]():
+        if finished.done() and actual["exited"]():
             return True
         if time.monotonic() >= deadline:
-            runtime.request_stop(spec, timeout=30, expected=current)
+            await asyncio.to_thread(runtime.request_stop, spec, timeout=30, expected=current)
             # An unconfirmed normal stop raises, never authorizes rollback.
             if not actual["exited"]():
                 raise WindowsServiceError("The unready updated host has not exited.")
             return True
-        time.sleep(0.25)
+        await asyncio.sleep(0.25)
 
 
 def _host(spec):
