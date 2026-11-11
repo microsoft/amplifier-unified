@@ -614,8 +614,8 @@ class RuntimeControls:
                 if isinstance(captured,dict) and name in captured.get('connectionKeys',{}):
                     shared['connectionKey']=captured['connectionKeys'][name]
                 if mounted and isinstance(captured,dict) and name in captured.get('keys',{}):
-                    from .provider_catalog import configuration_key
-                    current=configuration_key(captured['workspace'],mounted['module'],mounted.get('config',{}),captured['sources'][name],home=captured['home'])
+                    from .provider_catalog import configuration_key, mounted_provider_config
+                    current=configuration_key(captured['workspace'],mounted['module'],mounted_provider_config(mounted),captured['sources'][name],home=captured['home'])
                     if current==captured['keys'][name]:shared['sharedCatalogKey']=current
                 listing = await model_list_info(provider)
                 rows.append({"id":name,**({"available":False,"failure":provider.failure} if isinstance(provider,UnavailableProvider) else {}),"module":mounted.get('module'),"catalogKey":catalog_key,**shared,"info":public_config(info, metadata=True),"configSchema":public_config(schema, metadata=True),

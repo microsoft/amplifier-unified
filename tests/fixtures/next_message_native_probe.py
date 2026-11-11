@@ -31,6 +31,7 @@ class FixtureProvider:
     async def complete(self, request, **kwargs):
         with Path(self.config["calls"]).open("a") as stream:
             stream.write(json.dumps({"pid":os.getpid(),"root":self.config["root"],
+                "implementation":__file__,
                 "model":request.model,"effort":request.reasoning_effort,
                 "kwargsModel":kwargs.get("model"),"kwargsEffort":kwargs.get("reasoning_effort")})+"\\n")
         return ChatResponse(content=[TextBlock(text="native-next-message-"+self.config["root"])])
@@ -50,7 +51,7 @@ async def until(predicate):
             await asyncio.sleep(.02)
 
 
-async def run(root, regression=False):
+async def run(root, regression=False, binding=False):
     root.mkdir(parents=True, exist_ok=False)
     home, shared, workspace = (root/name for name in ('app', 'shared', 'workspace'))
     shared.mkdir(); workspace.mkdir()
@@ -70,6 +71,7 @@ async def run(root, regression=False):
     from aiohttp.test_utils import TestClient, TestServer
     from aiohttp import ServerDisconnectedError
     from amplifier_web.auth import SESSION_COOKIE, new_session
+    from amplifier_web.setup import SetupManager
     import yaml
 
     for key in list(os.environ):
@@ -84,22 +86,62 @@ async def run(root, regression=False):
     loop = str(Path(amplifier_module_loop_live.__file__).parent)
     bundles = []
     calls = root/'calls.jsonl'
+    connection = {'root': 'shared' if binding else 'a', 'calls': str(calls),
+                  **({'api_key': 'synthetic-fixture-only'} if binding else {})}
     for label in ('a', 'b', 'bad', 'slow'):
         path = root/f'bundle-{label}.yaml'
         path.write_text(yaml.safe_dump({'bundle': {'name': 'fixture-'+label, 'version': SNAPSHOT_VERSION},
             'session': {'orchestrator': {'module': 'loop-live', 'config': {'use_streaming': False}},
                         'context': {'module': 'context-simple', 'source': context}},
             'providers': [{'module': 'provider-fixture', 'source': str(provider.parent),
-                           'config': {'root': label, 'calls': str(calls),
+                           'config': {**connection, **({} if binding else {'root': label}),
                                **({'fail': True} if label == 'bad' else {}),
                                **({'hold': str(root/'mount-held')} if label == 'slow' else {})}}]}))
         bundles.append(str(path))
+    # Binding mode exercises the configured host catalog, not a fabricated key.
+    # Its offline provider accepts raw but never emits a network request.
+    if binding:
+        from amplifier_web.provider_recording import RAW_MODULES
+        assert 'provider-openai' in RAW_MODULES
+        # The fixture is mounted under OpenAI's module ID so the actual host
+        # recording default participates, while its implementation stays local.
+        for path in map(Path, bundles):
+            value = yaml.safe_load(path.read_text())
+            value['providers'][0].update(module='provider-openai', instance_id='fixture')
+            path.write_text(yaml.safe_dump(value))
+        package = root/'provider'/'amplifier_module_provider_openai'
+        package.mkdir()
+        (package/'__init__.py').write_text(
+            PROVIDER.replace('name="fixture")', 'name="openai")') + '\nOpenAIProvider = FixtureProvider\n')
+        (home/'diagnostics').mkdir(parents=True)
+        (home/'diagnostics/config.json').write_text('{"providerRequests":true}')
     (shared/'settings.yaml').write_text(yaml.safe_dump({'bundle': {'active': bundles[0], 'app': []},
         'web_bundles': {'excluded': list(APPENDED_DEFAULTS)},
-        'sources': {'modules': {'loop-live': loop, 'context-simple': context, 'provider-fixture': str(provider.parent)}}}))
+        **({'config': {'providers': [{'id': 'fixture', 'module': 'provider-openai',
+            'source': str(provider.parent), 'config': connection}]}} if binding else {}),
+        'sources': {'modules': {'loop-live': loop, 'context-simple': context,
+            ('provider-openai' if binding else 'provider-fixture'): str(provider.parent)}}}))
     # Real composition/metadata query in this isolated process. No host runtime
     # downloader is needed: the fixture's explicit modules are already installed.
     async def resolver(home, workspace, bundle=None, app_bundle=None, **kwargs):
+        if binding and kwargs.get('catalog'):
+            manager = SetupManager(home)
+            # Replace only dependency/probe transport with a local metadata
+            # fixture; host discovery, cache and binding producers stay real.
+            async def offline_probe(action, args, workspace):
+                import amplifier_module_provider_openai as offline
+                from amplifier_web.provider_probe import public
+                assert Path(offline.__file__).resolve() == package/'__init__.py'
+                provider = offline.FixtureProvider()
+                return {'info': public(provider.get_info()),
+                    'configSchema': provider.get_config_schema(), 'models': await provider.list_models(),
+                    'modelsSupported': True, 'modelsProvenance': 'provider-api'}
+            manager.probe = offline_probe
+            try:
+                return await manager.discover_catalog(workspace, instance=kwargs.get('instance'),
+                    selected_only=kwargs.get('selected_only', False))
+            finally:
+                await manager.catalog.close()
         return await query({'home': str(home), 'workspace': workspace, 'bundle': bundle,
             'sessionId': kwargs.get('session_id'), 'catalog': kwargs.get('catalog', False),
             'refresh': kwargs.get('refresh', False), 'replacement': kwargs.get('replacement'),
@@ -107,6 +149,15 @@ async def run(root, regression=False):
     draft_defaults.resolve_defaults = resolver
     runtime = RuntimeManager(command=[sys.executable, '-u', str(Path(__file__).resolve()), '--worker'],
         startup_timeout=45, retention={'prewarm_on_select': False})
+    verified = []
+    original_control = runtime.control
+    async def observed_control(sid, operation, args, **kwargs):
+        result = await original_control(sid, operation, args, **kwargs)
+        if operation == 'provider.verifyConnection':
+            assert args.get('expectedConnectionKey') and result == {'verified': True}
+            verified.append(sid)
+        return result
+    runtime.control = observed_control
     app = await create_app(home, workspace=workspace, runtime=runtime, voice=False,
         background_updates=False, preload_providers=False)
     service = app['service']; runtime.app_bridge, runtime.home = service.app_bridge, home
@@ -134,11 +185,28 @@ async def run(root, regression=False):
         await action('session.create', {'bundle': bundles[0], 'title': 'Native next message'}, 'create')
         current = service._session(); sid = current['id']
         await action('session.naming', {'id': sid, 'automatic': False}, 'no-name-model')
+        if binding:
+            # Real ordinary startup before the pending bundle+model replacement.
+            await action('conversation.send', {'sessionId': sid, 'text': 'BASELINE_INPUT'}, 'baseline-input')
+            await until(lambda: current.get('collaborationGeneration', {}).get('terminal'))
+            await until(lambda: runtime.workers.get(sid, {}).get('parked'))
+            assert len(calls.read_text().splitlines()) == 1
+            # Keep the existing exactly-once oracle focused on the next inputs.
+            calls.write_text('')
+        starts_before_save = len(worker_processes)
+        calls_before_save = calls.read_text() if calls.exists() else None
         for revision, bundle, model, effort in [(0,bundles[1],'second','high'),(1,bundles[1],'first','low')]:
             await action('conversation.configure', {'sessionId':sid, 'expectedRevision':revision,
                 'bundle':bundle, 'selection':{'instance':'fixture','model':model,'effort':effort}}, 'save-'+str(revision))
-        assert not runtime.workers and not worker_processes and not calls.exists()
-        report['zeroStartsBeforeSend'] = True
+        if binding:
+            assert current.get('modelConnectionKey')
+        if not binding:
+            assert not runtime.workers and not worker_processes and not calls.exists()
+            report['zeroStartsBeforeSend'] = True
+        else:
+            assert len(worker_processes) == starts_before_save
+            assert calls.read_text() == calls_before_save
+            report['configurationSaveDidNotStartWork'] = True
         if regression:
             # Deliberate stale-selection injection before the provider boundary;
             # the same acceptance oracle below must reject it.
@@ -156,7 +224,11 @@ async def run(root, regression=False):
         assert calls.exists(), current.get('error')
         await until(lambda: runtime.workers[sid].get('parked'))
         first = [json.loads(line) for line in calls.read_text().splitlines()]
-        assert len(first) == 1 and first[0]['root'] == 'b' and first[0]['model'] == 'first' and first[0]['effort'] == 'low', first
+        assert len(first) == 1 and first[0]['root'] == ('shared' if binding else 'b') and first[0]['model'] == 'first' and first[0]['effort'] == 'low', first
+        if binding:
+            assert len(verified) >= 1
+            assert Path(first[0]['implementation']).resolve() == package/'__init__.py'
+            report['nonemptyBindingVerified'] = True
         assert current['appliedConfigurationRevision'] == 2 and not current.get('pendingBundleSelection')
         await action('conversation.configure', {'sessionId':sid,'expectedRevision':2,'bundle':bundles[0],
             'selection':{'instance':'fixture','model':'second','effort':'high'}}, 'save-adjacent')
@@ -166,12 +238,16 @@ async def run(root, regression=False):
         await until(lambda: runtime.workers[sid].get('parked'))
         report['processes'].append(runtime.workers[sid]['process'].pid)
         observed = [json.loads(line) for line in calls.read_text().splitlines()]
-        assert observed[1]['root'] == 'a' and observed[1]['model'] == 'second' and observed[1]['effort'] == 'high', observed
+        assert observed[1]['root'] == ('shared' if binding else 'a') and observed[1]['model'] == 'second' and observed[1]['effort'] == 'high', observed
         assert len(set(report['processes'])) == 2
+        if binding:
+            assert len(verified) >= 2
         messages = SessionHistoryStore(sessions_dir(workspace)/runtime.workers[sid]['runtime_id']).load_messages()
         ids = [(message.get('metadata') or {}).get('amplifier_input',{}).get('id') for message in messages]
         assert ids.count('input-one') == ids.count('input-two') == 1, ids
-        assert len(worker_processes) == 2
+        if binding:
+            assert ids.count('baseline-input') == 1
+        assert len(worker_processes) == 2 + int(binding)
         native_id = runtime.workers[sid]['runtime_id']
         baseline = SessionHistoryStore(sessions_dir(workspace)/native_id).load_messages()
         await action('conversation.configure', {'sessionId':sid,'expectedRevision':3,'bundle':bundles[2]}, 'save-unavailable')
@@ -228,7 +304,7 @@ async def main():
         configure_protocol()
         await Worker().run()
     else:
-        await run(Path(sys.argv[1]), '--stale-regression' in sys.argv)
+        await run(Path(sys.argv[1]), '--stale-regression' in sys.argv, '--connection-binding' in sys.argv)
 
 
 if __name__ == '__main__':
