@@ -14,12 +14,22 @@ PACKAGE = Path(__file__).resolve().parents[1] / "amplifier_web"
 
 
 def test_apply_settings_does_not_require_server_dependencies():
+    import amplifier_foundation
+
     # Use a fresh interpreter so a server module imported by another test cannot
     # mask an accidental dependency. Workers intentionally do not install aiohttp.
     runner = textwrap.dedent("""
         import importlib.util, sys
         from types import SimpleNamespace
         sys.path.insert(0, sys.argv[1])
+        sys.path.insert(0, sys.argv[2])
+        # Initialize the selected producer before simulating an older API.
+        # New Foundation versions export these classes during their own import;
+        # this check concerns the app's dependency-preparation import boundary.
+        import amplifier_foundation.session as native_session
+        for name in ('ActivationGate', 'NativeTranscriptGuard', 'NativeTranscriptConflict'):
+            if hasattr(native_session, name):
+                delattr(native_session, name)
         sys.modules['aiohttp'] = None
         # Dependency preparation must remain importable in a retained worker
         # before an included update installs the execution-only session APIs.
@@ -44,7 +54,8 @@ def test_apply_settings_does_not_require_server_dependencies():
         assert 'amplifier_web.device_connections' not in sys.modules
     """)
     result = subprocess.run(
-        [sys.executable, '-I', '-c', runner, str(PACKAGE.parent)],
+        [sys.executable, '-I', '-c', runner, str(PACKAGE.parent),
+         str(Path(amplifier_foundation.__file__).resolve().parent.parent)],
         capture_output=True, text=True, timeout=15,
     )
     assert result.returncode == 0, result.stderr + result.stdout
