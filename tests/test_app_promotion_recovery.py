@@ -299,3 +299,86 @@ async def test_restored_host_releases_only_saved_unsubmitted_input_once(promoted
     await finish(promoted.manager, "withdrawn")
     assert len(promoted.service.runtime.sent) == 1
     assert promoted.service.state["updates"]["drain"]["phase"] == "released"
+
+
+@pytest.mark.parametrize("promoted", [None, "generation"], indirect=True)
+@pytest.mark.parametrize("effect", ["none", "saved_not_mounted"])
+async def test_restore_retains_terminal_configuration_hold_and_releases_only_unsent(
+        promoted, monkeypatch, effect):
+    from types import SimpleNamespace
+    from amplifier_foundation.session import SharedSessionStore, SessionBusyError
+    from amplifier_web.configuration_recovery import native_apply, prepare_attempt
+    from amplifier_web.management import Management
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.update_drain import finish
+    from test_queued_configuration_boundary import ControlsTransport, plan
+    from test_update_terminal_configuration import _admit, originals
+    from test_update_replacement import save_held_input
+
+    service = promoted.service
+    original_runtime = service.runtime
+    service.runtime = RuntimeManager()
+    # Real absent-writer boundary; only delivery to the unrelated chat is synthetic.
+    monkeypatch.setattr(service.runtime, "send", original_runtime.send)
+    service.runtime.sent = original_runtime.sent
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(service.data_dir))
+    monkeypatch.setenv("AMPLIFIER_HOME", str(service.data_dir / "native"))
+    await service.dispatch("session.create", {"title": "Terminal held configuration"})
+    held = service._session()
+    service.management = Management(service)
+    transport = ControlsTransport(service.data_dir, held["id"])
+    try:
+        record = service.management.create_configuration_operation(held, plan(2), "original-settings", None, None)
+        held.update(configurationBusy=True, configurationOperationFence=record["id"])
+        service.management.configuration_transition(held, record["id"], phase="applying", stage="preparing")
+        attempt = prepare_attempt(service.management, held, record["id"])
+        if effect == "none":
+            def refuse(*args):
+                raise ValueError("Synthetic refusal before settings write")
+            monkeypatch.setattr(transport.controls, "prepare_configuration", refuse)
+            with pytest.raises(ValueError, match="Synthetic refusal"):
+                await native_apply(transport.controls, plan(2), attempt,
+                    lambda args: _admit(service, held, args), lambda: held.get("interruptionRevision", 0))
+        else:
+            await native_apply(transport.controls, plan(2), attempt,
+                lambda args: _admit(service, held, args), lambda: held.get("interruptionRevision", 0))
+        service.management.configuration_transition(held, record["id"], phase="error", stage="readback",
+            effect=effect, recoveryRequired=True, error="Synthetic held configuration")
+        held["status"] = "error"
+        fixture = SimpleNamespace(app=service, session=held)
+        before = originals(fixture)
+        store = SharedSessionStore(held["workspace"], held["id"])
+        await service.dispatch("session.create", {"title": "Unsubmitted input"})
+        unheld_id = service._session()["id"]
+        original_process = app_updates.process
+        probes = []
+
+        async def process(*args, **kwargs):
+            if app_updates.PROBE in args:
+                with pytest.raises(SessionBusyError):
+                    store.acquire(app="competing-during-promotion-recovery")
+                assert originals(fixture) == before
+                probes.append(Path(args[0]))
+                if Path(args[0]) == promoted.old_python:
+                    await save_held_input(service, "positively-unsent-during-recovery")
+            return await original_process(*args, **kwargs)
+
+        monkeypatch.setattr(app_updates, "process", process)
+        assert not promoted.manager.app_busy() and promoted.manager.busy()
+        await app_updates.activate(promoted.manager)
+        assert len(probes) == 2 and probes[-1] == promoted.old_python
+        assert generations.active(promoted.manager.home) == getattr(promoted, "previous_pointer", None)
+        assert not saved_updates(service).get("pendingReplacement") and not work_paused(service.state)
+        assert originals(fixture) == before and not transport.calls and not transport.inputs
+        acquired = store.acquire(app="after-restoration")
+        acquired.release()
+        await finish(promoted.manager, "withdrawn")
+        await finish(promoted.manager, "withdrawn")
+        assert len(service.runtime.sent) == 1
+        assert service.runtime.sent[0][0] == unheld_id
+        assert originals(fixture) == before
+        failures = [row for row in promoted.manager.diagnostics.state["events"] if row["status"] == "failed"]
+        assert any(row["phase"] == "replacement-probe" and row["errorType"] == "CommandTimeout" for row in failures)
+        promoted.restart.assert_not_awaited()
+    finally:
+        await transport.close()
