@@ -22,9 +22,19 @@ Keep each assertion with its owner. Shared generic helper APIs retain one
 implementation with injected test-framework facades, not copied implementations.
 A fixture pass is not actual-server, provider, release or cross-version acceptance.
 
-A Unified delivery copy (`components/web-client`) and prepared source
-(`.build/web-client`) are consumers, not alternative authoring locations. Refresh
-selected copies from committed canonical source; preserve unknown local experiments.
+## Temporary dual-repository maintenance
+
+While private, maintain both this canonical source and Unified's committed
+`components/web-client` snapshot and source record. Canonical-only or copy-only
+changes are not release-ready. Author here, then mechanically refresh the whole
+snapshot from the exact reviewed, accepted commit, or make a named integration
+handoff with exact revisions and pending work. Do not hand-edit the copy or import
+unreviewed moving-main extras. Follow the [README workflow](README.md#temporary-dual-repository-maintenance);
+only an explicitly approved delivery transition updating both repositories'
+guidance retires this obligation, not public availability alone.
+
+The delivery copy and prepared source (`.build/web-client`) are consumers, not
+alternative authoring locations; preserve unknown local experiments.
 Keep one explicit paired server revision in artifact evidence. Do not add a
 compatibility registry, runtime asset override or automatic fallback. Follow the
 workspace's owned-DTU rules for builds/browser work and remove obsolete owned

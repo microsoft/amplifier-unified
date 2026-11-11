@@ -1,4 +1,4 @@
-import React,{useEffect,useId,useMemo,useRef,useState} from 'react';
+import React,{useEffect,useId,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import ReactMarkdown from 'react-markdown';
 import {Markdown} from './markdown';
 import {DocumentOutput} from './inline-artifacts';
@@ -9,12 +9,21 @@ function ReviewArtifact({reference,question,state,dispatch,onExpandedChange}){
   questionBinding={{questionId:question.id,questionContentRevision:question.contentRevision||1}} onExpandedChange={onExpandedChange}/>;
 }
 
+const reminderDismissed=q=>q.status==='answered'&&!!q.delivery?.inputId&&q.reminderDismissal?.inputId===q.delivery.inputId;
+
 function QuestionCard({question,sessionId,state,dispatch,onPreviewChange,history}){
  const q=question,draftKey=JSON.stringify(['amplifier.questionDraft.v1',state.client?.hostInstanceId||globalThis.location?.origin||'local',sessionId,q.id,q.contentRevision||1]);
  const [text,setText]=useState(()=>{try{return q.status==='pending'?(sessionStorage.getItem(draftKey)||'').slice(0,8000):''}catch{return ''}});
  const [alternativeOpen,setAlternativeOpen]=useState(()=>!!text);
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[draftWarning,setDraftWarning]=useState(''),[deliveryNote,setDeliveryNote]=useState('');
  const pending=useRef(false),request=useRef(null);
+ const dismissal=useRef(null),currentDismissal=useRef(null),dismissalDescription=useId();
+ const dismissalKey=JSON.stringify([state.client?.hostInstanceId,sessionId,q.id,q.revision,q.delivery?.inputId,q.status,q.delivery?.status,reminderDismissed(q),history]);
+ const [cleared,setCleared]=useState(false),[clearing,setClearing]=useState(false);
+ useLayoutEffect(()=>{
+  currentDismissal.current=dismissalKey;setCleared(false);
+  return ()=>{currentDismissal.current=null};
+ },[dismissalKey]);
  const label=q.prompt.replace(/[#*_`]/g,'').slice(0,200),fileContext=useMemo(()=>({sessionId,act:dispatch}),[sessionId,dispatch]);
  const editText=value=>{
   setText(value);
@@ -55,6 +64,25 @@ function QuestionCard({question,sessionId,state,dispatch,onPreviewChange,history
   }catch(error){setError(error.message||'Delivery could not be checked. Nothing was sent again.')}
   finally{pending.current=false;setBusy(false)}
  }
+ async function clearReminder(){
+  if(pending.current||currentDismissal.current!==dismissalKey||history||reminderDismissed(q)||q.status!=='answered'||!['unknown','rejected'].includes(q.delivery?.status)||!q.delivery?.inputId)return;
+  const args={sessionId,id:q.id,expectedRevision:q.revision,inputId:q.delivery.inputId};
+  const key=JSON.stringify(args);
+  if(dismissal.current?.key!==key)dismissal.current={key,id:crypto.randomUUID()};
+  pending.current=true;setBusy(true);setClearing(true);setError('');
+  try{
+   const result=await dispatch('question.dismiss',args,{id:dismissal.current.id,propagateError:true});
+   if(currentDismissal.current!==dismissalKey)return;
+   if(result?.accepted!==true)throw Object.assign(Error(result?.error||'The reminder could not be cleared.'),{accepted:result?.accepted});
+   // Only the host's durable marker moves a card to history, never a local mute.
+   setCleared(true);
+  }catch(error){
+   if(currentDismissal.current===dismissalKey){
+    if(error.accepted===false)dismissal.current=null;
+    setError(error.message||'Clearing the reminder could not be confirmed. The saved answer was not sent again.');
+   }
+  }finally{pending.current=false;setBusy(false);setClearing(false)}
+ }
  const delivery=q.delivery?.status;
  const original=<>
   <Markdown text={q.prompt} className="a-question-prompt" userContent fileContext={fileContext}/>
@@ -73,7 +101,12 @@ function QuestionCard({question,sessionId,state,dispatch,onPreviewChange,history
   <div className="a-question-kind">{q.status==='pending'?(q.required?'Your answer is needed':'Optional question'):q.status==='answered'?'Answered':'Closed question'}</div>
   {q.status==='pending'?<div key="prompt">{original}</div>:<div key="answer" className="a-question-result" role="status">
    {q.status==='answered'?<><strong>Your answer:</strong><Markdown text={q.answer.text} userContent fileContext={fileContext}/><small>{delivery==='accepted'?'Answer saved and delivered to Amplifier.':delivery==='sending'?'Answer saved. Confirming delivery…':delivery==='rejected'?'Answer saved; not delivered.': 'Answer saved. Delivery is unconfirmed; it has not been sent again.'}</small>{q.delivery?.message&&delivery!=='accepted'&&<p>{q.delivery.message}</p>}</>:<small>{q.status==='superseded'?'Replaced by a newer question.':'Question cancelled without an answer.'}</small>}
-   {q.status==='answered'&&delivery==='unknown'&&q.delivery?.inputId&&<div className="a-dialog-actions"><button type="button" className="a-soft" disabled={busy} onClick={checkDelivery}>{busy?'Checking delivery…':'Check delivery'}</button></div>}
+   {reminderDismissed(q)&&<p className="a-caption">Reminder cleared. The saved answer and delivery status are kept.</p>}
+   {q.status==='answered'&&delivery==='unknown'&&q.delivery?.inputId&&<div className="a-dialog-actions"><button type="button" className="a-soft" disabled={busy} onClick={checkDelivery}>{busy&&!clearing?'Checking delivery…':'Check delivery'}</button></div>}
+   {!history&&!reminderDismissed(q)&&q.status==='answered'&&['unknown','rejected'].includes(delivery)&&q.delivery?.inputId&&<>
+    <p id={dismissalDescription} className="a-caption">Clear this reminder to keep the answer in history. Delivery status stays unchanged; nothing is sent again.</p>
+    <div className="a-dialog-actions"><button type="button" className="a-soft" data-action="question.dismiss" aria-describedby={dismissalDescription} disabled={busy||cleared} onClick={clearReminder}>{cleared?'Reminder cleared':busy?'Please wait…':'Clear reminder'}</button></div>
+   </>}
    {deliveryNote&&delivery!=='accepted'&&<p>{deliveryNote}</p>}
   </div>}
   {!!q.artifacts?.length&&<div key="review-artifacts" className="a-question-artifacts" aria-label="Documents for this decision">{q.artifacts.map(ref=><ReviewArtifact key={`${ref.id}:${ref.version}`} reference={ref} question={q} state={state} dispatch={dispatch}
@@ -102,7 +135,7 @@ function QuestionCard({question,sessionId,state,dispatch,onPreviewChange,history
 }
 
 export function activeQuestions(session){
- return (session?.questions||[]).filter(q=>q.status==='pending'||q.status==='answered'&&q.delivery?.status!=='accepted');
+ return (session?.questions||[]).filter(q=>q.status==='pending'||q.status==='answered'&&q.delivery?.status!=='accepted'&&!reminderDismissed(q));
 }
 
 export function QuestionNotice({session,paneRef}){

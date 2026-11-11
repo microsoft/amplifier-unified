@@ -599,13 +599,11 @@ def command(management, action, args, origin, caller, *, operator=None):
             result["recovery"] = recovery_status(management, session, record, attempt, observed, origin, operator,
                 diagnostics=detail)
             if diagnostic:
-                from .update_blockers import operation_snapshot
-                from .errors import AppError
-                try:
-                    with observation() as update_detail:
-                        operation_snapshot(service, session)
-                except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError, AppError):
-                    pass
+                from .update_blockers import assess
+                held = assess(service, application=True, session_id=session['id'])['selectedHold']
+                update_detail = {'availability': 'observed' if held else 'unavailable',
+                    'firstFailure': held['reasonCode'] if held and not held['quiescent'] else None,
+                    'savedComparison': 'not_observed'}
                 # Never use a retained presentation plan as loaded-worker proof.
                 result["diagnostic"] = {"schemaVersion": 1, "kind": diagnostic,
                     "expectedRevision": args["expectedRevision"],

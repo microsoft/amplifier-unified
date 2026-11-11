@@ -9,7 +9,7 @@ import {RefreshCw,Download,Undo2,Check,ArrowUpCircle,AlertCircle,Pin,Clock3,Load
 import './updates.css';
 import {UpdateDiagnostics} from './update-diagnostics.jsx';
 import {UpdateSupport} from './update-support.jsx';
-import {UpdateBlockers} from './update-restart.jsx';
+import {UpdateBlockers,UpdateRestart} from './update-restart.jsx';
 import {SmartToolUpdateResults} from './smart-tool-update-results.jsx';
 import {ReleaseHistory,ReleaseNotices,UpdateReleaseSummary} from './release-notes.jsx';
 const sourceName=row=>row.label.split('/').pop().replace(/^amplifier-(bundle-|module-)/,'');
@@ -109,6 +109,7 @@ export function UpdateSettings({state,act}){
   </div>
   <UpdateReleaseSummary updates={updates} application={application} overview={overview}/>
    {overview.waiting&&!overview.runnerOnlyPending&&<UpdateBlockers updates={updates} act={act}/>}
+  <UpdateRestart updates={updates} act={act}/>
   {overview.current?.actionRequired&&<div className="a-update-current-action">
    {overview.current.component&&<p className="a-caption">Component: {overview.current.component}</p>}
    <button className="a-soft" data-action={overview.current.action==='check'?'updates.check':'view.update'} aria-controls={overview.current.action==='check'?undefined:advancedId} aria-expanded={overview.current.action==='check'?undefined:detailsOpen} onClick={()=>overview.current.action==='check'?act('updates.check'):revealDetails(overview.current.action)}>{overview.current.action==='check'?(overview.current.component===(application.label||'Amplifier Unified')?'Check for updates':'Check current components'):overview.current.action==='sources'?'Review source details':'View update diagnostics'}</button>

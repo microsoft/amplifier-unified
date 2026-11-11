@@ -201,6 +201,21 @@ def failure_details(error, error_type=None):
     return {'category': category, 'errorType': kind, 'summary': summary, 'guidance': guidance, 'replayed': False}
 
 
+def startup_failure_details(event):
+    """Only facts bound by the runtime owner to this exact startup attempt.
+
+    No log reads, prose-based reconstruction or historical cause inference.
+    Absence/invalidity remains absence, not an empty successful diagnosis.
+    """
+    from .worker_diagnostics import validate_startup_failure_facts
+    attempt = event.get('startupAttemptId')
+    if type(attempt) is not str or not re.fullmatch(
+            r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', attempt):
+        return {}
+    facts = validate_startup_failure_facts(event.get('startupFailureFacts'))
+    return {'startupAttemptId': attempt, 'startupFailureFacts': facts} if facts is not None else {}
+
+
 def exception_details(error):
     from .support_diagnostics import exception_chain
     chain = exception_chain(error)
@@ -328,6 +343,12 @@ def inspect_session(home, session):
     report['moduleFailures'] = read_failures(current if (current / 'module-load-failures.json').exists() else directory)
     if session.get('failure') or session.get('error'):
         report['failure'] = session.get('failure') or failure_details(session['error'], 'RuntimeError')
+        # Saved facts cross the same closed boundary on read. A legacy failure
+        # does not acquire facts from a newer worker, receipt or log.
+        saved = report['failure']
+        report['failure'] = {key: value for key, value in saved.items()
+                             if key not in {'startupAttemptId', 'startupFailureFacts'}}
+        report['failure'].update(startup_failure_details(saved))
     runtime_support = (session.get('runtimeReport') or {}).get('support')
     if isinstance(runtime_support, dict):
         report['runtime'] = runtime_support

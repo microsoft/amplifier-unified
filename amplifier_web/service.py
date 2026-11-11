@@ -2665,7 +2665,7 @@ class AppService:
                     if include_state and getattr(self, '_progress_dirty', False):
                         self._commit_pending_progress()
                     saved_receipt = json.loads(previous[1])
-                    if action == 'question.answer':
+                    if action in {'question.answer', 'question.dismiss'}:
                         saved_receipt['result'] = self.questions.read('question.read', args)
                     return {**saved_receipt, **({'state': self.browser_state()} if include_state else {}), "duplicate": True}
             # A shielded task may have waited on history, configuration, creation
@@ -4128,7 +4128,7 @@ class AppService:
                 # Capture before returning to the HTTP task. Its later resumption
                 # may follow a publication that this client never subscribed to.
                 result['_deliveryStateRevision'] = (json.loads(saved[0]).get('_deliveryStateRevision') if saved else None) or self._state['revision']
-        if action == 'question.answer':result['result'] = self.questions.read('question.read', args)
+        if action in {'question.answer', 'question.dismiss'}:result['result'] = self.questions.read('question.read', args)
         return {**result, **({'state': self.browser_state()} if include_state else {})}
 
     async def _provision_workspace(self, identity, reconcile=False):
@@ -4537,9 +4537,11 @@ class AppService:
                     self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(saved), input_id))
                 self._publish_changes(sessions={session['id']}, globals={'view'})
             from .worker_diagnostics import diagnostic_reference
+            from .session_health import startup_failure_details
             await self.on_runtime_event('runtime.error', {
                 'sessionId': session['id'], 'error': message, 'errorType': 'RuntimeStartupError',
                 'phase': 'worker_startup',
+                **startup_failure_details(vars(exc)),
                 **({'moduleFailures': exc.failures} if getattr(exc, 'failures', None) else {}),
                 **diagnostic_reference(exc),
             })
@@ -4987,8 +4989,10 @@ class AppService:
                     detail=str(failure)
                 startup = payload.get('errorType') == 'RuntimeStartupError' or payload.get('phase') == 'worker_startup'
                 error_type = payload.get('errorType') or (None if startup else session.get('turnErrorType'))
-                from .session_health import current_terminal_failure, failure_details
+                from .session_health import current_terminal_failure, failure_details, startup_failure_details
                 projected = failure_details(detail, error_type)
+                if startup:
+                    projected.update(startup_failure_details(payload))
                 existing = session.get('failure')
                 if startup and projected['category'] == 'unknown':
                     error_type = 'RuntimeStartupError'
