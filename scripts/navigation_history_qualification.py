@@ -143,6 +143,16 @@ def main():
             harness = Path(temporary)
             helpers = stage_web_test_harness(ROOT, harness, python_tests=True,
                 source_helpers=('destination-history.js', 'settings-navigation.js'))
+            schedule_test = ROOT / 'amplifier_scheduling/tests/test_policy_store.py'
+            installed_schedule_test = harness / 'tests/scheduling/test_policy_store.py'
+            installed_schedule_test.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(schedule_test, installed_schedule_test)
+            assert installed_schedule_test.read_bytes() == schedule_test.read_bytes()
+            result['installedSchedulingTest'] = {
+                'source': str(schedule_test.relative_to(ROOT)),
+                'staged': str(installed_schedule_test.relative_to(harness)),
+                'sha256': hashlib.sha256(schedule_test.read_bytes()).hexdigest(),
+            }
             result['installedSourceOracles'] = helpers
             env = {**os.environ, "AMPLIFIER_TEST_PYTHON": sys.executable,
                    "AMPLIFIER_SHELL_NODE_MODULES": str(harness / ".build/web-client/node_modules"),
@@ -170,7 +180,7 @@ def main():
             run("installed-auth", [sys.executable, "-m", "pytest", "--asyncio-mode=auto", "-q",
                 "tests/test_history_scope.py", "tests/test_auth.py",
                 "tests/test_automation_overview.py", "tests/test_schedules.py",
-                "tests/test_schedule_new_tasks.py", "tests/test_schedule_policy.py",
+                "tests/test_schedule_new_tasks.py", "tests/scheduling/test_policy_store.py",
                 f"--junitxml={OUTPUT / 'installed-python.xml'}"], cwd=harness, env=env)
             cases = ET.parse(OUTPUT / "installed-python.xml").getroot().findall(".//testcase")
             assert cases and all(not any(case.find(tag) is not None for tag in ("skipped", "failure", "error")) for case in cases)
