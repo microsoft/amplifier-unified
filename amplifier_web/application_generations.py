@@ -8,6 +8,7 @@ of reinstalling the already-tested packages into the serving environment.
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 import json
 import os
 import re
@@ -87,12 +88,20 @@ def promote(home, validated, bootstrap):
         return _promote(home, validated, bootstrap)
 
 
+@contextmanager
 def _pointer_lock(home):
     from filelock import FileLock
 
     folder = Path(home) / 'updates'
-    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-    return FileLock(folder / 'application-active.lock', timeout=0, mode=0o600)
+    if os.name == "nt":
+        from .windows_files import directory
+        with directory(folder, owned_root=home, create=True):
+            with FileLock(folder / 'application-active.lock', timeout=0, mode=0o600):
+                yield
+    else:
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with FileLock(folder / 'application-active.lock', timeout=0, mode=0o600):
+            yield
 
 
 def _promote(home, validated, bootstrap):
@@ -113,7 +122,8 @@ def _promote(home, validated, bootstrap):
             for key, value in pointer.items()
             if key not in {"folder", "prefix", "previous"}
         }
-    write_private(Path(home) / "updates/application-active.json", json.dumps(record))
+    write_private(Path(home) / "updates/application-active.json", json.dumps(record),
+                  **({"owned_root": home} if os.name == "nt" else {}))
     return active(home)
 
 
@@ -140,7 +150,8 @@ def _restore(home, promoted, previous, bootstrap, expected_bootstrap):
         path.unlink()
     else:
         write_private(path, json.dumps({key: value for key, value in previous.items()
-                                       if key not in {'folder', 'prefix'}}))
+                                       if key not in {'folder', 'prefix'}}),
+                      **({"owned_root": home} if os.name == "nt" else {}))
     if active(home) != previous:
         raise ValueError('The previous application launch target was not restored')
 
