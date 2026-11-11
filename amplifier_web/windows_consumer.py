@@ -12,6 +12,7 @@ from importlib import metadata
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -100,6 +101,13 @@ def delivery_proof(home):
             or type(proof["schema"]) is not int or proof["schema"] != 1
             or proof["receiptDigest"] != _receipt_digest(receipt)):
         raise ValueError("The consumer setup qualification changed.")
+    binding = proof["installation"]
+    if (not isinstance(binding, dict) or set(binding) != {"prefix", "digest"}
+            or not isinstance(binding["prefix"], str)
+            or binding["prefix"] != str(root / "tools/amplifier-unified")
+            or not isinstance(binding["digest"], str)
+            or not re.fullmatch("[a-f0-9]{64}", binding["digest"])):
+        raise ValueError("The consumer audit installation binding is missing or invalid.")
     graph = validate_graph(receipt["graph"])
     qualification = proof["qualification"]
     if (not isinstance(qualification, dict) or set(qualification) != {

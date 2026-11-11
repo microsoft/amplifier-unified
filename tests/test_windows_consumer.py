@@ -118,6 +118,60 @@ def test_first_install_capture_uses_audited_proof_without_inventing_restart(tmp_
     assert readiness.capture_artifact(manager) is None
 
 
+@pytest.mark.parametrize("change", [None, "null", "missing", "empty", "prefix-type",
+                                  "foreign-prefix", "digest-type", "digest-format",
+                                  "changed-installation"])
+def test_consumer_delivery_capture_composes_real_current_binding_checks(tmp_path, monkeypatch, change):
+    import copy
+    from amplifier_web import update_readiness as readiness, application_generations as generations
+    from amplifier_web import app_component_graph as graph, app_release_artifacts as artifacts, windows_files
+    root = tmp_path
+    binding = {"prefix": str(root / "tools/amplifier-unified"), "digest": "d" * 64}
+    artifact = {"url": "https://github.com/microsoft/amplifier-unified/releases/download/v1.0.0/amplifier_unified-1.0.0-py3-none-any.whl",
+                "path": str(root / "amplifier_unified-1.0.0-py3-none-any.whl"), "sha256": "a" * 64}
+    app = {"name": "amplifier-unified", "version": "1.0.0",
+           "url": "https://github.com/microsoft/amplifier-unified", "revision": "b" * 40,
+           "delivery": {key: artifact[key] for key in ("url", "sha256")}}
+    receipt = {"graph": [app], "artifact": artifact}
+    qualification = {"app": app, "artifact": artifact, "extras": [], "dependencyDigest": graph.digest([])}
+    proof = {"schema": 1, "receiptDigest": consumer._receipt_digest(receipt),
+             "installation": copy.deepcopy(binding), "qualification": qualification}
+    if change == "null": proof["installation"] = None
+    elif change == "missing": del proof["installation"]
+    elif change == "empty": proof["installation"] = {}
+    elif change == "prefix-type": proof["installation"]["prefix"] = 5
+    elif change == "foreign-prefix": proof["installation"]["prefix"] = str(root / "foreign")
+    elif change == "digest-type": proof["installation"]["digest"] = None
+    elif change == "digest-format": proof["installation"]["digest"] = "not-a-digest"
+    monkeypatch.setattr(consumer, "installation", lambda selected: (root, receipt))
+    monkeypatch.setattr(windows_files, "address", Path)
+    @contextmanager
+    def directory(path, **kwargs):
+        yield SimpleNamespace(read_private=lambda name, limit: json.dumps(proof).encode())
+    monkeypatch.setattr(windows_files, "directory", directory)
+    monkeypatch.setattr(generations, "active", lambda home: None)
+    observed_binding = {**binding, "digest": "e" * 64} if change == "changed-installation" else binding
+    monkeypatch.setattr(generations, "bootstrap_identity", lambda prefix: observed_binding)
+    # The actual normalized PEP610+source-stamp reader and _observed_artifact
+    # execute, rather than replacing the very optional-binding check under test.
+    raw = {"name": "amplifier-unified", "version": "1.0.0",
+           "direct": {"url": Path(artifact["path"]).as_uri(), "archive_info": {}},
+           "stamp": {"schema": 1, "repository": "microsoft/amplifier-unified",
+                     "version": "1.0.0", "revision": "b" * 40}}
+    monkeypatch.setattr(artifacts, "distribution_row", lambda dist: raw)
+    dist = SimpleNamespace(locate_file=lambda name: Path(readiness.__file__).parent)
+    monkeypatch.setattr(readiness.metadata, "distribution", lambda name: dist)
+    monkeypatch.setattr(readiness.sys, "platform", "win32")
+    manager = SimpleNamespace(home=root / "app", running_identity={"version": "1.0.0", "revision": "b" * 40},
+                              service=SimpleNamespace(state={"updates": {}}))
+    result = readiness.capture_artifact(manager)
+    if change is None:
+        assert result["installation"] == binding and result["app"] == app
+    else:
+        assert result is None
+    assert manager.service.state == {"updates": {}}
+
+
 def test_no_browser_launch_composes_existing_background_owner_without_reinstall(tmp_path, monkeypatch):
     from amplifier_web import windows_installation
     calls = []
