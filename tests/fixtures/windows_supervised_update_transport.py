@@ -8,6 +8,8 @@ qualifies that fixture-host route, not public installer/launcher equivalence.
 Release metadata, selected tag lookup and artifact HTTP bytes are substituted.
 The explicit readinessTimeout fault may additionally withhold HTTP health only
 in the selected successor, AFTER the app's ordinary authentication middleware.
+With that fault, shutdownStall may delay app cleanup beyond normal Stop's
+deadline to test refusal of unconfirmed recovery. It changes no owner deadline.
 It cannot acknowledge readiness, change a Stop or write update/recovery state.
 Owner/task/handle/graph checks, public actions, idle/Stop, stage/promotion,
 readiness decisions/rollback and process containment remain canonical.
@@ -22,7 +24,7 @@ import re
 
 PLAN = "native-update-transport.json"
 FIELDS = {"schema", "kind", "target", "failBeforeIdentity"}
-OPTIONAL = {"readinessTimeout"}
+OPTIONAL = {"readinessTimeout", "shutdownStall"}
 TARGET = {"version", "revision", "path", "sha256", "bytes"}
 
 
@@ -32,7 +34,9 @@ def validate(value):
             or value["kind"] != "private-native-transport-fixture"
             or type(value["failBeforeIdentity"]) is not bool
             or type(value.get("readinessTimeout", False)) is not bool
-            or value["failBeforeIdentity"] and value.get("readinessTimeout", False)):
+            or type(value.get("shutdownStall", False)) is not bool
+            or value["failBeforeIdentity"] and value.get("readinessTimeout", False)
+            or value.get("shutdownStall", False) and not value.get("readinessTimeout", False)):
         raise ValueError("Invalid private native transport fixture plan.")
     target = value["target"]
     if (not isinstance(target, dict) or set(target) != TARGET
@@ -91,6 +95,11 @@ def install(spec):
                 return await handler(request)
             # Innermost: existing origin/identity/auth admission still runs.
             app.middlewares.append(withhold_health)
+            if value.get("shutdownStall", False):
+                async def unresponsive_cleanup(_app):
+                    import asyncio
+                    await asyncio.sleep(120)
+                app.on_cleanup.append(unresponsive_cleanup)
             return app
         server.create_app = unready_app
     original_read = app_updates.github_read

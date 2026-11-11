@@ -25,7 +25,7 @@ def plan(root):
 
 
 @pytest.mark.parametrize("change", ["extra", "schema", "failure", "revision", "hash", "size", "url",
-                                  "timeout-type", "two-faults"])
+                                  "timeout-type", "two-faults", "stall-type", "stall-without-timeout"])
 def test_transport_plan_refuses_unbound_input(tmp_path, change):
     value = plan(tmp_path)
     if change == "extra": value["env"] = {"SECRET": "never"}
@@ -35,6 +35,8 @@ def test_transport_plan_refuses_unbound_input(tmp_path, change):
     elif change == "hash": value["target"]["sha256"] = "not a digest"
     elif change == "size": value["target"]["bytes"] = True
     elif change == "timeout-type": value["readinessTimeout"] = "yes"
+    elif change == "stall-type": value.update(readinessTimeout=True, shutdownStall="yes")
+    elif change == "stall-without-timeout": value["shutdownStall"] = True
     elif change == "two-faults":
         value.update(readinessTimeout=True, failBeforeIdentity=True)
     else: value["target"]["url"] = "https://untrusted.example"
@@ -49,7 +51,7 @@ def test_unready_fault_is_explicit_and_does_not_change_target_or_old_plan(tmp_pa
     assert fixture.validate(value) == expected
 
 
-@pytest.mark.parametrize("mode", ["ordinary", "old-unready", "target-unready"])
+@pytest.mark.parametrize("mode", ["ordinary", "old-unready", "target-unready", "target-stalled"])
 def test_only_exact_transport_is_substituted_and_no_host_state_is_written(tmp_path, monkeypatch, mode):
     from amplifier_web import app_updates, app_release_artifacts, windows_service, windows_files
     from amplifier_web import windows_read_files, update_readiness
@@ -57,10 +59,12 @@ def test_only_exact_transport_is_substituted_and_no_host_state_is_written(tmp_pa
     value = plan(root)
     if mode != "ordinary":
         value["readinessTimeout"] = True
-    if mode == "target-unready":
+    if mode == "target-stalled":
+        value["shutdownStall"] = True
+    if mode.startswith("target-"):
         from amplifier_web import server
         auth = object()
-        app = SimpleNamespace(middlewares=[auth])
+        app = SimpleNamespace(middlewares=[auth], on_cleanup=[])
         async def create_app(*args, **kwargs):
             return app
         monkeypatch.setattr(server, "create_app", create_app)
@@ -77,7 +81,7 @@ def test_only_exact_transport_is_substituted_and_no_host_state_is_written(tmp_pa
     verified = []
     monkeypatch.setattr(app_release_artifacts, "verify", lambda *args: verified.append(args))
     monkeypatch.setattr(update_readiness, "running_identity",
-                        lambda: {"revision": ("c" if mode == "target-unready" else "a") * 40})
+                        lambda: {"revision": ("c" if mode.startswith("target-") else "a") * 40})
     calls = []
     async def read(*args, **kwargs):
         calls.append(("read", args, kwargs)); return "ordinary metadata"
@@ -89,9 +93,9 @@ def test_only_exact_transport_is_substituted_and_no_host_state_is_written(tmp_pa
     monkeypatch.setattr(app_release_artifacts, "_get", app_release_artifacts._get)
     result = fixture.install(SimpleNamespace(supervised=True, data_dir=root / "app"))
     assert result["transportSubstituted"] and not result["publicAcceptance"] and len(verified) == 1
-    assert result["readinessWithheld"] == (mode == "target-unready")
+    assert result["readinessWithheld"] == mode.startswith("target-")
     async def check():
-        if mode == "target-unready":
+        if mode.startswith("target-"):
             assert await server.create_app() is app
             assert app.middlewares[0] is auth and len(app.middlewares) == 2
             calls_to_handler = []
@@ -102,6 +106,14 @@ def test_only_exact_transport_is_substituted_and_no_host_state_is_written(tmp_pa
             response = await fault(SimpleNamespace(path="/api/health"), handler)
             assert response.status == 503 and not calls_to_handler
             assert await fault(SimpleNamespace(path="/api/state"), handler) == "ordinary handler"
+            assert len(app.on_cleanup) == (1 if mode == "target-stalled" else 0)
+            if app.on_cleanup:
+                cleanup = asyncio.create_task(app.on_cleanup[0](app))
+                await asyncio.sleep(0)
+                assert not cleanup.done()
+                cleanup.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await cleanup
         metadata = json.loads(await app_updates.github_read("repos/microsoft/amplifier-unified/releases/latest"))
         assert metadata["tag_name"] == "v0.77.1"
         assert await app_updates.github_read("another/path") == "ordinary metadata"
@@ -115,6 +127,7 @@ def test_only_exact_transport_is_substituted_and_no_host_state_is_written(tmp_pa
     assert [row[0] for row in calls] == ["read", "process"]
     assert not root.exists()
     value.pop("readinessTimeout", None)
+    value.pop("shutdownStall", None)
     value["failBeforeIdentity"] = True
     monkeypatch.setattr(update_readiness, "running_identity", lambda: {"revision": "c" * 40})
     with pytest.raises(RuntimeError, match="before runtime identity"):
