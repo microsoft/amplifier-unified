@@ -4889,6 +4889,12 @@ class AppService:
                     ended_foreground = interrupt_runtime_execution(session, payload.get('runtimeOwnerId'))
                     if ended_foreground:
                         settle_stream(session)
+                    current_process = getattr(self.runtime, 'workers', {}).get(session['id'], {})
+                    if (ended_foreground or payload.get('runtimeOwnerId') and
+                            current_process.get('runtimeOwnerId') == payload['runtimeOwnerId']):
+                        # Controls and accepted schedules can precede the first
+                        # conversation generation. Confirm their current process,
+                        # not an unbound next input or an old process's late exit.
                         self.operations.interrupted(session["id"])
                         self.schedules.runtime_ended(session)
                     interrupt_owned_workers(session, payload.get('runtimeOwnerId'))
