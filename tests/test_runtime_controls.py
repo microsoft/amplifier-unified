@@ -639,6 +639,10 @@ def managed_module_source(tmp_path, monkeypatch):
     module = root / 'modules/hook-source-lifetime-fixture'
     package = module / 'amplifier_module_hook_source_lifetime_fixture'
     package.mkdir(parents=True)
+    # Shared-source resolution validates the repository root before selecting
+    # the module subdirectory; both fixture commits must be valid repositories.
+    (root / 'bundle.yaml').write_text(
+        'bundle:\n  name: source-lifetime-fixture\n  version: 1.0.0\n')
     (module / 'pyproject.toml').write_text(
         '[project]\nname="amplifier-module-hook-source-lifetime-fixture"\n'
         'version="1.0"\ndependencies=[]\n')
