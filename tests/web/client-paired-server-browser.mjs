@@ -153,6 +153,45 @@ async function qualifyAppearance({page,composer,history,actions,screenshot,base}
   stateOrigin:'Authenticated one-shot synthetic seed; actual installed host projection/HTTP/SSE'};
  const prior=await history(),clientId=await page.evaluate(()=>window.amplifier.getState().client.id);
  const request=page.context().request;
+ const historyReadbacks=[],historyEvidence=join(artifact,'appearance-history-readbacks.json');
+ const priorIds=prior.sessions.map(row=>row.id);
+ assert.equal(priorIds.length,2,'Bind both original accepted chat and empty navigation control before setup');
+ assert.equal(new Set(priorIds).size,2);
+ assert.equal(prior.sessions.filter(row=>row.title==='Retained-copy navigation control'&&row.messages.length===0).length,1);
+ async function exactHistory(sessionIds,label){
+  const response=await request.post(base+'/fixture/appearance-history',{data:{sessionIds}});
+  if(response.status()!==200){
+   historyReadbacks.push({label,requestedIds:sessionIds,status:response.status()});
+   await writeFile(historyEvidence,JSON.stringify(historyReadbacks,null,2)+'\n');
+  }
+  assert.equal(response.status(),200,'Every requested saved owner must exist; never accept partial history');
+  const {history:value,evidence}=await response.json();
+  assert.deepEqual(evidence.requestedIds,sessionIds);
+  assert.deepEqual(value.sessions.map(row=>row.id),sessionIds,'Exact owner order/cardinality, no omission or alias substitution');
+  assert.equal(evidence.source,'state_records.load_owner/session_projection.hydrate');
+  assert.equal(evidence.residencyUnchanged,true);assert.equal(evidence.selectionUnchanged,true);
+  assert.equal(new Set(evidence.residentRequestedIds).size,evidence.residentRequestedIds.length);
+  assert.ok(evidence.residentRequestedIds.every(id=>sessionIds.includes(id)));
+  historyReadbacks.push({label,requestedIds:sessionIds,returnedIds:value.sessions.map(row=>row.id),
+   nonresidentRequestedIds:sessionIds.filter(id=>!evidence.residentRequestedIds.includes(id)),
+   source:evidence.source,residencyUnchanged:true,selectionUnchanged:true,
+   messageCounts:value.sessions.map(row=>({id:row.id,count:row.messages.length})),historySha256:hash(JSON.stringify(value))});
+  await writeFile(historyEvidence,JSON.stringify(historyReadbacks,null,2)+'\n');
+  return value;
+ }
+ // Exercise the reader's closed/bounded request and missing-owner refusal.
+ // None of these controls may seed, admit, select or silently omit a record.
+ for(const data of [{sessionIds:[]},{sessionIds:[priorIds[0],priorIds[0]]},
+  {sessionIds:Array.from({length:65},(_,index)=>'unrequested-'+index)},
+  {sessionIds:priorIds,unexpected:true}]){
+  assert.equal((await request.post(base+'/fixture/appearance-history',{data})).status(),400);
+ }
+ assert.equal((await request.post(base+'/fixture/appearance-history',{
+  data:{sessionIds:[...priorIds,'missing-paired-fixture-owner']}})).status(),404);
+ const canonicalPrior=await exactHistory(priorIds,'before-seed');
+ assert.deepEqual(canonicalPrior,prior,'Exact committed read must match the original two-owner oracle before expansion');
+ assert.deepEqual((await exactHistory([...priorIds].reverse(),'reversed-exact-ids')).sessions,
+  [...canonicalPrior.sessions].reverse(),'Readback follows explicit identities, not resident/catalog ordering');
  const unauthorized=await fetch(base+'/fixture/appearance',{method:'POST',redirect:'manual',
   headers:{'Content-Type':'application/json'},body:JSON.stringify({clientId})});
  assert.equal(unauthorized.status,307,'The actual host auth gate rejects unauthenticated fixture setup');
@@ -188,8 +227,10 @@ async function qualifyAppearance({page,composer,history,actions,screenshot,base}
  const selected=()=>page.evaluate(id=>window.amplifier.getState().sessions.find(row=>row.id===id),seed.sessionId);
  await expect.poll(async()=>(await selected())?.messages?.length).toBe(26);
  await expect.poll(async()=>(await selected())?.draftAttachments).toEqual([seed.attachment]);
- const seededHistory=await history(),ids=new Set(seed.pinnedSessionIds);
- assert.deepEqual(seededHistory.sessions.filter(row=>!ids.has(row.id)),prior.sessions,
+ const trackedIds=[...priorIds,...seed.pinnedSessionIds],ids=new Set(seed.pinnedSessionIds);
+ assert.equal(new Set(trackedIds).size,trackedIds.length,'Seed must not reuse any prior owner');
+ const seededHistory=await exactHistory(trackedIds,'after-seed');
+ assert.deepEqual(seededHistory.sessions.slice(0,priorIds.length),canonicalPrior.sessions,
   'Appearance setup cannot rewrite the earlier accepted conversation history');
  assert.deepEqual(seededHistory.sends,prior.sends);assert.deepEqual(seededHistory.edits,prior.edits);
  assert.deepEqual(seededHistory.pins,[...prior.pins,...seed.pinnedSessionIds]);
@@ -224,7 +265,8 @@ async function qualifyAppearance({page,composer,history,actions,screenshot,base}
   await expect(composer).toHaveText(draft);
   assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),seed.sessionId);
   assert.deepEqual((await selected()).draftAttachments,[seed.attachment]);
-  assert.deepEqual(await history(),seededHistory,'Layout gestures cannot change canonical history or runtime counters');
+  assert.deepEqual(await exactHistory(trackedIds,'retained-'+historyReadbacks.length),seededHistory,
+   'Layout gestures cannot change any exact prior/seeded owner, pins or runtime counters');
   assert.deepEqual(attachmentRequests,[],'A text attachment chip does not fetch its private content');
   assert.deepEqual(actions.slice(actionStart).filter(row=>/^(conversation\.|worker\.|call\.)/.test(row.action)||
    ['message.edit','session.select','session.create','session.delete','session.archive','attachment.add',
@@ -341,6 +383,7 @@ async function qualifyAppearance({page,composer,history,actions,screenshot,base}
    await expect(composer).toBeFocused();await retained();await capture(width+'-draft-attachment');
   }
   proof.passed=true;proof.syntheticSessionIds=seed.pinnedSessionIds;
+  proof.historyEvidence=historyEvidence;proof.exactHistoryOwnerCount=trackedIds.length;
   proof.historyAndRuntimeCountersPreserved=true;proof.attachmentContentNotFetched=true;
   proof.limits=['Synthetic work state is not native execution', 'Stop and Remove are enabled/hit-tested, not invoked'];
   return proof;

@@ -50,7 +50,7 @@ async function appearanceRegression({page,scenario,readState,emit,stopGuard}){
   sessionKind:'root',workspace:'/fixture',workspaceId:'project',status:'idle',recentActivityAt:now-i}));
  state.pinnedNavigation={items:chats.map(row=>({id:'chat:'+row.id,kind:'chat',row})),total:chats.length};
  state.view={...state.view,workSurface:'chat',navPinned:!mobile,navExpanded:!mobile,navAge:'all',
-  navMode:'browse',navSectionsCollapsed:[],executionExpanded:['turn:appearance-turn']};
+  navMode:'browse',navSectionsCollapsed:[],executionExpanded:[]};
  const messages=JSON.stringify(session.messages),attachments=JSON.stringify(session.draftAttachments);
  const start=calls.length;
  await emit();
@@ -64,7 +64,23 @@ async function appearanceRegression({page,scenario,readState,emit,stopGuard}){
  await expect.poll(()=>readState().view.draft).toBe(draft);
  const complete=page.locator('[data-node-id="appearance-completed"] > .a-execution-action-line');
  const running=page.locator('[data-node-id="appearance-running"] > .a-execution-action-line');
+ // splitWork groups these nodes after their input anchor. The disclosure owns
+ // the rendered segment ID, not the original runtime turn ID. Open that actual
+ // control and confirm its saved view patch before measuring the child rows.
+ const group=pane.locator('[data-part="execution"][data-turn-id="appearance-turn"]');
+ await expect(group).toHaveCount(1);
+ await expect(group).toHaveAttribute('data-group-id','appearance-turn@appearance-input');
+ const disclosure=group.locator(':scope > button.a-execution-turn-line');
+ await expect(disclosure).toBeVisible();await expect(disclosure).toBeEnabled();
+ await expect(disclosure).toHaveAttribute('aria-expanded','false');
+ await expect(complete).toHaveCount(0);await expect(running).toHaveCount(0);
+ await disclosure.click();
+ await expect(disclosure).toHaveAttribute('aria-expanded','true');
+ await expect.poll(()=>readState().view.executionExpanded).toEqual(['turn:appearance-turn@appearance-input']);
  await expect(complete).toBeVisible();await expect(running).toBeVisible();
+ await expect(group.locator('[data-node-id]')).toHaveCount(2);
+ proof.executionDisclosure={groupId:await group.getAttribute('data-group-id'),
+  expanded:await disclosure.getAttribute('aria-expanded'),nodeCount:2};
 
  const scroll=locator=>locator.evaluate(node=>({
   top:node.scrollTop,height:node.scrollHeight,client:node.clientHeight,

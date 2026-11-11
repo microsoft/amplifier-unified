@@ -14,6 +14,7 @@ stay real. The Node browser driver is separate from the Node-free Python host.
 import argparse
 import asyncio
 import base64
+import copy
 import hashlib
 import importlib.metadata
 import json
@@ -207,6 +208,59 @@ async def serve(args):
                 'runtime': 'existing synthetic ChatRuntime',
             })
 
+        async def appearance_history(request):
+            """Exact committed fixture owners, independent of resident eviction."""
+            if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+                raise web.HTTPForbidden()
+            payload = await request.json()
+            if (not isinstance(payload, dict) or set(payload) != {'sessionIds'}
+                    or not isinstance(payload['sessionIds'], list)
+                    or not 1 <= len(payload['sessionIds']) <= 64
+                    or any(not isinstance(sid, str) or not 1 <= len(sid) <= 200
+                           for sid in payload['sessionIds'])
+                    or len(set(payload['sessionIds'])) != len(payload['sessionIds'])):
+                raise web.HTTPBadRequest(text='Supply 1 to 64 distinct exact fixture session IDs.')
+            from amplifier_web.state_records import load_owner
+            from amplifier_web.session_projection import hydrate
+
+            service = app['service']
+            async with service.lock:
+                # Never call _session(): admission would perturb the working set
+                # and could hide this fixture's resident-list oracle defect.
+                resident_ids = [row['id'] for row in service._state['sessions']]
+                selected = service._state.get('selectedSessionId')
+                rows = []
+                for sid in payload['sessionIds']:
+                    saved, _ = load_owner(service.db, sid)
+                    if saved is None:
+                        raise web.HTTPNotFound(text='An exact saved fixture owner is missing.')
+                    if saved.get('id') != sid or saved.get('$native'):
+                        raise web.HTTPConflict(text='Expected an exact app-owned fixture record.')
+                    detached = {'sessions': [saved]}
+                    hydrate(service.data_dir, detached, service.db)
+                    owner = detached['sessions'][0]
+                    if owner['id'] != sid or not isinstance(owner.get('messages'), list):
+                        raise web.HTTPConflict(text='Saved fixture messages are unavailable.')
+                    if len(owner['messages']) > 100:
+                        raise web.HTTPRequestEntityTooLarge(max_size=100, actual_size=len(owner['messages']))
+                    rows.append({key: copy.deepcopy(owner.get(key))
+                                 for key in ('id', 'title', 'workspaceId', 'messages')})
+                if (resident_ids != [row['id'] for row in service._state['sessions']]
+                        or selected != service._state.get('selectedSessionId')):
+                    raise RuntimeError('Exact fixture read changed residency or selection')
+                value = {
+                    'history': {'sessions': rows, 'pins': copy.deepcopy(service._state['pinnedSessionIds']),
+                                'sends': copy.deepcopy(service.runtime.sent), 'edits': copy.deepcopy(service.runtime.edits)},
+                    'evidence': {'source': 'state_records.load_owner/session_projection.hydrate',
+                                 'requestedIds': payload['sessionIds'],
+                                 'residentRequestedIds': [sid for sid in payload['sessionIds'] if sid in resident_ids],
+                                 'residencyUnchanged': True, 'selectionUnchanged': True},
+                }
+                body = json.dumps(value).encode()
+                if len(body) > 262144:
+                    raise web.HTTPRequestEntityTooLarge(max_size=262144, actual_size=len(body))
+                return web.Response(body=body, content_type='application/json')
+
         async def seed_appearance(request):
             """One bounded setup, not a state override or a runtime execution."""
             nonlocal appearance_seeded
@@ -285,6 +339,7 @@ async def serve(args):
 
         app.router.add_get('/fixture/assembly', identity)
         app.router.add_post('/fixture/disconnect', disconnect)
+        app.router.add_post('/fixture/appearance-history', appearance_history)
         app.router.add_post('/fixture/appearance', seed_appearance)
         runner = web.AppRunner(app)
         await runner.setup()
