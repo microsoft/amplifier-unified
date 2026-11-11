@@ -33,10 +33,9 @@ def _visible(value):
 
 
 def _native_page(reader, source, before, limit):
-    from .automatic_history import directory
+    from .automatic_history import directory, native_input_id
     from .shared_state_probe import text_content
     from .session_store import message_time
-    from .input_status import native_input_id
     result = reader.read_window(directory(source), {
         'project': source['nativeProject'],
         'nativeId': source.get('nativeIdentity') or source.get('runtimeSessionId') or source['id']},
@@ -49,8 +48,7 @@ def _native_page(reader, source, before, limit):
         value = item['value']
         at = message_time(value)
         text = text_content(value)
-        metadata = value.get('metadata') or {}
-        exact_input = native_input_id(value.get('role'), metadata.get('amplifier_input'))
+        exact_input = native_input_id(value)
         items.append({'id': item['displayId'], 'role': value['role'],
             **({'nativeInputId': exact_input} if exact_input else {}),
             '_windowDigest': hashlib.sha256(text.encode()).hexdigest(),

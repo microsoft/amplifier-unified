@@ -34,7 +34,7 @@ from amplifier_web.auth import data_identity
 from amplifier_web.handoff_boundary import inspect as inspect_boundary
 from amplifier_web.management import Management
 from amplifier_web.service import AppService
-from amplifier_web.shared_state import ActivationGate
+from amplifier_foundation.session.activation import ActivationGate
 from amplifier_web.update_restart import target
 from amplifier_web.updates import UpdateManager
 from amplifier_module_loop_live.runtime import Input
@@ -352,6 +352,10 @@ async def test_owner_update_wait_yields_then_continues_once_on_exact_healthy_ado
             assert marker["yieldedGoal"] == yielded_goal  # Produced by the actual native hook.
             boundary_id = provider.wait_receipt["result"]["boundaryId"]
             assert marker["id"] == boundary_id
+            enrolled = app.collaboration.receipt(WAIT)
+            assert enrolled["sourceInputIds"] == [HUMAN]
+            assert enrolled["sourceGenerationId"] == first["generation_id"]
+            assert enrolled["sourceInterruptionRevision"] == app._session(sid).get("interruptionRevision", 0)
             assert worker.controls.tasks.record()["status"] == "active"
 
             # Native idle alone must not count as checkpoint/release proof.

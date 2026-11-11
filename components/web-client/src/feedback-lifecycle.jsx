@@ -10,7 +10,7 @@ export function FeedbackReconcile({state,act}){
   try{await act('feedback.reconcile',{requestId,feedbackId})}catch(e){setError(e.message)}finally{pending.current=false;setBusy(false)}
  }
  return <section aria-label="Unconfirmed feedback delivery">
-  {!!rows.length&&<><h3>Unconfirmed delivery</h3><p>Check for the original report using its saved identity. Checking never sends it again.</p>{rows.map(row=><div key={row.requestId}><strong>{row.title}</strong><button type="button" className="a-soft" data-action="feedback.reconcile" disabled={busy||['queued','sending'].includes(result?.status)} onClick={()=>check(row.requestId)}>Check delivery</button></div>)}</>}
+  {!!rows.length&&<><h3>Unconfirmed delivery</h3><p>Check for the original report using its saved identity. Checking never sends it again.</p>{rows.map(row=><div key={row.requestId} className="a-dialog-actions"><strong>{row.title}</strong><button type="button" className="a-soft" data-action="feedback.reconcile" disabled={busy||['queued','sending'].includes(result?.status)} onClick={()=>check(row.requestId)}>Check delivery</button></div>)}</>}
   {result&&<p role="status">{result.message}</p>}{error&&<p role="alert">{error}</p>}
  </section>;
 }

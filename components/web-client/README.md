@@ -21,6 +21,10 @@ delivery safeguards; a new unbound copy makes it visible again. It retains the
 compact-sidebar controls, reset-cleanup interface and canonical client-test
 ownership from `0.3.1`. Backend reset behavior is qualified by Unified `0.74.0`,
 not by standalone client fixtures.
+Current source removes that automatic notice and its retained-copy badge from
+ordinary chat. Old unbound copies remain stored and inert; current messages keep
+their exact-source delivery checks and recovery controls. This presentation
+simplification requires a new qualified client selection before Unified delivery.
 The 14 canonical shared inputs are selected from accepted Unified main
 `816c7a67dbafc20bfb28723dd317c71d3bd2bb28`; their bytes still match the current
 accepted server. Shared-input provenance and actual server qualification are distinct.
