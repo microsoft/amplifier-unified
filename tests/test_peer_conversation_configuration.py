@@ -376,6 +376,34 @@ async def test_default_rechecks_authority_inside_the_canonical_settings_mutator(
     assert not (folder / '.amplifier/settings.local.yaml').exists()
 
 
+@pytest.mark.parametrize('change', ['defaults-only', 'directory', 'revision', 'native', 'stop'])
+async def test_peer_legacy_native_placement_defaults_keep_original_authority(app, change):
+    target = peer(app)
+    target.pop('workingDirectory', None)
+    target.pop('executionRevision', None)
+    await configure(app, target)
+    authority = target['pendingBundleSelection']['authority']
+    witness = authority['operatorConfiguration']['target']
+    witness.update(workingDirectory=None, executionRevision=None)
+    original = deepcopy(authority)
+    target.update(workingDirectory=target['workspace'], executionRevision=0)
+    if change == 'directory':
+        target['workingDirectory'] += '/different'
+    elif change == 'revision':
+        target['executionRevision'] = 1
+    elif change == 'native':
+        target['nativeIdentity'] = 'replaced-native-root'
+        target['runtimeSessionId'] = 'replaced-native-root'
+    elif change == 'stop':
+        target['interruptionRevision'] = 1
+    if change == 'defaults-only':
+        app.configuration_authority.check(authority)
+    else:
+        with pytest.raises(AppError):
+            app.configuration_authority.check(authority)
+    assert authority == original
+
+
 async def test_native_discovered_root_keeps_saved_intent_after_restart(app, tmp_path, monkeypatch):
     from amplifier_web.host.storage import SessionStore
     store = SessionStore.for_app(app.data_dir, tmp_path)
