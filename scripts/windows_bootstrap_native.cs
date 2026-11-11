@@ -337,6 +337,8 @@ namespace UnifiedBootstrap {
                 Stage="installed source and package audit";
                 Child(python,new[]{"-I","-B","-m","amplifier_web.windows_consumer","--root",root,"--audit"},env);
                 Child(uv,new[]{"pip","check","--python",python},env);
+                Stage="Windows Start menu and installed-app entry";
+                Child(python,new[]{"-I","-B","-m","amplifier_web.windows_consumer","--root",root,"--integrate"},env);
                 shortcut=ConsumerShortcut(python,root,"Launch Unified","");
                 ConsumerShortcut(python,root,"Amplifier status"," --status");
                 ConsumerShortcut(python,root,"Stop Amplifier"," --stop");

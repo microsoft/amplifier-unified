@@ -185,6 +185,20 @@ def test_no_browser_launch_composes_existing_background_owner_without_reinstall(
     assert calls == [(tmp_path, tmp_path / "tools/amplifier-unified/Scripts/amplifier-unified.exe", {})]
 
 
+def test_os_entries_require_audited_first_install_proof(tmp_path, monkeypatch):
+    from amplifier_web import windows_consumer_shell
+    monkeypatch.setattr(consumer, "installation", lambda root: (root, {"version": "1.0.0"}))
+    monkeypatch.setattr(consumer, "delivery_proof", lambda home: None)
+    calls = []
+    monkeypatch.setattr(windows_consumer_shell, "install", lambda *args: calls.append(args))
+    with pytest.raises(ValueError, match="audit"):
+        consumer.integrate(tmp_path)
+    assert not calls
+    monkeypatch.setattr(consumer, "delivery_proof", lambda home: {"audited": True})
+    consumer.integrate(tmp_path)
+    assert calls == [(tmp_path, "1.0.0")]
+
+
 def test_windowless_failure_is_bounded_owner_notice_not_stderr_or_retry(tmp_path, monkeypatch):
     from amplifier_web import windows_installation
     def invalid(root):

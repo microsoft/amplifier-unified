@@ -195,10 +195,21 @@ async def maintenance(root, operation):
         return {"ok": True, "cancelled": True}
     if operation == "uninstall":
         await asyncio.to_thread(uninstall, root / "app")
+        from . import windows_consumer_shell
+        if (root / windows_consumer_shell.FILE).exists():
+            await asyncio.to_thread(windows_consumer_shell.remove, root)
     else:
         await asyncio.to_thread(command, "stop", root / "app")
     return {"ok": True, "operation": operation, "userDataRetained": True,
             "installationFilesRetained": True}
+
+def integrate(root):
+    """Setup-only OS entries after source/payload/graph and dependency checks."""
+    root, value = installation(root)
+    if delivery_proof(root / "app") is None:
+        raise ValueError("The consumer payload audit has not qualified this installation.")
+    from .windows_consumer_shell import install
+    return install(root, value["version"])
 
 
 def main(argv=None):
@@ -206,6 +217,7 @@ def main(argv=None):
     parser.add_argument("--root", type=Path, required=True)
     operations = parser.add_mutually_exclusive_group()
     operations.add_argument("--audit", action="store_true")
+    operations.add_argument("--integrate", action="store_true")
     operations.add_argument("--status", action="store_true")
     operations.add_argument("--stop", action="store_true")
     operations.add_argument("--uninstall", action="store_true")
@@ -213,7 +225,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         operation = next((name for name in ("status", "stop", "uninstall") if getattr(args, name)), None)
-        result = (audit(args.root) if args.audit else asyncio.run(maintenance(args.root, operation))
+        result = (audit(args.root) if args.audit else integrate(args.root) if args.integrate
+                  else asyncio.run(maintenance(args.root, operation))
                   if operation else asyncio.run(launch(args.root, open_browser=not args.no_open)))
         if sys.stdout is not None:
             print(json.dumps(result))

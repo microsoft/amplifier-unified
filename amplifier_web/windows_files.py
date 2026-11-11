@@ -451,6 +451,28 @@ class PinnedDirectory:
         finally:
             self._api.close(handle)
 
+    def remove_private(self, name: str, expected_sha256: str) -> None:
+        """Remove only the still-open private object whose exact bytes we own."""
+        import hashlib
+        import re
+        _component(name)
+        if not isinstance(expected_sha256, str) or not re.fullmatch("[a-f0-9]{64}", expected_sha256):
+            raise ValueError("Private removal requires an exact SHA-256.")
+        self._check()
+        path = self.path / name
+        handle = self._api.open(path, cleanup=True)
+        try:
+            self._api.validate_acl(handle, private=True)
+            identity = _identity(self._api.info(handle, path, directory=False))
+            if identity[0] != self._pins[-1][2][0]:
+                raise PermissionError("Windows private file crosses volumes")
+            if hashlib.sha256(self._api.read(handle, limit=_MAX_CONTENT)).hexdigest() != expected_sha256:
+                raise ValueError("Owned private file changed; removal refused.")
+            self._check()
+            self._api.discard(handle, path, identity)
+        finally:
+            self._api.close(handle)
+
     def publish_private(self, name: str, content: bytes, *, replace: bool = False) -> None:
         """Publish a complete file, never delete-first or overwrite by default.
 

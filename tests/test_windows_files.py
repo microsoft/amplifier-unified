@@ -412,6 +412,23 @@ class PublicationTests(unittest.TestCase):
         pinned._check = lambda: None
         return pinned
 
+    def test_private_removal_uses_exact_open_object_and_content(self):
+        import hashlib
+        api = self.API()
+        api.read = lambda handle, limit: b"owned link"
+        pinned = self.pinned(api)
+        pinned.remove_private("Launch.lnk", hashlib.sha256(b"owned link").hexdigest())
+        self.assertEqual(api.events[-2:], [("discard", "Launch.lnk"), ("close", 10)])
+
+    def test_private_removal_refuses_changed_content_without_discard(self):
+        import hashlib
+        api = self.API()
+        api.read = lambda handle, limit: b"changed link"
+        with self.assertRaisesRegex(ValueError, "changed"):
+            self.pinned(api).remove_private("Launch.lnk", hashlib.sha256(b"old").hexdigest())
+        self.assertNotIn(("discard", "Launch.lnk"), api.events)
+        self.assertEqual(api.events[-1], ("close", 10))
+
     def test_flush_failure_never_renames(self):
         api = self.API()
         api.flush_error = True
