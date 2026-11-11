@@ -170,20 +170,48 @@ async def test_completion_before_message_reload_and_older_than_event_caps(tmp_pa
 
 async def test_folding_preference_is_boolean_and_not_a_new_browser_default(tmp_path):
     app = AppService(tmp_path, workspace=tmp_path)
+    queues = []
     try:
+        app.clients.attach("first")
+        with app.clients.bind("first"):
+            queues.append(app.subscribe())
+            current = app.appearance.read("first")
+            await app.dispatch("appearance.client.report", {
+                "generation": current["generation"], "revision": current["local"]["revision"],
+                "storageVersion": current["local"]["storageVersion"],
+                "activeScope": current["activeScope"], "values": current["local"]["values"],
+                "status": "ready"}, origin="ui")
+        shared = app.appearance.shared()
         shell = app.shell
         first = shell.client("first")
         composition = deepcopy(first["composition"])
         composition["presentation"]["collapseInterimReplies"] = True
         receipt = await app.dispatch("shell.changes.prepare", {"clientId": "first",
             "expectedRevision": first["revision"], "composition": composition})
-        await app.dispatch("shell.changes.apply", {"clientId": "first",
+        queued = await app.dispatch("shell.changes.apply", {"clientId": "first",
             "expectedRevision": first["revision"], "changeId": receipt["result"]["id"]})
-        assert shell.client("first")["composition"]["presentation"]["collapseInterimReplies"] is True
-        assert "collapseInterimReplies" not in shell.client("second")["composition"]["presentation"]
+        assert queued["result"]["status"] == "awaiting-storage"
+        assert not queued["result"]["stored"] and not queued["result"]["activated"]
+        assert app.appearance.values("first")["collapseInterimReplies"] is False
+        assert shell.client("first")["revision"] == first["revision"]
+        current = app.appearance.read("first")
+        command = current["command"]
+        with app.clients.bind("first"):
+            stored = await app.dispatch("appearance.client.report", {
+                "generation": current["generation"], "revision": command["expectedRevision"] + 1,
+                "storageVersion": "folding-stored", **command["after"],
+                "commandId": command["id"], "status": "stored"}, origin="ui")
+        assert stored["result"]["stored"] and stored["result"]["activated"]
+        assert stored["result"]["rendered"] is False
+        assert shell.inspect("first")["effectiveComposition"]["presentation"]["collapseInterimReplies"] is True
+        app.clients.attach("second")
+        assert shell.inspect("second")["effectiveComposition"]["presentation"]["collapseInterimReplies"] is False
+        assert app.appearance.shared() == shared
         composition["presentation"]["collapseInterimReplies"] = "true"
         with pytest.raises(AppError, match="boolean"):
             await app.dispatch("shell.changes.prepare", {"clientId": "first",
                 "expectedRevision": shell.client("first")["revision"], "composition": composition})
     finally:
+        for queue in queues:
+            app.unsubscribe(queue)
         await app.close()

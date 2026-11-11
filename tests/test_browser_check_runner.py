@@ -285,8 +285,9 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     resume_addition = question_resume_browser_addition(rows, set())
     navigation_ids = agent_navigation_browser_additions(rows, set())
     sidebar_ids = sidebar_controls_browser_addition(rows, set())
+    input_ids = input_status_browser_addition(rows, set())
     historical_rows = [row for row in rows
-                       if row['id'] not in navigation_ids | sidebar_ids
+                       if row['id'] not in navigation_ids | sidebar_ids | input_ids
                        and not (canvas_additions | breadbin_addition | question_fade_addition | context_addition | immediate_addition | delivery_addition | waiting_addition | resume_addition).intersection(row['command'])]
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
@@ -382,7 +383,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     original = [row for row in historical_rows if row['id'] not in additions and row['id'] not in recovery_ids]
     assert len(original) == 65 and len(historical_rows) == 133
     # Preserve the preceding total after validating all exact additive owners.
-    assert len([row for row in rows if row['id'] not in navigation_ids | sidebar_ids | {'context-inspector-layout', 'delivery-warning', 'legacy-outbox-notice', 'delivery-reconciliation', 'delivery-new-chat', 'navigation-waiting', 'canvas-versions', 'question-resume'}]) == 139
+    assert len([row for row in rows if row['id'] not in navigation_ids | sidebar_ids | input_ids | {'context-inspector-layout', 'delivery-warning', 'legacy-outbox-notice', 'delivery-reconciliation', 'delivery-new-chat', 'navigation-waiting', 'canvas-versions', 'question-resume'}]) == 139
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -860,6 +861,45 @@ def test_question_fade_browser_addition_rejects_missing_duplicate_or_wrong_envir
         question_fade_browser_addition(rows, readiness_scripts)
 
 
+def input_status_browser_addition(rows, readiness_scripts, *, current=False):
+    """Validate the additive client owner before excluding it from frozen coverage."""
+    script = 'tests/input-status-browser.mjs'
+    expected = {'id': 'input-status', 'command': ['node', script],
+                'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/input-status'}}
+    if current:
+        expected['cwd'] = '.build/web-client'
+    owners = [row for row in rows
+              if row['id'] == 'input-status' or script in row['command']]
+    assert owners == [expected], 'input-status: expected one exact selected-client owner'
+    assert script not in readiness_scripts, 'input-status: duplicate readiness owner'
+    return {'input-status'}
+
+
+@pytest.mark.parametrize('current', [False, True])
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'renamed', 'command',
+                                  'environment', 'cwd', 'readiness'])
+def test_input_status_browser_owner_is_distinct_and_additive(current, fault):
+    rows = (current_plan() if current else coverage_plan())['scenarios']
+    owner = next(row for row in rows if row['id'] == 'input-status')
+    readiness = set()
+    if fault == 'missing':
+        rows.remove(owner)
+    elif fault == 'duplicate':
+        rows.append({**owner, 'id': 'input-status-extra'})
+    elif fault == 'renamed':
+        owner['id'] += '-renamed'
+    elif fault == 'command':
+        owner['command'].append('--extra')
+    elif fault == 'environment':
+        owner['env'] = {}
+    elif fault == 'cwd':
+        owner['cwd'] = 'tests/web'
+    else:
+        readiness.add(owner['command'][1])
+    with pytest.raises(AssertionError, match='input-status'):
+        input_status_browser_addition(rows, readiness, current=current)
+
+
 def sidebar_controls_browser_addition(rows, readiness_scripts, *, current=False):
     """Validate the selected client's additive journey before freezing prior owners."""
     script = 'tests/sidebar-controls-browser.mjs'
@@ -1008,8 +1048,9 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     plan = coverage_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], readiness_scripts)
     sidebar_ids = sidebar_controls_browser_addition(plan['scenarios'], readiness_scripts)
+    input_ids = input_status_browser_addition(plan['scenarios'], readiness_scripts)
     extended_scripts = {row['command'][2 if row['command'][1] == '--test' else 1]
-                        for row in plan['scenarios'] if row['id'] not in navigation_ids | sidebar_ids}
+                        for row in plan['scenarios'] if row['id'] not in navigation_ids | sidebar_ids | input_ids}
     source_only = {f'tests/{name}-browser.mjs' for name in (
         'interim-replies', 'draft-reload', 'draft-switch', 'activity-feedback',
         'conversation-navigation', 'workspace-shortcuts', 'inline-media-transition', 'execution-observability',
@@ -3328,16 +3369,22 @@ def test_split_registry_initialization_preserves_order_and_binds_both_sources(tm
     assert not (tmp_path / '.build').exists(), 'Reading initial coverage must not prepare or execute the client'
 
 
-@pytest.mark.parametrize('fault', ['missing-client', 'duplicate-id', 'missing-order-id', 'duplicate-order-id', 'stale-prepared'])
+@pytest.mark.parametrize('fault', ['missing-client', 'duplicate-id', 'missing-order-id',
+                                  'extra-order-id', 'unknown-order-id', 'duplicate-order-id', 'stale-prepared'])
 def test_split_registry_never_falls_back_or_loses_coverage(tmp_path, fault):
     host, client, selection = owned_registry_fixture(tmp_path)
     if fault == 'missing-client':
         client.unlink()
     elif fault == 'duplicate-id':
         client.write_text(json.dumps({'schemaVersion': 1, 'scenarios': [scenario('host-case', 'pass')]}))
-    elif fault in {'missing-order-id', 'duplicate-order-id'}:
+    elif fault in {'missing-order-id', 'extra-order-id', 'unknown-order-id', 'duplicate-order-id'}:
         plan = json.loads(host.read_text())
-        plan['scenarioOrder'] = ['host-case'] if fault == 'missing-order-id' else ['host-case', 'host-case']
+        plan['scenarioOrder'] = {
+            'missing-order-id': ['host-case'],
+            'extra-order-id': ['client-case', 'host-case', 'extra-case'],
+            'unknown-order-id': ['client-case', 'extra-case'],
+            'duplicate-order-id': ['host-case', 'host-case'],
+        }[fault]
         host.write_text(json.dumps(plan))
     else:
         prepared = tmp_path / '.build/web-client'
@@ -3390,10 +3437,11 @@ def test_runner_executes_each_explicit_owner_cwd_without_changing_environment_ro
 def test_current_composed_registry_owns_every_executable_and_both_mixed_suites():
     plan = current_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], set(), current=True)
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids]
+    input_ids = input_status_browser_addition(plan['scenarios'], set(), current=True)
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | input_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 148
-    assert len(plan['scenarios']) == 148 + len(navigation_ids)
-    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 15
+    assert len(plan['scenarios']) == 148 + len(navigation_ids) + len(input_ids)
+    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 16
     sidebar_controls_browser_addition(plan['scenarios'], set(), current=True)
     for row in plan['scenarios']:
         for part in row['command']:
@@ -3405,11 +3453,14 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
                                 '../../tests/web/configuration-recovery-observer.test.mjs']
 
 
-def test_legacy_outbox_notice_is_composed_once_from_selected_client_owner():
-    name = 'legacy-outbox-notice'
-    script = 'tests/legacy-outbox-notice-browser.mjs'
+@pytest.mark.parametrize('name,previous,following', [
+    ('legacy-outbox-notice', 'delivery-warning', 'delivery-reconciliation'),
+    ('input-status', 'draft-discovery-recovery', 'action-spacing'),
+])
+def test_client_scenario_is_composed_once_from_selected_client_owner(name, previous, following):
+    script = f'tests/{name}-browser.mjs'
     expected = {'id': name, 'command': ['node', script],
-                'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/legacy-outbox-notice'}}
+                'env': {'AMPLIFIER_TEST_ARTIFACTS': f'{{root}}/output/browser-checks/{name}'}}
     host_path = ROOT / 'tests/web/browser-checks.json'
     host = json.loads(host_path.read_text())
     client_path = source_test(script).with_name('browser-checks.json')
@@ -3423,7 +3474,7 @@ def test_legacy_outbox_notice_is_composed_once_from_selected_client_owner():
     assert host['scenarioOrder'].count(name) == 1
     index = host['scenarioOrder'].index(name)
     assert host['scenarioOrder'][index - 1:index + 2] == [
-        'delivery-warning', name, 'delivery-reconciliation']
+        previous, name, following]
     plan, proof = runner.load_plan(ROOT, host_path)
     assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
     assert [row for row in plan['scenarios'] if owns(row)] == [{**expected, 'cwd': '.build/web-client'}]
