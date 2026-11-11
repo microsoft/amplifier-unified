@@ -622,3 +622,57 @@ def test_upgrade_refreshes_dormant_old_block_facts_without_runtime_hydration(tmp
     assert counts['/projects/alpha']['activityCounts']['attention']==0
     reads=[];db.set_trace_callback(reads.append);refresh_directory(db);db.set_trace_callback(None)
     assert not any('history_local_rows' in sql for sql in reads)
+
+
+@pytest.mark.parametrize('outcome', ['deferred','question','conflict'])
+async def test_actual_sealed_interim_result_does_not_confirm_cancellation(app,outcome):
+    from test_collaborative_workspaces import declared_result, finish, agent_action
+    from test_request_cancellation import cancel
+    source,peer=app.state['sessions']
+    source['task']={'id':'objective','revision':1,'status':'active','continuationEpoch':1}
+    app.state.setdefault('runtimeControl',{})[source['id']]={'task.get':{'task':source['task']}}
+    await declared_result(app,kind='result',outcome=outcome)
+    await agent_action(app,source,'coordination.subscribe',
+        {'sessionId':source['id'],'requestId':'result-request'},'interim-subscribe')
+    await finish(app,peer,'result-request')
+    result=await cancel(app,identity='result-request')
+    assert result['result']['status']=='requested'
+    saved=deepcopy(app.collaboration.receipt('result-request'))
+    assert saved['response']['status']=='sealed'
+    source.update(status='idle',task=task())
+    value=activity(source,task=source['task'],db=app.db)
+    assert value['kind']=='attention'
+    assert value['waiting']['phase']=='cancellation_requested'
+    assert app.collaboration.receipt('result-request')==saved
+
+
+def test_migrated_legacy_block_without_task_row_survives_metadata_sync_and_reopen(tmp_path):
+    from test_history_directory_navigation import directory_fixture
+    from amplifier_web.navigation_waiting import refresh_directory, saved_task
+    from amplifier_web.history_directory import HistoryDirectory
+    from amplifier_web.history_directory_query import workspace_counts
+    from types import SimpleNamespace
+    state,directory=directory_fixture(tmp_path,count=0);db=directory.db
+    owner={**session(),'workspace':'/projects/alpha','workspaceId':'a',
+           'sessionKind':'root','task':{'status':'blocked'}}
+    directory.sync([owner],state)
+    db.execute("DELETE FROM history_navigation_tasks WHERE id='manager'")
+    db.execute("UPDATE history_local_rows SET base_activity_kind='attention',base_activity_label='Work blocked',activity_kind='attention',activity_label='Work blocked' WHERE id='manager'")
+    db.execute('DELETE FROM navigation_fact_versions')
+    refresh_directory(db)
+    assert saved_task(db,'manager')=={'status':'blocked'}
+    assert not db.execute("SELECT 1 FROM history_navigation_tasks WHERE id='manager'").fetchone()
+    cold=json.loads(db.execute("SELECT summary FROM history_local_rows WHERE id='manager'").fetchone()[0])
+    cold['title']='Renamed while dormant'
+    directory.sync([cold],state)
+    assert db.execute("SELECT activity_label FROM history_local_rows WHERE id='manager'").fetchone()[0]=='Blocked — details unavailable'
+    db.commit()
+    reopened=sqlite3.connect(tmp_path/'app.sqlite3')
+    again=HistoryDirectory(SimpleNamespace(db=reopened,_state=state,data_dir=tmp_path))
+    cold['title']='Renamed again after restart'
+    again.sync([cold],state)
+    assert saved_task(reopened,'manager')=={'status':'blocked'}
+    assert reopened.execute("SELECT activity_label FROM history_local_rows WHERE id='manager'").fetchone()[0]=='Blocked — details unavailable'
+    counts=workspace_counts(again,state)['/projects/alpha']['activityCounts']
+    assert counts['attention']==0 and counts['idle']==1
+    reopened.close()

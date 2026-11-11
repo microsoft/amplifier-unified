@@ -411,7 +411,10 @@ questions, approvals, actual execution, current unreviewed errors, interruption 
 Stop/pause take precedence over dependency presentation.
 Requested cancellation does not confirm stopped execution: unknown or admitted
 effects remain visible until resolved. Confirmed withdrawal retires only that
-dependency. Status-only failures without an acknowledgeable error notice remain
+dependency. A sealed interim deferred/question/conflict report is not a terminal
+cancellation result. Migrated neutral legacy blocks retain their minimal blocked
+fact across later metadata refreshes even when exact task provenance is unavailable.
+Status-only failures without an acknowledgeable error notice remain
 failures; reviewing an older error cannot clear a new occurrence.
 Missing identity/provenance is neutral **Blocked — details unavailable**, never a
 guessed target, failure or request for human intervention. It remains in saved

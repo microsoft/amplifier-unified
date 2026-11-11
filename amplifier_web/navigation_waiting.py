@@ -147,7 +147,8 @@ def saved_task(db, sid):
     # Pre-upgrade directory rows may know only blocked/paused, not exact task
     # provenance. Keep that honest generic status without parsing old runtime.
     legacy = db.execute('SELECT base_activity_label FROM history_local_rows WHERE id=?', (sid,)).fetchone()
-    return {'status': 'blocked'} if legacy and legacy[0] == 'Work blocked' else (
+    return {'status': 'blocked'} if legacy and legacy[0] in {
+        'Work blocked', 'Blocked — details unavailable'} else (
         {'status': 'paused'} if legacy and legacy[0] == 'Paused' else {})
 
 
@@ -239,7 +240,10 @@ def disposition(row):
     if row['terminal_status'] == 'observed' and (
             status is None or (row['terminal_revision'] or 0) >= (row['response_revision'] or 0)):
         status, outcome, qualified = 'observed', row['terminal_outcome'], False
-    if cancellation and status not in {'sealed', 'observed'}:
+    from .request_cancellation import terminal_report
+    final_result = terminal_report({'status': status, 'kind': row['response_kind'], 'outcome': outcome})
+    final_admission = row['terminal_status'] == 'observed' and outcome in {'failed', 'cancelled', 'declined'}
+    if cancellation and not (final_result or final_admission):
         return 'cancellation_requested', 'Dependency cancellation unconfirmed', 'attention'
     if status == 'unknown' or outcome == 'unknown':
         return 'unknown', 'Dependency outcome unknown', 'attention'
