@@ -54,6 +54,8 @@ async def preview_saved(management, args):
 
 async def perform(management, action, args):
     from .configuration_authority import check_current
+    from .next_message_configuration import target
+    from .updates import active_release
     check_current()
     if action == 'bundle.preview':
         return await preview_saved(management, args)
@@ -71,11 +73,48 @@ async def perform(management, action, args):
         current['bundleChange'] = {'phase': 'working', 'action': action, 'bundle': args['bundle']}
         source = copy.deepcopy(current)
         interruption_revision = current.get('interruptionRevision', 0)
+        revision = (app.state.get('configurationRevision', 0), source.get('nextMessageRevision', 0))
+        generation = active_release(app.data_dir).get('current')
         app._publish_changes(sessions={sid})
     def restart_guard():
         check_current()
-        if app._session(sid).get('interruptionRevision', 0) != interruption_revision:
+        current = app._session(sid)
+        if current.get('interruptionRevision', 0) != interruption_revision:
             raise ValueError('The conversation was stopped before changing bundles. It was not restarted.')
+        if (revision != (app.state.get('configurationRevision', 0), current.get('nextMessageRevision', 0))
+                or target(current) != target(source)
+                or (current.get('runtimeSessionId') or current.get('nativeIdentity') or sid)
+                    != (source.get('runtimeSessionId') or source.get('nativeIdentity') or sid)
+                or active_release(app.data_dir).get('current') != generation):
+            raise ValueError('The configuration or execution placement changed. Preview the selected bundle again.')
+
+    async def qualified_replacement(baseline, *, recovering):
+        """Keep review in its original graph; mount only the candidate's graph.
+
+        Re-observe the original rendering after qualification so an external
+        source edit during that wait cannot silently become a fresh baseline.
+        The candidate worker still repeats its own exact fingerprint check.
+        """
+        from .draft_defaults import resolve_defaults
+        restart_guard()
+        checked = await resolve_defaults(app.data_dir, source['workspace'], args['bundle'],
+            session_id=source.get('runtimeSessionId') or source.get('nativeIdentity') or sid,
+            replacement={'selection': baseline.get('selection'), 'replaceSavedSelection': True,
+                         'workingDirectory': source.get('workingDirectory')},
+            runtime_session=source)
+        restart_guard()
+        if not checked['modelCompatible'] and not args.get('resetModel'):
+            raise ValueError('Your pinned model is unavailable in this bundle. Select Use the new bundle’s model to continue.')
+        if recovering:
+            original = await resolve_defaults(app.data_dir, source['workspace'], args['bundle'],
+                session_id=source.get('runtimeSessionId') or source.get('nativeIdentity') or sid,
+                replacement={key: source[key] for key in ('selection', 'workingDirectory') if key in source})
+        else:
+            original = await app.runtime.control(sid, 'bundle.preview', {'bundle': args['bundle']})
+        restart_guard()
+        if any(original.get(key) != baseline.get(key) for key in ('bundle', 'fingerprint', 'selection')):
+            raise ValueError('The configuration changed. Preview the selected bundle again.')
+        return {**checked, 'resetModel': args.get('resetModel', False), 'replaceSavedSelection': True}
 
     try:
         recovering = (source.get('errorType') == 'RuntimeStartupError'
@@ -96,7 +135,7 @@ async def perform(management, action, args):
             if action == 'bundle.switch':
                 if not checked['modelCompatible'] and not args.get('resetModel'):
                     raise ValueError('Your pinned model is unavailable in this bundle. Select Use the new bundle’s model to continue.')
-                replacement = {**checked, 'resetModel': args.get('resetModel', False)}
+                replacement = await qualified_replacement(checked, recovering=True)
                 restart_guard()
                 await management.ensure_runtime(source, bundle_replacement=replacement, restart_guard=restart_guard)
         else:
@@ -122,7 +161,7 @@ async def perform(management, action, args):
                     async with app.lock:
                         app._session(sid)['bundlePreview'] = prepared['preview']
                     raise ValueError('Your pinned model is unavailable in this bundle. Select Use the new bundle’s model to continue.')
-                replacement = prepared['replacement']
+                replacement = await qualified_replacement(prepared['replacement'], recovering=False)
                 restart_guard()
                 await app.runtime.stop(sid, reason='configuration')
                 restart_guard()

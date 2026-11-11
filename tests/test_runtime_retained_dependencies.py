@@ -40,6 +40,97 @@ def reference(ref=OLD):
     return NAME + ' @ git+' + URL + '@' + ref
 
 
+@pytest.mark.parametrize('provenance', ['installed Git distribution', 'installed Foundation cache module'])
+@pytest.mark.parametrize('ref', ['stable', OLD])
+def test_foundation_has_one_effective_source_policy(provenance, ref):
+    shipped = tomllib.loads(runtime.manifest_path().read_text())
+    # The canonical source owns the app default, not a second authored URL.
+    assert [value for value in shipped['tool']['uv']['override-dependencies']
+            if Requirement(value).name == 'amplifier-foundation'] == ['amplifier-foundation']
+    content = runtime.augmented_manifest(runtime.declared_manifest(extras=[]), [{
+        'kind':'runtime dependency','package':'amplifier-foundation',
+        'url':'https://example.invalid/fork','ref':ref,'provenance':provenance,
+        'subdirectory':'foundation'}])
+    data = tomllib.loads(content.decode())
+    assert data['tool']['uv']['sources']['amplifier-foundation'] == {
+        'git':'https://example.invalid/fork','rev':ref,'subdirectory':'foundation'}
+    overrides = [Requirement(value) for value in data['tool']['uv']['override-dependencies']
+                 if Requirement(value).name == 'amplifier-foundation']
+    assert [value.url for value in overrides] == [None]
+
+
+@pytest.mark.parametrize('choice', ['main', 'pin', 'fork-pin'])
+async def test_real_foundation_source_and_distinct_hook_pin(tmp_path, monkeypatch, choice, record_property):
+    """Actual uv: app root advances; a distinct same-repo hook stays pinned."""
+    uv = shutil.which('uv')
+    assert uv, 'Managed qualification must supply uv'
+    name, hook_name = 'amplifier-foundation', 'amplifier-module-hooks-session-naming'
+    repo=tmp_path/'foundation';repo.mkdir()
+    git(repo,'init','-b','main')
+    git(repo,'config','user.name','Fixture');git(repo,'config','user.email','fixture@example.invalid')
+    url=repo.as_uri()
+    def package(root, package, requirement=None):
+        root.mkdir(parents=True,exist_ok=True)
+        root.joinpath('pyproject.toml').write_text('[project]\nname='+json.dumps(package)+
+            '\nversion="1.0"\n'+('dependencies=['+json.dumps(requirement)+']\n' if requirement else '')+
+            '[build-system]\nrequires=[]\nbuild-backend="backend"\nbackend-path=["."]\n')
+        backend=BACKEND.replace('fixture_component',package.replace('-','_')).replace('fixture-component',package)
+        if requirement:backend=backend.replace('Version: 1.0\\n','Version: 1.0\\nRequires-Dist: '+requirement+'\\n')
+        root.joinpath('backend.py').write_text(backend)
+    package(repo,name)
+    git(repo,'add','.');git(repo,'commit','-m','root')
+    old=git(repo,'rev-parse','HEAD')
+    package(repo/'modules/hooks-session-naming',hook_name,name+' @ git+'+url+'@'+old)
+    git(repo,'add','.');git(repo,'commit','-m','pinned hook')
+    hook=git(repo,'rev-parse','HEAD')
+    (repo/'next').write_text('new root');git(repo,'add','.');git(repo,'commit','-m','advance root')
+    current=git(repo,'rev-parse','HEAD')
+    root_url, root_ref, expected = url, old if choice=='pin' else 'main', old if choice=='pin' else current
+    if choice=='fork-pin':
+        fork=tmp_path/'fork'
+        shutil.copytree(repo,fork)
+        (fork/'fork-only').write_text('owned distinct fork')
+        git(fork,'add','.');git(fork,'commit','-m','fork choice')
+        root_url, root_ref = fork.as_uri(), git(fork,'rev-parse','HEAD')
+        expected=root_ref
+    shipped=tomllib.loads(runtime.declared_manifest(extras=[]).decode())
+    # Preserve the shipped Foundation policy mechanism; replace only URLs with
+    # this owned local Git repository and omit unrelated worker dependencies.
+    uv_policy={'sources':{name:{'git':url,'rev':'main'},
+                         hook_name:{'git':url,'rev':hook,'subdirectory':'modules/hooks-session-naming'}},
+               'override-dependencies':[v.replace('https://github.com/microsoft/amplifier-foundation',url)
+                   for v in shipped['tool']['uv']['override-dependencies'] if Requirement(v).name==name]}
+    data={'project':{'name':'worker','version':'1','dependencies':[name,hook_name]},'tool':{'uv':uv_policy}}
+    # The bare transitive requirement follows this effective local source,
+    # not an independently authored upstream URL or the hook's commit.
+    content=runtime.augmented_manifest(encode(data),[{
+        'kind':'runtime dependency','package':name,'url':root_url,
+        'ref':root_ref,'provenance':'installed Git distribution'}])
+    monkeypatch.setenv('UV_NO_INDEX','1');monkeypatch.delenv('UV_OFFLINE',raising=False)
+    monkeypatch.setenv('UV_PYTHON_DOWNLOADS','never');monkeypatch.setenv('UV_CACHE_DIR',str(tmp_path/'uv-cache'))
+    if choice=='fork-pin':
+        # Compare the old independently authored override against the effective
+        # installed fork. Do not assume this inconsistency is a uv error.
+        legacy=tomllib.loads(content.decode())
+        legacy['tool']['uv']['override-dependencies']=[name+' @ git+'+url+'@main']
+        prior=runtime.prepare_project(tmp_path/'legacy','e'*32,content=encode(legacy))
+        result=subprocess.run([uv,'lock','--project',str(prior),'--python',sys.executable],
+                              capture_output=True,text=True,timeout=90)
+        record_property('legacyUvExit',result.returncode)
+        record_property('legacyStderrBytes',len(result.stderr.encode()))
+        record_property('legacyUvStderr',result.stderr)
+        if result.returncode==0:
+            record_property('legacySelectedEffectiveFork',runtime.locked_sources(prior)[name].fragment==expected)
+    project=runtime.prepare_project(tmp_path/'app','f'*32,content=content)
+    await updates.process(uv,'lock','--project',str(project),'--python',sys.executable,timeout=90)
+    locked=runtime.locked_sources(project)
+    assert locked[name].fragment==expected
+    assert locked[name].path==root_url.removeprefix('file://')
+    assert locked[hook_name].fragment==hook
+    from urllib.parse import parse_qs
+    assert parse_qs(locked[hook_name].query)['subdirectory']==['modules/hooks-session-naming']
+
+
 def test_generated_provenance_preserves_authored_policy_and_moving_sources():
     authored = 'other-package==3'
     data = {**BASE, 'tool': {'uv': {'override-dependencies': [authored],

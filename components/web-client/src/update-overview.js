@@ -14,7 +14,9 @@ function sequenceOverview(updates={},options={}){
  const rows=(updates.items||[]).filter(i=>i.kind!=='app'&&i.id!=='application');
  const issues=rows.filter(i=>['check_failed','local_changes'].includes(i.status));
  const components=Math.max(rows.filter(i=>i.status==='update').length,(seq.included?.available||0)+(seq.other?.available||0));
- const appAvailable=app.status==='update',installable=appAvailable||components>0||!!updates.pendingApp||!!updates.pendingRelease;
+ // The host alone qualifies retained-source retries. They are not newly
+ // available updates, and failed rows or historical receipts cannot qualify them.
+ const appAvailable=app.status==='update',installable=appAvailable||components>0||!!updates.pendingApp||!!updates.pendingRelease||updates.currentStatus?.action==='install';
  const appAttention=['check_failed','release_channel_needed'].includes(app.status);
  const blocked=appAvailable&&app.canInstall===false||updates.pendingReplacement!=null||!!updates.pendingRestart||!!(seq.stage==='included'&&seq.included?.issues&&!updates.includedCanProceed);
  // An unavailable app check is not a failed component operation. Its row stays

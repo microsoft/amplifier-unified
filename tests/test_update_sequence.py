@@ -112,6 +112,21 @@ async def test_completed_sequence_has_no_repeated_background_check(manager,monke
     await manager.tick()
 
 
+@pytest.mark.parametrize('fresh',[False,True])
+async def test_public_check_does_not_offer_retained_preparation_as_retry(manager,monkeypatch,fresh):
+    from amplifier_web import update_partial
+    calls=[]
+    async def inventory(**kwargs):return [source(manager,'included')]
+    async def remote(*args,**kwargs):return 'b'*40+' refs/heads/main'
+    def retained(m,rows,*,retry_retained):
+        calls.append(retry_retained)
+    monkeypatch.setattr(manager,'inventory_sources',inventory)
+    monkeypatch.setattr(updates,'process',remote)
+    monkeypatch.setattr(update_partial,'retained_after_check',retained)
+    await manager.check(fresh=fresh)
+    assert calls==[False]
+
+
 @pytest.mark.parametrize('action', ['app', 'install'])
 async def test_explicit_app_scope_replaces_old_whole_install_without_changing_policy(manager, monkeypatch, action):
     import copy
@@ -210,7 +225,7 @@ async def test_missing_source_staging_verifies_exact_checked_revision(tmp_path,m
         await update_sequence.stage_missing(None,destination,row)
 
 
-@pytest.mark.parametrize('case', ['pin', 'exact', 'transport', 'interrupted'])
+@pytest.mark.parametrize('case', ['pin', 'exact', 'transport', 'command', 'interrupted'])
 @pytest.mark.parametrize('wake', ['check', 'timer'])
 async def test_checked_source_failure_retry_disposition_survives_checks_and_restart(manager, monkeypatch, case, wake):
     """Real check/install/tick/receipts; only remote I/O and costly qualification
@@ -240,6 +255,9 @@ async def test_checked_source_failure_retry_disposition_survives_checks_and_rest
     async def preflight():
         if case == 'transport':
             raise TimeoutError('private endpoint must not enter diagnostics')
+        if case == 'command':
+            from amplifier_web.update_diagnostics import CommandFailure
+            raise CommandFailure({'exitCode':1,'stderrBytes':10611})
         if case == 'interrupted':
             raise asyncio.CancelledError()
         selected = {'url': row['url'], 'ref': 'main', 'revision': 'a'*40,
@@ -267,7 +285,7 @@ async def test_checked_source_failure_retry_disposition_survives_checks_and_rest
     assert not updates.active_release(manager.home)
     diagnostic = manager.diagnostics.state
     failure = copy.deepcopy(diagnostic['lastFailure'])
-    mode = 'inspect' if case == 'interrupted' else 'backoff' if case == 'transport' else 'changed-inputs'
+    mode = 'inspect' if case == 'interrupted' else 'changed-inputs'
     assert diagnostic['batch']['retry']['mode'] == mode
     if case in {'pin', 'exact'}:
         assert failure['package'] == 'amplifier-foundation'
@@ -293,7 +311,12 @@ async def test_checked_source_failure_retry_disposition_survives_checks_and_rest
         with pytest.raises(ValueError, match='not replayed'):
             await manager.install()
         return
-    manager.diagnostics.state['batch']['retry']['retryAt'] = 0
+    # Legacy saved deadlines/counters confer no new preparation authority.
+    if case in {'transport','command'}:
+        manager.diagnostics.state['batch']['retry'].update(mode='backoff',retryAt=0,attempts=100)
+        await manager.publish()
+        manager.diagnostics = UpdateDiagnostics(manager)
+    first_candidates=set((manager.directory/'releases').iterdir())
     if case == 'transport' and wake == 'timer':
         settings = manager.service.state['settings']['updates']
         sequence = manager.service.state['updates']['sequence']
@@ -308,11 +331,12 @@ async def test_checked_source_failure_retry_disposition_survives_checks_and_rest
         sequence.pop('manualHandoff')
     if wake == 'check':
         await manager.check()
-    await manager.tick()
-    assert len(calls) == (2 if case == 'transport' else 1)
-    if case == 'transport':
-        assert manager.diagnostics.state['batch']['retry']['attempts'] == 2
-        return
+    for _ in range(10):
+        # Advance beyond any legacy retry delay, including after public Check.
+        monkeypatch.setattr(time,'time',lambda:10**12)
+        await manager.tick()
+    assert len(calls) == 1
+    assert set((manager.directory/'releases').iterdir())==first_candidates
     # Unrelated publication/credential settings do not change the source graph.
     manager.service.state['configurationRevision'] = manager.service.state.get('configurationRevision', 0) + 1
     await manager.check()
@@ -452,7 +476,7 @@ async def test_qualification_configuration_repair_rechecks_same_sources(manager,
     await manager.check();await manager.tick()
     assert len(attempts)==2 and len(prepared)==1
     assert prepared[0]==[] if repair=='override-disabled' else prepared[0][0]['config']['value']=='repaired'
-    assert manager.diagnostics.state['batch']['retry']['mode']=='backoff'
+    assert manager.diagnostics.state['batch']['retry']['mode']=='changed-inputs'
     assert first in manager.diagnostics.state['events']
     assert not updates.active_release(manager.home)
 

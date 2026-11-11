@@ -9,8 +9,175 @@ import './composer-test-helpers.mjs';
 
 const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS||'output/sidebar-controls';
 const baseline=process.env.AMPLIFIER_SIDEBAR_BASELINE==='1';
-const results=[],errors=[],calls=[],regressions=[],explicitStops=[],attachmentRequests=[],cleanupErrors=[];
-let browser,vite,page,failure;
+const results=[],errors=[],calls=[],regressions=[],menuRegressions=[],explicitStops=[],attachmentRequests=[],cleanupErrors=[];
+let browser,vite,page,failure,activeMenuProof,menuPhase;
+
+async function visibleGeometry(locator,{tolerance=1,header=false,record=()=>{}}={}){
+ await expect(locator).toBeVisible();
+ const geometry=await locator.evaluate((node,includeHeader)=>{
+  const rect=node=>{const r=node.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};
+  const box=rect(node),hit=document.elementFromPoint(box.left+box.width/2,box.top+box.height/2);
+  const header=includeHeader?node.closest('.a-work-header'):null;
+  return {...box,viewportWidth:innerWidth,viewportHeight:innerHeight,opacity:getComputedStyle(node).opacity,
+   hit:node.contains(hit),hitTarget:hit?{tag:hit.tagName,className:hit.getAttribute('class')}:null,
+   // Record wrapped-header intersections for review; do not require a notice
+   // anchored inside the header to sit outside the entire header rectangle.
+   ...(includeHeader?{header:header?rect(header):null,headerContentOverlaps:header?
+    [...header.querySelectorAll('button,[data-part="session-heading"]')].filter(target=>{
+     const r=rect(target);return r.width>0&&r.height>0&&r.left<box.right&&r.right>box.left&&r.top<box.bottom&&r.bottom>box.top;
+    }).map(target=>({label:target.getAttribute('aria-label')||target.textContent.trim(),rect:rect(target)})):[]}:{}),
+  };
+ },header);
+ record(geometry);
+ assert.ok(geometry.width>0&&geometry.height>0&&geometry.left>=-tolerance&&geometry.right<=geometry.viewportWidth+tolerance
+  &&geometry.top>=-tolerance&&geometry.bottom<=geometry.viewportHeight+tolerance&&geometry.hit&&geometry.opacity!=='0',
+ 'Visible, in-viewport and unobscured: '+JSON.stringify(geometry));
+ return geometry;
+}
+
+async function menuRegression({page,scenario,readState,emit}){
+ const proof={scenario:scenario.name,passed:false,clipboard:'real browser grant; synthetic records',actionTrace:[],notices:[]};
+ menuRegressions.push(proof);
+ activeMenuProof=proof;menuPhase='app-disclosure';
+ const start=calls.length,original={...readState().sessions[0]},originalView={...readState().view};
+ const footer=page.locator('.a-work-footer'),app=footer.getByRole('button',{name:'App options',exact:true});
+ const appItems=footer.getByRole('group',{name:'App options',exact:true});
+ const labels=locator=>locator.evaluateAll(nodes=>nodes.map(node=>{
+  const copy=node.cloneNode(true);copy.querySelectorAll('svg,.a-attention-badge').forEach(node=>node.remove());return copy.textContent.trim();
+ }));
+ const capture=label=>page.screenshot({path:`${artifacts}/${scenario.name}-${label}.png`});
+ await expect(app.locator('.a-attention-badge')).toHaveText('3');
+ await app.focus();await app.press('Enter');
+ await expect(appItems.getByRole('button').first()).toBeFocused();
+ assert.deepEqual(await labels(appItems.getByRole('button')),['Activity','Send feedback','Automations','What the agents see','Settings']);
+ await expect(appItems.locator('hr,[role="separator"]')).toHaveCount(0);
+ await expect(appItems.getByRole('button',{name:/^Activity/}).locator('.a-attention-badge')).toHaveText('2');
+ await expect(appItems.getByRole('button',{name:/^Settings/}).locator('.a-attention-badge')).toHaveText('3');
+ for(const button of await appItems.getByRole('button').all()){
+  const box=await button.boundingBox();assert.ok(box&&box.x>=0&&box.x+box.width<=scenario.width);
+ }
+ await capture('app-options');
+ menuPhase='app-menu-escape';
+ await page.keyboard.press('Escape');await expect(app).toBeFocused();await expect(appItems).toHaveCount(0);
+ await expect(app.locator('.a-attention-badge')).toHaveText('3');
+ // The mobile drawer owns focus/inertness until explicitly closed.
+ if(scenario.touch){
+  menuPhase='mobile-drawer-escape';
+  await page.getByRole('slider',{name:'Filter conversations by age'}).focus();await page.keyboard.press('Escape');
+  await expect(page.locator('#workspace-navigation')).toBeHidden();
+  await expect.poll(()=>readState().view.navExpanded).toBe(false);
+ }
+ const copyStart=calls.length;
+ menuPhase='chat-disclosure';
+ const trigger=page.getByRole('button',{name:'Chat',exact:true});
+ const items=page.getByRole('group',{name:'Chat',exact:true});
+ const copy=()=>items.getByRole('button',{name:'Copy session ID',exact:true});
+ const notice=page.locator('.a-session-copy-notice');
+ const visibleNotice=async checkpoint=>{
+  const geometry=await visibleGeometry(notice,{tolerance:0,header:true,
+   record:geometry=>proof.notices.push({checkpoint,...geometry})});
+  assert.deepEqual(geometry.headerContentOverlaps,[],'Copy feedback does not cover header controls or the chat title');
+  assert.ok(geometry.top>=geometry.header.bottom,'Copy feedback sits below the complete wrapped header');
+  return geometry;
+ };
+ await expect(trigger.locator('.lucide-info')).toHaveCount(1);
+ await trigger.focus();await trigger.press('Enter');await expect(copy()).toBeFocused();
+ assert.deepEqual(await labels(items.getByRole('button')),['Copy session ID','Rename','Pin','Share or save','Chat info','Help & diagnostics','Advanced','Archive']);
+ await capture('chat-options');
+ menuPhase='chat-menu-escape';
+ await page.keyboard.press('Escape');await expect(trigger).toBeFocused();
+ menuPhase='clipboard-granted';
+ await trigger.press('Enter');await expect(copy()).toBeFocused();
+ await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:new URL(page.url()).origin});
+ await copy().press('Enter');
+ await expect(items).toHaveCount(0);await expect(trigger).toBeFocused();
+ await expect(notice).toHaveText('Session ID copied.');await expect(notice).toBeVisible();
+ assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),original.nativeIdentity);
+ await expect(notice).toHaveAttribute('role','status');await expect(notice).toHaveAttribute('aria-live','polite');
+ await expect(notice).toHaveAttribute('aria-atomic','true');
+ await visibleNotice('copied');
+ await capture('session-id-copied');
+ if(['desktop-320','mobile-390'].includes(scenario.name)){
+  // Deterministic pending/errors supplement the real granted write above.
+  // The stub is client-local and records exact bytes; it is not host acceptance.
+  await page.evaluate(()=>{
+   window.fixtureClipboard={writes:[],pending:[],mode:'pending'};
+   Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:text=>{
+    const fixture=window.fixtureClipboard;fixture.writes.push(text);
+    if(fixture.mode==='denied')return Promise.reject(new DOMException('Fixture denial','NotAllowedError'));
+    if(fixture.mode==='failed')return Promise.reject(Error('Fixture failure'));
+    return new Promise((resolve,reject)=>fixture.pending.push({resolve,reject}));
+   }}});
+  });
+  menuPhase='clipboard-pending';
+  await trigger.click();await copy().press('Space');
+  await expect(items).toHaveCount(0);await expect(notice).toHaveText('Copying session ID…');
+  await visibleNotice('pending');
+  await capture('session-id-pending');
+  await trigger.click();await expect(copy()).toBeDisabled();await page.keyboard.press('Escape');
+  menuPhase='clipboard-stale-rejection';
+  readState().sessions[0]={...original,runtimeSessionId:'runtime-'+scenario.name,location:{kind:'managed'}};
+  await emit();await expect(notice).toBeEmpty();
+  await page.evaluate(()=>window.fixtureClipboard.pending[0].reject(new DOMException('Old denial','NotAllowedError')));
+  await expect(notice).toBeEmpty();
+  menuPhase='clipboard-runtime-id';
+  await trigger.click();
+  assert.deepEqual(await labels(items.getByRole('button')),['Copy session ID','Rename','Pin','Share or save','Chat info','Help & diagnostics','Advanced','Archive','Delete']);
+  await copy().press('Enter');await expect(notice).toHaveText('Copying session ID…');
+  await page.evaluate(()=>window.fixtureClipboard.pending[1].resolve());
+  await expect(notice).toHaveText('Session ID copied.');
+  await visibleNotice('runtime-id-copied');
+  assert.deepEqual(await page.evaluate(()=>window.fixtureClipboard.writes),[original.nativeIdentity,'runtime-'+scenario.name]);
+  for(const [mode,message] of [
+   ['denied','Clipboard access was denied. Session ID was not copied.'],
+   ['failed','Session ID could not be copied.'],
+   ['unavailable','Clipboard is unavailable in this browser. Session ID was not copied.'],
+  ]){
+   menuPhase='clipboard-'+mode;
+   await page.evaluate(mode=>{window.fixtureClipboard.mode=mode;if(mode==='unavailable')Object.defineProperty(navigator,'clipboard',{configurable:true,value:undefined})},mode);
+   await trigger.click();await copy().press('Enter');
+   await expect(items).toHaveCount(0);await expect(notice).toHaveText(message);await expect(notice).toBeVisible();
+   await visibleNotice(mode);
+   if(mode==='denied')await capture('session-id-denied');
+  }
+  menuPhase='clipboard-owner-reset';
+  await page.evaluate(()=>delete navigator.clipboard);
+  readState().sessions[0]=original;await emit();await expect(notice).toBeEmpty();
+  readState().selectedSessionId=null;await emit();await expect(trigger).toHaveCount(0);
+  readState().selectedSessionId=original.id;await emit();await expect(trigger).toHaveCount(1);
+  proof.syntheticClipboard=['pending','stale rejection','managed runtime ID','denied','failed','unavailable','new draft'];
+ }
+ assert.equal(readState().selectedSessionId,original.id);
+ assert.deepEqual(readState().sessions[0],original);
+ assert.deepEqual(readState().view.draft,originalView.draft);
+ const actionEvidence=JSON.stringify({scenario:scenario.name,actionTrace:proof.actionTrace});
+ // The diagnostic run observed shell/runtime.jsx's debounced render report
+ // settling during disclosure. It is not an interactive menu action. Keep it
+ // visible and validate its exact fixture identity rather than timing it away.
+ const clientId=await page.evaluate(()=>window.amplifier.getState().client.id);
+ for(const call of calls.slice(start).filter(call=>call.action==='shell.report')){
+  assert.equal(call.args.clientId,clientId);
+  assert.equal(call.args.revision,0);
+  assert.equal(call.args.previewId,null);
+  assert.equal(call.args.message,'');
+  assert.deepEqual(call.args.instances,{
+   workspaces:'ready',chats:'ready','core.app.actions':'ready','core.app.status':'ready',
+   'core.conversation.header':'ready','core.composer.actions':'ready',
+   'core.canvas.toolbar':'inactive','core.settings.appearance':'inactive',
+  });
+ }
+ const interactive=rows=>rows.filter(call=>call.action!=='shell.report').map(({action,args})=>({action,args}));
+ assert.deepEqual(interactive(calls.slice(copyStart)),[],
+  'Chat menu disclosure/copy never dispatches an interactive action or changes selection/model/draft: '+actionEvidence);
+ assert.deepEqual(interactive(calls.slice(start)),scenario.touch?[{action:'view.update',args:{patch:{navExpanded:false}}}]:[],
+  'Only the explicit mobile drawer close may dispatch a view update: '+actionEvidence);
+ if(scenario.touch){
+  menuPhase='mobile-drawer-reopen';
+  await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+ }
+ activeMenuProof=null;menuPhase=null;
+ proof.passed=true;
+}
 
 // Two existing viewport cells exercise the real shell/skin, not a CSS-only
 // specimen. All records are synthetic, inline and bounded; no saved detail,
@@ -88,18 +255,8 @@ async function appearanceRegression({page,scenario,readState,emit,stopGuard}){
  }));
  const rect=node=>{const r=node.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};
  async function usable(locator,{button=false}={}){
-  await expect(locator).toBeVisible();
   if(button)await expect(locator).toBeEnabled();
-  const geometry=await locator.evaluate(node=>{
-   const r=node.getBoundingClientRect(),style=getComputedStyle(node);
-   return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,
-    viewportWidth:innerWidth,viewportHeight:innerHeight,opacity:style.opacity,
-    hit:node.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))};
-  });
-  assert.ok(geometry.width>0&&geometry.height>0&&geometry.left>=-1&&geometry.right<=geometry.viewportWidth+1
-   &&geometry.top>=-1&&geometry.bottom<=geometry.viewportHeight+1&&geometry.hit&&geometry.opacity!=='0',
-  'Visible, in-viewport and unobscured: '+JSON.stringify(geometry));
-  return geometry;
+  return visibleGeometry(locator);
  }
  async function capture(label){
   const prefix=`${artifacts}/${scenario.name}-${label}`;
@@ -273,9 +430,9 @@ try{
  ]){
   let state={revision:1,settings:{workspace:'/fixture',bundle:'anchors'},runtime:{available:true},
    view:{navPinned:true,navExpanded:true,navWidth:scenario.navWidth||216,navAge:'all',navMode:scenario.navMode||'browse'},
-   sessions:[{id:'chat',sessionKind:'root',title:'Saved synthetic chat',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[]}],
+   sessions:[{id:'chat',nativeIdentity:'native-'+scenario.name,sessionKind:'root',title:'Saved synthetic chat',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[]}],
    workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',
-   setup:{providers:[{id:'fixture',module:'provider-fixture',enabled:true,config:{default_model:'fixture-model'}}],providersLoadedAt:1,providersWorkspace:'/fixture'},canvas:{open:false}};
+   setup:{providers:[{id:'fixture',module:'provider-fixture',enabled:true,config:{default_model:'fixture-model'}}],providersLoadedAt:1,providersWorkspace:'/fixture'},canvas:{open:false},attention:{badgeUnread:2,settingsUnread:3}};
   if(scenario.pinned)state.pinnedNavigation={items:[{id:'chat:chat',kind:'chat',row:state.sessions[0]}],total:1};
   const shell=createShellHttpFixture(()=>state),stopGuard={armed:false};
   page=await browser.newPage({viewport:{width:scenario.width,height:900},hasTouch:!!scenario.touch,isMobile:!!scenario.touch});
@@ -290,6 +447,7 @@ try{
    if(path==='/api/actions'&&request.method()==='GET')return route.fulfill({json:[]});
    if(path==='/api/actions'){
     const envelope=request.postDataJSON(),body=envelope.action==='shell.command'?(envelope.args.command||envelope.args):envelope;calls.push(body);
+    if(activeMenuProof)activeMenuProof.actionTrace.push({phase:menuPhase,callIndex:calls.length-1,call:body,envelope});
     if(body.action==='conversation.stop'){
      assert.ok(scenario.name==='desktop-320'&&stopGuard.armed&&explicitStops.length===0,'Only the explicit fixture Stop is allowed');
      assert.deepEqual(body.args,{sessionId:'chat'});stopGuard.armed=false;explicitStops.push(body);
@@ -323,6 +481,7 @@ try{
    return {filter:rect(filter),label:rect(label),range:rect(range),first:rect(first),labelStyle:style(label),rangeStyle:style(range),firstStyle:style(first),gap:first.getBoundingClientRect().top-filter.getBoundingClientRect().bottom,sidebar:rect(document.querySelector('#workspace-navigation')),buttons,sectionMargins:[...document.querySelectorAll('.a-sidebar-section')].map(node=>getComputedStyle(node).marginTop)};
   });
   results.push({scenario:scenario.name,baseline,...metrics});
+  const emit=async()=>{const revision=++state.revision;await page.evaluate(value=>window.emitFixtureState(value),shell.state());await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().revision)).toBeGreaterThanOrEqual(revision)};
   await page.screenshot({path:`${artifacts}/${scenario.name}.png`});
   assert.equal(await slider.getAttribute('aria-valuetext'),'All activity dates');
   assert.equal(await page.locator('.a-chat-age-stops>span').count(),6);
@@ -341,6 +500,7 @@ try{
     assert.ok(button.rect.x>=metrics.sidebar.x&&button.rect.x+button.rect.width<=metrics.sidebar.x+metrics.sidebar.width);
    }
   }
+  if(!baseline)await menuRegression({page,scenario,readState:()=>state,emit});
   // Native keyboard semantics and meaningful values remain six-stop choices.
   await slider.focus();
   await slider.press('Home');
@@ -380,7 +540,6 @@ try{
   await newChat.focus();await newChat.press('Enter');await drafted;
   assert.equal(calls.filter(call=>call.action==='session.draft').length,beforeDraft+1,'New chat dispatches exactly once');
   if(['desktop-320','mobile-390'].includes(scenario.name)){
-   const emit=async()=>{const revision=++state.revision;await page.evaluate(value=>window.emitFixtureState(value),shell.state());await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().revision)).toBeGreaterThanOrEqual(revision)};
    await appearanceRegression({page,scenario,readState:()=>state,emit,stopGuard});
   }
   await page.close();page=null;
@@ -389,7 +548,8 @@ try{
  assert.ok(calls.every(call=>!['session.select','conversation.send','session.history','session.create'].includes(call.action)),'Passive controls never execute or reload history');
  assert.equal(explicitStops.length,1);assert.deepEqual(attachmentRequests,[]);
  assert.ok(regressions.length===2&&regressions.every(row=>row.passed));
- console.log(JSON.stringify({scope:'synthetic client browser',baseline,scenarios:results,regressions,errors},null,2));
+ if(!baseline)assert.ok(menuRegressions.length===8&&menuRegressions.every(row=>row.passed));
+ console.log(JSON.stringify({scope:'synthetic client browser',baseline,scenarios:results,regressions,menuRegressions,errors},null,2));
 }catch(error){
  failure=error;
  if(page&&!page.isClosed()){
@@ -405,10 +565,13 @@ try{
   try{await close()}catch(error){cleanupErrors.push({name,error:String(error)});}
  }
  try{await writeFile(`${artifacts}/metrics.json`,JSON.stringify({
-  passed:!failure&&!errors.length&&!cleanupErrors.length,baseline,results,regressions,errors,cleanupErrors,
+  passed:!failure&&!errors.length&&!cleanupErrors.length,baseline,results,regressions,menuRegressions,errors,cleanupErrors,
   explicitStops:explicitStops.map(row=>({action:row.action,args:row.args})),attachmentRequests,
   scope:'Real client and stylesheet; synthetic HTTP/SSE only, no actual host/runtime or installed-package qualification.',
-  ...(failure?{failure:String(failure.stack||failure)}:{}),
+  ...(failure?{failure:String(failure.stack||failure),failureDetails:{
+   name:failure.name,message:failure.message,stack:failure.stack,code:failure.code,
+   operator:failure.operator,actual:failure.actual,expected:failure.expected,
+  }}:{}),
  },null,2)+'\n')}catch(error){if(failure)console.error('Metrics write failed:',error);else throw error}
  if(cleanupErrors.length){if(failure)console.error('Fixture cleanup failed:',cleanupErrors);else throw Error('Fixture cleanup failed: '+JSON.stringify(cleanupErrors))}
 }

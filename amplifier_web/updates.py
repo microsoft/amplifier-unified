@@ -958,7 +958,7 @@ class UpdateManager:
                     await self.publish(sequence={**sequence}, detail='Checking included components…' if stage == 'included' else 'Checking other components…')
                     await asyncio.gather(*(check_row(row) for row in selected))
                     from .update_partial import retained_after_check, availability
-                    await asyncio.to_thread(retained_after_check, self, selected, retry_retained=not automatic and fresh)
+                    await asyncio.to_thread(retained_after_check, self, selected, retry_retained=False)
                     checked.extend(selected)
                     sequence.update(stage=stage)
                     sequence[stage] = summary(group_sources(selected))
@@ -1118,6 +1118,12 @@ class UpdateManager:
             if not self.inventory:
                 path=self.directory/'inventory.json'
                 self.inventory=json.loads(path.read_text()) if path.exists() else []
+            if not automatic:
+                # Only deliberate Install retries an unchanged retained source.
+                # Check never grants this intent; receipt/selection checks still
+                # bind the release to the current active generation.
+                from .update_partial import retained_after_check
+                retained_after_check(self, self.inventory, retry_retained=True)
             candidates=[r for r in self.inventory if r.get('status')=='update' and r.get('eligible') and r.get('kind')!='smart tool']
             if pending_preparation(self.diagnostics.state):
                 if automatic:return
@@ -1130,8 +1136,7 @@ class UpdateManager:
             await asyncio.to_thread(verify_app_selection, self, self.inventory)
             from .update_health import preparation_key, retry_decision, environment_repaired
             input_key = preparation_key(self, self.inventory)
-            prior_retry = self.diagnostics.state.get('batch', {}).get('retry') or {}
-            batch = self.diagnostics.state.get('batch', {})
+            batch = self.diagnostics.state.get('componentPreparation', self.diagnostics.state.get('batch', {}))
             decision = retry_decision(batch, input_key)
             if automatic and decision and not (decision == 'changed-inputs' and environment_repaired(self, batch)):
                 await self.publish()
@@ -1140,6 +1145,7 @@ class UpdateManager:
             self.diagnostics.begin('ecosystem',release,tier=state.get('sequence',{}).get('stage'),
                                    components=[row.get('package') or row.get('id') if not row.get('url') else
                                                safe_label(row['url']).rsplit('/',1)[-1] for row in candidates])
+            self.diagnostics.state.pop('componentPreparation', None)
             self.diagnostics.state['batch']['inputKey'] = input_key
             stage_id=uuid.uuid4().hex
             self.diagnostics.record('ecosystem-stage','started',commandId=stage_id)
@@ -1220,7 +1226,7 @@ class UpdateManager:
                     self.diagnostics.record(phase,status,**{**getattr(error,'diagnostic_facts',{}),**exception_facts(error)})
                 failure=self.diagnostics.state['lastFailure']
                 from .update_health import record_retry
-                record_retry(self.diagnostics.state['batch'], input_key, failure, prior_retry)
+                record_retry(self.diagnostics.state['batch'], input_key, failure)
                 if interrupted:
                     # Display may preserve a prior handled fetch failure. Actual
                     # cancellation, not that historical display choice, owns the
@@ -1715,13 +1721,9 @@ class UpdateManager:
         sequence = state.get('sequence', {})
         install_intent = (sequence.get('install') if sequence.get('manualHandoff')
                           else settings.get('autoInstall', True) or sequence.get('install'))
-        batch = self.diagnostics.state.get('batch', {})
-        retry = batch.get('retry') or {}
-        retry_due = (state.get('phase') == 'error' and batch.get('kind') == 'ecosystem'
-                     and retry.get('mode') == 'backoff' and retry.get('retryAt', 0) <= time.time())
-        if not managed_preview and install_intent and state.get('available',0) and (state.get('phase') == 'available' or retry_due):
-            # The timer wakes the existing install owner, which rechecks source,
-            # intent and uncertain-operation guards before preparing anything.
+        if not managed_preview and install_intent and state.get('available',0) and state.get('phase') == 'available':
+            # A newly checked desired graph still goes through install's input
+            # admission. Elapsed time never replays a settled failed preparation.
             await self.install(automatic=True)
             return
         if self.independent_tool_results(state) and (state.get('phase') not in {'error', 'interrupted'} or any(
