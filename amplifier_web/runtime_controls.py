@@ -365,6 +365,7 @@ class RuntimeControls:
 
     def prepare_configuration(self, config):
         from .decision_accounts import logical_plan
+        from .host.components import portable_module_sources
         previous = logical_plan(self.coordinator.config)
         stored = override_path(self.session.session_id)
         if stored.exists():
@@ -375,9 +376,12 @@ class RuntimeControls:
                     row for row in saved.get(section, []) if identity(row) not in current)
         plan = restore_redactions(config, previous)
         validate_plan(plan)
-        return {key: value for key, value in plan.items() if key in PLAN_KEYS}
+        return portable_module_sources(
+            {key: value for key, value in plan.items() if key in PLAN_KEYS}, app_home())
 
     def save_configuration(self, plan):
+        from .host.components import portable_module_sources
+        plan = portable_module_sources(plan, app_home())
         write_private(override_path(self.session.session_id), json.dumps(plan, indent=2))
         # A full mount-plan edit supersedes previous live module toggles.
         if self.state_path().exists():
