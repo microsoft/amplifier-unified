@@ -264,12 +264,12 @@ class _API:
             raise PermissionError("Windows private-file path has an alternate namespace/case alias")
         return info
 
-    def open(self, path, *, directory=False, create=False, cleanup=False):
+    def open(self, path, *, directory=False, create=False, cleanup=False, exclusive=False):
         _local(str(path))
         # Pins: read attributes/control, deny WRITE and DELETE sharing.
         # Readers: allow DELETE for atomic replacement, never WRITE/partial reads.
         access = 0x20080 | (0 if directory else 0x80000000)
-        share = 1 if directory else 5
+        share = 1 if directory or exclusive else 5
         if create:
             access = 0x20080 | 0x40000000 | 0x10000  # write + DELETE for exact-handle cleanup
         elif cleanup:
@@ -451,8 +451,13 @@ class PinnedDirectory:
         finally:
             self._api.close(handle)
 
-    def remove_private(self, name: str, expected_sha256: str) -> None:
-        """Remove only the still-open private object whose exact bytes we own."""
+    @contextmanager
+    def removal_private(self, name: str, expected_sha256: str):
+        """Pin verified bytes, denying writes/replacement until exact deletion.
+
+        Callers can acquire a whole set before any effect. Sharing conflicts
+        refuse preparation; genuine later I/O errors are not atomic rollback.
+        """
         import hashlib
         import re
         _component(name)
@@ -460,7 +465,7 @@ class PinnedDirectory:
             raise ValueError("Private removal requires an exact SHA-256.")
         self._check()
         path = self.path / name
-        handle = self._api.open(path, cleanup=True)
+        handle = self._api.open(path, cleanup=True, exclusive=True)
         try:
             self._api.validate_acl(handle, private=True)
             identity = _identity(self._api.info(handle, path, directory=False))
@@ -468,10 +473,17 @@ class PinnedDirectory:
                 raise PermissionError("Windows private file crosses volumes")
             if hashlib.sha256(self._api.read(handle, limit=_MAX_CONTENT)).hexdigest() != expected_sha256:
                 raise ValueError("Owned private file changed; removal refused.")
-            self._check()
-            self._api.discard(handle, path, identity)
+            def remove():
+                self._check()
+                self._api.discard(handle, path, identity)
+            yield remove
         finally:
             self._api.close(handle)
+
+    def remove_private(self, name: str, expected_sha256: str) -> None:
+        """Remove only the still-open private object whose exact bytes we own."""
+        with self.removal_private(name, expected_sha256) as remove:
+            remove()
 
     def publish_private(self, name: str, content: bytes, *, replace: bool = False) -> None:
         """Publish a complete file, never delete-first or overwrite by default.

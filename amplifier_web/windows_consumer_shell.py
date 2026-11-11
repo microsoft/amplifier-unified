@@ -6,7 +6,7 @@ silently overwritten. Removal unregisters this app and preserves user files.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import ctypes as C
 from ctypes import wintypes as W
 import hashlib
@@ -106,31 +106,106 @@ def shell_link():
         ole.CoUninitialize()
 
 
+def _registry_values(handle):
+    import winreg
+    if winreg.QueryInfoKey(handle)[0]:
+        raise ValueError("The installed-app entry has unexpected children.")
+    return {name: (value, kind) for name, value, kind in (
+        winreg.EnumValue(handle, index) for index in range(winreg.QueryInfoKey(handle)[1]))}
+
+
+@contextmanager
+def registry_change(root, values, *, remove=False):
+    """Prepare a conflict-detecting native registry transaction, then commit.
+
+    A staged delete holds the key against same-account edits/replacement while
+    the caller validates its other objects. No compare/close/path-delete gap.
+    Unsupported KTM/registry transactions refuse; never fall back to path writes.
+    """
+    import winreg
+    kernel = C.WinDLL("kernel32", use_last_error=True)
+    ktm = C.WinDLL("ktmw32", use_last_error=True)
+    adv = C.WinDLL("advapi32", use_last_error=True)
+    signatures = {
+        "CreateTransaction": (W.HANDLE, [C.c_void_p, C.c_void_p, W.DWORD, W.DWORD, W.DWORD, W.DWORD, W.LPWSTR]),
+        "CommitTransaction": (W.BOOL, [W.HANDLE]),
+        "RollbackTransaction": (W.BOOL, [W.HANDLE]),
+    }
+    for name, (result, args) in signatures.items():
+        fn = getattr(ktm, name)
+        fn.restype, fn.argtypes = result, args
+    kernel.CloseHandle.argtypes, kernel.CloseHandle.restype = [W.HANDLE], W.BOOL
+    adv.RegCreateKeyTransactedW.argtypes = [
+        W.HKEY, W.LPCWSTR, W.DWORD, W.LPWSTR, W.DWORD, W.DWORD,
+        C.c_void_p, C.POINTER(W.HKEY), C.POINTER(W.DWORD), W.HANDLE, C.c_void_p]
+    adv.RegOpenKeyTransactedW.argtypes = [
+        W.HKEY, W.LPCWSTR, W.DWORD, W.DWORD, C.POINTER(W.HKEY), W.HANDLE, C.c_void_p]
+    adv.RegDeleteKeyTransactedW.argtypes = [
+        W.HKEY, W.LPCWSTR, W.DWORD, W.DWORD, W.HANDLE, C.c_void_p]
+    for name in ("RegCreateKeyTransactedW", "RegOpenKeyTransactedW", "RegDeleteKeyTransactedW"):
+        getattr(adv, name).restype = W.LONG
+    transaction = ktm.CreateTransaction(None, None, 0, 0, 0, 0, None)
+    if not transaction or transaction == C.c_void_p(-1).value:
+        raise C.WinError(C.get_last_error())
+    committed = False
+    try:
+        key = REGISTRY + identity(root)
+        hive = W.HKEY(C.c_int32(int(winreg.HKEY_CURRENT_USER)).value)
+        handle, disposition = W.HKEY(), W.DWORD()
+        if remove:
+            error = adv.RegOpenKeyTransactedW(
+                hive, key, 0, winreg.KEY_READ | winreg.KEY_SET_VALUE | 0x10000,
+                C.byref(handle), transaction, None)
+        else:
+            error = adv.RegCreateKeyTransactedW(
+                hive, key, 0, None, 0, winreg.KEY_READ | winreg.KEY_SET_VALUE,
+                None, C.byref(handle), C.byref(disposition), transaction, None)
+        if error:
+            raise C.WinError(error)
+        with winreg.HKEYType(handle.value) as opened:
+            if remove:
+                expected = {name: (value, winreg.REG_DWORD if type(value) is int else winreg.REG_SZ)
+                            for name, value in values.items()}
+                if _registry_values(opened) != expected:
+                    raise ValueError("The installed-app entry changed; removal refused.")
+                error = adv.RegDeleteKeyTransactedW(hive, key, 0, 0, transaction, None)
+                if error:
+                    raise C.WinError(error)
+            else:
+                if disposition.value != 1:  # REG_CREATED_NEW_KEY, never adopt an existing key
+                    raise ValueError("The installed-app entry already exists; nothing was overwritten.")
+                for name, value in values.items():
+                    winreg.SetValueEx(opened, name, 0,
+                                     winreg.REG_DWORD if type(value) is int else winreg.REG_SZ, value)
+            def commit():
+                nonlocal committed
+                if committed:
+                    raise RuntimeError("The registry transaction is already committed.")
+                if not ktm.CommitTransaction(transaction):
+                    raise C.WinError(C.get_last_error())
+                committed = True
+            yield commit
+    finally:
+        try:
+            if not committed and not ktm.RollbackTransaction(transaction):
+                raise C.WinError(C.get_last_error())
+        finally:
+            if not kernel.CloseHandle(transaction):
+                raise C.WinError(C.get_last_error())
+
+
 def registry(root, values=None, *, remove=False):
     import winreg
+    if values is not None or remove:
+        with registry_change(root, values, remove=remove) as commit:
+            commit()
+        return
     key = REGISTRY + identity(root)
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_READ) as handle:
-            existing = {}
-            for index in range(winreg.QueryInfoKey(handle)[1]):
-                name, value, kind = winreg.EnumValue(handle, index)
-                existing[name] = (value, kind)
+            return _registry_values(handle)
     except FileNotFoundError:
-        existing = None
-    if remove:
-        if existing is None: return
-        expected = {name: (value, winreg.REG_DWORD if type(value) is int else winreg.REG_SZ)
-                    for name, value in values.items()}
-        if existing != expected:
-            raise ValueError("The installed-app entry changed; removal refused.")
-        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
-    elif values is not None:
-        if existing is not None:
-            raise ValueError("The installed-app entry already exists; inspect it before retrying.")
-        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as handle:
-            for name, value in values.items():
-                winreg.SetValueEx(handle, name, 0, winreg.REG_DWORD if type(value) is int else winreg.REG_SZ, value)
-    return existing
+        return None
 
 
 def install(root, version):
@@ -165,7 +240,8 @@ def install(root, version):
     return {"startMenu": str(folder), "installedAppEntry": True, "shortcuts": len(links)}
 
 
-def remove(root):
+@contextmanager
+def removal(root):
     from .windows_files import address, directory
     from .deployment import write_private
     root = address(root)
@@ -180,19 +256,30 @@ def remove(root):
             or set(row["links"]) != set(links) or not isinstance(row["registry"], dict)
             or row["registry"] != registration_values(root, row["registry"].get("DisplayVersion"))):
         raise ValueError("The Windows app entry receipt is incomplete; inspect before removal.")
-    with directory(folder, owned_root=folder) as owned:
-        # Validate ALL links before removing the app registration or any file.
+    with ExitStack() as stack:
+        owned = stack.enter_context(directory(folder, owned_root=folder))
+        removers = []
+        # Keep ALL verified handles (deny WRITE/DELETE sharing) through effects.
         for name, args in links.items():
-            raw = owned.read_private(name, limit=65536)
-            if hashlib.sha256(raw).hexdigest() != row["links"][name]:
-                raise ValueError("A Windows shortcut changed; no entries were removed.")
             with shell_link() as link:
                 if link.read(folder / name) != (str(python), args):
                     raise ValueError("A Windows shortcut target changed; no entries were removed.")
-        registry(root, row["registry"], remove=True)
-        for name in links:
-            owned.remove_private(name, row["links"][name])
-    row["status"] = "removed"
-    write_private(root / FILE, json.dumps(row), owned_root=root)
-    # The empty private folder and all installation/user files are retained.
-    return {"shortcutsRemoved": True, "installedAppEntryRemoved": True, "userDataRetained": True}
+            # COM can open without DELETE sharing. Close it first, then pin the
+            # exact audited bytes: a change between those reads is refused.
+            removers.append(stack.enter_context(owned.removal_private(name, row["links"][name])))
+        commit = stack.enter_context(registry_change(root, row["registry"], remove=True))
+        def finish():
+            # Prepared conflicts refuse before task removal. Later genuine I/O
+            # failures can leave partial effects; they do not imply rollback.
+            commit()
+            for remove_link in removers:
+                remove_link()
+            row["status"] = "removed"
+            write_private(root / FILE, json.dumps(row), owned_root=root)
+            return {"shortcutsRemoved": True, "installedAppEntryRemoved": True, "userDataRetained": True}
+        yield finish
+
+
+def remove(root):
+    with removal(root) as finish:
+        return finish()

@@ -1,5 +1,7 @@
 """Portable ownership/composition controls; actual COM/HKCU checks are separate."""
 from contextlib import contextmanager
+import asyncio
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,7 +18,7 @@ def model(tmp_path, monkeypatch):
     root.mkdir()
     programs = tmp_path / "Programs"
     programs.mkdir()
-    state = {"registry": None, "links": {}, "calls": []}
+    state = {"registry": None, "links": {}, "calls": [], "pins": set()}
     monkeypatch.setattr(windows_files, "address", Path)
     monkeypatch.setattr(shell, "programs", lambda: programs)
     @contextmanager
@@ -27,12 +29,22 @@ def model(tmp_path, monkeypatch):
             raw = (path / name).read_bytes()
             assert len(raw) <= limit
             return raw
-        def remove(name, digest):
-            import hashlib
-            assert hashlib.sha256(read(name, 65536)).hexdigest() == digest
-            state["calls"].append(("remove", name))
-            (path / name).unlink()
-        yield SimpleNamespace(read_private=read, remove_private=remove)
+        @contextmanager
+        def removal(name, digest):
+            if state.get("before_pin"):
+                state["before_pin"](path, name)
+            if hashlib.sha256(read(name, 65536)).hexdigest() != digest:
+                raise ValueError("Owned private file changed; removal refused.")
+            state["pins"].add(name)
+            try:
+                def remove():
+                    assert set(state["pins"]) == set(shell.LINKS)
+                    state["calls"].append(("remove", name))
+                    (path / name).unlink()
+                yield remove
+            finally:
+                state["pins"].remove(name)
+        yield SimpleNamespace(read_private=read, removal_private=removal)
     monkeypatch.setattr(windows_files, "directory", directory)
     monkeypatch.setattr(deployment, "write_private", lambda path, raw, **kw: path.write_text(raw))
     @contextmanager
@@ -52,6 +64,13 @@ def model(tmp_path, monkeypatch):
             state["registry"] = values
         return state["registry"]
     monkeypatch.setattr(shell, "registry", registry)
+    @contextmanager
+    def registry_change(root, values, *, remove=False):
+        assert remove and set(state["pins"]) == set(shell.LINKS)
+        if state["registry"] != values:
+            raise ValueError("Registry changed")
+        yield lambda: registry(root, values, remove=True)
+    monkeypatch.setattr(shell, "registry_change", registry_change)
     return root, programs, state
 
 
@@ -104,3 +123,40 @@ def test_existing_or_partial_registration_does_not_replay(model):
     shell.install(root, "1.0.0")
     with pytest.raises(ValueError, match="receipt"): shell.install(root, "1.0.0")
     assert not state["calls"]
+
+
+@pytest.mark.parametrize("conflict", ["prechanged", "last-pin", "registry", None])
+def test_public_uninstall_prepares_all_objects_before_task_effect(model, monkeypatch, conflict):
+    from amplifier_web import windows_consumer as consumer, windows_installation, windows_service
+    root, programs, state = model
+    shell.install(root, "1.0.0")
+    folder = programs / ("Amplifier Unified - " + shell.identity(root))
+    last = list(shell.LINKS)[-1]
+    if conflict == "prechanged":
+        (folder / last).write_bytes(b"changed before uninstall")
+    elif conflict == "last-pin":
+        def cross(path, name):
+            if name == last:
+                assert len(state["pins"]) == len(shell.LINKS) - 1
+                (path / name).write_bytes(b"changed during set preparation")
+        state["before_pin"] = cross
+    elif conflict == "registry":
+        state["registry"] = {"foreign": "registration"}
+    monkeypatch.setattr(consumer, "installation", lambda value: (value, {}))
+    monkeypatch.setattr(consumer, "environment", lambda *a: {})
+    monkeypatch.setattr(windows_installation, "owner_notice", lambda *a, **kw: True)
+    def uninstall(home):
+        assert home == root / "app"
+        assert set(state["pins"]) == set(shell.LINKS)
+        state["calls"].append(("task-remove",))
+    monkeypatch.setattr(windows_service, "uninstall", uninstall)
+    if conflict:
+        registration = state["registry"].copy()
+        with pytest.raises(ValueError):
+            asyncio.run(consumer.maintenance(root, "uninstall"))
+        assert not state["calls"] and state["registry"] == registration
+        assert len(list(folder.iterdir())) == 4
+    else:
+        asyncio.run(consumer.maintenance(root, "uninstall"))
+        assert state["calls"][:2] == [("task-remove",), ("registry-remove",)]
+    assert not state["pins"]

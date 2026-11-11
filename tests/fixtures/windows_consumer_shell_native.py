@@ -51,6 +51,42 @@ def run(root):
         if not registration or registration["InstallLocation"][0] != str(root):
             raise AssertionError("Actual HKCU installed-app entry is missing or foreign.")
         report["registryFields"] = sorted(registration)
+        # Atomic create must never adopt/overwrite a key that already exists,
+        # including a collision that appeared after the install preflight.
+        try:
+            shell.registry(root, shell.registration_values(root, __version__))
+        except ValueError:
+            report["existingRegistryCreateRefused"] = True
+        else:
+            raise AssertionError("Registry create must refuse an existing registration.")
+        if shell.registry(root) != registration:
+            raise AssertionError("Registry collision overwrote existing values.")
+        # Preparing removal retains the entire file set and a native registry
+        # transaction. No task or entry effect has been committed. Real Win32
+        # sharing / transactional conflicts must block same-account mutation.
+        with shell.removal(root):
+            import winreg
+            key = shell.REGISTRY + shell.identity(root)
+            last = list(links)[-1]
+            for operation in ("write-link", "replace-link", "change-key", "delete-key"):
+                try:
+                    if operation == "write-link":
+                        with (folder / last).open("wb") as changed:
+                            changed.write(b"must never write")
+                    elif operation == "replace-link":
+                        write_private(folder / last, b"must never replace", owned_root=folder)
+                    elif operation == "change-key":
+                        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE) as changed:
+                            winreg.SetValueEx(changed, "DisplayVersion", 0, winreg.REG_SZ, "foreign")
+                    else:
+                        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
+                except OSError:
+                    report[operation + "Refused"] = True
+                else:
+                    raise AssertionError("Prepared removal allowed concurrent mutation: " + operation)
+        if shell.registry(root) != registration or any(not (folder / item).exists() for item in links):
+            raise AssertionError("Abandoned preparation changed app entries.")
+        report["abandonedPreparationUnchanged"] = True
         name = next(iter(links))
         with directory(folder, owned_root=folder) as owned:
             original = owned.read_private(name, limit=65536)

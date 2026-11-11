@@ -194,10 +194,17 @@ async def maintenance(root, operation):
             confirm=True):
         return {"ok": True, "cancelled": True}
     if operation == "uninstall":
-        await asyncio.to_thread(uninstall, root / "app")
         from . import windows_consumer_shell
-        if (root / windows_consumer_shell.FILE).exists():
-            await asyncio.to_thread(windows_consumer_shell.remove, root)
+        def remove():
+            if (root / windows_consumer_shell.FILE).exists():
+                # Prepare and retain every shell object BEFORE touching the
+                # Scheduler task. Conflicts leave all registrations unchanged.
+                with windows_consumer_shell.removal(root) as finish:
+                    uninstall(root / "app")
+                    finish()
+            else:
+                uninstall(root / "app")
+        await asyncio.to_thread(remove)
     else:
         await asyncio.to_thread(command, "stop", root / "app")
     return {"ok": True, "operation": operation, "userDataRetained": True,
