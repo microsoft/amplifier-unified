@@ -12,6 +12,7 @@ from ctypes import wintypes as W
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import uuid
@@ -43,6 +44,15 @@ def entries(root):
     python = Path(root) / "tools/amplifier-unified/Scripts/pythonw.exe"
     args = subprocess.list2cmdline(["-I", "-m", "amplifier_web.windows_consumer", "--root", str(root)])
     return python, {name: args + suffix for name, suffix in LINKS.items()}
+
+def registration_values(root, version):
+    if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise ValueError("The consumer app version is invalid.")
+    python, _ = entries(root)
+    return {"DisplayName": "Amplifier Unified (unsigned preview)", "DisplayVersion": version,
+            "InstallLocation": str(root), "UninstallString": subprocess.list2cmdline(
+                [str(python), "-I", "-m", "amplifier_web.windows_consumer", "--root", str(root), "--uninstall"]),
+            "NoModify": 1, "NoRepair": 1}
 
 
 @contextmanager
@@ -134,10 +144,7 @@ def install(root, version):
     if folder.exists() or registry(root) is not None:
         raise ValueError("The Windows app entries already exist; nothing was overwritten.")
     python, links = entries(root)
-    values = {"DisplayName": "Amplifier Unified (unsigned preview)", "DisplayVersion": version,
-              "InstallLocation": str(root), "UninstallString": subprocess.list2cmdline(
-                  [str(python), "-I", "-m", "amplifier_web.windows_consumer", "--root", str(root), "--uninstall"]),
-              "NoModify": 1, "NoRepair": 1}
+    values = registration_values(root, version)
     row = {"schema": 1, "root": str(root), "folder": str(folder), "status": "preparing",
            "links": {}, "registry": values}
     write_private(manifest, json.dumps(row), owned_root=root)
@@ -166,9 +173,12 @@ def remove(root):
         row = json.loads(owned.read_private(FILE, limit=65536))
     folder = programs() / ("Amplifier Unified - " + identity(root))
     python, links = entries(root)
-    if (set(row) != {"schema", "root", "folder", "status", "links", "registry"}
-            or row["schema"] != 1 or row["root"] != str(root) or row["folder"] != str(folder)
-            or row["status"] != "installed" or set(row["links"]) != set(links)):
+    if (not isinstance(row, dict) or set(row) != {"schema", "root", "folder", "status", "links", "registry"}
+            or type(row["schema"]) is not int or row["schema"] != 1
+            or row["root"] != str(root) or row["folder"] != str(folder)
+            or row["status"] != "installed" or not isinstance(row["links"], dict)
+            or set(row["links"]) != set(links) or not isinstance(row["registry"], dict)
+            or row["registry"] != registration_values(root, row["registry"].get("DisplayVersion"))):
         raise ValueError("The Windows app entry receipt is incomplete; inspect before removal.")
     with directory(folder, owned_root=folder) as owned:
         # Validate ALL links before removing the app registration or any file.

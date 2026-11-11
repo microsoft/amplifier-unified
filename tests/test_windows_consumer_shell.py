@@ -76,7 +76,7 @@ def test_user_shell_entries_have_windowless_exact_root_and_normal_remove(model):
     assert state["calls"][0] == ("registry-remove",)
 
 
-@pytest.mark.parametrize("change", ["bytes", "binding", "receipt"])
+@pytest.mark.parametrize("change", ["bytes", "binding", "receipt", "null", "registry"])
 def test_modified_shell_entries_never_remove_anything(model, change):
     root, programs, state = model
     shell.install(root, "1.0.0")
@@ -84,9 +84,15 @@ def test_modified_shell_entries_never_remove_anything(model, change):
     name = next(iter(shell.LINKS))
     if change == "bytes": (folder / name).write_bytes(b"foreign")
     elif change == "binding": state["links"][str(folder / name)] = ("other.exe", "")
-    else:
+    elif change == "receipt":
         row = json.loads((root / shell.FILE).read_text())
         row["folder"] = str(programs / "foreign")
+        (root / shell.FILE).write_text(json.dumps(row))
+    elif change == "null":
+        (root / shell.FILE).write_text("null")
+    else:
+        row = json.loads((root / shell.FILE).read_text())
+        row["registry"]["UninstallString"] = "foreign program"
         (root / shell.FILE).write_text(json.dumps(row))
     with pytest.raises(ValueError): shell.remove(root)
     assert state["registry"] is not None and not state["calls"]
