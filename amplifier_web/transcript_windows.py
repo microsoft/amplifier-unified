@@ -33,16 +33,30 @@ def _visible(value):
 
 
 def _native_page(reader, source, before, limit):
+    from collections import Counter
     from .automatic_history import directory, native_input_id
     from .shared_state_probe import text_content
     from .session_store import message_time
+    counts = Counter()
+    def visible(value):
+        exact_input = native_input_id(value)
+        if exact_input:
+            counts[exact_input] += 1
+        return _visible(value)
+
     result = reader.read_window(directory(source), {
         'project': source['nativeProject'],
         'nativeId': source.get('nativeIdentity') or source.get('runtimeSessionId') or source['id']},
-        before=before, limit=limit, visible=_visible)
+        before=before, limit=limit, visible=visible)
     if result['status'] != 'ready':
         raise ValueError('Saved message window is unavailable: ' + result['reason'])
     window = result['messageWindow']
+    # Only an initial, gap-free read of the entire primary proves marker
+    # multiplicity for this display join. Count every validated raw occurrence,
+    # including hidden/media-only inputs, without expanding the reader's budget.
+    complete = (before is None and result['coverage']['rangeStart'] == 0
+                and not window['hasEarlier'] and not result['unavailableRanges']
+                and window['source'] == 'primary' and window['recoveredBackup'] is False)
     items = []
     for item in result['rows']:
         value = item['value']
@@ -57,10 +71,8 @@ def _native_page(reader, source, before, limit):
             'displayOnly': True, 'windowKey': window['windowKey'],
             'sourceReference': {'kind': 'transcript-window', 'byteOffset': item['byteOffset'],
                                 'revision': window['revision'], 'restoreCursor': window['restoreCursor']}})
-    from collections import Counter
-    counts = Counter(row.get('nativeInputId') for row in items)
     for row in items:
-        if row.get('nativeInputId') and counts[row['nativeInputId']] > 1:
+        if row.get('nativeInputId') and (not complete or counts[row['nativeInputId']] != 1):
             row['nativeInputAmbiguous'] = True
     return {'items': items, **window, 'coverage': {'kind': 'native-saved', **result['coverage']},
             'unavailableRanges': result['unavailableRanges'], '_owner': source}

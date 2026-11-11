@@ -452,6 +452,8 @@ async def test_bounded_native_history_carries_valid_marker_and_joins_without_res
               'nativeIdentity': 'native-status'}
     page = _native_page(TranscriptWindowReader(), source, None, 100)
     assert page['items'][0]['nativeInputId'] == 'input'
+    assert page['globalInputUniqueness'] == 'unknown'
+    assert not page['items'][0].get('nativeInputAmbiguous')
     app = app_factory()
     current = app._new_session({'title': 'Bounded status'})
     app._state['sessions'].append(current)
@@ -464,6 +466,149 @@ async def test_bounded_native_history_carries_valid_marker_and_joins_without_res
     assert current['messages'] == []  # No backfill or native-execution mount.
     assert not app.runtime.started and not app.runtime.sent
     await windows.close()
+
+
+@pytest.mark.parametrize('hidden', ['ephemeral', 'reference', 'recovery', 'image', 'empty'])
+async def test_bounded_native_status_counts_hidden_raw_input_occurrences(
+        app_factory, tmp_path, monkeypatch, hidden):
+    from amplifier_web import transcript_window
+    from amplifier_web.session_files import project_slug
+    from amplifier_web.transcript_windows import TranscriptWindows, _native_page
+
+    visible = {'role': 'user', 'content': 'Visible native input', 'metadata': {
+        'amplifier_input': {'version': 1, 'kind': 'user', 'id': 'input'}}}
+    duplicate = deepcopy(visible)
+    if hidden == 'image':
+        duplicate['content'] = [{'type': 'image', 'source': {
+            'type': 'base64', 'media_type': 'image/png', 'data': 'AA=='}}]
+    elif hidden == 'empty':
+        duplicate['content'] = []
+    else:
+        key = {'ephemeral': 'ephemeral', 'reference': 'amplifier_visible_reference',
+               'recovery': 'amplifier_recovery_reference'}[hidden]
+        duplicate['metadata'][key] = True
+    workspace = tmp_path / 'native-workspace'
+    directory = native_session(workspace, 'hidden-status', [duplicate, visible])
+    path = directory / 'transcript.jsonl'
+    before = (path.read_bytes(), path.stat().st_mtime_ns)
+    source = {'id': 'root', 'nativeProject': project_slug(workspace), 'nativeIdentity': 'hidden-status'}
+    reader = transcript_window.TranscriptWindowReader()
+    reads = []
+    original = reader._read
+    def read(*args):
+        reads.append(args[0])
+        return original(*args)
+    monkeypatch.setattr(reader, '_read', read)
+    page = _native_page(reader, source, None, 100)
+    assert len(reads) == 1
+    assert page['coverage']['scannedRecords'] == 2
+    assert page['coverage']['rangeStart'] == 0 and not page['hasEarlier']
+    assert page['unavailableRanges'] == [] and page['source'] == 'primary'
+    assert page['globalInputUniqueness'] == 'unknown'
+    assert len(page['items']) == 1 and page['items'][0]['nativeInputId'] == 'input'
+    assert page['items'][0]['nativeInputAmbiguous'] is True
+    app = app_factory()
+    current = app._new_session({'title': 'Hidden duplicate status'})
+    app._state['sessions'].append(current)
+    input_status.generation(current, {**lifecycle('finished', at=20),
+        'sessionId': current['id'], 'rootSessionId': current['id']})
+    saved = deepcopy(current)
+    windows = TranscriptWindows(app)
+    try:
+        writes = app.db.total_changes
+        wire = windows._wire(page, current['id'])
+        assert all('inputStatus' not in row for row in wire['items'])
+        assert current == saved and current['messages'] == []
+        assert app.db.total_changes == writes
+        assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+        assert not app.runtime.started and not app.runtime.sent
+    finally:
+        await windows.close()
+
+
+@pytest.mark.parametrize('boundary', [
+    'unique-limit', 'duplicate-limit', 'raw-limit', 'earlier-cursor',
+    'restore-cursor', 'gap', 'backup', 'append-pending-backup',
+])
+async def test_bounded_native_status_requires_complete_initial_primary(
+        app_factory, tmp_path, monkeypatch, boundary):
+    from amplifier_web import transcript_window
+    from amplifier_web.session_files import project_slug
+    from amplifier_web.transcript_windows import TranscriptWindows, _native_page
+
+    native = {'role': 'user', 'content': 'Visible native input', 'metadata': {
+        'amplifier_input': {'version': 1, 'kind': 'user', 'id': 'input'}}}
+    assistant = {'role': 'assistant', 'content': 'Native reply'}
+    rows, limit = [assistant, native], 1
+    if boundary == 'duplicate-limit':
+        rows = [{**native, 'content': 'Older duplicate'}, native]
+    elif boundary == 'raw-limit':
+        rows, limit = [native, {'role': 'user', 'content': []}, native], 100
+        monkeypatch.setattr(transcript_window, 'RAW_LIMIT', 2)
+    elif boundary == 'earlier-cursor':
+        rows = [native, assistant]
+    elif boundary == 'gap':
+        rows, limit = [{**assistant, 'content': 'x' * 512}, native], 100
+        monkeypatch.setattr(transcript_window, 'RECORD_LIMIT', 256)
+    elif boundary in {'restore-cursor', 'backup', 'append-pending-backup'}:
+        rows, limit = [native], 100
+    workspace = tmp_path / 'native-workspace'
+    directory = native_session(workspace, 'partial-status', rows)
+    path = directory / 'transcript.jsonl'
+    if boundary in {'backup', 'append-pending-backup'}:
+        (directory / 'transcript.jsonl.backup').write_bytes(path.read_bytes())
+        if boundary == 'backup':
+            path.write_text('invalid primary\n')
+        else:
+            (directory / 'transcript.jsonl.append-pending').write_text('{}')
+    # Only synthetic transcript sources are inspected, never capture/event logs.
+    paths = list(directory.glob('transcript.jsonl*'))
+    before = {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in paths}
+    source = {'id': 'root', 'nativeProject': project_slug(workspace), 'nativeIdentity': 'partial-status'}
+    reader = transcript_window.TranscriptWindowReader()
+    reads = []
+    original = reader._read
+    def read(*args):
+        reads.append(args[0])
+        return original(*args)
+    monkeypatch.setattr(reader, '_read', read)
+    cursor = None
+    if boundary in {'earlier-cursor', 'restore-cursor'}:
+        initial = _native_page(reader, source, None, limit)
+        cursor = initial['before'] if boundary == 'earlier-cursor' else initial['restoreCursor']
+        assert cursor is not None
+        reads.clear()
+    page = _native_page(reader, source, cursor, limit)
+    assert len(reads) == (2 if boundary == 'backup' else 1)
+    if boundary.endswith('limit'):
+        assert page['hasEarlier'] and page['coverage']['rangeStart'] > 0
+    elif boundary == 'earlier-cursor':
+        # Even reaching byte zero on an earlier page says nothing about the suffix.
+        assert not page['hasEarlier'] and page['coverage']['rangeStart'] == 0
+    elif boundary == 'gap':
+        assert page['unavailableRanges'] and not page['hasEarlier']
+    elif boundary in {'backup', 'append-pending-backup'}:
+        assert page['source'] == 'backup' and page['recoveredBackup'] is True
+    assert page['globalInputUniqueness'] == 'unknown'
+    assert len(page['items']) == 1 and page['items'][0]['nativeInputId'] == 'input'
+    assert page['items'][0]['nativeInputAmbiguous'] is True
+    app = app_factory()
+    current = app._new_session({'title': 'Partial native status'})
+    app._state['sessions'].append(current)
+    input_status.generation(current, {**lifecycle('finished', at=20),
+        'sessionId': current['id'], 'rootSessionId': current['id']})
+    saved = deepcopy(current)
+    windows = TranscriptWindows(app)
+    try:
+        writes = app.db.total_changes
+        wire = windows._wire(page, current['id'])
+        assert all('inputStatus' not in row for row in wire['items'])
+        assert current == saved and current['messages'] == []
+        assert app.db.total_changes == writes
+        assert {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in paths} == before
+        assert not app.runtime.started and not app.runtime.sent
+    finally:
+        await windows.close()
 
 
 def test_reaction_overlays_lookup_requested_page_ids_without_scanning_input_receipts():

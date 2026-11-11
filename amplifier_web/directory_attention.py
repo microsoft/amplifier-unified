@@ -77,8 +77,10 @@ class DirectoryAttention:
         count(self.directory.service, 'directory.notices.decoded')
         return json.loads(value)
 
-    def receipts(self, identities=None, *, errors=False):
+    def receipts(self, identities=None, *, errors=False, decisions=False):
         where = 'is_error' if errors else "(is_error OR key GLOB 'completion:*' OR key GLOB 'unread:*')"
+        if decisions:
+            where = "(" + where + " OR key GLOB 'question:*' OR key GLOB 'approval:*')"
         params = self.params
         if identities is not None:
             if not identities:
@@ -117,9 +119,11 @@ class DirectoryAttention:
         items = self.items(session_ids)
         result['items'].extend(items)
         if session_ids is not None:
-            # Internal navigation consumers need exact reviewed-error receipts,
-            # not error bodies. Browser demand removes off-page receipt headers.
-            result['items'].extend(item for item in self.receipts(errors=True) if item['sessionId'] not in session_ids)
+            # Navigation needs reviewed-error receipts; device notifications need
+            # current decision receipts. Neither needs off-chat notice bodies.
+            # Browser demand removes these headers from ordinary attention items.
+            result['items'].extend(item for item in self.receipts(errors=True, decisions=True)
+                                   if item['sessionId'] not in session_ids)
         completion_badge = state.get('notificationSettings', {}).get('completionBadge', False)
         workspace_ids = {}
         for row in state.get('workspaces', []):
