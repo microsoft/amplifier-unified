@@ -269,7 +269,10 @@ async def test_delayed_other_task_equal_revision_reply_is_not_current(app, monke
         async def delayed(*args, **kwargs):
             return {'task': old, 'history': [], 'goal': None, 'receipt': copy.deepcopy(receipt)}
         monkeypatch.setattr(app.runtime, 'control', delayed, raising=False)
-        monkeypatch.setattr(app.management, 'ensure_runtime', AsyncMock())
+        monkeypatch.setattr(app, 'management', SimpleNamespace(
+            ensure_runtime=AsyncMock(), close=AsyncMock(), setup_manager=None,
+            global_setup_manager=None, workspace_setup_managers={},
+            provider_catalog=SimpleNamespace(close=AsyncMock())))
         result = (await task_continuity.dispatch(app, 'task.complete', {
             'sessionId': source['id'], 'expectedRevision': 1, 'condition': old['objective'],
             'evidence': ['Historical result']}, 'agent', 'old-task-reply', False))['result']
