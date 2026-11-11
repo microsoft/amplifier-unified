@@ -102,9 +102,9 @@ try{
  // A rejected older request cannot discard the newer agent-issued navigation.
  await openSettingsDialog(page);const failing=await nextAction();
  await page.evaluate(()=>{window.laterNavigation=window.amplifier.dispatch('view.update',{patch:{panel:'appearance'}}).catch(error=>error.message)});
- await page.getByRole('heading',{name:'Appearance',exact:true}).waitFor();
+ await page.locator('.a-settings-page-heading').getByRole('heading',{name:'Appearance',exact:true}).waitFor();
  await finish(failing,'Fixture rejected older navigation');const appearance=await nextAction();
- await page.getByRole('heading',{name:'Appearance',exact:true}).waitFor();await finish(appearance);
+ await page.locator('.a-settings-page-heading').getByRole('heading',{name:'Appearance',exact:true}).waitFor();await finish(appearance);
  await page.waitForFunction(()=>window.amplifier.getState().view.panel==='appearance');
 
  // Shared updates continue under the optimistic overlay; rollback uses the latest
@@ -130,7 +130,7 @@ try{
  await page.evaluate(state=>window.emitFixtureState(state),shell.state());
  await page.getByRole('heading',{name:'Settings',exact:true}).waitFor();
  await outdated.route.fulfill({json:{accepted:true,state:accepted}});
- await page.getByRole('heading',{name:'Appearance',exact:true}).waitFor();
+ await page.locator('.a-settings-page-heading').getByRole('heading',{name:'Appearance',exact:true}).waitFor();
  // Agent and UI dispatch share the queue: a slow request must not accumulate
  // every intermediate editor keystroke, erase a newer draft, or cross a save.
  await page.evaluate(()=>{window.initialEditor=window.amplifier.dispatch('view.update',{patch:{providerEditor:{id:'provider',model:'initial'}}})});

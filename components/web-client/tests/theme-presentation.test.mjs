@@ -128,3 +128,8 @@ test('Reference retains accepted delivery recovery geometry without restoring th
  assert.match(css,/\.a-delivery-warning>summary\[hidden\]\{display:none\}/);
  assert.doesNotMatch(css,/\.a-delivery-confirm button\{margin:/,'Obsolete per-button spacing must not override the shared action row.');
 });
+
+test('shared dialog action rows keep native coarse-pointer targets, including feedback reconciliation',()=>{
+ const css=readFileSync(new URL('../src/reference.css',import.meta.url),'utf8');
+ assert.match(css,/@media\s*\(pointer:\s*coarse\)\s*\{\s*#amp-one \.a-dialog-actions button\s*\{\s*min-height:\s*44px;\s*\}\s*\}/);
+});

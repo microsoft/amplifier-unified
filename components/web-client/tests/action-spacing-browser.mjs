@@ -154,8 +154,8 @@ try{
    const clippedButtons=await page.locator('#fixture button:visible').evaluateAll(nodes=>nodes.filter(node=>node.scrollWidth>node.clientWidth+1).map(node=>node.textContent));
    if(clippedButtons.length)failures.push(label+' clipped buttons: '+clippedButtons.join(', '));
    if(viewport.width<=390){
-    const smallTargets=await page.locator('#fixture button:visible').evaluateAll(nodes=>nodes.filter(node=>node.getBoundingClientRect().height<44).map(node=>node.textContent));
-    if(smallTargets.length)failures.push(label+' touch targets below 44px: '+smallTargets.join(', '));
+    const smallTargets=await page.locator('#fixture button:visible').evaluateAll(nodes=>nodes.filter(node=>node.getBoundingClientRect().height<44).map(node=>({text:node.textContent,height:node.getBoundingClientRect().height,region:node.closest('section')?.getAttribute('aria-label')})));
+    if(smallTargets.length)failures.push(label+' touch targets below 44px: '+JSON.stringify(smallTargets));
    }
    await page.evaluate(()=>window.scrollTo(0,0));
    await page.screenshot({path:`${artifacts}/${label}.png`,fullPage:true});
