@@ -204,7 +204,7 @@ wheels = [
 [[package]]
 name = "amplifier-foundation"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#82798febe57899497eccd659c8657f8bd8960138" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#355a3e199697baf2f7eb3e04cf7a6940635f4201" }
 dependencies = [
     { name = "amplifier-core" },
     { name = "filelock" },
@@ -255,7 +255,7 @@ dependencies = [
 [[package]]
 name = "amplifier-module-hooks-session-naming"
 version = "0.2.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main#82798febe57899497eccd659c8657f8bd8960138" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main#355a3e199697baf2f7eb3e04cf7a6940635f4201" }
 
 [[package]]
 name = "amplifier-module-loop-live"
