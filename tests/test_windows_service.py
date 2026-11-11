@@ -706,6 +706,73 @@ def test_late_owner_stop_fences_successor_and_restore_relaunch(monkeypatch, when
     assert state["restores"] == (1 if when in {"restore", "restored-verification", "failed-run-verification"} else 0)
 
 
+def test_delayed_failed_run_stop_after_rollback_receipt_stops_current_child(monkeypatch):
+    import asyncio
+    import threading
+    from amplifier_web import windows_task_runtime as runtime
+    value = spec(supervised=True)
+    failed = {"schema": 1, "registration": value.registration_id, "run": "b" * 32,
+              "pid": 123, "created": "134000000000000001",
+              "image": r"C:\Python\pythonw.exe", "phase": "stopped"}
+    restored = {**failed, "run": "c" * 32, "pid": 456, "created": "134000000000000002"}
+    read_failed, release, monitor_started = (threading.Event() for _ in range(3))
+    state = {"current": failed, "stop": None, "published": [], "restored_exited": False}
+    monkeypatch.setattr(runtime, "read", lambda spec, name=runtime.RECEIPT:
+                        state["current"] if name == runtime.RECEIPT else state["stop"])
+    @contextmanager
+    def process(pid):
+        if pid == failed["pid"]:
+            read_failed.set()
+            assert release.wait(5)
+            yield {**failed, "exited": lambda: True}
+        else:
+            assert pid == restored["pid"]
+            yield {**restored, "exited": lambda: state["restored_exited"]}
+    monkeypatch.setattr(runtime, "process", process)
+    async def run():
+        loop = asyncio.get_running_loop()
+        finished = loop.create_future()
+        def publish(spec, record, name):
+            assert name == runtime.STOP
+            state["stop"] = dict(record)
+            state["published"].append(record["run"])
+            if record["run"] == restored["run"]:
+                state["restored_exited"] = True
+                loop.call_soon_threadsafe(finished.set_result, "settled-child")
+        monkeypatch.setattr(runtime, "publish", publish)
+        real_stop_requested = runtime.stop_requested
+        def observed(spec, record):
+            monitor_started.set()
+            return real_stop_requested(spec, record)
+        monkeypatch.setattr(runtime, "stop_requested", observed)
+        # The real Stop owner reads B, then pauses before it can publish.
+        old_stop = asyncio.create_task(asyncio.to_thread(runtime.request_stop, value, expected=failed))
+        assert await asyncio.to_thread(read_failed.wait, 5)
+        state["current"] = restored
+        monitor = asyncio.create_task(service._finish_owned_host(value, finished, restored, (failed,)))
+        assert await asyncio.to_thread(monitor_started.wait, 5)
+        assert not state["published"] and not finished.done()
+        # C has passed initial checks. B's delayed signal must still be applied.
+        release.set()
+        await asyncio.wait_for(old_stop, 5)
+        assert await asyncio.wait_for(monitor, 5) == "settled-child"
+    asyncio.run(run())
+    assert state["published"] == [failed["run"], restored["run"]]
+    assert state["restored_exited"]
+
+
+def test_deliberate_fresh_start_does_not_inherit_stop_monitor(monkeypatch):
+    import asyncio
+    from amplifier_web import windows_task_runtime as runtime
+    monkeypatch.setattr(runtime, "stop_requested", lambda *a:
+                        pytest.fail("fresh start has no inherited run"))
+    async def run():
+        finished = asyncio.get_running_loop().create_future()
+        finished.set_result("ordinary-exit")
+        assert await service._finish_owned_host(spec(), finished, {}, ()) == "ordinary-exit"
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("failure", ["timeout", "foreign-child", "reused-pid"])
 def test_supervisor_identity_failure_cannot_restart_or_restore(monkeypatch, failure):
     from amplifier_web import windows_task_runtime as runtime

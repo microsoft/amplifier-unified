@@ -823,7 +823,7 @@ async def _launch_owned_host(spec, python, restart, *, stop_runs=()):
                     await asyncio.to_thread(runtime.request_stop, spec, timeout=30, expected=record)
                 elif restart is not None:
                     failed = await _wait_updated_host(spec, finished, actual, restart)
-                result = await finished
+                result = await _finish_owned_host(spec, finished, record, stop_runs)
                 if not actual["exited"]():
                     raise WindowsServiceError("The recorded host did not exit with its owned launch.")
         else:
@@ -841,6 +841,24 @@ async def _launch_owned_host(spec, python, restart, *, stop_runs=()):
             home = address(spec.data_dir)
             with directory(home / "config/services", owned_root=home, create=False) as pinned:
                 pinned.publish_private("task-launcher-output.log", bytes(tail), replace=True)
+
+
+async def _finish_owned_host(spec, finished, record, stop_runs):
+    """Keep delayed inherited owner Stop observable until this child exits.
+
+    A Stop caller may have read the failed run before rollback and publish that
+    exact request only after this successor passed its first receipt check.
+    Fresh intentional starts have no inherited runs. Never force or relaunch.
+    """
+    from . import windows_task_runtime as runtime
+    if not stop_runs:
+        return await finished
+    while not finished.done():
+        if any(runtime.stop_requested(spec, run) for run in stop_runs):
+            await asyncio.to_thread(runtime.request_stop, spec, timeout=30, expected=record)
+            break
+        await asyncio.sleep(0.1)
+    return await finished
 
 
 async def _wait_updated_host(spec, finished, actual, restart):
