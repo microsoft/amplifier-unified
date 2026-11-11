@@ -405,9 +405,22 @@ def current(state, evidence=None, *, manual_verified=None):
         if (manual.get('phase') == 'manual-handoff-reconciled'
                 and manual_verified is not None and manual_verified == manual.get('requestId')
                 and manual.get('revision') == app.get('runningRevision')
-                and manual.get('version') == app.get('current')
-                and row == manual.get('refusal')):
-            return True  # Exact historical pre-effect refusal, not generic recovery.
+                and manual.get('version') == app.get('current')):
+            refusal = manual.get('refusal') or {}
+            if row == refusal:
+                return True  # Exact historical pre-effect refusal, not generic recovery.
+            # The same verified installed payload can establish current readiness
+            # after older pre-effect discovery/restart refusals too. Do not use
+            # this as an acknowledgement, history rewrite, or replacement proof.
+            from .update_diagnostics import sanitized_application_extras
+            requested = sanitized_application_extras(row.get('applicationExtras'))
+            installed = sanitized_application_extras(refusal.get('applicationExtras'))
+            if (row.get('kind') == 'application' and row.get('status') == 'failed'
+                    and row.get('phase') in {'target-discovery', 'restart-capability'}
+                    and requested is not None and installed is not None
+                    and set(requested) <= set(installed)
+                    and 0 < row.get('at', 0) < refusal.get('at', 0) <= manual.get('verifiedAt', 0)):
+                return True
         # A later complete, applicable operation proves current readiness for
         # generic preparation/OS failures too, not just a reason-code allowlist.
         # Missing packages and unknown app feature scope remain unverified.

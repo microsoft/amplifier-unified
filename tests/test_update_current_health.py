@@ -222,6 +222,48 @@ def test_application_result_covers_old_generic_candidate_failure_only_with_curre
     assert (value['status']=='current')==(case=='covered')
 
 
+@pytest.mark.parametrize('case', [
+    'discovery', 'restart-capability', 'missing-proof', 'wrong-proof',
+    'wrong-revision', 'wrong-version', 'unknown-extras', 'missing-feature',
+    'later', 'unknown-time', 'invalid-refusal-time', 'interrupted',
+    'candidate-install', 'activation', 'pending-replacement', 'pending-restart',
+])
+def test_verified_manual_payload_covers_only_older_pre_effect_same_scope_refusals(case):
+    failure = {'kind': 'application', 'status': 'failed', 'phase': 'target-discovery',
+               'at': 10, 'applicationExtras': []}
+    refusal = {'kind': 'application', 'status': 'failed', 'phase': 'restart-capability',
+               'at': 20, 'applicationExtras': ['managed-browser']}
+    manual = {'phase': 'manual-handoff-reconciled', 'requestId': 'manual-current',
+              'revision': 'a' * 40, 'version': '0.76.3', 'verifiedAt': 30,
+              'refusal': refusal}
+    state = {'phase': 'installed', 'error': None, 'available': 0,
+             'application': {'status': 'current', 'current': '0.76.3', 'runningRevision': 'a' * 40},
+             'sequence': {'stage': 'complete'}, 'manualHandoff': manual,
+             'diagnostics': {'activeFailures': {'old': {'latest': failure},
+                                                 'manual': {'latest': refusal}}}}
+    verified = 'manual-current'
+    if case == 'restart-capability':failure['phase'] = 'restart-capability'
+    elif case == 'missing-proof':verified = None
+    elif case == 'wrong-proof':verified = 'other-request'
+    elif case == 'wrong-revision':manual['revision'] = 'b' * 40
+    elif case == 'wrong-version':manual['version'] = '0.76.2'
+    elif case == 'unknown-extras':failure.pop('applicationExtras')
+    elif case == 'missing-feature':failure['applicationExtras'] = ['tui']
+    elif case == 'later':failure['at'] = 21
+    elif case == 'unknown-time':failure.pop('at')
+    elif case == 'invalid-refusal-time':refusal['at'] = 31
+    elif case == 'interrupted':failure['status'] = 'interrupted'
+    elif case == 'candidate-install':failure['phase'] = 'candidate-install'
+    elif case == 'activation':failure['phase'] = 'activation'
+    elif case == 'pending-replacement':state['pendingReplacement'] = {'unconfirmed': True}
+    elif case == 'pending-restart':state['pendingRestart'] = {'requestStatus': 'rejected'}
+    original = copy.deepcopy(state)
+    evidence = {'generation': 'c' * 32, 'startedAt': 40, 'verifiedAt': 50, 'packages': {'example'}}
+    result = health.current(state, evidence, manual_verified=verified)
+    assert (result['status'] == 'current') == (case in {'discovery', 'restart-capability'})
+    assert state == original  # Historical failures and exact manual receipt stay byte-equivalent.
+
+
 @pytest.mark.parametrize('automatic',[True,False])
 async def test_interrupted_preparation_cannot_be_replayed_by_manual_intent(tmp_path,monkeypatch,automatic):
     from amplifier_web.updates import UpdateManager
