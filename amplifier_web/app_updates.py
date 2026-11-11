@@ -501,7 +501,7 @@ async def installed_target():
     """Only replace the uv tool environment that owns this running host."""
     uv=shutil.which('uv')
     background = None
-    if sys.platform == 'win32':
+    if os.name == 'nt':
         from .windows_service import installed_target as background_target
         from .host.config import app_home
         background = await asyncio.to_thread(background_target, app_home())
@@ -594,9 +594,10 @@ async def _activate(manager, *, force=None, holds=None):
                 from .update_restart import RestartRejected
                 raise RestartRejected(message)
             return
-    from .application_generations import directory
-    folder=(directory(manager.home, revision, generation) if generation
-            else manager.directory/'applications'/revision)
+    folder=manager.directory/'applications'/revision
+    if generation:
+        from .application_generations import directory
+        folder=directory(manager.home, revision, generation)
     marker=folder/'validated.json'
     # Validate one snapshot before closing the runtime or touching the install.
     try:

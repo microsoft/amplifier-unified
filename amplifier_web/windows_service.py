@@ -585,9 +585,11 @@ def installed_target(data_dir):
     permits in-place replacement. An unrelated task or foreground host cannot
     make an arbitrary environment an update target.
     """
-    from .windows_task_runtime import observe
+    from .windows_task_runtime import current_process_record, observe
     from .windows_files import address, directory
     from .application_generations import bootstrap_identity
+    if current_process_record(data_dir) is None:
+        return None
     value, spec = _read(data_dir)
     if spec is None or not spec.supervised:
         return None

@@ -76,6 +76,27 @@ def read(spec, name=RECEIPT):
     return validate(value, spec.registration_id)
 
 
+def current_process_record(data_dir):
+    """Cheap private hint before contacting Scheduler; never grants ownership.
+
+    Foreground uv hosts have no task receipt. They must not wait on COM merely
+    to discover their existing installation. A matching hint still requires the
+    service owner's fresh task, native process and installed-source checks.
+    """
+    from .windows_files import address, directory
+    root = address(data_dir)
+    try:
+        with directory(root / "config/services", owned_root=root, create=False) as pinned:
+            raw = pinned.read_private(RECEIPT, limit=LIMIT)
+    except FileNotFoundError:
+        return None
+    value = json.loads(raw)
+    value = validate(value, value.get("registration") if isinstance(value, dict) else None)
+    if value["pid"] != os.getpid() or value["phase"] != "listening":
+        return None
+    return value if matches(value, process(value["pid"])) else None
+
+
 def publish(spec, value, name=RECEIPT):
     from .windows_files import directory
     value = validate(value, spec.registration_id)

@@ -807,6 +807,7 @@ def test_background_target_discovery_uses_exact_owned_task_not_uv_global_state(t
     monkeypatch.setattr(windows_task_runtime, "observe", lambda spec: {
         "pid": os.getpid() + (1 if change == "foreign-pid" else 0),
         "phase": "starting" if change == "starting" else "listening"})
+    monkeypatch.setattr(windows_task_runtime, "current_process_record", lambda home: {"pid": os.getpid()})
     monkeypatch.setattr(service.sys, "executable", str(other if change == "wrong-python" else python))
     monkeypatch.setattr(service, "_launch_python", lambda spec: (str(python), None))
     monkeypatch.setattr(windows_files, "address", Path)
@@ -826,6 +827,13 @@ def test_background_target_discovery_uses_exact_owned_task_not_uv_global_state(t
         with pytest.raises(service.WindowsServiceError):
             service.installed_target(value.data_dir)
         assert not seen
+
+
+def test_foreground_discovery_does_not_contact_scheduler(monkeypatch):
+    from amplifier_web import windows_task_runtime
+    monkeypatch.setattr(windows_task_runtime, "current_process_record", lambda home: None)
+    monkeypatch.setattr(service, "_read", lambda *a: pytest.fail("foreground must not query Scheduler"))
+    assert service.installed_target(spec().data_dir) is None
 
 
 def test_free_threaded_interpreter_is_not_ordinary_python(monkeypatch):

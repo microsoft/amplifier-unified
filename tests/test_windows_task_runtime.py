@@ -43,6 +43,33 @@ def test_record_retains_exact_64bit_time_and_detaches_dictionary():
     assert result["created"] == "134000000000000001"
 
 
+@pytest.mark.parametrize("change", [{}, {"pid": 456}, {"phase": "stopped"}, {"created": "134000000000000002"}])
+def test_current_process_hint_keeps_exact_native_identity(monkeypatch, change):
+    from amplifier_web import windows_files
+    value = record(**change)
+    monkeypatch.setattr(runtime.os, "getpid", lambda: 123)
+    monkeypatch.setattr(runtime, "process", lambda pid: record())
+    monkeypatch.setattr(windows_files, "address", Path)
+    @contextmanager
+    def directory(path, **kwargs):
+        assert path == Path(spec().data_dir) / "config/services"
+        assert kwargs == {"owned_root": Path(spec().data_dir), "create": False}
+        yield SimpleNamespace(read_private=lambda name, limit: json.dumps(value).encode())
+    monkeypatch.setattr(windows_files, "directory", directory)
+    assert runtime.current_process_record(spec().data_dir) == (value if not change else None)
+
+
+def test_missing_private_task_receipt_is_not_a_background_host(monkeypatch):
+    from amplifier_web import windows_files
+    monkeypatch.setattr(windows_files, "address", Path)
+    @contextmanager
+    def directory(*args, **kwargs):
+        raise FileNotFoundError
+        yield
+    monkeypatch.setattr(windows_files, "directory", directory)
+    assert runtime.current_process_record(spec().data_dir) is None
+
+
 def restart(**changes):
     return {"schema": 1, "run": record(), "target": {
         "revision": "c" * 40, "generation": "d" * 32, "attemptId": "e" * 32}, **changes}
