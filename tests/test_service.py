@@ -731,17 +731,60 @@ async def test_restart_and_rewarming_cannot_turn_unconfirmed_work_into_success(t
 
 
 async def test_worker_exit_only_marks_unfinished_root_work(service):
+    import time
     from amplifier_web.execution import ensure_turn
+    from amplifier_web.input_status import PREFIX
     session = service._session()
     sid = session['id']
     await service.on_runtime_event('runtime.ended', {'sessionId': sid})
     assert 'error' not in session
+    tree = ensure_turn(session, 'unbound')
+    unbound = tree['turns'][-1]
+    await service.on_runtime_event('runtime.ended', {
+        'sessionId': sid, 'runtimeOwnerId': 'owned-process'})
+    assert unbound['phase'] == 'running' and 'runtimeOwnerId' not in unbound
+    assert 'error' not in session
+
     ensure_turn(session, 'unfinished')
-    await service.on_runtime_event('runtime.ended', {'sessionId': sid, 'backgroundOnly': True})
-    assert session['execution']['turns'][0]['phase'] == 'running'
-    await service.on_runtime_event('runtime.ended', {'sessionId': sid})
-    assert session['execution']['turns'][0]['phase'] == 'interrupted'
+    turn = tree['turns'][-1]
+    observed = time.time()
+    epoch = session.get('interruptionRevision', 0)
+    await service.on_runtime_event('runtime.generation', {
+        'sessionId': sid, 'rootSessionId': sid, 'event': 'generation.started',
+        'initial_input_id': 'unfinished', 'generation_id': 'owned-generation',
+        'observedAt': observed, 'runtimeOwnerId': 'owned-process',
+        'interruptionRevision': epoch})
+    assert turn['runtimeOwnerId'] == 'owned-process'
+    assert turn['generationId'] == 'owned-generation'
+    annotation = session['messageAnnotations'][PREFIX + 'unfinished']
+    assert annotation['_generationStartedAt'] == observed
+    assert annotation['inputStatus']['basis'] == 'generation_started'
+    assert annotation['inputStatus']['phase'] == 'working'
+    ending = {'sessionId': sid, 'rootSessionId': sid,
+              'runtimeOwnerId': 'owned-process', 'status': 'interrupted'}
+    for payload in (
+        {**ending, 'backgroundOnly': True},
+        {**ending, 'sessionId': 'child'},
+        {key: value for key, value in ending.items() if key != 'runtimeOwnerId'},
+        {**ending, 'runtimeOwnerId': 'replacement-process'},
+    ):
+        await service.on_runtime_event('runtime.ended', payload)
+        assert turn['phase'] == unbound['phase'] == 'running'
+        assert not turn.get('endedAt') and not unbound.get('endedAt')
+        assert 'error' not in session
+
+    await service.on_runtime_event('runtime.ended', ending)
+    assert turn['phase'] == 'interrupted' and turn['endedAt'] >= observed
+    assert unbound['phase'] == 'running' and not unbound.get('endedAt')
+    assert session['messageAnnotations'][PREFIX + 'unfinished']['inputStatus']['phase'] == 'unknown'
     assert session['failure']['category'] == 'execution_interrupted'
+    ended = turn['endedAt']
+    ensure_turn(session, 'next-input')
+    next_turn = tree['turns'][-1]
+    await service.on_runtime_event('runtime.ended', ending)
+    assert next_turn['phase'] == 'running' and not next_turn.get('endedAt')
+    assert 'runtimeOwnerId' not in next_turn
+    assert turn['phase'] == 'interrupted' and turn['endedAt'] == ended
 
 
 @pytest.mark.parametrize('later_turn', [False, True])

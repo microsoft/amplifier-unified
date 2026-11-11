@@ -1,6 +1,7 @@
 """Real Settings HTTP/SSE with captured attempt history and synthetic current graph."""
 import asyncio
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ import signal
 import sys
 import tempfile
 import subprocess
+import time
 from aiohttp import web
 
 
@@ -16,12 +18,79 @@ async def main(home):
                       AMPLIFIER_UNIFIED_IMPORT_HOME=str(home/'legacy'))
     from settings_ui_server import main as settings_app
     import settings_ui_server
+    from amplifier_web.runtime import RuntimeStartupError
+    from amplifier_web.errors import AppError
+    message_input='update-health-recovery-input'
+    message_text='Recover this synthetic saved request exactly once.'
+    response_text='Synthetic saved-message recovery completed once.'
+    recovery={'started':False,'ready':False,'original':None,'history':None}
+    class MessageRuntime(settings_ui_server.Runtime):
+        """Only the transport/admission boundary is synthetic, as in startup-selection."""
+        def __init__(self):
+            super().__init__()
+            self.session_id=None
+            self.send_calls=self.retry_calls=self.retry_completed=self.accepted=self.delivery_checks=0
+        def bound(self,session,text,input_id):
+            assert session['id']==self.session_id and input_id==message_input and text==message_text
+        async def send(self,session,text,input_id,emit):
+            self.send_calls+=1
+            self.bound(session,text,input_id)
+            assert self.send_calls==1 and self.retry_calls==0
+            raise RuntimeStartupError('Synthetic worker startup failed before input admission. Nothing was sent.')
+        async def delivery(self,session,input_id):
+            assert session['id']==self.session_id and input_id==message_input
+            self.delivery_checks+=1
+            return 'accepted' if self.accepted else 'unknown'  # The host owns the explicit startup-failure receipt.
+        async def retry(self,session,text,input_id,emit):
+            self.retry_calls+=1
+            self.bound(session,text,input_id)
+            assert recovery['ready'] and self.send_calls==1 and self.retry_calls==1 and self.accepted==0
+            event={'sessionId':session['id'],'rootSessionId':session['id'],
+                   'generation_id':'update-health-recovery-generation','runtimeOwnerId':'synthetic-recovery-owner',
+                   'interruptionRevision':session.get('interruptionRevision',0)}
+            await emit('runtime.generation',{**event,'event':'generation.started',
+                'initial_input_id':input_id,'observedAt':time.time()})
+            self.accepted+=1
+            await emit('assistant.message',{'sessionId':session['id'],'inputId':input_id,'text':response_text})
+            await emit('runtime.generation',{**event,'event':'generation.finished','observedAt':time.time(),
+                'input_ids':[input_id],'active_job_ids':[],'disposition':'manager_turn_finished'})
+            await emit('runtime.status',{'sessionId':session['id'],'status':'idle'})
+            self.retry_completed+=1
+            return {'accepted':True}
+    settings_ui_server.Runtime=MessageRuntime
     original_create=settings_ui_server.create_app
     async def isolated_app(*args,**kwargs):
         kwargs.update(background_work=False,preload_providers=False)
         return await original_create(*args,**kwargs)
     settings_ui_server.create_app=isolated_app
     app=await settings_app(home);service=app['service'];manager=service.update_manager
+    runtime=service.runtime
+    assert isinstance(runtime,MessageRuntime)
+    def original_user(message):
+        return {key:copy.deepcopy(message[key]) for key in
+                ('id','role','inputId','text','createdAt','attachments','document') if key in message}
+    def message_observation():
+        session=service._session(runtime.session_id) if runtime.session_id else None
+        rows=session['messages'] if session else []
+        users=[row for row in rows if row.get('role')=='user']
+        original=next((row for row in users if row.get('inputId')==message_input),None)
+        command=service.db.execute('SELECT receipt FROM commands WHERE id=?',(message_input,)).fetchone()
+        receipt=json.loads(command[0]) if command else {}
+        return {'syntheticRuntime':True,'ready':recovery['ready'],'sessionId':runtime.session_id,
+                'inputId':message_input,'sendCalls':runtime.send_calls,'retryCalls':runtime.retry_calls,
+                'retryCompleted':runtime.retry_completed,'acceptedInputs':runtime.accepted,
+                'deliveryChecks':runtime.delivery_checks,
+                'sendActions':sum(event['action']=='conversation.send' for event in service.state['events']),
+                'retryActions':sum(event['action']=='conversation.retry' for event in service.state['events']),
+                'userCount':len(users),'assistantCount':sum(row.get('role')=='assistant' for row in rows),
+                'originalUserUnchanged':original is not None and original_user(original)==recovery['original'],
+                'originalUserSha256':hashlib.sha256(json.dumps(original_user(original),sort_keys=True).encode()).hexdigest()
+                    if original else None,
+                'historyBeforeRetryUnchanged':rows==recovery['history'],
+                'delivery':(original or {}).get('delivery',{}).get('status'),
+                'commandDelivery':receipt.get('delivery'),
+                'commandBound':receipt.get('sessionId')==runtime.session_id and receipt.get('inputId')==message_input,
+                'failureCategory':(session or {}).get('failure',{}).get('category')}
     from amplifier_web import update_health, runtime_qualification
     from amplifier_web.runtime_profiles import configuration_key
     from amplifier_web.host.config import read_config, write_private
@@ -167,8 +236,29 @@ async def main(home):
                 'available':state.get('available'),'status':state['currentStatus']}
     async def transition(request):
         if request.headers.get('Authorization')!='Bearer fixture-browser-control-token':raise web.HTTPForbidden()
-        mode=(await request.json())['mode']
-        if mode=='failure':
+        payload=await request.json()
+        if not isinstance(payload,dict) or set(payload)!={'mode'} or not isinstance(payload['mode'],str):
+            raise web.HTTPBadRequest()
+        mode=payload['mode']
+        if mode=='message-recovery':
+            if recovery['started']:raise web.HTTPConflict(text='Message recovery was already seeded; do not repeat it.')
+            recovery['started']=True
+            session=service._session()
+            assert not session['messages']
+            runtime.session_id=session['id']
+            try:
+                await service.dispatch('conversation.send',{'sessionId':session['id'],'text':message_text},
+                                       command_id=message_input)
+            except AppError as exc:
+                assert exc.status==503 and exc.code=='worker_startup_failed'
+                assert exc.receipt=={'delivery':'failed','inputId':message_input,'sessionId':session['id']}
+            else:raise AssertionError('Synthetic startup must fail before input admission')
+            session=service._session(runtime.session_id)
+            assert len(session['messages'])==1 and session['messages'][0]['delivery']['status']=='failed'
+            assert session['failure']['category']=='worker_startup' and runtime.accepted==0
+            recovery.update(ready=True,original=original_user(session['messages'][0]),
+                            history=copy.deepcopy(session['messages']))
+        elif mode=='failure':
             manager.diagnostics.begin('ecosystem','b'*32,tier='other',components=['amplifier-foundation'])
             manager.diagnostics.record('ecosystem-source-preflight','failed',package='amplifier-foundation',reason='runtime-source-constraint')
             await manager.publish(phase='error',error='Current source conflict; installed components kept.')
@@ -232,11 +322,12 @@ async def main(home):
             await manager.publish(application=application)
         else:raise web.HTTPBadRequest()
         return web.json_response({'status':state['currentStatus'],'historyPreserved':all(k in state['diagnostics']['activeFailures'] for k in original),
-                                  'retry':retry_observation()})
+                                  'retry':retry_observation(),'messageRecovery':message_observation()})
     async def observations(request):
+        if request.headers.get('Authorization')!='Bearer fixture-browser-control-token':raise web.HTTPForbidden()
         return web.json_response({'status':state['currentStatus'],'history':state['diagnostics']['activeFailures'],
             'originalHistoryUnchanged':state['diagnostics']['activeFailures']==original,'paidCalls':0,'liveInstallCalls':0,
-            'retry':retry_observation()})
+            'retry':retry_observation(),'messageRecovery':message_observation()})
     app.router.add_post('/fixture/current-update',transition);app.router.add_get('/fixture/current-update',observations)
     return app
 

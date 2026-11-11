@@ -7,12 +7,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 import yaml
+from test_runtime_controls import managed_module_source
 
 
 @pytest.mark.parametrize("recovering", [False, True])
 @pytest.mark.parametrize("reviewed", [False, True])
 @pytest.mark.parametrize("fault", [None, "source", "configuration", "placement", "stop"])
-async def test_immediate_switch_qualifies_candidate_before_guard(tmp_path, monkeypatch, recovering, reviewed, fault):
+async def test_immediate_switch_qualifies_candidate_before_guard(
+        tmp_path, monkeypatch, recovering, reviewed, fault, portable_source=None):
     from amplifier_web import bundle_actions, runtime_profiles, updates
     from amplifier_web.bundle_selection import begin_replacement, inspect_replacement
     from amplifier_web.bundles import SNAPSHOT_VERSION
@@ -21,19 +23,30 @@ async def test_immediate_switch_qualifies_candidate_before_guard(tmp_path, monke
     from amplifier_web.service import AppService
 
     home, shared = tmp_path / "app", tmp_path / "shared"
+    if portable_source is not None:
+        home = portable_source.home
     shared.mkdir()
     monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(home))
     monkeypatch.setenv("AMPLIFIER_HOME", str(shared))
     monkeypatch.setenv("AMPLIFIER_UNIFIED_RELEASE", "a" * 32)
     monkeypatch.setenv("AMPLIFIER_SOURCE_STORE", str(tmp_path / "source-store"))
     candidate = tmp_path / "candidate.yaml"
-    candidate.write_text(yaml.safe_dump({
+    candidate_plan = {
         "bundle": {"name": "candidate", "version": SNAPSHOT_VERSION},
         "session": {"orchestrator": {"module": "loop-live"}, "context": {"module": "context-simple"}},
         "providers": [{"module": "provider-fixture", "instance_id": "fixture"}],
         "tools": [{"module": "tool-fixture", "source": "${AMPLIFIER_SOURCE_STORE}/fixture",
                    "config": {"generation": "${AMPLIFIER_UNIFIED_RELEASE}"}}],
-    }))
+    }
+    if portable_source is not None:
+        # Exercise the published source-lifetime projection before the existing
+        # immediate replacement path renders its candidate-generation guard.
+        from amplifier_web.host.components import portable_module_sources
+        candidate_plan["hooks"] = [{"module": "hook-source-lifetime-fixture",
+                                    "source": str(portable_source.module)}]
+        candidate_plan = portable_module_sources(candidate_plan, home)
+        assert candidate_plan["hooks"][0]["source"] == portable_source.portable
+    candidate.write_text(yaml.safe_dump(candidate_plan))
     monkeypatch.setattr(updates, "active_release", lambda home: {"current": "a" * 32})
     app = source = None
     async def qualified(*args):
@@ -105,5 +118,15 @@ async def test_immediate_switch_qualifies_candidate_before_guard(tmp_path, monke
         assert ensure.await_count == 1
         assert source["bundle"] == str(candidate)
         assert not source["configurationBusy"]
+        if portable_source is not None:
+            assert yaml.safe_load(candidate.read_text())["hooks"][0]["source"] == portable_source.portable
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize("fault", [None, "source"])
+async def test_portable_source_candidate_keeps_exact_identity_and_guard(
+        tmp_path, monkeypatch, managed_module_source, fault):
+    await test_immediate_switch_qualifies_candidate_before_guard(
+        tmp_path, monkeypatch, recovering=False, reviewed=False, fault=fault,
+        portable_source=managed_module_source)
