@@ -57,7 +57,7 @@ def starting_observation(data, roots):
     if kind != 'execution.event' or set(data) != {'type', 'event'}:
         return False
     event = data.get('event')
-    fields = {'id', 'parentId', 'turnId', 'admissionInputId', 'sessionId', 'rootSessionId',
+    fields = {'id', 'parentId', 'turnId', 'admissionInputId', 'generationId', 'sessionId', 'rootSessionId',
               'kind', 'phase', 'toolCallId', 'label', 'tool', 'startedAt', 'endedAt',
               'revision', 'liveObservation', 'toolObservationId', 'inputSummary',
               'inputPreview', 'actionPath', 'outcomeSummary'}

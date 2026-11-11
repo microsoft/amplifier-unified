@@ -70,6 +70,7 @@ class ExecutionEvents:
         self.root_id, self.emit = root_id, emit
         self.producer_id = str(uuid.uuid4())
         self.turn_id = None
+        self.generation_id = None
         self.admission_inputs = {}
         self.calls = {}
         self.children = {}
@@ -105,11 +106,14 @@ class ExecutionEvents:
     def lifecycle(self, event):
         kind = event.get("type")
         sid = event.get('sessionId') or event.get('session_id') or self.root_id
-        if sid == self.root_id and kind == 'generation.started':
+        root = event.get('rootSessionId') or event.get('root_session_id') or self.root_id
+        is_root = sid == self.root_id and root == self.root_id
+        if is_root and kind == 'generation.started':
             self.admission_inputs[sid] = event.get('initial_input_id')
-        elif sid == self.root_id and kind == 'input.delivered' and not event.get('target_generation_id'):
+            self.generation_id = event.get('generation_id')
+        elif is_root and kind == 'input.delivered' and not event.get('target_generation_id'):
             self.admission_inputs[sid] = event.get('input_id')
-        if (sid == self.root_id and kind == "input.delivered" and event.get("source", "user") == "user"
+        if (is_root and kind == "input.delivered" and event.get("source", "user") == "user"
                 and not event.get('target_generation_id')):
             self.turn_id = event.get("input_id") or self.turn_id
         elif kind == "child.updated":
@@ -168,7 +172,7 @@ class ExecutionEvents:
         return (child["id"], child.get("turnId")) if child else (None, self.turn_id)
 
     def admission_input(self, sid):
-        return self.admission_inputs.get(sid, self.admission_inputs.get(self.root_id, self.turn_id))
+        return self.admission_inputs.get(sid, self.admission_inputs.get(self.root_id))
 
     async def _begin_provider_call(self, sid, provider, request, *, label=None, run_id=None, request_options=None):
         from . import request_projection
@@ -198,6 +202,7 @@ class ExecutionEvents:
         provider_id = info.get("id") if isinstance(info, dict) else getattr(info, "id", type(provider).__name__)
         row = {"id":call_id,"parentId":parent,"turnId":turn,"sessionId":sid,
                "admissionInputId":admission_input,
+               "generationId":self.generation_id if sid == self.root_id else None,
                "rootSessionId":self.root_id,"producerId":self.producer_id,"kind":"llm","phase":"running","label":label or (purpose["label"] if purpose else "Model call"),
                "provider":str(provider_id)[:160],
                "model":str(getattr(request,"model",None) or defaults.get("model") or defaults.get("default_model") or "")[:160],
@@ -468,6 +473,7 @@ class ExecutionEvents:
             key = (sid, call)
             row = self.calls.get(key) or {"id": f"tool:{sid}:{call}", "parentId": parent, "turnId": turn,
                 "admissionInputId": self.admission_input(sid),
+                "generationId": self.generation_id if sid == self.root_id else None,
                 "sessionId": sid, "rootSessionId": self.root_id, "kind": "tool", "toolCallId": call,
                 "label": str(data.get("tool_name") or "Tool")[:120], "startedAt": now}
             row = dict(row)
@@ -536,6 +542,8 @@ class ExecutionEvents:
             row = self.requests.get(task)
             if event == "llm:request":
                 row = {"id": "llm:" + str(uuid.uuid4()), "parentId": parent, "turnId": turn,
+                    "admissionInputId": self.admission_input(sid),
+                    "generationId": self.generation_id if sid == self.root_id else None,
                     "sessionId": sid, "rootSessionId": self.root_id, "kind": "llm", "phase": "running",
                     **scope, "startedAt": now,
                     **{key:str(data[key])[:160] for key in ("provider", "model") if data.get(key)}}

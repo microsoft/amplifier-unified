@@ -243,14 +243,14 @@ def page(session, part, before=None, group=None, revision=None, *, resolver=None
     start=max(0,end-(message_limit if part=='messages' else NODE_LIMIT))
     from .message_interactions import annotate
     from .peer_attribution import display_annotations
-    annotation_source = {**session, 'messageAnnotations': display_annotations(session)} if part == 'messages' else session
     selected = rows[start:end]
+    annotation_source = {'messageAnnotations': display_annotations(session, (row.get('id') for row in selected))} if part == 'messages' else session
     if part == 'messages':
         from .peer_attribution import derive
         selected = derive(session, selected, resolver)
     items=[]
     for row in selected:
-        item=compact(annotate(annotation_source, row) if part == 'messages' else row,session['id'],part,TEXT_LIMIT if part=='messages' else SUMMARY_LIMIT)
+        item=compact(annotate(annotation_source, row, status_source=session) if part == 'messages' else row,session['id'],part,TEXT_LIMIT if part=='messages' else SUMMARY_LIMIT)
         if part == 'messages' and row.get('attribution'):
             item['attribution'] = row['attribution']
         items.append(item)
@@ -330,6 +330,7 @@ def sync_work(session, group, known, *, window_message_id=None):
 
 
 def project(session, *, resolver=None, message_overlay=None, work_overlay=None):
+    status_source = session
     if work_overlay is not None:
         from .cold_display import raw
         # ColdRecord's ordinary mapping interface materializes all virtual
@@ -339,11 +340,8 @@ def project(session, *, resolver=None, message_overlay=None, work_overlay=None):
                    if not key.startswith('_cold') and key not in {'execution', 'historyActivity'}}
         session['messages'] = (message_overlay or {}).get('messages', resident.get('messages', [])[-100:])
         session['execution'] = {'nodes': [], 'turns': []}
-        visible = {row['id'] for row in session['messages']}
-        session['messageAnnotations'] = {key: value for key, value in resident.get('messageAnnotations', {}).items() if key in visible}
     result=dict(session)
     from .peer_attribution import display_annotations
-    result['messageAnnotations'] = display_annotations(session)
     if message_overlay is not None:
         result.update(message_overlay)
         messages = None
@@ -353,6 +351,11 @@ def project(session, *, resolver=None, message_overlay=None, work_overlay=None):
     if messages is not None:
         result.update(messages=messages.pop('items'),messageWindow=messages,
                       sharedHistoryUserTurnOffset=messages['userOffset'])
+    # Requested disk/saved windows may predate current status. Join exact input
+    # annotations after the overlay, without hydrating the retained transcript.
+    from .input_status import annotate as input_annotation
+    result['messages'] = [input_annotation(status_source, row) for row in result.get('messages', [])]
+    result['messageAnnotations'] = display_annotations(status_source, (row.get('id') for row in result['messages']))
     # Native disk paging can retain thousands of previously loaded messages.
     # Browser projection stays bounded independently; older rows remain available
     # through the same message cursor before fetching another disk page.

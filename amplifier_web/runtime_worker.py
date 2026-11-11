@@ -580,6 +580,9 @@ class Worker:
         if event.get('type', '').startswith('generation.') and event_session_id:
             event['sessionId'] = event_session_id
             event['rootSessionId'] = event_root_id
+            # Preserve source observation order across delayed transport/reload.
+            # This is lifecycle evidence, not optimistic host send admission.
+            event['observedAt'] = time.time()
         root_generation = event_session_id == root_session_id and event_root_id == root_session_id
         if root_generation and event.get('type') == 'generation.started':
             # Explicit inputs carry the host epoch captured at transport

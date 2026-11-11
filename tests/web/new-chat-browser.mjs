@@ -58,14 +58,14 @@ try{
  await page.screenshot({path:out+'/new-chat-desktop.png'});
  await action('view.update',{patch:{navPinned:false,navExpanded:false}});
  for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:out+`/new-chat-${width}.png`});
- await page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true}).click();const panel=page.getByRole('dialog',{name:'Chat options',exact:true});await expect(panel).toBeVisible();
+ await page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true}).click();const panel=page.getByRole('dialog',{name:'Model for this chat',exact:true});await expect(panel).toBeVisible();
  const assertPanelFits=async()=>{const geometry=await panel.evaluate(el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom}});
  assert.ok(geometry.x>=0&&geometry.y>=0&&geometry.right<=width&&geometry.bottom<=844,JSON.stringify(geometry))};
  await assertPanelFits();
  await showComposerOption(page,'model');await expect(panel.getByRole('combobox',{name:'Conversation model',exact:true})).toBeVisible();await assertPanelFits();
  await showComposerOption(page,'bundle');await expect(panel.getByLabel('Registered root bundles',{exact:true})).toBeVisible();await assertPanelFits();
- await panel.getByRole('button',{name:'Back to chat options',exact:true}).click();
- await expect(panel.locator('input:not([type=range])')).toHaveCount(0);await page.screenshot({path:out+`/compact-options-${width}.png`});await panel.getByRole('button',{name:'Close chat options',exact:true}).click();
+ await panel.getByText('Advanced',{exact:true}).click();await expect(panel.locator('details')).toHaveJSProperty('open',false);await expect(panel.getByLabel('Registered root bundles',{exact:true})).toBeHidden();
+ for(const [role,name] of [['combobox','Connection'],['combobox','Conversation model'],['slider','Reasoning effort high']])await expect(panel.getByRole(role,{name,exact:true})).toBeVisible();await expect(panel.getByRole('combobox',{name:'Conversation model',exact:true})).toHaveValue('chosen-model');await expect(panel.getByRole('slider',{name:'Reasoning effort high',exact:true})).toHaveAttribute('aria-valuetext','high');await expect(composer).toHaveDraft('Do the planned work');await assertPanelFits();await page.screenshot({path:out+`/compact-options-${width}.png`});await panel.getByRole('button',{name:'Close chat options',exact:true}).click();
  }
  await page.setViewportSize({width:1280,height:900});await action('view.update',{patch:{navPinned:true}});
  await page.getByRole('button',{name:'Send message',exact:true}).click();await page.getByText('Synthetic first response',{exact:true}).waitFor();

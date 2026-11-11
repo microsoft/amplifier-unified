@@ -33,28 +33,47 @@ def _visible(value):
 
 
 def _native_page(reader, source, before, limit):
-    from .automatic_history import directory
+    from collections import Counter
+    from .automatic_history import directory, native_input_id
     from .shared_state_probe import text_content
     from .session_store import message_time
+    counts = Counter()
+    def visible(value):
+        exact_input = native_input_id(value)
+        if exact_input:
+            counts[exact_input] += 1
+        return _visible(value)
+
     result = reader.read_window(directory(source), {
         'project': source['nativeProject'],
         'nativeId': source.get('nativeIdentity') or source.get('runtimeSessionId') or source['id']},
-        before=before, limit=limit, visible=_visible)
+        before=before, limit=limit, visible=visible)
     if result['status'] != 'ready':
         raise ValueError('Saved message window is unavailable: ' + result['reason'])
     window = result['messageWindow']
+    # Only an initial, gap-free read of the entire primary proves marker
+    # multiplicity for this display join. Count every validated raw occurrence,
+    # including hidden/media-only inputs, without expanding the reader's budget.
+    complete = (before is None and result['coverage']['rangeStart'] == 0
+                and not window['hasEarlier'] and not result['unavailableRanges']
+                and window['source'] == 'primary' and window['recoveredBackup'] is False)
     items = []
     for item in result['rows']:
         value = item['value']
         at = message_time(value)
         text = text_content(value)
+        exact_input = native_input_id(value)
         items.append({'id': item['displayId'], 'role': value['role'],
+            **({'nativeInputId': exact_input} if exact_input else {}),
             '_windowDigest': hashlib.sha256(text.encode()).hexdigest(),
             'text': text, 'source': 'native', 'via': 'chat',
             'createdAt': at or source.get('createdAt', 0), 'timestampKnown': at is not None,
             'displayOnly': True, 'windowKey': window['windowKey'],
             'sourceReference': {'kind': 'transcript-window', 'byteOffset': item['byteOffset'],
                                 'revision': window['revision'], 'restoreCursor': window['restoreCursor']}})
+    for row in items:
+        if row.get('nativeInputId') and (not complete or counts[row['nativeInputId']] != 1):
+            row['nativeInputAmbiguous'] = True
     return {'items': items, **window, 'coverage': {'kind': 'native-saved', **result['coverage']},
             'unavailableRanges': result['unavailableRanges'], '_owner': source}
 
@@ -271,7 +290,10 @@ class TranscriptWindows:
         # unsupported annotation fields or decorate native display-only rows.
         current = self.service._session(session_id, hydrate=False)
         annotations = dict.get(current, 'messageAnnotations', {})
+        from .input_status import annotate as input_annotation
         for index, row in enumerate(result['items']):
+            row = input_annotation(current, row)
+            result['items'][index] = row
             if not row.get('displayOnly'):
                 from .browser_detail import compact
                 result['items'][index] = compact(row, session_id, 'messages', 4096)

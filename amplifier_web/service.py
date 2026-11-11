@@ -1012,6 +1012,10 @@ class AppService:
             return {'revision': self.state['revision'], 'sessions': []}
         index = self.projections.sessions(self.state)
         session = copy.deepcopy(row)
+        from .input_status import annotate as input_annotation, PREFIX as input_status_prefix
+        session['messages'] = [input_annotation(row, message) for message in session.get('messages', [])]
+        session['messageAnnotations'] = {key: value for key, value in session.get('messageAnnotations', {}).items()
+                                         if not key.startswith(input_status_prefix)}
         if session_id == self.state.get('selectedSessionId'):
             session['subagentCount'] = len(index.children(row))
         session['workers'] = [{key: value for key, value in worker.items() if key != 'reportReceipts'}
@@ -3503,6 +3507,8 @@ class AppService:
                 session["interruptionRevision"] = session.get("interruptionRevision", 0) + 1
                 session["lastInterruption"] = {"commandId": command_id, "at": time.time(), "origin": origin}
                 session["status"] = "stopping"
+                from .input_status import interrupt as interrupt_input_status
+                interrupt_input_status(session)
                 pending.append((self._stop, (session["id"],)))
             elif action == "worker.spawn":
                 session = self._session(args.get("sessionId"))
@@ -4997,6 +5003,8 @@ class AppService:
                 event = {**payload, "at": time.time()}
                 session.setdefault("generations", []).append(event)
                 session["generations"] = session["generations"][-200:]
+                from .input_status import generation as observe_input_generation
+                observe_input_generation(session, payload)
                 from .response_completion import apply as apply_response_completion
                 apply_response_completion(session, payload)
                 root_generation = (payload.get('sessionId', session['id']) == session['id']
@@ -5099,6 +5107,8 @@ class AppService:
                 activity["lastEvent"] = {"worker": payload.get("name", "Worker"), "status": payload.get("status"), "at": time.time()}
             elif kind == "approval.requested":
                 session["approvals"].append({**payload, "status": "pending"})
+                from .input_status import human_wait
+                human_wait(session, payload)
                 self._activity(session, "approval", "Waiting for your approval")
                 if self.access_mode.full(session):
                     self._task(self.access_mode.settle(session["id"]))
