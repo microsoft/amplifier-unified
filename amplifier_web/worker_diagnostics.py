@@ -425,41 +425,84 @@ def runtime_failure_witness(error):
         return None
 
 
+_STARTUP_ERROR_CLASSES = tuple((kind, kind.__name__) for kind in (
+    Exception, RuntimeError, AssertionError, ValueError, TypeError, KeyError,
+    AttributeError, ImportError, ModuleNotFoundError, OSError, PermissionError,
+    FileNotFoundError, NotADirectoryError, IsADirectoryError, NotImplementedError,
+    TimeoutError, asyncio.CancelledError, subprocess.TimeoutExpired,
+    subprocess.CalledProcessError, UnicodeError, UnicodeDecodeError, UnicodeEncodeError,
+))
+_STARTUP_CLASS_LABELS = frozenset(label for _, label in _STARTUP_ERROR_CLASSES) | {'ModuleActivationError', 'other'}
+
+
+def validate_startup_failure_facts(value):
+    """Copy the existing private receipt's finite facts, never arbitrary detail."""
+    try:
+        if not _command_keys(value, ('errors', 'truncated')):
+            return None
+        errors, truncated = value['errors'], value['truncated']
+        if type(errors) is not list or len(errors) > 4 or type(truncated) is not bool:
+            return None
+        rows = []
+        for error in errors:
+            if not _command_keys(error, ('class',), ('errno', 'winerror', 'returncode')):
+                return None
+            label = error['class']
+            if type(label) is not str or len(label) > 32 or label not in _STARTUP_CLASS_LABELS:
+                return None
+            row = {'class': label}
+            for key in ('errno', 'winerror', 'returncode'):
+                if key in error:
+                    if (not _command_number(error[key])
+                            or key == 'returncode' and label != 'CalledProcessError'
+                            or key != 'returncode' and label not in _COMMAND_OS_LABELS):
+                        return None
+                    row[key] = error[key]
+            rows.append(row)
+        return {'errors': rows, 'truncated': truncated}
+    except BaseException:
+        return None
+
+
 def _startup_exception_facts(error):
+    """Fact capture is optional and must not replace the original failure."""
+    try:
+        return _collect_startup_exception_facts(error)
+    except BaseException:
+        return {'errors': [], 'truncated': True}
+
+
+def _collect_startup_exception_facts(error):
     """Closed, payload-free facts while the original exception still exists.
 
     Exact class identity only. Unknown/subclass names and their properties never
     become labels; exception messages, arguments, commands and frames stay private.
     """
-    kinds = tuple((kind, kind.__name__) for kind in (
-        Exception, RuntimeError, AssertionError, ValueError, TypeError, KeyError,
-        AttributeError, ImportError, ModuleNotFoundError, OSError, PermissionError,
-        FileNotFoundError, NotADirectoryError, IsADirectoryError, NotImplementedError,
-        TimeoutError, asyncio.CancelledError, subprocess.TimeoutExpired,
-        subprocess.CalledProcessError, UnicodeError, UnicodeDecodeError, UnicodeEncodeError,
-    ))
     module = sys.modules.get('amplifier_foundation.modules.activator')
     activation = vars(module).get('ModuleActivationError') if type(module) is types.ModuleType else None
     rows, seen = [], set()
     while isinstance(error, BaseException) and id(error) not in seen and len(rows) < 4:
         seen.add(id(error))
         kind = type(error)
-        label = next((label for known, label in kinds if kind is known), 'other')
+        label = next((label for known, label in _STARTUP_ERROR_CLASSES if kind is known), 'other')
         row = {'class': 'ModuleActivationError' if kind is activation else label}
         if label != 'other' and isinstance(error, OSError):
             for key in ('errno', 'winerror'):
-                number = BaseException.__getattribute__(error, key) if hasattr(error, key) else None
+                try:
+                    number = BaseException.__getattribute__(error, key)
+                except AttributeError:
+                    continue
                 if type(number) is int and -(2**31) <= number < 2**32:
                     row[key] = number
         if kind is subprocess.CalledProcessError:
-            number = error.returncode
+            number = BaseException.__getattribute__(error, '__dict__').get('returncode')
             if type(number) is int and -(2**31) <= number < 2**32:
                 row['returncode'] = number
         rows.append(row)
-        cause = BaseException.__getattribute__(error, '__cause__')
+        cause = BaseException.__cause__.__get__(error)
         error = cause if cause is not None else (
-            None if BaseException.__getattribute__(error, '__suppress_context__')
-            else BaseException.__getattribute__(error, '__context__'))
+            None if BaseException.__suppress_context__.__get__(error)
+            else BaseException.__context__.__get__(error))
     return {'errors': rows, 'truncated': isinstance(error, BaseException)}
 
 

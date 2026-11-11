@@ -4515,9 +4515,11 @@ class AppService:
                     self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(saved), input_id))
                 self._publish_changes(sessions={session['id']}, globals={'view'})
             from .worker_diagnostics import diagnostic_reference
+            from .session_health import startup_failure_details
             await self.on_runtime_event('runtime.error', {
                 'sessionId': session['id'], 'error': message, 'errorType': 'RuntimeStartupError',
                 'phase': 'worker_startup',
+                **startup_failure_details(vars(exc)),
                 **({'moduleFailures': exc.failures} if getattr(exc, 'failures', None) else {}),
                 **diagnostic_reference(exc),
             })
@@ -4965,8 +4967,10 @@ class AppService:
                     detail=str(failure)
                 startup = payload.get('errorType') == 'RuntimeStartupError' or payload.get('phase') == 'worker_startup'
                 error_type = payload.get('errorType') or (None if startup else session.get('turnErrorType'))
-                from .session_health import current_terminal_failure, failure_details
+                from .session_health import current_terminal_failure, failure_details, startup_failure_details
                 projected = failure_details(detail, error_type)
+                if startup:
+                    projected.update(startup_failure_details(payload))
                 existing = session.get('failure')
                 if startup and projected['category'] == 'unknown':
                     error_type = 'RuntimeStartupError'

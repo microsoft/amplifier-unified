@@ -186,7 +186,8 @@ async def prepare(service, captured, *, frozen=False):
             checked = await resolve_defaults(service.data_dir, session['workspace'], pending['bundle'],
                 session_id=session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'],
                 replacement={'selection': session.get('selection'), 'replaceSavedSelection': True,
-                    'workingDirectory': session.get('workingDirectory')})
+                    'workingDirectory': session.get('workingDirectory')},
+                runtime_session=session)
             check()
             if not checked.get('modelCompatible') and not pending.get('resetModel'):
                 failure = {'code': 'incompatible-model', 'bundle': pending['bundle']}
