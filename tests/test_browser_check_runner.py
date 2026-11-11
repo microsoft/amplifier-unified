@@ -38,8 +38,13 @@ def current_layout_commands(source):
 
 def coverage_plan():
     plan = current_plan()
+    # Validate the new independent client mode before comparing the unchanged
+    # historical inventory. Its exact owner is checked separately below.
+    retained_ids = retained_update_recovery_browser_addition(plan['scenarios'])
     rows = []
     for row in plan['scenarios']:
+        if row['id'] in retained_ids:
+            continue
         row = {**row, 'command': [coverage_paths(part) for part in row['command']]}
         row.pop('cwd', None)
         if row['id'] == 'configuration-recovery-components':
@@ -3478,14 +3483,73 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     plan, proof = runner.load_plan(ROOT, host_path)
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], set(), current=True)
     client_addition_ids = input_status_and_action_spacing_browser_additions(plan['scenarios'], set(), current=True)
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids]
+    retained_ids = retained_update_recovery_browser_addition(plan['scenarios'])
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 151
-    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids)
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152
+    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
     assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 16
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+
+
+def retained_update_recovery_browser_addition(rows):
+    """The retained-only mode is additive, not a second ordinary delivery run."""
+    expected = {
+        'id': 'retained-update-recovery',
+        'command': ['node', 'tests/update-message-delivery-browser.mjs', '--retained-recovery-only'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/retained-update-recovery'},
+        'cwd': '.build/web-client',
+    }
+    owners = [row for row in rows if row['id'] == expected['id']
+              or '--retained-recovery-only' in row['command']]
+    assert owners == [expected], 'retained-update-recovery: expected one exact selected-client mode'
+    return {expected['id']}
+
+
+def test_retained_update_recovery_is_composed_once_without_replacing_ordinary_delivery():
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    client_path = source_test('tests/update-message-delivery-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    name = 'retained-update-recovery'
+    assert not any(row['id'] == name or '--retained-recovery-only' in row['command']
+                   for row in host['scenarios'])
+    assert host['scenarioOrder'].count(name) == 1
+    index = host['scenarioOrder'].index(name)
+    assert host['scenarioOrder'][index - 1:index + 2] == [
+        'update-message-delivery', name, 'attachment-consumption']
+    plan, proof = runner.load_plan(ROOT, host_path)
+    retained_update_recovery_browser_addition(plan['scenarios'])
+    selected = next(row for row in client['scenarios'] if row['id'] == name)
+    assert next(row for row in plan['scenarios'] if row['id'] == name) == {
+        **selected, 'cwd': '.build/web-client'}
+    ordinary = next(row for row in plan['scenarios'] if row['id'] == 'update-message-delivery')
+    assert ordinary == {
+        'id': 'update-message-delivery', 'command': ['node', 'tests/update-message-delivery-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/update-message-delivery'},
+        'cwd': '.build/web-client'}
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+
+
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'mode', 'artifacts', 'cwd'])
+def test_retained_update_recovery_rejects_changed_or_duplicate_mode(fault):
+    rows = current_plan()['scenarios']
+    owner = next(row for row in rows if row['id'] == 'retained-update-recovery')
+    if fault == 'missing':
+        rows.remove(owner)
+    elif fault == 'duplicate':
+        rows.append({**owner, 'id': 'other-retained-mode'})
+    elif fault == 'mode':
+        owner['command'] = owner['command'][:-1]
+    elif fault == 'artifacts':
+        owner['env'] = {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/update-message-delivery'}
+    else:
+        owner['cwd'] = 'tests/web'
+    with pytest.raises(AssertionError, match='retained-update-recovery'):
+        retained_update_recovery_browser_addition(rows)
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
     sidebar_controls_browser_addition(plan['scenarios'], set(), current=True)
     for row in plan['scenarios']:
