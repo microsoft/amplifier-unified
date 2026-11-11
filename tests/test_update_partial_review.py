@@ -264,12 +264,26 @@ async def test_fresh_automatic_tier_continuation_does_not_mean_deliberate_retry(
                if row['url'].endswith(('/a', '/c')))
     assert set((m.directory / 'releases').iterdir()) == before
 
-    # Freshness alone is not intent. A genuinely manual fresh check can expose
-    # the same desired revisions for a new guarded installation.
+    # Neither manual freshness nor a subsequent timer grants retry intent.
     await actual_check(tier=tier, fresh=True, automatic=False)
-    assert m.service.state['updates']['available'] == 2
-    assert all(row['status'] == 'update' for row in m.inventory
+    assert m.service.state['updates']['available'] == 0
+    assert all(row['status'] == 'check_failed' for row in m.inventory
                if row['url'].endswith(('/a', '/c')))
+    assert set((m.directory/'releases').iterdir())==before
+    # A deliberate Install can select the same receipt-derived retained rows.
+    # Stop at ordinary new-candidate validation, not actual profile mounting.
+    calls.clear()
+    async def build(*args):return {'mode':'worker','reason':'fixture','activation':'per-worker'}
+    async def validate(stage,revision):calls.append(revision);raise RuntimeError('fixture stops before mount')
+    monkeypatch.setattr(update_plan,'build',build)
+    monkeypatch.setattr(m,'validate',validate)
+    await m.install()
+    # The known A fetch still fails. The explicit action owns a fresh guarded
+    # candidate, not an assertion that the retained combination now qualifies.
+    assert not calls
+    assert len(set((m.directory/'releases').iterdir())-before)==1
+    assert m.diagnostics.state['lastFailure']['kind']=='ecosystem'
+    assert m.service.state['updates']['phase']=='error'
 
 
 async def test_new_unknown_check_failure_is_not_authorized_by_prior_retention(prior_partial, monkeypatch):

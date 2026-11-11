@@ -353,8 +353,10 @@ def pin_manifest(content, retained):
             if package_name(req.name) == name:
                 from .selected_runtime_dependencies import git_source
                 prior = git_source(req.url)
-                if (req.marker or req.extras or prior is None or key(prior) != key(policy)
-                        or prior.get('subdirectory', '') != policy.get('subdirectory', '')):
+                bare_source = source and not req.url and not req.specifier
+                if (req.marker or req.extras or not bare_source and
+                        (prior is None or key(prior) != key(policy)
+                         or prior.get('subdirectory', '') != policy.get('subdirectory', ''))):
                     raise ValueError('An authored override protects the retained dependency.')
                 overrides.remove(old)
         overrides.append(value)
@@ -468,8 +470,13 @@ def retained_after_check(manager, rows, *, retry_retained):
                 or not row.get('url') or key(row) != key(prior['source'])
                 or row.get('current') != prior['revision']):
             continue
-        # A deliberate manual Check/Install may try again; automatic checks
-        # require a genuinely new desired source revision.
+        # Only deliberate Install may retry this exact receipt-derived hold.
+        if (retry_retained and row.get('status') == 'check_failed'
+                and row.get('availabilityFailure') is True and row.get('sourceUpdate') == prior['status']
+                and isinstance(row.get('latest'), str) and re.fullmatch('[a-f0-9]{40}', row['latest'])
+                and row['latest'] != row['current']
+                and row.get('latest') == prior.get('desired')):
+            row.update(status='update')
         if not retry_retained and row.get('status') == 'update' and row.get('latest') == prior.get('desired'):
             row.update(status='check_failed', sourceUpdate=prior['status'], availabilityFailure=True,
-                       detail='The working version is retained. Check manually to retry this source.')
+                       detail='The working version is retained. Install explicitly to retry this source.')

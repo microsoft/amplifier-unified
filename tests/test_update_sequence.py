@@ -112,6 +112,21 @@ async def test_completed_sequence_has_no_repeated_background_check(manager,monke
     await manager.tick()
 
 
+@pytest.mark.parametrize('fresh',[False,True])
+async def test_public_check_does_not_offer_retained_preparation_as_retry(manager,monkeypatch,fresh):
+    from amplifier_web import update_partial
+    calls=[]
+    async def inventory(**kwargs):return [source(manager,'included')]
+    async def remote(*args,**kwargs):return 'b'*40+' refs/heads/main'
+    def retained(m,rows,*,retry_retained):
+        calls.append(retry_retained)
+    monkeypatch.setattr(manager,'inventory_sources',inventory)
+    monkeypatch.setattr(updates,'process',remote)
+    monkeypatch.setattr(update_partial,'retained_after_check',retained)
+    await manager.check(fresh=fresh)
+    assert calls==[False]
+
+
 @pytest.mark.parametrize('action', ['app', 'install'])
 async def test_explicit_app_scope_replaces_old_whole_install_without_changing_policy(manager, monkeypatch, action):
     import copy

@@ -153,9 +153,10 @@ every running worker. The existing worker-adoption status remains separate.
 
 `includedCanProceed` permits an independent eligible installation despite included
 source issues. It does not clear a pending replacement, restart or uncertain
-operation, and does not make the failed tier “Up to date.” An unchanged automatic
-check does not silently retry retained failures; a deliberate manual check can
-refresh the desired sources for a new guarded attempt.
+operation, and does not make the failed tier “Up to date.” Neither a manual nor
+an automatic Check retries unchanged retained failures. A deliberate Install
+can request a new guarded attempt; a genuinely changed desired revision can
+also make new work eligible.
 
 Automatic availability freshness is not deliberate retry intent. Unchanged
 retained outcomes survive later unrelated tier promotions through the existing
@@ -306,6 +307,16 @@ The logical roles are candidate, current and previous. Physical generations rema
 Availability checks reuse a private inventory index, invalidated by generation, registry and configuration changes, with periodic full reconciliation. Remote-ref requests retain coalescing and bounded cached availability; a manual refresh refreshes remote availability. Every installation repeats exact source preflight, so cached availability cannot authorize overwriting an intervening local edit. Unified owns its registry, source store and runtimes. CLI caches and registries remain separate; shared settings, credentials and native projects/history authorities are unchanged.
 
 Core follows published PyPI releases using the app's wheel-only policy. Foundation's host library, the streaming engine and loop-live track their configured `@main` sources. Provider/tool modules also follow their configured mutable sources. Candidate preparation resolves exact revisions in an isolated runtime and records them as validation evidence; these receipts do not replace branch-tracking configuration with commit pins. Activation still requires the candidate runtime checks described above. Application releases come from the private `microsoft/amplifier-unified` GitHub repository. Checks use the signed-in GitHub CLI and resolve the release tag to an exact commit. Installation first builds a separate uv tool environment and checks the host import, packaged frontend assets and package version. This validates packaging, not every provider account or live audio connection. Once idle, the host installs that exact revision into its normal uv tool location and restarts on the same port, workspace and data directory. Restart output is retained privately in `updates/restart.log`; the prior Git install reference is recorded in `updates/previous-app.json` for manual recovery. Ecosystem rollback does not roll back application code. If there is no accessible release or GitHub sign-in, the UI reports a failed check rather than claiming the application is current.
+
+The worker's transitive Foundation override names the distribution without
+independently declaring a URL/ref. The effective `tool.uv.sources` choice owns
+that identity, including an installed fork or pin carried into a new candidate.
+The naming hook is a separate distribution: sharing a repository does not make
+its explicitly selected revision follow the Foundation root. Memory's existing
+app-source override remains necessary for its old pinned-hook counterexample.
+This removes a redundant policy declaration; the local resolver comparison also
+honors the effective fork under the previous declaration, so it is not evidence
+of the historical Mac resolver failure whose stderr was unavailable.
 
 Local data: `updates/inventory.json` (private source details), `updates/releases/<id>/` (staged sources/configuration), `updates/active.json` (current/previous pointer), and per-generation runtime environments. Previous and referenced generations remain available for rollback and active workers; unreferenced, verified owned generations and environments are reclaimed. Shared source objects are retained pending complete proof that no references remain. State shown to the UI/agent contains credential-safe source labels and commit IDs, not credential-bearing remote URLs.
 
@@ -495,15 +506,15 @@ reported as retained with activation verification unavailable, not falsely healt
 or a request to reinstall. Newer failures, failed activation and unrelated source
 scope remain actionable. Settings revalidation uses a neutral pending state.
 
-Automatic preparation remembers the input witness and disposition of its last
-attempt. An unchanged deterministic source/configuration conflict performs no
-duplicate copy, resolver or installer work. Changed source/configuration/application
-inputs or an explicit install request can re-evaluate; transient failures use a
-bounded backoff. When that backoff expires, the normal background timer must
-resume an already-authorized component installation without a manual check or
-waiting for the next availability-check interval. It reuses the install owner's
-source, intent and uncertain-operation guards. Interrupted or unknown effects
-wait quietly on automatic ticks.
+Preparation remembers its input witness and disposition independently of the
+displayed application or Smart Tool batch. A settled failure performs no duplicate
+copy, resolver or installer work for unchanged inputs. This includes failures
+whose cause is unknown: an elapsed deadline or attempt counter does not prove
+them transient. Changed source/configuration/application inputs or an explicit
+Install request can re-evaluate through the existing install owner. Check is
+availability discovery, not retry intent. Saved legacy backoff records retain
+the same unchanged-input hold; no timer replays the whole failed preparation.
+Interrupted or unknown effects retain their separate inspection fence.
 Pinned and exact checked-revision mismatches retain a typed source-policy reason
 and sanitized package identity; they are not transient transport failures.
 The preparation witness includes the canonical source-configuration key, checked

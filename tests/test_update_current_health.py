@@ -101,17 +101,16 @@ def test_render_projection_does_no_filesystem_work_and_config_revision_invalidat
 def test_retry_witness_preserves_manual_and_unknown_boundaries():
     batch={};failure={'reason':'runtime-source-constraint','status':'failed'}
     health.record_retry(batch,'A',failure)
-    assert health.retry_decision(batch,'A',now=10**12)=='changed-inputs'
+    assert health.retry_decision(batch,'A')=='changed-inputs'
     assert health.retry_decision(batch,'B') is None
     health.record_retry(batch,'A',{'status':'interrupted'})
     assert health.retry_decision(batch,'B')=='inspect'
     health.record_retry(batch,'A',{'status':'failed','errorType':'TimeoutError'})
-    assert health.retry_decision(batch,'A',now=0)=='changed-inputs'
-    assert health.retry_decision(batch,'A',now=10**12)=='changed-inputs'
+    assert health.retry_decision(batch,'A')=='changed-inputs'
     assert batch['retry']=={'inputKey':'A','mode':'changed-inputs'}
     legacy={'retry':{'mode':'backoff','inputKey':'A','attempts':100,'retryAt':1}}
-    assert health.retry_decision(legacy,'A',now=10**12)=='changed-inputs'
-    assert health.retry_decision(legacy,'B',now=10**12) is None
+    assert health.retry_decision(legacy,'A')=='changed-inputs'
+    assert health.retry_decision(legacy,'B') is None
 
 
 def test_unknown_component_failure_keeps_app_ack_and_history_without_transient_claim():
@@ -167,7 +166,9 @@ def test_failed_application_check_cannot_mask_component_failure_or_replace_its_r
     assert state == before
 
 
-async def test_automatic_unchanged_conflict_does_zero_duplicate_stage_work(tmp_path,monkeypatch):
+@pytest.mark.parametrize('failure_kind',['protected','command'])
+@pytest.mark.parametrize('unrelated',[None,'application','smart-tools','rollback'])
+async def test_automatic_unchanged_conflict_does_zero_duplicate_stage_work(tmp_path,monkeypatch,failure_kind,unrelated):
     from amplifier_web.updates import UpdateManager
     from amplifier_web.runtime_environment import ProtectedRuntimeSource
     from amplifier_web import update_plan
@@ -185,6 +186,9 @@ async def test_automatic_unchanged_conflict_does_zero_duplicate_stage_work(tmp_p
     async def validate(stage,release):
         assert stage.is_dir() and stage.name==release
         calls['validate']+=1
+        if failure_kind=='command':
+            from amplifier_web.update_diagnostics import CommandFailure
+            raise CommandFailure({'exitCode':1,'stderrBytes':10611})
         raise ProtectedRuntimeSource('amplifier-foundation','runtime-source-constraint')
     m.publish=publish;m.validate=validate
     monkeypatch.setattr(update_plan,'build',build)
@@ -202,11 +206,17 @@ async def test_automatic_unchanged_conflict_does_zero_duplicate_stage_work(tmp_p
     assert calls=={'validate':1}
     first=set(releases.iterdir())
     assert len(first-existing)==1
+    failed=copy.deepcopy(m.diagnostics.state['lastFailure'])
+    if unrelated:
+        m.diagnostics.begin(unrelated,'d'*40 if unrelated=='application' else 'd'*32)
+        m.diagnostics.record('unrelated-check','succeeded')
+        m.diagnostics=UpdateDiagnostics(m)
     for _ in range(10):
         u['phase']='available'
         await UpdateManager.install(m,automatic=True)
     assert calls=={'validate':1}
     assert set(releases.iterdir())==first
+    assert m.diagnostics.state['lastFailure']==failed
     m.inventory[0]['latest']='B'
     await UpdateManager.install(m,automatic=True)
     assert calls=={'validate':2}
