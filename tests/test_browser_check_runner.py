@@ -285,7 +285,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     resume_addition = question_resume_browser_addition(rows, set())
     navigation_ids = agent_navigation_browser_additions(rows, set())
     sidebar_ids = sidebar_controls_browser_addition(rows, set())
-    spacing_ids = action_spacing_browser_addition(rows, set())
+    action_spacing_browser_addition(rows, set())
     historical_rows = [row for row in rows
                        if row['id'] not in navigation_ids | sidebar_ids
                        and not (canvas_additions | breadbin_addition | question_fade_addition | context_addition | immediate_addition | delivery_addition | waiting_addition | resume_addition).intersection(row['command'])]
