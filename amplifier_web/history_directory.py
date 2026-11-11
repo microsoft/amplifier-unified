@@ -83,6 +83,8 @@ def initialize(db):
     from .navigation_waiting import initialize as waiting_initialize
     waiting_initialize(db)
     db.execute('CREATE TABLE IF NOT EXISTS history_navigation_tasks(id TEXT PRIMARY KEY,value TEXT NOT NULL)')
+    from .navigation_waiting import refresh_directory
+    refresh_directory(db)
 
 
 def ready(db):
@@ -133,9 +135,12 @@ def _scalars(row, state, ordinal, *, dormant_task_active=None, db=None):
     error_reviewed = any(item[4] and receipts.get(item[2]) == item[3] for item in notice_rows)
     from .navigation_waiting import task_for
     task = task_for(state, row)
-    base = activity(row, False, error_reviewed=False, blocked=task_blocked(state, row['id']), task=task, db=db)
-    facts = (base if not unread and not error_reviewed else
-        activity(row, unread, error_reviewed=error_reviewed, blocked=task_blocked(state, row['id']), task=task, db=db))
+    # Retain the non-error fallback as scalars. The exact error notice/read
+    # fingerprint is joined at query time, including for dormant owners.
+    base = activity(row, False, error_reviewed=any(item[4] for item in notice_rows),
+                    blocked=task_blocked(state, row['id']), task=task, db=db)
+    facts = activity(row, unread, error_reviewed=error_reviewed,
+                     blocked=task_blocked(state, row['id']), task=task, db=db)
     flags = activity_flags(row)
     value = summary(row)
     from .navigation_waiting import input_boundary
@@ -615,7 +620,8 @@ class HistoryDirectory:
                 WHERE {'n.owner IN (SELECT id FROM stored_local_rows) AND ' if scoped else ''}n.owner NOT IN (SELECT id FROM live_rows)),
             read_receipts AS MATERIALIZED (SELECT key,value FROM json_each(?)),
             notice_status AS (SELECT owner,MAX(COALESCE(r.value != n.fingerprint,1)) AS unread,
-                MAX(n.is_error AND r.value=n.fingerprint) AS error_reviewed
+                MAX(n.is_error AND r.value=n.fingerprint) AS error_reviewed,
+                MAX(n.is_error AND COALESCE(r.value!=n.fingerprint,1)) AS error_unread
                 FROM directory_notices n LEFT JOIN read_receipts r ON r.key=n.key GROUP BY owner)'''
         if self._native_path:
             parent = '''COALESCE((SELECT p.id FROM live_rows p WHERE p.native_project=n.project AND p.native_id=n.parent_id LIMIT 1),
@@ -649,11 +655,13 @@ class HistoryDirectory:
         else:
             local += ', raw_local_rows AS (SELECT * FROM stored_local_rows)'
         expressions = []
-        quiet = "(l.base_activity_kind IN ('idle','unread') OR (l.base_activity_label='Needs attention' AND ns.error_reviewed))"
+        quiet = "(l.base_activity_label IN ('Idle','New response') OR (l.base_activity_label='Needs attention' AND ns.error_reviewed))"
+        current_error = """(ns.error_unread AND l.base_activity_kind!='working'
+            AND l.base_activity_label NOT IN ('Approval requested','Answer requested','Check answer delivery'))"""
         for name in COLUMNS:
             expression = ("COALESCE(ns.unread,0)" if name == 'unread' else
-                f"CASE WHEN {quiet} THEN CASE WHEN ns.unread THEN 'unread' ELSE 'idle' END ELSE l.base_activity_kind END" if name == 'activity_kind' else
-                f"CASE WHEN {quiet} THEN CASE WHEN ns.unread THEN 'New response' ELSE 'Idle' END ELSE l.base_activity_label END" if name == 'activity_label' else f'l.{name}')
+                f"CASE WHEN {current_error} THEN 'attention' WHEN {quiet} THEN CASE WHEN ns.unread THEN 'unread' ELSE 'idle' END ELSE l.base_activity_kind END" if name == 'activity_kind' else
+                f"CASE WHEN {current_error} THEN 'Needs attention' WHEN {quiet} THEN CASE WHEN ns.unread THEN 'New response' ELSE 'Idle' END ELSE l.base_activity_label END" if name == 'activity_label' else f'l.{name}')
             expressions.append(expression + ' AS ' + name)
         local += (', local_rows AS (SELECT ' + ','.join(expressions) + ' FROM raw_local_rows l LEFT JOIN notice_status ns ON ns.owner=l.id)'
                   if needs_notice_status else ', local_rows AS (SELECT * FROM raw_local_rows)')

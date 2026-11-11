@@ -764,7 +764,7 @@ def observe_task(service, session, observation):
     revision = returned.get("revision", 0)
     if revision < current_revision:
         return False, current_revision
-    from .navigation_waiting import wait_epoch
+    from .navigation_waiting import wait_epoch, operation_refs
     # Derived display metadata only; never write it into native task authority.
     # A cold bounded observation may already carry this exact projection.
     session["_navigationTask"] = {
@@ -772,6 +772,7 @@ def observe_task(service, session, observation):
         ("id", "revision", "status", "continuationEpoch", "blockProvenance")}
     session["_navigationTask"]["dependencyWaitEpoch"] = (
         wait_epoch(returned) if "changes" in returned else returned.get("dependencyWaitEpoch"))
+    session["_navigationTask"].update(operation_refs(returned))
     controls["task.get"] = {**previous, **{key: observation[key] for key in
         ("task", "history", "goal", "continuity", "continuationSupported") if key in observation}}
     session["task"] = observation["task"]
