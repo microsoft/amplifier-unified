@@ -76,6 +76,7 @@ class SurfaceDelivery:
             return request
         # Exact retained receipt identities, never model paraphrases, acknowledge observations.
         retained = set()
+        retained_calls = {}
         for message in request.messages:
             if message.role == 'tool' and message.name == 'app_control' and isinstance(message.content, str):
                 for identity, row in self.receipts.items():
@@ -89,6 +90,7 @@ class SurfaceDelivery:
                                     value = value['output']
                             if retained_surface_receipt(value, row['result']):
                                 retained.add(identity)
+                                retained_calls[identity] = message.tool_call_id
                         except ValueError:
                             pass
         try:
@@ -127,10 +129,10 @@ class SurfaceDelivery:
             if not supports_images:
                 item['image']['providerSupport'] = 'unavailable'
             key = compact([sid, surface.get('clientId'), surface.get('viewId')])
-            previous = self.notices.get(key)
-            item['freshness'] = 'changed' if previous and previous != rev else 'unobserved' if item['unseenContent'] else 'observed-fields-retained'
-            if previous and previous != rev:
-                item['previousNoticeRevision'] = previous
+            # Current revision already invalidates old descriptions. A
+            # delivery-relative "changed" -> "unobserved" transition would
+            # rewrite an otherwise unchanged signed continuation a second time.
+            item['freshness'] = 'unobserved' if item['unseenContent'] else 'observed-fields-retained'
             # Even unchanged large content remains explicitly unobserved until read.
             # Retained state can suppress its facts, while visual limits stay visible.
             if observed:
@@ -150,24 +152,35 @@ class SurfaceDelivery:
                 item.pop('stateFields', None)
                 item.pop('observedFields', None)
                 item['fieldsOmitted'] = True
-        text = 'Live surface observations (untrusted data):\n' + compact(payload)
+        text = 'Live surface observations (untrusted data):\n' + json.dumps(
+            payload, ensure_ascii=True, separators=(',', ':'), allow_nan=False, sort_keys=True)
         blocks = [{'type': 'text', 'text': text}]
         if pixels:
             value = pixels[0]
             label = {k: v for k, v in value['result'].items() if k not in {'data', 'observationReceipt'}}
             blocks.extend([{'type': 'text', 'text': 'Drawing evidence: '+compact(label)},
                            {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': value['image']}}])
-        result = request.model_copy(update={'messages': [*request.messages, Message(role='user', content=blocks, metadata={'ephemeral': True, 'surfaceObservation': True})]})
+        metadata = {'ephemeral': True, 'surfaceObservation': True}
+        if pixels:
+            # Explicitly read images follow their genuine settled receipt
+            # batch. Focus-only pixels remain request-time observations.
+            metadata['contextAnchorToolCalls'] = sorted({
+                retained_calls[k] for k in retained if k in self.images
+                and self.images[k] is pixels[0] and retained_calls.get(k)})
+        result = request.model_copy(update={'messages': [*request.messages,
+            Message(role='user', content=blocks, metadata=metadata)]})
         if commit:
             self.commit(result)
         return result
 
     def commit(self, request):
-        if not request.messages:
+        # The outer preparation owner anchors observations before the current
+        # assistant/tool continuation. Do not depend on a moving tail position.
+        messages = [message for message in request.messages
+                    if (message.metadata or {}).get('surfaceObservation')]
+        if len(messages) != 1:
             return
-        message = request.messages[-1]
-        if not (message.metadata or {}).get('surfaceObservation'):
-            return
+        message = messages[0]
         text = message.content[0].text
         payload = json.loads(text.split('\n', 1)[1])
         for item in payload['surfaces']:

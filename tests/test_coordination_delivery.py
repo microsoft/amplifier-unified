@@ -86,6 +86,36 @@ async def test_budget_and_transport_share_one_observation_then_next_request_refr
     assert len(reads) == 2 and measured == transported and measured[0] != measured[1]
 
 
+async def test_prompt_clock_allowlist_preserves_semantic_times_versions_and_source_dto():
+    current = {
+        'capturedAt': 1000, 'awareness': {'observedAt': 1001, 'revision': 'stable', 'declaredAt': 900},
+        'grants': [{'id': 'grant', 'expiresAt': 2000, 'createdAt': 800}],
+        'source': {'capturedAt': 700},
+        'work': {'available': True, 'discovery': empty_discovery(),
+                 'required': unavailable_requirements()},
+    }
+    before = copy.deepcopy(current)
+    async def bridge(operation, args):
+        return current
+    delivery = CoordinationDelivery(Previous(), bridge)
+    first = await delivery.prepare(request(), None)
+    assert current == before
+    current['capturedAt'] += 10
+    current['awareness']['observedAt'] += 10
+    current['work']['discovery']['observedAt'] += 10
+    second = await delivery.prepare(request(), None)
+    assert first.messages[-1].content == second.messages[-1].content
+    shown = observation(second)
+    assert shown['awareness']['declaredAt'] == 900
+    assert shown['grants'][0] == current['grants'][0]
+    assert shown['source']['capturedAt'] == 700
+    assert shown['work']['discovery']['observationVersion'] == current['work']['discovery']['observationVersion']
+    assert shown['work']['discovery']['snapshotVersion'] == current['work']['discovery']['snapshotVersion']
+    current['grants'][0]['expiresAt'] -= 1
+    changed = await delivery.prepare(request(), None)
+    assert changed.messages[-1].content != second.messages[-1].content
+
+
 # Producer contract inspected at ce64785720c24081c352baa9e210f0f743c3fb24:
 # .work.discovery is the context DTO; .work.required is invocation provenance.
 # A discovery result never establishes the relevant set or authorizes effects.
@@ -593,6 +623,36 @@ async def installed_work_adapter(app):
     required = (await current_work(app, child))['required']
     assert required['status'] == 'available'
     return await InstalledWorkAdapter().setup(app, child), child, required
+
+
+async def test_current_work_plaintext_follows_last_acquiring_batch_not_later_continuation(app):
+    adapter, _, required = await installed_work_adapter(app)
+    await adapter.fill(required)
+    acquired_end = len(adapter.request().messages)
+    adapter.messages.append(Message(role='assistant', content='Later unrelated continuation.'))
+    measured, sent = [], []
+    class Provider:
+        async def request_budget(self, value, **kwargs):
+            measured.append(value.model_copy(deep=True))
+            return {'tokens': 100}
+        async def complete(self, value, **kwargs):
+            sent.append(value.model_copy(deep=True))
+            return {}
+    wrapped = adapter.capabilities['web.provider_transform'](Provider())
+    original = adapter.request()
+    before = original.model_copy(deep=True)
+    await wrapped.request_budget(original)
+    await wrapped.complete(original)
+    plaintext = next(message for message in sent[0].messages
+                     if (message.metadata or {}).get('workPlaintextObservation'))
+    # Ambient coordination precedes the tool batches, explicit detail follows
+    # their last genuine settled receipt, not the unrelated assistant message.
+    assert sent[0].messages.index(plaintext) == acquired_end + 1
+    assert sent[0].messages[-1].content == 'Later unrelated continuation.'
+    assert plaintext.metadata['contextAnchorToolCalls']
+    assert adapter.delivery.work_request(sent[0]) is not None
+    assert adapter.delivery.request_coverage(sent[0])['complete']
+    assert measured == sent and original == before
 
 
 @pytest.mark.parametrize('fault', ['none', 'missing_guard', 'new_input', 'overflow', 'new_generation'])
