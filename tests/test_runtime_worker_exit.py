@@ -298,3 +298,83 @@ async def test_stale_owner_cannot_rebind_retry_or_replacement(tmp_path,late,repl
         assert turn['phase']=='running'
     finally:
         await service.close()
+
+
+@pytest.mark.parametrize('replacement',[False,True])
+async def test_confirmed_current_process_cleans_controls_before_generation(tmp_path,monkeypatch,replacement):
+    runtime=RuntimeManager(command=['unused'])
+    service=AppService(tmp_path/'app',runtime,workspace=tmp_path)
+    session=service._new_session({'title':'Controls before generation'})
+    service.state['sessions']=[session]
+    calls=[]
+    monkeypatch.setattr(service.operations,'interrupted',lambda sid:calls.append('operations'))
+    monkeypatch.setattr(service.schedules,'runtime_ended',lambda s:calls.append('schedules'))
+    row={'runtimeOwnerId':'old-process','emit':service.on_runtime_event,'executionEnded':False}
+    runtime.workers[session['id']]=({'runtimeOwnerId':'replacement'} if replacement else row)
+    try:
+        await runtime._execution_ended(session['id'],row,'interrupted')
+        assert calls==([] if replacement else ['operations','schedules'])
+        assert not session.get('execution',{}).get('turns')
+    finally:
+        runtime.workers.clear()
+        await service.close()
+
+
+async def test_current_process_exit_preserves_terminal_operation_and_marks_unfinished_unknown(tmp_path):
+    from test_operations import event, output, final
+    runtime=RuntimeManager(command=['unused'])
+    service=AppService(tmp_path/'app',runtime,workspace=tmp_path)
+    session=service._new_session({'title':'Idle operations'})
+    service.state['sessions']=[session];sid=session['id']
+    row={'runtimeOwnerId':'process','emit':service.on_runtime_event}
+    runtime.workers[sid]=row
+    try:
+        await service.operations.observe(sid,sid,event())
+        await service.operations.observe(sid,sid,output())
+        await service.operations.observe(sid,sid,final())
+        await service.operations.observe(sid,sid,event('unfinished'))
+        await runtime._execution_ended(sid,row,'interrupted')
+        assert service.operations.status(sid,'p1')['state']=='completed'
+        assert service.operations.status(sid,'unfinished')['state']=='outcome_unknown'
+    finally:
+        runtime.workers.clear()
+        await service.close()
+
+
+async def test_accepted_schedule_before_start_is_settled_by_current_process(tmp_path,monkeypatch):
+    from test_schedules import fixture, schedule
+    service,runtime,now,sid=await fixture(tmp_path,monkeypatch)
+    manager=RuntimeManager(command=['unused'])
+    row={'runtimeOwnerId':'process','emit':service.on_runtime_event}
+    runtime.workers={sid:row}
+    try:
+        record=await schedule(service,sid,now[0])
+        now[0]+=61;await service.schedules.tick()
+        run=service.schedules.store.runs(sid)[0]
+        assert run['phase'] in {'accepted','running'}
+        await manager._execution_ended(sid,row,'interrupted')
+        assert service.schedules.store.run(sid,run['id'])['phase']=='unknown'
+        assert service.schedules.store.get(sid,record['id'])['status']=='needs_review'
+    finally:
+        runtime.workers.clear()
+        await service.close()
+
+
+async def test_delayed_start_cannot_cross_stop_epoch(tmp_path):
+    from amplifier_web.execution import ensure_turn
+    service=AppService(tmp_path/'app',SimpleNamespace(close=AsyncMock()),workspace=tmp_path)
+    session=service._new_session({'title':'Stop epoch'})
+    service.state['sessions']=[session];ensure_turn(session,'input')
+    session['interruptionRevision']=1
+    start={'sessionId':session['id'],'rootSessionId':session['id'],'event':'generation.started',
+           'initial_input_id':'input','generation_id':'old-generation','observedAt':time.time(),
+           'runtimeOwnerId':'old-process','interruptionRevision':0}
+    try:
+        await service.on_runtime_event('runtime.generation',start)
+        turn=session['execution']['turns'][0]
+        assert not turn.get('runtimeOwnerId')
+        await service.on_runtime_event('runtime.generation',{**start,'generation_id':'new-generation',
+            'runtimeOwnerId':'new-process','interruptionRevision':1,'observedAt':time.time()})
+        assert turn['runtimeOwnerId']=='new-process'
+    finally:
+        await service.close()
