@@ -70,9 +70,8 @@ def test_restart_receipt_detaches_and_preserves_exact_birth():
     assert result["run"]["created"] == "134000000000000001"
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("stop", [True, False])
-async def test_supervised_host_closes_normally_with_distinct_restart_exit(monkeypatch, stop):
+def test_supervised_host_closes_normally_with_distinct_restart_exit(monkeypatch, stop):
     from aiohttp.web_runner import GracefulExit
     runner = object.__new__(runtime.Runner)
     runner.spec = SimpleNamespace(supervised=True)
@@ -82,13 +81,12 @@ async def test_supervised_host_closes_normally_with_distinct_restart_exit(monkey
     runner.stop_requested = lambda: stop
     monkeypatch.setattr(runtime, "read_restart", lambda spec: restart())
     with pytest.raises(GracefulExit):
-        await runner.watch()
+        asyncio.run(runner.watch())
     assert runner.exit_code == (0 if stop else runtime.RESTART_EXIT)
     assert phases == ["stopping"]
 
 
-@pytest.mark.asyncio
-async def test_prior_run_restart_never_restarts_the_current_host(monkeypatch):
+def test_prior_run_restart_never_restarts_the_current_host(monkeypatch):
     runner = object.__new__(runtime.Runner)
     runner.spec = SimpleNamespace(supervised=True)
     runner.record, runner.exit_code = record(), 0
@@ -99,7 +97,7 @@ async def test_prior_run_restart_never_restarts_the_current_host(monkeypatch):
         raise asyncio.CancelledError
     monkeypatch.setattr(runtime.asyncio, "sleep", stop_observing)
     with pytest.raises(asyncio.CancelledError):
-        await runner.watch()
+        asyncio.run(runner.watch())
     assert runner.exit_code == 0
 
 
