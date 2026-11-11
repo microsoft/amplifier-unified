@@ -5,7 +5,8 @@ import './dependency-waiting.css';
 // Host-derived request relationships only. Expanding is private presentation;
 // following a link uses the normal selection action and never sends a draft.
 export function DependencyWaiting({activity,sessionId,act}){
- const waiting=activity?.sessionId===sessionId&&activity.waiting;
+ if(!sessionId||activity?.sessionId!==sessionId)return null;
+ const waiting=activity.waiting;
  if(!waiting?.targets?.length)return null;
  const pending=!waiting.phase||waiting.phase==='pending';
  const Icon=activity.kind==='attention'?(waiting.phase==='decision'?CircleHelp:AlertCircle):Clock3;
