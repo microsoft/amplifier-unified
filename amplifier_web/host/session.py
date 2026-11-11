@@ -649,8 +649,16 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
             allowed, denied = f'allowed_{kind}_paths', f'denied_{kind}_paths'
             if allowed in policy and allowed in current:
                 shared, local = paths(policy[allowed]), paths(current[allowed])
-                policy[allowed] = list(dict.fromkeys(str(a if a.is_relative_to(b) else b)
-                    for a in shared for b in local if a.is_relative_to(b) or b.is_relative_to(a)))
+                # Preserve an already permitted declaration, including its
+                # order. Expanding it into redundant shared descendants makes
+                # repeated host projection drift even without an access change.
+                restricted = []
+                for path in local:
+                    if any(path.is_relative_to(root) for root in shared):
+                        restricted.append(path)
+                    else:
+                        restricted.extend(root for root in shared if root.is_relative_to(path))
+                policy[allowed] = list(dict.fromkeys(str(path) for path in restricted))
             elif allowed in policy:
                 policy[allowed] = [str(path) for path in paths(policy[allowed])]
             if denied in policy:

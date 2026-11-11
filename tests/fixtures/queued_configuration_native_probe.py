@@ -208,7 +208,7 @@ def finish_cleanup_evidence(root, report, primary_failure):
             raise AssertionError(detail)
 
 
-async def worker(root, mutant, continuation=False, targeted=False, nested_revocation=False):
+async def worker(root, mutant, continuation=False, targeted=False, nested_revocation=False, producer_roundtrip=False):
     from amplifier_web import configuration_recovery
     from amplifier_web.runtime_controls import RuntimeControls, override_path
     from amplifier_web.runtime_worker import Worker, configure_protocol
@@ -253,7 +253,7 @@ async def worker(root, mutant, continuation=False, targeted=False, nested_revoca
             raise ValueError("Synthetic one-shot pre-write refusal")
         return plan
 
-    if not continuation and not targeted:
+    if not continuation and not targeted and not producer_roundtrip:
         RuntimeControls.prepare_configuration = refuse_once
     source = inspect.getsource(configuration_recovery.native_apply)
     needle = "    controls.save_configuration(plan)\n"
@@ -281,7 +281,7 @@ async def until(predicate, *, seconds=30):
             await asyncio.sleep(.02)
 
 
-async def probe(root, mutant, continuation=False, targeted=False, update_held=False, nested_revocation=False):
+async def probe(root, mutant, continuation=False, targeted=False, update_held=False, nested_revocation=False, producer_roundtrip=False):
     root.mkdir(parents=True, exist_ok=False)
     workspace, shared, home = (root / name for name in ("workspace", "shared", "app"))
     workspace.mkdir()
@@ -330,6 +330,11 @@ async def probe(root, mutant, continuation=False, targeted=False, update_held=Fa
                     "context": {"module": "context-simple", "source": paths["context-simple"]}},
         "providers": [declaration],
         "tools": [{"module": "tool-filesystem", "source": paths["tool-filesystem"]}]}
+    path_policy = "--write-policy-order" in sys.argv
+    if path_policy:
+        external = root / "external"
+        external.mkdir()
+        bundle_plan["tools"][0]["config"] = {"allowed_write_paths": [str(external)]}
     if nested_revocation:
         specialist = root / "specialist"
         specialist.mkdir()
@@ -338,11 +343,22 @@ async def probe(root, mutant, continuation=False, targeted=False, update_held=Fa
             "agents": {"deep": {"instruction": "Retained nested specialist.",
                 "agents": "none", "tools": [
                     {"module": "tool-recovery-specialist", "source": str(specialist)}]}}}}
+    if producer_roundtrip:
+        # Real Core/Foundation mount and host policy, with no provider/tool
+        # execution. A retained child declaration exercises full-plan copying.
+        bundle_plan["agents"] = {"retained": {
+            "instruction": "Synthetic retained child", "agents": "none",
+            "tools": [{"module": "tool-filesystem", "source": paths["tool-filesystem"],
+                       "config": {"allowed_write_paths": [str(workspace)]}}]}}
     bundle.write_text(yaml.safe_dump(bundle_plan))
-    (shared / "settings.yaml").write_text(yaml.safe_dump({
+    settings = {
         "bundle": {"active": str(bundle), "app": []},
         "web_bundles": {"excluded": list(APPENDED_DEFAULTS)},
-        "sources": {"modules": {**paths, "provider-recovery": str(provider.parent)}}}))
+        "sources": {"modules": {**paths, "provider-recovery": str(provider.parent)}}}
+    if path_policy:
+        settings["overrides"] = {"tool-filesystem": {
+            "config": {"allowed_write_paths": [str(root / "external")]}}}
+    (shared / "settings.yaml").write_text(yaml.safe_dump(settings))
     command = [sys.executable, "-u", str(Path(__file__).resolve()), "--worker", str(root)]
     if mutant:
         command.append("--skip-save")
@@ -352,6 +368,10 @@ async def probe(root, mutant, continuation=False, targeted=False, update_held=Fa
         command.append("--targeted-saved")
     if nested_revocation:
         command.append("--revoke-nested-preparation")
+    if producer_roundtrip:
+        command.append("--producer-roundtrip")
+    if path_policy:
+        command.append("--write-policy-order")
     runtime = RuntimeManager(command=command, startup_timeout=45,
         retention={"prewarm_on_select": False})
     web_app = await create_app(home, workspace=workspace, runtime=runtime,
@@ -390,6 +410,9 @@ async def probe(root, mutant, continuation=False, targeted=False, update_held=Fa
             runtime.stop = saved_stop
         assert not calls.exists(), "Mounting must not invoke the provider."
         initial = await runtime.control(sid, "configuration.inspect", {})
+        if producer_roundtrip:
+            await plan_roundtrip(app, runtime, owner, action, root, initial, processes, calls, report)
+            return
         if nested_revocation:
             assert initial["plan"]["agents"] == bundle_plan["agents"]
             report["retainedNestedReadback"] = True
@@ -547,6 +570,78 @@ async def probe(root, mutant, continuation=False, targeted=False, update_held=Fa
                     processes=[{"pid": p.pid, "returncode": p.returncode} for p in processes],
                     runtimeRowsAfterClose=len(runtime.workers))
                 finish_cleanup_evidence(root, report, primary_failure)
+
+
+async def plan_roundtrip(app, runtime, owner, action, root, initial, processes, calls, report):
+    """Actual native save/remount, not the transport fixture's copied dictionary."""
+    from amplifier_web.configuration_authority import fingerprint
+    from amplifier_web.configuration_readback import matches
+    from amplifier_web.configuration_recovery import evidence
+    from amplifier_web.runtime_controls import override_path, PLAN_KEYS
+
+    sid = owner["id"]
+    report["producerRoundtrip"] = []
+    # An idle control-only worker may have released its lease. Native apply
+    # reacquires it through the ordinary command owner; do not invent a turn.
+    report["initialWriterAvailable"] = await writer_available(owner["workspace"], sid)
+    public_shape = "--public-request-shape" in sys.argv
+    path_policy = "--write-policy-order" in sys.argv
+    for label in (("historical-public-structure",) if public_shape else ("unchanged", "append-write-path")):
+        desired = copy.deepcopy(initial["plan"])
+        if public_shape:
+            # Historical request-side structure only. Not the missing original
+            # worker pair: these declarations and paths are all synthetic.
+            desired["agents"] = {name: {"name": name} for name in desired.get("agents", {})}
+            desired["session"]["orchestrator"]["source"] = (
+                "git+https://github.com/microsoft/amplifier-module-loop-live@main")
+            desired["session"]["orchestrator"]["config"]["configured_bundle"] = True
+        if label == "append-write-path":
+            row = next(row for row in desired["tools"] if row["module"] == "tool-filesystem")
+            row["config"]["allowed_write_paths"].append(
+                str(owner["workspace"]) if path_policy else str(root / "assigned-checkout"))
+        expected = copy.deepcopy(desired)
+        await action("configuration.apply", {"id": sid, "config": desired, "whenIdle": True},
+                     "producer-" + label)
+        await until(lambda: sid not in app.management.pending_config_tasks
+            and owner.get("pendingConfiguration", {}).get("phase") in {"ready", "error"}, seconds=60)
+        pending = owner["pendingConfiguration"]
+        record = app.management.configuration_record(sid, pending["operationId"])
+        assert record["request"]["config"] == expected
+        assert len(record["attempts"]) == 1
+        attempt = record["attempts"][0]
+        assert evidence(attempt, home=app.data_dir)["effect"] == "saved_not_mounted"
+        if sid in runtime.workers and runtime.workers[sid]["process"] not in processes:
+            processes.append(runtime.workers[sid]["process"])
+        actual = (await runtime.control(sid, "configuration.inspect", {}))["plan"]
+        saved = json.loads(override_path(attempt["nativeSessionId"]).read_text())
+        # Values, arbitrary keys, agent names and secret hashes stay out of
+        # retained evidence. Equality booleans locate the producer boundary.
+        comparison = {"scenario": label, "savedMatchesRequest": matches(expected, saved),
+            "loadedMatchesRequest": matches(expected, actual), "attempts": len(record["attempts"]),
+            "phase": record["state"]["phase"], "effect": record["state"]["effect"],
+            "sections": {key: {"equal": fingerprint(expected.get(key)) == fingerprint(actual.get(key)),
+                              "expectedType": type(expected.get(key)).__name__,
+                              "actualType": type(actual.get(key)).__name__}
+                         for key in sorted(PLAN_KEYS)},
+            "disabledRows": sum(row.get("enabled") is False for key in ("providers", "tools", "hooks")
+                                for row in expected.get(key, [])),
+            "loopSource": {"expectedKind": "git" if expected["session"]["orchestrator"].get("source", "").startswith("git+") else "local",
+                           "actualKind": "git" if actual["session"]["orchestrator"].get("source", "").startswith("git+") else "local"},
+            "agentFields": {"expected": sorted(len(value) for value in expected.get("agents", {}).values()),
+                            "actual": sorted(len(value) for value in actual.get("agents", {}).values())}}
+        expected_writer = next(row for row in expected["tools"] if row["module"] == "tool-filesystem")
+        actual_writer = next(row for row in actual["tools"] if row["module"] == "tool-filesystem")
+        before_paths = expected_writer.get("config", {}).get("allowed_write_paths", [])
+        after_paths = actual_writer.get("config", {}).get("allowed_write_paths", [])
+        comparison["writerPaths"] = {"expectedCount": len(before_paths), "actualCount": len(after_paths),
+            "sameMembers": set(before_paths) == set(after_paths), "sameOrder": before_paths == after_paths}
+        report["producerRoundtrip"].append(comparison)
+        assert comparison["savedMatchesRequest"]
+        assert record["state"]["phase"] == "ready" and comparison["loadedMatchesRequest"], comparison
+        assert not calls.exists(), "No native provider turn is needed for a plan roundtrip."
+        initial = {"plan": actual}
+    report.update(attempts=1 if public_shape else 2, oneSavePerOperation=True, noTargetProviderCalls=True,
+                  mountedPlanVerified=True, nativeId=sid)
 
 
 async def settings_continuation(app, runtime, owner, action, root, workspace,
@@ -805,7 +900,7 @@ async def update_terminal_held(app, runtime, owner, root, calls, record, report)
                   nativeId=record['attempts'][0]['nativeSessionId'])
 
 
-async def bounded_probe(root, mutant, continuation=False, targeted=False, update_held=False, nested_revocation=False):
+async def bounded_probe(root, mutant, continuation=False, targeted=False, update_held=False, nested_revocation=False, producer_roundtrip=False):
     # Parent timeout asks for ordinary cancellation so the probe's finally can
     # close real workers and release their writer before the process exits.
     loop, task = asyncio.get_running_loop(), asyncio.current_task()
@@ -817,7 +912,7 @@ async def bounded_probe(root, mutant, continuation=False, targeted=False, update
         loop.add_signal_handler(signum, cancel_once)
     try:
         async with asyncio.timeout(150):
-            await probe(root, mutant, continuation, targeted, update_held, nested_revocation)
+            await probe(root, mutant, continuation, targeted, update_held, nested_revocation, producer_roundtrip)
     finally:
         for signum in signals:
             loop.remove_signal_handler(signum)
@@ -826,8 +921,8 @@ async def bounded_probe(root, mutant, continuation=False, targeted=False, update
 if __name__ == "__main__":
     if sys.argv[1] == "--worker":
         asyncio.run(worker(Path(sys.argv[2]), "--skip-save" in sys.argv, "--settings-continuation" in sys.argv,
-            "--targeted-saved" in sys.argv, "--revoke-nested-preparation" in sys.argv))
+            "--targeted-saved" in sys.argv, "--revoke-nested-preparation" in sys.argv, "--producer-roundtrip" in sys.argv))
     else:
         asyncio.run(bounded_probe(Path(sys.argv[1]), "--skip-save" in sys.argv, "--settings-continuation" in sys.argv,
             "--targeted-saved" in sys.argv or "--update-held" in sys.argv,
-            "--update-held" in sys.argv, "--revoke-nested-preparation" in sys.argv))
+            "--update-held" in sys.argv, "--revoke-nested-preparation" in sys.argv, "--producer-roundtrip" in sys.argv))
