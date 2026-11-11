@@ -10,17 +10,12 @@ def dependency(task):
     return bool(task.get('blockProvenance') is not None and dependency_blocked(task))
 
 
-# A rebuildable scalar index over commands. Triggers share the command's own
-# transaction; this table cannot admit work or settle a result.
-PENDING = """json_extract(receipt,'$.commandAction')='coordination.send'
+# A rebuildable presentation index over commands, including returned results.
+# Notification eligibility is deliberately NOT dependency ownership.
+ELIGIBLE = """json_extract(receipt,'$.commandAction')='coordination.send'
  AND json_extract(receipt,'$.protocol')=2
  AND json_extract(receipt,'$.subscription.notificationVersion')=2
  AND json_extract(receipt,'$.subscription.supported')=1
- AND json_extract(receipt,'$.subscription.status')='waiting'
- AND json_extract(receipt,'$.subscription.open')=1
- AND json_extract(receipt,'$.response') IS NULL
- AND json_extract(receipt,'$.terminalOutcome') IS NULL
- AND json_extract(receipt,'$.delivery') IN ('queued','accepted','pending_steer','started','applied')
  AND json_extract(receipt,'$.cancellation') IS NULL"""
 KEYS = """json_extract(receipt,'$.senderSessionId'),
  json_extract(receipt,'$.subscription.taskId'),
@@ -30,12 +25,26 @@ KEYS = """json_extract(receipt,'$.senderSessionId'),
  json_extract(receipt,'$.sourceInputIds[#-1]')"""
 TARGET = "json_extract(receipt,'$.target.sessionId')"
 TITLE = "substr(json_extract(receipt,'$.target.title'),1,200)"
+FACTS = {
+    'workspace': '$.workspace', 'delivery': '$.delivery',
+    'wait_status': '$.subscription.status', 'wait_open': '$.subscription.open',
+    'response_status': '$.response.status', 'response_kind': '$.response.kind',
+    'response_outcome': '$.response.outcome', 'response_qualified': '$.response.qualified',
+    'response_revision': '$.response.outcomeRevision',
+    'terminal_status': '$.terminalOutcome.status', 'terminal_outcome': '$.terminalOutcome.outcome',
+    'terminal_revision': '$.terminalOutcome.outcomeRevision',
+}
+COLUMNS = ('id', 'sender', 'task_id', 'interruption', 'epoch', 'generation',
+           'input_id', 'target', 'title', *FACTS)
+OPEN_WAIT = """wait_open=1 AND wait_status IN ('waiting','backpressured')
+ AND response_status IS NULL AND terminal_status IS NULL
+ AND delivery IN ('queued','accepted','pending_steer','started','applied')"""
 
 
 def initialize(db):
     if not db.execute("SELECT 1 FROM sqlite_master WHERE name='commands'").fetchone():
         return
-    if db.execute("SELECT 1 FROM sqlite_master WHERE name='navigation_pending_requests'").fetchone():
+    if db.execute("SELECT 1 FROM sqlite_master WHERE name='navigation_dependency_requests'").fetchone():
         return
     db.execute('SAVEPOINT navigation_wait_init')
     try:
@@ -48,28 +57,35 @@ def initialize(db):
 
 
 def _initialize(db):
-    db.execute('''CREATE TABLE navigation_pending_requests(
+    # Replace only the old derived index, atomically. Canonical receipts and
+    # admission/return subscriptions are never rewritten.
+    for name in ('insert', 'update', 'delete'):
+        db.execute(f'DROP TRIGGER IF EXISTS navigation_wait_{name}')
+    db.execute('DROP TABLE IF EXISTS navigation_pending_requests')
+    db.execute(f'''CREATE TABLE navigation_dependency_requests(
         id TEXT PRIMARY KEY,sender TEXT,task_id TEXT,interruption INTEGER,epoch INTEGER,
-        generation TEXT,input_id TEXT,target TEXT,title TEXT)''')
-    db.execute('CREATE INDEX navigation_pending_scope ON navigation_pending_requests(sender,task_id,interruption,epoch,generation,input_id)')
-    db.execute('CREATE INDEX navigation_pending_target ON navigation_pending_requests(target,sender)')
-    values = f'{KEYS},{TARGET},{TITLE}'
-    insert = f"INSERT OR REPLACE INTO navigation_pending_requests SELECT new.id,{values.replace('receipt,', 'new.receipt,')} WHERE {PENDING.replace('receipt,', 'new.receipt,')};"
+        generation TEXT,input_id TEXT,target TEXT,title TEXT,
+        {','.join(FACTS)})''')
+    db.execute('CREATE INDEX navigation_dependency_scope ON navigation_dependency_requests(sender,task_id,interruption,epoch,generation,input_id)')
+    db.execute(f'CREATE INDEX navigation_dependency_target ON navigation_dependency_requests(target,sender) WHERE {OPEN_WAIT}')
+    values = f'{KEYS},{TARGET},{TITLE},' + ','.join(
+        f"json_extract(receipt,'{path}')" for path in FACTS.values())
+    insert = f"INSERT OR REPLACE INTO navigation_dependency_requests SELECT new.id,{values.replace('receipt,', 'new.receipt,')} WHERE {ELIGIBLE.replace('receipt,', 'new.receipt,')};"
     for event in ('INSERT', 'UPDATE OF receipt'):
         name = 'insert' if event == 'INSERT' else 'update'
         db.execute(f'''CREATE TRIGGER navigation_wait_{name} AFTER {event} ON commands BEGIN
-            DELETE FROM navigation_pending_requests WHERE id=new.id;
+            DELETE FROM navigation_dependency_requests WHERE id=new.id;
             {insert} END''')
     db.execute('''CREATE TRIGGER navigation_wait_delete AFTER DELETE ON commands BEGIN
-        DELETE FROM navigation_pending_requests WHERE id=old.id; END''')
+        DELETE FROM navigation_dependency_requests WHERE id=old.id; END''')
     # One migration/backfill, not a navigation read. Canonical bytes stay intact.
-    db.execute(f'INSERT INTO navigation_pending_requests SELECT id,{values} FROM commands WHERE {PENDING}')
+    db.execute(f'INSERT INTO navigation_dependency_requests SELECT id,{values} FROM commands WHERE {ELIGIBLE}')
 
 
 def affected_sources(db, target):
-    """Lifecycle publication visits actual pending dependants, never history."""
+    """Only open pending subscriptions need recipient lifecycle publication."""
     return {row[0] for row in db.execute(
-        "SELECT DISTINCT sender FROM navigation_pending_requests WHERE target=?",
+        f"SELECT DISTINCT sender FROM navigation_dependency_requests WHERE target=? AND {OPEN_WAIT}",
         (target,)) if row[0]}
 
 
@@ -138,9 +154,54 @@ def save_task(db, sid, task):
     """Derived scalar metadata owned by the existing directory transaction."""
     import json
     keys = ('id', 'status', 'revision', 'continuationEpoch', 'blockProvenance', 'dependencyWaitEpoch')
-    value = json.dumps({key: task.get(key) for key in keys}, separators=(',', ':'))
+    value = json.dumps({**{key: task.get(key) for key in keys},
+                        **operation_refs(task)}, separators=(',', ':'))
     db.execute('''INSERT INTO history_navigation_tasks VALUES(?,?)
         ON CONFLICT(id) DO UPDATE SET value=excluded.value WHERE value!=excluded.value''', (sid, value))
+
+
+def operation_refs(task):
+    """Existing owner-authored references, bounded before cold persistence."""
+    refs = task.get('operationIds')
+    if not isinstance(refs, list):
+        return {}
+    return {'operationIds': [ref for ref in refs[:LIMIT + 1]
+                             if isinstance(ref, str) and 0 < len(ref) <= 200],
+            'operationIdsCount': task.get('operationIdsCount', len(refs))}
+
+
+def disposition(row):
+    """Fixed labels over saved scalar facts; no report/reason text inference."""
+    delivery = row['delivery']
+    if delivery == 'unknown':
+        return 'unknown', 'Dependency outcome unknown', 'attention'
+    if delivery in {'rejected', 'not_sent', 'expired', 'failed'}:
+        return 'failed', 'Dependency request failed', 'attention'
+    status, outcome, qualified = row['response_status'], row['response_outcome'], row['response_qualified']
+    if row['response_kind'] == 'ack':
+        status = outcome = qualified = None
+    if row['terminal_status'] == 'observed' and (
+            status is None or (row['terminal_revision'] or 0) >= (row['response_revision'] or 0)):
+        status, outcome, qualified = 'observed', row['terminal_outcome'], False
+    if status == 'unknown' or outcome == 'unknown':
+        return 'unknown', 'Dependency outcome unknown', 'attention'
+    if outcome in {'declined', 'cancelled'}:
+        return outcome, 'Dependency ' + outcome, 'attention'
+    if status == 'rejected' or outcome == 'failed':
+        return 'failed', 'Dependency failed', 'attention'
+    if outcome in {'question', 'conflict'}:
+        return 'decision', 'Dependency decision requested', 'attention'
+    if status in {'staged', 'sealed', 'observed'} and outcome == 'success':
+        # A sealed success is a report, not independent acceptance or task completion.
+        return ('returned', 'Dependency result ready', 'waiting') if qualified else (
+            'reported', 'Dependency result reported', 'waiting')
+    if outcome == 'deferred':
+        return 'deferred', 'Dependency deferred', 'waiting'
+    if (row['wait_open'] == 1 and row['wait_status'] in {'waiting', 'backpressured', 'claimed'}
+            and delivery in {'queued', 'accepted', 'pending_steer', 'started', 'applied', 'held'}):
+        return ('backpressured', 'Waiting for dependency delivery', 'waiting') if row['wait_status'] == 'backpressured' else (
+            'pending', 'Waiting for another chat', 'waiting')
+    return None
 
 
 def input_boundary(session):
@@ -166,29 +227,57 @@ def project(db, session, task):
     prior = task.get('dependencyWaitEpoch')
     if type(prior) is int and prior not in epochs:
         epochs.append(prior)
-    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='navigation_pending_requests'").fetchone():
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='navigation_dependency_requests'").fetchone():
         return None
     boundary = input_boundary(session)
-    if boundary is None:
-        return None
     rows = []
-    # Two exact epoch seeks share a total lookahead bound.
-    for value in epochs:
-        rows.extend(db.execute("""SELECT target,title FROM navigation_pending_requests
-            WHERE sender=? AND task_id=? AND interruption=?
-            AND epoch=? AND generation=? AND input_id=?
-            LIMIT ?""", (session['id'], task['id'], session.get('interruptionRevision', 0),
-                         value, *boundary, LIMIT + 1 - len(rows))).fetchall())
+    refs = operation_refs(task).get('operationIds', [])
+    # Explicit owner references may outlive the model callback, but retain the
+    # exact sender/task/pre-block epoch, interruption and workspace boundaries.
+    if refs:
+        refs = [ref for ref in refs if isinstance(ref, str) and 0 < len(ref) <= 200]
+        rows.extend(db.execute(f"""SELECT {','.join(COLUMNS)} FROM navigation_dependency_requests
+            WHERE id IN ({','.join('?' for _ in refs)}) AND sender=? AND task_id=?
+            AND interruption=? AND epoch IN ({','.join('?' for _ in epochs)})
+            LIMIT ?""", (*refs, session['id'], task['id'],
+                         session.get('interruptionRevision', 0), *epochs, LIMIT + 1)).fetchall())
+    # Implicit association still needs exact current input/generation. Reading
+    # navigation never promotes an old callback into execution authority.
+    for value in epochs if boundary else []:
         if len(rows) > LIMIT:
             break
+        excluded = [row[0] for row in rows]
+        rows.extend(db.execute(f"""SELECT {','.join(COLUMNS)} FROM navigation_dependency_requests
+            WHERE sender=? AND task_id=? AND interruption=?
+            AND epoch=? AND generation=? AND input_id=?
+            AND id NOT IN ({','.join('?' for _ in excluded)})
+            LIMIT ?""", (session['id'], task['id'], session.get('interruptionRevision', 0),
+                         value, *boundary, *excluded, LIMIT + 1 - len(rows))).fetchall())
     targets = {}
-    for sid, title in rows[:LIMIT]:
+    phases = []
+    for raw in rows[:LIMIT]:
+        row = dict(zip(COLUMNS, raw))
+        if row['workspace'] != session.get('workspace'):
+            continue
+        state = disposition(row)
+        if state is None:
+            continue
+        phase, label, kind = state
+        sid, title = row['target'], row['title']
         if isinstance(sid, str) and sid and sid != session['id']:
-            targets.setdefault(sid, {'sessionId': sid, 'title': title or 'Conversation'})
+            phases.append(state)
+            target = targets.setdefault(sid, {'sessionId': sid, 'title': title or 'Conversation',
+                                             'phase': phase, 'label': label})
+            if kind == 'attention':
+                target.update(phase=phase, label=label)
     if not targets:
         return None
-    return {'targets': list(targets.values()), 'hasMore': len(rows) > LIMIT,
-            'basis': 'saved-request-subscription'}
+    phase, label, kind = next((item for item in phases if item[2] == 'attention'), phases[0])
+    if kind == 'waiting' and len({item[0] for item in phases}) > 1:
+        phase, label = 'mixed', 'Waiting on chat dependencies'
+    return {'targets': list(targets.values()),
+            'hasMore': len(rows) > LIMIT or task.get('operationIdsCount', 0) > LIMIT,
+            'basis': 'saved-request-subscription', 'phase': phase, 'label': label, 'kind': kind}
 
 
 def target_details(db, waiting):

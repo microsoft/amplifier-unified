@@ -71,7 +71,7 @@ def complete(directory, saved, identity):
         saved[5] if saved[5] is not None else root_navigation_part(session, notices, navigation, project))
 
 
-def parts(row, *, blocked=False, task=None, db=None):
+def parts(row, *, blocked=False, task=None, db=None, activity_fact=None):
     from .client_observations import Observations
     facts = Observations.row_facts(None,row,{},frozenset())
     session,workspace,notices = facts
@@ -83,7 +83,8 @@ def parts(row, *, blocked=False, task=None, db=None):
                    timestamp(row.get(key)) if key=='createdAt' and row.get(key) is not None else
                    row.get(key) if row.get(key) is not None else defaults.get(key)
                    for key in NAVIGATION_FIELDS],session['agentCreated'],
-                  navigation_activity(row),activity(row,False,blocked=blocked,task=task,db=db))
+                  navigation_activity(row),activity_fact if activity_fact is not None else
+                  activity(row,False,blocked=blocked,task=task,db=db,error_reviewed=True))
     return (*tuple(encoded(value) for value in ((session,workspace),
         (session['role'],notices),Observations.count_facts(facts),navigation)),
         workspace_part(session, workspace, notices, navigation, row.get('nativeProject')),
@@ -216,7 +217,10 @@ def revision(directory,state):
                    'nativeIdentity':record[COLUMNS.index('native_id')]}
         else:
             row = directory.decode(record[:len(COLUMNS)])
-            current = parts(row, blocked=raw[1]=='Work blocked')
+            fact = {'kind':record[COLUMNS.index('base_activity_kind')], 'label':raw[1]}
+            if row.get('_navigationWaiting'):
+                fact['waiting'] = row['_navigationWaiting']
+            current = parts(row, activity_fact=fact)
         retained[identity] = (raw,current)
         previous = saved_parts(directory,row)
         for index,key in enumerate(COLLECTIONS):

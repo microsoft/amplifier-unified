@@ -378,11 +378,16 @@ waiting separate from attention. A stopped or explicitly paused owner is not
 described as waiting; required questions, approvals and errors retain precedence.
 
 This is a passive projection of an agent-recorded dependency block and exact
-pending direct-request subscriptions. It is not an inventory of workers. A
+task-owned direct-request subscriptions. It is not an inventory of workers. A
 bounded typed task projection identifies the pre-block epoch without changing
-continuation authority. Existing saved source-generation/input identity prevents an
-old wait from reappearing after new input, runtime replacement, or Stop. A derived
-scalar index reads at most 17 current request references, showing at most 16 with an
+continuation authority. An ordinary implicit association requires the saved
+source-generation/input identity. It does not survive new input or runtime
+replacement. An existing owner-authored `task.operationIds` reference may keep an
+exact dependency visible across those boundaries: sender, workspace, task identity,
+pre-block epoch and interruption must still match. This optional reference is not
+required for ordinary waits, and never authorizes resumption. Stop, pause and task
+replacement invalidate the association. A derived
+scalar index reads at most 17 request references, showing at most 16 with an
 explicit continuation marker; historical receipt bodies are not decoded.
 The index is populated once when introduced; command insert/update/delete triggers
 maintain it in the canonical command transaction. It contains no request/report
@@ -391,9 +396,17 @@ task history; keyed directory task facts are refreshed by the task observation o
 Recipient lifecycle publication visits only its indexed pending dependants so
 their displayed status can refresh; this work grows with actual dependants, not
 all retained chats or receipts.
-Missing legacy identity/provenance remains **Work blocked**, never a guessed
-target. A staged or returned report leaves the live-wait view; that does not
-qualify success or resolve the task. Target errors and unavailable targets remain
+The clock describes a dependency, not a running recipient or an eligible automatic
+callback. Staged success is **Dependency result reported**; a qualified success is
+**Dependency result ready**, while the blocked owner still owns its review. Neither
+is independent acceptance or task completion. Deferred and backpressured states
+retain their distinct labels. Failed, declined or unknown results remain explicit
+attention states; a dependency question/conflict is a decision. Required human
+questions, approvals, actual execution, current unreviewed errors, interruption and
+Stop/pause take precedence over dependency presentation.
+Missing identity/provenance is neutral **Blocked — details unavailable**, never a
+guessed target, failure or request for human intervention. It remains in saved
+conversations rather than Needs you. Target errors and unavailable targets remain
 explicit. Workspace and chat rows share icon/text columns; pin/unpin remains in
 the details menu, without a redundant inline workspace pin.
 

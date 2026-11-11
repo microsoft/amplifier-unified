@@ -21,7 +21,7 @@ try{
   fixture.stdout.on('data',data=>{text+=data;for(const line of text.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row)}}catch{}});
  });
  if(process.env.AMPLIFIER_TEST_DEV){
-  const target=ready.url;vite=await createServer({configFile:false,root:root+'.build/web-client',server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,r=>r.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
+  const target=ready.url;vite=await createServer({configFile:false,root:process.env.AMPLIFIER_TEST_CLIENT||root+'.build/web-client',server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,ws:true,configure(proxy){for(const event of ['proxyReq','proxyReqWs'])proxy.on(event,r=>r.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
   await vite.listen();
  }
  browser=await chromium.launch({headless:true});
@@ -30,7 +30,7 @@ try{
  await page.goto(vite?.resolvedUrls.local[0]||ready.url);await showFixtureConversation(page,{navPinned:true});
  const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
  await expect(composer).toBeEditable();await composer.fill('Keep this draft while inspecting waits');
- const waiting=page.getByRole('region',{name:'Waiting for other chats'});
+ const waiting=page.getByRole('region',{name:'Chat dependencies'});
  const mode=async value=>{const response=await page.request.post(ready.url+'/fixture/wait',{data:{mode:value}});assert.equal(response.status(),200)};
  const select=id=>page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),id);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
@@ -62,9 +62,38 @@ try{
  await waiting.getByRole('button',{name:'Unified: Readiness',exact:true}).click();
  await expect.poll(async()=>(await state()).selectedSessionId).toBe(ready.ids[1]);
  await expect(waiting).toHaveCount(0);await select(ready.ids[0]);await expect(composer).toHaveDraft('Keep this draft while inspecting waits');
- for(const value of ['paused','stopped','ready','question','new-input']){
+ for(const [value,kind,label] of [
+  ['ready','waiting','Dependency result reported'],
+  ['returned','waiting','Dependency result ready'],
+  ['explicit-return','waiting','Dependency result ready'],
+  ['backpressured','waiting','Waiting for dependency delivery'],
+  ['deferred','waiting','Dependency deferred'],
+  ['failed','attention','Dependency failed'],
+  ['declined','attention','Dependency declined'],
+  ['unknown','attention','Dependency outcome unknown'],
+  ['decision','attention','Dependency decision requested'],
+ ]){
+  await mode(value);await expect(waiting).toBeVisible();
+  await expect.poll(async()=>(await state()).selectedActivity?.label).toBe(label);
+  const marker=nav.locator('.a-nav-chat[data-session-id="'+ready.ids[0]+'"] .a-navigation-status');
+  await expect(marker).toHaveAttribute('data-kind',kind);
+  await expect(marker).toHaveAttribute('aria-label',label);
+  assert.equal(await marker.locator('.a-progress-spinner').count(),0);
+  if(kind==='waiting')await expect(marker.locator('.lucide-clock-3')).toHaveCount(1);
+  else await expect(marker.locator(value==='decision'?'.lucide-circle-help':'.lucide-circle-alert')).toHaveCount(1);
+  await expect(composer).toHaveDraft('Keep this draft while inspecting waits');
+  observations.push({id:value,selectedActivity:(await state()).selectedActivity});
+  if(['ready','explicit-return','failed'].includes(value))await page.screenshot({path:out+'/'+value+'-desktop.png'});
+ }
+ for(const value of ['paused','stopped','question','new-input','unclassified']){
   await mode(value);await expect(waiting).toHaveCount(0);
   observations.push({id:value,selectedActivity:(await state()).selectedActivity});
+  if(['new-input','unclassified'].includes(value)){
+   const marker=nav.locator('.a-nav-chat[data-session-id="'+ready.ids[0]+'"] .a-navigation-status');
+   await expect(marker).toHaveAttribute('data-kind','idle');
+   await expect(marker).toHaveAttribute('title','Blocked — details unavailable');
+   assert.equal(await marker.locator('.lucide-circle-alert').count(),0);
+  }
  }
  await mode('recipient-error');await expect(waiting).toContainText('error');
  await mode('many');await expect(waiting.locator('summary')).toBeVisible();

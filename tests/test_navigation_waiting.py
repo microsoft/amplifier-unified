@@ -49,7 +49,8 @@ def test_saved_preblock_wait_and_many_not_arbitrary_child(db):
     assert project(db, session(), before) is None
     put(db, receipt())
     value = project(db, session(), before)
-    assert value['targets'] == [{'sessionId': 'worker', 'title': 'Worker worker'}]
+    assert value['targets'] == [{'sessionId': 'worker', 'title': 'Worker worker',
+                                'phase': 'pending', 'label': 'Waiting for another chat'}]
     assert activity(session(), task=before, db=db)['kind'] == 'waiting'
     put(db, receipt('second'), 'two')
     assert len(project(db, session(), before)['targets']) == 2
@@ -57,13 +58,8 @@ def test_saved_preblock_wait_and_many_not_arbitrary_child(db):
 
 
 @pytest.mark.parametrize('field,value', [
-    ('senderSessionId','other'), ('protocol',1), ('delivery','unknown'),
-    ('delivery','rejected'), ('delivery','expired'), ('delivery','submitting'),
+    ('senderSessionId','other'), ('protocol',1), ('delivery','submitting'),
     ('sourceGenerationId',None), ('sourceInputIds',[]), ('cancellation',{'requested':True}),
-    ('response',{'status':'staged','outcome':'success'}),
-    ('response',{'status':'qualified','outcome':'deferred'}),
-    ('response',{'status':'qualified','outcome':'failed'}),
-    ('terminalOutcome',{'outcome':'unknown'}),
 ])
 def test_inexact_settled_or_unknown_requests_are_not_live_waits(db, field, value):
     put(db, receipt(**{field:value}))
@@ -72,7 +68,7 @@ def test_inexact_settled_or_unknown_requests_are_not_live_waits(db, field, value
 
 @pytest.mark.parametrize('field,value', [
     ('taskId','old-objective'), ('taskContinuationEpoch',0), ('interruptionRevision',1),
-    ('status','claimed'), ('status','suppressed'), ('open',False), ('supported',False),
+    ('status','suppressed'), ('open',False), ('supported',False),
     ('notificationVersion',1),
 ])
 def test_old_or_missing_subscription_never_binds(db, field, value):
@@ -101,14 +97,16 @@ def test_attention_and_execution_precedence(db):
         ({'status':'error'}, 'attention'), ({'status':'stopped'}, 'paused')]:
         assert activity({**session(), **patch}, task=task(), db=db)['kind'] == expected
     assert activity(session(), task={**task(),'status':'paused'}, db=db)['kind'] == 'paused'
-    assert activity(session(), task={**task(),'blockProvenance':None}, db=db)['kind'] == 'attention'
+    assert activity(session(), task={**task(),'blockProvenance':None}, db=db) == {
+        'kind':'idle', 'label':'Blocked — details unavailable'}
 
 
 def test_projection_bound_is_independent_of_retained_receipts(db):
     put(db, receipt())
     # Same sender's settled historical requests and unrelated pending senders.
     db.executemany('INSERT INTO commands VALUES(?,?)', [
-        (str(i),json.dumps(receipt(delivery='rejected', text='private body'*1000))) for i in range(2000)])
+        (str(i),json.dumps(receipt(sourceGenerationId='historical', delivery='rejected',
+                                  text='private body'*1000))) for i in range(2000)])
     steps = 0
     def count():
         nonlocal steps
@@ -140,7 +138,7 @@ def test_pending_query_uses_covering_expressions_not_large_receipt_bodies(db):
     db.set_trace_callback(statements.append)
     assert project(db,session(),task())
     db.set_trace_callback(None)
-    query=next(sql for sql in statements if 'FROM navigation_pending_requests' in sql)
+    query=next(sql for sql in statements if 'FROM navigation_dependency_requests' in sql)
     operations=db.execute('EXPLAIN '+query).fetchall()
     print('SQLITE',sqlite3.sqlite_version,'PLAN',json.dumps(operations))
     # Expression-index reads must not invoke JSON functions over retained text.
@@ -194,21 +192,21 @@ def test_directory_and_workspace_share_current_waiting_facts(tmp_path):
     owner = state['sessions'][1]
     owner.update(session(), workspace='/projects/alpha', workspaceId='a', sessionKind='root')
     state['runtimeControl'] = {'manager': {'task.get': {'task': task()}}}
-    put(db, receipt())
+    put(db, receipt(workspace='/projects/alpha'))
     directory.sync([owner], state)
     assert db.execute("SELECT activity_kind FROM history_local_rows WHERE id='manager'").fetchone()[0] == 'waiting'
     counts = workspace_counts(directory, state)
     assert counts['/projects/alpha']['activityCounts']['waiting'] == 1
     before = directory.navigation_revision
-    put(db, receipt('other'), 'second')
+    put(db, receipt('other',workspace='/projects/alpha'), 'second')
     directory.sync([owner], state)
     assert directory.navigation_revision > before, 'A second wait must invalidate retained context'
     before = directory.navigation_revision
     db.execute("DELETE FROM commands WHERE id='second'")
-    put(db, receipt(response={'status':'staged','outcome':'success'}))
+    put(db, receipt(workspace='/projects/alpha',response={'status':'staged','outcome':'success'}))
     directory.sync([owner], state)
     assert directory.navigation_revision > before
-    assert db.execute("SELECT activity_label FROM history_local_rows WHERE id='manager'").fetchone()[0] == 'Work blocked'
+    assert db.execute("SELECT activity_label FROM history_local_rows WHERE id='manager'").fetchone()[0] == 'Dependency result reported'
 
 
 @pytest.mark.parametrize('created', [False, True])
@@ -354,11 +352,11 @@ def test_derived_index_preserves_original_receipts_and_three_value_writers(tmp_p
     db.execute('DELETE FROM commands WHERE id=?',('new',))
     db.execute('UPDATE commands SET receipt=? WHERE id=?',
                (json.dumps(receipt(response={'status':'staged','outcome':'success'})),'old'))
-    assert project(db,session(),task()) is None
+    assert project(db,session(),task())['phase'] == 'reported'
     db.rollback()
     assert project(db,session(),task()), 'Derived state must roll back with the canonical receipt'
     db.execute('DELETE FROM commands')
-    assert not db.execute('SELECT 1 FROM navigation_pending_requests').fetchone()
+    assert not db.execute('SELECT 1 FROM navigation_dependency_requests').fetchone()
     db.close()
 
 
@@ -374,7 +372,7 @@ def test_first_population_is_atomic_and_reopen_does_not_reparse_receipts(tmp_pat
     with pytest.raises(sqlite3.DatabaseError):
         initialize(db)
     db.set_authorizer(None)
-    assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='navigation_pending_requests'").fetchone()
+    assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='navigation_dependency_requests'").fetchone()
     assert db.execute('SELECT receipt FROM commands').fetchone()[0]==original
     initialize(db)
     assert project(db,session(),task())
@@ -384,3 +382,150 @@ def test_first_population_is_atomic_and_reopen_does_not_reparse_receipts(tmp_pat
     db.set_trace_callback(None)
     assert len(statements)==2 and all('sqlite_master' in sql for sql in statements)
     db.close()
+
+
+@pytest.mark.parametrize('status,qualified,phase', [
+    ('staged',False,'reported'), ('sealed',True,'returned'),
+])
+def test_success_report_keeps_clock_without_claiming_completion(db, status, qualified, phase):
+    row = receipt(response={'status':status,'kind':'result','outcome':'success',
+                            'qualified':qualified,'outcomeRevision':1})
+    # Suppression retires notification authority, not this task's dependency.
+    row['subscription'].update(status='suppressed',open=False)
+    put(db,row)
+    before = db.execute('SELECT receipt FROM commands').fetchall()
+    value = activity(session(),task=task(),db=db)
+    assert value['kind'] == 'waiting' and value['waiting']['phase'] == phase
+    assert 'accepted' not in value['label'].lower()
+    assert db.execute('SELECT receipt FROM commands').fetchall() == before
+
+
+@pytest.mark.parametrize('patch,phase,kind', [
+    ({'delivery':'unknown'},'unknown','attention'),
+    ({'delivery':'not_sent'},'failed','attention'),
+    ({'response':{'status':'sealed','outcome':'failed'}},'failed','attention'),
+    ({'response':{'status':'sealed','outcome':'declined'}},'declined','attention'),
+    ({'response':{'status':'sealed','outcome':'cancelled'}},'cancelled','attention'),
+    ({'response':{'status':'unknown','outcome':'success'}},'unknown','attention'),
+    ({'response':{'status':'staged','outcome':'deferred'}},'deferred','waiting'),
+    ({'response':{'status':'staged','outcome':'question'}},'decision','attention'),
+    ({'response':{'status':'staged','outcome':'conflict'}},'decision','attention'),
+    ({'terminalOutcome':{'status':'observed','outcome':'unknown'}},'unknown','attention'),
+])
+def test_result_dispositions_do_not_hide_failures_or_decisions(db,patch,phase,kind):
+    put(db,receipt(**patch))
+    value=activity(session(),task=task(),db=db)
+    assert value['kind']==kind and value['waiting']['phase']==phase
+    if phase=='decision':
+        assert value['attentionType']=='decision'
+
+
+def test_later_generation_needs_explicit_owned_reference_not_dependency_flag(db):
+    row=receipt(workspace='/project',response={'status':'sealed','qualified':True,'outcome':'success'})
+    put(db,row)
+    later={**session(),'workspace':'/project','collaborationGeneration':{'id':'later','inputIds':['fresh']}}
+    assert activity(later,task=task(),db=db)=={'kind':'idle','label':'Blocked — details unavailable'}
+    owned={**task(),'operationIds':['request']}
+    assert activity(later,task=owned,db=db)['waiting']['phase']=='returned'
+    for change in ({'workspace':'/other'},{'interruptionRevision':1},{'status':'stopped'}):
+        assert activity({**later,**change},task=owned,db=db)['kind']!='waiting'
+    for change in ({'id':'replacement'},{'status':'paused'},{'dependencyWaitEpoch':4,'continuationEpoch':5}):
+        assert activity(later,task={**owned,**change},db=db)['kind']!='waiting'
+    put(db,{**row,'senderSessionId':'other-owner'})
+    assert activity(later,task=owned,db=db)['kind']=='idle'
+
+
+def test_backpressure_many_and_precedence(db):
+    row=receipt()
+    row['subscription']['status']='backpressured'
+    put(db,row)
+    assert project(db,session(),task())['phase']=='backpressured'
+    put(db,receipt('second',response={'status':'sealed','outcome':'success','qualified':True}),'second')
+    assert project(db,session(),task())['phase']=='mixed'
+    put(db,receipt('third',response={'status':'sealed','outcome':'failed'}),'third')
+    value=activity(session(),task=task(),db=db)
+    assert value['kind']=='attention' and len(value['waiting']['targets'])==3
+    assert activity({**session(),'questions':[{'required':True,'status':'pending'}]},
+                    task=task(),db=db)['label']=='Answer requested'
+    assert activity({**session(),'error':'new failure'},task=task(),db=db)['label']=='Needs attention'
+    db.execute("DELETE FROM commands WHERE id='third'")
+    assert activity({**session(),'error':'old reviewed'},task=task(),error_reviewed=True,db=db)['kind']=='waiting'
+    assert activity({**session(),'status':'interrupted'},task=task(),db=db)['label']=='Outcome unknown'
+
+
+def test_derived_upgrade_rebuilds_old_pending_table_atomically(tmp_path):
+    db=sqlite3.connect(tmp_path/'upgrade.sqlite3')
+    db.execute('CREATE TABLE commands(id TEXT PRIMARY KEY,receipt TEXT)')
+    db.execute('CREATE TABLE navigation_pending_requests(id TEXT PRIMARY KEY)')
+    db.execute("CREATE TRIGGER navigation_wait_insert AFTER INSERT ON commands BEGIN INSERT INTO navigation_pending_requests VALUES(new.id); END")
+    row=json.dumps(receipt(response={'status':'sealed','qualified':True,'outcome':'success'}))
+    db.execute('INSERT INTO commands VALUES(?,?)',('old',row))
+    db.commit()
+    db.set_authorizer(lambda action,*args:sqlite3.SQLITE_DENY if action==sqlite3.SQLITE_CREATE_TRIGGER else sqlite3.SQLITE_OK)
+    with pytest.raises(sqlite3.DatabaseError):
+        initialize(db)
+    db.set_authorizer(None)
+    assert db.execute("SELECT id FROM navigation_pending_requests").fetchall()==[('old',)]
+    initialize(db)
+    assert project(db,session(),task())['phase']=='returned'
+    assert db.execute('SELECT receipt FROM commands').fetchall()==[(row,)]
+    assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='navigation_pending_requests'").fetchone()
+    db.close()
+
+
+def test_lifecycle_publication_index_excludes_growing_settled_history(db):
+    from amplifier_web.navigation_waiting import affected_sources
+    put(db,receipt())
+    db.executemany('INSERT INTO commands VALUES(?,?)', [
+        (f'history-{i}',json.dumps(receipt(response={'status':'sealed','outcome':'success'})))
+        for i in range(2000)])
+    queries=[]
+    db.set_trace_callback(queries.append)
+    assert affected_sources(db,'worker')=={'manager'}
+    db.set_trace_callback(None)
+    query=queries[-1]
+    plan=db.execute('EXPLAIN QUERY PLAN '+query).fetchall()
+    assert any('navigation_dependency_target' in str(row) for row in plan)
+
+
+def test_explicit_task_reference_survives_cold_directory_without_runtime_body(tmp_path):
+    from test_history_directory_navigation import directory_fixture
+    from amplifier_web.navigation_waiting import saved_task, task_for
+    state,directory=directory_fixture(tmp_path,count=1)
+    db=directory.db
+    db.execute('CREATE TABLE commands(id TEXT PRIMARY KEY,receipt TEXT)')
+    initialize(db)
+    owner=state['sessions'][0]
+    owner.update(session(),workspace='/projects/alpha')
+    owner['collaborationGeneration']={'id':'later','inputIds':['later-input']}
+    current={**task(),'operationIds':['request']}
+    state['runtimeControl']={'manager':{'task.get':{'task':current}}}
+    put(db,receipt(workspace='/projects/alpha',
+                   response={'status':'sealed','outcome':'success','qualified':True}))
+    directory.sync([owner],state)
+    saved=db.execute("SELECT summary FROM history_local_rows WHERE id='manager'").fetchone()[0]
+    cold=json.loads(saved)
+    cold_task=saved_task(db,'manager')
+    assert cold_task['operationIds']==['request']
+    assert project(db,cold,cold_task)['phase']=='returned'
+    assert task_for(state,owner)==current
+
+
+async def test_actual_request_return_keeps_blocked_owner_presentation_only(app):
+    from test_collaborative_workspaces import send, settled, agent_action, generation
+    source,peer=app.state['sessions']
+    source['task']={'id':'objective','revision':1,'status':'active','continuationEpoch':1}
+    app.state.setdefault('runtimeControl',{})[source['id']]={'task.get':{'task':source['task']}}
+    await send(app,'return-wait',returnNotification=True)
+    actual=await settled(app,'return-wait','accepted')
+    await generation(app,peer,'recipient-return-wait',['return-wait'])
+    source.update(status='idle',task=task())
+    app.state['runtimeControl'][source['id']]['task.get']['task']=source['task']
+    await agent_action(app,peer,'coordination.reply',{'requestId':'return-wait',
+        'kind':'result','outcome':'success','text':'Synthetic fixture result'},'return-report')
+    actual=app.collaboration.receipt('return-wait')
+    before=deepcopy(actual)
+    value=activity(source,task=source['task'],db=app.db)
+    assert value['kind']=='waiting' and value['waiting']['phase']=='reported'
+    assert app.collaboration.receipt('return-wait')==before
+    assert source['task']['status']=='blocked'

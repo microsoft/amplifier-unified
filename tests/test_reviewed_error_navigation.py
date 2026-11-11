@@ -81,7 +81,7 @@ async def test_reviewed_failure_preserves_pending_approval_question_and_blocked_
         assert app.coordination.snapshot({'sessionId': sid})['attention']
         await app.dispatch('question.cancel', {'sessionId': sid, 'id': question['id'],
                            'expectedRevision': question['revision'], 'reason': 'Fixture resolution'})
-        assert activity_for(app, sid)[0]['label'] == 'Work blocked'
+        assert activity_for(app, sid)[0] == {'kind':'idle','label':'Blocked — details unavailable'}
         blocked_key = app.projections.shell_key(app.state)
         app.state['runtimeControl'][sid]['task.get']['task']['status'] = 'active'
         app._publish()
