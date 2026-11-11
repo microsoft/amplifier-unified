@@ -247,6 +247,8 @@ class RuntimeControls:
                 plan["agents"][name] = self.agent_definitions[name]
         from .decision_accounts import logical_plan
         plan = logical_plan(plan)
+        from .host.components import portable_module_sources
+        plan = portable_module_sources(plan, app_home())
         if self.coordinator.get_capability("web.provider_credentials_bound"):
             from .provider_environment import credential_bindings
             plan = credential_bindings(plan)
@@ -288,6 +290,8 @@ class RuntimeControls:
                 disabled = [row for row in saved.get(section, []) if row.get("enabled") is False]
                 current = {identity(row) for row in plan.get(section, [])}
                 plan.setdefault(section, []).extend(row for row in disabled if identity(row) not in current)
+        from .host.components import portable_module_sources
+        plan = portable_module_sources(plan, app_home())
         snapshot = self.configurator.snapshot() if self.configurator else {}
         modules = []
         for section in SECTIONS:
@@ -366,6 +370,7 @@ class RuntimeControls:
     def prepare_configuration(self, config):
         from .decision_accounts import logical_plan
         from .host.components import portable_module_sources
+        validate_plan(config)
         previous = logical_plan(self.coordinator.config)
         stored = override_path(self.session.session_id)
         if stored.exists():
@@ -374,10 +379,14 @@ class RuntimeControls:
                 current = {identity(row) for row in previous.get(section, [])}
                 previous.setdefault(section, []).extend(
                     row for row in saved.get(section, []) if identity(row) not in current)
-        plan = restore_redactions(config, previous)
+        # The host seals portable sources before dispatch. Compare the edited
+        # and live declarations in one fresh provenance pass before restoring
+        # redacted fields; module/instance/source ownership stays exact.
+        pair = portable_module_sources(
+            {'agents': {'edited': config, 'previous': previous}}, app_home())['agents']
+        plan = restore_redactions(pair['edited'], pair['previous'])
         validate_plan(plan)
-        return portable_module_sources(
-            {key: value for key, value in plan.items() if key in PLAN_KEYS}, app_home())
+        return {key: value for key, value in plan.items() if key in PLAN_KEYS}
 
     def save_configuration(self, plan):
         from .host.components import portable_module_sources

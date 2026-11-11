@@ -729,7 +729,7 @@ def test_configuration_save_normalizes_base_cache_repository_root(managed_module
 @pytest.mark.parametrize('change', [
     'external-local', 'unmanaged-local', 'dirty', 'staged', 'extra-source',
     'head-mismatch', 'remote-mismatch', 'missing-metadata', 'missing-source',
-    'ignored-module', 'symlink', 'git-pin',
+    'ignored-module', 'symlink', 'git-pin', 'credential-url',
 ])
 def test_configuration_save_never_guesses_unverified_or_local_sources(
         managed_module_source, tmp_path, change):
@@ -773,6 +773,11 @@ def test_configuration_save_never_guesses_unverified_or_local_sources(
         source = str(alias / c.module.relative_to(c.root))
     elif change == 'git-pin':
         source = 'git+https://other.invalid/explicit@v1.2#subdirectory=custom'
+    elif change == 'credential-url':
+        url = c.url.replace('https://', 'https://SYNTHETIC_SECRET@')
+        c.git('remote', 'set-url', 'origin', url)
+        metadata = json.loads(c.metadata.read_text())
+        c.metadata.write_text(json.dumps({**metadata, 'git_url': url}))
     plan = {'hooks': [{'module': 'hook-source-lifetime-fixture', 'source': source,
                        'enabled': False, 'config': {'keep': [1, 2, 3]}}]}
     controller = controls('preserved-sources')
@@ -875,3 +880,148 @@ async def test_saved_module_source_prepares_after_reset_moves_generation(managed
     finally:
         await session.cleanup()
         await controller.close()
+
+
+@pytest.mark.parametrize('case', ['no-home', 'logical-only'])
+def test_portable_sources_without_managed_paths_need_no_foundation_or_git(tmp_path, monkeypatch, case):
+    import builtins
+    from amplifier_web.host.components import portable_module_sources
+
+    plan = {'tools': [{'module': 'tool-fixture', 'source':
+        str(tmp_path / 'app/foundation/cache/missing') if case == 'no-home'
+        else 'git+https://example.invalid/fixture@explicit-pin'}]}
+    imported = builtins.__import__
+
+    def checked(name, *args, **kwargs):
+        if name.startswith('amplifier_foundation'):
+            pytest.fail('Logical sources must not inspect Foundation caches')
+        return imported(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', checked)
+    monkeypatch.setattr(subprocess, 'check_output',
+                        lambda *a, **kw: pytest.fail('Logical sources must not invoke Git'))
+    assert portable_module_sources(plan, None if case == 'no-home' else tmp_path / 'app') == plan
+
+
+@pytest.mark.parametrize('changed', [None, 'module', 'instance', 'revision', 'dirty'])
+def test_portable_redacted_edit_requires_exact_verified_owner(managed_module_source, changed):
+    import copy
+    from test_task_continuity import controls
+
+    c = managed_module_source
+    controller = controls('portable-redactions')
+    original = {'session': {'orchestrator': {'module': 'loop-live'},
+                            'context': {'module': 'context-simple'}},
+                'providers': [{'module': 'provider-fixture', 'instance_id': 'chosen',
+                    'source': str(c.module), 'config': {'api_key': 'SYNTHETIC_EXACT_SECRET'}}]}
+    controller.coordinator.config = copy.deepcopy(original)
+    edited = public_config(original)
+    row = edited['providers'][0]
+    row['source'] = c.portable
+    if changed == 'dirty':
+        c.code.write_text(c.code.read_text().replace('VERSION = 1', 'VERSION = 9'))
+    elif changed in {'module', 'instance'}:
+        row['module' if changed == 'module' else 'instance_id'] = 'different'
+    elif changed == 'revision':
+        row['source'] = c.portable.replace(c.commit, 'f' * 40)
+    if changed:
+        with pytest.raises(ValueError, match='redacted value cannot be used'):
+            controller.prepare_configuration(edited)
+    else:
+        saved = controller.prepare_configuration(edited)
+        assert saved['providers'][0]['source'] == c.portable
+        assert saved['providers'][0]['config']['api_key'] == 'SYNTHETIC_EXACT_SECRET'
+    assert controller.coordinator.config == original
+
+
+@pytest.mark.parametrize('bound', [False, True])
+def test_effective_snapshot_and_inspection_use_portable_sources(managed_module_source, bound):
+    import copy
+    import json
+    from amplifier_web.provider_environment import HOST_CREDENTIAL
+    from test_task_continuity import controls
+
+    c = managed_module_source
+    controller = controls('effective-sources')
+    provider = {'module': 'provider-fixture', 'source': str(c.module),
+                'config': {'api_key': 'SYNTHETIC_SECRET'}}
+    plan = {'providers': [provider], 'agents': {'child': {'providers': [copy.deepcopy(provider)]}},
+            'tools': [{'module': 'tool-fixture', 'source': str(c.module)}],
+            'context': {'data': str(c.module)}}
+    controller.coordinator.config = copy.deepcopy(plan)
+    controller.coordinator.register_capability('web.provider_credentials_bound', bound)
+    controller.persist()
+    saved = json.loads(controller.state_path().with_name('effective-configuration.json').read_text())
+    for node in (saved, saved['agents']['child']):
+        assert node['providers'][0]['source'] == c.portable
+        assert node['providers'][0]['config']['api_key'] == (HOST_CREDENTIAL if bound else 'SYNTHETIC_SECRET')
+    inspected = controller.configuration()
+    assert inspected['plan']['tools'][0]['source'] == c.portable
+    assert inspected['modules'][0]['source'] == c.portable
+    assert saved['context'] == plan['context']
+    assert controller.coordinator.config == plan
+
+
+@pytest.mark.parametrize('changed', [None, 'module', 'instance', 'revision', 'dirty'])
+def test_portable_inherited_credential_binding_requires_exact_source(managed_module_source, changed):
+    """Covers the credential-owner integration required by portable snapshots."""
+    import copy
+    from amplifier_web.provider_environment import credential_bindings, rebind_provider_credentials
+    from amplifier_web.host.components import portable_module_sources
+
+    c = managed_module_source
+    row = {'module': 'provider-fixture', 'instance_id': 'chosen',
+           'source': str(c.module), 'config': {'api_key': 'SYNTHETIC_EXACT_SECRET'}}
+    authorized = {'providers': [row], 'agents': {'child': {'providers': [copy.deepcopy(row)]}}}
+    edited = credential_bindings(portable_module_sources(authorized, c.home))
+    if changed == 'dirty':
+        c.code.write_text(c.code.read_text().replace('VERSION = 1', 'VERSION = 9'))
+    elif changed in {'module', 'instance'}:
+        edited['agents']['child']['providers'][0]['module' if changed == 'module' else 'instance_id'] = 'different'
+    elif changed == 'revision':
+        edited['agents']['child']['providers'][0]['source'] = c.portable.replace(c.commit, 'f' * 40)
+    before = copy.deepcopy((edited, authorized))
+    if changed:
+        with pytest.raises(ValueError, match='instance/source'):
+            rebind_provider_credentials(edited, authorized)
+    else:
+        restored, bound = rebind_provider_credentials(edited, authorized)
+        assert bound
+        for node in (restored, restored['agents']['child']):
+            assert node['providers'][0]['source'] == c.portable
+            assert node['providers'][0]['config']['api_key'] == 'SYNTHETIC_EXACT_SECRET'
+    assert (edited, authorized) == before
+
+
+def test_narrow_patch_save_preserves_historical_plan_hash(managed_module_source):
+    import json
+    from amplifier_web.configuration_authority import fingerprint
+    from test_task_continuity import controls
+
+    c = managed_module_source
+    controller = controls('narrow-placement')
+    plan = {'tools': [{'module': 'tool-apply-patch', 'source': str(c.module),
+                       'config': {'working_dir': '/explicit-workspace'}}]}
+    expected = fingerprint(plan)
+    controller.save_patch_placement(plan)
+    saved = json.loads(controller.state_path().with_name('configuration.json').read_text())
+    assert fingerprint(saved) == expected
+    assert saved['tools'][0]['source'] == str(c.module)
+
+
+def test_portable_readback_equivalence_is_source_only_and_requires_provenance(managed_module_source):
+    import copy
+    from amplifier_web.management import Management
+
+    c = managed_module_source
+    expected = {'tools': [{'module': 'tool-fixture', 'source': str(c.module),
+                          'config': {'path': str(c.module)}}]}
+    actual = copy.deepcopy(expected)
+    actual['tools'][0]['source'] = c.portable
+    assert not Management.configuration_readback_matches(expected, actual)
+    assert Management.configuration_readback_matches(expected, actual, home=c.home)
+    actual['tools'][0]['config']['path'] = c.portable
+    assert not Management.configuration_readback_matches(expected, actual, home=c.home)
+    actual['tools'][0]['config']['path'] = str(c.module)
+    c.metadata.unlink()
+    assert not Management.configuration_readback_matches(expected, actual, home=c.home)

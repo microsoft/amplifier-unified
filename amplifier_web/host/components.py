@@ -134,14 +134,11 @@ def portable_module_sources(plan, home):
     fallback to the current bundle. Inspect only roots used by this plan, once
     per call, never the cache inventory or other conversations.
     """
-    from amplifier_foundation.paths.resolution import parse_uri
-    from amplifier_foundation.sources.shared import clean_checkout
-    from ..staged_sources import owned_path
-    from ..updates import source_key
-
     result = copy.deepcopy(plan)
+    if home is None or not isinstance(result, dict):
+        return result
     home = Path(home).resolve()
-    inspected = {}
+    inspected, converted = {}, {}
 
     def git(root, *args):
         return subprocess.check_output(
@@ -152,9 +149,14 @@ def portable_module_sources(plan, home):
         source = row.get('source')
         if not isinstance(source, str):
             continue
+        if source in converted:
+            row['source'] = converted[source]
+            continue
+        converted[source] = source
         try:
             path = Path(source)
             if source.startswith('file:'):
+                from amplifier_foundation.paths.resolution import parse_uri
                 parsed = parse_uri(source)
                 path = Path(parsed.path)
                 if parsed.subpath:
@@ -169,6 +171,7 @@ def portable_module_sources(plan, home):
                 base = home.joinpath(*parts[:5])
             else:
                 continue
+            from ..staged_sources import owned_path
             owned_path(path, base)
             if not path.exists():
                 continue
@@ -178,14 +181,20 @@ def portable_module_sources(plan, home):
             if root == base:
                 continue
             if root not in inspected:
+                from amplifier_foundation.sources.shared import clean_checkout
+                from ..updates import source_key
                 inspected[root] = None
                 metadata = owned_path(root / '.amplifier_cache_meta.json', base)
                 data = json.loads(metadata.read_text())
                 revision, url = data['commit'], data['git_url']
-                if (not re.fullmatch('[a-f0-9]{40}', revision)
+                remote = urlsplit(url)
+                if (remote.query or remote.fragment or remote.password
+                        or remote.scheme in {'http', 'https'} and remote.username
+                        or not re.fullmatch('[a-f0-9]{40}', revision)
                         or Path(git(root, 'rev-parse', '--show-toplevel')).resolve() != root
                         or git(root, 'rev-parse', 'HEAD') != revision
-                        or source_key(git(root, 'remote', 'get-url', 'origin'), 'HEAD')[0]
+                        or source_key(git(root, 'config', '--local', '--no-includes',
+                                          '--get', 'remote.origin.url'), 'HEAD')[0]
                         != source_key(url, 'HEAD')[0]
                         or not clean_checkout(root)):
                     continue
@@ -198,7 +207,7 @@ def portable_module_sources(plan, home):
             # reconstructed from the commit, even in an otherwise clean cache.
             if suffix != '.' and not git(root, 'ls-tree', 'HEAD', '--', suffix):
                 continue
-            row['source'] = reference + ('#subdirectory=' + suffix if suffix != '.' else '')
+            row['source'] = converted[source] = reference + ('#subdirectory=' + suffix if suffix != '.' else '')
         except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
             # Provenance is optional evidence, never authority to discard local
             # changes or manufacture a replacement for a retired legacy path.
