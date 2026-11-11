@@ -13,7 +13,7 @@ test('navigation distinguishes unresolved input, active work, errors, and new re
 test('waiting is host evidence, pause and unknown interruption are different',()=>{
  const waiting={kind:'waiting',label:'Waiting for another chat'};
  assert.equal(activityFor({id:'owner',task:{status:'blocked'}},{navigationActivityById:{owner:waiting}}),waiting);
- assert.equal(activityFor({id:'owner',task:{status:'blocked'},workers:[{status:'working'}]}).label,'Work blocked');
+ assert.deepEqual(activityFor({id:'owner',task:{status:'blocked'},workers:[{status:'working'}]}),{kind:'idle',label:'Blocked — details unavailable'});
  assert.equal(activityFor({status:'stopped'}).label,'Stopped');
  assert.equal(activityFor({task:{status:'paused'}}).kind,'paused');
  assert.equal(activityFor({status:'interrupted'}).label,'Outcome unknown');
@@ -28,7 +28,7 @@ test('reviewing an exact failure clears its marker without hiding current obliga
  assert.equal(activityFor({...chat,approvals:[{status:'pending'}]},state).label,'Approval requested');
  assert.equal(activityFor({...chat,questions:[{status:'pending',required:true}]},state).label,'Answer requested');
  assert.equal(activityFor({...chat,questions:[{status:'answered',delivery:{status:'rejected'}}]},state).label,'Check answer delivery');
- assert.equal(activityFor(chat,{...state,runtimeControl:{failed:{'task.get':{task:{status:'blocked'}}}}}).label,'Work blocked');
+ assert.equal(activityFor(chat,{...state,runtimeControl:{failed:{'task.get':{task:{status:'blocked'}}}}}).label,'Blocked — details unavailable');
  assert.equal(activityFor(chat,{attention:{...state.attention,sessions:{failed:1}}}).kind,'unread');
  item.read=false;assert.equal(activityFor(chat,state).kind,'attention');
  item.id='completion:failed';item.read=true;assert.equal(activityFor(chat,state).kind,'attention');
@@ -66,7 +66,7 @@ test('pinned workspaces identify their type, qualifying only collisions or expli
 test('active execution supersedes saved blocked task, while questions still require attention',()=>{
  const state={runtimeControl:{chat:{'task.get':{task:{status:'blocked'}}}}};
  assert.equal(activityFor({id:'chat',status:'working'},state).kind,'working');
- assert.equal(activityFor({id:'chat',status:'idle'},state).label,'Work blocked');
+ assert.equal(activityFor({id:'chat',status:'idle'},state).label,'Blocked — details unavailable');
  assert.equal(activityFor({id:'chat',status:'working',questions:[{status:'pending',required:true}]},state).label,'Answer requested');
 });
 
@@ -86,4 +86,16 @@ test('current admitted activity updates retained rows independently of page memb
  assert.equal(activityFor(chats[0],{navigationActivityById:{}}).kind,'idle','a replaced context cannot inherit another owner’s activity');
  assert.equal(activityFor({id:'constructor',activity:{kind:'idle',label:'Idle'}},state).kind,'idle');
  assert.equal(JSON.stringify(chats),before,'current activity never mutates cached page rows');
+});
+
+test('retained rows use current dependency result and neutral facts without inventing failure',()=>{
+ const chat={id:'manager',activity:{kind:'attention',label:'Work blocked'}};
+ for(const value of [
+  {kind:'waiting',label:'Dependency result reported',waiting:{phase:'reported'}},
+  {kind:'waiting',label:'Dependency result ready',waiting:{phase:'returned'}},
+  {kind:'idle',label:'Blocked — details unavailable'},
+  {kind:'attention',label:'Dependency declined'},
+ ]){
+  assert.equal(activityFor(chat,{navigationActivityById:{manager:value}}),value);
+ }
 });
