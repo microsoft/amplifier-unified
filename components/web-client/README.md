@@ -173,7 +173,7 @@ Browser effects (call media, notification permission, and file download) are del
 
 ## Themes
 
-`src/unified.css` is the complete Amplifier Unified skin. It includes an embedded Amplifier logo from microsoft/amplifier and has no external asset dependencies. The build always links a real CSS file in HTML; theme application does not depend on enabling a disabled stylesheet or on `@scope` support. The same source is copied to `dist/unified.amplifier.css` for reset and export.
+`src/reference.css` is the shared neutral appearance foundation. Gallery appearances contribute validated palette, typography and artwork deltas rather than replacing that foundation. The build always links a real CSS file in HTML; theme application does not depend on enabling a disabled stylesheet or on `@scope` support. The same foundation is copied to `dist/reference.amplifier.css` for reset and export.
 
 The stable root is `#amp-one`, with named `data-part` surfaces. A skin can replace
 variables or component styles. See [themes](https://github.com/microsoft/amplifier-unified/blob/816c7a67dbafc20bfb28723dd317c71d3bd2bb28/docs/shell/themes.md) for surface

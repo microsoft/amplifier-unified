@@ -2,8 +2,9 @@ import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {Markdown} from './markdown';
 import {appearanceThumbnailDocument} from './appearance-thumbnail-document';
+import {composeAppearanceStyles} from './appearance-composition';
 import base from './base.css?raw';
-import unified from './unified.css?raw';
+import reference from './reference.css?raw';
 import shell from './work-shell.css?raw';
 import refresh from './main-refresh.css?raw';
 import chat from './chat-presentation.css?raw';
@@ -35,5 +36,5 @@ const markup=renderToStaticMarkup(<>
   </main>
  </div>
 </>);
-const hostCss=[base,unified,shell,refresh,chat,composer,navigation,detail,markdown].join('\n');
+const hostCss=composeAppearanceStyles(base,reference)+'\n'+[shell,refresh,chat,composer,navigation,detail,markdown].join('\n');
 export const renderAppearanceThumbnail=(css,scheme)=>appearanceThumbnailDocument({css,scheme,hostCss,markup});

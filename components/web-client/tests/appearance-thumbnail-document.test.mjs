@@ -11,7 +11,7 @@ test('thumbnail generation is deterministic, scheme-specific and versioned',()=>
 test('CSS cannot escape the style element or inject script/markup',()=>{
  const html=make('p::before{content:"</style><script>bad()</script>"}');
  assert.doesNotMatch(html,/<script>/);assert.match(html,/\\3c \/style>/);
- assert.equal((html.match(/<style>/g)||[]).length,3);
+ assert.equal((html.match(/<style>/g)||[]).length,2);
 });
 test('document denies network, execution, form submission and base changes',()=>{
  const html=make();

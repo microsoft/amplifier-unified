@@ -1,4 +1,5 @@
 import {fixturePython} from './fixture-python.mjs';
+import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium} from '@playwright/test';
@@ -14,7 +15,20 @@ const box=selector=>page.locator(selector).boundingBox();
 const settled=()=>page.waitForTimeout(120);
 const toolbarsMatch=visible=>page.locator('.a-canvas-toolbar').evaluateAll((nodes,visible)=>nodes.length>0&&nodes.every(node=>!!node.getClientRects().length===visible),visible);
 try{
- await page.goto('http://127.0.0.1:8958/');await page.waitForSelector('#amp-one');
+ await page.goto('http://127.0.0.1:8958/');await showFixtureConversation(page);
+ // The empty pane must be resizable before any artifact supplies its layout.
+ await action('canvas.reopen',{});await settled();
+ const separator=page.getByRole('separator',{name:'Resize canvas'});
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().canvasWorkspace?.views?.length||0),0,'Canvas starts without an artifact view');
+ const emptyPanel=await box('.a-canvas-panel'),emptyHandle=await separator.boundingBox();
+ assert.ok(emptyPanel?.width>0&&emptyPanel.height>0,'Empty Canvas has nonzero bounds');
+ assert.ok(emptyHandle?.width>0&&emptyHandle.height>0,'Empty Canvas separator has a nonzero hit area');
+ const hit={x:emptyHandle.x+emptyHandle.width/2,y:emptyHandle.y+emptyHandle.height/2};
+ assert.equal(await separator.evaluate((el,{x,y})=>el.contains(document.elementFromPoint(x,y)),hit),true,'The pointer hits the empty Canvas separator, not adjacent content');
+ const dragX=hit.x+(hit.x<emptyPanel.x+emptyPanel.width/2?-80:80);
+ await page.mouse.move(hit.x,hit.y);await page.mouse.down();await page.mouse.move(dragX,hit.y,{steps:6});await page.mouse.up();
+ await page.waitForFunction(width=>Math.abs(document.querySelector('.a-canvas-panel').getBoundingClientRect().width-width)>20,emptyPanel.width);
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().canvasWorkspace?.views?.length||0),0,'Pointer resize does not create an artifact');
  await action('canvas.show',{kind:'html',title:'A canvas that keeps its place',content:'<!doctype html><html><head><style>body{margin:0;background:linear-gradient(135deg,#eef2ff,#e6f9f5);font:18px system-ui;min-height:100vh}main{padding:40px}button{font:inherit;padding:12px 20px;border:0;border-radius:12px;background:#6261db;color:white}</style></head><body><main><h1>Room to explore</h1><p>This interactive view stays alive as you resize and focus it.</p><button onclick="this.textContent=String(Number(this.textContent)+1)">0</button></main></body></html>'});
  await patch({canvasControlsPinned:false,canvasControlsExpanded:false});await page.mouse.move(100,30);await settled();
  const beforeHover=await box('.a-canvas-html');await page.screenshot({path:'/tmp/amplifier-canvas-before-hover.png'});
@@ -43,7 +57,7 @@ try{
  await patch({canvasDraft:{},canvasControlsExpanded:false});
  const header=await box('.a-canvas-head'),body=await box('.a-canvas-body'),iframe=await box('.a-canvas-html');
  assert.equal(header.height,36);assert.ok(Math.abs(body.x-iframe.x)<1&&Math.abs(body.width-iframe.width)<1);assert.ok(Math.abs(body.y-iframe.y)<1);assert.ok(Math.abs(iframe.y+iframe.height-950)<1);
- const separator=page.getByRole('separator',{name:'Resize canvas'});await separator.focus();await page.keyboard.press('End');await settled();
+ await separator.focus();await page.keyboard.press('End');await settled();
  const expanded=await box('.a-canvas-panel'),chat=await box('.a-conversation');assert.ok(expanded.width>1000);assert.ok(chat.width>=360&&chat.width<=361);
  const composer=await box('.a-composer');assert.ok(composer.x>=chat.x&&composer.x+composer.width<=chat.x+chat.width);assert.ok(await page.locator('.a-compose-bottom').evaluate(el=>el.scrollWidth<=el.clientWidth));
  await page.getByRole('button',{name:'Model and reasoning settings'}).click();

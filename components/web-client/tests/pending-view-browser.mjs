@@ -117,12 +117,8 @@ try{
  await finish(pending,'Fixture rejected latest navigation');await page.getByRole('heading',{name:'Ready for you',exact:true}).waitFor();
  await page.getByText('A new streamed answer',{exact:true}).waitFor();
  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.panel),'activity');
- // Leaving Appearance ends its preview through the same ordered mutation queue.
- // Settle that exact cleanup before issuing the next navigation under test.
- const previewCleanup=await nextAction();
- assert.equal(previewCleanup.action,'view.update');
- assert.deepEqual(previewCleanup.args,{patch:{themePreview:false}});
- await finish(previewCleanup);
+ // No preview was started: leaving Appearance must not add a cleanup mutation.
+ assert.equal(waiting.length,0,'Inactive appearance preview creates no queued cleanup');
 
  // A response overtaken by a newer shared revision must settle its local patch
  // without reverting navigation that the server has changed since accepting it.

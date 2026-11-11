@@ -1,6 +1,7 @@
 import {messageTime} from './message-time';
 import {MessageInteractions,QuoteCard,QuotedDocument,AssistantReactions} from './message-interactions';
 import {MessageDelivery} from './message-delivery';
+import {InputStatus} from './input-status.jsx';
 import {deliveryRecovery} from './pending-delivery-checks';
 import {readDetail} from './conversation-detail';
 import React,{useEffect,useRef,useState} from 'react';
@@ -45,7 +46,7 @@ export function StreamingMessage({session,state,embedded=false}){
   <article className="a-message a-assistant">{body}</article>;
 }
 
-export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn,retry,discard,dispatch=act,expandedObservation=false,newest=false,omitMedia=false,workEmbedded=false}){
+export function MessageEntry({message:m,session,state,connected=true,statusCurrent=true,act,stamp,working,forkTurn,retry,discard,dispatch=act,expandedObservation=false,newest=false,omitMedia=false,workEmbedded=false}){
  const [loadingEdit,setSaving]=useState(false),[localCopied,setLocalCopied]=useState(false),[copying,setCopying]=useState(false),[detailError,setDetailError]=useState(''),edit=state.view?.messageEdit,editing=edit?.sessionId===session.id&&edit?.messageId===m.id;
  const pendingEdit=usePendingMessageEdit(JSON.stringify([state.client?.hostInstanceId,state.client?.id,session.id,m.inputId||m.commandId||m.id]),setDetailError),saving=loadingEdit||pendingEdit.pending;
  const [text,setText]=useState(editing?edit.text:''),pendingText=useRef(null),submitting=useRef(false);
@@ -84,6 +85,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
   </div>
   <AssistantReactions message={m}/>
   {attribution&&<p className="a-message-attribution">{attribution}</p>}
+  {!editing&&<InputStatus message={m} connected={connected} current={statusCurrent}/>}
   {!editing&&<div className="a-message-actions" data-delivery-problem={!!delivery||undefined}>
    <button type="button" className="a-icon" title="Copy as Markdown" aria-label="Copy message as Markdown" data-action="message.copy" disabled={copying} data-operation-pending={copying||undefined} aria-busy={copying||undefined} onClick={async()=>{if(!localDelivery&&!m.displayOnly){await act('message.copy',{sessionId:session.id,messageId:m.id});return}setCopying(true);try{await navigator.clipboard.writeText(m.textDetail?await readDetail(m.textDetail):m.text);setLocalCopied(true)}catch(error){setDetailError(error.message)}finally{setCopying(false)}}}>{copied?.status==='ready'||localCopied?<Check/>:<Copy/>}</button>
    {!localDelivery&&!m.displayOnly&&['user','assistant'].includes(m.role)&&<MessageInteractions message={m} sessionId={session.id} dispatch={dispatch}/>}

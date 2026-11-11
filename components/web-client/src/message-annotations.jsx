@@ -1,6 +1,16 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {request} from './api';
 
+export function overlayAnnotation(row,annotation){
+ const {inputStatus:cached,...reactions}=annotation;
+ const exact=row.inputId||row.nativeInputId,current=row.inputStatus;
+ // Reactions and input status have different clocks. A delayed annotation read
+ // must never replace a newer streamed correction, even when refresh fails.
+ const useCached=cached?.version===1&&cached.inputId===exact&&
+  Number.isFinite(cached.updatedAt)&&(!current||cached.updatedAt>(current.updatedAt??-1));
+ return {...row,...reactions,...(useCached?{inputStatus:cached}:{})};
+}
+
 // Historical reader windows remain immutable. Observe only the current viewport's
 // canonical rows and overlay their small annotation records, never whole history.
 export function useVisibleMessageAnnotations(session,enabled){
@@ -21,7 +31,7 @@ export function useVisibleMessageAnnotations(session,enabled){
     const value=await request('/api/conversation/annotations',{method:'POST',body:{sessionId:id,messageIds},signal:controller.signal});
     if(disposed||controller.signal.aborted||owner.current!==id)return;
     if(value.sessionId!==id||!Number.isSafeInteger(value.revision)||value.revision<revision||!value.items||messageIds.some(messageId=>!Array.isArray(value.items[messageId]?.reactions)))throw Error('Message reactions could not be refreshed.');
-    setSaved({id,revision:value.revision,items:Object.fromEntries(messageIds.map(messageId=>[messageId,{reactions:[...value.items[messageId].reactions],assistantReactions:[...(value.items[messageId].assistantReactions||[])],annotationRevision:value.revision}]))});setError(null);
+    setSaved({id,revision:value.revision,items:Object.fromEntries(messageIds.map(messageId=>[messageId,{reactions:[...value.items[messageId].reactions],assistantReactions:[...(value.items[messageId].assistantReactions||[])],...(value.items[messageId].inputStatus?{inputStatus:value.items[messageId].inputStatus}:{}),annotationRevision:value.revision}]))});setError(null);
    }catch(e){if(!disposed&&!controller.signal.aborted&&owner.current===id)setError({id,message:e.message||'Message reactions could not be refreshed.'})}
   };
   const observer=new IntersectionObserver(entries=>{
@@ -31,6 +41,6 @@ export function useVisibleMessageAnnotations(session,enabled){
   for(const element of pane.querySelectorAll('[data-message-id]'))if(eligible.has(element.dataset.messageId))observer.observe(element);
   return()=>{disposed=true;observer.disconnect();clearTimeout(timer);abort?.abort()};
  },[enabled,id,revision,key,retry]);
- const messages=useMemo(()=>enabled&&saved?.id===id?(session?.messages||[]).map(row=>saved.items[row.id]?{...row,...saved.items[row.id]}:row):session?.messages,[enabled,id,session?.messages,saved]);
+ const messages=useMemo(()=>enabled&&saved?.id===id?(session?.messages||[]).map(row=>saved.items[row.id]?overlayAnnotation(row,saved.items[row.id]):row):session?.messages,[enabled,id,session?.messages,saved]);
  return {messages,error:enabled&&error?.id===id?error.message:'',retry:()=>setRetry(value=>value+1)};
 }

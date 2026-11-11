@@ -10,7 +10,7 @@
 #amp-one.a-approachable-shell .a-work-brand{border:0;gap:8px;font-size:14px;font-weight:600;padding-right:4px}
 #amp-one.a-approachable-shell .a-work-brand img{width:21px;height:21px}
 #amp-one.a-approachable-shell .a-work-crumb{font-size:13px}
-#amp-one.a-approachable-shell .a-conversation{height:auto;align-self:stretch;border:var(--a-panel-border-width,0px) solid var(--a-panel-line,var(--a-line));border-bottom:0;border-radius:0;box-shadow:var(--a-panel-shadow,none);background-color:var(--a-surface);background-image:var(--a-conversation-art,none);background-repeat:no-repeat;background-size:100% 240px}
+#amp-one.a-approachable-shell .a-conversation{height:auto;align-self:stretch;border:var(--a-panel-border-width,0px) solid var(--a-panel-line,var(--a-line));border-bottom:0;border-radius:0;box-shadow:var(--a-panel-shadow,none);background-color:var(--a-surface);background-image:var(--a-conversation-art,none);background-repeat:var(--a-conversation-art-repeat,no-repeat);background-position:var(--a-conversation-art-position,0 0);background-size:var(--a-conversation-art-size,100% 240px)}
 #amp-one.a-approachable-shell .a-nav-rail{border:var(--a-panel-border-width,0px) solid var(--a-panel-line,var(--a-line));border-left:0;border-bottom:0;border-right-width:1px;border-radius:0 var(--a-panel-radius,0px) 0 0;background-color:var(--a-soft);background-image:var(--a-navigation-art,none);background-size:var(--a-navigation-art-size,100% 240px);background-repeat:var(--a-navigation-art-repeat,no-repeat);padding:var(--a-navigation-pad,16px) 10px 0;box-shadow:var(--a-panel-shadow,none)}
 #amp-one.a-approachable-shell .a-nav-main{background:transparent;color:var(--a-ink)}
 #amp-one.a-approachable-shell .a-nav-main:hover{background:var(--a-tint)}
@@ -23,10 +23,10 @@
 #amp-one.a-approachable-shell .a-messages>*{max-width:var(--a-reading-width)}
 #amp-one.a-approachable-shell .a-user>.a-message-body{padding:11px 16px;max-width:85%;border-radius:var(--a-message-radius,18px) var(--a-message-radius,18px) 4px var(--a-message-radius,18px)}
 #amp-one.a-approachable-shell .a-message-actions{font-size:12px;gap:3px}
-#amp-one.a-approachable-shell .a-message-actions button{color:var(--a-muted)}
+#amp-one.a-approachable-shell .a-message-actions button:not(.a-primary):not(.a-send){color:var(--a-muted)}
 #amp-one.a-approachable-shell .a-execution-turn{border-bottom:0}
 #amp-one.a-approachable-shell .a-execution-turn-line{font-size:13px}
-#amp-one.a-approachable-shell .a-composer{max-width:var(--a-reading-width);width:calc(100% - 48px);margin-bottom:18px;border-radius:var(--a-composer-radius,18px);padding:var(--a-composer-pad,12px) 14px;box-shadow:var(--a-surface-shadow,none)}
+#amp-one.a-approachable-shell .a-composer{max-width:var(--a-reading-width);width:calc(100% - 48px);margin-inline:auto;margin-bottom:18px;border-radius:var(--a-composer-radius,18px);padding:var(--a-composer-pad,12px) 14px;box-shadow:var(--a-surface-shadow,none)}
 /* Approvals are siblings of messages, so they need the same reading column.
    Keep the existing bounded scroller; long paths must not widen its contents. */
 #amp-one.a-approachable-shell .a-approvals{box-sizing:border-box;max-width:var(--a-reading-width);width:calc(100% - 48px);margin-inline:auto;overflow-wrap:anywhere}
@@ -45,8 +45,15 @@
 #amp-one.a-approachable-shell .a-chat-overview .a-saved-artifact strong{font-size:13px;font-weight:500}
 #amp-one.a-approachable-shell .a-overview-history{margin-top:12px;color:var(--a-muted);font-size:12px}
 #amp-one.a-approachable-shell .a-overview-history summary{cursor:pointer;padding:5px 0}
+/* Separator hit areas are functional, independent of appearance paint. */
+#amp-one.a-chat-shell .a-nav-resize{position:absolute;right:-8px;top:0;bottom:12px;width:14px;z-index:3;cursor:col-resize;touch-action:none}
+#amp-one.a-chat-shell .a-nav-resize:before{content:"";position:absolute;top:40%;bottom:40%;width:3px;left:6px;background:var(--a-line);border-radius:3px}
+#amp-one .a-canvas-resize{position:absolute;z-index:3;left:-9px;top:0;bottom:0;width:15px;cursor:col-resize;touch-action:none}
+#amp-one .a-canvas-resize:before{content:"";position:absolute;width:3px;height:34px;left:6px;top:calc(50% - 17px);border-radius:3px;background:var(--a-line)}
+#amp-one .a-canvas-resize:focus-visible{outline:1px solid var(--a-accent);outline-offset:-3px}
 #amp-one.a-approachable-shell .a-nav-resize:before,#amp-one.a-approachable-shell .a-canvas-resize:before{background:transparent}
 #amp-one.a-approachable-shell .a-nav-resize:hover:before,#amp-one.a-approachable-shell .a-nav-resize:focus-visible:before,#amp-one.a-approachable-shell .a-canvas-resize:hover:before,#amp-one.a-approachable-shell .a-canvas-resize:focus-visible:before{background:var(--a-accent)}
+@media(max-width:700px){#amp-one .a-canvas-resize{display:none}}
 @container conversation (max-width:520px){
  #amp-one.a-approachable-shell .a-messages{padding:22px 18px;gap:clamp(18px,calc(var(--a-message-gap,24px) - 4px),22px)}
  #amp-one.a-approachable-shell .a-composer,#amp-one.a-approachable-shell .a-approvals,#amp-one.a-approachable-shell .a-permission-history-entry,#amp-one.a-approachable-shell .a-chat-plan-composer{width:calc(100% - 28px)}

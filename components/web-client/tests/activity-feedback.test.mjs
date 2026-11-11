@@ -5,7 +5,7 @@ import {createActionFeedback} from '../src/action-feedback.js';
 
 function element(action,region){
  const attributes=new Map(),listeners=new Map();
- return {tagName:'BUTTON',dataset:{action},getAttribute:name=>attributes.get(name)??null,
+ return {tagName:'BUTTON',disabled:false,dataset:{action},getAttribute:name=>attributes.get(name)??null,
   setAttribute:(name,value)=>attributes.set(name,value),removeAttribute:name=>attributes.delete(name),
   closest:selector=>selector==='[data-action]'?null:selector.startsWith('button')?undefined:region,
   addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:name=>listeners.delete(name),
@@ -23,10 +23,24 @@ test('only the initiating action is busy; another click cannot repeat it; cleanu
  const detach=feedback.attach(root);root.fire('click',button);
  const unrelated=feedback.begin('other');assert.equal(button.getAttribute('aria-busy'),null);unrelated();
  const finish=feedback.begin('refresh');assert.equal(button.getAttribute('aria-busy'),'true');assert.equal(button.getAttribute('aria-disabled'),'true');
+ assert.equal(button.disabled,false,'The runtime request observer leaves native disabled state to the component.');
  assert.equal(root.fire('click',button),true);assert.equal(root.fire('change',button),false);
  finish();assert.equal(button.getAttribute('aria-disabled'),null);assert.equal(button.getAttribute('aria-busy'),null);assert.equal(root.fire('click',button),false);
  await new Promise(resolve=>setTimeout(resolve,0));feedback.begin('refresh');assert.equal(button.getAttribute('aria-busy'),null,'background work must not animate the last focused control');detach();
 });
+test('component-owned pending ARIA state survives the action request finishing first',()=>{
+ const root=element(),region=element(),button=element('appearance.preferences.undo',region),feedback=createActionFeedback();
+ feedback.attach(root);root.fire('click',button);
+ const finish=feedback.begin('appearance.preferences.undo');
+ button.setAttribute('data-operation-pending','true');
+ button.setAttribute('data-operation-aria-disabled','true');
+ button.setAttribute('aria-disabled','true');button.setAttribute('aria-busy','true');
+ finish();
+ assert.equal(button.getAttribute('data-action-pending'),null,'The request-level marker ends with its request.');
+ assert.equal(button.getAttribute('aria-disabled'),'true','The component retains focusable pending state until its own confirmation settles.');
+ assert.equal(button.getAttribute('aria-busy'),'true');
+});
+
 test('optimistic navigation remains usable while its save is pending',()=>{
  const root=element(),button=element('view.update'),feedback=createActionFeedback();feedback.attach(root);root.fire('click',button);
  feedback.begin('view.update');assert.equal(button.getAttribute('aria-busy'),null);assert.equal(root.fire('click',button),false);

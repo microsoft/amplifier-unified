@@ -1,3 +1,5 @@
+import {composeAppearanceStyles} from './appearance-composition.js';
+
 export const thumbnailScene={version:1,width:800,height:520};
 const styleText=value=>String(value).replaceAll('<','\\3c ');
 // Markup is the fixed, bundled synthetic scene, never user messages or metadata.
@@ -6,7 +8,8 @@ const styleText=value=>String(value).replaceAll('<','\\3c ');
 export function appearanceThumbnailDocument({css,hostCss,markup,scheme}){
  if(!['light','dark'].includes(scheme))throw Error('Choose a thumbnail color mode.');
  if(typeof css!=='string'||css.length>1000000)throw Error('Invalid thumbnail appearance.');
- return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"><meta name="color-scheme" content="${scheme}"><style>${styleText(hostCss)}</style><style>${styleText(css)}</style><style>
+ const composition=composeAppearanceStyles(hostCss,css);
+ return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"><meta name="color-scheme" content="${scheme}"><style>${styleText(composition)}</style><style>
 html,body{margin:0;width:800px;height:520px;overflow:hidden}
 #amp-one.a-thumbnail-scene{width:800px;height:520px;min-width:0;min-height:0;margin:0;display:flex;flex-direction:column}
 #amp-one.a-thumbnail-scene [data-part=header]{flex:none;min-height:48px;padding:10px 16px;display:flex;align-items:center;gap:12px}

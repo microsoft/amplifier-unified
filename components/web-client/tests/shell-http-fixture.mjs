@@ -42,6 +42,11 @@ export function createShellHttpFixture(readState){
  }
  function response(request){
   const url=new URL(request.url()),path=url.pathname;
+  if(path==='/api/actions'&&request.postDataJSON()?.action==='appearance.preferences.read'){
+   // Non-appearance journeys need an explicit inert read, not a simulated
+   // browser-storage protocol or an extra entry in their controlled action queue.
+   return {accepted:true,result:readState().appearance||{renderedPreferences:{}}};
+  }
   if(path==='/api/clients/attach'){
    clientId=request.postDataJSON().clientId;registration=undefined;
    return {clientId,kind:'web',hostInstanceId,transports:[]};

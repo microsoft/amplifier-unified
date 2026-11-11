@@ -59,7 +59,12 @@
   content:"";position:fixed;top:var(--wco-y);left:var(--wco-x);width:var(--wco-width);height:var(--wco-height);
   -webkit-app-region:drag;
 }
-#amp-one[data-window-controls-overlay=true] .a-canvas-panel[data-focused=true]{top:var(--a-navigation-top,var(--wco-safe-top))!important;padding-top:0!important;box-sizing:border-box!important}
+/* Focused Canvas starts below the measured container header; native clearance
+   plus header decoration is the minimum for the overlaid WCO header. */
+#amp-one[data-window-controls-overlay=true] .a-canvas-panel[data-focused=true]{
+  top:max(var(--a-navigation-top,56px),calc(var(--wco-safe-top) + var(--wco-decoration-height)))!important;
+  padding-top:0!important;box-sizing:border-box!important
+}
 #amp-one[data-window-controls-overlay=true] .a-canvas-panel[data-focused=true] .a-canvas-head{
   position:relative;z-index:0;
   width:100%!important;max-width:100%!important;min-width:0!important;

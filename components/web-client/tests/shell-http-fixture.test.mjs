@@ -35,6 +35,15 @@ test('mock receipts update accepted scope and omit pages until replacement deman
  assert.throws(()=>f.register(f.demand(3)),/one/);
 });
 
+test('neutral appearance reads bypass controlled actions without claiming storage support',()=>{
+ const f=fixture(),read=()=>f.shell.response(f.request('/api/actions',{action:'appearance.preferences.read',args:{}}));
+ assert.deepEqual(read(),{accepted:true,result:{renderedPreferences:{}}});
+ assert.equal(read().result.namespace,undefined);
+ f.state.appearance={renderedPreferences:{scheme:'dark'}};
+ assert.deepEqual(read().result,f.state.appearance);
+ assert.equal(f.shell.response(f.request('/api/actions',{action:'view.update',args:{patch:{panel:'settings'}}})),undefined);
+});
+
 test('mock stream bootstraps after attachment and closes without late frames',async()=>{
  const previousWindow=globalThis.window,previousFetch=globalThis.fetch;
  const pending=[];

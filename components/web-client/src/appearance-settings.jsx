@@ -1,154 +1,483 @@
 import React,{useContext,useEffect,useRef,useState,useSyncExternalStore} from 'react';
-import {Check,Download,Upload,Palette,Sun,Moon,Monitor,FolderOpen,RefreshCw} from 'lucide-react';
+import {Check,Download,FolderOpen,Upload} from 'lucide-react';
 import {SettingsLayoutContext} from './settings-layout';
 import {FileDrop} from './settings-ui';
 import {WorkingLabel} from './working-label';
-import {ThemeDecorationControl,useThemeScheme} from './theme-presentation';
 import {clearAppearancePreview,previewAppearance} from './appearance-preview';
 import {appearanceImportFileArgs,appearanceMutationTarget} from './appearance-library';
 import {appearanceCatalogFor} from './appearance-catalog';
+import {useThemeScheme} from './theme-presentation';
 import {AppearanceThumbnail} from './appearance-thumbnail';
+import {effectivePreferenceValue,reconcileAppearancePreferenceValues,sparseExecutionVisibilityPatch} from './appearance-preferences';
 import './appearance-settings.css';
-import {ObservabilityPreferences} from './execution-observability.jsx';
 
-const operationLabels={choose:'Loading appearance…',save:'Saving appearance…',update:'Updating saved appearance…',delete:'Deleting saved appearance…',preview:'Preparing preview…',apply:'Applying appearance…',revert:'Reverting appearance…',import:'Importing appearance…',export:'Exporting appearance…',reset:'Restoring original appearance…',change:'Saving appearance preferences…'};
+const METRIC_CHOICES=[
+ ['elapsedSeconds','Elapsed time'],['grossInputTokens','Input tokens'],['outputTokens','Output tokens'],
+ ['grossTotalTokens','Total tokens'],['cacheReadTokens','Cache read tokens'],['cacheWriteTokens','Cache write tokens'],
+ ['reasoningTokens','Reasoning tokens'],['voiceSeconds','Voice seconds'],['costUsd','Cost'],['calls','Calls'],
+];
+const PREFERENCE_GROUPS=[
+ {id:'visual-basics',title:'Visual basics',fields:[['appearanceId','Appearance'],['scheme','Color mode'],['layout','Layout'],['decorations','Background decorations'],['density','Density'],['accent','Accent color']]},
+ {id:'conversation-display',title:'Conversation display',fields:[['interfaceDetail','Interface detail'],['conversationStatus','Conversation status'],['collapseInterimReplies','Interim updates'],['workStartView','Starting view'],['planPlacement','Plan location']]},
+ {id:'work-visibility',title:'Work visibility and metrics',fields:[['executionDetail','Work detail'],['executionVisibility','Work visibility'],['executionMetrics','Work metrics']]},
+];
+const cloneValue=value=>value===undefined||value===null||typeof value!=='object'?value:JSON.parse(JSON.stringify(value));
+function stableValue(value){
+ if(Array.isArray(value))return '['+value.map(stableValue).join(',')+']';
+ if(value&&typeof value==='object')return '{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+stableValue(value[key])).join(',')+'}';
+ return JSON.stringify(value);
+}
+const sameValue=(left,right)=>stableValue(left)===stableValue(right);
+function resultValue(receipt){
+ if(!receipt||receipt.accepted===false||receipt.ok===false)throw Error(receipt?.error||'The preference change was not confirmed.');
+ const result=receipt.result||receipt;
+ if(result?.status==='awaiting-storage'||result?.status==='pending')throw Error('This browser has not confirmed the preference change yet.');
+ if(result?.status==='failed')throw Error(result.error||'The preference change was not confirmed.');
+ return result;
+}
 
-export function AppearanceSettings({state,shell,act,editor:editorState,preview,previewSnapshot,setPreview,defaultSkin,simple=false,advancedOnly=false,onAdvanced}){
+function PreferenceFeedback({field,scope,label,feedback,onUndo,onRetry}){
+ if(!feedback)return null;
+ const pending=feedback.status==='pending';
+ return <span className="a-appearance-feedback" data-feedback-for={field}>
+  {feedback.message&&<small className="a-appearance-field-feedback" role="status" tabIndex={-1} aria-live="polite">{feedback.message}</small>}
+  {feedback.status==='failed'&&<button type="button" className="a-link a-appearance-retry" disabled={pending} data-action="appearance.preferences.retry" onClick={event=>onRetry(field,scope,event.currentTarget)}>Retry</button>}
+  {feedback.undoId&&<button type="button" className="a-link a-appearance-undo" aria-label={`Undo ${label} change`} aria-disabled={pending||undefined} aria-busy={pending||undefined} data-operation-pending={pending||undefined} data-operation-aria-disabled={pending||undefined} data-action="appearance.preferences.undo" onClick={event=>{if(!pending)onUndo(field,scope,feedback.undoId,event.currentTarget)}}>Undo</button>}
+ </span>;
+}
+
+function PreferenceRow({field,scope,label,help,feedback,onUndo,onRetry,children}){
+ const headingId=`appearance-preference-${field}`;
+ const status=<PreferenceFeedback field={field} scope={scope} label={label} feedback={feedback} onUndo={onUndo} onRetry={onRetry}/>;
+ if(field==='appearanceId')return <section className="a-appearance-gallery-section" data-appearance-preference={field}>
+  <div className="a-appearance-gallery-heading"><div><h3 id={headingId}>{label}</h3>{help&&<p>{help}</p>}</div></div>
+  {children}{status}
+ </section>;
+ return <div className="a-appearance-option" data-appearance-preference={field}>
+  <div className="a-appearance-option-description">
+   <div className="a-appearance-option-heading"><h3 id={headingId}>{label}</h3></div>
+   {help&&<p>{help}</p>}{status}
+  </div>
+  <div className="a-appearance-control">{children}</div>
+ </div>;
+}
+
+export function AppearanceSettings({
+ state,appearance=state.appearance||{},act,editor:editorState,preferenceStatus,
+ onPreferenceChange=()=>{},onPreferenceSelect=()=>{},onPreferenceUndo=()=>{},
+}){
  const {active}=useContext(SettingsLayoutContext);
  const catalog=appearanceCatalogFor(state.client?.hostInstanceId);
  const cached=useSyncExternalStore(catalog.subscribe,catalog.getSnapshot,catalog.getSnapshot);
  const library=cached.library||{items:[],errors:[],directory:''},libraryError=cached.error;
- const [selected,setSelected]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
- const [operation,setOperation]=useState(null),submitting=useRef(false),feedbackOwner=useRef(null);
- // The app's tab-private owner survives Settings unmounts. The mutable editor
- // and the exact host-validated preview snapshot deliberately remain separate.
- const {draft,setDraft,compareAndSetDraft,storageError}=editorState;
- const {entry:editing,name,css,description}=draft;
- const confirmedPreview=preview&&previewSnapshot?previewSnapshot:null;
- const [deleteTarget,setDeleteTarget]=useState(null),editor=useRef(null);
- const api=useRef(act),alive=useRef(true),generation=useRef(0),previewing=useRef(preview);api.current=act;previewing.current=preview;
- const presentation=shell.composition.presentation,scheme=presentation.scheme||state.view?.scheme||'system';
- const thumbnailMode=useThemeScheme(scheme);
- const refresh=(force=true)=>catalog.refresh(api.current,{force});
- useEffect(()=>{if(!active){alive.current=false;return}alive.current=true;submitting.current=false;setBusy(false);setOperation(null);refresh(false).catch(()=>{});const timer=setInterval(()=>refresh().catch(()=>{}),30000);return()=>{alive.current=false;generation.current++;clearInterval(timer);previewing.current=false;clearAppearancePreview(setPreview,api.current).catch(()=>{})}},[active,catalog]);
- async function run(fn,key='change'){
-  if(submitting.current)return;
-  const current=generation.current,token={},isCurrent=()=>alive.current&&current===generation.current;
-  submitting.current=token;feedbackOwner.current=token;setBusy(true);setOperation(key);setError('');setNotice('');
-  try{return await fn(isCurrent)}catch(e){
-   // Keep a failure for the same draft while its section is hidden. A newer
-   // draft or submission owns its own feedback, even if this receipt is late.
-   // Returning to the section releases its abandoned lock, not its right to
-   // report failure. Only a newer submission or draft supersedes that feedback.
-   if(feedbackOwner.current===token&&(isCurrent()||compareAndSetDraft(draft,current=>current)))setError(e.message);
-  }
-  finally{if(submitting.current===token){submitting.current=false;if(isCurrent()){setBusy(false);setOperation(null)}}}
- }
- async function choose(item){
-  if(submitting.current)return;
-  const current=++generation.current;
-  await run(async()=>{const {result}=await api.current('theme.read',{id:item.id});if(!alive.current||current!==generation.current)return;setSelected(item.id);setDraft({entry:result,name:result.name,css:result.css,description:result.description||'',dirty:false});setDeleteTarget(null);if(simple){const receipt=await api.current('theme.apply',{name:result.name,css:result.css});if(receipt?.accepted===false)throw Error(receipt.error||'Could not save appearance.');setPreview(false);setNotice(result.name+' saved.')}else await previewAppearance(setPreview,api.current,{name:result.name,css:result.css},()=>alive.current&&current===generation.current)},'choose');
- }
- async function startPreview(){const current=generation.current;await run(()=>previewAppearance(setPreview,api.current,{name,css},()=>alive.current&&current===generation.current),'preview')}
- async function apply(){await run(async()=>{await api.current('theme.apply',{name,css});setPreview(false);setNotice(name+' applied.')},'apply')}
- async function applyPreview(){if(!confirmedPreview)return;const snapshot={...confirmedPreview};await run(async()=>{await api.current('theme.apply',snapshot);setPreview(false);setNotice(snapshot.name+' applied.')},'apply')}
- async function cancelPreview(){await run(()=>clearAppearancePreview(setPreview,api.current),'revert')}
- async function revert(){await run(async()=>{await clearAppearancePreview(setPreview,api.current);setDraft({entry:null,name:state.theme?.name||'Amplifier Unified',css:state.theme?.css||defaultSkin,description:'',dirty:false});setSelected(null);setDeleteTarget(null)},'revert')}
- async function changeDraft(patch){
-  const next={...draft,...patch,dirty:true};setDraft(next);setDeleteTarget(null);
-  previewing.current=false;setPreview(false);
-  // Preserve the existing client-scoped draft projection for agent/UI readback.
-  // It is not the editor's identity owner and cannot replace its target.
-  await api.current('view.update',{patch:{themeDraft:next.css,themeDraftName:next.name,themePreview:false}});
- }
- async function save(update=false){await run(async isCurrent=>{
-  const args={name,css,description,...(update?appearanceMutationTarget(editing):{})};
-  const receipt=await api.current(update?'theme.update':'theme.save',args);
-  if(receipt?.accepted!==true||!receipt.result?.id)throw Error(receipt?.error||'Saving this appearance was not confirmed. Check the library before trying again.');
-  catalog.invalidate();
-  const adopted=compareAndSetDraft(draft,{...draft,entry:receipt.result,dirty:false});
-  // A confirmed library mutation still stands if the editor has moved on.
-  // Only the unchanged draft may adopt its target; old UI instances stay silent.
-  if(!isCurrent())return;
-  if(adopted){setSelected(receipt.result.id);setDeleteTarget(null)}
-  await refresh();
-  if(isCurrent())setNotice(update?'Library entry updated. Apply separately to change the current appearance.':'Saved to your appearance library. Apply separately to use it.');
- },update?'update':'save')}
- async function remove(){await run(async isCurrent=>{
-  const target=appearanceMutationTarget(deleteTarget),receipt=await api.current('theme.delete',target);
-  if(receipt?.accepted!==true)throw Error(receipt?.error||'Deleting this appearance was not confirmed. Check the library before trying again.');
-  catalog.invalidate();
-  const adopted=draft.entry?.id===target.id&&draft.entry?.fingerprint===target.expectedFingerprint&&compareAndSetDraft(draft,{...draft,entry:null,dirty:true});
-  if(!isCurrent())return;
-  if(adopted){setSelected(null);setDeleteTarget(null)}
-  await refresh();
-  if(isCurrent())setNotice('Deleted from your library. The applied appearance is unchanged.');
- },'delete')}
- function edit(){if(editor.current)editor.current.open=true;editor.current?.querySelector('input')?.focus()}
- async function upload(file){
-  if(!file)return;return run(async isCurrent=>{
-   const receipt=await api.current('theme.import',await appearanceImportFileArgs(file));
-   if(receipt?.accepted!==true||!receipt.result?.id||typeof receipt.result.name!=='string')throw Error(receipt?.error||'Importing this appearance was not confirmed. Check the library before trying again.');
-   catalog.invalidate();
-   if(!isCurrent())return receipt.result;
-   await refresh();
-   if(isCurrent())setNotice(receipt.result.name+' added to your library. Select it to preview.');
-   return receipt.result;
-  },'import');
- }
- const chosenId=selected||editing?.id||(state.theme?.name==='Amplifier Unified'?'builtin:default':library.items.find(item=>item.name===state.theme?.name)?.id);
- const setPresentation=patch=>run(()=>shell.setPresentation(patch));
- return <div className="a-appearance-settings" data-appearance-simple={simple} data-appearance-advanced={advancedOnly}>
-  <div className="a-appearance-intro"><div>{simple?<p>Choose a look. Your choice is saved automatically.</p>:<><p>Make this space yours.</p><small>Choose an appearance to try it. Apply when it feels right.</small></>}</div>{!simple&&<span className="a-appearance-current"><Palette size={14}/>{confirmedPreview?'Previewing '+confirmedPreview.name:state.theme?.name||'Amplifier'}</span>}</div>
-  {simple&&<h4 className="a-appearance-label">Look & feel</h4>}
-  {advancedOnly&&<h3>Included & saved appearances</h3>}
-  <div className="a-appearance-gallery" aria-label="Appearance library">
-   {library.items.map(item=><button type="button" key={item.id} className="a-appearance-card" aria-label={(simple?'Use ':'Preview ')+item.name} aria-pressed={chosenId===item.id} disabled={busy} data-action={simple?"theme.apply":"theme.preview"} onClick={()=>choose(item)}>
-    <AppearanceThumbnail item={item} mode={thumbnailMode} catalog={catalog} act={act}/><div className="a-appearance-card-caption"><div><strong>{item.name}</strong>{!simple&&<small>{item.tag}</small>}</div>{chosenId===item.id?<Check/>:<Palette/>}</div>{!simple&&<p>{item.description}</p>}
-   </button>)}
-   {!library.items.length&&!libraryError&&<p role="status">Loading appearances…</p>}
-  </div>
-  {!simple&&editing&&<div className="a-dialog-actions" aria-label="Selected appearance actions">
-   <button type="button" className="a-soft" disabled={busy} onClick={edit}>Edit {editing.name}</button>
-   <button type="button" className="a-soft" disabled={busy} data-action="theme.export" onClick={()=>run(()=>api.current('theme.export',{id:editing.id}),'export')}><Download/>Export {editing.name}</button>
-   <button type="button" className="a-soft" disabled={busy} data-action="theme.export" onClick={()=>run(()=>api.current('theme.export',{id:editing.id,format:'zip'}),'export')}><Download/>Export {editing.name} as ZIP</button>
-   {editing.source==='saved'&&<button type="button" className="a-soft" disabled={busy} onClick={()=>setDeleteTarget(editing)}>Delete {editing.name}</button>}
-  </div>}
-  {!simple&&deleteTarget&&<div role="group" aria-label="Delete appearance confirmation"><p>Delete “{deleteTarget.name}” from the shared library? This cannot be undone. The applied appearance stays unchanged. Export it first to keep a copy.</p><div className="a-dialog-actions"><button type="button" className="a-soft" disabled={busy} onClick={()=>setDeleteTarget(null)}>Cancel deletion</button><button type="button" className="a-primary" disabled={busy} data-action="theme.delete" onClick={remove}><WorkingLabel active={operation==='delete'} working="Deleting…">Confirm delete</WorkingLabel></button></div></div>}
-  {confirmedPreview&&<div className="a-appearance-preview" role="status"><span>{'Previewing '+confirmedPreview.name}</span><div><button type="button" className="a-soft" disabled={busy} onClick={cancelPreview}>Cancel preview</button><button type="button" className="a-primary" disabled={busy} data-action="theme.apply" onClick={applyPreview}><Check/>{simple?'Apply appearance':'Use '+confirmedPreview.name}</button></div></div>}
-  {busy&&<p role="status" className="a-appearance-operation">{operationLabels[operation]}</p>}
-  {(error||libraryError||storageError)&&<p role="alert" className="a-danger">{error||libraryError||storageError}</p>}{notice&&<p role="status" className="a-appearance-notice"><Check size={15}/>{notice}</p>}
-  <section className="a-appearance-options">{simple?<div className="a-appearance-color"><label htmlFor="appearance-color-mode">Color mode</label><select id="appearance-color-mode" value={scheme} disabled={busy} data-action="shell.changes.apply" onChange={event=>setPresentation({scheme:event.target.value})}><option value="system">Device</option><option value="light">Light</option><option value="dark">Dark</option></select></div>:<div className="a-appearance-option"><div><h3>Color mode</h3><p>Keep a favorite look throughout the day.</p></div><div className="a-appearance-modes" role="group" aria-label="Color mode">{[['light','Light',Sun],['dark','Dark',Moon],['system','Device',Monitor]].map(([value,label,Icon])=><button type="button" key={value} disabled={busy} aria-pressed={scheme===value} data-action="shell.changes.apply" onClick={()=>setPresentation({scheme:value})}><Icon/>{label}</button>)}</div></div>}
-   <ObservabilityPreferences presentation={presentation} setPresentation={setPresentation} busy={busy}/>
-   <fieldset className="a-detail-level"><legend>How much would you like to see?</legend><p>Choose a calmer workspace or keep more information at hand. You can always open details.</p><div className="a-detail-choices">{[['minimal','Focused','Quiet lists and simple work summaries. Extra information stays in details.'],['standard','Balanced','Useful context and work totals, with deeper details one click away.'],['detailed','Everything','Work activity opens automatically. Counts and list actions stay visible.']].map(([value,label,description])=><label key={value} data-selected={(presentation.interfaceDetail||presentation.executionDetail||'standard')===value}><input type="radio" name="interface-detail" value={value} checked={(presentation.interfaceDetail||presentation.executionDetail||'standard')===value} disabled={busy} data-action="shell.changes.apply" onChange={()=>setPresentation({interfaceDetail:value,executionDetail:value})}/><span><strong>{label}</strong><small>{description}</small></span></label>)}</div></fieldset>
-   <div className="a-appearance-option"><div><label htmlFor="work-start-view">Starting view</label><p>Focused starts with Focus, Balanced with Brief, and Everything with Studio. Switch views anytime. Changing this keeps your open work in place.</p></div><select id="work-start-view" value={presentation.workStartView||'appearance'} disabled={busy} data-action="shell.changes.apply" onChange={event=>setPresentation({workStartView:event.target.value})}><option value="appearance">Follow appearance</option><option value="focus">Focus</option><option value="brief">Brief</option><option value="studio">Studio</option></select></div>
-   <div className="a-appearance-option"><div><label htmlFor="plan-placement">Plan location</label><p>Choose where the agent’s task list appears.</p></div><select id="plan-placement" value={presentation.planPlacement||'composer'} disabled={busy} data-action="shell.changes.apply" onChange={event=>setPresentation({planPlacement:event.target.value})}><option value="composer">Above composer</option><option value="inline">Inline in chat</option><option value="active">Above composer while working</option><option value="overview">Chat overview only</option></select></div>
-   <div className="a-appearance-option"><div><label htmlFor="collapse-interim-replies">Collapse interim replies <small>Experimental</small></label><p id="collapse-interim-help">After a turn’s final answer is ready, move earlier updates into work details. Nothing is deleted. Collapsed at every detail level unless you open the details. Applies to this browser.</p></div><input id="collapse-interim-replies" type="checkbox" aria-describedby="collapse-interim-help" checked={presentation.collapseInterimReplies===true} disabled={busy} data-action="shell.changes.apply" onChange={event=>setPresentation({collapseInterimReplies:event.target.checked})}/></div>
-   <details className="a-everyday-disclosure" open={!simple||undefined}><summary>Layout & background</summary><div>
-   <div className="a-appearance-option"><div><h3>Background</h3><p>Decorative artwork stays behind your content.</p></div><ThemeDecorationControl shell={shell} onError={setError}/></div>
-   <div className="a-appearance-option"><div><label htmlFor="layout">Layout</label><p>Choose where the conversation and Canvas sit.</p></div><select id="layout" value={presentation.layout||state.view?.layout||'balanced'} disabled={busy} data-action="shell.changes.apply" onChange={e=>setPresentation({layout:e.target.value})}><option value="balanced">Canvas on the right</option><option value="conversation">More room for conversation</option><option value="work">Canvas on the left</option></select></div>
+ const [operations,setOperations]=useState({}),[fieldFeedback,setFieldFeedback]=useState({}),[fieldValues,setFieldValues]=useState({}),[focusRequest,setFocusRequest]=useState(0),[profileFeedback,setProfileFeedback]=useState(null);
+ const focusRevision=useRef(0);
+ const [error,setError]=useState(null),[notice,setNotice]=useState(''),[deleteTarget,setDeleteTarget]=useState(null);
+ const operationOwners=useRef(new Map()),operationFeedbackOwner=useRef(null),fieldOwners=useRef(new Map()),fieldRetries=useRef(new Map()),profileOwner=useRef(null),profileRetry=useRef(null),focusAfterUndo=useRef(null);
+ const api=useRef(act),alive=useRef(false),activeRef=useRef(active),previewOwner=useRef({}),editor=useRef(null);
+ api.current=act;activeRef.current=active;
+ const activeScope=appearance.activeScope==='client'||appearance.writeScope==='client'?'client':'shared';
+ const preferences=appearance.effective||appearance.renderedPreferences||{};
+ const thumbnailMode=useThemeScheme(effectivePreferenceValue('scheme',preferences));
+ const {draft,setDraft,compareAndSetDraft,storageError}=editorState||{};
+ const {entry:editing,name,css,description,dirty}=draft||{entry:null,name:'Reference',css:'',description:'',dirty:false};
+ const visibleError=error?.draft===draft?error?.message:'';
+ const confirmedPreview=appearance.preview?.theme||null;
+ if(confirmedPreview)previewOwner.current.active=true;
+ const libraryItems=library.items||[];
+ const savedItems=libraryItems.filter(item=>item.source==='saved');
+ const preferenceKey=stableValue([preferences,appearance.namespace,appearance.generation,appearance.local?.revision,appearance.shared?.revision]);
+ const busyFor=key=>operations[key]==='pending';
+ const mutationBusy=['save','update','delete','import','export','read','preview','cancel-preview','revert'].some(busyFor);
+ const fieldKey=(scope,field)=>`${scope==='client'?'client':'shared'}:${field}`;
+ const profileValues=scope=>{
+  const values=(scope==='shared'?appearance.shared:appearance.local)?.values;
+  if(values&&typeof values==='object'&&!Array.isArray(values))return values;
+  return scope===activeScope?preferences:{};
+ };
+ const effectiveValue=(field,scope=activeScope)=>{
+  const values=profileValues(scope);
+  return effectivePreferenceValue(field,values,values.appearanceId??'reference');
+ };
+ const displayedValue=(field,scope=activeScope)=>{
+  const entry=fieldValues[fieldKey(scope,field)];
+  if(!entry)return effectiveValue(field,scope);
+  return field==='executionVisibility'&&entry.patch?{...effectiveValue(field,scope),...entry.patch}:entry.value;
+ };
+ const displayCurrentId=displayedValue('appearanceId',activeScope);
+ const targetForScope=scope=>{
+  const profile=scope==='shared'?appearance.shared:appearance.local;
+  return {namespace:appearance.namespace,generation:appearance.generation,expectedRevision:profile?.revision,
+   ...(scope==='client'?{expectedStorageVersion:appearance.local?.storageVersion}:{})};
+ };
 
-   </div></details>
-  </section>
-  {!simple&&<section className="a-appearance-import"><div><h3><Upload/>Your appearance library</h3><p>Upload a CSS appearance or ZIP package once. It will stay here across restarts and be available to every connected device. Imports do not apply or replace other appearances.</p></div><FileDrop id="theme-import" disabled={busy} accept=".css,.zip,text/css,application/zip" action="theme.import" label="Upload appearance" workingLabel="Uploading appearance…" hint="Drop a CSS or ZIP file here · CSS up to 1 MB · ZIP up to 4 MB" onFile={upload}/>{library.errors.map(row=><p className="a-danger" key={row.name}>{row.name}: {row.message}</p>)}<details className="a-appearance-folder"><summary><FolderOpen/>Theme folder</summary><p>CSS files and ZIP packages placed here appear in the library automatically.</p><code>{library.directory}</code></details></section>}
-  {!simple&&<details ref={editor} className="a-appearance-advanced">
+ useEffect(()=>{
+  alive.current=true;
+  return()=>{alive.current=false;operationOwners.current.clear();fieldOwners.current.clear();fieldRetries.current.clear();profileOwner.current=null;profileRetry.current=null};
+ },[]);
+ useEffect(()=>{
+  if(!active){
+   operationOwners.current.clear();setOperations({});setError(null);setNotice('');setDeleteTarget(null);
+   return;
+  }
+  const timer=setInterval(()=>catalog.refresh(api.current).catch(()=>{}),30000);
+  catalog.refresh(api.current,{force:false}).catch(()=>{});
+  return()=>{clearInterval(timer);void clearAppearancePreview(previewOwner.current,api.current).catch(()=>{})};
+ },[active,catalog]);
+ useEffect(()=>{
+  if(typeof document==='undefined')return;
+  const recordFocus=()=>{focusRevision.current++};
+  document.addEventListener('focusin',recordFocus,true);
+  return()=>document.removeEventListener('focusin',recordFocus,true);
+ },[]);
+ useEffect(()=>{
+  setFieldValues(current=>reconcileAppearancePreferenceValues(current,appearance));
+ },[preferenceKey,activeScope,appearance.local?.storageVersion,fieldValues]);
+ useEffect(()=>{
+  if(!active)return;
+  const pending=focusAfterUndo.current;if(!pending)return;
+  focusAfterUndo.current=null;
+  if(typeof document==='undefined'||focusRevision.current!==pending.focusVersion)return;
+  const status=pending.row?.querySelector('[role="status"]');status?.focus();
+ },[fieldFeedback,active,focusRequest]);
+
+ function fieldPending(field,scope=activeScope){return fieldFeedback[fieldKey(scope,field)]?.status==='pending';}
+ function retryPreference(field,scope=activeScope){
+  const key=fieldKey(scope,field);
+  if(fieldOwners.current.has(key))return;
+  const retry=fieldRetries.current.get(key);
+  if(retry){void runFieldAction(field,scope,retry.operation,retry.successMessage,retry.onSuccess);return}
+  const previous=fieldValues[key];
+  if(previous?.status==='failed')void commitPreference(field,previous.value,scope,{retry:true,patch:previous.patch,target:previous.target});
+ }
+ async function commitPreference(field,value,scope=activeScope,{retry=false,patch:retryPatch,target}={}){
+  const key=fieldKey(scope,field);
+  if(fieldOwners.current.has(key))return null;
+  const currentValue=displayedValue(field,scope);
+  if(!retry&&sameValue(value,currentValue))return null;
+  let patch=value;
+  if(field==='executionVisibility'){
+   patch=retryPatch??sparseExecutionVisibilityPatch(value,currentValue);
+   if(patch&&typeof patch==='object'&&!Array.isArray(patch)&&Object.keys(patch).length===0)return null;
+  }
+  fieldRetries.current.delete(key);
+  const targetAtGesture=target||targetForScope(scope);
+  const confirmation={namespace:targetAtGesture.namespace??appearance.namespace,generation:targetAtGesture.generation??appearance.generation};
+  const token={},attempt=cloneValue(value),savedPatch=cloneValue(patch),savedTarget=cloneValue(targetAtGesture);
+  const isCurrent=()=>alive.current&&fieldOwners.current.get(key)===token;
+  fieldOwners.current.set(key,token);
+  setFieldValues(values=>({...values,[key]:{operation:field,value:attempt,patch:savedPatch,status:'pending',scope,target:savedTarget}}));
+  setFieldFeedback(values=>({...values,[key]:{status:'pending',message:'Saving…'}}));
+  try{
+   const result=resultValue(await onPreferenceChange(field,cloneValue(patch),{...savedTarget,scope,retry}));
+   if(isCurrent()){
+    setFieldValues(values=>({...values,[key]:{operation:field,value:attempt,patch:savedPatch,status:'stored',scope,target:savedTarget,confirmation:{
+     namespace:result.namespace??confirmation.namespace,generation:result.generation??confirmation.generation,
+     revision:result.revision,storageVersion:result.storageVersion,
+    }}}));
+    setFieldFeedback(values=>({...values,[key]:{status:'stored',message:'Saved.',undoId:result.undoId||result.result?.undoId}}));
+   }
+   return result;
+  }catch(exception){
+   if(isCurrent()){
+    setFieldValues(values=>({...values,[key]:{operation:field,value:attempt,patch:savedPatch,status:'failed',scope,target:savedTarget}}));
+    setFieldFeedback(values=>({...values,[key]:{status:'failed',message:exception?.message||'The preference change failed.'}}));
+   }
+   return null;
+  }finally{
+   if(fieldOwners.current.get(key)===token)fieldOwners.current.delete(key);
+  }
+ }
+ async function runFieldAction(field,scope,operation,successMessage,onSuccess){
+  const key=fieldKey(scope,field);
+  if(fieldOwners.current.has(key))return null;
+  const token={},isCurrent=()=>alive.current&&fieldOwners.current.get(key)===token;
+  fieldOwners.current.set(key,token);fieldRetries.current.set(key,{operation,successMessage,onSuccess});
+  setFieldFeedback(values=>({...values,[key]:{...values[key],status:'pending',message:'Saving…'}}));
+  try{
+   const result=resultValue(await operation());
+   if(isCurrent()){
+    fieldRetries.current.delete(key);
+    onSuccess?.(result,key);
+    setFieldFeedback(values=>({...values,[key]:{status:'stored',message:successMessage,undoId:result.undoId||result.result?.undoId}}));
+   }
+   return result;
+  }catch(exception){
+   if(isCurrent())setFieldFeedback(values=>({...values,[key]:{status:'failed',message:exception?.message||'The preference change failed.'}}));
+   return null;
+  }finally{if(fieldOwners.current.get(key)===token)fieldOwners.current.delete(key)}
+ }
+ async function undoPreference(field,scope,undoId,trigger){
+  const key=fieldKey(scope,field);
+  if(!undoId||fieldOwners.current.has(key))return null;
+  const row=trigger?.closest?.('[data-appearance-preference]')||null;
+  const focusVersion=typeof document!=='undefined'&&document.activeElement===trigger?focusRevision.current:null;
+  const result=await runFieldAction(field,scope,()=>onPreferenceUndo(undoId),'Preference change undone.',(receipt,overlayKey)=>{
+   const restoredValues=scope==='client'?receipt.values:receipt.shared?.values;
+   if(restoredValues&&Object.hasOwn(restoredValues,field)){
+    const restored=effectivePreferenceValue(field,restoredValues,restoredValues.appearanceId??'reference');
+    setFieldValues(values=>({...values,[overlayKey]:{operation:field,value:cloneValue(restored),status:'stored',scope,
+     confirmation:{namespace:receipt.namespace,generation:receipt.generation,revision:receipt.revision,storageVersion:receipt.storageVersion}}}));
+   }else setFieldValues(values=>{if(!Object.hasOwn(values,overlayKey))return values;const next={...values};delete next[overlayKey];return next});
+  });
+  if(result&&alive.current&&focusVersion!==null){focusAfterUndo.current={focusVersion,row};setFocusRequest(value=>value+1)}
+  return result;
+ }
+ function selectProfile(targetScope,retry=false){
+  if(profileOwner.current||targetScope===activeScope)return;
+  const token={},isCurrent=()=>alive.current&&profileOwner.current===token;
+  const gesture={...targetForScope('client')};
+  if(targetScope==='client'&&appearance.local?.values===null)gesture.expectedSharedRevision=appearance.shared?.revision;
+  profileOwner.current=token;
+  profileRetry.current={kind:'select',scope:targetScope};
+  setProfileFeedback({scope:targetScope,status:'pending',message:'Saving…'});
+  void (async()=>{
+   try{
+    const result=resultValue(await onPreferenceSelect(targetScope,{...gesture,retry}));
+    if(isCurrent()){
+     profileRetry.current=null;
+     setProfileFeedback({scope:targetScope,status:'stored',message:'Appearance profile changed.',undoId:result.undoId||result.result?.undoId});
+    }
+   }catch(exception){
+    if(isCurrent())setProfileFeedback({scope:targetScope,status:'failed',message:exception?.message||'Could not change the active appearance profile.'});
+   }finally{if(profileOwner.current===token)profileOwner.current=null}
+  })();
+ }
+ async function undoProfile(undoId){
+  if(!undoId||profileOwner.current)return null;
+  const token={},scope=profileFeedback?.scope||activeScope,isCurrent=()=>alive.current&&profileOwner.current===token;
+  profileOwner.current=token;profileRetry.current={kind:'undo',scope,undoId};
+  setProfileFeedback({scope,status:'pending',message:'Saving…'});
+  try{
+   const result=resultValue(await onPreferenceUndo(undoId));
+   if(isCurrent()){
+    profileRetry.current=null;
+    setProfileFeedback({scope,status:'stored',message:'Appearance profile change undone.'});
+   }
+   return result;
+  }catch(exception){
+   if(isCurrent())setProfileFeedback({scope,status:'failed',message:exception?.message||'Could not undo the appearance profile change.'});
+   return null;
+  }finally{if(profileOwner.current===token)profileOwner.current=null}
+ }
+ function retryProfile(){
+  if(profileOwner.current)return;
+  const retry=profileRetry.current;
+  if(retry?.kind==='undo')void undoProfile(retry.undoId);
+  else if(retry?.kind==='select')selectProfile(retry.scope,true);
+ }
+
+ async function runOperation(key,operation){
+  if(!activeRef.current||operationOwners.current.has(key))return null;
+  const token={},draftAtStart=draft,isCurrent=()=>alive.current&&activeRef.current&&operationOwners.current.get(key)===token;
+  operationOwners.current.set(key,token);operationFeedbackOwner.current=token;
+  setOperations(values=>({...values,[key]:'pending'}));setError(null);setNotice('');
+  try{return await operation(isCurrent)}catch(exception){
+   // Section changes release UI locks, not an unchanged draft's failure. A newer
+   // operation or persistent draft revision owns its own feedback, even on return.
+   if(alive.current&&operationFeedbackOwner.current===token&&
+      (!compareAndSetDraft||compareAndSetDraft(draftAtStart,value=>value)))
+    setError({draft:draftAtStart,message:exception?.message||'The appearance operation failed.'});
+   return null;
+  }finally{if(operationOwners.current.get(key)===token){operationOwners.current.delete(key);if(alive.current)setOperations(values=>{const next={...values};delete next[key];return next})}}
+ }
+ async function refresh(force=true){return catalog.refresh(api.current,{force})}
+ async function editItem(item){
+  if(!editorState)return null;
+  const original=draft;
+  return runOperation('read',async isCurrent=>{
+   const receipt=await api.current('theme.read',{id:item.id});
+   if(receipt?.accepted!==true||!receipt.result)throw Error(receipt?.error||'Could not read this appearance.');
+   if(!isCurrent())return;
+   const result=receipt.result,next={entry:result,name:result.name,css:result.css,description:result.description||'',dirty:false};
+   if(!compareAndSetDraft(original,next))return;
+   setDeleteTarget(null);if(editor.current)editor.current.open=true;
+  });
+ }
+ function startPreview(){return runOperation('preview',isCurrent=>previewAppearance(previewOwner.current,api.current,{name,css},isCurrent))}
+ function cancelPreview(){
+  if(confirmedPreview)previewOwner.current.active=true;
+  return runOperation('cancel-preview',()=>clearAppearancePreview(previewOwner.current,api.current));
+ }
+ function changeDraft(patch){if(!setDraft)return;setDraft({...draft,...patch,dirty:true});setDeleteTarget(null);setNotice('')}
+ async function saveCopy(){
+  const savedDraft=draft;
+  return runOperation('save',async isCurrent=>{
+   const receipt=await api.current('theme.save',{name:savedDraft.name,css:savedDraft.css,description:savedDraft.description});
+   if(receipt?.accepted!==true||!receipt.result?.id)throw Error(receipt?.error||'Saving this appearance was not confirmed. Check the library before trying again.');
+   catalog.invalidate();
+   const adopted=compareAndSetDraft(savedDraft,{...savedDraft,entry:receipt.result,dirty:false});
+   await refresh();if(isCurrent()&&adopted)setNotice('Saved to your appearance library. Select it to use the saved version.');
+   return receipt.result;
+  });
+ }
+ async function updateSaved(){
+  if(editing?.source!=='saved')return null;
+  const savedDraft=draft,target=appearanceMutationTarget(editing);
+  return runOperation('update',async isCurrent=>{
+   const receipt=await api.current('theme.update',{...target,name:savedDraft.name,css:savedDraft.css,description:savedDraft.description});
+   if(receipt?.accepted!==true||!receipt.result?.id)throw Error(receipt?.error||'Updating this appearance was not confirmed. Check the library before trying again.');
+   catalog.invalidate();
+   const adopted=compareAndSetDraft(savedDraft,{...savedDraft,entry:receipt.result,dirty:false});
+   await refresh();if(isCurrent()&&adopted)setNotice('Library entry updated. The active appearance is unchanged.');
+   return receipt.result;
+  });
+ }
+ async function revertDraft(){
+  if(!setDraft)return null;
+  return runOperation('revert',async isCurrent=>{
+   if(editing){
+    const receipt=await api.current('theme.read',{id:editing.id});
+    if(receipt?.accepted!==true||!receipt.result)throw Error(receipt?.error||'Could not restore this library entry.');
+    if(isCurrent())setDraft({entry:receipt.result,name:receipt.result.name,css:receipt.result.css,description:receipt.result.description||'',dirty:false});
+   }else if(isCurrent())setDraft({entry:null,name:appearance.theme?.name||'Reference',css:appearance.theme?.css||'',description:'',dirty:false});
+   if(isCurrent())setDeleteTarget(null);
+  });
+ }
+ async function remove(){
+  if(!deleteTarget)return null;
+  const target=appearanceMutationTarget(deleteTarget);
+  return runOperation('delete',async isCurrent=>{
+   const receipt=await api.current('theme.delete',target);
+   if(receipt?.accepted!==true)throw Error(receipt?.error||'Deleting this appearance was not confirmed. Check the library before trying again.');
+   catalog.invalidate();
+   if(draft?.entry?.id===target.id&&draft?.entry?.fingerprint===target.expectedFingerprint)compareAndSetDraft(draft,{...draft,entry:null,dirty:true});
+   if(isCurrent()){setDeleteTarget(null);await refresh();if(isCurrent())setNotice('Deleted from your library. The active appearance is unchanged.');}
+  });
+ }
+ function exportItem(item){if(!item?.id)return null;return runOperation('export',()=>api.current('theme.export',{id:item.id,format:'zip'}))}
+ async function upload(file){
+  if(!file)return null;
+  return runOperation('import',async isCurrent=>{
+   const receipt=await api.current('theme.import',await appearanceImportFileArgs(file));
+   if(receipt?.accepted!==true||!receipt.result?.id||typeof receipt.result.name!=='string')throw Error(receipt?.error||'Importing this package was not confirmed. Check the library before trying again.');
+   catalog.invalidate();await refresh();if(isCurrent())setNotice(receipt.result.name+' added to your library.');return receipt.result;
+  });
+ }
+ const row=(field,label,help,children)=> <PreferenceRow key={field} field={field} scope={activeScope} label={label} help={help} feedback={fieldFeedback[fieldKey(activeScope,field)]} onUndo={undoPreference} onRetry={retryPreference}>{children}</PreferenceRow>;
+ const change=(field,value)=>{void commitPreference(field,value,activeScope,{target:targetForScope(activeScope)})};
+ const controlDisabled=field=>profileFeedback?.status==='pending'||fieldPending(field,activeScope);
+ const valueFor=field=>displayedValue(field,activeScope);
+ const accentPickerValue=()=>{
+  const stored=valueFor('accent');
+  if(typeof stored==='string'&&/^#[0-9a-f]{6}$/i.test(stored))return stored;
+  const fallback='#000000';
+  if(typeof document==='undefined'||typeof window==='undefined')return fallback;
+  const appRoot=typeof document.getElementById==='function'?document.getElementById('amp-one'):null;
+  const element=appRoot||document.documentElement;
+  if(!element||typeof document.createElement!=='function'||typeof element.appendChild!=='function'||
+     typeof element.removeChild!=='function'||typeof window.getComputedStyle!=='function')return fallback;
+  try{
+   const raw=window.getComputedStyle(element)?.getPropertyValue?.('--a-accent')?.trim();
+   if(!raw)return fallback;
+   const probe=document.createElement('span');
+   if(!probe?.style)return fallback;
+   probe.style.color='var(--a-accent)';
+   probe.style.position='fixed';probe.style.visibility='hidden';probe.style.pointerEvents='none';
+   let appended=false;
+   try{
+    element.appendChild(probe);appended=true;
+    const color=window.getComputedStyle(probe)?.color?.trim()||'';
+    const hex=color.match(/^#([0-9a-f]{6})$/i);
+    if(hex)return `#${hex[1]}`;
+    const rgb=color.match(/^rgba?\(\s*(\d+(?:\.\d+)?)\s*(?:,\s*|\s+)(\d+(?:\.\d+)?)\s*(?:,\s*|\s+)(\d+(?:\.\d+)?)(?:\s*(?:,|\/)\s*(?:\d+(?:\.\d+)?%?))?\s*\)$/i);
+    if(!rgb)return fallback;
+    const channels=rgb.slice(1).map(value=>Math.round(Number(value)));
+    if(channels.some(channel=>!Number.isFinite(channel)||channel<0||channel>255))return fallback;
+    return '#'+channels.map(channel=>channel.toString(16).padStart(2,'0')).join('');
+   }finally{if(appended)element.removeChild(probe)}
+  }catch{return fallback}
+ };
+ const renderAppearanceCards=()=> <>
+  <div className="a-appearance-gallery" role="radiogroup" aria-label="Available appearances">
+   {libraryItems.map(item=><label className="a-appearance-card" key={item.id} data-selected={displayCurrentId===item.id} data-appearance-card={item.id}>
+    <input className="a-appearance-radio-input" type="radio" name="appearanceId" aria-label={item.name} value={item.id} checked={displayCurrentId===item.id} disabled={controlDisabled('appearanceId')} data-action="appearance.preferences.update" onChange={()=>change('appearanceId',item.id)}/>
+    <AppearanceThumbnail item={item} mode={thumbnailMode} catalog={catalog} act={act}/>
+    <span className="a-appearance-card-caption"><strong>{item.name}</strong></span>
+   </label>)}
+   {!libraryItems.length&&!libraryError&&<p role="status">Loading appearances…</p>}
+  </div>
+  <button type="button" className="a-soft a-appearance-reset" aria-label="Restore neutral appearance" aria-pressed={displayCurrentId==='reference'} disabled={controlDisabled('appearanceId')} data-appearance-neutral={true} data-action="appearance.preferences.update" onClick={()=>change('appearanceId','reference')}>Restore neutral appearance</button>
+ </>;
+ const renderPreferenceGroup=group=> <section className="a-appearance-preference-group" key={group.id} aria-labelledby={`appearance-group-${group.id}`}>
+  <h2 id={`appearance-group-${group.id}`}>{group.title}</h2>
+  {group.id==='visual-basics'&&<>
+   {row('appearanceId','Appearance','Choose an included or saved look, or restore the neutral appearance.',renderAppearanceCards())}
+   {row('scheme','Color mode','Choose the color mode for this browser or workspace.',<div className="a-appearance-modes" role="radiogroup" aria-label="Color mode">{[['system','System'],['light','Light'],['dark','Dark']].map(([value,label])=><label key={value}><input type="radio" name="appearance-scheme" value={value} checked={valueFor('scheme')===value} disabled={controlDisabled('scheme')} data-action="appearance.preferences.update" onChange={()=>change('scheme',value)}/>{label}</label>)}</div>)}
+   {row('layout','Layout',null,<select aria-label="Layout" value={valueFor('layout')} disabled={controlDisabled('layout')} data-action="appearance.preferences.update" onChange={event=>change('layout',event.target.value)}><option value="balanced">Canvas on the right</option><option value="conversation">More room for conversation</option><option value="work">Canvas on the left</option></select>)}
+   {row('decorations','Background decorations','Decorative artwork stays behind your content.',<label className="a-appearance-toggle"><input type="checkbox" checked={valueFor('decorations')!==false} disabled={controlDisabled('decorations')} data-action="appearance.preferences.update" onChange={event=>change('decorations',event.target.checked)}/>Show background decorations</label>)}
+   {row('density','Density',null,<select aria-label="Density" value={valueFor('density')} disabled={controlDisabled('density')} data-action="appearance.preferences.update" onChange={event=>change('density',event.target.value)}><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select>)}
+   {row('accent','Accent color',null,<input type="color" aria-label="Accent color" value={valueFor('accent')??accentPickerValue()} disabled={controlDisabled('accent')} data-action="appearance.preferences.update" onChange={event=>change('accent',event.target.value)}/>)}
+  </>}
+  {group.id==='conversation-display'&&<>
+   {row('interfaceDetail','Interface detail',null,<select aria-label="Interface detail" value={valueFor('interfaceDetail')} disabled={controlDisabled('interfaceDetail')} data-action="appearance.preferences.update" onChange={event=>change('interfaceDetail',event.target.value)}><option value="minimal">Focused</option><option value="standard">Balanced</option><option value="detailed">Everything</option></select>)}
+   {row('conversationStatus','Conversation status',null,<label className="a-appearance-toggle"><input type="checkbox" checked={valueFor('conversationStatus')===true} disabled={controlDisabled('conversationStatus')} data-action="appearance.preferences.update" onChange={event=>change('conversationStatus',event.target.checked)}/>Show conversation status</label>)}
+   {row('collapseInterimReplies','Interim updates','After a turn’s final answer is ready, earlier updates move into work details. Nothing is deleted.',<label className="a-appearance-toggle"><input type="checkbox" checked={valueFor('collapseInterimReplies')===true} disabled={controlDisabled('collapseInterimReplies')} data-action="appearance.preferences.update" onChange={event=>change('collapseInterimReplies',event.target.checked)}/>Collapse earlier updates</label>)}
+   {row('workStartView','Starting view',null,<select aria-label="Starting view" value={valueFor('workStartView')} disabled={controlDisabled('workStartView')} data-action="appearance.preferences.update" onChange={event=>change('workStartView',event.target.value)}><option value="appearance">Follow appearance</option><option value="focus">Focus</option><option value="brief">Brief</option><option value="studio">Studio</option></select>)}
+   {row('planPlacement','Plan location','Choose where the agent’s task list appears.',<select aria-label="Plan location" value={valueFor('planPlacement')} disabled={controlDisabled('planPlacement')} data-action="appearance.preferences.update" onChange={event=>change('planPlacement',event.target.value)}><option value="composer">Above composer</option><option value="inline">Inline in chat</option><option value="active">Above composer while working</option><option value="overview">Chat overview only</option></select>)}
+  </>}
+  {group.id==='work-visibility'&&<>
+   {row('executionDetail','Work detail',null,<select aria-label="Work detail" value={valueFor('executionDetail')} disabled={controlDisabled('executionDetail')} data-action="appearance.preferences.update" onChange={event=>change('executionDetail',event.target.value)}><option value="minimal">Focused</option><option value="standard">Balanced</option><option value="detailed">Everything</option></select>)}
+   {row('executionVisibility','Work visibility',null,<div className="a-detail-choices">{[['step','Each step'],['turn','After each turn'],['conversation','In the conversation']].map(([scope,label])=><label key={scope}><input type="checkbox" checked={valueFor('executionVisibility')?.[scope]!==false} disabled={controlDisabled('executionVisibility')} data-action="appearance.preferences.update" onChange={event=>change('executionVisibility',{...valueFor('executionVisibility'),[scope]:event.target.checked})}/>{label}</label>)}</div>)}
+   {row('executionMetrics','Work metrics','Choose which totals to show.',<div className="a-detail-choices">{METRIC_CHOICES.map(([key,label])=><label key={key}><input type="checkbox" checked={(valueFor('executionMetrics')||[]).includes(key)} disabled={controlDisabled('executionMetrics')} data-action="appearance.preferences.update" onChange={event=>{const current=valueFor('executionMetrics')||[],next=event.target.checked?[...current,key]:current.filter(item=>item!==key);change('executionMetrics',next)}}/>{label}</label>)}</div>)}
+  </>}
+ </section>;
+
+ return <div className="a-appearance-settings">
+  <div className="a-appearance-intro">
+   <div><p>Choose how this interface looks and works.</p></div>
+   <div className="a-sidebar-modes a-appearance-profile-switch">
+    <div className="a-sidebar-organizations" role="group" aria-label="Appearance profile">
+     <button type="button" aria-pressed={activeScope==='shared'} disabled={profileFeedback?.status==='pending'} data-action="appearance.preferences.select" onClick={()=>selectProfile('shared')}>Global</button>
+     <button type="button" aria-pressed={activeScope==='client'} disabled={profileFeedback?.status==='pending'} data-action="appearance.preferences.select" onClick={()=>selectProfile('client')}>This browser</button>
+    </div>
+   </div>
+  </div>
+  {profileFeedback&&<p className="a-appearance-profile-feedback" role={profileFeedback.status==='failed'?'alert':'status'}>
+   <span>{profileFeedback.message}</span>
+   {profileFeedback.status==='failed'&&<button type="button" className="a-link" onClick={retryProfile}>Retry</button>}
+   {profileFeedback.status==='stored'&&profileFeedback.undoId&&<button type="button" className="a-link" onClick={()=>void undoProfile(profileFeedback.undoId)}>Undo</button>}
+  </p>}
+  {preferenceStatus?.status==='failed'&&<p role="alert" className="a-danger">{preferenceStatus.error||'This browser could not confirm its appearance preferences. Shared settings were not changed.'}</p>}
+  {storageError&&<p role="alert" className="a-danger">{storageError}</p>}
+  {visibleError&&<p role="alert" className="a-danger">{visibleError}</p>}{libraryError&&<p role="alert" className="a-danger">{libraryError}</p>}
+  {notice&&<p role="status" className="a-appearance-notice"><Check size={15}/>{notice}</p>}
+  {confirmedPreview&&<div className="a-appearance-preview" role="status"><span>Previewing {confirmedPreview.name}. Appearance preferences are unchanged.</span><button type="button" className="a-soft" aria-disabled={busyFor('cancel-preview')} data-action="appearance.preview.cancel" onClick={()=>{if(!busyFor('cancel-preview'))void cancelPreview()}}>Cancel preview</button></div>}
+  <div className="a-appearance-groups">{PREFERENCE_GROUPS.map(renderPreferenceGroup)}</div>
+  {<section className="a-appearance-saved"><h2>Saved appearances</h2>
+   {savedItems.map(item=><div className="a-appearance-saved-row" key={item.id}>
+    <div><strong>{item.name}</strong>{item.description&&<p>{item.description}</p>}</div>
+    <div className="a-appearance-saved-actions">
+     <button type="button" className="a-soft" aria-label={'Use '+item.name} aria-disabled={controlDisabled('appearanceId')} data-action="appearance.preferences.update" onClick={()=>{if(!controlDisabled('appearanceId'))change('appearanceId',item.id)}}>Use</button>
+     <button type="button" className="a-soft" aria-label={'Edit '+item.name} aria-disabled={busyFor('read')} onClick={()=>{if(!busyFor('read'))void editItem(item)}}>Edit</button>
+     <button type="button" className="a-soft" aria-disabled={busyFor('export')} data-action="theme.export" onClick={()=>{if(!busyFor('export'))void exportItem(item)}}><Download/>Export ZIP</button>
+     <button type="button" className="a-link" aria-label={'Delete '+item.name} aria-disabled={busyFor('delete')} onClick={()=>{if(!busyFor('delete'))setDeleteTarget(item)}}>Delete</button>
+    </div>
+   </div>)}
+   {!savedItems.length&&<p>No saved appearances yet.</p>}
+  </section>}
+  {deleteTarget&&<div role="group" aria-label="Delete appearance confirmation"><p>Delete “{deleteTarget.name}” from your library? The active appearance is unchanged.</p><div className="a-dialog-actions"><button type="button" className="a-soft" onClick={()=>setDeleteTarget(null)}>Cancel deletion</button><button type="button" className="a-primary" aria-disabled={busyFor('delete')} data-action="theme.delete" onClick={()=>{if(!busyFor('delete'))void remove()}}><WorkingLabel active={busyFor('delete')} working="Deleting…">Confirm delete</WorkingLabel></button></div></div>}
+  {<section className="a-appearance-import"><div><h3><Upload/>Your appearance library</h3><p>Import a version-2 ZIP package based on Reference. CSS files are not imported as standalone skins.</p></div>
+   <FileDrop id="theme-import" disabled={busyFor('import')} accept=".zip,application/zip" action="theme.import" label="Upload ZIP package" workingLabel="Importing appearance…" hint="Reference-based version-2 ZIP package" onFile={upload}/>
+   {library.errors.map((item,index)=><p className="a-danger" key={item.path||index}>{item.message}</p>)}
+   <details className="a-appearance-folder"><summary><FolderOpen/>Appearance folder</summary><p>Packages placed here appear in the library automatically.</p><code>{library.directory}</code></details>
+  </section>}
+  {<details ref={editor} className="a-appearance-advanced">
    <summary>Advanced customization</summary>
-   <p>Edit CSS, preview locally, then save a copy or update the selected library entry. Saving never applies your edits. Exports use the selected library entry or committed current appearance, not this draft.</p>
-   {editing&&<p>Editing: <strong>{editing.name}</strong>. {editing.source==='saved'?'Update keeps this library entry’s identity.':'Included appearances are read-only. Save your changes as a copy.'}</p>}
-   <label htmlFor="theme-name">Appearance name</label><input id="theme-name" maxLength={100} disabled={busy} value={name} data-action="view.update" onChange={e=>changeDraft({name:e.target.value}).catch(e=>setError(e.message))}/>
-   <label htmlFor="theme-description">Description</label><input id="theme-description" maxLength={240} disabled={busy} value={description} onChange={e=>changeDraft({description:e.target.value}).catch(e=>setError(e.message))}/>
-   <label htmlFor="theme-css">CSS</label><textarea id="theme-css" disabled={busy} spellCheck={false} className="a-css-editor" value={css} data-action="view.update" onChange={e=>changeDraft({css:e.target.value}).catch(e=>setError(e.message))}/>
+   <p>Edit a Reference CSS delta, preview it locally, then save a library entry. Drafts stay private to this browser tab; saving never changes the active appearance.</p>
+   {editing&&<p>Editing: <strong>{editing.name}</strong>. {editing.source==='saved'?'Updates preserve this library entry’s identity.':'Included appearances are read-only; save edits as a copy.'}</p>}
+   <label htmlFor="theme-name">Appearance name</label><input id="theme-name" maxLength={100} value={name||''} disabled={mutationBusy} onChange={event=>changeDraft({name:event.target.value})}/>
+   <label htmlFor="theme-description">Description</label><input id="theme-description" maxLength={240} value={description||''} disabled={mutationBusy} onChange={event=>changeDraft({description:event.target.value})}/>
+   <label htmlFor="theme-css">Reference CSS delta</label><textarea id="theme-css" spellCheck={false} className="a-css-editor" value={css||''} disabled={mutationBusy} onChange={event=>changeDraft({css:event.target.value})}/>
+   {busyFor('save')&&<p role="status" aria-live="polite">Saving appearance…</p>}
    <div className="a-dialog-actions">
-    <button type="button" className="a-primary" disabled={busy} data-action="theme.save" aria-busy={operation==='save'||undefined} data-operation-pending={operation==='save'||undefined} onClick={()=>save(false)}><WorkingLabel active={operation==='save'} working="Saving…">Save as copy</WorkingLabel></button>
-    {editing?.source==='saved'&&<button type="button" className="a-soft" disabled={busy} data-action="theme.update" aria-busy={operation==='update'||undefined} data-operation-pending={operation==='update'||undefined} onClick={()=>save(true)}><WorkingLabel active={operation==='update'} working="Updating…">Update saved appearance</WorkingLabel></button>}
-    <button type="button" className="a-soft" disabled={busy} data-action="theme.preview" onClick={startPreview} aria-busy={operation==='preview'||undefined} data-operation-pending={operation==='preview'||undefined}><WorkingLabel active={operation==='preview'} working="Preparing…">Preview</WorkingLabel></button>
-    <button type="button" className="a-soft" disabled={busy} data-action="theme.apply" aria-busy={operation==='apply'||undefined} data-operation-pending={operation==='apply'||undefined} onClick={apply}><WorkingLabel active={operation==='apply'} working="Applying…">Apply appearance</WorkingLabel></button>
-    <button type="button" className="a-soft" disabled={busy} aria-busy={operation==='revert'||undefined} data-operation-pending={operation==='revert'||undefined} onClick={revert}><WorkingLabel active={operation==='revert'} working="Reverting…">Revert edits</WorkingLabel></button>
-    <button type="button" className="a-soft" disabled={busy} data-action="theme.export" aria-busy={operation==='export'||undefined} data-operation-pending={operation==='export'||undefined} onClick={()=>run(()=>api.current('theme.export',{}),'export')}><Download/>Export current appearance</button>
-    <button type="button" className="a-soft" disabled={busy} data-action="theme.export" aria-busy={operation==='export'||undefined} data-operation-pending={operation==='export'||undefined} onClick={()=>run(()=>api.current('theme.export',{format:'zip'}),'export')}><Download/>Export current appearance as ZIP</button>
+    <button type="button" className="a-primary" disabled={mutationBusy} data-action="theme.save" onClick={()=>void saveCopy()}><WorkingLabel active={busyFor('save')} working="Saving…">Save as copy</WorkingLabel></button>
+    {editing?.source==='saved'&&<button type="button" className="a-soft" disabled={mutationBusy} data-action="theme.update" onClick={()=>void updateSaved()}><WorkingLabel active={busyFor('update')} working="Updating…">Update saved appearance</WorkingLabel></button>}
+    <button type="button" className="a-soft" disabled={mutationBusy} data-action="appearance.preview" onClick={()=>void startPreview()}><WorkingLabel active={busyFor('preview')} working="Preparing…">Preview draft</WorkingLabel></button>
+    {confirmedPreview&&<button type="button" className="a-soft" aria-disabled={busyFor('cancel-preview')} data-action="appearance.preview.cancel" onClick={()=>{if(!busyFor('cancel-preview'))void cancelPreview()}}>Cancel preview</button>}
+    <button type="button" className="a-soft" disabled={mutationBusy} onClick={()=>void revertDraft()}><WorkingLabel active={busyFor('revert')} working="Reverting…">Revert editor changes</WorkingLabel></button>
+    {editing?.id&&<button type="button" className="a-soft" disabled={mutationBusy} data-action="theme.export" onClick={()=>void exportItem(editing)}><Download/>Export ZIP</button>}
    </div>
   </details>}
-  {simple&&<div className="a-everyday-footer"><button className="a-link" data-action="view.update" onClick={onAdvanced}>Save, import & export themes</button></div>}
-  {!simple&&<button type="button" className="a-link a-appearance-reset" disabled={busy} data-action="theme.reset" onClick={()=>run(async()=>{await api.current('theme.reset',{});setPreview(false);setSelected(null);setDraft({entry:null,name:'Amplifier Unified',css:defaultSkin,description:'',dirty:false});setDeleteTarget(null)},'reset')} aria-busy={operation==='reset'||undefined} data-operation-pending={operation==='reset'||undefined}><RefreshCw/>Restore original appearance</button>}
  </div>;
 }

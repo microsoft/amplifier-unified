@@ -5,7 +5,51 @@ import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {useConversationDetail}=await server.ssrLoadModule('/src/conversation-detail.jsx');
+const {overlayAnnotation,useVisibleMessageAnnotations}=await server.ssrLoadModule('/src/message-annotations.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;test.after(()=>server.close());
+test('pending or failed annotation refresh cannot replace a newer exact status correction',()=>{
+ const working={version:1,inputId:'one',phase:'working',basis:'execution_observed',updatedAt:10};
+ const cached={inputStatus:working,reactions:['like'],annotationRevision:3};
+ for(const phase of ['done','failed','unknown']){
+  const row={id:'row',inputId:'one',inputStatus:{...working,phase,updatedAt:20}};
+  assert.equal(overlayAnnotation(row,cached).inputStatus.phase,phase);
+  assert.deepEqual(overlayAnnotation(row,cached).reactions,['like']);
+ }
+ const old={id:'row',inputId:'one',inputStatus:working};
+ assert.equal(overlayAnnotation(old,{...cached,inputStatus:{...working,phase:'done',updatedAt:20}}).inputStatus.phase,'done');
+ assert.equal(overlayAnnotation(old,{...cached,inputStatus:{...working,inputId:'other',updatedAt:30}}).inputStatus.phase,'working');
+});
+test('populated viewport annotation cache preserves a streamed correction during failed refresh',async()=>{
+ const original={document:globalThis.document,observer:globalThis.IntersectionObserver,fetch:globalThis.fetch};
+ const target={dataset:{messageId:'input'}},pane={querySelectorAll:()=>[target]};
+ globalThis.document={querySelector:()=>pane};
+ globalThis.IntersectionObserver=class{
+  constructor(callback){this.callback=callback}
+  observe(target){this.callback([{target,isIntersecting:true}])}
+  disconnect(){}
+ };
+ const working={version:1,inputId:'one',phase:'working',basis:'execution_observed',updatedAt:10};
+ let root,result,pending=[],value={id:'chat',messageAnnotationRevision:1,messages:[{id:'input',inputId:'one',inputStatus:working}]};
+ globalThis.fetch=()=>new Promise(resolve=>pending.push(resolve));
+ function Probe(){result=useVisibleMessageAnnotations(value,true);return null}
+ try{
+  await act(async()=>{root=create(React.createElement(Probe));await new Promise(resolve=>setTimeout(resolve,60))});
+  // The observer effect is installed after initial rendering.
+  if(!pending.length)await act(async()=>new Promise(resolve=>setTimeout(resolve,60)));
+  assert.equal(pending.length,1);
+  await act(async()=>pending.shift()(response({sessionId:'chat',revision:1,items:{input:{reactions:['like'],inputStatus:working}}})));
+  assert.equal(result.messages[0].inputStatus.phase,'working');
+  value={...value,messageAnnotationRevision:2,messages:[{...value.messages[0],inputStatus:{...working,phase:'failed',updatedAt:20}}]};
+  await act(async()=>{root.update(React.createElement(Probe))});
+  assert.equal(result.messages[0].inputStatus.phase,'failed');
+  await act(async()=>new Promise(resolve=>setTimeout(resolve,60)));
+  await act(async()=>pending.shift()(new Response('{"error":"Unavailable"}',{status:503})));
+  assert.equal(result.messages[0].inputStatus.phase,'failed');
+ }finally{
+  await act(async()=>root?.unmount());
+  globalThis.fetch=original.fetch;globalThis.document=original.document;globalThis.IntersectionObserver=original.observer;
+ }
+});
 const source=id=>({id,messages:[{id:id+'-last',text:'Current'}],messageWindow:{offset:1,before:id+'-last'},execution:{nodes:[],turns:[],segments:[]},executionWindow:{offset:1,before:'g-last',part:'groups'}});
 const response=value=>new Response(JSON.stringify(value),{headers:{'content-type':'application/json'}});
 test('unchanged message branches survive parent renders and unrelated session updates',async()=>{
@@ -135,6 +179,23 @@ test('earlier pages remain a snapshot while new publications and live status con
   assert.deepEqual(detail.session.messages.map(row=>row.id),['prior','window-last']);
   assert.equal(detail.session.status,'working');
   await act(async()=>detail.latest());assert.deepEqual(detail.session.messages.map(row=>row.id),['changed']);
+ }finally{await act(async()=>root?.unmount());globalThis.fetch=original}
+});
+
+test('frozen earlier history receives exact status correction without unfreezing its text',async()=>{
+ let detail,root,value={...source('window'),messageWindow:{mode:'cursor',hasEarlier:true,before:'first'},executionWindow:null};
+ const working={version:1,inputId:'one',phase:'working',basis:'execution_observed',startedAt:10,updatedAt:12};
+ value.messages=[{id:'input',role:'user',inputId:'one',text:'Original text',inputStatus:working}];
+ const original=globalThis.fetch;globalThis.fetch=async()=>response({mode:'cursor',items:[{id:'prior'}],hasEarlier:false,before:null});
+ function Probe(){detail=useConversationDetail(value);return detail.controls}
+ try{
+  await act(async()=>{root=create(React.createElement(Probe))});await act(async()=>detail.earlier());
+  assert.equal(detail.focused,true);
+  value={...value,messages:[{...value.messages[0],text:'New text',inputStatus:{...working,phase:'done',endedAt:20,updatedAt:20}}]};
+  await act(async()=>root.update(React.createElement(Probe)));
+  const row=detail.session.messages.find(row=>row.id==='input');
+  assert.equal(row.text,'Original text');assert.equal(row.inputStatus.phase,'done');
+  assert.equal(detail.focused,true);
  }finally{await act(async()=>root?.unmount());globalThis.fetch=original}
 });
 
