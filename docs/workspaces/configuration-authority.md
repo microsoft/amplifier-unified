@@ -440,6 +440,15 @@ A terminal sealed native save receipt and an unchanged saved plan allow explicit
 resume to finish that same operation's loaded readback. It observes the exact
 existing worker first; only an absent worker may mount the proven saved plan.
 This continuation never repeats the settings write or submits conversation input.
+An explicit `configuration.cancel` may instead abandon an unfinished load after
+the host proves that its worker and native writer have stopped. The same sealed
+terminal save and unchanged target and saved plan are required. This fresh
+cancellation can follow Stop without renewing the original request's authority:
+it keeps saved settings, immutable receipts and failure history, releases only
+the cancelled operation's hold, and sends no input or automatic continuation.
+Unknown or partial effects, active configuration work and another native writer
+still refuse cancellation. Interrupted host publication finishes from the durable
+cancellation record on startup; it never replays the settings write or load.
 A saved conversation plan retains its selected module sources through dependency
 preparation and worker mounting, including distinct sources for child or named
 module instances. Earlier bundle composition and installation defaults cannot

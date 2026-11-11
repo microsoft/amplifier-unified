@@ -2,7 +2,7 @@
 
 The native receipt is private, authenticated by a per-attempt host secret, and
 written independently of the transport reply. This is not a permission system:
-every admission still checks the original authority and target at the host.
+resuming an effect still checks the original authority and target at the host.
 """
 from __future__ import annotations
 
@@ -340,6 +340,11 @@ def public(record, observed=None):
 def check_saved(management, session, record, attempt=None, observed=None):
     """Prove the original write completed and its saved plan is unchanged."""
     management.check_configuration_operation(session, record)
+    check_saved_effect(management, session, record, attempt, observed)
+
+
+def check_saved_effect(management, session, record, attempt=None, observed=None):
+    """Inspect the sealed save independently of permission to resume its load."""
     attempt = latest_attempt(record) if attempt is None else attempt
     observed = evidence(attempt, home=management.service.data_dir) if attempt and observed is None else observed
     if (record['request']['source'].get('action', 'configuration.apply') != 'configuration.apply'
@@ -356,6 +361,25 @@ def check_saved(management, session, record, attempt=None, observed=None):
     saved = json.loads(path.read_text())
     if not management.configuration_readback_matches(record['request']['config'], saved):
         raise ValueError('The saved configuration changed after application; its operation remains unresolved.')
+
+
+def check_saved_cancellation(management, session, record):
+    """Fresh cancellation keeps the saved plan; it never renews old authority."""
+    request = record['request']
+    task = management.pending_config_tasks.get(session['id'])
+    if (session.get('configurationOperationFence') != record['id']
+            or record['state']['phase'] != 'error'
+            or task and not task.done()
+            or session.get('configurationPending')
+            or session.get('configurationRefresh', {}).get('phase') in {'queued', 'applying'}):
+        raise ValueError('Wait for configuration work to settle before cancelling its unfinished load.')
+    if (request['sessionId'] != session['id'] or request['workspace'] != session['workspace']
+            or request['workingDirectory'] != session.get('workingDirectory')
+            or request['executionRevision'] != session.get('executionRevision', 0)
+            or fingerprint(request['config']) != request['payloadHash']
+            or fingerprint(json.loads(management.queued_path(session['id']).read_text())) != request['payloadHash']):
+        raise ValueError('The saved configuration target or payload changed; its operation remains unresolved.')
+    check_saved_effect(management, session, record)
 
 
 async def finish_saved(management, identity, operation):

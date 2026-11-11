@@ -191,7 +191,7 @@ ACTION_DEFINITIONS = {
     "bundles.move": ("Reorder app behaviors",schema({"id":string(200),"direction":{"enum":["up","down"]},"beforeId":{"type":["string","null"]}},["id"])),
     "bundle.export": ("Export the conversation's customized bundle",schema({"sessionId":string(200),"name":string(200),"description":string(1000)},["sessionId"])),
     "bundle.save": ("Save and use the conversation's customized bundle",schema({"sessionId":string(200),"name":string(200),"description":string(1000)},["sessionId","name"])),
-    "configuration.cancel": ("Cancel queued mount-plan changes",schema({"id":string(200)})),
+    "configuration.cancel": ("Cancel queued changes or a stopped worker's unfinished configuration load; saved settings remain",schema({"id":string(200)})),
     "configuration.inspect": ("Inspect resolved modules and configuration",schema({"id":string(200)})),
     "configuration.apply": ("Apply edits to the loaded session mount plan, optionally waiting for idle",schema({"id":string(200),"config":{"type":"object"},"whenIdle":{"type":"boolean"}},["id","config"])),
     "runtime.control": ("Manage runtime modes, goals, provider, budgets, skills and tools",schema({"sessionId":string(200),"operation":string(100),"args":{"type":"object"}},["sessionId","operation"])),
