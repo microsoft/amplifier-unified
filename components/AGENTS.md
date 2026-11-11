@@ -1,5 +1,10 @@
 # Temporary component delivery
 
+`native-runtime/` is an independently buildable package authored in this public
+repository. It is not a generated delivery copy. Follow its README for the
+producer-first rollout; current app consumers are unchanged until separately
+reviewed dependency adoption.
+
 `web-client/` is a verbatim snapshot of the separate client repository selected
 by `web-client.source.json`. Maintain source, client tests and build tools in that
 owning repository, then refresh the whole snapshot and record together. Do not
