@@ -1,10 +1,11 @@
 import {fixturePython} from './fixture-python.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {writeFile} from 'node:fs/promises';
+import {readFile,writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
 const output=process.env.AMPLIFIER_TEST_ARTIFACTS;
 if(!output)throw Error('Owned evidence folder required');
@@ -13,26 +14,48 @@ const hostEnv={...process.env,PYTHONDONTWRITEBYTECODE:'1'};
 delete hostEnv.PYTHONPATH;delete hostEnv.PYTHONHOME;
 if(installed)hostEnv.PATH=process.env.AMPLIFIER_TEST_HOST_PATH;
 const child=spawn(fixturePython(),['-I','-B','-u',fileURLToPath(new URL('../../tests/fixtures/update_current_health_server.py',import.meta.url))],{env:hostEnv});
-let log='',browser;child.stderr.on('data',x=>log+=x);
-const result={paidCalls:0,liveInstallCalls:0,syntheticRecordedGraph:true,capturedLegacyAttempts:true};
+const stop=ownFixture(child,{label:'Update current health fixture'});
+let log='',browser,failure;child.stderr.on('data',x=>log=(log+x).slice(-8000));
+const result={status:'running',paidCalls:0,liveInstallCalls:0,syntheticRecordedGraph:true,capturedLegacyAttempts:true};
 try{
- const boot=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error(log||'boot timeout')),60000);child.once('exit',code=>{clearTimeout(timer);reject(Error('fixture exit '+code+log))});child.stdout.on('data',x=>{text+=x;for(const line of text.split('\n'))try{const v=JSON.parse(line);if(v.url){clearTimeout(timer);resolve(v)}}catch{}})});
+ const boot=await new Promise((resolve,reject)=>{
+  let pending='';
+  const cleanup=()=>{clearTimeout(timer);child.off('error',failed);child.off('exit',exited);child.stdout.off('data',data)};
+  const failed=error=>{cleanup();reject(error)};
+  const exited=(code,signal)=>failed(Error('fixture exit '+(code??signal)+log));
+  const data=chunk=>{
+   pending+=chunk;
+   for(let end;(end=pending.indexOf('\n'))>=0;){
+    const line=pending.slice(0,end);pending=pending.slice(end+1);
+    let value;try{value=JSON.parse(line)}catch{continue}
+    if(value.url){cleanup();resolve(value);return}
+   }
+   if(pending.length>8000)failed(Error('fixture readiness output exceeded its bound'));
+  };
+  const timer=setTimeout(()=>failed(Error(log||'boot timeout')),60000);
+  child.once('error',failed);child.once('exit',exited);child.stdout.on('data',data);
+ });
  browser=await chromium.launch({headless:true,channel:'chromium',args:['--disable-gpu','--no-zygote']});
  const page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  if(installed){
-  const component=await (await page.request.get(boot.url+'/client-component.json')).json();
+  const record=JSON.parse(await readFile(process.env.AMPLIFIER_TEST_ASSEMBLY_RECORD,'utf8'));
+  const verifiedBody=async(path,expected)=>{
+   assert.ok(expected,'Assembly must bind '+path);
+   const response=await page.request.get(boot.url+path);assert.ok(response.ok(),path);
+   const bytes=await response.body();assert.equal(bytes.length,expected.bytes,path);
+   assert.equal(createHash('sha256').update(bytes).digest('hex'),expected.sha256,path);
+   return bytes;
+  };
+  const component=JSON.parse((await verifiedBody('/client-component.json',record.client.component)).toString('utf8'));
+  assert.deepEqual(component,record.client.manifest);
   assert.equal(component.source.revision,process.env.AMPLIFIER_TEST_CLIENT_REVISION);
-  const identity=await(await page.request.get(boot.url+'/build.json')).json();
+  const identity=JSON.parse((await verifiedBody('/build.json',component.assets['build.json'])).toString('utf8'));
   assert.deepEqual(identity,component.build);
-  const html=await(await page.request.get(boot.url)).text();
+  const html=(await verifiedBody('/',component.assets['index.html'])).toString('utf8');
   const paths=[...html.matchAll(/(?:src|href)="(\/[^"]+\.(?:js|css))"/g)].map(x=>x[1]);
-  assert.ok(paths.length);
-  for(const path of paths){
-   const response=await page.request.get(boot.url+path);assert.ok(response.ok());
-   const bytes=await response.body(),expected=component.assets[path.slice(1)];
-   assert.ok(expected,path);assert.equal(bytes.length,expected.bytes);
-   assert.equal(createHash('sha256').update(bytes).digest('hex'),expected.sha256);
-  }
+  assert.ok(paths.some(path=>path.endsWith('.js')),'Served index must reference JavaScript');
+  assert.ok(paths.some(path=>path.endsWith('.css')),'Served index must reference CSS');
+  for(const path of new Set(paths))await verifiedBody(path,component.assets[path.slice(1)]);
   result.servedEntrypointAssetHashes=true;result.selectedClient=component.source;result.clientBuild=component.build;
  }
  const errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(boot.url);await page.waitForSelector('#amp-one');await openSettingsPage(page,'updates');
@@ -99,36 +122,6 @@ try{
  await expect(outcomes).toContainText('Updated');
  await expect(outcomes).toContainText('Fixture C');
  await expect(outcomes).toContainText('Dependency-held — working version retained');
- // Real host Check/projection/Install owner, not a synthetic client peer.
- const retryButton=panel.getByRole('button',{name:'Retry installation',exact:true});
- for(const mode of ['known','unknown','missing','stale']){
-  await transition('retry-'+mode);
-  if(mode==='known')await expect(retryButton).toBeVisible();
-  else await expect(retryButton).toHaveCount(0);
-  const observation=await(await page.request.get(boot.url+'/fixture/current-update')).json();
-  assert.equal(observation.retry.candidateCount,0);assert.equal(observation.retry.fetches,0);
-  assert.equal(observation.retry.prepareCalls,0);assert.equal(observation.retry.installActions,0);
- }
- await transition('retry-known');
- for(const width of [1280,390]){
-  await page.setViewportSize({width,height:950});await expect(retryButton).toBeVisible();await expect(retryButton).toBeEnabled();
-  await page.screenshot({path:output+`/retained-retry-${width}.png`});
- }
- await panel.getByRole('button',{name:/^Check/}).first().click();
- await expect(retryButton).toBeEnabled();
- await page.reload();await page.waitForSelector('#amp-one');await openSettingsPage(page,'updates');
- await expect(retryButton).toBeVisible();
- let observation=await(await page.request.get(boot.url+'/fixture/current-update')).json();
- assert.equal(observation.retry.candidateCount,0);assert.equal(observation.retry.installActions,0);
- await retryButton.click();
- await expect.poll(async()=> (await(await page.request.get(boot.url+'/fixture/current-update')).json()).retry.prepareCalls).toBe(1);
- observation=await(await page.request.get(boot.url+'/fixture/current-update')).json();
- assert.equal(observation.retry.installActions,1);assert.equal(observation.retry.candidateCount,1);
- assert.equal(observation.retry.fetches,1);assert.equal(observation.retry.activePointerUnchanged,true);
- assert.equal(observation.retry.servingSourceUnchanged,true);
- Object.assign(result,{retainedOnlyCheckNoPreparation:true,explicitRetryVisibleDesktopMobile:true,
-  unknownMissingStaleNoRetry:true,oneGuardedCandidate:true,oneSyntheticAcquisition:true,
-  runtimeQualificationNotRun:true,installed:!!installed});
  for(const width of [390,1280]){
   await page.setViewportSize({width,height:950});
   await expect(status).not.toContainText('You’re up to date');
@@ -137,6 +130,78 @@ try{
  await page.reload();await page.waitForSelector('#amp-one');
  if(!await status.isVisible())await openSettingsPage(page,'updates');
  await expect(outcomes).toContainText('Dependency-held — working version retained');
- assert.deepEqual(errors,[]);Object.assign(result,{status:'passed',package:boot.package,currentDesktop:true,currentMobile:true,historyRetained:true,reload:true,currentFailureHasAction:true,sourceActionReopensAndReveals:true,uncertainPreserved:true,notesDemand:true,notesMissingBounded:true,notesLateArrival:true,notesVersionSwitch:true,notesEmptyAndError:true,partialResults:true,partialReload:true});
-} catch(error){Object.assign(result,{status:'failed',error:String(error),fixtureLog:log});throw error}
-finally{await browser?.close();child.kill('SIGTERM');await new Promise(resolve=>{if(child.exitCode!==null)return resolve();child.once('exit',resolve);setTimeout(resolve,5000)});result.fixtureExit={code:child.exitCode,signal:child.signalCode};await writeFile(output+'/browser-result.json',JSON.stringify(result,null,2));assert.equal(child.exitCode,0);assert.equal(child.signalCode,null)}
+ // Real host Check/projection/Install owner, not a synthetic client peer.
+ const retryButton=panel.getByRole('button',{name:'Retry installation',exact:true});
+ const observeRetry=async()=>{
+  const response=await page.request.get(boot.url+'/fixture/current-update');assert.ok(response.ok());
+  return (await response.json()).retry;
+ };
+ for(const mode of ['known','unknown','missing','stale','live-configuration']){
+  await transition('retry-'+mode);
+  if(mode==='known')await expect(retryButton).toBeVisible();
+  else await expect(retryButton).toHaveCount(0);
+  const observation=await observeRetry();
+  assert.equal(observation.available,0);
+  if(mode==='known')assert.equal(observation.status.action,'install');
+  else assert.notEqual(observation.status.action,'install');
+  assert.equal(observation.liveSelectionChanged,mode==='live-configuration');
+  assert.equal(observation.candidateCount,0);assert.equal(observation.fetches,0);
+  assert.equal(observation.prepareCalls,0);assert.equal(observation.installActions,0);
+ }
+ await transition('retry-known');
+ for(const width of [1280,390]){
+  await page.setViewportSize({width,height:950});await expect(retryButton).toBeVisible();await expect(retryButton).toBeEnabled();
+  await page.screenshot({path:output+`/retained-retry-${width}.png`});
+ }
+ const beforeCheck=await observeRetry();
+ await panel.locator('[data-action="updates.check"]').click();
+ await expect.poll(async()=>{
+  const observation=await observeRetry();
+  return {actions:observation.checkActions-beforeCheck.checkActions,
+   completed:observation.checkActionsCompleted-beforeCheck.checkActionsCompleted,
+   inventories:observation.checks-beforeCheck.checks,done:observation.checkTaskDone,
+   phase:observation.phase,stage:observation.sequenceStage,locked:observation.ownerLocked};
+ },{timeout:30000}).toEqual({actions:1,completed:1,inventories:1,done:true,phase:'checked',stage:'complete',locked:false});
+ await expect(retryButton).toBeEnabled();
+ let observation=await observeRetry();
+ assert.equal(observation.available,0);assert.equal(observation.status.action,'install');
+ assert.equal(observation.candidateCount,0);assert.equal(observation.installActions,0);
+ assert.equal(observation.fetches,0);assert.equal(observation.prepareCalls,0);
+ await page.reload();await page.waitForSelector('#amp-one');await openSettingsPage(page,'updates');
+ await expect(retryButton).toBeVisible();
+ observation=await observeRetry();
+ assert.equal(observation.candidateCount,0);assert.equal(observation.installActions,0);
+ assert.equal(observation.fetches,0);assert.equal(observation.prepareCalls,0);
+ assert.equal(observation.checkActionsCompleted,beforeCheck.checkActionsCompleted+1);
+ await retryButton.click();
+ await expect.poll(async()=>{
+  const observation=await observeRetry();
+  return {actions:observation.installActions,completed:observation.installActionsCompleted,
+   stops:observation.prepareCalls,phase:observation.phase,locked:observation.ownerLocked,
+   failure:observation.failure};
+ },{timeout:30000}).toEqual({actions:1,completed:1,stops:1,phase:'error',locked:false,
+  failure:{phase:'ecosystem-validation',status:'failed',errorType:'RuntimeError'}});
+ observation=await observeRetry();
+ assert.equal(observation.candidateCount,1);assert.match(observation.controlledStopCandidate,/^[a-f0-9]{32}$/);
+ assert.equal(observation.fetches,1);assert.equal(observation.activePointerUnchanged,true);
+ assert.equal(observation.servingSourceUnchanged,true);
+ assert.equal(observation.pendingRelease,null);assert.equal(observation.candidateValidated,false);
+ Object.assign(result,{retainedOnlyCheckNoPreparation:true,explicitRetryVisibleDesktopMobile:true,
+  unknownMissingStaleNoRetry:true,liveSelectionChangeNoRetry:true,checkOwnerCompleted:true,
+  controlledInstallTerminal:true,oneGuardedCandidate:true,oneSyntheticAcquisition:true,
+  runtimeQualificationNotRun:true,installed:!!installed});
+ assert.deepEqual(errors,[]);Object.assign(result,{package:boot.package,currentDesktop:true,currentMobile:true,historyRetained:true,reload:true,currentFailureHasAction:true,sourceActionReopensAndReveals:true,uncertainPreserved:true,notesDemand:true,notesMissingBounded:true,notesLateArrival:true,notesVersionSwitch:true,notesEmptyAndError:true,partialResults:true,partialReload:true});
+} catch(error){failure=error;Object.assign(result,{status:'failed',error:String(error),fixtureLog:log});throw error}
+finally{
+ try{
+  await finishFixture({label:'Update current health',close:[['Browser',()=>browser?.close()]],stop});
+  result.status=failure?'failed':'passed';
+ }catch(error){
+  Object.assign(result,{status:'failed',cleanupError:String(error),fixtureLog:log});
+  if(!failure)throw error;
+  console.error(error);
+ }finally{
+  result.fixtureExit={code:child.exitCode,signal:child.signalCode};
+  await writeFile(output+'/browser-result.json',JSON.stringify(result,null,2));
+ }
+}

@@ -24,7 +24,7 @@ async def main(home):
     app=await settings_app(home);service=app['service'];manager=service.update_manager
     from amplifier_web import update_health, runtime_qualification
     from amplifier_web.runtime_profiles import configuration_key
-    from amplifier_web.host.config import read_config
+    from amplifier_web.host.config import read_config, write_private
     from amplifier_web.update_diagnostics import UpdateDiagnostics
     saved=json.loads((Path(__file__).parent/'update-current-health-captured060.json').read_text())
     get=lambda key:saved['observedState'][key]['value']
@@ -51,29 +51,43 @@ async def main(home):
     await update_health.refresh(manager);assert manager._active_update_evidence
     original=copy.deepcopy(state['diagnostics']['activeFailures'])
     await manager.publish()
-    retry = {'enabled':False,'mode':'known','fetches':0,'prepareCalls':0,'checks':0,'installActions':0}
+    retry = {'enabled':False,'mode':'known','fetches':0,'prepareCalls':0,'checks':0,
+             'checkActions':0,'checkActionsCompleted':0,'installActions':0,'installActionsCompleted':0,
+             'controlledStopCandidate':None}
     from amplifier_web import updates, app_updates, update_plan
     from amplifier_web.update_sequence import app_selection
-    from amplifier_web.update_partial import RECEIPT, public_results
+    from amplifier_web.update_partial import RECEIPT, adopted_items, public_results
     remote=home/'fixture-remote';remote.mkdir()
+    # Isolate every fixture Git child, including the real owner's source guards,
+    # from inherited Git redirection, templates, hooks and signing configuration.
+    git_template=home/'git-template';git_template.mkdir()
+    git_env={name:value for name,value in os.environ.items() if not name.startswith('GIT_')}
+    git_env.update(GIT_CONFIG_GLOBAL=os.devnull,GIT_CONFIG_SYSTEM=os.devnull,GIT_CONFIG_NOSYSTEM='1',
+                   GIT_TEMPLATE_DIR=str(git_template),GIT_TERMINAL_PROMPT='0',GIT_CONFIG_COUNT='2',
+                   GIT_CONFIG_KEY_0='core.hooksPath',GIT_CONFIG_VALUE_0=os.devnull,
+                   GIT_CONFIG_KEY_1='commit.gpgsign',GIT_CONFIG_VALUE_1='false')
     def git(path,*args):
-        return subprocess.check_output(['git',*args],cwd=path,text=True,stderr=subprocess.DEVNULL).strip()
+        return subprocess.check_output(['git',*args],cwd=path,env=git_env,timeout=10,
+                                       text=True,stderr=subprocess.DEVNULL).strip()
     git(remote,'init','-b','main');git(remote,'config','user.name','Fixture');git(remote,'config','user.email','fixture@example.invalid')
     (remote/'pyproject.toml').write_text('[project]\nname="fixture-retained"\nversion="1.0"\n')
     git(remote,'add','.');git(remote,'commit','-m','old');old=git(remote,'rev-parse','HEAD')
     (remote/'revision.txt').write_text('candidate');git(remote,'add','.');git(remote,'commit','-m','new');new=git(remote,'rev-parse','HEAD')
     cache=stage/'foundation/cache/retained';cache.parent.mkdir(parents=True)
     git(remote,'clone',str(remote),str(cache));git(cache,'checkout','--detach',old)
-    url=remote.as_uri();git(cache,'remote','set-url','origin',url)
+    url='https://update-health-fixture.invalid/retained';git(cache,'remote','set-url','origin',url)
     (cache/'.amplifier_cache_meta.json').write_text(json.dumps({'git_url':url,'ref':'main','commit':old}))
     witness=app_selection(home)['witness']
     row={'id':'retained','kind':'bundle / module','label':'Fixture retained source','path':'cache/retained',
          'url':url,'ref':'main','current':old,'latest':new,'eligible':True,'status':'not_checked',
          'usage':'configured','updateTier':'included','appSelection':witness}
     partial={'version':1,'candidate':generation,'attemptId':'e'*32,'baseline':'a'*32,
+             'pointer':update_health.pointer_witness(manager),
              'selection':[witness],'retained':{'fixture-retained':{'url':url,'ref':'main','revision':old,'subdirectory':''}},
              'results':{'retained':{'status':'failed','revision':old,'desired':new,'source':{'url':url,'ref':'main'}}}}
     pointer=(manager.directory/'active.json').read_bytes()
+    shared_settings=Path(os.environ['AMPLIFIER_HOME'])/'settings.yaml'
+    shared_original=shared_settings.read_text()
     original_inventory=manager.inventory_sources;original_process=updates.process
     original_check=app_updates.check;original_build=update_plan.build
     async def inventory(**kwargs):
@@ -81,30 +95,63 @@ async def main(home):
         retry['checks']+=1
         return [copy.deepcopy(row)]
     async def process(*args,**kwargs):
+        if args and args[0]=='git':
+            kwargs={**kwargs,'env':git_env}
         if retry['enabled'] and args[:2]==('git','ls-remote'):
+            assert args==('git','ls-remote',url,'refs/heads/main','refs/tags/main')
             if retry['mode']=='unknown':
                 from amplifier_web.update_diagnostics import CommandTimeout
                 raise CommandTimeout(1)
             return new+' refs/heads/main'
-        if retry['enabled'] and 'fetch' in args:retry['fetches']+=1
+        if retry['enabled'] and 'fetch' in args:
+            assert args==('git','-c','core.hooksPath=/dev/null','fetch','--depth=1',url,new)
+            # Translate only this checked acquisition, after the real source
+            # guards, and only inside a new owned candidate. Identity stays HTTPS.
+            target=Path(kwargs['cwd']).resolve();candidate=target.parent.parent.parent
+            assert candidate.parent==(manager.directory/'releases').resolve() and candidate.name!=generation
+            assert len(candidate.name)==32 and all(char in '0123456789abcdef' for char in candidate.name)
+            assert target==candidate/'foundation/cache/retained'
+            retry['fetches']+=1
+            args=(*args[:-2],str(remote),new)
         return await original_process(*args,**kwargs)
     async def application():
         if retry['enabled']:return {**state['application'],'status':'current'}
         return await original_check()
     async def build(*args,**kwargs):
         if not retry['enabled']:return await original_build(*args,**kwargs)
+        _,candidate,candidates=args
+        target=candidate/'foundation/cache/retained'
+        assert len(candidates)==1 and candidates[0]['id']=='retained'
+        assert git(target,'rev-parse','HEAD')==new
+        assert json.loads((target/'.amplifier_cache_meta.json').read_text())['commit']==new
+        assert (target/'revision.txt').read_text()=='candidate'
+        assert not (candidate/'plan.json').exists() and not (candidate/'validated.json').exists()
+        retry['controlledStopCandidate']=candidate.name
         retry['prepareCalls']+=1
         raise RuntimeError('Synthetic qualification stop after guarded acquisition; no runtime install')
     manager.inventory_sources=inventory;updates.process=process;app_updates.check=application;update_plan.build=build
     original_command=manager.command
     async def command(action,*args,**kwargs):
-        if retry['enabled'] and action=='install':retry['installActions']+=1
-        return await original_command(action,*args,**kwargs)
+        counter=action+'Actions' if retry['enabled'] and action in {'check','install'} else None
+        if counter:retry[counter]+=1
+        try:return await original_command(action,*args,**kwargs)
+        finally:
+            if counter:retry[counter+'Completed']+=1
     manager.command=command
     def retry_observation():
+        candidate=retry['controlledStopCandidate']
+        failure=state['diagnostics'].get('lastFailure') or {}
         return {**retry,'candidateCount':len(list((manager.directory/'releases').iterdir()))-1,
                 'activePointerUnchanged':(manager.directory/'active.json').read_bytes()==pointer,
-                'servingSourceUnchanged':git(cache,'rev-parse','HEAD')==old,
+                'servingSourceUnchanged':git(cache,'rev-parse','HEAD')==old and not (cache/'revision.txt').exists()
+                    and json.loads((cache/'.amplifier_cache_meta.json').read_text())['commit']==old,
+                'liveSelectionChanged':app_selection(home)['witness']!=witness,
+                'checkTaskDone':manager.check_task is None or manager.check_task.done(),
+                'ownerLocked':manager.lock.locked(),'phase':state.get('phase'),
+                'sequenceStage':state.get('sequence',{}).get('stage'),
+                'pendingRelease':state.get('pendingRelease'),
+                'candidateValidated':bool(candidate and (manager.directory/'releases'/candidate/'validated.json').exists()),
+                'failure':{name:failure.get(name) for name in ('phase','status','errorType')},
                 'available':state.get('available'),'status':state['currentStatus']}
     async def transition(request):
         if request.headers.get('Authorization')!='Bearer fixture-browser-control-token':raise web.HTTPForbidden()
@@ -118,7 +165,6 @@ async def main(home):
             state['diagnostics']['activeFailures']=copy.deepcopy(original);state['diagnostics'].pop('lastFailure',None)
             await manager.publish(phase='checked',error=None,pendingReplacement=None)
         elif mode == 'partial':
-            from amplifier_web.update_partial import adopted_items, public_results
             rows = [{'id': name, 'label': 'Fixture ' + name.upper(), 'kind': 'bundle / module',
                      'status': 'update', 'current': 'a'*40, 'latest': 'b'*40, 'ref': 'main',
                      'usage': 'configured', 'updateTier': 'included'} for name in 'abc']
@@ -128,6 +174,12 @@ async def main(home):
                 sequence={'stage': 'complete', 'install': False, 'included': {'status': 'attention', 'issues': 2}},
                 items=adopted_items(rows, receipt), componentResults=public_results(receipt, adopted=True))
         elif mode.startswith('retry-'):
+            if mode not in {'retry-known','retry-unknown','retry-missing','retry-stale','retry-live-configuration'}:
+                raise web.HTTPBadRequest()
+            if shared_settings.read_text()!=shared_original:
+                write_private(shared_settings,shared_original)
+                service.state['configurationRevision']=service.state.get('configurationRevision',0)+1
+                manager.configuration_changed()
             retry.update(enabled=True,mode=mode.removeprefix('retry-'))
             (stage/RECEIPT).write_text(json.dumps(partial))
             state['diagnostics'].pop('componentPreparation',None)
@@ -143,6 +195,16 @@ async def main(home):
                 else:manager.inventory[0]['appSelection']='stale'
             else:
                 await manager.check()
+                if retry['mode']=='live-configuration':
+                    assert state['currentStatus']['action']=='install'
+                    # A real effective source-setting change, not an edited row
+                    # witness or a substituted currentStatus response.
+                    changed=settings_ui_server.yaml.safe_load(shared_original)
+                    changed['sources']={'bundles':{'routing-matrix':'git+https://update-health-fixture.invalid/changed@main'}}
+                    write_private(shared_settings,settings_ui_server.yaml.safe_dump(changed))
+                    service.state['configurationRevision']=service.state.get('configurationRevision',0)+1
+                    manager.configuration_changed()
+                    assert app_selection(home)['witness']!=witness
             await update_health.refresh(manager);await manager.publish()
         elif mode.startswith('notes-'):
             application = dict(state['application'])
@@ -177,15 +239,19 @@ async def serve():
             package=Path(installed).resolve()
             record=json.loads(Path(os.environ['AMPLIFIER_TEST_ASSEMBLY_RECORD']).read_text())
             verify_installed(package,record);verify_imports(package)
-        app=await main(Path(tmp));runner=web.AppRunner(app);await runner.setup();stopped=asyncio.Event();loop=asyncio.get_running_loop()
+        app=await main(Path(tmp))
+        if installed:verify_imports(package)
+        runner=web.AppRunner(app);await runner.setup();stopped=asyncio.Event();loop=asyncio.get_running_loop()
         for sig in [signal.SIGTERM,signal.SIGINT]:loop.add_signal_handler(sig,stopped.set)
         try:
             site=web.TCPSite(runner,'127.0.0.1',0);await site.start();url='http://127.0.0.1:'+str(site._server.sockets[0].getsockname()[1]);app['allowed_origins']|={url}
             import amplifier_web
             print(json.dumps({'url':url,'package':amplifier_web.__file__}),flush=True);await stopped.wait()
         finally:
-            await runner.cleanup()
-            if installed:verify_installed(package,record);verify_imports(package)
+            try:await runner.cleanup()
+            finally:
+                for sig in [signal.SIGTERM,signal.SIGINT]:loop.remove_signal_handler(sig)
+                if installed:verify_installed(package,record);verify_imports(package)
 
 if __name__=='__main__':
     sys.path.insert(0,str(Path(__file__).resolve().parent))
