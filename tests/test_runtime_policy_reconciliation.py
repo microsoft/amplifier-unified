@@ -209,11 +209,12 @@ async def test_inactive_catalog_entries_are_never_observed(selected):
 
 
 async def test_host_observes_effective_module_override(selected):
+    from amplifier_web.host.components import HostComponents
     from amplifier_web.host.session import module_source
     s = selected
     s.config._source_policy_observer = migration.Collector()
     s.config.settings['sources'] = {'modules': {'fixture': 'git+' + URL + '@' + s.old}}
-    components = SimpleNamespace(source=lambda m, source, **kw: source, owns=lambda m, source: False)
+    components = HostComponents()
     assert module_source(s.config, False, 'fixture', 'git+' + URL + '@main', components).endswith(s.old)
     assert s.config._source_policy_observer.references == {(URL, s.old)}
 
@@ -579,6 +580,7 @@ def test_retained_extra_usage_requires_matching_completed_profile_selection(sele
 @pytest.mark.parametrize('form', ['relative', 'parent-relative', 'file-subdirectory'])
 async def test_real_resolver_local_module_override_never_becomes_branch(selected, monkeypatch, form):
     from amplifier_foundation.sources.resolver import SimpleSourceResolver
+    from amplifier_web.host.components import HostComponents
     from amplifier_web.host.session import module_source
     s = selected
     monkeypatch.chdir(s.config.workspace)
@@ -590,8 +592,7 @@ async def test_real_resolver_local_module_override_never_becomes_branch(selected
         reference = s.root.parent.as_uri() + '#subdirectory=' + s.root.name
     s.config._source_policy_observer = s.collector
     s.config.settings['sources'] = {'modules': {'fixture': reference}}
-    components = SimpleNamespace(source=lambda module, source, **kw: source,
-                                 owns=lambda module, source: False)
+    components = HostComponents()
     effective = module_source(s.config, False, 'fixture', 'git+' + URL + '@main', components)
     resolved = await SimpleSourceResolver(cache_dir=s.config.registry_home / 'cache',
                                           base_path=s.config.workspace).resolve(effective)

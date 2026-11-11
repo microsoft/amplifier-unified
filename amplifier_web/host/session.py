@@ -835,18 +835,18 @@ def installed_naming_source():
     return installed_package_source('amplifier-module-hooks-session-naming', 'amplifier_module_hooks_session_naming')
 
 
-def required_components():
+def required_components(*, resolved_plan=False):
     # Any bundle naming hook and the app adapter must share one implementation.
     # Resolve the included dependency without changing saved mount declarations.
     return HostComponents({'loop-live': LOOP_SOURCE}, {'loop-live': installed_loop_source,
-        'hooks-session-naming': installed_naming_source})
+        'hooks-session-naming': installed_naming_source}, resolved_plan=resolved_plan)
 
 
 def module_source(config, snapshot, module, source, components=None):
     components = components or required_components()
     selected = components.source(module, source, installed=True)
     owned = components.owns(module, source)
-    result = selected if owned else source if snapshot else config.module_sources.get(module) or source
+    result = selected if owned else source if snapshot or components.resolved_plan else config.module_sources.get(module) or source
     observer = getattr(config, '_source_policy_observer', None)
     if observer:
         # Observe the winning host declaration too. A resolved relative module
@@ -947,6 +947,10 @@ def apply_runtime_plan(loaded, edited, config, execution_workspace):
     for key in ("session", "agents", "context", "instruction"):
         if key in edited:
             setattr(loaded, key, edited[key])
+    # The saved plan already includes bundle/settings source selection. Reusing
+    # that composition's maps would overwrite later per-conversation edits and
+    # distinct child/instance sources. Only required host components still win.
+    loaded._host_components = required_components(resolved_plan=True)
     from ..write_policy_refresh import WritePolicySource
     # An edited live plan is already composed. Retain its explicit ceilings,
     # rather than trusting provenance imported from bundle data.

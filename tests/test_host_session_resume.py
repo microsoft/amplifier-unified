@@ -600,6 +600,62 @@ async def test_execution_write_policy_follows_checkout_on_all_prepare_routes(mou
     h.session.execute.assert_not_called()
 
 
+@pytest.mark.parametrize('route', ['dependencies', 'manager', 'saved'])
+@pytest.mark.parametrize('local_source', [False, True])
+async def test_saved_module_sources_survive_preparation_and_mount(mounted_host, tmp_path, monkeypatch, route, local_source):
+    from amplifier_web.host.components import HostComponents, declarations
+    from amplifier_web.runtime_controls import override_path
+    h = mounted_host
+    old = 'git+https://github.com/example/tools@main#subdirectory=tool'
+    chosen = str(tmp_path / 'repair') if local_source else old.replace('@main', '@reviewed')
+    child = old.replace('@main', '@child-pin')
+    h.config.providers = []
+    h.config.module_sources = {'tool-fixture': old.replace('@main', '@global-default')}
+    h.loaded.providers = [{'module': 'provider-fixture'}]
+    h.loaded.tools = [{'module': 'tool-fixture', 'source': old}]
+    h.loaded.hooks = [{'module': 'hooks-session-naming', 'source': old}]
+    h.loaded.agents = {}
+    h.loaded.session = {'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}}
+    h.loaded.to_mount_plan = lambda: copy.deepcopy({key: getattr(h.loaded, key)
+        for key in ('providers', 'tools', 'hooks', 'agents', 'session')})
+    # Composition has already chosen defaults. The saved conversation then
+    # chooses a different source, including a distinct instance in its child.
+    h.loaded._host_components = HostComponents({'tool-fixture': old})
+    edited = h.loaded.to_mount_plan()
+    edited['tools'][0]['source'] = chosen
+    edited['agents'] = {'child': {'tools': [{'module': 'tool-fixture', 'source': child}]}}
+    monkeypatch.setattr(host, 'installed_loop_source', lambda: '/installed/loop-live')
+    monkeypatch.setattr(host, 'installed_naming_source', lambda: '/installed/session-naming')
+    captured = {}
+    async def prepare_bundle(**kwargs):
+        captured['plan'] = h.loaded.to_mount_plan()
+        captured['sources'] = [(row['module'], kwargs['source_resolver'](row['module'], row.get('source')))
+                               for row in declarations(captured['plan'])]
+        h.prepared.mount_plan = copy.deepcopy(captured['plan'])
+        return h.prepared
+    h.loaded.prepare.side_effect = prepare_bundle
+    messages = [{'role': 'user', 'content': 'Do not replay completed work'}]
+    h.store.save('native-root', messages, {'bundle': 'anchors'})
+    original = h.path.read_bytes()
+    if route == 'dependencies':
+        await host.prepare_dependencies(h.config.workspace, runtime_plan=edited)
+        h.prepared.create_session.assert_not_awaited()
+    elif route == 'manager':
+        await h.prepare(runtime_plan=edited)
+    else:
+        path = override_path(h.runtime.session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(edited))
+        await h.prepare()
+    assert captured['plan']['tools'][0]['source'] == chosen
+    assert captured['plan']['agents']['child']['tools'][0]['source'] == child
+    assert [value for module, value in captured['sources'] if module == 'tool-fixture'] == [chosen, child]
+    assert ('loop-live', '/installed/loop-live') in captured['sources']
+    assert ('hooks-session-naming', '/installed/session-naming') in captured['sources']
+    assert h.path.read_bytes() == original
+    h.session.execute.assert_not_called()
+
+
 def nested_checkpoint_scope(h):
     from amplifier_web.coordination_delivery import WORK_NESTED
     coordinator = h.session.coordinator
