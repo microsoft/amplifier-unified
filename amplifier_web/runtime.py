@@ -547,6 +547,8 @@ class RuntimeManager:
             raise RuntimeHostClosingError()
         sid = session["id"]
         self._check_preparation_cleanup(sid)
+        if self._preparations.get(sid, {}).get('input_configuration'):
+            raise RuntimeStartupError('Next message preparation is already in progress. No input was sent.')
         self._check_execution(sid, session)
         configuration_revision = self._configuration_revision()
         self._retired.pop(sid, None)
@@ -576,7 +578,10 @@ class RuntimeManager:
         proc = lease = windows_owner = startup_stderr_task = None
         startup_stderr = []
         if guard is not None: guard()
-        preparation = {"stopped": self._closed, "shutdown": self._closed, "task": None, "started_at": time.monotonic()}
+        if self._preparations.get(sid, {}).get('input_configuration'):
+            raise RuntimeStartupError('Next message preparation is already in progress. No input was sent.')
+        preparation = {"stopped": self._closed, "shutdown": self._closed, "task": None,
+                       "runtimeOwnerId": str(uuid.uuid4()), "started_at": time.monotonic()}
         self._preparations[sid] = preparation
         heartbeat = asyncio.create_task(self._preparation_progress(sid, preparation, emit))
         try:
@@ -700,7 +705,7 @@ class RuntimeManager:
             # Qualification and spawn failures happen before a worker/readers
             # exist. Settle every caller (input, controls and background warmup)
             # here, not just send(), and retain the sanitized probe facts.
-            from .worker_diagnostics import save_startup_failure, diagnostic_reference, setup_failure_detail
+            from .worker_diagnostics import save_startup_failure, diagnostic_reference, setup_failure_detail, _startup_exception_facts
             from .update_diagnostics import exception_type, probe_record, PROBE_PREFIX
             from .session_health import failure_details
             facts = getattr(exc, 'diagnostic_facts', {})
@@ -716,13 +721,17 @@ class RuntimeManager:
                 {'runtime_id': session.get('runtimeSessionId') or session.get('nativeIdentity') or sid,
                  'phase': 'runtime-setup'}, None,
                 failure=setup_failure_detail(exc),
-                home=home)
+                home=home, exception=exc)
             failure = RuntimeStartupError(public)
+            failure.startupAttemptId = preparation['runtimeOwnerId']
+            failure.startupFailureFacts = _startup_exception_facts(exc)
             if diagnostic:
                 failure.diagnostic_path = diagnostic
                 failure.args = (public + f' Startup details were saved locally to {diagnostic}.',)
             await emit('runtime.error', {'sessionId': sid, 'error': str(failure),
                 'errorType': 'RuntimeStartupError', 'phase': 'worker_startup',
+                'startupAttemptId': preparation['runtimeOwnerId'],
+                'startupFailureFacts': _startup_exception_facts(exc),
                 **diagnostic_reference(failure)})
             raise failure from exc
         finally:
@@ -741,7 +750,7 @@ class RuntimeManager:
                             candidate.unlink(missing_ok=True)
                         except OSError:
                             pass  # Preserve the original failed setup diagnosis.
-        row = {"process": proc, "emit": emit, "runtimeOwnerId": str(uuid.uuid4()), "configurationRevision": configuration_revision, "generation": generation, "source_generation": source_generation, "update_pending": update_pending, "ready": asyncio.get_running_loop().create_future(),
+        row = {"process": proc, "emit": emit, "runtimeOwnerId": preparation['runtimeOwnerId'], "configurationRevision": configuration_revision, "generation": generation, "source_generation": source_generation, "update_pending": update_pending, "ready": asyncio.get_running_loop().create_future(),
                "pending": {}, "inflight": set(), "inputId": None, "closing": False, "stderr": startup_stderr, "bridge_tasks": set(),
                "started_at": time.monotonic(), "phase": "runtime-setup",
                "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies."}
@@ -1144,6 +1153,10 @@ class RuntimeManager:
                     await row['emit']('runtime.ownership', {'sessionId': sid,
                         **{key: data[key] for key in ('status', 'source', 'detail') if key in data}})
                 elif data.get("type") == "runtime.error":
+                    if row.get('startup_failure_reported'):
+                        # A failed readiness future is done, but is not READY.
+                        # Teardown must not replace that attempt's first cause.
+                        continue
                     if 'terminalFailure' in data:
                         # This is supplemental metadata, not a new failure or
                         # startup exception. Invalid/unsupported captures cannot
@@ -1171,8 +1184,10 @@ class RuntimeManager:
                     failure = _worker_error(data)
                     diagnostic = None
                     startup = not row['ready'].done()
+                    startup_facts = None
                     if startup and not isinstance(failure, SessionInUseError):
-                        from .worker_diagnostics import receipt_path, save_startup_failure
+                        from .worker_diagnostics import receipt_path, save_startup_failure, validate_startup_failure_facts
+                        startup_facts = validate_startup_failure_facts(data.get('startupFailureFacts'))
                         diagnostic = receipt_path(data.get("diagnosticReceipt"))
                         if diagnostic is None:
                             # A handled worker error can race the final stderr.
@@ -1201,6 +1216,9 @@ class RuntimeManager:
                             failure = RuntimeStartupError(public)
                         if diagnostic:
                             failure.diagnostic_path = diagnostic
+                        failure.startupAttemptId = row['runtimeOwnerId']
+                        if startup_facts is not None:
+                            failure.startupFailureFacts = startup_facts
                     error = str(failure)
                     reported_error = error
                     if not row["ready"].done():
@@ -1213,8 +1231,13 @@ class RuntimeManager:
                             **({"errorType": "RuntimeStartupError"} if startup else
                                {"errorType": failure_details(error, data["errorType"])["errorType"]} if data.get("errorType") else {}),
                             **({'phase': 'worker_startup'} if startup else {}),
+                            **({'startupAttemptId': row['runtimeOwnerId'],
+                                **({'startupFailureFacts': startup_facts} if startup_facts is not None else {})}
+                               if startup else {}),
                             **({"diagnosticReceipt": diagnostic.name} if diagnostic else {}),
                             **({"moduleFailures": failure.failures} if isinstance(failure, ConfiguredModuleError) else {})})
+                        if startup:
+                            row['startup_failure_reported'] = True
                 elif data.get("type") == "history.revised":
                     await row["emit"]("history.revised", {**data, "sessionId": sid})
                 elif data.get("type") in {"approval.requested", "approval.resolved"} and data.get("id"):
@@ -1304,7 +1327,7 @@ class RuntimeManager:
             error = f'Amplifier worker communication failed ({type(exc).__name__}). Work was not replayed.'
             if cleanup_error is not None:
                 error += ' Windows worker cleanup is unconfirmed; ownership is retained.'
-            if not row['closing']:
+            if not row['closing'] and not row.get('startup_failure_reported'):
                 await row['emit']('runtime.error', {'sessionId':sid,'error':error,'errorType':'WorkerCommunicationError' if row['ready'].done() else 'RuntimeStartupError',
                     **({'phase': 'worker_startup'} if not row['ready'].done() else {})})
             if not row["ready"].done():
@@ -1593,7 +1616,41 @@ class RuntimeManager:
             guard = None
             captured_revision = session.get('nextMessageRevision', 0)
             if self._input_configuration and session.get('nextMessageRevision'):
-                session, guard = await self._input_configuration(session)
+                if self._closed:
+                    raise RuntimeHostClosingError()
+                sid = session['id']
+                self._check_preparation_cleanup(sid)
+                if sid in self._preparations:
+                    raise RuntimeStartupError('Conversation preparation is already in progress. No input was sent.')
+                preparation = {'stopped': self._closed, 'shutdown': self._closed,
+                               'input_configuration': True,
+                               'runtimeOwnerId': str(uuid.uuid4()),
+                               'task': asyncio.create_task(self._input_configuration(session))}
+                self._preparations[sid] = preparation
+                try:
+                    session, guard = await preparation['task']
+                    if preparation['stopped']:
+                        raise RuntimeStartupError('This preparation was stopped. No input was sent.')
+                except asyncio.CancelledError:
+                    if not preparation['stopped']:
+                        raise
+                    if preparation.get('shutdown'):
+                        raise RuntimeHostClosingError() from None
+                    raise RuntimeStartupError('This preparation was stopped. No input was sent.') from None
+                except Exception as exc:
+                    from .worker_diagnostics import _startup_exception_facts
+                    # Capture the original preparation error, not its public
+                    # wrapper. No message/traceback/arguments cross this boundary.
+                    failure = exc if isinstance(exc, RuntimeStartupError) else RuntimeStartupError(
+                        'Next message preparation failed. No input was sent.')
+                    failure.startupAttemptId = preparation['runtimeOwnerId']
+                    failure.startupFailureFacts = _startup_exception_facts(exc.__cause__ or exc)
+                    if failure is exc:
+                        raise
+                    raise failure from exc
+                finally:
+                    if self._preparations.get(sid) is preparation:
+                        self._preparations.pop(sid)
             configuration_guard = guard
             if admission_check:
                 def guard():
@@ -1633,6 +1690,12 @@ class RuntimeManager:
             failure = RuntimeStartupError('The conversation worker could not start. This attempt did not send your message.')
             if getattr(exc, 'diagnostic_path', None) is not None:
                 failure.diagnostic_path = exc.diagnostic_path
+            from .session_health import startup_failure_details
+            for key, value in startup_failure_details(vars(exc)).items():
+                setattr(failure, key, value)
+            from .module_failures import ConfiguredModuleError
+            if isinstance(exc, ConfiguredModuleError):
+                failure.failures = exc.failures
             raise failure from exc
 
     async def delivery(self, session, input_id):
@@ -1982,7 +2045,7 @@ class RuntimeManager:
         self._check_preparation_cleanup(session_id)
         self._retired.pop(session_id, None)
         preparation = self._preparations.get(session_id)
-        if preparation:
+        if preparation and preparation.get('task') is not asyncio.current_task():
             if reason == 'stopped' or 'stop_reason' not in preparation:
                 preparation['stop_reason'] = reason
             if reason == 'stopped':

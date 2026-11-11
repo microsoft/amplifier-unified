@@ -186,6 +186,7 @@ async def test_worker_captures_original_validation_error_before_safe_metadata_re
     await worker.start({'id': 'captured-fixture', 'workspace': str(tmp_path)}, recover_bundle=False)
     error = next(event for event in events if event['type'] == 'runtime.error')
     assert error['code'] == 'module_load_failed'
+    assert error['startupFailureFacts'] == {'errors': [{'class': 'other'}], 'truncated': False}
     content = (tmp_path / 'app/logs/workers' / error['diagnosticReceipt']).read_text()
     assert 'protocol_compliance' in content and 'BackendError' in content
     assert 'synthetic-worker-secret' not in content + json.dumps(events)
@@ -383,6 +384,35 @@ def test_private_startup_facts_fault_and_write_fault_never_replace_original(tmp_
     finally:
         capture.close()
     assert error.args == ('original cancellation',)
+
+
+def test_startup_facts_validator_is_closed_bounded_and_copies():
+    from amplifier_web.worker_diagnostics import validate_startup_failure_facts
+    facts = {'errors': [{'class': 'ModuleActivationError'},
+                        {'class': 'PermissionError', 'errno': 13, 'winerror': 5},
+                        {'class': 'CalledProcessError', 'returncode': 128}], 'truncated': False}
+    result = validate_startup_failure_facts(facts)
+    assert result == facts
+    result['errors'][1]['errno'] = 1
+    assert facts['errors'][1]['errno'] == 13
+    for invalid in (
+            {**facts, 'message': 'private'},
+            {**facts, 'errors': facts['errors'] * 2},
+            {**facts, 'truncated': 1},
+            {**facts, 'errors': [{'class': 'PrivateSecretClass'}]},
+            {**facts, 'errors': [{'class': 'RuntimeError', 'errno': 13}]},
+            {**facts, 'errors': [{'class': 'PermissionError', 'errno': True}]},
+            {**facts, 'errors': [{'class': 'CalledProcessError', 'returncode': 2**32}]},
+            {**facts, 'errors': [{'class': 'RuntimeError', 'frames': []}]}):
+        assert validate_startup_failure_facts(invalid) is None
+    class BadDict(dict):
+        def __iter__(self): raise AssertionError('untrusted iterator')
+    class BadString(str):
+        def __eq__(self, other): raise AssertionError('untrusted comparison')
+        def __hash__(self): raise AssertionError('untrusted hash')
+    assert validate_startup_failure_facts(BadDict(facts)) is None
+    assert validate_startup_failure_facts({'errors': [{'class': BadString('RuntimeError')}],
+                                         'truncated': False}) is None
 
 
 def _command_facts_fixture():

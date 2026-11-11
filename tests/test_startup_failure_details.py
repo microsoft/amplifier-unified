@@ -48,6 +48,132 @@ async def test_send_keeps_private_startup_log_location_after_admission_fails(tmp
         await restored.close()
 
 
+@pytest.mark.parametrize('facts', [
+    {'errors': [{'class': 'RuntimeError'}, {'class': 'PermissionError', 'errno': 13}], 'truncated': False},
+    None,
+    {'errors': [{'class': 'PrivateSecretClass', 'message': 'private'}], 'truncated': False},
+])
+@pytest.mark.parametrize('module', [False, True])
+async def test_startup_facts_survive_reader_saved_failure_inspection_and_reopen(tmp_path, monkeypatch, facts, module):
+    """A synthetic protocol peer; no provider, production session or retry."""
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    event = {'type': 'runtime.error', 'error': 'Unclassified private startup payload'}
+    if facts is not None:
+        event['startupFailureFacts'] = facts
+    if module:
+        event.update(code='module_load_failed', moduleFailures=[
+            {'module': 'tool-fixture', 'type': 'tool', 'reason_code': 'validation_failed'}])
+    cleanup = {'type': 'runtime.error', 'error': 'secondary private cleanup payload',
+               'startupFailureFacts': {'errors': [{'class': 'ValueError'}], 'truncated': False}}
+    fixture = ('import sys; sys.stdin.readline(); print(' + repr(json.dumps(event)) +
+               ',flush=True); print(' + repr(json.dumps(cleanup)) + ',flush=True)')
+    runtime = RuntimeManager(command=[sys.executable, '-c', fixture], retention={'prewarm_on_select': False})
+    app = AppService(tmp_path, runtime, workspace=tmp_path)
+    valid = facts is not None and facts['errors'][0]['class'] == 'RuntimeError'
+    try:
+        await app.dispatch('session.create', {})
+        sid = app._session()['id']
+        with pytest.raises(AppError):
+            await app.dispatch('conversation.send', {'text': 'Saved unsent input'}, command_id='facts-start')
+        failure = copy.deepcopy(app._session()['failure'])
+        assert failure['category'] == 'worker_startup'
+        assert ('startupFailureFacts' in failure) == valid
+        if valid:
+            assert failure['startupFailureFacts'] == facts
+            import uuid
+            assert str(uuid.UUID(failure['startupAttemptId'])) == failure['startupAttemptId']
+        report = (await app.dispatch('session.inspect', {'id': sid}))['result']
+        assert report['failure'] == failure
+        assert 'private' not in json.dumps(report)
+        assert not runtime.workers
+        await app.close()
+        app = AppService(tmp_path, workspace=tmp_path)
+        report = (await app.dispatch('session.inspect', {'id': sid}))['result']
+        assert report['failure'] == failure
+        assert app._session()['messages'][0]['delivery']['status'] == 'failed'
+    finally:
+        await app.close()
+
+
+async def test_stop_owns_candidate_configuration_preparation_before_start(tmp_path):
+    import asyncio
+    from amplifier_web.runtime import RuntimeStartupError
+    entered, settled = asyncio.Event(), asyncio.Event()
+    runtime = RuntimeManager(command=[sys.executable, '-c', 'raise AssertionError("must not spawn")'])
+    async def prepare(session):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            settled.set()
+    runtime.bind_input_configuration(prepare)
+    async def emit(*args):
+        pass
+    task = asyncio.create_task(runtime._start_for_input(
+        {'id': 'cold', 'workspace': str(tmp_path), 'nextMessageRevision': 1}, emit))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        # A warmup/start cannot replace the callback's cancellation owner.
+        with pytest.raises(RuntimeStartupError, match='already in progress'):
+            await runtime.start({'id': 'cold', 'workspace': str(tmp_path)}, emit)
+        await runtime.stop('cold')
+        assert settled.is_set()
+        with pytest.raises(RuntimeStartupError, match='stopped'):
+            await task
+        assert not runtime._preparations and not runtime.workers
+    finally:
+        await runtime.close()
+
+
+async def test_closed_runtime_never_starts_candidate_configuration(tmp_path):
+    from amplifier_web.runtime import RuntimeHostClosingError
+    runtime = RuntimeManager()
+    callback = AsyncMock()
+    runtime.bind_input_configuration(callback)
+    runtime.begin_shutdown()
+    with pytest.raises(RuntimeHostClosingError):
+        await runtime._start_for_input({'id': 'closed', 'nextMessageRevision': 1}, AsyncMock())
+    callback.assert_not_awaited()
+    await runtime.close()
+
+
+async def test_startup_publication_cannot_overwrite_later_configuration_owner(tmp_path):
+    import asyncio
+    from amplifier_web.runtime import RuntimeStartupError
+    publishing, release, preparing, settled = (asyncio.Event() for _ in range(4))
+    runtime = RuntimeManager(command=[sys.executable, '-c', 'raise AssertionError("must not spawn")'])
+    async def emit(*args):
+        publishing.set()
+        await release.wait()
+    async def prepare(session):
+        preparing.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            settled.set()
+    runtime.bind_input_configuration(prepare)
+    session = {'id': 'cold', 'workspace': str(tmp_path)}
+    startup = asyncio.create_task(runtime.start(session, emit))
+    callback = None
+    try:
+        await asyncio.wait_for(publishing.wait(), 2)
+        callback = asyncio.create_task(runtime._start_for_input({**session, 'nextMessageRevision': 1}, emit))
+        await asyncio.wait_for(preparing.wait(), 2)
+        release.set()
+        with pytest.raises(RuntimeStartupError, match='already in progress'):
+            await startup
+        await runtime.stop('cold')
+        with pytest.raises(RuntimeStartupError, match='stopped'):
+            await callback
+        assert settled.is_set() and not runtime._preparations and not runtime.workers
+    finally:
+        release.set()
+        if callback is not None and not callback.done():
+            callback.cancel()
+        await asyncio.gather(startup, *( [callback] if callback else []), return_exceptions=True)
+        await runtime.close()
+
+
 @pytest.mark.parametrize('entry', ['send', 'controls', 'warmup'])
 async def test_preworker_qualification_failure_is_saved_and_settles_status(tmp_path, monkeypatch, entry):
     from amplifier_web import runtime_profiles

@@ -30,7 +30,7 @@ try{
  for(const [mode,label,code,linked] of [
   ['management-hold','Update waits for global configuration management to settle','management-lock-held',false],
   ['unobservable-hold','Update cannot verify global runtime activity','runtime-observer-unavailable',false],
-  ['operation-hold','Conversation configuration operation remains held for recovery','operation-bound-recovery',true]]){
+  ['mounted-worker-hold','Conversation runtime has not settled','mounted-worker',true]]){
   await receipt(mode);await expect(blockers).toContainText(label);
   await expect(blockers).not.toContainText('Conversation settings are being applied');
   await expect(blockers.getByRole('button',{name:'Settings test',exact:true})).toHaveCount(linked?1:0);
@@ -52,12 +52,14 @@ try{
  await expect(identity).toContainText('Amplifier 0.20.165 · Latest 99.0.1');
  await expect(updates.getByRole('button',{name:'Check for newer release',exact:true})).toBeEnabled();
  const refreshed=await receipt();assert.equal(refreshed.calls.length,1);assert.equal(refreshed.checks.length,1);assert.deepEqual(refreshed.updates.pendingApp,staged.updates.pendingApp);assert.equal(refreshed.generation.active,'original-generation');
- await updates.getByRole('button',{name:'Force restart…',exact:true}).click();
- const confirmation=updates.getByRole('alertdialog',{name:'Confirm update restart'});
- await expect(confirmation).toContainText('prepared Amplifier 99.0.0');
- await expect(confirmation).toContainText('Amplifier 99.0.1 is available');
- await confirmation.getByRole('button',{name:'Cancel',exact:true}).click();
- await expect(confirmation).toHaveCount(0);
+ const restart=updates.locator('.a-update-force-restart'),interrupt=restart.getByRole('button',{name:'Interrupt work and restart',exact:true});
+ await expect(interrupt).toBeVisible();await expect(interrupt).toBeEnabled();
+ assert.equal(await interrupt.evaluate(button=>!!button.closest('[data-part="update-blockers"]')),false);
+ await expect(restart).toContainText('Restart into prepared Amplifier 99.0.0.');
+ await expect(restart).toContainText('Amplifier 99.0.1 is available, but this action uses the prepared version above.');
+ await expect(interrupt).toHaveAccessibleDescription(/interrupted work will not be replayed automatically/);
+ await expect(updates.getByRole('alertdialog',{name:'Confirm update restart'})).toHaveCount(0);
+ assert.equal(actions.filter(row=>row.action==='updates.forceRestart').length,0,'Inspecting the prepared target is not consent to restart');
  await receipt('offline');await updates.getByRole('button',{name:'Check for newer release',exact:true}).click();
  await expect(updates).toContainText('The prepared update is still available');
  await expect(overview).toContainText('Waiting for 1 chat to finish');
@@ -66,7 +68,7 @@ try{
  await receipt('newer-release');await updates.getByRole('button',{name:'Check for newer release',exact:true}).click();
  await expect(updates).not.toContainText('The prepared update is still available');
  await expect(updates.getByRole('button',{name:'Check for newer release',exact:true})).toBeEnabled();
- await receipt('unknown');await expect(overview).toContainText('Updates need attention');await expect(updates).toContainText('installation needs verification');await expect(updates.locator('[data-action="updates.check"]')).toBeDisabled();await expect(updates.locator('[data-action="updates.install"]')).toHaveCount(0);assert.equal((await receipt()).calls.length,1);
+ await receipt('unknown');await expect(overview).toContainText('Installation needs verification');await expect(overview).toContainText('The application replacement outcome is not confirmed. Work remains protected; inspect the update diagnostics before another installation.');await expect(updates.locator('[data-action="updates.check"]')).toBeDisabled();await expect(updates.locator('[data-action="updates.install"]')).toHaveCount(0);assert.equal((await receipt()).calls.length,1);
  await expect(identity).toContainText('Amplifier 0.20.165 · Latest 99.0.1');assert.equal((await receipt()).generation.active,'original-generation');
  await receipt('known-failure');await expect(updates.getByRole('button',{name:'Try update again',exact:true})).toBeEnabled();assert.equal((await receipt()).generation.active,'original-generation');
  await expect(identity).toContainText('Amplifier 0.20.165 · Latest 99.0.1');await expect(updates).toContainText('Synthetic staging failed; original generation retained.');
@@ -74,8 +76,14 @@ try{
  await receipt('rollback-ready');
  // The only rollback control is within Advanced details; this is supplemental
  // coverage of a public entry, not ordinary-path credit for hidden internals.
+ // The fixture response precedes the browser's state update. A one-shot button
+ // visibility read can therefore toggle already-open details closed.
+ await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().updates.canRollback)).toBe(true);
  const restore=updates.getByRole('button',{name:'Restore previous components',exact:true});
- if(!await restore.isVisible())await updates.locator('[data-part="ecosystem-update-details"]>summary').click();
+ const advanced=updates.locator('[data-part="ecosystem-update-details"]');
+ if(!await advanced.evaluate(element=>element.open))await advanced.locator(':scope>summary').click();
+ await expect(advanced).toHaveAttribute('open','');
+ await expect(restore).toBeVisible();await expect(restore).toBeEnabled();
  await restore.click();await expect(restore).toHaveCount(0);const after=await receipt();assert.equal(after.generation.active,'previous-generation');assert.deepEqual(after.calls.at(-1),{operation:'rollback',target:'previous-generation'});assert.deepEqual(after.messages,before.originalMessages);
  await page.getByRole('button',{name:'Close panel',exact:true}).click();await expect(composer).toHaveDraft('Keep my unsent update draft');assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),before.sessionId);assert.deepEqual(errors,[]);
  assert.equal(actions.filter(row=>['conversation.send','session.warm','updates.forceRestart'].includes(row.action)).length,0);

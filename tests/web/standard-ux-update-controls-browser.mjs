@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {mkdir,writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
+import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url)),out=process.env.AMPLIFIER_TEST_ARTIFACTS;
 if(!out)throw Error('Owned AMPLIFIER_TEST_ARTIFACTS is required');
 await mkdir(out,{recursive:true});
@@ -25,34 +26,30 @@ for(const [id,width,height,mode] of variants){
   await page.route('**/*',route=>{const url=new URL(route.request().url());if(['http:','https:'].includes(url.protocol)&&url.hostname!=='127.0.0.1'){external.push(url.origin);return route.abort()}return route.continue()});
   const activate=async control=>{await expect(control).toBeVisible();await expect(control).toBeEnabled();if(mode==='keyboard'){await control.focus();await expect(control).toBeFocused();await control.press('Enter')}else if(mode==='touch')await control.tap();else await control.click()};
   await page.goto(boot.url);await page.waitForSelector('#amp-one');
-  const settings=page.getByRole('button',{name:/^Settings(?: \d+ unread items)?$/});
-  if(!await settings.isVisible())await activate(page.getByRole('button',{name:'Open navigation',exact:true}));
-  await activate(settings);await expect(page.locator('.a-settings-experience')).toBeVisible();
-  await page.waitForFunction(()=>{const el=document.querySelector('.a-settings-experience');return el&&el.dataset.compact===String((el.closest('.a-overlay')||el).clientWidth<960)});
-  const panel=page.locator('.a-settings-experience');
-  for(let depth=0;await panel.getAttribute('data-compact')==='true'&&await panel.getAttribute('data-settings-index')!=='true';depth++){
-   if(depth>=6)throw Error('Settings Back did not reach index');const previous=await panel.getAttribute('data-settings-route');
-   await activate(panel.locator('.a-settings-mobile-head button').first());await expect(panel).not.toHaveAttribute('data-settings-route',previous);
-  }
-  await activate(page.locator('[data-settings-section="updates"]'));
+  // Use the selected client's maintained App options/Settings entry, with every
+  // gesture still owned by this pointer, keyboard or touch variant (no dispatch).
+  await openSettingsPage(page,'updates',{activate:(_label,control)=>activate(control)});
   await expect(page.locator('.a-settings-experience')).toHaveAttribute('data-settings-page','updates');
   const state=async()=>{const response=await page.request.get(boot.url+'/fixture/update-restart');assert.ok(response.ok());return response.json()};
-  const blockers=page.locator('[data-part="update-blockers"]'),entry=blockers.getByRole('button',{name:'Force restart…',exact:true});
-  await expect(entry).not.toBeVisible();await activate(blockers.locator('summary'));await expect(entry).toBeVisible();
-  await expect(blockers).toContainText('restarting will not resolve it');assert.equal((await state()).calls.length,0);
-  const dialog=page.getByRole('alertdialog',{name:'Confirm update restart'}),cancel=dialog.getByRole('button',{name:'Cancel',exact:true}),confirm=dialog.getByRole('button',{name:'Interrupt work and restart',exact:true});
-  await activate(entry);await expect(cancel).toBeFocused();await expect(dialog).toContainText('will not be replayed automatically');
-  await activate(cancel);await expect(entry).toBeFocused();assert.equal((await state()).calls.length,0);
-  await activate(entry);await page.keyboard.press('Escape');await expect(entry).toBeFocused();assert.equal((await state()).calls.length,0);
-  await activate(entry);assert.ok((await page.request.post(boot.url+'/fixture/update-restart')).ok());
-  await expect(confirm).toBeDisabled();await expect(dialog).toContainText('staged update or host changed');await activate(cancel);assert.equal((await state()).calls.length,0);
-  await activate(entry);const target=(await state()).target;
+  const blockers=page.locator('[data-part="update-blockers"]'),restart=page.locator('.a-update-force-restart'),entry=restart.locator('[data-action="updates.forceRestart"]');
+  await expect(entry).toHaveText('Interrupt work and restart');await expect(entry).toBeVisible();
+  assert.equal(await entry.evaluate(button=>!!button.closest('[data-part="update-blockers"]')),false);
+  await expect(restart).toContainText('Restart into prepared Amplifier 99.0.0.');
+  await expect(restart).toContainText('Amplifier 99.0.1 is available, but this action uses the prepared version above.');
+  await expect(entry).toHaveAccessibleDescription(/interrupted work will not be replayed automatically/);
+  await expect(page.getByRole('alertdialog',{name:'Confirm update restart'})).toHaveCount(0);
+  await activate(blockers.locator('summary'));await expect(blockers).toContainText('Restarting does not recover held settings');
+  await activate(blockers.locator('summary'));assert.equal((await state()).calls.length,0,'Inspecting blockers cannot restart');
+  const target=(await state()).target;
   const accepted=page.waitForResponse(response=>response.request().method()==='POST'&&response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='updates.forceRestart');
-  await activate(confirm);const response=await accepted;assert.ok(response.ok());const receipt=await response.json();assert.equal(receipt.accepted,true);assert.ok(receipt.requestId);
-  await expect(blockers.getByRole('alert')).toContainText('update operation');await expect(entry).toBeEnabled();
+  await activate(entry);const response=await accepted;assert.ok(response.ok());const receipt=await response.json();assert.equal(receipt.accepted,true);assert.ok(receipt.requestId);
+  await expect(restart.getByRole('alert')).toContainText('update operation');await expect(entry).toBeEnabled();
   const actual=await state();assert.equal(actual.calls.length,1);assert.deepEqual(actual.calls[0].args,{...target,confirm:true});assert.equal(actual.calls[0].requestId,receipt.requestId);assert.equal(actual.unknown,true);
-  // A failed asynchronous activation permits a new explicit review, never an automatic retry.
-  await activate(entry);await expect(cancel).toBeFocused();await activate(cancel);assert.equal((await state()).calls.length,1);
+  assert.equal(actual.result.requestId,receipt.requestId);assert.equal(actual.result.status,'rejected');
+  // A confirmed rejection re-enables an explicit gesture, never an automatic retry.
+  await activate(blockers.locator('summary'));await activate(blockers.locator('summary'));assert.equal((await state()).calls.length,1);
+  assert.ok(await restart.evaluate(element=>element.scrollWidth<=element.clientWidth+1),'Restart warning and action fit');
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'No page overflow');
   assert.deepEqual(actions.filter(value=>['updates.install','updates.check','conversation.send','session.warm'].includes(value.action)),[]);
   assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
   await page.screenshot({path:out+'/'+id+'.png'});
