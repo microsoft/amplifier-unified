@@ -87,9 +87,9 @@ def test_changed_bindings_do_not_restore_or_replay(transaction, monkeypatch, cha
 def test_wrong_attempt_does_not_retire_parent_recovery(transaction):
     t = transaction
     recovery.prepare(t.spec, t.restart, t.old)
-    recovery.acknowledge(t.spec, {**t.restart["target"], "attemptId": "0" * 32})
+    assert not recovery.acknowledge(t.spec, {**t.restart["target"], "attemptId": "0" * 32})
     assert t.state["writes"] == ["prepared"]
-    recovery.acknowledge(t.spec, t.restart["target"])
+    assert recovery.acknowledge(t.spec, t.restart["target"])
     assert t.state["writes"] == ["prepared", "acknowledged"]
 
 
@@ -132,17 +132,20 @@ def test_recovery_record_has_no_arbitrary_command_or_success_protocol(transactio
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", [None, "wrong-health", "same-host", "wrong-attempt", "wrong-pointer",
-                                   "wrong-run", "graph-drift", "settings-extras", "commit-failure"])
+                                   "wrong-run", "wrong-origin", "replacement-unknown", "wrong-process",
+                                   "graph-drift", "settings-extras", "commit-failure"])
 async def test_only_verified_old_host_can_reopen_after_rollback(transaction, monkeypatch, change):
     import asyncio
     from amplifier_web import app_component_graph as components, app_updates, auth
     t = transaction
     recovery.prepare(t.spec, t.restart, t.old)
     recovery.restore(t.spec, t.restart)
-    state = {"pendingRestart": {**t.restart["target"], "version": "2.0.0"},
+    state = {"pendingRestart": {**t.restart["target"], "version": "2.0.0",
+                               "sourceInstanceId": t.old["identity"]["instanceId"]},
              "pendingReplacement": None, "phase": "activating", "settingsPreserved": True}
     identity = {**t.old["identity"], "instanceId": "9" * 32}
     current_run = {**t.restart["run"], "run": "8" * 32}
+    monkeypatch.setattr(recovery.os, "getpid", lambda: 123)
     saved, events = [], []
     def publish(**kwargs):
         if change == "commit-failure":
@@ -171,6 +174,12 @@ async def test_only_verified_old_host_can_reopen_after_rollback(transaction, mon
         t.state["active"] = t.state["receipt"]["promoted"]
     elif change == "wrong-run":
         current_run["run"] = t.restart["run"]["run"]
+    elif change == "wrong-origin":
+        state["pendingRestart"]["sourceInstanceId"] = "unrelated-host"
+    elif change == "replacement-unknown":
+        state["pendingReplacement"] = {"unqualified": True}
+    elif change == "wrong-process":
+        current_run["pid"] = 124
     before = copy.deepcopy(state)
     if change == "commit-failure":
         with pytest.raises(OSError):

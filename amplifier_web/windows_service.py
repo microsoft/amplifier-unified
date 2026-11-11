@@ -751,7 +751,7 @@ def _wait_updated_host(spec, child, actual, restart):
         if child.poll() is not None and actual["exited"]():
             return True
         if time.monotonic() >= deadline:
-            runtime.request_stop(spec, timeout=30)
+            runtime.request_stop(spec, timeout=30, expected=current)
             # An unconfirmed normal stop raises, never authorizes rollback.
             if not actual["exited"]():
                 raise WindowsServiceError("The unready updated host has not exited.")

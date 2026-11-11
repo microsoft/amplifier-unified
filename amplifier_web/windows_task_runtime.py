@@ -261,11 +261,13 @@ def listener_owners(host, port):
     return owners
 
 
-def request_stop(spec, *, timeout=60):
+def request_stop(spec, *, timeout=60, expected=None):
     """One request and bounded observation, never retry or force termination."""
     record = read(spec)
     if record is None:
         raise RuntimeError("No verified task runtime receipt; reconcile task status before stopping.")
+    if expected is not None and any(record[key] != expected[key] for key in _FIELDS - {"phase"}):
+        raise RuntimeError("The expected task run changed; no stop request was sent.")
     with process(record["pid"]) as actual:
         if actual is None or actual["exited"]():
             return

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -147,6 +148,8 @@ def acknowledge(spec, target):
             and all(target.get(key) == value["restart"]["target"][key]
                     for key in ("revision", "generation", "attemptId"))):
         _write(spec, {**value, "status": "acknowledged"})
+        return True
+    return False
 
 
 def automatic_retry_held(state):
@@ -172,6 +175,8 @@ async def confirm(manager, health):
     state = manager.service.state["updates"]
     pending = copy.deepcopy(state.get("pendingRestart"))
     if (not value or value["status"] != "restored" or not pending
+            or state.get("phase") != "activating" or state.get("pendingReplacement") is not None
+            or pending.get("sourceInstanceId") != value["identity"]["instanceId"]
             or any(pending.get(key) != value["restart"]["target"][key] for key in ("revision", "generation", "attemptId"))
             or any(manager.running_identity.get(key) != value["identity"][key] for key in ("version", "revision"))
             or manager.running_identity["instanceId"] == value["identity"]["instanceId"]
@@ -182,7 +187,8 @@ async def confirm(manager, health):
             or any(health.get(key) != manager.running_identity[key] for key in ("version", "revision", "instanceId"))):
         return False
     run = windows_task_runtime.observe(spec)
-    if not run or run["run"] == value["restart"]["run"]["run"]:
+    if (not run or run["pid"] != os.getpid() or run["phase"] != "listening"
+            or run["run"] == value["restart"]["run"]["run"]):
         return False
     graph = await components.read_graph(app_updates.process, sys.executable,
         **({"artifact": value["artifact"]} if value["artifact"] is not None else {}))

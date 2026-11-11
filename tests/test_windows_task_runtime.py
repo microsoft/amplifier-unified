@@ -207,6 +207,13 @@ def test_stop_timeout_retains_request_without_retry(controls):
     assert controls["writes"] == [(runtime.STOP, record())]
 
 
+def test_expected_stop_cannot_follow_a_new_run_between_readiness_and_request(controls):
+    expected = record(run="c" * 32)
+    with pytest.raises(RuntimeError, match="expected task run changed"):
+        runtime.request_stop(spec(), expected=expected)
+    assert not controls["writes"]
+
+
 def test_new_run_after_request_is_not_stopped_again(controls, monkeypatch):
     def replace(_delay):
         controls["record"]["run"] = "c" * 32

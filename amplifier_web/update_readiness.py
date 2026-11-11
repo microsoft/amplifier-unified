@@ -199,7 +199,7 @@ def recovery_candidate(manager):
 
 def same_target(first, second):
     return bool(first and second and all(first.get(key) == second.get(key)
-                for key in ('attemptId', 'version', 'revision', 'sourceInstanceId', 'legacy', 'featureSelection', 'dependencyDigest', 'qualification', 'updateIntent')))
+                for key in ('attemptId', 'version', 'revision', 'generation', 'sourceInstanceId', 'legacy', 'featureSelection', 'dependencyDigest', 'qualification', 'updateIntent')))
 
 
 async def qualify_successor(manager, target):
@@ -377,7 +377,8 @@ async def confirm_readiness(manager, health, expected=None, command_id=None, *, 
                         return False
                     # Retire parent rollback authority before publishing the
                     # authenticated new-host result. Unknown commits stay fenced.
-                    acknowledge(spec, target)
+                    if not acknowledge(spec, target):
+                        return False
                 manager.diagnostics.clear_failure()
                 state.pop('reconciliation', None)
                 detail = 'Application update installed and the restarted server is healthy.'
