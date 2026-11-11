@@ -3489,9 +3489,19 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152
     assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
-    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 16
+    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+    assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
+    sidebar_controls_browser_addition(plan['scenarios'], set(), current=True)
+    for row in plan['scenarios']:
+        for part in row['command']:
+            if part.endswith('.mjs'):
+                assert source_test(coverage_paths(part)).is_file(), (row['id'], part)
+    mixed = next(row for row in plan['scenarios'] if row['id'] == 'configuration-recovery-components')
+    assert mixed['cwd'] == '.build/web-client'
+    assert mixed['command'] == ['node', '--test', 'tests/configuration-recovery.test.mjs',
+                                '../../tests/web/configuration-recovery-observer.test.mjs']
 
 
 def retained_update_recovery_browser_addition(rows):
@@ -3550,16 +3560,6 @@ def test_retained_update_recovery_rejects_changed_or_duplicate_mode(fault):
         owner['cwd'] = 'tests/web'
     with pytest.raises(AssertionError, match='retained-update-recovery'):
         retained_update_recovery_browser_addition(rows)
-    assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
-    sidebar_controls_browser_addition(plan['scenarios'], set(), current=True)
-    for row in plan['scenarios']:
-        for part in row['command']:
-            if part.endswith('.mjs'):
-                assert source_test(coverage_paths(part)).is_file(), (row['id'], part)
-    mixed = next(row for row in plan['scenarios'] if row['id'] == 'configuration-recovery-components')
-    assert mixed['cwd'] == '.build/web-client'
-    assert mixed['command'] == ['node', '--test', 'tests/configuration-recovery.test.mjs',
-                                '../../tests/web/configuration-recovery-observer.test.mjs']
 
 
 @pytest.mark.parametrize('name', ['input-status', 'action-spacing'])
