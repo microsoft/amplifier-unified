@@ -465,19 +465,20 @@ def test_command_failure_frame_labels_require_loaded_code_identity_not_equal_clo
     from amplifier_web.runtime_worker import Worker
     from amplifier_web.worker_diagnostics import command_failure_facts
     function = getattr(Worker, method)
+    args = (None,) if method == 'read' else (None, {})
     error = RuntimeError('private argument')
-    error.__traceback__ = _command_traceback(function)
+    error.__traceback__ = _command_traceback(function, args=args)
     assert command_failure_facts(error) == {
         'errors': [{'class': 'RuntimeError', 'frames': [{'source': label, 'offset': 7}]}],
         'truncated': False}
     clone = function.__code__.replace()
     assert clone == function.__code__ and clone is not function.__code__
     copied = types.FunctionType(clone, function.__globals__, function.__name__)
-    error.__traceback__ = _command_traceback(copied)
+    error.__traceback__ = _command_traceback(copied, args=args)
     assert command_failure_facts(error)['errors'][0]['frames'] == []
     # Matching names and arbitrary traceback filenames are never exported.
     copied = types.FunctionType(clone.replace(co_filename='/private/token.py'), function.__globals__)
-    error.__traceback__ = _command_traceback(copied)
+    error.__traceback__ = _command_traceback(copied, args=args)
     assert command_failure_facts(error)['errors'][0]['frames'] == []
     assert '/private/token.py' not in json.dumps(command_failure_facts(error))
 
