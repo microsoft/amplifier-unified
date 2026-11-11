@@ -1018,9 +1018,9 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     plan = coverage_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], readiness_scripts)
     sidebar_ids = sidebar_controls_browser_addition(plan['scenarios'], readiness_scripts)
-    spacing_ids = action_spacing_browser_addition(plan['scenarios'], readiness_scripts)
+    action_spacing_browser_addition(plan['scenarios'], readiness_scripts)
     extended_scripts = {row['command'][2 if row['command'][1] == '--test' else 1]
-                        for row in plan['scenarios'] if row['id'] not in navigation_ids | sidebar_ids | spacing_ids}
+                        for row in plan['scenarios'] if row['id'] not in navigation_ids | sidebar_ids}
     source_only = {f'tests/{name}-browser.mjs' for name in (
         'interim-replies', 'draft-reload', 'draft-switch', 'activity-feedback',
         'conversation-navigation', 'workspace-shortcuts', 'inline-media-transition', 'execution-observability',
