@@ -1,8 +1,9 @@
 """Live write defaults at reference-tool admission, not mutable tool instances.
 
 Composition and path intersection stay with the existing host policy owner.
-Only the two session write lists may change here. Other configuration still
-requires the ordinary runtime lifecycle.
+Only the two filesystem write defaults change live. Writer declarations and
+their other settings retain the ordinary runtime lifecycle; unrelated settings
+are not dependencies of a file invocation.
 """
 from __future__ import annotations
 
@@ -44,6 +45,10 @@ def _without_writes(settings):
     return prune(result)
 
 
+class WritePolicyRefreshRequired(ValueError):
+    code = 'file_policy_refresh_required'
+
+
 class WritePolicySource:
     """Host-only provenance captured before settings obscure declaration limits."""
 
@@ -54,21 +59,30 @@ class WritePolicySource:
         self.snapshot = snapshot
         self.execution_workspace = execution_workspace
 
-    def build(self, settings):
-        from .host.session import _apply_host_policy, _apply_settings
-        from .host.config import runtime_settings
-        settings = runtime_settings(settings, self.config.home, self.config.registry_home)
-        bundle = SimpleNamespace(tools=copy.deepcopy(self.tools), agents=copy.deepcopy(self.agents),
-                                 providers=[], hooks=[], session={})
-        # Reuse settings/declaration precedence without composing providers,
-        # hooks, credentials, sources, dependencies or new tools.
+    def select(self, settings):
+        """The settings dependency of build, also used to fence mount changes.
+
+        Keep whole writer declarations/overrides, including source, identity and
+        enabled, rather than guessing which config fields a module will consume.
+        Providers, decision selection and unrelated tools are not composed here.
+        """
         selected = {key: {'tools': _rows(settings.get(key, {}).get('tools', []))}
                     for key in ('modules', 'config')}
         from .access_mode import walk_tools
-        identities = {row.get('id') or row.get('instance_id') or row['module']
-                      for row in [*walk_tools(bundle), *selected['modules']['tools'], *selected['config']['tools']]}
-        selected['overrides'] = {key: {'config': copy.deepcopy(value.get('config', {}))}
+        identities = {row.get('id') or row.get('instance_id') or row['module'] for row in [
+            *walk_tools(self), *selected['modules']['tools'], *selected['config']['tools']]}
+        selected['overrides'] = {key: copy.deepcopy(value)
             for key, value in settings.get('overrides', {}).items() if key in identities | MODULES}
+        return selected
+
+    def build(self, settings):
+        from .host.session import _apply_host_policy, _apply_settings
+        from .host.config import runtime_settings
+        # Project before relocation/copying: the same selected dependency is
+        # checked by refresh. Never compose new providers, hooks or credentials.
+        selected = runtime_settings(self.select(settings), self.config.home, self.config.registry_home)
+        bundle = SimpleNamespace(tools=copy.deepcopy(self.tools), agents=copy.deepcopy(self.agents),
+                                 providers=[], hooks=[], session={})
         config = SimpleNamespace(workspace=self.config.workspace, settings=selected,
                                  providers=[], module_sources={}, access_mode=self.config.access_mode)
         if not self.snapshot:
@@ -81,14 +95,16 @@ class LiveWritePolicy:
         self.source, self.coordinator = source, coordinator
         self.session_id, self.current = session_id, current
         self.cache = SettingsReadCache(limit=1)
-        self.initial = copy.deepcopy(getattr(source.config, '_canonical_settings', source.config.settings))
+        self.initial = source.select(getattr(source.config, '_canonical_settings', source.config.settings))
+        self.mount_settings = _without_writes(self.initial)
+        self.settings = None
         self.revision = None
         self.signature = None
         self.bundle = None
 
     def refresh(self, *, expected=None):
         if not self.current():
-            raise ValueError('The originating runtime is no longer current.')
+            raise WritePolicyRefreshRequired('The originating runtime is no longer current.')
         config = self.source.config
         paths = tuple(settings_paths(config.workspace, shared_home=config.config_home,
                                      session_id=self.session_id, global_only=config.global_only).values())
@@ -97,42 +113,55 @@ class LiveWritePolicy:
         signature = self.cache._signature(paths)
         if self.revision is not None and signature == self.signature:
             if expected is not None and expected != self.revision:
-                raise ValueError('File settings changed before the live refresh.')
+                raise WritePolicyRefreshRequired('File settings changed before the live refresh.')
             return {'settingsRevision': self.revision, 'boundary': 'next-tool-call'}
         settings = read_settings(config.workspace, shared_home=config.config_home,
                                  session_id=self.session_id, global_only=config.global_only, cache=self.cache)
         revision = fingerprint(settings)
         if expected is not None and expected != revision:
-            raise ValueError('File settings changed before the live refresh.')
-        if _without_writes(settings) != _without_writes(self.initial):
-            raise ValueError('Other configuration changed; the runtime must refresh before writing.')
-        if revision != self.revision:
-            bundle = self.source.build(settings)
-            if self.cache._signature(paths) != signature or not self.current():
-                raise ValueError('File settings or runtime changed during the live refresh.')
-            self.settings = settings
-            self.bundle, self.revision = bundle, revision
+            raise WritePolicyRefreshRequired('File settings changed before the live refresh.')
+        selected = self.source.select(settings)
+        if _without_writes(selected) != self.mount_settings:
+            raise WritePolicyRefreshRequired('Writer configuration changed; the runtime must refresh before writing.')
+        changed = selected != self.settings
+        bundle = self.source.build(selected) if changed else self.bundle
+        if self.cache._signature(paths) != signature or not self.current():
+            raise WritePolicyRefreshRequired('File settings or runtime changed during the live refresh.')
+        if changed:
             # Child planning reads declarations, not mounted tool attributes.
             # Existing children keep their own plans and invocation ceilings.
             def update(rows, fresh, agents, fresh_agents):
-                policies = {row.get('id') or row.get('instance_id') or row['module']: row
-                            for row in fresh}
+                def identity(row):
+                    return row.get('module'), row.get('id') or row.get('instance_id') or row.get('module')
+                policies = {identity(row): row for row in fresh}
+                updated = []
                 for row in rows:
-                    policy = policies.get(row.get('id') or row.get('instance_id') or row.get('module'))
+                    policy = policies.get(identity(row))
                     if policy:
+                        row = {**row, 'config': dict(row.get('config', {}))}
                         for key in WRITE_KEYS:
                             if key in policy.get('config', {}):
-                                row.setdefault('config', {})[key] = copy.deepcopy(policy['config'][key])
+                                row['config'][key] = copy.deepcopy(policy['config'][key])
                             else:
-                                row.get('config', {}).pop(key, None)
+                                row['config'].pop(key, None)
+                    updated.append(row)
                 from .host.components import agent_roster
+                children = dict(agents) if isinstance(agents, dict) else agents
                 for name, agent in agent_roster(agents).items():
                     if isinstance(agent, dict) and name in fresh_agents:
                         fresh_agent = fresh_agents[name]
-                        update(agent.get('tools', []), fresh_agent['tools'],
-                               agent.get('agents', {}), fresh_agent['agents'])
+                        tools, nested = update(agent.get('tools', []), fresh_agent['tools'],
+                                               agent.get('agents', {}), fresh_agent['agents'])
+                        children[name] = {**agent, 'tools': tools, 'agents': nested}
+                return updated, children
             plan = self.coordinator.config
-            update(plan.get('tools', []), bundle.tools, plan.get('agents', {}), bundle.agents)
+            # Replace declaration trees, not their captured objects. A child
+            # already preparing from this roster must retain its old ceiling.
+            # Unrelated module configs and agent bodies need no deep copy.
+            tools, agents = update(plan.get('tools', []), bundle.tools, plan.get('agents', {}), bundle.agents)
+            plan.update(tools=tools, agents=agents)
+            self.settings, self.bundle = selected, bundle
+        self.revision = revision
         self.signature = signature
         return {'settingsRevision': revision, 'boundary': 'next-tool-call'}
 
@@ -197,7 +226,7 @@ class LiveWritePolicy:
             rows = [row for row in rows if (row.get('id') or row.get('instance_id') or row['module']) == name]
             if len(rows) != 1 or not declarations:
                 if self.settings != self.initial:
-                    raise ValueError('The writer declaration cannot be refreshed safely.')
+                    raise WritePolicyRefreshRequired('The writer declaration cannot be refreshed safely.')
                 # Ambiguous pre-existing instances remain usable unchanged.
                 # A write-list change fails closed and cannot clear its fence.
                 policy = config
@@ -237,7 +266,10 @@ class LiveWritePolicy:
             result._engine.config = config
             target = result._engine
         for key in WRITE_KEYS:
-            setattr(target, key, copy.deepcopy(config[key]))
+            # The reference filesystem and both patch engines validate again
+            # inside execute using these mount-cached attributes, not config.
+            # Bind them to the invocation's single policy, never the raw mount.
+            setattr(target, key, config[key])
         return result
 
 
