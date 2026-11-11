@@ -68,7 +68,7 @@ try{
  await receipt('newer-release');await updates.getByRole('button',{name:'Check for newer release',exact:true}).click();
  await expect(updates).not.toContainText('The prepared update is still available');
  await expect(updates.getByRole('button',{name:'Check for newer release',exact:true})).toBeEnabled();
- await receipt('unknown');await expect(overview).toContainText('Updates need attention');await expect(updates).toContainText('installation needs verification');await expect(updates.locator('[data-action="updates.check"]')).toBeDisabled();await expect(updates.locator('[data-action="updates.install"]')).toHaveCount(0);assert.equal((await receipt()).calls.length,1);
+ await receipt('unknown');await expect(overview).toContainText('Installation needs verification');await expect(overview).toContainText('The application replacement outcome is not confirmed. Work remains protected; inspect the update diagnostics before another installation.');await expect(updates.locator('[data-action="updates.check"]')).toBeDisabled();await expect(updates.locator('[data-action="updates.install"]')).toHaveCount(0);assert.equal((await receipt()).calls.length,1);
  await expect(identity).toContainText('Amplifier 0.20.165 · Latest 99.0.1');assert.equal((await receipt()).generation.active,'original-generation');
  await receipt('known-failure');await expect(updates.getByRole('button',{name:'Try update again',exact:true})).toBeEnabled();assert.equal((await receipt()).generation.active,'original-generation');
  await expect(identity).toContainText('Amplifier 0.20.165 · Latest 99.0.1');await expect(updates).toContainText('Synthetic staging failed; original generation retained.');
