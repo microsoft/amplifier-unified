@@ -124,7 +124,9 @@ async function screenshot(name){
 }
 async function assertRetained(){
  assert.deepEqual(await outbox(),kept,'Foreign, unrelated and unbound payloads stay byte-for-byte unchanged');
- await expect(page.getByText(legacyNotice,{exact:true})).toBeVisible();
+ await expect(page.getByText(legacyNotice,{exact:true})).toHaveCount(0);
+ await expect(page.locator('[data-part="legacy-outbox-notice"]')).toHaveCount(0);
+ await expect(page.getByRole('button',{name:/^Retained copies/})).toHaveCount(0);
  await expect(page.getByText('Legacy payload with no verified source.',{exact:true})).toHaveCount(0);
 }
 function assertPassive(){
@@ -187,7 +189,7 @@ try{
  await composer.fill('Keep the next unsent thought');
  const retained=await outbox();
  assert.deepEqual(retained,seed);
- await expect(page.getByText(legacyNotice,{exact:true})).toBeVisible();
+ await expect(page.getByText(legacyNotice,{exact:true})).toHaveCount(0);
  await expect(page.getByText('Legacy payload with no verified source.',{exact:true})).toHaveCount(0);
  assert.equal(recoveryCalls().length,0,'Offline mount must not request delivery');
  for(let i=0;i<3;i++){state.sessions[0].title=`Offline state revision ${i}`;await emit();}
@@ -199,7 +201,7 @@ try{
  await expect(composer).toHaveDraft('Keep the next unsent thought');
  assert.deepEqual(await outbox(),seed,'Reload preserves original origin and unbound copies without duplication');
  assert.equal(recoveryCalls().length,0);
- await expect(page.getByText(legacyNotice,{exact:true})).toBeVisible();
+ await expect(page.getByText(legacyNotice,{exact:true})).toHaveCount(0);
  assertPassive();completed.push('offline reload: same persisted scoped outbox, no duplicate projection or submission');
 
  // Lost ACK recovery: no Check click or retry, and exactly one read after SSE open.
@@ -242,7 +244,7 @@ try{
  assert.equal(recoveryCalls().length,1);
  await page.evaluate(value=>window.fixtureTransport.reconnect(value),wireState());
  assert.equal(recoveryCalls().length,1);
- completed.push('accepted snapshot and reload: scoped retirement persists; same-ID legacy payload and notice remain');
+ completed.push('accepted snapshot and reload: scoped retirement persists; same-ID legacy payload stays inert without a composer notice');
 
  // The no-local-copy case represents another browser with only a saved input.
  state.sessions[0].messages=[message('saved-only')];await emit();
