@@ -119,14 +119,47 @@ async def launch(root, *, open_browser=True):
     return result
 
 
+async def maintenance(root, operation):
+    from .windows_installation import owner_notice
+    from .installation_health import status
+    from .windows_service import command, uninstall
+    root, value = installation(root)
+    os.environ.update(environment(root, value))
+    if operation == "status":
+        result = await status(root / "app")
+        if sys.stdout is None:
+            owner_notice(result["message"])
+        return result
+    if operation not in {"stop", "uninstall"}:
+        raise ValueError("Unknown consumer operation.")
+    if not owner_notice(
+            "Stop Amplifier's background app?" if operation == "stop" else
+            "Remove Amplifier's start-at-sign-in registration and stop its background app? "
+            "Your accounts, settings, history and installation files will be retained.",
+            confirm=True):
+        return {"ok": True, "cancelled": True}
+    if operation == "uninstall":
+        await asyncio.to_thread(uninstall, root / "app")
+    else:
+        await asyncio.to_thread(command, "stop", root / "app")
+    return {"ok": True, "operation": operation, "userDataRetained": True,
+            "installationFilesRetained": True}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--audit", action="store_true")
+    operations = parser.add_mutually_exclusive_group()
+    operations.add_argument("--audit", action="store_true")
+    operations.add_argument("--status", action="store_true")
+    operations.add_argument("--stop", action="store_true")
+    operations.add_argument("--uninstall", action="store_true")
     parser.add_argument("--no-open", action="store_true")
     args = parser.parse_args(argv)
     try:
-        result = audit(args.root) if args.audit else asyncio.run(launch(args.root, open_browser=not args.no_open))
+        operation = next((name for name in ("status", "stop", "uninstall") if getattr(args, name)), None)
+        result = (audit(args.root) if args.audit else asyncio.run(maintenance(args.root, operation))
+                  if operation else asyncio.run(launch(args.root, open_browser=not args.no_open)))
         if sys.stdout is not None:
             print(json.dumps(result))
     except (OSError, ValueError, RuntimeError, TimeoutError, metadata.PackageNotFoundError) as error:

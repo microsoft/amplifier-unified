@@ -91,3 +91,21 @@ def test_windowless_failure_is_bounded_owner_notice_not_stderr_or_retry(tmp_path
         consumer.main(["--root", str(tmp_path), "--audit"])
     assert stopped.value.code == 1 and len(notices) == 1
     assert "synthetic-private" not in notices[0] and "No automatic retry" in notices[0]
+
+
+@pytest.mark.parametrize("operation,confirmed", [("stop", True), ("uninstall", True), ("uninstall", False)])
+def test_consumer_maintenance_uses_normal_owner_stop_and_preserves_files(tmp_path, monkeypatch, operation, confirmed):
+    from amplifier_web import windows_installation, windows_service
+    events = []
+    monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
+    monkeypatch.setattr(consumer, "environment", lambda *a: {})
+    monkeypatch.setattr(windows_installation, "owner_notice", lambda text, confirm:
+                        events.append(("confirm", confirm)) or confirmed)
+    monkeypatch.setattr(windows_service, "uninstall", lambda home: events.append(("uninstall", home)))
+    monkeypatch.setattr(windows_service, "command", lambda name, home: events.append((name, home)))
+    retained = tmp_path / "user-data"
+    retained.write_bytes(b"original")
+    result = asyncio.run(consumer.maintenance(tmp_path, operation))
+    assert events == [("confirm", True)] + ([(operation, tmp_path / "app")] if confirmed else [])
+    assert retained.read_bytes() == b"original"
+    assert result.get("userDataRetained", result.get("cancelled")) is True
