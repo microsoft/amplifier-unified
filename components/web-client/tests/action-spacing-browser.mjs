@@ -107,12 +107,11 @@ try{
    if(enlarged)await page.locator('#amp-one').evaluate(node=>node.style.setProperty('--a-text-base','24px'));
    const label=`${viewport.width}-${scheme}${enlarged?'-large-text':''}`;
    const updates=page.getByRole('region',{name:'Update restart',exact:true});
-   await updates.getByRole('button',{name:'Force restart…',exact:true}).click();
-   const dialog=updates.getByRole('alertdialog'),cancel=dialog.getByRole('button',{name:'Cancel',exact:true});
-   await expect(cancel).toBeFocused();
-   await separated(dialog.getByRole('button',{name:'Interrupt work and restart',exact:true}),cancel,label+' restart');
-   await cancel.press('Escape');await expect(updates.getByRole('button',{name:'Force restart…',exact:true})).toBeFocused();
-   await updates.getByRole('button',{name:'Force restart…',exact:true}).click();
+   const restart=updates.getByRole('button',{name:'Interrupt work and restart',exact:true});
+   await expect(restart).toBeVisible();
+   await expect(restart).toHaveAccessibleDescription(/will be interrupted/);
+   await expect(updates.getByRole('alertdialog')).toHaveCount(0);
+   await expect(updates.getByRole('button')).toHaveCount(1);
    for(const name of ['Original submission','Saved submission']){
     const section=page.getByRole('region',{name,exact:true});
     await section.getByRole('button',{name:'Check delivery',exact:true}).click();

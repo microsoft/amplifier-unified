@@ -26,11 +26,13 @@ simplification requires a qualified client selection before Unified delivery.
 The 14 canonical shared inputs are selected from accepted Unified main
 `816c7a67dbafc20bfb28723dd317c71d3bd2bb28`; their bytes still match the current
 accepted server. Shared-input provenance and actual server qualification are distinct.
-The repository is currently private. Its independent package is
+The repository is currently private; preserve its visibility. Its independent package is
 `@amplifier/client-web`, currently `0.3.3`; this candidate's private GitHub artifact publication
 and Unified release adoption remain separate. Client source and tests are authored here. Unified owns selection, host integration
 checks and distribution assembly; its temporary delivery copy and disposable
 prepared tree are consumers of this source. The retained AHP client is separate.
+While private, client changes intended for Unified require both repositories or
+a named integration handoff; see [temporary dual-repository maintenance](#temporary-dual-repository-maintenance).
 
 The [family vision](https://github.com/microsoft/amplifier-unified/blob/816c7a67dbafc20bfb28723dd317c71d3bd2bb28/docs/architecture/VISION.md),
 [component boundaries](https://github.com/microsoft/amplifier-unified/blob/816c7a67dbafc20bfb28723dd317c71d3bd2bb28/contracts/component-boundaries.v1.md) and
@@ -102,8 +104,29 @@ asset assembly are a separate distribution responsibility.
 
 ## Packaging an isolated source copy
 
-A distribution can carry a temporary source copy while this repository is
-private. Create its small source record from a clean standalone client checkout:
+### Temporary dual-repository maintenance
+
+Unified ships the selected full tracked tree in `components/web-client/` with
+`components/web-client.source.json`. Author or port client changes here first.
+Then follow [Unified's refresh and retirement workflow](https://github.com/microsoft/amplifier-unified/blob/main/components/README.md#refresh-and-retire-the-copy):
+export the whole tracked tree and source record from the exact reviewed, accepted
+canonical commit, not unreviewed moving `main`. Never hand-edit the consumer copy
+or generated assets. Verify tracked files and modes, source digest, build
+provenance and the affected server pairing. Keep the selected shared-input lock.
+
+Coordinate with the integration/release owner to preserve unrelated work and
+avoid duplicate ports or reverting a later accepted selection. Carry both updates
+or make an explicit named integration handoff with exact client and Unified
+PRs/revisions and pending work. Canonical-only or copy-only changes are not
+release-ready; a handoff does not waive synchronization. Report source acceptance,
+copied selection, build/qualification and release as distinct states, using the
+existing affected-check policy rather than a new full-suite requirement.
+
+Retire this obligation only through an explicitly approved public/repository
+delivery transition updating both repositories' guidance. Public availability
+alone does not retire it or authorize changing this repository's visibility.
+
+Create the small source record from a clean standalone client checkout:
 
 ```sh
 node scripts/client-source.mjs record /tmp/web-client.source.json
