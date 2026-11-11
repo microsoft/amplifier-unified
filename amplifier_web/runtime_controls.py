@@ -247,8 +247,6 @@ class RuntimeControls:
                 plan["agents"][name] = self.agent_definitions[name]
         from .decision_accounts import logical_plan
         plan = logical_plan(plan)
-        from .host.components import portable_module_sources
-        plan = portable_module_sources(plan, app_home())
         if self.coordinator.get_capability("web.provider_credentials_bound"):
             from .provider_environment import credential_bindings
             plan = credential_bindings(plan)
@@ -290,8 +288,6 @@ class RuntimeControls:
                 disabled = [row for row in saved.get(section, []) if row.get("enabled") is False]
                 current = {identity(row) for row in plan.get(section, [])}
                 plan.setdefault(section, []).extend(row for row in disabled if identity(row) not in current)
-        from .host.components import portable_module_sources
-        plan = portable_module_sources(plan, app_home())
         snapshot = self.configurator.snapshot() if self.configurator else {}
         modules = []
         for section in SECTIONS:

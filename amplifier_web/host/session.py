@@ -842,7 +842,7 @@ def required_components(*, resolved_plan=False):
         'hooks-session-naming': installed_naming_source}, resolved_plan=resolved_plan)
 
 
-def module_source(config, snapshot, module, source, components=None):
+def module_source(config, snapshot, module, source, components=None, *, portable=False):
     components = components or required_components()
     selected = components.source(module, source, installed=True)
     owned = components.owns(module, source)
@@ -855,6 +855,10 @@ def module_source(config, snapshot, module, source, components=None):
         explicit_local = bool(not snapshot and config.module_sources.get(module) == result)
         explicit_local |= owned and module in getattr(components, 'installed', {})
         observer.observe(result, config, explicit_local=explicit_local)
+    if portable:
+        from .components import portable_module_sources
+        result = portable_module_sources(
+            {'providers': [{'module': module, 'source': result}]}, config.home)['providers'][0]['source']
     return result
 
 
@@ -938,7 +942,7 @@ def apply_runtime_plan(loaded, edited, config, execution_workspace):
         # plan has no authority to restore the automatic-origin exception.
         loaded._host_automatic_routing = False
     from ..provider_environment import rebind_provider_credentials
-    edited, bound = rebind_provider_credentials(edited, loaded.to_mount_plan())
+    edited, bound = rebind_provider_credentials(edited, loaded.to_mount_plan(), home=config.home)
     loaded._host_provider_credentials_bound = bound
     for key in ("providers", "tools", "hooks"):
         if key in edited:
@@ -1166,7 +1170,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     # shared AMPLIFIER_HOME still owns history/settings, not app module caches.
     with startup_timing.phase('manager.bundle.prepare'):
         from .components import prepare_bundle
-        prepared = await prepare_bundle(loaded, strict=True, install_deps=not (qualification_readonly or os.environ.get("AMPLIFIER_RUNTIME_IMMUTABLE") == "1"), **preparation_policy,
+        prepared = await prepare_bundle(loaded, source_home=config.home,
+            strict=True, install_deps=not (qualification_readonly or os.environ.get("AMPLIFIER_RUNTIME_IMMUTABLE") == "1"), **preparation_policy,
             cache_dir=config.registry_home / "cache",
             source_resolver=lambda module, source: module_source(config, snapshot, module, source, components),
             progress_callback=progress)
@@ -1190,8 +1195,11 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                     row["enabled"] = False
         apply_provider_environment(environment_plan)
     from ..decision_accounts import DecisionAccounts, AccountResolver, logical_plan
+    # Decision projection must keep the same canonical hints prepared above,
+    # including host-selected physical overrides. Its envelopes are validated
+    # together; never rewrite only their hook source later during persistence.
     decision_accounts = DecisionAccounts(prepared.mount_plan, isolation,
-        lambda module, source: module_source(config, snapshot, module, source, components))
+        lambda module, source: module_source(config, snapshot, module, source, components, portable=True))
     prepared.mount_plan = decision_accounts.plan
     if decision_accounts.aliases:
         prepared.resolver = AccountResolver(prepared.resolver, decision_accounts.aliases)

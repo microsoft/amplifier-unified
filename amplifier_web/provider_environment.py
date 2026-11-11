@@ -203,7 +203,7 @@ def credential_bindings(value, *, provider=False, module=None):
     return copy.deepcopy(value)
 
 
-def rebind_provider_credentials(edited, authorized):
+def rebind_provider_credentials(edited, authorized, *, home=None):
     """Resolve only the same host-composed instance/source and declared field.
 
     The saved marker grants no fallback to a module family's ambient account.
@@ -214,7 +214,7 @@ def rebind_provider_credentials(edited, authorized):
     from .host.config import app_home
     sources = portable_module_sources(
         {"agents": {"edited": logical_plan(edited), "authorized": logical_plan(authorized)}},
-        app_home())["agents"]
+        home if home is not None else app_home())["agents"]
     result, authorized = sources["edited"], sources["authorized"]
     bound = False
 

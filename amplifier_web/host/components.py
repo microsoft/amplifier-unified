@@ -70,13 +70,34 @@ def declarations(plan):
             yield from declarations(agent)
 
 
-async def prepare_bundle(bundle, **kwargs):
+async def prepare_bundle(bundle, *, source_home=None, **kwargs):
     """Activate nested declarations without treating access selectors as rosters.
 
     Foundation's ordinary preparation visits immediate agents only; its batched
     walk assumes every nested agents value is a mapping. Flatten an activation-
     only copy, then retain the exact executable plan and original bundle.
     """
+    if source_home is not None:
+        # Canonicalize before Foundation records source-qualified provider
+        # paths and before Core/modes capture the plan. Never relabel those
+        # hints after preparation or reverify repositories at checkpoints.
+        original = bundle.to_mount_plan()
+        plan = portable_module_sources(original, source_home)
+        # Keep the exact physical activation and source-policy observation.
+        # Foundation already retains original/effective provider hints; this
+        # translation exists only during this preparation, not at checkpoints.
+        physical = {(after['module'], after.get('source')): before['source']
+                    for before, after in zip(declarations(original), declarations(plan))
+                    if before.get('source') != after.get('source')}
+        if physical:
+            resolve = kwargs.get('source_resolver')
+            def source_resolver(module, source):
+                selected = physical.get((module, source), source)
+                return resolve(module, selected) if resolve is not None else selected
+            kwargs['source_resolver'] = source_resolver
+        for key in ('providers', 'tools', 'hooks', 'session', 'spawn', 'agents'):
+            if key in plan:
+                setattr(bundle, key, plan[key])
     projected = copy.copy(bundle)
     projected.agents = {}
     agent_names = {}
@@ -138,6 +159,10 @@ def portable_module_sources(plan, home):
     if home is None or not isinstance(result, dict):
         return result
     home = Path(home).resolve()
+    # Qualification has its own app home but uses the explicitly selected
+    # shared store. Do not infer ownership from an arbitrary ancestor.
+    shared = os.environ.get('AMPLIFIER_SOURCE_STORE')
+    shared_objects = Path(shared).expanduser().resolve() / 'objects' if shared else None
     inspected, converted = {}, {}
 
     def git(root, *args):
@@ -164,8 +189,10 @@ def portable_module_sources(plan, home):
             if not path.is_absolute():
                 continue
             path = Path(os.path.normpath(path))
-            parts = path.relative_to(home).parts
-            if parts[:2] in {('foundation', 'cache'), ('source-store', 'objects')}:
+            parts = path.relative_to(home).parts if path.is_relative_to(home) else ()
+            if shared_objects is not None and path.is_relative_to(shared_objects):
+                base = shared_objects
+            elif parts[:2] in {('foundation', 'cache'), ('source-store', 'objects')}:
                 base = home.joinpath(*parts[:2])
             elif parts[:2] == ('updates', 'releases') and parts[3:5] == ('foundation', 'cache'):
                 base = home.joinpath(*parts[:5])
@@ -187,6 +214,10 @@ def portable_module_sources(plan, home):
                 metadata = owned_path(root / '.amplifier_cache_meta.json', base)
                 data = json.loads(metadata.read_text())
                 revision, url = data['commit'], data['git_url']
+                if base == shared_objects:
+                    from amplifier_foundation.sources.shared import SharedSourceStore
+                    if SharedSourceStore(shared_objects.parent).checkout(url, revision) != root:
+                        continue
                 remote = urlsplit(url)
                 if (remote.query or remote.fragment or remote.password
                         or remote.scheme in {'http', 'https'} and remote.username
