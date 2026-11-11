@@ -260,17 +260,17 @@ namespace UnifiedBootstrap {
             Need(names.Contains("amplifier-unified"),"Consumer app identity missing.");
             lines.Sort(StringComparer.Ordinal); return String.Join("\n",lines)+"\n";
         }
-        static string ConsumerShortcut(string python, string root) {
+        static string ConsumerShortcut(string python, string root, string name, string operation) {
             string entry=Path.Combine(Path.GetDirectoryName(python),"pythonw.exe");
             Need(File.Exists(entry),"Installed windowless launcher missing.");
-            string path=Path.Combine(root,"Launch Unified.lnk");
+            string path=Path.Combine(root,name+".lnk");
             using(var file=Storage.CreateFile(path)) file.Flush(true);
             dynamic shell=Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell",true));
             try {
                 dynamic shortcut=shell.CreateShortcut(path);
                 try {
                     shortcut.TargetPath=entry;
-                    shortcut.Arguments="-I -m amplifier_web.windows_consumer --root "+Quote(root);
+                    shortcut.Arguments="-I -m amplifier_web.windows_consumer --root "+Quote(root)+operation;
                     shortcut.WorkingDirectory=Path.Combine(root,"workspace");
                     shortcut.Description="Amplifier Unified - start or reopen your background app";
                     shortcut.Save();
@@ -296,7 +296,7 @@ namespace UnifiedBootstrap {
             string python=null,root=null,shortcut=null;
             using(Storage=new InstallStorage(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData))) {
                 root=Storage.Root;LogPath=Path.Combine(root,"install.log");PrivateText(LogPath,"");
-                foreach(string relative in new[]{"app","shared","ownership","capture","import","workspace","cache","python","python-bin","tools","tool-bin","temp"})
+                foreach(string relative in new[]{"app","shared","ownership","capture","import","source-store","workspace","cache","python","python-bin","tools","tool-bin","temp"})
                     Storage.EnsureDirectory(Path.Combine(root,relative));
                 foreach(string relative in new[]{"","cache","python","python-bin","tools","tool-bin","temp"})
                     Storage.EnableToolWrites(Path.Combine(root,relative));
@@ -312,6 +312,7 @@ namespace UnifiedBootstrap {
                 var env=EnvironmentFor(uv,git);
                 env["AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH"]=Path.Combine(root,"capture");
                 env["AMPLIFIER_UNIFIED_IMPORT_HOME"]=Path.Combine(root,"import");
+                env["AMPLIFIER_SOURCE_STORE"]=Path.Combine(root,"source-store");
                 Stage="private ordinary Python";
                 string patch=Text(plan,"python");
                 Child(uv,new[]{"python","install",patch,"--no-bin","--no-registry"},env);
@@ -336,7 +337,11 @@ namespace UnifiedBootstrap {
                 Stage="installed source and package audit";
                 Child(python,new[]{"-I","-B","-m","amplifier_web.windows_consumer","--root",root,"--audit"},env);
                 Child(uv,new[]{"pip","check","--python",python},env);
-                shortcut=ConsumerShortcut(python,root);Storage.Validate();
+                shortcut=ConsumerShortcut(python,root,"Launch Unified","");
+                ConsumerShortcut(python,root,"Amplifier status"," --status");
+                ConsumerShortcut(python,root,"Stop Amplifier"," --stop");
+                ConsumerShortcut(python,root,"Remove Amplifier sign-in host"," --uninstall");
+                Storage.Validate();
             }
             Stage="background application setup";
             var start=new ProcessStartInfo(Path.Combine(Path.GetDirectoryName(python),"pythonw.exe"),

@@ -77,7 +77,8 @@ def environment(root, value):
     roots = {"AMPLIFIER_WEB_HOME": "app", "AMPLIFIER_HOME": "shared",
              "AMPLIFIER_SESSION_STATE_HOME": "ownership",
              "AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH": "capture",
-             "AMPLIFIER_UNIFIED_IMPORT_HOME": "import", "UV_TOOL_DIR": "tools",
+             "AMPLIFIER_UNIFIED_IMPORT_HOME": "import", "AMPLIFIER_SOURCE_STORE": "source-store",
+             "UV_TOOL_DIR": "tools",
              "UV_TOOL_BIN_DIR": "tool-bin", "UV_CACHE_DIR": "cache",
              "UV_PYTHON_INSTALL_DIR": "python", "UV_PYTHON_BIN_DIR": "python-bin",
              "TEMP": "temp", "TMP": "temp"}

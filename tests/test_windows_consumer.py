@@ -31,11 +31,12 @@ def test_process_local_roots_preserve_accounts_and_user_git_policy(tmp_path, mon
     assert result["AMPLIFIER_HOME"] == str(tmp_path / "shared")
     assert result["AMPLIFIER_SESSION_STATE_HOME"] == str(tmp_path / "ownership")
     assert result["AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH"] == str(tmp_path / "capture")
+    assert result["AMPLIFIER_SOURCE_STORE"] == str(tmp_path / "source-store")
     assert "PYTHONPATH" not in result
     assert result["GIT_CONFIG_VALUE_0"] == "owner-helper"
     assert result["OPENAI_API_KEY"] == "synthetic-never-persisted"
     assert dict(consumer.os.environ) == before
-    assert len(roots) == 12 and all(kwargs == {"owned_root": tmp_path, "create": False} for _, kwargs in roots)
+    assert len(roots) == 13 and all(kwargs == {"owned_root": tmp_path, "create": False} for _, kwargs in roots)
 
 
 def test_audit_reuses_native_archive_payload_reader_and_exact_graph(tmp_path, monkeypatch):
