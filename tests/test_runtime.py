@@ -1315,6 +1315,42 @@ async def test_windows_communication_error_settles_children_only_after_confirmed
         await model.manager.close()
 
 
+@pytest.mark.parametrize('facts_status', ['valid', 'invalid', 'missing'])
+async def test_windows_eof_preserves_originating_worker_failure_without_payload(
+        windows_runtime_model, facts_status):
+    from amplifier_web.runtime import encode_message
+    from amplifier_web.worker_diagnostics import runtime_failure_witness
+    model = windows_runtime_model
+    model.identify()
+    await model.manager.start({'id': 'worker-error-eof'}, model.emit)
+    row = model.manager.workers['worker-error-eof']
+    pending = asyncio.get_running_loop().create_future()
+    row['pending']['unacknowledged-input'] = pending
+    facts = {'errors': [{'class': 'PermissionError', 'errno': 13, 'winerror': 5, 'frames': []}],
+             'truncated': False}
+    event = {'type': 'runtime.error', 'error': 'private token/path/body', 'failureSource': 'execution'}
+    if facts_status != 'missing':
+        event['failureFacts'] = facts if facts_status == 'valid' else {**facts, 'payload': 'private'}
+    model.job.stdout.feed_data(encode_message(event))
+    model.job.finish()
+    try:
+        await asyncio.wait_for(asyncio.shield(row['reader']), 1)
+        with pytest.raises(RuntimeError, match='Amplifier worker disconnected') as caught:
+            await pending
+        witness = runtime_failure_witness(caught.value)
+        assert witness['factsStatus'] == 'not_applicable' and witness['errors'] == []
+        assert witness['reader']['reason'] == 'eof' and witness['reader']['frame'] == 'error'
+        assert witness['reader']['exitObserved'] and witness['reader']['exitCode'] == 0
+        assert not witness['reader']['closing'] and witness['reader']['stopReason'] == 'none'
+        assert witness['workerFailure'] == {'source': 'execution', 'factsStatus': facts_status,
+            **(facts if facts_status == 'valid' else {'errors': [], 'truncated': False})}
+        assert 'private' not in json.dumps(witness)
+        assert not any(write['op'] == 'send' for write in model.job.writes)
+        assert model.job.tree_empty and model.job.io_finalized
+    finally:
+        await model.manager.close()
+
+
 async def test_windows_reader_cancelled_cleanup_keeps_original_cause_and_unknown_effect(
         windows_runtime_model, monkeypatch):
     from amplifier_web.worker_diagnostics import validate_runtime_failure_witness
@@ -3167,6 +3203,7 @@ async def test_default_runtime_probe_uninstrumented_journey_keeps_real_acceptanc
         def __exit__(self, *_):
             return False
     def inert_metadata_controls(_, result):
+        assert sys.exception() is (error if failure in {'send', 'send-control'} else None)
         if failure == 'send-control':
             raise ValueError('PRIVATE control failure')
         result.update({label: {'observation': InertMetadataObservation(None).facts,
@@ -3201,6 +3238,8 @@ async def test_default_runtime_probe_uninstrumented_journey_keeps_real_acceptanc
             fixture.validate_metadata_observation(report['metadataObservation'])
             assert ('controlsFailure' in report['metadataObservation']) == (failure == 'send-control')
             assert len(report['metadataObservation']['controls']) == (0 if failure == 'send-control' else 3)
+            if failure == 'send-control':
+                assert [row['class'] for row in report['metadataObservation']['controlsFailure']['errors']] == ['ValueError']
     assert len(calls) == 1 and calls[0].command is None and not calls[0].workers
     assert 'workerStartup' not in report
     assert dict(os.environ) == environment and sys.getprofile() is None
@@ -3232,6 +3271,109 @@ def test_default_runtime_probe_uninstrumented_pass_rejects_historical_injected_a
     fixture.validate_inner_report(old)
     assert fixture.parse_inner_output(json.dumps(old)) == old
     assert old['status'] == 'FAIL'  # Passive validation never promotes old evidence.
+
+
+@pytest.mark.parametrize('active_error', [False, True])
+@pytest.mark.parametrize('fault', [None, 'winerror', 'holder', 'readonly'])
+def test_native_metadata_controls_isolate_ambient_context_without_weakening_checks(
+        tmp_path, monkeypatch, active_error, fault):
+    """Real control body; modeled native IO facts, NOT native Windows evidence."""
+    from contextlib import nullcontext
+    fixture = _default_runtime_probe_module()
+    holders = []
+    reads = {}
+    original_open = Path.open
+    def opened(path, mode='r', *args, **kwargs):
+        handle = original_open(path, mode, *args, **kwargs)
+        if mode == 'rb' and path.name == 'metadata.json':
+            holders.append(handle)
+            reads[path] = reads.get(path, 0) + 1
+            if fault == 'holder' and path.parent.name == 'ordinary-held' and reads[path] == 2:
+                handle.close()
+        return handle
+    monkeypatch.setattr(Path, 'open', opened)
+    class Store:
+        def __init__(self, directory, **kwargs):
+            directory.mkdir(parents=True, exist_ok=True)
+            self.target = directory / 'metadata.json'
+        def set_name(self, text, **kwargs):
+            if text == 'CONTROL replacement' and self.target.parent.name != 'released':
+                try:
+                    error = PermissionError(13, 'PRIVATE local payload', '/PRIVATE/path')
+                    error.winerror = 32 if fault == 'winerror' else 5
+                    raise error
+                except PermissionError as cause:
+                    raise OSError('PRIVATE wrapper') from cause
+            self.target.write_text(text)
+    class Observation:
+        def __init__(self, target):
+            self.target = target
+            self.facts = {'status': 'observed', 'outcome': 'unknown',
+                'primary': {'temporaryClosed': True}}
+            for role in ('temporary', 'destination', 'parent'):
+                self.facts['primary'][role] = {
+                    'status': 'observed', 'ownerMatch': False, 'defaultTokenOwnerMatch': True,
+                    'daclPolicyMatch': True, 'reparse': False, 'directory': role == 'parent',
+                    'readonly': role == 'destination' and (
+                        target.parent.name == 'readonly' or fault == 'readonly')}
+        def __enter__(self): return self
+        def __exit__(self, kind, error, tb):
+            self.facts['outcome'] = 'raised' if error else 'returned'
+            return False
+    monkeypatch.setitem(sys.modules, 'amplifier_foundation.session.metadata',
+                        SimpleNamespace(SessionMetadataStore=Store))
+    monkeypatch.setitem(sys.modules, 'amplifier_web.windows_files',
+                        SimpleNamespace(directory=lambda *a, **k: nullcontext()))
+    monkeypatch.setattr(fixture, 'MetadataRenameObservation', Observation)
+    primary = RuntimeError('PRIVATE original dispatch')
+    result = {}
+    def controls():
+        assert sys.exception() is (primary if active_error else None)
+        if fault:
+            with pytest.raises(AssertionError):
+                fixture.native_metadata_controls(tmp_path / 'controls', result)
+        else:
+            fixture.native_metadata_controls(tmp_path / 'controls', result)
+    if active_error:
+        with pytest.raises(RuntimeError) as caught:
+            try:
+                raise primary
+            finally:
+                controls()
+        assert caught.value is primary
+    else:
+        controls()
+    assert all(handle.closed for handle in holders)
+    assert list(result) == (['ordinary-held'] if fault else ['ordinary-held', 'released', 'readonly'])
+    if not fault:
+        assert result['released']['failure']['errors'] == []
+        for label in ('ordinary-held', 'readonly'):
+            assert [r['class'] for r in result[label]['failure']['errors']] == ['OSError', 'PermissionError']
+            assert result[label]['failure']['errors'][1]['winerror'] == 5
+        assert 'PRIVATE' not in json.dumps(result)
+
+
+def test_metadata_diagnostic_boundary_keeps_genuine_local_context_and_original_chain():
+    fixture = _default_runtime_probe_module()
+    primary = RuntimeError('PRIVATE dispatch')
+    with pytest.raises(RuntimeError) as caught:
+        try:
+            raise primary
+        finally:
+            try:
+                try:
+                    raise ValueError('PRIVATE local')
+                except ValueError:
+                    raise PermissionError(13, 'PRIVATE permission')
+            except PermissionError as cause:
+                try:
+                    raise OSError('PRIVATE wrapper') from cause
+                except OSError as error:
+                    assert len(fixture.failure_facts(error, 'metadata_control')['errors']) == 4
+                    facts = fixture.failure_facts(error, 'metadata_control', stop_at=primary)
+                    assert [r['class'] for r in facts['errors']] == ['OSError', 'PermissionError', 'ValueError']
+                    assert error.__cause__ is cause and cause.__context__.__context__ is primary
+    assert caught.value is primary
 
 
 @pytest.mark.parametrize('fault', [
