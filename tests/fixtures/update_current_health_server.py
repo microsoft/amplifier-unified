@@ -32,7 +32,13 @@ async def main(home):
     source=saved['generations'][generation]
     (manager.directory/'active.json').write_text(json.dumps(saved['active']))
     project=home/'runtime'/('q-'+'a'*32);project.mkdir(parents=True)
-    (project/'.venv').symlink_to(Path(sys.prefix),target_is_directory=True)
+    # The wheel-only host venv can reuse dependencies through .pth, whereas
+    # installed_graph deliberately inventories only the selected runtime's own
+    # metadata directory. Bind this synthetic graph to the prepared dependency
+    # venv explicitly instead of claiming .pth packages are installed in the host.
+    dependency_venv=Path(os.environ.get('AMPLIFIER_TEST_DEPENDENCY_VENV',sys.prefix))
+    assert dependency_venv.is_absolute() and dependency_venv.is_dir()
+    (project/'.venv').symlink_to(dependency_venv,target_is_directory=True)
     graph=runtime_qualification.installed_graph(project)
     assert any(row['name']=='amplifier-foundation' for row in graph)
     config=read_config(home,home=home,global_only=True)
