@@ -4881,6 +4881,9 @@ class AppService:
             elif kind == "runtime.ended":
                 # A turn may finish before naming does; only the runtime host
                 # can confirm that no independent call can still be running.
+                # Keep the exact listed background outcome before generic
+                # owner-loss settlement makes its live nodes interrupted.
+                finish_background(session,payload.get("backgroundCallIds",[]),payload.get("status","interrupted"))
                 ended_foreground = False
                 if (payload.get("sessionId") in {session["id"], session.get("runtimeSessionId")}
                         and payload.get('rootSessionId', session['id']) == session['id']
@@ -4898,7 +4901,6 @@ class AppService:
                         self.operations.interrupted(session["id"])
                         self.schedules.runtime_ended(session)
                     interrupt_owned_workers(session, payload.get('runtimeOwnerId'))
-                finish_background(session,payload.get("backgroundCallIds",[]),payload.get("status","interrupted"))
             elif kind == 'runtime.ownership':
                 if payload.get('status') == 'blocked':
                     from .session_ownership import blocked

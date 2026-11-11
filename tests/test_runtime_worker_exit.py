@@ -226,8 +226,47 @@ async def test_late_old_exit_cannot_settle_reused_input_new_attempt(tmp_path, ge
         assert tree['nodes'][0]['phase'] == 'interrupted'
         assert tree['nodes'][1]['phase'] == 'completed'
         assert tree['nodes'][2]['phase'] == 'running'
-        assert tree['nodes'][3]['phase'] == 'interrupted'
+        assert tree['nodes'][3]['phase'] == 'stopped'  # Exact listed background receipt.
         assert tree['nodes'][4]['phase'] == 'running'
+    finally:
+        await service.close()
+
+
+async def test_listed_background_stop_precedes_generic_owner_loss(tmp_path):
+    from amplifier_web.execution import ensure_turn, ingest
+    runtime = RuntimeManager(command=['unused'])
+    service = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    session = service._new_session({'title': 'Exact naming Stop'})
+    service.state['sessions'] = [session]
+    ensure_turn(session, 'input')
+    for identity, owner, lifecycle in [
+        ('listed', 'old-process', 'background'),
+        ('unlisted', 'old-process', 'background'),
+        ('foreground', 'old-process', None),
+        ('replacement', 'new-process', 'background'),
+        ('terminal', 'old-process', 'background'),
+    ]:
+        ingest(session, {'id': identity, 'kind': 'llm', 'runtimeOwnerId': owner,
+            'phase': 'completed' if identity == 'terminal' else 'running',
+            **({'endedAt': 2} if identity == 'terminal' else {}),
+            'lifecycle': lifecycle, 'sessionId': session['id'],
+            'rootSessionId': session['id'], 'startedAt': 1})
+    nodes = {node['id']: node for node in session['execution']['nodes']}
+    terminal = copy.deepcopy(nodes['terminal'])
+    replacement = copy.deepcopy(nodes['replacement'])
+    payload = {'sessionId': session['id'], 'runtimeOwnerId': 'old-process',
+               'status': 'stopped', 'reason': 'stopped',
+               'backgroundCallIds': ['listed', 'terminal']}
+    try:
+        await service.on_runtime_event('runtime.ended', payload)
+        assert nodes['listed']['phase'] == 'stopped'
+        assert nodes['unlisted']['phase'] == nodes['foreground']['phase'] == 'interrupted'
+        assert nodes['terminal'] == terminal and nodes['replacement'] == replacement
+        assert session['execution']['aggregateUsage']['costPendingCalls'] == 1
+        ended = {name: (node.get('phase'), node.get('endedAt')) for name, node in nodes.items()}
+        await service.on_runtime_event('runtime.ended', payload)
+        assert {name: (node.get('phase'), node.get('endedAt')) for name, node in nodes.items()} == ended
+        assert session['execution']['aggregateUsage']['costPendingCalls'] == 1
     finally:
         await service.close()
 
