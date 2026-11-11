@@ -278,17 +278,24 @@ class _InlineStream:
         return self.position
 
 
-def project_detached(source, projector):
+def project_detached(source, projector, *, max_bytes=None):
     """Generic bounded bytes projection; no JSON/body policy or live SQLite.
 
     The callback receives a seekable binary stream and must bound its own
     projection memory. Its result cannot escape until the COMPLETE resource
     hash, regular/no-follow file and before/after descriptor AND path evidence
     agree. Seeking by the callback does not omit bytes from hash validation.
+    File validation reads at most the admitted size plus one growth sentinel.
+    max_bytes also bounds inline validation; the callback still bounds its reads.
     """
     blob = _blob_index(source)
     path = source.directory / (source.identity + '.json') if blob else None
     signature = detached_signature(source)
+    if max_bytes is not None and (type(max_bytes) is not int or max_bytes < 0):
+        raise ValueError('Invalid projection byte budget.')
+    limit = signature[2] if blob else max_bytes
+    if blob and max_bytes is not None and limit > max_bytes:
+        raise ValueError('Artifact exceeds the projection byte budget.')
     stream = _open_blob(path) if blob else _InlineStream(source.indexed)
     with stream as stream:
         if blob:
@@ -297,7 +304,9 @@ def project_detached(source, projector):
         projection = projector(stream)
         stream.seek(0)
         digest, size = hashlib.sha256(), 0
-        while chunk := stream.read(64 * 1024):
+        while chunk := stream.read(64 * 1024 if limit is None else min(64 * 1024, limit - size + 1)):
+            if limit is not None and size + len(chunk) > limit:
+                raise ValueError('Artifact grew or exceeds the projection byte budget.')
             digest.update(chunk)
             size += len(chunk)
         if digest.hexdigest() != source.identity:

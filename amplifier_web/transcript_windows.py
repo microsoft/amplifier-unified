@@ -163,6 +163,18 @@ class TranscriptWindows:
         if not task.cancelled():
             task.exception()  # A cancelled HTTP waiter must not orphan failures.
 
+    async def _read_job(self, work):
+        # Admission and registration have no intervening await. One job owns
+        # window read, peer qualification and detachment until physical return.
+        if self.closed:
+            raise ValueError('Saved message readers are closed.')
+        if len(self.jobs) >= 8:
+            raise ValueError('Saved message readers are busy. Try again.')
+        task = asyncio.create_task(asyncio.to_thread(work))
+        self.jobs.add(task)
+        task.add_done_callback(self._read_finished)
+        return await asyncio.shield(task)
+
     async def close(self):
         self.closed = True
         # File reads have fixed byte/object bounds. Cancellation of an HTTP
@@ -295,6 +307,8 @@ class TranscriptWindows:
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError('Choose 1 to 100 messages.')
         async with self.service.lock:
+            if self.closed:
+                raise ValueError('Saved message readers are closed.')
             session = self.service._session(session_id, hydrate=False)
             source = _source(session)
             fence = self._fence(session_id)
@@ -309,47 +323,38 @@ class TranscriptWindows:
                         committed = entry
                 # Canonical saved IDs, attachments and action authority survive.
                 page = self._saved_page(session, before, limit, committed=committed)
-        if use_native or cold is not None:
-            if self.closed or len(self.jobs) >= 8:
-                raise ValueError('Saved message readers are busy. Try again.')
+        def read_and_prepare():
             if use_native:
-                work = asyncio.to_thread(_native_page, self.reader, source, before, limit)
-            else:
+                result = _native_page(self.reader, source, before, limit)
+            elif cold is not None:
                 from .saved_message_window import read_saved_window
-                work = asyncio.to_thread(read_saved_window, cold, self.reader, session_id=session_id,
-                                         fence=fence, before=before, limit=limit)
-            task = asyncio.create_task(work)
-            self.jobs.add(task)
-            task.add_done_callback(self._read_finished)
-            page = await asyncio.shield(task)
-        if not use_native:
-            if cold is not None:
-                page['_savedComplete'] = before is None and not page['hasEarlier'] and not page['unavailableRanges']
-            page['_savedOwner'] = {'source': source, 'fence': fence,
-                                   'resource': cold.identity if cold is not None else None}
-        proof = None
-        wanted = self._peer_wanted(page['items']) if not use_native else []
-        if wanted and cold is not None:
-            # One bounded complete proof for the requested keys, off the owner
-            # thread. Budget failure keeps display neutral, never page-local trust.
-            async def qualify():
+                result = read_saved_window(cold, self.reader, session_id=session_id,
+                                           fence=fence, before=before, limit=limit)
+            else:
+                result = page
+            if not use_native:
+                if cold is not None:
+                    result['_savedComplete'] = before is None and not result['hasEarlier'] and not result['unavailableRanges']
+                result['_savedOwner'] = {'source': source, 'fence': fence,
+                                        'resource': cold.identity if cold is not None else None}
+            proof = None
+            wanted = self._peer_wanted(result['items']) if not use_native else []
+            if wanted and cold is not None:
+                # This second phase stays in the SAME admitted physical job:
+                # cancellation/shutdown never loses it or admits a ninth worker.
                 try:
-                    return await asyncio.to_thread(self.peer_originals.cold, cold, wanted)
+                    proof = self.peer_originals.cold(cold, wanted)
                 except (ValueError, OSError):
-                    return None
-            task = asyncio.create_task(qualify())
-            self.jobs.add(task)
-            task.add_done_callback(self._read_finished)
-            proof = await asyncio.shield(task)
-        # Detach/size only this selected page outside writer exclusion.
-        def prepare():
-            detached = copy.deepcopy(page)
+                    pass
+            detached = copy.deepcopy(result)
             size = len(json.dumps(detached, ensure_ascii=False, separators=(',', ':')).encode())
-            return detached, size
-        page, size = await asyncio.to_thread(prepare)
+            return detached, size, proof, wanted
+        page, size, proof, wanted = await self._read_job(read_and_prepare)
         if size > MAX_BYTES:
             raise ValueError('Saved message window exceeds the display budget.')
         async with self.service.lock:
+            if self.closed:
+                raise ValueError('Saved message readers are closed.')
             current = self.service._session(session_id, hydrate=False)
             database_epoch = self._database_epoch() if cold is not None else None
             if (_source(current) != source or self._fence(session_id) != fence
@@ -453,6 +458,8 @@ class TranscriptWindows:
         return result
 
     async def load(self, session_id, *, only_if_changed=False):
+        if self.closed:
+            return
         try:
             await self._load(session_id, only_if_changed=only_if_changed)
         except asyncio.CancelledError:
@@ -460,6 +467,8 @@ class TranscriptWindows:
             raise
         except (ValueError, OSError):
             async with self.service.lock:
+                if self.closed:
+                    return
                 session = self.service._session(session_id, hydrate=False)
                 reference = dict.get(session, '_coldFields', {}).get('messages', {}).get('$resource')
                 self.initial[session_id] = {'status': 'unavailable', 'source': _source(session),
@@ -480,6 +489,8 @@ class TranscriptWindows:
             cold = self._cold_source(session) if not managed else None
             saved_source = [cold.identity if cold is not None else None, self._fence(session_id)]
         stamp = await asyncio.to_thread(revision, source) if source.get('nativeProject') else None
+        if self.closed:
+            return
         entry = self.initial.get(session_id)
         if (only_if_changed and entry and entry.get('stamp') == stamp
                 and entry.get('source') == source and entry.get('status') == 'ready'
@@ -487,6 +498,8 @@ class TranscriptWindows:
             return
         if not managed:
             page = await self.read(session_id) if cold is not None else None
+            if self.closed:
+                return
             self.initial[session_id] = {'status': 'ready', 'stamp': stamp,
                 'source': source, 'savedSource': saved_source,
                 **({'key': (session_id, page['windowKey'])} if page else {}),
@@ -500,12 +513,16 @@ class TranscriptWindows:
         self._notify(session_id)
         try:
             page = await self.read(session_id)
+            if self.closed:
+                return
             self.initial[session_id] = {'status': 'ready', 'stamp': stamp, 'source': source,
                                         'key': (session_id, page['windowKey'])}
         except asyncio.CancelledError:
             self.initial.pop(session_id, None)
             raise
         except (ValueError, OSError):
+            if self.closed:
+                return
             self.initial[session_id] = {'status': 'unavailable', 'stamp': stamp,
                 'error': 'Could not read this saved message window. Original files are unchanged.'}
         while len(self.initial) > MAX_PAGES:

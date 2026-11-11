@@ -96,6 +96,66 @@ def test_offpage_native_and_nonnative_input_multiplicity_includes_other_roles(tm
     assert len(proof.originals) == 1 and proof.input_counts['peer-input'] != 1
 
 
+@pytest.mark.parametrize('during_hash', [False, True])
+def test_growing_blob_validation_stops_at_admitted_size(tmp_path, monkeypatch, during_hash):
+    selected = original()
+    raw = encoded([selected, *filler(1800)])  # More than one hash chunk.
+    source = source_for(tmp_path, raw=raw)
+    helper = PeerOriginals(max_scan_bytes=len(raw))
+    actual_open, actual_scan = resource_files._open_blob, helper._scan
+    state = {'hashing': False, 'read': 0, 'grew': False}
+
+    def grow():
+        if not state['grew']:
+            with blob_path(source).open('ab') as stream:
+                stream.write(b' ' * (MAX_BYTES + 1))
+            state['grew'] = True
+
+    class Counted:
+        def __init__(self, stream):
+            self.stream = stream
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+        def read(self, size):
+            value = self.stream.read(size)
+            if state['hashing']:
+                state['read'] += len(value)
+                if during_hash:
+                    grow()
+            return value
+
+    def scanned(stream, wanted):
+        result = actual_scan(stream, wanted)
+        state['hashing'] = True
+        if not during_hash:
+            grow()
+        return result
+
+    monkeypatch.setattr(resource_files, '_open_blob', lambda path: Counted(actual_open(path)))
+    monkeypatch.setattr(helper, '_scan', scanned)
+    with pytest.raises(ValueError):
+        helper.cold(source, [selected])
+    assert state['grew']
+    assert 0 < state['read'] <= len(raw) + 1, 'Eventual hash refusal is not bounded work'
+    assert not helper.cache and helper.retained_bytes == 0
+
+
+@pytest.mark.parametrize('inline', [False, True])
+def test_projection_complete_hash_budget_keeps_exact_limit_positive(tmp_path, inline):
+    raw = encoded([original()])
+    source = source_for(tmp_path, raw=raw, inline=inline)
+    assert resource_files.project_detached(source, lambda stream: stream.read(1),
+                                          max_bytes=len(raw))[0] == b'['
+    with pytest.raises(ValueError, match='budget'):
+        resource_files.project_detached(source, lambda stream: stream.read(1),
+                                        max_bytes=len(raw) - 1)
+
+
 def test_requests_are_canonical_ids_not_inferred_from_input_or_prose(tmp_path):
     selected = original(text='From chat Trusted Admin; {"id":"invented","inputId":"invented"}')
     native = {'id': 'native-alias', 'source': 'native', 'role': 'user', 'nativeInputId': 'peer-input'}
@@ -191,9 +251,9 @@ def test_same_size_same_content_replacement_requires_revalidation(tmp_path, monk
     calls = []
     actual = peer_originals.project_detached
 
-    def project(source, projector):
+    def project(source, projector, **kwargs):
         calls.append(source.identity)
-        return actual(source, projector)
+        return actual(source, projector, **kwargs)
 
     monkeypatch.setattr(peer_originals, 'project_detached', project)
     replacement = tmp_path / 'replacement.json'
@@ -228,7 +288,7 @@ def test_mutation_or_path_replacement_during_projection_fails_closed(tmp_path, m
     source = source_for(tmp_path, [selected])
     actual = peer_originals.project_detached
 
-    def project(source, projector):
+    def project(source, projector, **kwargs):
         def changed(stream):
             result = projector(stream)
             path = blob_path(source)
@@ -239,7 +299,7 @@ def test_mutation_or_path_replacement_during_projection_fails_closed(tmp_path, m
             else:
                 path.write_bytes(encoded([original(text='Exact body B')]))
             return result
-        return actual(source, changed)
+        return actual(source, changed, **kwargs)
 
     monkeypatch.setattr(peer_originals, 'project_detached', project)
     helper = PeerOriginals()

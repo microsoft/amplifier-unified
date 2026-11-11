@@ -303,7 +303,8 @@ class PeerOriginals:
                         break
             if entry is None:
                 entry, validated_signature = project_detached(
-                    source, lambda stream: self._scan(stream, wanted))
+                    source, lambda stream: self._scan(stream, wanted),
+                    max_bytes=self.max_scan_bytes)
                 if validated_signature != signature:
                     raise ValueError('Peer original source changed.')
             selection, bodies = entry
