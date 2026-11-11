@@ -23,6 +23,7 @@ import uuid
 LIMIT = 8192
 RECEIPT = "task-runtime.json"
 STOP = "task-stop.json"
+RECOVERY_STOP = "task-recovery-stop.json"
 RESTART = "task-restart.json"
 RESTART_EXIT = 75
 LOG = "task-output.log"
@@ -283,22 +284,23 @@ def listener_owners(host, port):
     return owners
 
 
-def request_stop(spec, *, timeout=60, expected=None):
+def request_stop(spec, *, timeout=60, expected=None, recovery=False):
     """One request and bounded observation, never retry or force termination."""
     record = read(spec)
     if record is None:
         raise RuntimeError("No verified task runtime receipt; reconcile task status before stopping.")
     if expected is not None and any(record[key] != expected[key] for key in _FIELDS - {"phase"}):
         raise RuntimeError("The expected task run changed; no stop request was sent.")
+    signal = RECOVERY_STOP if recovery else STOP
     with process(record["pid"]) as actual:
         if actual is None:
             # Preserve owner intent across the old-host exit/successor boundary.
             # This is a private run signal, not a claim of native tree settlement.
-            publish(spec, record, STOP)
+            publish(spec, record, signal)
             return
         if not matches(record, actual):
             raise RuntimeError("Task PID identity changed; no stop request was sent.")
-        publish(spec, record, STOP)
+        publish(spec, record, signal)
         deadline = time.monotonic() + timeout
         while not actual["exited"]():
             current = read(spec)
@@ -309,11 +311,11 @@ def request_stop(spec, *, timeout=60, expected=None):
             time.sleep(0.1)
 
 
-def stop_requested(spec, record):
+def stop_requested(spec, record, *, name=STOP):
     """Exact run-bound owner intent survives cleanup, never a later owner start."""
     if record is None:
         return False
-    request = read(spec, STOP)
+    request = read(spec, name)
     return bool(record and request and all(
         request[key] == record[key] for key in _FIELDS - {"phase"}))
 
@@ -335,7 +337,8 @@ class Runner:
         publish(self.spec, self.record)
 
     def stop_requested(self):
-        return stop_requested(self.spec, self.record)
+        return (stop_requested(self.spec, self.record)
+                or stop_requested(self.spec, self.record, name=RECOVERY_STOP))
 
     async def watch(self):
         from aiohttp.web_runner import GracefulExit

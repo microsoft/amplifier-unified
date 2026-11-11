@@ -43,6 +43,13 @@ promotion. Windows does not fall back to in-place replacement. Before the old
 host requests normal shutdown, it records the exact promoted/previous pointer,
 bootstrap and old installation identity/graph, and target revision/generation/
 attempt with its current run. An explicit stop wins over the restart request.
+The launcher retains exact old-host and failed-successor Stop identities through
+candidate verification and rollback selection. A Stop during cleanup must not
+launch another app. An intentional later owner start does not inherit that old
+run's Stop. Readiness-timeout cleanup uses a separate, closed private recovery
+stop signal; it still asks the exact app to close normally, but cannot impersonate
+an owner Stop and thereby suppress the required recovery. Unknown shutdown
+continues to refuse both recovery and another launch.
 The successor must obtain the existing private-pinned authenticated readiness
 acknowledgement. A launch or a listening socket alone is not update success.
 

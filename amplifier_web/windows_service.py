@@ -711,9 +711,11 @@ async def _supervise_owned(spec):
     from .windows_task_runtime import read_restart, stop_requested, RESTART_EXIT
     requested = None
     restart = None
-    stop_run = None
+    stop_runs = ()
+    def stopped():
+        return any(stop_requested(spec, run) for run in stop_runs)
     while True:
-        if stop_run and stop_requested(spec, stop_run):
+        if stopped():
             return 0
         value, installed = _read(spec.data_dir)
         if installed != spec or value.get("state") != 4 or value.get("instances") != 1:
@@ -723,35 +725,37 @@ async def _supervise_owned(spec):
         except (OSError, ValueError, RuntimeError):
             if requested is None:
                 raise
-            if stop_requested(spec, restart["run"]):
+            if stopped():
                 return 0
             # No successor launch occurred. The exact old run/tree has already
             # exited; restore still rechecks this attempt's unchanged pointer.
             from .windows_app_recovery import restore
             await asyncio.to_thread(restore, spec, restart)
-            if stop_requested(spec, restart["run"]):
+            if stopped():
                 return 0
             requested = restart = None
             continue
         if requested is not None:
-            if stop_requested(spec, restart["run"]):
+            if stopped():
                 return 0
             if not target or any(target.get(key) != requested[key] for key in ("revision", "generation")):
                 raise WindowsServiceError("The requested application launch target changed.")
             validated = json.loads((target["folder"] / "validated.json").read_text())
             if validated.get("attemptId") != requested["attemptId"]:
                 raise WindowsServiceError("The application qualification attempt changed.")
-        if stop_run and stop_requested(spec, stop_run):
+        if stopped():
             return 0
         record, code, failed_start = await _launch_owned_host(
-            spec, python, restart, stop_run=stop_run)
+            spec, python, restart, stop_runs=stop_runs)
         if code != RESTART_EXIT:
             if failed_start and requested is not None:
-                if stop_requested(spec, restart["run"]) or stop_requested(spec, record):
+                if record:
+                    stop_runs = (*stop_runs, record)
+                if stopped():
                     return 0
                 from .windows_app_recovery import restore
                 await asyncio.to_thread(restore, spec, restart)
-                if stop_requested(spec, restart["run"]) or stop_requested(spec, record):
+                if stopped():
                     return 0
                 requested = restart = None
                 continue
@@ -764,16 +768,18 @@ async def _supervise_owned(spec):
             return 0
         requested = request["target"]
         restart = request
-        stop_run = record
+        # A new accepted restart starts a fresh handoff. During its recovery,
+        # retain both the old host and any failed successor as Stop targets.
+        stop_runs = (record,)
         if target and all(target.get(key) == requested[key] for key in ("revision", "generation")):
             raise WindowsServiceError("The host requested its unchanged application generation.")
 
 
-async def _launch_owned_host(spec, python, restart, *, stop_run=None):
+async def _launch_owned_host(spec, python, restart, *, stop_runs=()):
     """Reuse the canonical launch guard, including pre-identity tree settlement."""
     from .windows_jobs import WindowsOwnedProcess
     from . import windows_task_runtime as runtime
-    if stop_run and runtime.stop_requested(spec, stop_run):
+    if any(runtime.stop_requested(spec, run) for run in stop_runs):
         return None, 0, False
     previous = runtime.read(spec)
     owner = await WindowsOwnedProcess.start(
@@ -813,7 +819,7 @@ async def _launch_owned_host(spec, python, restart, *, stop_run=None):
             with runtime.process(record["pid"]) as actual:
                 if not runtime.matches(record, actual):
                     raise WindowsServiceError("The launched host identity differs from its receipt.")
-                if stop_run and runtime.stop_requested(spec, stop_run):
+                if any(runtime.stop_requested(spec, run) for run in stop_runs):
                     await asyncio.to_thread(runtime.request_stop, spec, timeout=30, expected=record)
                 elif restart is not None:
                     failed = await _wait_updated_host(spec, finished, actual, restart)
@@ -860,7 +866,8 @@ async def _wait_updated_host(spec, finished, actual, restart):
         if finished.done() and actual["exited"]():
             return True
         if time.monotonic() >= deadline:
-            await asyncio.to_thread(runtime.request_stop, spec, timeout=30, expected=current)
+            await asyncio.to_thread(runtime.request_stop, spec, timeout=30, expected=current,
+                                    recovery=True)
             # An unconfirmed normal stop raises, never authorizes rollback.
             if not actual["exited"]():
                 raise WindowsServiceError("The unready updated host has not exited.")

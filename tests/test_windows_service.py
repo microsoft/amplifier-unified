@@ -647,7 +647,7 @@ def test_supervisor_normal_stop_does_not_restart_or_infer_generation(monkeypatch
     assert events == [(value, value.python, None)]
 
 
-@pytest.mark.parametrize("when", ["cleanup", "verification", "failed-verification", "failed-start", "restore", "restored-verification", "stale"])
+@pytest.mark.parametrize("when", ["cleanup", "verification", "failed-verification", "failed-start", "restore", "restored-verification", "failed-run-verification", "stale"])
 def test_late_owner_stop_fences_successor_and_restore_relaunch(monkeypatch, when):
     from amplifier_web import windows_task_runtime as runtime, windows_app_recovery as recovery
     value = spec(supervised=True)
@@ -656,14 +656,15 @@ def test_late_owner_stop_fences_successor_and_restore_relaunch(monkeypatch, when
            "image": r"C:\Python\pythonw.exe", "phase": "stopped"}
     target = {"revision": "c" * 40, "generation": "d" * 32, "attemptId": "e" * 32}
     request = {"schema": 1, "run": old, "target": target}
+    failed_run = {**old, "run": "a" * 32, "pid": 456, "created": "134000000000000002"}
     state = {"launches": 0, "selected": 0, "stop": None, "restores": 0}
     monkeypatch.setattr(service, "_read", lambda home: ({"state": 4, "instances": 1}, value))
     monkeypatch.setattr(runtime, "read_restart", lambda spec: request)
     monkeypatch.setattr(runtime, "read", lambda spec, name: state["stop"])
     def select(spec):
         state["selected"] += 1
-        if state["selected"] == 3 and when == "restored-verification":
-            state["stop"] = old
+        if state["selected"] == 3 and when in {"restored-verification", "failed-run-verification"}:
+            state["stop"] = failed_run if when == "failed-run-verification" else old
         if state["selected"] == 2:
             if when in {"verification", "failed-verification"}:
                 state["stop"] = old
@@ -688,21 +689,21 @@ def test_late_owner_stop_fences_successor_and_restore_relaunch(monkeypatch, when
             elif when == "stale":
                 state["stop"] = {**old, "run": "f" * 32}
             return old, runtime.RESTART_EXIT, False
-        if when in {"failed-start", "restore", "restored-verification"}:
+        if when in {"failed-start", "restore", "restored-verification", "failed-run-verification"}:
             if when == "failed-start":
                 state["stop"] = old
-            return None, 1, True
+            return failed_run if when == "failed-run-verification" else None, 1, True
         return {**old, "run": "a" * 32}, 0, False
     monkeypatch.setattr(service, "_launch_owned_host", launch)
     def restore(*args):
         state["restores"] += 1
-        assert when in {"restore", "restored-verification"}
+        assert when in {"restore", "restored-verification", "failed-run-verification"}
         if when == "restore":
             state["stop"] = old
     monkeypatch.setattr(recovery, "restore", restore)
     assert service._supervise(value) == 0
-    assert state["launches"] == (2 if when in {"failed-start", "restore", "restored-verification", "stale"} else 1)
-    assert state["restores"] == (1 if when in {"restore", "restored-verification"} else 0)
+    assert state["launches"] == (2 if when in {"failed-start", "restore", "restored-verification", "failed-run-verification", "stale"} else 1)
+    assert state["restores"] == (1 if when in {"restore", "restored-verification", "failed-run-verification"} else 0)
 
 
 @pytest.mark.parametrize("failure", ["timeout", "foreign-child", "reused-pid"])

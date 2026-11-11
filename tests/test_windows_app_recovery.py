@@ -120,6 +120,8 @@ def test_updated_host_readiness_is_bounded_and_normal_stop_wins(transaction, mon
     else:
         assert asyncio.run(service._wait_updated_host(t.spec, finished, observed, t.restart)) is (mode in {"failed", "timeout"})
     assert len(stopped) == (1 if mode in {"timeout", "unknown-stop"} else 0)
+    if stopped:
+        assert stopped[0][1]["recovery"] is True
 
 
 def test_old_run_stop_in_launch_gap_normally_stops_exact_successor(transaction, monkeypatch):
@@ -137,6 +139,59 @@ def test_old_run_stop_in_launch_gap_normally_stops_exact_successor(transaction, 
     assert asyncio.run(service._wait_updated_host(
         t.spec, SimpleNamespace(done=lambda: False), actual, t.restart)) is False
     assert stopped == [(t.spec, {"timeout": 30, "expected": current})]
+
+
+@pytest.mark.parametrize("owner_stop", [False, True])
+def test_readiness_timeout_real_signal_composes_with_supervisor_recovery(transaction, monkeypatch, owner_stop):
+    import asyncio
+    from contextlib import contextmanager
+    t = transaction
+    old = t.restart["run"]
+    current = {**old, "run": "0" * 32, "pid": 456, "created": "134000000000000002"}
+    state = {"launches": 0, "restores": 0, "signals": {}, "exited": False}
+    monkeypatch.setattr(service, "_read", lambda home: ({"state": 4, "instances": 1}, t.spec))
+    class Folder:
+        def __truediv__(self, name):
+            return SimpleNamespace(read_text=lambda: json.dumps(t.restart["target"]))
+    def select(spec):
+        return spec.python, ({**t.restart["target"], "folder": Folder()}
+                             if state["launches"] == 1 else None)
+    monkeypatch.setattr(service, "_launch_python", select)
+    monkeypatch.setattr(runtime, "read_restart", lambda spec: t.restart)
+    monkeypatch.setattr(runtime, "read", lambda spec, name=runtime.RECEIPT:
+                        current if name == runtime.RECEIPT else state["signals"].get(name))
+    actual = {**current, "exited": lambda: state["exited"]}
+    @contextmanager
+    def process(pid):
+        assert pid == current["pid"]
+        yield actual
+    monkeypatch.setattr(runtime, "process", process)
+    def publish(spec, record, name):
+        state["signals"][name] = dict(record)
+        state["exited"] = True  # Simulated app consumed its normal stop signal.
+    monkeypatch.setattr(runtime, "publish", publish)
+    monkeypatch.setattr(recovery, "read", lambda spec: {"restart": t.restart, "status": "prepared"})
+    ticks = iter([0, 91])
+    monkeypatch.setattr(service, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    async def launch(*args, **kwargs):
+        state["launches"] += 1
+        if state["launches"] == 1:
+            return old, runtime.RESTART_EXIT, False
+        if state["launches"] == 2:
+            failed = await service._wait_updated_host(
+                t.spec, SimpleNamespace(done=lambda: state["exited"]), actual, t.restart)
+            if owner_stop:
+                runtime.request_stop(t.spec, expected=current)
+            return current, 0, failed
+        return {**current, "run": "9" * 32}, 0, False
+    monkeypatch.setattr(service, "_launch_owned_host", launch)
+    monkeypatch.setattr(recovery, "restore", lambda *args:
+                        state.update(restores=state["restores"] + 1))
+    assert service._supervise(t.spec) == 0
+    assert state["signals"][runtime.RECOVERY_STOP] == current
+    assert state["restores"] == (0 if owner_stop else 1)
+    assert state["launches"] == (2 if owner_stop else 3)
+    assert (runtime.STOP in state["signals"]) is owner_stop
 
 
 @pytest.mark.parametrize("change", [{"status": "success"}, {"status": []}, {"schema": True},

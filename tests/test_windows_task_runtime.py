@@ -235,6 +235,18 @@ def test_late_stop_is_retained_after_exact_old_host_exit(controls):
     assert controls["writes"] == [(runtime.STOP, record())]
 
 
+def test_internal_recovery_stop_does_not_impersonate_owner_stop(controls, monkeypatch):
+    controls["exited"] = True
+    runtime.request_stop(spec(), expected=record(), recovery=True)
+    assert controls["writes"] == [(runtime.RECOVERY_STOP, record())]
+    monkeypatch.setattr(runtime, "read", lambda spec, name:
+                        record() if name == runtime.RECOVERY_STOP else None)
+    assert not runtime.stop_requested(spec(), record())
+    runner = runtime.Runner.__new__(runtime.Runner)
+    runner.spec, runner.record = spec(), record()
+    assert runner.stop_requested()  # Still normal app cleanup, not a force kill.
+
+
 def test_late_stop_is_retained_when_old_process_already_absent(controls, monkeypatch):
     @contextmanager
     def absent(pid):
