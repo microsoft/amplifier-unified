@@ -171,7 +171,15 @@ try{
  Object.assign(result.messageRecovery,{passed:true,duplicateBannerActionAbsent:true,savedRetryUsed:true,
   exactInputOnce:true,historyAndDraftRetained:true,reviewAndDismissDidNotSubmit:true});
  result.phase='current update health';
- await page.setViewportSize({width:1280,height:950});await openSettingsPage(page,'updates');
+ await page.setViewportSize({width:1280,height:950});
+ // Establish the next feature's surface, as showFixtureConversation does for
+ // the preceding journey. Navigation gestures have separate menu acceptance;
+ // no update/input action is dispatched by this fixture-only view setup.
+ await page.evaluate(async()=>{
+  const receipt=await window.amplifier.dispatch('view.update',{patch:{panel:'settings',settingsExpanded:['updates']}});
+  if(!receipt.accepted)throw Error('Could not establish fixture Settings surface');
+ });
+ await openSettingsPage(page,'updates');
  const panel=page.locator('[data-part="updates"]'),status=page.locator('[data-part="application-update"]').first();
  await expect(status).toContainText('You’re up to date');await expect(panel.locator('.a-update-current-action')).toHaveCount(0);
  assert.equal((await (await page.request.get(boot.url+'/fixture/current-update')).json()).originalHistoryUnchanged,true);
