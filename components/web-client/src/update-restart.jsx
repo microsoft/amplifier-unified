@@ -39,8 +39,10 @@ export function UpdateRestart({updates,act}){
    <p>Running chats, background workers, tools, and calls will be interrupted. Saved conversation history and drafts will be kept. Interrupted work will not be replayed automatically.</p>
    <p>Unresolved checkout handoffs will still require inspection after the restart.</p>
    {!current&&<p role="alert">The staged update or host changed. Cancel and review the current update before confirming again.</p>}
-   <button type="button" className="a-primary" data-action="updates.forceRestart" disabled={!current||submitting} onClick={confirm}>{submitting?'Restart requested…':'Interrupt work and restart'}</button>
-   <button ref={cancelButton} type="button" className="a-soft" disabled={submitting} onClick={cancel}>Cancel</button>
+   <div className="a-dialog-actions">
+    <button type="button" className="a-primary" data-action="updates.forceRestart" disabled={!current||submitting} onClick={confirm}>{submitting?'Restart requested…':'Interrupt work and restart'}</button>
+    <button ref={cancelButton} type="button" className="a-soft" disabled={submitting} onClick={cancel}>Cancel</button>
+   </div>
   </div>}
   {error&&<p role="alert">{error}</p>}
  </div>;

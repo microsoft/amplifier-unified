@@ -285,8 +285,9 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     resume_addition = question_resume_browser_addition(rows, set())
     navigation_ids = agent_navigation_browser_additions(rows, set())
     sidebar_ids = sidebar_controls_browser_addition(rows, set())
+    spacing_ids = action_spacing_browser_addition(rows, set())
     historical_rows = [row for row in rows
-                       if row['id'] not in navigation_ids | sidebar_ids
+                       if row['id'] not in navigation_ids | sidebar_ids | spacing_ids
                        and not (canvas_additions | breadbin_addition | question_fade_addition | context_addition | immediate_addition | delivery_addition | waiting_addition | resume_addition).intersection(row['command'])]
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
@@ -381,7 +382,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     original = [row for row in historical_rows if row['id'] not in additions and row['id'] not in recovery_ids]
     assert len(original) == 65 and len(historical_rows) == 132
     # Preserve the preceding total after validating all exact additive owners.
-    assert len([row for row in rows if row['id'] not in navigation_ids | sidebar_ids | {'context-inspector-layout', 'delivery-warning', 'legacy-outbox-notice', 'delivery-reconciliation', 'delivery-new-chat', 'navigation-waiting', 'canvas-versions', 'question-resume'}]) == 138
+    assert len([row for row in rows if row['id'] not in navigation_ids | sidebar_ids | spacing_ids | {'context-inspector-layout', 'delivery-warning', 'legacy-outbox-notice', 'delivery-reconciliation', 'delivery-new-chat', 'navigation-waiting', 'canvas-versions', 'question-resume'}]) == 138
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -859,36 +860,45 @@ def test_question_fade_browser_addition_rejects_missing_duplicate_or_wrong_envir
         question_fade_browser_addition(rows, readiness_scripts)
 
 
-def sidebar_controls_browser_addition(rows, readiness_scripts, *, current=False):
+def selected_client_browser_addition(rows, readiness_scripts, identity, *, current=False):
     """Validate the selected client's additive journey before freezing prior owners."""
-    script = 'tests/sidebar-controls-browser.mjs'
+    script = f'tests/{identity}-browser.mjs'
     expected = {
-        'id': 'sidebar-controls', 'command': ['node', script],
-        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/sidebar-controls'},
+        'id': identity, 'command': ['node', script],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': f'{{root}}/output/browser-checks/{identity}'},
     }
     if current:
         expected['cwd'] = '.build/web-client'
     owners = [row for row in rows
-              if row['id'] == 'sidebar-controls' or script in row['command']]
-    assert owners == [expected], 'sidebar-controls: expected one exact selected-client owner'
-    assert script not in readiness_scripts, 'sidebar-controls: duplicate readiness owner'
-    return {'sidebar-controls'}
+              if row['id'] == identity or script in row['command']]
+    assert owners == [expected], f'{identity}: expected one exact selected-client owner'
+    assert script not in readiness_scripts, f'{identity}: duplicate readiness owner'
+    return {identity}
 
 
+def sidebar_controls_browser_addition(rows, readiness_scripts, *, current=False):
+    return selected_client_browser_addition(rows, readiness_scripts, 'sidebar-controls', current=current)
+
+
+def action_spacing_browser_addition(rows, readiness_scripts, *, current=False):
+    return selected_client_browser_addition(rows, readiness_scripts, 'action-spacing', current=current)
+
+
+@pytest.mark.parametrize('identity', ['sidebar-controls', 'action-spacing'])
 @pytest.mark.parametrize('current', [False, True])
 @pytest.mark.parametrize('fault', [
     'missing', 'duplicate', 'identical-duplicate', 'renamed', 'command',
     'extra-argument', 'environment', 'wrong-artifacts', 'extra-environment',
     'cwd', 'readiness',
 ])
-def test_sidebar_controls_browser_owner_is_distinct_and_additive(current, fault):
+def test_sidebar_controls_browser_owner_is_distinct_and_additive(identity, current, fault):
     rows = (current_plan() if current else coverage_plan())['scenarios']
-    owner = next(row for row in rows if row['id'] == 'sidebar-controls')
+    owner = next(row for row in rows if row['id'] == identity)
     readiness = set()
     if fault == 'missing':
         rows.remove(owner)
     elif fault == 'duplicate':
-        rows.append({**owner, 'id': 'sidebar-controls-duplicate'})
+        rows.append({**owner, 'id': identity + '-duplicate'})
     elif fault == 'identical-duplicate':
         rows.append(json.loads(json.dumps(owner)))
     elif fault == 'renamed':
@@ -907,8 +917,8 @@ def test_sidebar_controls_browser_owner_is_distinct_and_additive(current, fault)
         owner['cwd'] = 'tests/web'
     else:
         readiness.add(owner['command'][1])
-    with pytest.raises(AssertionError, match='sidebar-controls'):
-        sidebar_controls_browser_addition(rows, readiness, current=current)
+    with pytest.raises(AssertionError, match=identity):
+        selected_client_browser_addition(rows, readiness, identity, current=current)
 
 
 def agent_navigation_browser_additions(rows, readiness_scripts, *, current=False):
@@ -1007,8 +1017,9 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     plan = coverage_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], readiness_scripts)
     sidebar_ids = sidebar_controls_browser_addition(plan['scenarios'], readiness_scripts)
+    spacing_ids = action_spacing_browser_addition(plan['scenarios'], readiness_scripts)
     extended_scripts = {row['command'][2 if row['command'][1] == '--test' else 1]
-                        for row in plan['scenarios'] if row['id'] not in navigation_ids | sidebar_ids}
+                        for row in plan['scenarios'] if row['id'] not in navigation_ids | sidebar_ids | spacing_ids}
     source_only = {f'tests/{name}-browser.mjs' for name in (
         'interim-replies', 'draft-reload', 'draft-switch', 'activity-feedback',
         'conversation-navigation', 'workspace-shortcuts', 'inline-media-transition', 'execution-observability',
@@ -3387,10 +3398,11 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     plan = current_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], set(), current=True)
     preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids]
-    assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == 147 + len(navigation_ids)
-    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 14
+    assert len(preceding) == len({row['id'] for row in preceding}) == 148
+    assert len(plan['scenarios']) == 148 + len(navigation_ids)
+    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 15
     sidebar_controls_browser_addition(plan['scenarios'], set(), current=True)
+    action_spacing_browser_addition(plan['scenarios'], set(), current=True)
     for row in plan['scenarios']:
         for part in row['command']:
             if part.endswith('.mjs'):
