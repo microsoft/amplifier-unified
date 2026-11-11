@@ -76,3 +76,203 @@ async def test_rejected_child_options_preserve_retained_history_before_effects(t
     assert runtime.inbox.empty()
     assert not children.sessions
     assert list(tmp_path.rglob('*'))==original_paths
+
+
+# Issue 1581 investigation only: characterize current behavior, not a runtime fix.
+# These are synthetic provider spies through real Core/Foundation/Children. No
+# provider SDK, credentials, model inference or tool-delegate implementation is used.
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'case,connections,requested,expected_checked,expected_error',
+    [
+        ('default-cross-provider', [('openai', None), ('anthropic', None)],
+         'anthropic', 'provider-anthropic', True),
+        ('default-same-provider', [('openai', None), ('anthropic', None)],
+         'openai', 'provider-openai', True),
+        ('exact-alias', [('openai', 'openai'), ('anthropic', 'fable')],
+         'fable', 'fable', False),
+        ('family-to-alias', [('openai', 'openai'), ('anthropic', 'fable')],
+         'anthropic', 'fable', False),
+        ('explicit-family-id', [('openai', 'openai'), ('anthropic', 'anthropic')],
+         'anthropic', 'anthropic', False),
+        ('id-only', [('openai', 'openai'), ('anthropic', 'fable')],
+         'fable', 'fable', False),
+        ('instance-only', [('openai', 'openai'), ('anthropic', 'fable')],
+         'fable', 'fable', False),
+        ('two-connections-family', [('openai', 'openai'), ('anthropic', 'anthropic'),
+                                    ('anthropic', 'fable')],
+         'anthropic', 'anthropic', False),
+        ('two-connections-alias', [('openai', 'openai'), ('anthropic', 'anthropic'),
+                                   ('anthropic', 'fable')],
+         'fable', 'fable', False),
+        ('two-aliases-family', [('openai', 'openai'), ('anthropic', 'fable'),
+                                ('anthropic', 'secondary')],
+         'anthropic', 'fable', False),
+        ('missing-selected', [('openai', 'openai'), ('anthropic', 'fable')],
+         'fable', 'fable', True),
+    ],
+)
+async def test_issue_1581_real_child_preexecution_identity(
+        tmp_path, monkeypatch, case, connections, requested, expected_checked, expected_error):
+    import copy
+    from dataclasses import dataclass
+    import importlib.util
+    import json
+    import sys
+    from types import SimpleNamespace
+    from amplifier_core import AmplifierSession
+    from amplifier_foundation.bundle import Bundle, BundleModuleResolver, PreparedBundle
+    from amplifier_module_loop_live.orchestrator import BundleLiveOrchestrator
+    from amplifier_module_loop_live.runtime import Runtime
+    from amplifier_web.host.children import install_children
+    from amplifier_web.host.model_selection import ProviderSelectionError, prepare_default_routing
+    from amplifier_web.host.session import SelectedProvider, _apply_settings
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web.provider_isolation import ProviderIsolation, require_available
+
+    # Only external provider loading is replaced. Core owns real mount keys;
+    # Foundation owns preference resolution; Unified owns availability + spawn.
+    package = tmp_path / ('amplifier_module_provider_issue1581_' + case.replace('-', '_'))
+    package.mkdir()
+    (package / '__init__.py').write_text('''
+from amplifier_core import ProviderInfo
+__amplifier_module_type__ = "provider"
+class Spy:
+    def __init__(self, config):
+        self.name = config.get("family", "metadata-only-spy")
+        self.config = dict(config)
+        self.priority = config.get("priority", 100)
+        self.default_model = config.get("default_model", "metadata-only-model")
+        self.calls = []
+    def get_info(self):
+        return ProviderInfo(id=self.name, display_name="Synthetic " + self.name,
+                            defaults={"model": self.default_model})
+    async def list_models(self):
+        return []
+    def get_config_schema(self):
+        return {"fields": []}
+    async def complete(self, request, **kwargs):
+        self.calls.append("complete")
+        raise AssertionError("No model inference is permitted")
+    def parse_tool_calls(self, response):
+        return []
+async def mount(coordinator, config=None):
+    spy = Spy(config)
+    await coordinator.mount("providers", spy, name=spy.name)
+''', encoding='utf-8')
+    paths = {
+        name: Path(importlib.util.find_spec('amplifier_module_' + name.replace('-', '_')).origin).parent
+        for name in ('loop-live', 'context-simple')
+    }
+    paths.update({'provider-openai': package, 'provider-anthropic': package})
+    rows = []
+    for index, (family, instance) in enumerate(connections):
+        row = {'module': 'provider-' + family, 'config': {
+            'family': family, 'default_model': 'parent-default-' + family, 'priority': index}}
+        if instance is not None:
+            if case != 'id-only':
+                row['instance_id'] = instance
+            if case != 'instance-only':
+                row['id'] = instance
+        rows.append(row)
+    plan = {'session': {'orchestrator': {'module': 'loop-live'},
+                        'context': {'module': 'context-simple'}}, 'providers': rows}
+    executions, creations, checks = [], [], []
+
+    class ObserveOnly(BundleLiveOrchestrator):
+        async def execute(self, prompt, context, providers, tools, hooks, coordinator):
+            selected = self._select_provider(providers)
+            underlying = getattr(selected, 'original', selected)
+            instance, = [key for key, provider in providers.items() if provider is underlying]
+            executions.append({'instance': instance, 'model': selected.default_model})
+            assert all(not provider.calls for provider in providers.values())
+            return 'selector observed; no inference'
+
+    @dataclass
+    class ObservedPrepared(PreparedBundle):
+        async def create_session(self, **kwargs):
+            creations.append(kwargs['session_id'])
+            session = await super().create_session(**kwargs)
+            assert isinstance(session, AmplifierSession)
+            await session.coordinator.mount('orchestrator', ObserveOnly({'inherit_effective_model': True}))
+            return session
+
+    bundle = Bundle.from_dict({'bundle': {'name': 'issue1581-spies'}, **plan}, base_path=tmp_path)
+    # Use the actual host's settings composition before Core mounts. In
+    # particular, legacy id-only rows are normalized here, not by the spy.
+    _apply_settings(bundle, SimpleNamespace(settings={}, providers=[], workspace=tmp_path))
+    plan = bundle.to_mount_plan()
+    prepared = ObservedPrepared(copy.deepcopy(plan), BundleModuleResolver(paths), bundle)
+    isolation = ProviderIsolation()
+
+    async def initialize(session):
+        await isolation.before_initialize(session)
+        await prepare_default_routing(session)
+
+    parent = await prepared.create_session(session_id='openai-parent', before_initialize=initialize)
+    # Child materialization reads schema separately from Core's resolver. Keep
+    # this external-provider metadata boundary on the SAME no-credential spy,
+    # never the installed OpenAI SDK or an uninstalled Anthropic package.
+    spy_class = sys.modules[package.name].Spy
+    def provider_class(module):
+        assert module in {'provider-openai', 'provider-anthropic'}
+        return spy_class
+    monkeypatch.setattr('amplifier_web.provider_environment.provider_class', provider_class)
+    coordinator = parent.coordinator
+    mounted = coordinator.get('providers')
+    assert set(mounted) == {instance or family for family, instance in connections}
+    # The root/new-chat selector uses the actual mounted connection key. Even
+    # the module-only declarations rejected by delegation are selectable here.
+    root_selectable = []
+    for instance in mounted:
+        require_available(coordinator, instance)
+        selected = SelectedProvider(mounted[instance], {'instance': instance, 'model': 'root-control'})
+        coordinator.get('orchestrator').root_provider = selected
+        assert coordinator.get('orchestrator')._select_provider(mounted) is selected
+        root_selectable.append(instance)
+    coordinator.get('orchestrator').root_provider = SelectedProvider(
+        mounted['openai'], {'instance': 'openai', 'model': 'gpt-parent', 'effort': 'high'})
+    if case == 'missing-selected':
+        await coordinator.unmount('providers', name='fable')
+        mounted = coordinator.get('providers')
+        assert 'fable' not in mounted
+    coordinator.register_capability('session.working_dir', str(tmp_path))
+    initial = copy.deepcopy(coordinator.config)
+
+    def checked(instance):
+        checks.append(instance)
+        return require_available(coordinator, instance)
+
+    coordinator.register_capability('provider.check_available', checked)
+    registry = await install_children(parent, prepared, Runtime('openai-parent'),
+                                      SessionStore(tmp_path / 'children'), None)
+    error = None
+    model = 'gpt-5.5' if requested == 'openai' else 'claude-opus-5-5'
+    try:
+        if expected_error:
+            with pytest.raises(ProviderSelectionError) as failure:
+                await registry.spawn('self', 'do not infer', parent, sub_session_id='probe-child',
+                    provider_preferences=[{'provider': requested, 'model': model}])
+            error = str(failure.value)
+            assert error == 'The selected provider instance is unavailable; select a connection explicitly.'
+            assert creations == ['openai-parent'] and not executions and not registry.rows
+        else:
+            result = await registry.spawn('self', 'do not infer', parent, sub_session_id='probe-child',
+                provider_preferences=[{'provider': requested, 'model': model}])
+            assert result['output'] == 'selector observed; no inference'
+            assert executions == [{'instance': expected_checked, 'model': model}]
+            assert creations == ['openai-parent', 'probe-child']
+        assert checks == [expected_checked]
+        assert coordinator.config == initial
+        assert coordinator.get('orchestrator').root_provider.selection == {
+            'instance': 'openai', 'model': 'gpt-parent', 'effort': 'high'}
+        assert all(not provider.calls for provider in mounted.values())
+        print('ISSUE1581 ' + json.dumps({
+            'case': case, 'connections': connections, 'requested': requested,
+            'mounted': list(mounted), 'availability_checks': checks, 'error': error,
+            'root_selectable_before_removal': root_selectable,
+            'created_sessions': creations, 'selector_executions': executions,
+            'model_inference_calls': 0, 'production_path': 'Children.spawn -> Foundation resolution -> require_available',
+        }, sort_keys=True))
+    finally:
+        await parent.cleanup()
