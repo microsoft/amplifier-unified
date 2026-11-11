@@ -62,7 +62,7 @@ def main():
             run('venv', [sys.executable, '-m', 'venv', '--system-site-packages', str(venv)], env=clean)
             python = venv / 'bin/python'
             run('install', [str(python), '-I', '-m', 'pip', 'install', '--no-index',
-                            '--no-deps', '--disable-pip-version-check', str(wheel)], cwd=temp, env=clean)
+                            '--no-deps', '--ignore-installed', '--disable-pip-version-check', str(wheel)], cwd=temp, env=clean)
             support = stage_web_test_harness(ROOT, harness, python_tests=True)
             report['harnessSupport'] = support
             origins_file = output / 'origins.json'
