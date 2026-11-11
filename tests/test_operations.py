@@ -157,13 +157,18 @@ async def test_existing_worker_receipts_project_without_duplicate_registry(app):
     assert app.operations.journal.list(sid) == []
 
 
-async def test_runtime_end_marks_only_unfinished_process_outcome_unknown(app):
+async def test_runtime_end_marks_only_unfinished_process_outcome_unknown(app, monkeypatch):
     sid = app._session()["id"]
     await app.operations.observe(sid, sid, event())
     await app.operations.observe(sid, sid, output())
     await app.operations.observe(sid, sid, final())
     await app.operations.observe(sid, sid, event("unfinished"))
-    await app.on_runtime_event("runtime.ended", {"sessionId": sid, "status": "stopped"})
+    with monkeypatch.context() as patch:
+        patch.setattr(app.runtime, "workers", {sid: {"runtimeOwnerId": "current-owner"}})
+        await app.on_runtime_event(
+            "runtime.ended",
+            {"sessionId": sid, "status": "stopped", "runtimeOwnerId": "current-owner"},
+        )
     assert app.operations.status(sid, "p1")["state"] == "completed"
     assert app.operations.status(sid, "unfinished")["state"] == "outcome_unknown"
 
