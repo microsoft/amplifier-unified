@@ -1330,7 +1330,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             native_guard.check()
             if held is not None:
                 held.check()
-        async def checkpoint(status="in_progress", *, timing=None, transcript_required=True):
+        async def checkpoint(status="in_progress", *, timing=None, transcript_required=True,
+                             capture_messages=True):
             nonlocal published_anchors
             if write_guard:
                 write_guard()
@@ -1347,26 +1348,46 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                     held.check()
                 return
             if timing:timing.mark('context.start')
-            transcript = await coordinator.get("context").get_messages()
-            if timing:timing.mark('context.end')
-            held = shared_handle_getter() if shared_handle_getter else shared_handle
-            native_guard.check()
-            if held is not None:
-                # Cross-host ownership remains Foundation's responsibility;
-                # native transcript/metadata are the only newly written history.
-                held.check()
-            if timing:timing.mark('store.start')
-            canonical = store.save(runtime.session_id, transcript, {**metadata, "status": status,
-                "last_updated": datetime.now(UTC).isoformat(),
-                "turn_count": sum(row.get("role") == "user" for row in transcript)})
-            if timing:timing.mark('store.end')
-            native_guard.saved()
-            if continuity:
-                if timing:timing.mark('continuity.start')
-                continuity.save()
-                if timing:timing.mark('continuity.end')
-            from ..collaboration_input import checkpoint_anchors
-            anchors = checkpoint_anchors(canonical, runtime)
+            canonical, anchors = None, None
+            def persist(transcript):
+                nonlocal canonical, anchors
+                if timing:timing.mark('context.end')
+                held = shared_handle_getter() if shared_handle_getter else shared_handle
+                native_guard.check()
+                if held is not None:
+                    # Cross-host ownership remains Foundation's responsibility;
+                    # native transcript/metadata are the only newly written history.
+                    held.check()
+                if timing:timing.mark('store.start')
+                saved_rows = store.save(runtime.session_id, transcript, {**metadata, "status": status,
+                    "last_updated": datetime.now(UTC).isoformat(),
+                    "turn_count": sum(row.get("role") == "user" for row in transcript)})
+                if timing:timing.mark('store.end')
+                native_guard.saved()
+                if continuity:
+                    if timing:timing.mark('continuity.start')
+                    continuity.save()
+                    if timing:timing.mark('continuity.end')
+                from ..collaboration_input import checkpoint_anchors
+                anchors = checkpoint_anchors(saved_rows, runtime)
+                if capture_messages:
+                    canonical = saved_rows
+
+            # Startup and automatic hooks discard the returned history. Let its
+            # owner lend rows only for the synchronous save/anchor calculation;
+            # no transcript reference escapes into the notification await below.
+            visit = coordinator.get_capability("context.history.visit") if not capture_messages else None
+            if callable(visit):
+                result = visit(persist)
+                if inspect.isawaitable(result):
+                    if inspect.iscoroutine(result):
+                        result.close()
+                    raise RuntimeError("Context history visitation must be synchronous")
+                del result
+                if anchors is None:
+                    raise RuntimeError("Context history visitor did not provide history")
+            else:
+                persist(await coordinator.get("context").get_messages())
             if anchors and anchors != published_anchors:
                 # Transcript persistence above is unconditional. This bounded
                 # notification carries message/generation identity, not a save
@@ -1379,12 +1400,12 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         from ..context_continuity import install as install_continuity
         continuity = install_continuity(coordinator, runtime.session_id, edited_path.parent,
                                        checkpoint, writer_guard=recovery_write_guard)
-        install_checkpoint_hooks(coordinator, runtime, checkpoint)
+        install_checkpoint_hooks(coordinator, runtime, partial(checkpoint, capture_messages=False))
         async def cleanup_jobs():
             jobs.close()
         coordinator.register_cleanup(cleanup_jobs)
         with startup_timing.phase('manager.checkpoint'):
-            await checkpoint()
+            await checkpoint(capture_messages=False)
         failures = getattr(loop, "load_failures", [])
         fatal_failures = [row for row in failures if not isolation or row.get("type") != "provider"]
         if fatal_failures:

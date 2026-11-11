@@ -143,7 +143,76 @@ async def test_checkpoints_persist_tools_without_republishing_unchanged_message_
     assert h.runtime.emit.await_count == 4
 
 
-async def test_checkpoint_hook_timing_retains_recovery_writer_guard(mounted_host, monkeypatch):
+async def test_discarded_checkpoint_history_stays_inside_synchronous_visit(mounted_host):
+    h = mounted_host
+    h.runtime.generation = {'id': 'generation-one', 'input_ids': ['input-one']}
+    borrowing = False
+    visits = []
+    def visit(consumer):
+        nonlocal borrowing
+        borrowing = True
+        visits.append(len(h.context.messages))
+        try:
+            assert consumer(h.context.messages) is None
+        finally:
+            borrowing = False
+    h.capabilities['context.history.visit'] = visit
+    h.context.get_messages = AsyncMock(wraps=h.context.get_messages)
+    async def emit(*args, **kwargs):
+        assert not borrowing  # No borrowed transcript survives a possible yield.
+        assert all(set(row) == {'messageId', 'nativeIndex', 'generationId'}
+                   for row in kwargs['messageAnchors'])
+        await asyncio.sleep(0)
+    h.runtime.emit = AsyncMock(side_effect=emit)
+    rows = [
+        {'role': 'user', 'content': 'Input', 'metadata': {'amplifier_input': {'id': 'input-one'}}},
+        {'role': 'assistant', 'content': 'Response', 'metadata': {'nested': ['original']}},
+    ]
+    await h.prepare(snapshot(rows))
+    h.context.get_messages.assert_not_awaited()
+    assert visits == [2]
+    before = h.path.read_bytes()
+    h.context.messages[-1]['metadata']['nested'][0] = 'later edit'
+    assert h.path.read_bytes() == before
+    hook = next(call.args[1] for call in h.session.coordinator.hooks.register.call_args_list
+                if call.kwargs.get('name') == 'unified-checkpoint-tool:post')
+    await hook('tool:post', {'session_id': h.runtime.session_id})
+    h.context.get_messages.assert_not_awaited()
+    assert visits == [2, 2]
+    assert json.loads(h.path.read_text().splitlines()[-1])['metadata']['nested'] == ['later edit']
+    returned = await h.capabilities['live.checkpoint']()
+    h.context.get_messages.assert_awaited_once()
+    assert visits == [2, 2]  # Ordinary/full-result callers still get detached rows.
+    returned[-1]['metadata']['nested'][0] = 'caller edit'
+    assert h.context.messages[-1]['metadata']['nested'] == ['later edit']
+
+
+@pytest.mark.parametrize('fault', ['async-visitor', 'async-result', 'no-visit'])
+async def test_invalid_history_visitor_never_retries_through_a_snapshot(mounted_host, fault):
+    h = mounted_host
+    await h.prepare(snapshot([{'role': 'user', 'content': 'preserved'}]))
+    h.context.get_messages = AsyncMock(wraps=h.context.get_messages)
+    before = h.path.read_bytes()
+    entered = []
+    async def later():
+        entered.append('awaited')
+    async def async_visit(consumer):
+        entered.append('awaited')
+        consumer(h.context.messages)
+    def visit(consumer):
+        if fault == 'async-result':
+            consumer(h.context.messages)
+            return later()
+    h.capabilities['context.history.visit'] = async_visit if fault == 'async-visitor' else visit
+    with pytest.raises(RuntimeError, match='synchronous|did not provide'):
+        await h.capabilities['live.checkpoint'](capture_messages=False)
+    assert entered == []
+    assert h.path.read_bytes() == before
+    h.context.get_messages.assert_not_awaited()
+
+
+@pytest.mark.parametrize('visit_history', [False, True])
+async def test_checkpoint_hook_timing_retains_recovery_writer_guard(mounted_host, monkeypatch, visit_history):
     from amplifier_web import performance_diagnostics
     h = mounted_host
     writer = Mock()
@@ -151,6 +220,8 @@ async def test_checkpoint_hook_timing_retains_recovery_writer_guard(mounted_host
     h.runtime.generation = {'id': 'timed-generation'}
     monkeypatch.setattr(performance_diagnostics, 'TIMING_ENABLED', True)
     h.capabilities['web.performance.emit'] = emit
+    if visit_history:
+        h.capabilities['context.history.visit'] = lambda consumer: consumer(h.context.messages)
     await h.prepare(write_guard=writer)
     adapter = h.capabilities['web.continuity.recovery']
     writer.reset_mock()
@@ -174,8 +245,10 @@ async def test_checkpoint_hook_timing_retains_recovery_writer_guard(mounted_host
 
 
 @pytest.mark.parametrize('failure', [RuntimeError('pipe failed'), asyncio.CancelledError()])
-async def test_failed_anchor_notification_is_retried_on_next_checkpoint(mounted_host, failure):
+@pytest.mark.parametrize('capture_messages', [True, False])
+async def test_failed_anchor_notification_is_retried_on_next_checkpoint(mounted_host, failure, capture_messages):
     h = mounted_host
+    h.capabilities['context.history.visit'] = lambda consumer: consumer(h.context.messages)
     await h.prepare()
     h.runtime.generation = {'id': 'generation-one', 'input_ids': ['input-one']}
     async def emit(*args, **kwargs):
@@ -189,11 +262,11 @@ async def test_failed_anchor_notification_is_retried_on_next_checkpoint(mounted_
     ]
     checkpoint = h.capabilities['live.checkpoint']
     with pytest.raises(type(failure)):
-        await checkpoint()
+        await checkpoint(capture_messages=capture_messages)
     assert 'Saved response.' in h.path.read_text()
-    await checkpoint()
+    await checkpoint(capture_messages=capture_messages)
     assert h.runtime.emit.await_count == 2
-    await checkpoint()
+    await checkpoint(capture_messages=capture_messages)
     assert h.runtime.emit.await_count == 2
 
 
@@ -456,9 +529,11 @@ async def test_preparing_saved_chat_does_not_change_recency_until_actual_context
 
 
 @pytest.mark.parametrize("mutation", ["append", "delete", "replace", "symlink"])
-async def test_out_of_band_native_change_blocks_later_checkpoint(mounted_host, mutation):
+@pytest.mark.parametrize('capture_messages', [True, False])
+async def test_out_of_band_native_change_blocks_later_checkpoint(mounted_host, mutation, capture_messages):
     from amplifier_foundation.session.transcript_guard import NativeTranscriptConflict
     h = mounted_host
+    h.capabilities['context.history.visit'] = lambda consumer: consumer(h.context.messages)
     rows = [{"role": "user", "content": "first"}]
     h.store.save("native-root", rows, {})
     await h.prepare(snapshot(rows))
@@ -481,7 +556,7 @@ async def test_out_of_band_native_change_blocks_later_checkpoint(mounted_host, m
     native_after = h.path.read_bytes() if h.path.exists() else None
     h.context.messages.append({"role": "assistant", "content": "stale in-memory answer"})
     with pytest.raises(NativeTranscriptConflict):
-        await h.capabilities["live.checkpoint"]("completed")
+        await h.capabilities["live.checkpoint"]("completed", capture_messages=capture_messages)
     assert (h.path.read_bytes() if h.path.exists() else None) == native_after
     assert not h.checkpoint.exists()
     assert (h.path.parent / "metadata.json").read_bytes() == original_metadata

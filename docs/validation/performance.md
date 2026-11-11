@@ -52,6 +52,15 @@ only the rows it changes. Keep ownership through the call, and verify that later
 in-place nested edits are persisted and the earlier disk checkpoint stays intact.
 Borrowed return values are not detached snapshots or reusable cache entries.
 
+Startup and automatic root checkpoint hooks discard their transcript result. A
+context may offer `context.history.visit` to lend its current rows to the existing
+synchronous writer and anchor calculation. That borrow ends before notification
+awaits; only owned scalar anchors escape. Ordinary `live.checkpoint` callers keep
+the detached full-history result, and contexts without the optional visitor use
+their existing detached getter. Keep writer checks, continuity persistence,
+nested-edit detection and failed/cancelled anchor retries on both paths. Reject an
+asynchronous visitor without falling back after it may already have saved.
+
 ## Separate current presentation from historical evidence
 
 Routine state carries the current fields its consumers need. Historical bodies
