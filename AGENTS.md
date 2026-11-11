@@ -7,6 +7,33 @@ contracts and tests. Ordinary `rg` does not apply these context classifications;
 use the map's selective-search examples, and expand to retained evidence or
 generated output when the task needs it.
 
+## Web client: temporary two-repository maintenance
+
+Author browser source, client tests and client build tools in
+[`amplifier-client-web`](https://github.com/microsoft/amplifier-client-web), the
+sole client authoring owner. It remains private; do not change its visibility.
+Until an approved repository-delivery cutover, every client change intended for
+Unified must also reach the committed `components/web-client` delivery copy.
+Follow [component ownership and assembly](components/README.md#refresh-and-retire-the-copy):
+port any copied-tree change upstream first, then refresh the whole selected
+snapshot and `web-client.source.json` together, preserving later accepted changes.
+
+A client-only PR merge is not a delivered Unified change. Carry both repositories
+through, or name the integration owner and hand off exact client and Unified
+PRs/revisions with remaining work explicitly pending. Coordinate with that owner;
+do not duplicate ports or build campaigns. Report source acceptance, copy selection,
+build/paired qualification and release separately. Public visibility alone does
+not end this obligation: the approved cutover must retire the copy and this guidance.
+
+Neither disposable `.build/web-client` nor generated `amplifier_web/static/` is
+another authoring owner. Unified owns the assembler in `scripts/` and
+host/browser/producer checks in [`tests/web`](tests/web/README.md), with a separate
+test dependency lock; do not recreate a frontend wrapper package, generated source
+view or duplicate client tests.
+The normal build replaces static output from the selected client. Verify
+source/artifact provenance and served routes after rebuilding; a source-only
+login check does not prove packaged browser entry.
+
 ## Assess scope and design before taking on issues or PRs
 
 User direction, October 13, 2026: an issue or PR is a proposal, not an automatic
@@ -123,18 +150,6 @@ must not hide import dependencies in this standard-library check. A cancelled
 Windows stdin read stops delivery; its daemon thread/descriptor may remain until
 EOF or worker-process exit. Do not join it or close its buffered stream from the
 event loop.
-
-Author browser source, client tests and client build tools in
-[`amplifier-client-web`](https://github.com/microsoft/amplifier-client-web).
-Follow [component ownership and assembly](components/README.md) to refresh its
-selected delivery copy and prepare disposable `.build/web-client`. Neither that
-prepared directory nor `components/web-client` is another authoring owner.
-Unified owns the assembler in `scripts/` and host/browser/producer checks in
-[`tests/web`](tests/web/README.md), with a separate test dependency lock. Do not
-recreate a frontend wrapper package, generated source view or duplicate client tests.
-The normal build replaces generated `amplifier_web/static/` from the selected
-client. Verify source/artifact provenance and served routes after rebuilding;
-a source-only login check does not prove packaged browser entry.
 
 The foreground owner-browser reader uses the existing-only native private
 credential boundary after qualified cold startup. Qualify the exact installed

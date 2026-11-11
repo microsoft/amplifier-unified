@@ -14,7 +14,7 @@ import re
 import tomllib
 
 VERSION = 1
-SELECTION_VERSION = 4
+SELECTION_VERSION = 5
 RECEIPT = 'runtime-policy-reconciliation.json'
 
 
@@ -154,7 +154,7 @@ class Collector:
             data = json.loads(path.read_text())
             bindings.setdefault((source_key(data['git_url'], 'HEAD')[0], data['commit']), set()).add(data['ref'])
         inspected, packages, constraints, manifests = {}, {}, {}, {}
-        constraint_origins, runtime_siblings = {}, {}
+        constraint_origins, constraint_inputs, runtime_siblings = {}, {}, {}
         for name, source in sorted(batch.names.items()):
             name, source = package_name(name), Path(source)
             package = {'status': 'unresolved'}
@@ -197,21 +197,7 @@ class Collector:
             content = manifest.read_bytes()
             if package_name(tomllib.loads(content.decode()).get('project', {}).get('name', '')) != name:
                 raise ValueError('A selected source changed its package identity.')
-            sibling_dev = selected_sibling_dev_sources(content, source, root, batch.names)
-            sibling_runtime = selected_runtime_sibling_sources(content, source, root, data, batch.names)
-            runtime_siblings[name] = sibling_runtime
-            from .runtime_source_policy import constraint_declarations
-            for dependency, declarations in constraint_declarations(
-                    content, prepared_local_sources=sibling_runtime, runtime_batch=True).items():
-                if dependency in sibling_dev:
-                    continue  # --no-sources does not activate this selected sibling's dev edge.
-                constraints.setdefault(dependency, []).extend(declarations)
-                constraint_origins.setdefault(dependency, []).append({
-                    'package': name, 'url': data['git_url'], 'revision': data['commit'],
-                    'subdirectory': '' if source == root else source.relative_to(root).as_posix(),
-                    'manifestSha256': hashlib.sha256(content).hexdigest(),
-                    'declarations': declarations,
-                })
+            constraint_inputs[name] = content, source, root, data
             if any((path / 'uv.toml').exists() or (path / 'uv.toml').is_symlink() for path in (root, source)):
                 package['status'] = 'separate-resolver-config'
                 continue
@@ -240,6 +226,26 @@ class Collector:
             # A verified pinned root still constrains its reachable dependencies.
             # Its own explicit-pin status remains ineligible for moving recovery.
             manifests[name] = content
+        # A shared object's marker records immutable bytes, not its selected ref.
+        # Prove all actual batch identities/bindings before interpreting redundant
+        # sibling development mappings; the mappings cannot supply that authority.
+        from .runtime_source_policy import constraint_declarations
+        for name, (content, source, root, data) in constraint_inputs.items():
+            sibling_dev = selected_sibling_dev_sources(content, source, root, batch.names)
+            sibling_runtime = selected_runtime_sibling_sources(
+                content, source, root, packages[name], batch.names, packages)
+            runtime_siblings[name] = sibling_runtime
+            for dependency, declarations in constraint_declarations(
+                    content, prepared_local_sources=sibling_runtime, runtime_batch=True).items():
+                if dependency in sibling_dev:
+                    continue  # --no-sources does not activate this selected sibling's dev edge.
+                constraints.setdefault(dependency, []).extend(declarations)
+                constraint_origins.setdefault(dependency, []).append({
+                    'package': name, 'url': data['git_url'], 'revision': data['commit'],
+                    'subdirectory': '' if source == root else source.relative_to(root).as_posix(),
+                    'manifestSha256': hashlib.sha256(content).hexdigest(),
+                    'declarations': declarations,
+                })
         for name, package in packages.items():
             if package.get('status') not in {'selected', 'explicit-pin'} or name not in constraints:
                 continue
@@ -384,7 +390,7 @@ def selected_sibling_dev_sources(content, source, root, selected):
     return result
 
 
-def selected_runtime_sibling_sources(content, source, root, metadata, selected):
+def selected_runtime_sibling_sources(content, source, root, identity, selected, packages):
     """Prove a local uv development mapping denotes the declared Git sibling.
 
     Runtime and optional direct Git requirements remain restrictions. Only the
@@ -396,6 +402,8 @@ def selected_runtime_sibling_sources(content, source, root, metadata, selected):
     from .runtime_environment import package_name
     from .selected_runtime_dependencies import git_source
     from .updates import pinned, source_key
+    if identity.get('status') != 'selected':
+        return set()
     data = tomllib.loads(content.decode())
     project = data.get('project', {})
     if project.get('dynamic'):
@@ -420,6 +428,10 @@ def selected_runtime_sibling_sources(content, source, root, metadata, selected):
                 or set(entry) - {'path', 'editable'} or not isinstance(entry.get('editable', False), bool)
                 or not isinstance(entry.get('path'), str) or Path(entry['path']).is_absolute()):
             continue
+        target_identity = packages.get(name)
+        if target_identity is not None and (target_identity.get('status') != 'selected'
+                or any(target_identity.get(key) != identity.get(key) for key in ('url', 'ref', 'revision'))):
+            continue
         target = (source / entry['path']).resolve()
         target_root = next((path for path in (target, *target.parents) if (path / '.git').exists()), None)
         if ((name in selected and target != Path(selected[name]).resolve()) or target_root != root
@@ -437,7 +449,7 @@ def selected_runtime_sibling_sources(content, source, root, metadata, selected):
             declared = git_source(requirement.url)
             if (not declared or requirement.marker or requirement.extras or pinned(declared['ref'])
                     or source_key(declared['url'], declared['ref']) !=
-                       source_key(metadata['git_url'], metadata.get('ref') or 'HEAD')
+                       source_key(identity['url'], identity['ref'])
                     or declared['subdirectory'] != subdir):
                 valid = False
         if valid:

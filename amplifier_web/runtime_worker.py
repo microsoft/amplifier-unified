@@ -1381,7 +1381,10 @@ class Worker:
         if not task.cancelled():
             error = task.exception()
             if error:
-                publish({"type": "runtime.error", "error": f"{type(error).__name__}: {error}. Work was not replayed.", "errorType": type(error).__name__})
+                from amplifier_web.worker_diagnostics import command_failure_facts
+                publish({"type": "runtime.error", "error": f"{type(error).__name__}: {error}. Work was not replayed.",
+                         "errorType": type(error).__name__, "failureSource": "execution",
+                         "failureFacts": command_failure_facts(error)})
         self.shutdown.set()
 
     async def command(self, data):
@@ -1867,7 +1870,9 @@ class Worker:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            publish({'type':'runtime.error','error':f'Amplifier worker communication failed ({type(exc).__name__}). A message could not be read; work was not replayed.'})
+            from amplifier_web.worker_diagnostics import command_failure_facts
+            publish({'type':'runtime.error','error':f'Amplifier worker communication failed ({type(exc).__name__}). A message could not be read; work was not replayed.',
+                     'failureSource': 'stdin', 'failureFacts': command_failure_facts(exc)})
         finally:
             if threaded_reader is not None:
                 threaded_reader.close()

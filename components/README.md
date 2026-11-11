@@ -2,11 +2,13 @@
 
 The [Amplifier web client](https://github.com/microsoft/amplifier-client-web) owns
 browser source, client tests, production dependencies and its build tools.
-While that repository awaits public availability, [`web-client/`](web-client/)
-supplies its selected source here. [`web-client.source.json`](web-client.source.json)
-selects the canonical commit, source digest and delivery location. Author changes
-in the client repository and refresh the whole snapshot; this copy is not a second
-place to develop the client.
+That repository is currently private; this is not permission to make it public.
+Until an approved repository-delivery cutover, **client changes intended for
+Unified must be maintained in both repositories**: author in the client repository,
+then refresh the committed [`web-client/`](web-client/) delivery copy here.
+[`web-client.source.json`](web-client.source.json) selects the canonical commit,
+source digest and delivery location. This is one authoring owner and one required
+selected delivery copy, not two places to develop the client.
 
 Until the client repository is public and its review is complete, release
 acceptance verifies that the canonical selected commit and this entire copy stay
@@ -96,19 +98,48 @@ record are replaced.
 
 ## Refresh and retire the copy
 
-From the clean selected client commit, run
-`node scripts/client-source.mjs record /tmp/client-source.json`, then export its
-tracked tree with `git archive HEAD`. Replace only `components/web-client/` and
-update its source record together, retaining
-`delivery: {"type":"directory","path":"components/web-client"}`. Review upstream
-changes and qualify affected build and peer behavior. Shared catalogs, SDK and
-normative contracts retain their existing owners. No wrapper package or lock is
-generated in Unified.
+A client-only PR merge is source acceptance, **not delivery in Unified**. The
+responsible owner must carry both locations through this workflow or make an
+explicit handoff to a named integration owner with exact client and Unified
+PRs/revisions and remaining work marked pending. Coordinate with the current
+integration owner rather than duplicating a port or build campaign.
+A canonical-only or copy-only change is not release-ready; a named handoff leaves
+integration pending, not waived.
 
-When repository access is available, change delivery to `{"type":"repository"}`
-and remove the copied tree in the same review. Preparation fetches the exact
-commit through Unified's repository-access policy. Client verification, artifact
-format and runtime do not change with delivery mode.
+1. Commit changes in the canonical client first. If work began in Unified's
+   copied tree or disposable prepared source, port it upstream before refreshing.
+   Review the selected revision against the current client and Unified selections;
+   preserve other writers' work and later accepted changes, not just the feature.
+   Pin the exact reviewed and accepted canonical commit, not latest `main` or a
+   merge commit unless that complete tree is accepted.
+2. From the clean selected client commit, run
+   `node scripts/client-source.mjs record /tmp/client-source.json`, then export its
+   whole tracked tree with `git archive HEAD`. Replace only `components/web-client/`
+   and update `components/web-client.source.json` together, retaining
+   `delivery: {"type":"directory","path":"components/web-client"}`. Do not cherry-pick
+   files into the copy or roll selection back to an older feature-only snapshot.
+   Compare the complete tracked tree (file contents and modes) with that exact
+   commit as well as the selection revision and digest; a bounded production-input
+   digest alone does not establish whole-tree equality.
+3. Use the existing [prepare, test and build workflow](#prepare-test-and-build)
+   and [release policy](../docs/validation/release-qualification.md) for affected
+   checks and build ownership. Preparation verifies the exact selection; build
+   and `verify` check artifact provenance. Neither `.build/web-client` nor
+   `amplifier_web/static` is an alternative source owner.
+4. Record exact client and Unified PRs/commits, selected source revision, affected
+   checks and any pending integration. Distinguish source acceptance, committed
+   copy selection, build/paired qualification and Unified release; do not report
+   an end-to-end change complete while an intended delivery stage remains pending.
+
+Shared catalogs, SDK and normative contracts retain their existing owners. No
+wrapper package, lock or duplicate client tests are generated in Unified.
+
+Public visibility alone does not retire this obligation. Only an approved
+public/repository-delivery cutover may change delivery to `{"type":"repository"}`;
+remove the copied tree and update this guide and agent guidance in the same review.
+Preparation then fetches the exact commit through Unified's repository-access
+policy. Client verification, artifact format and runtime do not change with
+delivery mode.
 
 The copied tree is opt-in source-review context and excluded from Unified's
 Python source distribution. Inspect selected source with

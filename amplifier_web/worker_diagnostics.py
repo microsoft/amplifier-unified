@@ -173,7 +173,7 @@ _READER_FRAME_SOURCES = (
     ('amplifier_web.host.storage', 'SessionStore', '_atomic', 'storage.atomic'),
     ('amplifier_web.naming', None, 'persist', 'storage.naming'),
 )
-_COMMAND_FRAME_LABELS = frozenset({'worker.command', 'worker.command_serial',
+_COMMAND_FRAME_LABELS = frozenset({'worker.command', 'worker.command_serial', 'worker.stdin',
                                  *(label for _, _, _, label in _READER_FRAME_SOURCES)})
 _COMMAND_MAX_ERRORS = 4
 _COMMAND_MAX_FRAMES = 5
@@ -203,7 +203,7 @@ def _command_frame_codes():
             continue
         methods = vars(worker)
         for method, label in (('command', 'worker.command'),
-                              ('_command_serial', 'worker.command_serial')):
+                              ('_command_serial', 'worker.command_serial'), ('read', 'worker.stdin')):
             function = methods.get(method)
             if type(function) is types.FunctionType:
                 codes.append((function.__code__, label))
@@ -371,7 +371,8 @@ def _validated_reader(value):
 def validate_runtime_failure_witness(value):
     """Copy a closed causal envelope; reader facts do not prove input outcomes."""
     try:
-        if not _command_keys(value, ('schema', 'origin', 'factsStatus', 'errors', 'truncated'), ('reader',)):
+        if not _command_keys(value, ('schema', 'origin', 'factsStatus', 'errors', 'truncated'),
+                             ('reader', 'workerFailure')):
             return None
         if type(value['schema']) is not int or value['schema'] != 1:
             return None
@@ -387,7 +388,7 @@ def validate_runtime_failure_witness(value):
             reader = _validated_reader(value.get('reader'))
             if reader is None or status != ('not_applicable' if reader['reason'] == 'eof' else 'valid'):
                 return None
-        elif 'reader' in value:
+        elif 'reader' in value or 'workerFailure' in value:
             return None
         facts = validate_command_failure_facts({'errors': value['errors'], 'truncated': value['truncated']})
         if facts is None or status != 'valid' and (facts['errors'] or facts['truncated']):
@@ -395,6 +396,18 @@ def validate_runtime_failure_witness(value):
         result = {'schema': 1, 'origin': origin, 'factsStatus': status, **facts}
         if reader is not None:
             result['reader'] = reader
+        if 'workerFailure' in value:
+            worker = value['workerFailure']
+            if not _command_keys(worker, ('source', 'factsStatus', 'errors', 'truncated')):
+                return None
+            source, status = worker['source'], worker['factsStatus']
+            if (type(source) is not str or source not in ('execution', 'stdin', 'other')
+                    or type(status) is not str or status not in ('valid', 'invalid', 'missing')):
+                return None
+            facts = validate_command_failure_facts({'errors': worker['errors'], 'truncated': worker['truncated']})
+            if facts is None or status != 'valid' and (facts['errors'] or facts['truncated']):
+                return None
+            result['workerFailure'] = {'source': source, 'factsStatus': status, **facts}
         return result if len(json.dumps(result).encode('utf-8')) <= _COMMAND_MAX_BYTES else None
     except BaseException:
         return None

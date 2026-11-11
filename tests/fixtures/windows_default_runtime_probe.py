@@ -222,17 +222,17 @@ def checkpoint(report, name):
     report["diagnostic"] = {"checkpoint": name, "errors": []}
 
 
-def failure_facts(error, name):
+def failure_facts(error, name, *, stop_at=None):
     """Fixed labels only; no exception text, filenames, symbols or frame locals."""
     try:
-        return _failure_facts(error, name)
+        return _failure_facts(error, name, stop_at=stop_at)
     except BaseException:
         # A diagnostic fault cannot skip the caller's retained cleanup/report.
         # Original outcome remains FAIL; an unknown class is not a cause claim.
         return {"checkpoint": name, "errors": [{"class": "other", "frames": []}]}
 
 
-def _failure_facts(error, name):
+def _failure_facts(error, name, *, stop_at=None):
     assert name in CHECKPOINTS
     witness = None
     if name == "input_admission" and type(error) is RuntimeError:
@@ -249,7 +249,8 @@ def _failure_facts(error, name):
             # an equal-but-distinct clone cannot claim its diagnostic label.
             codes[id(code)] = (code, label)
     rows, seen = [], set()
-    while isinstance(error, BaseException) and id(error) not in seen and len(rows) < 4:
+    while (isinstance(error, BaseException) and error is not stop_at
+           and id(error) not in seen and len(rows) < 4):
         seen.add(id(error))
         kind = type(error)
         row = {"class": ERROR_CLASSES.get(kind, "other"), "frames": []}
@@ -1529,6 +1530,10 @@ def native_metadata_controls(root, result):
     ALSO produce Win5. These controls distinguish mechanisms, not the unknown
     historical holder. No production file or ACL is changed.
     """
+    # A journey failure can still be active in finally. It is not part of a
+    # fresh control's local chain; stop at that exact object without mutating it
+    # or suppressing any genuine local cause/context.
+    ambient_error = sys.exception()
     from amplifier_foundation.session.metadata import SessionMetadataStore
     from amplifier_web.windows_files import directory
     for label in ("ordinary-held", "released", "readonly"):
@@ -1552,7 +1557,7 @@ def native_metadata_controls(root, result):
                 with observation:
                     store.set_name("CONTROL replacement", source="manual")
             except OSError as error:
-                failure = failure_facts(error, "metadata_control")
+                failure = failure_facts(error, "metadata_control", stop_at=ambient_error)
             assert observation.facts["status"] == "observed"
             primary = observation.facts["primary"]
             assert primary["temporaryClosed"]
@@ -1734,7 +1739,8 @@ async def journey(root, wheel, report):
             try:
                 native_metadata_controls(root / "metadata-controls", report["metadataObservation"]["controls"])
             except Exception as error:
-                report["metadataObservation"]["controlsFailure"] = failure_facts(error, "metadata_control")
+                report["metadataObservation"]["controlsFailure"] = failure_facts(
+                    error, "metadata_control", stop_at=primary_error)
                 if primary_error is None:
                     checkpoint(report, "metadata_control")
                     raise

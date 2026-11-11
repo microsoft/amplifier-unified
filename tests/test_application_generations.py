@@ -68,6 +68,50 @@ def test_changed_qualification_receipt_is_not_a_launch_target(qualified):
         generations.active(home)
 
 
+@pytest.mark.parametrize('previous_exists', [False, True])
+def test_restore_exact_promoted_target_preserves_previous_chain(qualified, previous_exists):
+    home, bootstrap, _, original, _ = qualified
+    previous = original if previous_exists else None
+    if not previous_exists:
+        (home / 'updates/application-active.json').unlink()
+    receipt = json.loads((original['folder'] / 'validated.json').read_text())
+    receipt['generation'] = 'c' * 32
+    folder = generations.directory(home, receipt['revision'], receipt['generation'])
+    folder.mkdir(parents=True)
+    (folder / 'validated.json').write_text(json.dumps(receipt))
+    promoted = generations.promote(home, receipt, bootstrap)
+    generations.restore(home, promoted, previous, bootstrap, expected_bootstrap=promoted['bootstrap'])
+    assert generations.active(home) == previous
+    assert (folder / 'validated.json').is_file()
+
+
+def test_restore_cannot_overwrite_later_promoted_generation(qualified):
+    home, bootstrap, _, previous, _ = qualified
+    receipt = json.loads((previous['folder'] / 'validated.json').read_text())
+    targets = []
+    for character in ('c', 'd'):
+        receipt['generation'] = character * 32
+        folder = generations.directory(home, receipt['revision'], receipt['generation'])
+        folder.mkdir(parents=True)
+        (folder / 'validated.json').write_text(json.dumps(receipt))
+        targets.append(generations.promote(home, receipt, bootstrap))
+    with pytest.raises(ValueError, match='changed'):
+        generations.restore(home, targets[0], previous, bootstrap, expected_bootstrap=targets[0]['bootstrap'])
+    assert generations.active(home) == targets[1]
+
+
+def test_pointer_writers_share_a_nonblocking_lock(qualified):
+    from filelock import Timeout
+    home, bootstrap, _, previous, _ = qualified
+    receipt = json.loads((previous['folder'] / 'validated.json').read_text())
+    with generations._pointer_lock(home):
+        with pytest.raises(Timeout):
+            generations.promote(home, receipt, bootstrap)
+        with pytest.raises(Timeout):
+            generations.restore(home, previous, None, bootstrap, expected_bootstrap=previous['bootstrap'])
+    assert generations.active(home) == previous
+
+
 def isolated_launchers(tmp_path, archive=False):
     import os
     import shutil
@@ -125,6 +169,29 @@ def test_bootstrap_execs_qualified_interpreter_in_real_isolated_environments(tmp
     result = subprocess.check_output([str(python), '-I', '-m', 'amplifier_web', *arguments], env=environment, text=True)
     actual = json.loads(result)
     assert Path(actual['prefix']).resolve() == candidate.resolve()
+    assert actual['args'] == arguments
+
+
+@pytest.mark.parametrize('previous_exists', [False, True])
+def test_restored_bootstrap_executes_previous_real_isolated_interpreter(tmp_path, previous_exists):
+    import os
+    import subprocess
+
+    home, bootstrap, candidate, receipt = isolated_launchers(tmp_path, archive=True)
+    previous = generations.promote(home, receipt, bootstrap) if previous_exists else None
+    newer = {**receipt, 'generation': 'e' * 32}
+    folder = generations.directory(home, newer['revision'], newer['generation'])
+    folder.mkdir(parents=True)
+    (folder / 'validated.json').write_text(json.dumps(newer))
+    promoted = generations.promote(home, newer, bootstrap)
+    generations.restore(home, promoted, previous, bootstrap, expected_bootstrap=promoted['bootstrap'])
+    python = bootstrap / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+    arguments = ['--data-dir', str(home), '--port', '8999']
+    environment = {name: os.environ[name] for name in ('PATH', 'SystemRoot') if name in os.environ}
+    environment['AMPLIFIER_WEB_HOME'] = str(home)
+    actual = json.loads(subprocess.check_output(
+        [str(python), '-I', '-m', 'amplifier_web', *arguments], env=environment, text=True))
+    assert Path(actual['prefix']).resolve() == (candidate if previous_exists else bootstrap).resolve()
     assert actual['args'] == arguments
 
 

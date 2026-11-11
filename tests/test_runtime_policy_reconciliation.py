@@ -346,7 +346,27 @@ async def test_runtime_sibling_mapping_does_not_waive_source_choices(selected, m
         assert None in report['runtimeRequirements'][NAME]['constraints']['fixture-dependency']
 
 
-async def runtime_sibling_report(s, monkeypatch, *, module_root=False, editable=None, case='valid'):
+@pytest.mark.parametrize('module_root', [False, True])
+@pytest.mark.parametrize('editable', [None, False, True])
+@pytest.mark.parametrize('binding', ['valid', 'missing', 'wrong-ref', 'wrong-commit'])
+async def test_shared_runtime_sibling_uses_requiring_source_binding_not_cache_ref(
+        selected, monkeypatch, module_root, editable, binding):
+    report = await runtime_sibling_report(selected, monkeypatch, module_root=module_root,
+        editable=editable, binding=binding)
+    package = report['packages'].get('fixture-dependency', {})
+    if binding == 'valid':
+        assert report['packages'][NAME]['status'] == package['status'] == 'selected'
+        assert package['ref'] == 'main'
+        assert report['runtimeRequirements'][NAME]['constraints']['fixture-dependency'] == [{
+            'url': URL, 'ref': 'main', 'refKind': 'rev', 'subdirectory': 'modules/dependency'}]
+    else:
+        assert report['packages'][NAME]['status'] != 'selected'
+        assert package.get('status') != 'selected'
+    assert not any(any(verb in cmd for verb in ('fetch', 'checkout', 'reset', 'clean', 'install'))
+                   for cmd in selected.commands)
+
+
+async def runtime_sibling_report(s, monkeypatch, *, module_root=False, editable=None, case='valid', binding=None):
     import importlib.metadata
     from test_selected_runtime_dependencies import dist
     parent, target = s.root / 'modules/loop', s.root / 'modules/dependency'
@@ -377,6 +397,19 @@ async def runtime_sibling_report(s, monkeypatch, *, module_root=False, editable=
     if case == 'explicit-local':
         s.batch.names['fixture-dependency'] = target
         s.collector.local_sources.add(target)
+    if binding is not None:
+        from test_runtime_constraint_identity import immutable_shared_selection
+        path = immutable_shared_selection(s, monkeypatch)
+        if binding == 'missing':
+            path.unlink()
+        elif binding != 'valid':
+            data = json.loads(path.read_text())
+            data['ref' if binding == 'wrong-ref' else 'commit'] = 'other' if binding == 'wrong-ref' else OLD
+            path.write_text(json.dumps(data))
+        # Deliberately misleading metadata cannot replace the explicit binding.
+        data = json.loads(s.marker.read_text())
+        data['ref'] = 'main' if binding != 'valid' else head
+        s.marker.write_text(json.dumps(data))
     monkeypatch.setattr(importlib.metadata, 'distributions', lambda: [dist(
         'fixture-dependency', revision=head, subdirectory='modules/dependency')])
     return await s.collector.report(s.batch, s.config)
@@ -597,14 +630,15 @@ async def test_host_component_selection_obeys_source_policy_boundaries(selected,
     assert (URL, 'unused') not in s.collector.references
 
 
-def test_previous_host_component_observation_receipt_is_rechecked(selected, monkeypatch):
+@pytest.mark.parametrize('previous_version', [2, 4])
+def test_previous_host_component_observation_receipt_is_rechecked(selected, monkeypatch, previous_version):
     s = selected
     monkeypatch.setattr('amplifier_web.host.config.read_config', lambda *a, **kw: s.config)
     oldrow = row()
     receipt = s.home / 'updates/baseline-runtime'
     receipt.mkdir()
     receipt.joinpath(migration.RECEIPT).write_text(json.dumps({
-        'version': 1, 'selectionVersion': 2, 'configuration': migration.configuration(s.config),
+        'version': 1, 'selectionVersion': previous_version, 'configuration': migration.configuration(s.config),
         'remaining': migration.legacy_candidates([oldrow]),
         'decisions': {NAME: 'unselected'}, 'offeredPackages': []}))
     assert migration.pending(s.home, None, [oldrow]) is not None

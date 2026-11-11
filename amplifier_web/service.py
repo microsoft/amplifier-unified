@@ -48,7 +48,7 @@ def command_fingerprint(action, args, origin, client_id, *, caller_session_id=No
     # Later-file receipts belong to their conversation even when no browser is
     # attached. This is a stable replay identity, not a fresh permission check.
     if (origin in {'agent', 'system'} and caller_session_id and
-            (action == 'session.select' or action.startswith('feedback.attachments.') or
+            (action in {'session.select', 'conversation.configure', 'bundle.default'} or action.startswith('feedback.attachments.') or
              action.startswith('configuration.operation.') and args.get('sessionId') != caller_session_id or
              action in {'feedback.attachment.add', 'feedback.attachment.remove'} and args.get('feedbackId'))):
         values.append({'sourceSessionId': caller_session_id})
@@ -458,7 +458,7 @@ for _access, _actions in {
         "settings.connection.services",
         "session.inspect", "session.titlePreview", "session.history", "session.deletePreview", "session.export",
         "session.exportDeliver", "session.sharePreview", "session.shareRead", "session.shareList",
-        "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
+        "message.copy", "history.export", "conversation.delivery", "conversation.configuration", "runtime.dependencies",
         "permissions.get", "providers.credentials", "providers.schema", "providers.list", "providers.decisionModels",
         "diagnostics.records", "task.get", "task.history", "task.detail", "task.receipt",
         "capacity.read", "modelCapacity.read", "question.list", "question.read",
@@ -1907,7 +1907,7 @@ class AppService:
         passive_task = action in {'task.get', 'task.history', 'task.detail', 'task.receipt'} or (
             action == 'runtime.control' and isinstance(args.get('operation'), str) and args['operation'] in
             {'task.get', 'task.history', 'task.detail', 'task.receipt'})
-        passive_metadata = passive_task or action in {'assignment.brief', 'coordination.list'}
+        passive_metadata = passive_task or action in {'assignment.brief', 'coordination.list', 'conversation.configuration'}
         if action in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}:
             # Exact retained IDs only. General alias resolution can refresh
             # history and admit a dormant owner before the passive read runs.
@@ -2073,6 +2073,10 @@ class AppService:
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
         if routed is not None:
             return routed
+        if action == 'conversation.configuration':
+            from .conversation_configuration import read
+            async with self.lock:
+                return {'accepted': True, 'result': read(self, args)}
         if action == 'configuration.patchPlacement.read':
             from .patch_placement import read
             try:
@@ -3709,6 +3713,8 @@ class AppService:
                     self.state['settings']['appBundle'] = bundle
                 else:
                     def update_default(value):
+                        self.configuration_authority.check(configuration_authority, workspace=workspace,
+                            scope='local' if args['scope'] == 'workspace' else 'global')
                         if bundle: value.setdefault('bundle', {})['active'] = bundle
                         else: value.get('bundle', {}).pop('active', None)
                     SettingsStore(self.data_dir).update(workspace, 'local' if args['scope']=='workspace' else 'global', update_default)
@@ -5172,10 +5178,10 @@ class AppService:
                 self.update_manager.notify_idle(settled_session_id=session['id'])
 
 
-    def _unmounted_legacy_refresh(self, session):
+    def _unmounted_held_refresh(self, session):
         """Prove only that passive freshness has no owned mount to retire.
 
-        The unbound settings operation remains unknown and fenced. Never send
+        The settings operation remains unresolved and fenced. Never send
         this case through runtime retirement, whose completion releases busy.
         Called synchronously under the service lock; unavailable evidence holds.
         """
@@ -5183,8 +5189,20 @@ class AppService:
         ownership = session.get('ownership', {})
         if not isinstance(ownership, dict) or ownership.get('status') not in {None, 'available'}:
             return False
-        if (pending.get('phase') != 'error' or pending.get('recoveryRequired') is not True
-                or pending.get('operationId') or session.get('configurationOperationFence')):
+        operation = pending.get('operationId')
+        if pending.get('phase') != 'error':
+            return False
+        if operation:
+            # This is freshness of an absent mount, not operation recovery.
+            # Keep the original payload, evidence and input fence even when its
+            # native outcome is unknown; no effect is authorized by this proof.
+            if (not pending.get('requestHash')
+                    or session.get('configurationOperationFence') != operation):
+                return False
+            preparations = getattr(self.runtime, '_preparations', None)
+            if not isinstance(preparations, dict) or preparations:
+                return False
+        elif pending.get('recoveryRequired') is not True or session.get('configurationOperationFence'):
             return False
         if session.get('configurationRefresh', {}).get('phase') not in {None, 'pending'}:
             return False
@@ -5214,7 +5232,7 @@ class AppService:
     def _claim_configuration_refresh(self,session):
         """Reserve an idle runtime under the service lock before deferring it."""
         if (session.get('historyManaged') and not session.get('fileAccessPending')) or not session.get('configurationPending') or session['status'] not in {'idle','stopped','interrupted','error'}:return
-        if session.get('configurationBusy') and not self._unmounted_legacy_refresh(session):return
+        if session.get('configurationBusy') and not self._unmounted_held_refresh(session):return
         if session.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:return
         workers=getattr(self.runtime,'workers',None)
         if self.runtime is None or isinstance(workers,dict) and session['id'] not in workers:
@@ -5506,7 +5524,7 @@ class AppService:
                         revision=self.state['revision'], command_id=args.get('id'))
                 return domain_receipt(result, action=args['action'], session_id=session_id,
                                       revision=self.state['revision'])
-            if args['action'] in {'workspace.environments.removal.read', 'workspace.environments.removal.list', 'assignment.brief'}:
+            if args['action'] in {'workspace.environments.removal.read', 'workspace.environments.removal.list', 'assignment.brief', 'conversation.configuration'}:
                 # Do not infer nativeProject, flush progress or build a snapshot:
                 # even _session(hydrate=False) admits dormant owners. Each passive
                 # action validates its own caller scope without runtime demand.

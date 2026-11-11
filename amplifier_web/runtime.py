@@ -923,6 +923,7 @@ class RuntimeManager:
         stdout = _worker_pipes(row).stdout
         lines = BufferedLines(row['windows_owner'].stdout if row.get('windows_owner') else stdout)
         turns = ObservationTurns()
+        worker_failure = None
 
         def terminal_event(data):
             if not isinstance(data, dict) or data.get('op') or data.get('type') != 'execution.event':
@@ -1151,6 +1152,20 @@ class RuntimeManager:
                             await row['emit'](*normalized)
                         continue
                     from .session_health import failure_details
+                    from .worker_diagnostics import validate_command_failure_facts
+                    # Retain the originating worker error separately from the
+                    # host's later EOF. Only closed facts survive; no worker
+                    # prose/paths enter the causal witness or change admission.
+                    if worker_failure is None:
+                        # Shutdown can fail secondarily. Later/better-shaped
+                        # evidence must not replace the first observed cause.
+                        facts = validate_command_failure_facts(data.get('failureFacts'))
+                        source = data.get('failureSource')
+                        worker_failure = {
+                            'source': source if type(source) is str and source in {'execution', 'stdin'} else 'other',
+                            'factsStatus': 'valid' if facts is not None else
+                                'invalid' if 'failureFacts' in data else 'missing',
+                            **(facts if facts is not None else {'errors': [], 'truncated': False})}
                     failure = _worker_error(data)
                     diagnostic = None
                     startup = not row['ready'].done()
@@ -1316,6 +1331,7 @@ class RuntimeManager:
                             'schema': 1, 'origin': 'reader_disconnect',
                             'factsStatus': 'not_applicable' if reader_reason == 'eof' else 'valid',
                             **reader_facts,
+                            **({'workerFailure': worker_failure} if worker_failure is not None else {}),
                             'reader': {'reason': reader_reason, 'phase': reader_phase,
                                 'frame': reader_frame, 'exitObserved': reader_exit is not None,
                                 'exitCode': reader_exit if type(reader_exit) is int and

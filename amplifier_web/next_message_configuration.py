@@ -10,8 +10,14 @@ def definitions(schema, string):
         'bundle': {**string(2000), 'minLength': 1}, 'selection': SELECTION,
         'resetModel': {'type': 'boolean'}}, ['sessionId', 'expectedRevision'])
     value['anyOf'] = [{'required': ['bundle']}, {'required': ['selection']}]
-    return {'conversation.configure': ('Save this conversation’s Next message bundle/model choices without preparing a worker. '
-        'expectedRevision is nextMessageRevision, not the app revision. Saved is not mounted; application is validated on genuine input.', value)}
+    return {
+        'conversation.configure': ('Save an explicitly targeted conversation’s Next message bundle/model choices without preparing a worker. '
+            'Current authenticated Full root operators may target other registered own chats. '
+            'expectedRevision is nextMessageRevision, not the app revision. Saved is not mounted; application is validated on genuine input.', value),
+        'conversation.configuration': ('Read only saved bundle/model choices, nextMessageRevision and configuration hold category for an explicit chat. '
+            'No runtime demand or history hydration. Private plan, authority, draft and conversation history are not returned.',
+            schema({'sessionId': string(200)}, ['sessionId'])),
+    }
 
 
 def target(session):
@@ -57,7 +63,7 @@ def save(service, args, authority=None):
         raise AppError('Next message settings changed. Review the current choices before saving again.', 409)
     manager = service.management
     pending = session.get('pendingConfiguration', {})
-    if (session.get('configurationBusy') or manager.unresolved_configuration(session)
+    if (session.get('configurationBusy') or session.get('configurationOperationFence') or manager.unresolved_configuration(session)
             or pending.get('phase') in {'queued', 'applying'}):
         raise AppError('Resolve the existing configuration operation before changing Next message settings.', 409)
     # This is durable future intent, not a worker mutation. Live manager/child
@@ -67,6 +73,8 @@ def save(service, args, authority=None):
         raise AppError('This conversation is owned elsewhere. Continue here before changing its settings.', 409)
     if session.get('historyReadOnlyReason'):
         raise AppError(session['historyReadOnlyReason'], 409)
+    if session.get('sessionKind', 'root') != 'root':
+        raise AppError('Worker and internal sessions retain their original configuration.', 409)
     selected = selection(args['selection']) if 'selection' in args else None
     if 'selection' in args and not selected:
         raise AppError('Choose a provider and model.', 400)
@@ -100,6 +108,13 @@ def save(service, args, authority=None):
         if session.get('pendingBundleSelection'):
             session['pendingBundleSelection']['resetModel'] = False
     session['nextMessageRevision'] = revision + 1
+    # Native discovery indexes are rebuildable and omit local future intent.
+    # Saving settings adopts only its app view; native history remains canonical.
+    session['historyManaged'] = False
+    if authority and 'operatorConfiguration' in authority and ('selection' in args or args.get('resetModel')):
+        session['pendingChoiceAuthority'] = copy.deepcopy(authority)
+    elif 'selection' in args or args.get('resetModel'):
+        session.pop('pendingChoiceAuthority', None)
     session.pop('nextMessageError', None)
     session.pop('nextMessageFailure', None)
     session['nextMessageStatus'] = 'saved'
@@ -141,6 +156,11 @@ def guard_for(service, captured, *, frozen=False):
                 service.configuration_authority.check(bundle.get('authority'))
             except Exception as exc:
                 raise RuntimeStartupError('The saved bundle authority changed. No input was sent.') from exc
+        if captured.get('pendingChoiceAuthority'):
+            try:
+                service.configuration_authority.check(captured['pendingChoiceAuthority'])
+            except Exception as exc:
+                raise RuntimeStartupError('The saved model authority changed. No input was sent.') from exc
     return check
 
 
@@ -285,6 +305,7 @@ def applied(session, payload):
         session.pop('pendingBundleSelection', None)
         session.pop('bundlePreview', None)
     session.pop('pendingModelSelection', None)
+    session.pop('pendingChoiceAuthority', None)
     session['nextMessageStatus'] = 'applied'
     session.pop('nextMessageError', None)
     session.pop('nextMessageFailure', None)

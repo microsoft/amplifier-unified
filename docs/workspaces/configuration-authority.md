@@ -161,6 +161,42 @@ grants stop/steer/settings authority over an independent peer. The explicit
 same-workspace Full operator recovery exception below inspects or continues only
 the original configuration operation; it does not administer that peer's grants.
 
+## Saved choices for other chats
+
+A current transport-bound **Full root operator** can use
+`conversation.configure` with an explicit other root `sessionId` on this
+authenticated installation, including archived, managed and other-workspace
+chats. This saves **Next message** bundle/model intent, not a live mount,
+conversation input, ownership takeover, Stop/resume or grant change. Existing
+work keeps its captured configuration. `expectedRevision` is the target's
+`nextMessageRevision`; `conversation.configuration` reads its saved-choice
+projection and hold category. Other-workspace reads require explicit `scope: all`.
+
+The caller retains its own Full revision, native identity and assigned input
+lineage; the target never becomes the caller. Lower-authority peer input cannot
+borrow this power, and ordinary own-session grants, children and unbound systems
+do not authorize the other-chat route. Authority and exact source/target
+placement and interruption revisions are checked after commit waits and again
+when genuine target input applies the choice. A later Stop or Full off/on does
+not renew old intent. Saving choices does not resume an already stopped chat.
+Read-only native workers, missing owners, conflicting ownership and unresolved
+configuration operations remain refused; permission parity does not repair them.
+Native-discovered roots retain app-owned choices across restart without rewriting
+their native transcript. Exact retries remain caller-bound and idempotent.
+
+The same Full root can set `bundle.default` for an explicitly registered other
+workspace. Its local effect is bound to that exact registered path, not broadened
+to global scope; authorization is rechecked inside the canonical settings
+mutator. Verify with `workspace.bundleDefault.inspect`. No additional permission
+store or browser impersonation is involved. Owner-local and user controls remain.
+
+The read visits only the requested resident metadata or exact committed owner
+manifest and immutable view payload, capped at 1 MiB. It never follows referenced
+message, execution or mount-plan bodies, admits a dormant owner, refreshes native
+history, starts a worker, flushes progress or builds an unrelated agent snapshot.
+An oversized or unavailable owner is explicitly unreadable, not an inherited or
+empty choice. The output omits internal authority, credentials and private drafts.
+
 ## Active tasks changing their own settings
 
 An authorized agent's `configuration.apply` with `whenIdle:true` binds the
@@ -419,6 +455,13 @@ While recovery is held, `configuration.inspect` may observe the exact existing
 worker and publish its actual loaded plan, even when it differs from the saved
 request. This read never starts a worker, changes settings or settles the operation;
 Stop or replacement of the observed worker prevents stale publication.
+An idle operation-bound error can also retain passive settings-freshness markers
+after its worker is gone. Once the host proves no worker, preparation, unsettled
+configuration task, refresh or runtime activity remains, it retires only that
+obsolete mount freshness. The operation's busy/input fence, original request,
+native evidence and unknown or saved-but-unverified outcome remain unchanged.
+This permits the existing recovery and app-update checks to assess their own
+evidence; it neither authorizes recovery nor makes component activation safe.
 For UI, user or internal originals, a current Full agent, qualified child or
 trusted system can reconcile and resume through the same recovery owner. Ask
 cannot substitute a new grant for that operator-origin authority. Resume retains

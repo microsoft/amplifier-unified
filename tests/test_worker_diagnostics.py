@@ -458,25 +458,27 @@ def test_command_failure_facts_known_types_do_not_format_arguments_or_process_pa
 
 
 @pytest.mark.parametrize('method,label', [
-    ('command', 'worker.command'), ('_command_serial', 'worker.command_serial')])
+    ('command', 'worker.command'), ('_command_serial', 'worker.command_serial'),
+    ('read', 'worker.stdin')])
 def test_command_failure_frame_labels_require_loaded_code_identity_not_equal_clones(method, label):
     import types
     from amplifier_web.runtime_worker import Worker
     from amplifier_web.worker_diagnostics import command_failure_facts
     function = getattr(Worker, method)
+    args = (None,) if method == 'read' else (None, {})
     error = RuntimeError('private argument')
-    error.__traceback__ = _command_traceback(function)
+    error.__traceback__ = _command_traceback(function, args=args)
     assert command_failure_facts(error) == {
         'errors': [{'class': 'RuntimeError', 'frames': [{'source': label, 'offset': 7}]}],
         'truncated': False}
     clone = function.__code__.replace()
     assert clone == function.__code__ and clone is not function.__code__
     copied = types.FunctionType(clone, function.__globals__, function.__name__)
-    error.__traceback__ = _command_traceback(copied)
+    error.__traceback__ = _command_traceback(copied, args=args)
     assert command_failure_facts(error)['errors'][0]['frames'] == []
     # Matching names and arbitrary traceback filenames are never exported.
     copied = types.FunctionType(clone.replace(co_filename='/private/token.py'), function.__globals__)
-    error.__traceback__ = _command_traceback(copied)
+    error.__traceback__ = _command_traceback(copied, args=args)
     assert command_failure_facts(error)['errors'][0]['frames'] == []
     assert '/private/token.py' not in json.dumps(command_failure_facts(error))
 
@@ -1191,3 +1193,107 @@ def test_real_atomic_replace_permission_error_keeps_only_closed_facts(tmp_path, 
     assert diagnostics.validate_runtime_failure_witness(witness) == witness
     assert str(tmp_path) not in json.dumps(witness) and secret not in json.dumps(witness)
     assert failure.filename == str(path) and failure.strerror == secret
+
+
+@pytest.mark.parametrize('source', ['execution', 'stdin', 'other'])
+@pytest.mark.parametrize('status', ['valid', 'invalid', 'missing'])
+def test_worker_failure_on_disconnect_is_closed_deep_copied_and_independent_of_eof(source, status):
+    from amplifier_web.worker_diagnostics import validate_runtime_failure_witness
+    witness = _reader_witness_fixture()
+    facts = _command_facts_fixture() if status == 'valid' else {'errors': [], 'truncated': False}
+    witness['workerFailure'] = {'source': source, 'factsStatus': status, **facts}
+    result = validate_runtime_failure_witness(witness)
+    assert result == witness
+    result['workerFailure']['errors'].append({'class': 'other', 'frames': []})
+    assert witness['workerFailure']['errors'] == facts['errors']
+    witness.update(origin='worker_reply', factsStatus='invalid')
+    witness.pop('reader')
+    assert validate_runtime_failure_witness(witness) is None
+
+
+@pytest.mark.parametrize('mutation', [
+    lambda v: v.update(source='private/path'),
+    lambda v: v.update(factsStatus='private/token'),
+    lambda v: v.update(message='private body'),
+    lambda v: v.update(errors=[{'class': 'PrivateError', 'frames': []}]),
+    lambda v: v.update(errors=[{'class': 'other', 'frames': [{'source': 'private', 'offset': 0}]}]),
+    lambda v: v.update(truncated=1),
+    lambda v: v.update(factsStatus='missing'),
+    lambda v: v.update(factsStatus='invalid'),
+    lambda v: v.pop('source'),
+])
+def test_worker_failure_witness_rejects_unknown_or_malformed_metadata(mutation):
+    from amplifier_web.worker_diagnostics import validate_runtime_failure_witness
+    witness = _reader_witness_fixture()
+    witness['workerFailure'] = {'source': 'execution', 'factsStatus': 'valid', **_command_facts_fixture()}
+    mutation(witness['workerFailure'])
+    assert validate_runtime_failure_witness(witness) is None
+
+
+def test_worker_failure_envelope_bounds_and_hostile_values_fail_closed(monkeypatch):
+    from amplifier_web import worker_diagnostics as diagnostics
+    class BadDict(dict):
+        def __iter__(self): raise AssertionError('private iterator')
+    class BadString(str):
+        def __eq__(self, other): raise AssertionError('private comparison')
+        def __hash__(self): raise AssertionError('private hash')
+    witness = _reader_witness_fixture()
+    worker = {'source': 'stdin', 'factsStatus': 'valid', **_command_facts_fixture()}
+    witness['workerFailure'] = worker
+    for bad in (BadDict(worker), {**worker, 'source': BadString('stdin')},
+                {**worker, 'factsStatus': BadString('valid')}, {**worker, 'errors': [worker]}):
+        assert diagnostics.validate_runtime_failure_witness({**witness, 'workerFailure': bad}) is None
+    result = diagnostics.validate_runtime_failure_witness(witness)
+    size = len(json.dumps(result).encode('utf-8'))
+    monkeypatch.setattr(diagnostics, '_COMMAND_MAX_BYTES', size)
+    assert diagnostics.validate_runtime_failure_witness(witness) == witness
+    monkeypatch.setattr(diagnostics, '_COMMAND_MAX_BYTES', size - 1)
+    assert diagnostics.validate_runtime_failure_witness(witness) is None
+
+
+async def test_executed_worker_publishes_original_failure_facts_before_shutdown(monkeypatch):
+    from amplifier_web import runtime_worker as module
+    from amplifier_web.worker_diagnostics import validate_command_failure_facts
+    published = []
+    monkeypatch.setattr(module, 'publish', published.append)
+    worker = module.Worker()
+    failure = PermissionError(13, 'private token', '/private/path')
+    failure.winerror = 5
+    async def fail():
+        raise failure
+    task = asyncio.create_task(fail())
+    with pytest.raises(PermissionError):
+        await task
+    worker.executed(task)
+    assert worker.shutdown.is_set()
+    event, = published
+    assert event['failureSource'] == 'execution'
+    facts = validate_command_failure_facts(event['failureFacts'])
+    assert facts == {'errors': [{'class': 'PermissionError', 'errno': 13, 'winerror': 5, 'frames': []}],
+                     'truncated': False}
+    assert 'private' not in json.dumps(facts) and task.exception() is failure
+
+
+async def test_worker_stdin_error_retains_exact_read_frame_without_payload(monkeypatch):
+    from types import SimpleNamespace
+    from amplifier_web import runtime_worker as module, worker_input
+    from amplifier_web.worker_diagnostics import validate_command_failure_facts
+    published = []
+    failure = PermissionError(13, 'private token', '/private/path')
+    failure.winerror = 5
+    def fail(*args):
+        raise failure
+    monkeypatch.setattr(module, 'publish', published.append)
+    monkeypatch.setattr(module, 'sys', SimpleNamespace(platform='win32', stdin=None))
+    monkeypatch.setattr(worker_input.ThreadedPipeReader, 'for_worker', fail)
+    worker = module.Worker()
+    await worker.read()
+    assert worker.shutdown.is_set()
+    event, = published
+    assert event['failureSource'] == 'stdin'
+    facts = validate_command_failure_facts(event['failureFacts'])
+    assert facts['errors'][0]['class'] == 'PermissionError'
+    assert facts['errors'][0]['winerror'] == 5
+    assert len(facts['errors'][0]['frames']) == 1
+    assert facts['errors'][0]['frames'][0]['source'] == 'worker.stdin'
+    assert 'private' not in json.dumps(facts)
