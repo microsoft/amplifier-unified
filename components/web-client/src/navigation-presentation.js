@@ -20,7 +20,7 @@ export function activityFor(chat,state){
  const task=state?.runtimeControl?.[chat.id]?.['task.get']?.task||chat.task;
  if(chat.status==='interrupted')return {kind:'attention',label:'Outcome unknown'};
  if(['stopped','cancelled','paused'].includes(chat.status)||task?.status==='paused')return {kind:'paused',label:['stopped','cancelled'].includes(chat.status)?'Stopped':'Paused'};
- if(chat.status==='blocked'||task?.status==='blocked')return {kind:'attention',label:'Work blocked'};
+ if(chat.status==='blocked'||task?.status==='blocked')return {kind:'idle',label:'Blocked — details unavailable'};
  if(state?.attention?.sessions?.[chat.id])return {kind:'unread',label:'New response'};
  return {kind:'idle',label:'Idle'};
 }
@@ -55,5 +55,5 @@ export function pinnedWorkspaceSubtitle(row,showPaths=false){
 
 export function attentionTone(activity){
  if(activity.kind!=='attention')return null;
- return activity.attentionType||({'Work blocked':'blocked','Approval requested':'decision','Answer requested':'decision','Check answer delivery':'error'})[activity.label]||'error';
+ return activity.attentionType||({'Approval requested':'decision','Answer requested':'decision','Dependency decision requested':'decision','Check answer delivery':'error'})[activity.label]||'error';
 }
