@@ -96,6 +96,13 @@ def capture_artifact(manager):
     try:
         active = application_generations.active(manager.home)
         if not active or Path(sys.prefix).resolve() != active['prefix'].resolve():
+            if sys.platform == 'win32':
+                # A first consumer install has no prior app-generation/manual
+                # handoff receipt. Its full setup audit owns that qualification.
+                from .windows_consumer import delivery_proof
+                proof = delivery_proof(manager.home)
+                if proof:
+                    return _observed_artifact(manager, proof['qualification'], proof['installation'])
             return None
         validated = json.loads((active['folder'] / 'validated.json').read_text())
         if not isinstance(validated.get('installation'), dict) or not validated.get('artifact'):

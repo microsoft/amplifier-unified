@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 from importlib import metadata
 import json
 import os
@@ -15,6 +16,11 @@ import subprocess
 import sys
 
 RECEIPT = "consumer-install.json"
+QUALIFICATION = "consumer-qualified.json"
+
+
+def _receipt_digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def installation(root):
@@ -59,11 +65,51 @@ def audit(root):
         "version": value["version"], "revision": value["revision"]}})
     result = subprocess.run([sys.executable, "-I", "-c", GRAPH_PROBE],
                             capture_output=True, text=True, timeout=30, check=False)
-    if (result.returncode or normalized(json.loads(result.stdout), artifact=artifact)
-            != validate_graph(value["graph"])):
+    graph = normalized(json.loads(result.stdout), artifact=artifact) if result.returncode == 0 else None
+    if graph != validate_graph(value["graph"]):
         raise ValueError("The installed application graph differs from setup's qualified selection.")
+    from .application_generations import bootstrap_identity
+    from .app_component_graph import digest
+    from .app_updates import installed_extras
+    from .deployment import write_private
+    proof = {"schema": 1, "receiptDigest": _receipt_digest(value),
+             "installation": bootstrap_identity(sys.prefix),
+             "qualification": {
+                 "app": next(row for row in graph if row["name"] == "amplifier-unified"),
+                 "artifact": artifact, "extras": installed_extras(),
+                 "dependencyDigest": digest([row for row in graph if row["name"] != "amplifier-unified"])}}
+    # Produced only AFTER the full setup audit, never a restart ACK or pointer.
+    write_private(root / QUALIFICATION, json.dumps(proof), owned_root=root)
     return {"ok": True, "version": value["version"], "revision": value["revision"],
             "packageCount": len(value["graph"]), "modelRequests": 0}
+
+
+def delivery_proof(home):
+    """Read first-install qualification, bound to this exact consumer bootstrap."""
+    from .windows_files import address, directory
+    from .app_component_graph import digest, validate_graph
+    home = address(home)
+    root = home.parent
+    if home != root / "app":
+        return None
+    root, receipt = installation(root)
+    with directory(root, owned_root=root) as owned:
+        proof = json.loads(owned.read_private(QUALIFICATION, limit=256 * 1024))
+    if (not isinstance(proof, dict) or set(proof) != {
+            "schema", "receiptDigest", "installation", "qualification"}
+            or type(proof["schema"]) is not int or proof["schema"] != 1
+            or proof["receiptDigest"] != _receipt_digest(receipt)):
+        raise ValueError("The consumer setup qualification changed.")
+    graph = validate_graph(receipt["graph"])
+    qualification = proof["qualification"]
+    if (not isinstance(qualification, dict) or set(qualification) != {
+            "app", "artifact", "extras", "dependencyDigest"}
+            or qualification["artifact"] != receipt["artifact"]
+            or [qualification["app"]] != [row for row in graph if row["name"] == "amplifier-unified"]
+            or qualification["dependencyDigest"] != digest(
+                [row for row in graph if row["name"] != "amplifier-unified"])):
+        raise ValueError("The consumer setup graph qualification changed.")
+    return proof
 
 
 def environment(root, value):

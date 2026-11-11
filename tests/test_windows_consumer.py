@@ -41,6 +41,7 @@ def test_process_local_roots_preserve_accounts_and_user_git_policy(tmp_path, mon
 
 def test_audit_reuses_native_archive_payload_reader_and_exact_graph(tmp_path, monkeypatch):
     from amplifier_web import app_component_graph as graph, app_release_artifacts, manual_app_handoff
+    from amplifier_web import application_generations, app_updates, deployment, windows_files
     artifact = {"url": "https://github.com/microsoft/amplifier-unified/releases/download/v1.0.0/amplifier_unified-1.0.0-py3-none-any.whl",
                 "path": str(tmp_path / "amplifier_unified-1.0.0-py3-none-any.whl"), "sha256": "a" * 64}
     value = {"artifact": artifact, "version": "1.0.0", "revision": "b" * 40,
@@ -57,14 +58,64 @@ def test_audit_reuses_native_archive_payload_reader_and_exact_graph(tmp_path, mo
     monkeypatch.setattr(manual_app_handoff, "_payload", lambda proof: calls.append(("payload", proof)))
     monkeypatch.setattr(consumer.subprocess, "run", lambda *a, **kw:
                         SimpleNamespace(returncode=0, stdout=json.dumps(raw)))
+    binding = {"prefix": str(tmp_path / "tools/amplifier-unified"), "digest": "d" * 64}
+    monkeypatch.setattr(application_generations, "bootstrap_identity", lambda prefix: binding)
+    monkeypatch.setattr(app_updates, "installed_extras", lambda: [])
+    saved = []
+    monkeypatch.setattr(deployment, "write_private", lambda path, contents, **kw:
+                        saved.append((path, json.loads(contents), kw)))
     assert consumer.audit(tmp_path) == {"ok": True, "version": "1.0.0", "revision": "b" * 40,
                                       "packageCount": 1, "modelRequests": 0}
     assert [row[0] for row in calls] == ["artifact", "payload"]
     assert calls[1][1]["binding"] == {"version": "1.0.0", "revision": "b" * 40}
+    assert saved[0][0] == tmp_path / consumer.QUALIFICATION
+    assert saved[0][2] == {"owned_root": tmp_path}
+    proof = saved[0][1]
+    assert proof["installation"] == binding
+    assert proof["qualification"] == {"app": value["graph"][0], "artifact": artifact,
+                                     "extras": [], "dependencyDigest": graph.digest([])}
+    monkeypatch.setattr(windows_files, "address", Path)
+    @contextmanager
+    def directory(path, **kw):
+        assert path == tmp_path and kw == {"owned_root": tmp_path}
+        yield SimpleNamespace(read_private=lambda name, limit: json.dumps(proof).encode())
+    monkeypatch.setattr(windows_files, "directory", directory)
+    assert consumer.delivery_proof(tmp_path / "app") == proof
+    for key, changed in (("receiptDigest", "0" * 64), ("schema", True)):
+        old = proof[key]
+        proof[key] = changed
+        with pytest.raises(ValueError):
+            consumer.delivery_proof(tmp_path / "app")
+        proof[key] = old
+    proof["qualification"]["dependencyDigest"] = "0" * 64
+    with pytest.raises(ValueError, match="graph"):
+        consumer.delivery_proof(tmp_path / "app")
     monkeypatch.setattr(consumer.subprocess, "run", lambda *a, **kw:
                         SimpleNamespace(returncode=0, stdout='[{"name":"other","version":"1"}]'))
     with pytest.raises(ValueError, match="graph"):
         consumer.audit(tmp_path)
+    assert len(saved) == 1  # Failed graph cannot create new first-install proof.
+
+
+def test_first_install_capture_uses_audited_proof_without_inventing_restart(tmp_path, monkeypatch):
+    from amplifier_web import update_readiness as readiness, application_generations as generations
+    monkeypatch.setattr(generations, "active", lambda home: None)
+    monkeypatch.setattr(readiness.sys, "platform", "win32")
+    manager = SimpleNamespace(home=tmp_path / "app", running_identity={},
+                              service=SimpleNamespace(state={"updates": {}}))
+    before = json.dumps(manager.service.state, sort_keys=True)
+    proof = {"qualification": {"artifact": "test-only"}, "installation": {"digest": "a" * 64}}
+    monkeypatch.setattr(consumer, "delivery_proof", lambda home: proof)
+    calls = []
+    monkeypatch.setattr(readiness, "_observed_artifact", lambda *args:
+                        calls.append(args) or {"verified": True})
+    assert readiness.capture_artifact(manager) == {"verified": True}
+    assert calls == [(manager, proof["qualification"], proof["installation"])]
+    assert json.dumps(manager.service.state, sort_keys=True) == before
+    def missing(home):
+        raise FileNotFoundError
+    monkeypatch.setattr(consumer, "delivery_proof", missing)
+    assert readiness.capture_artifact(manager) is None
 
 
 def test_no_browser_launch_composes_existing_background_owner_without_reinstall(tmp_path, monkeypatch):
