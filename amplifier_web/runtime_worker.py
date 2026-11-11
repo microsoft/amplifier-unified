@@ -888,7 +888,8 @@ class Worker:
             qualified_overrides = None
             install_overrides = None
             if not os.environ.get("UV_OVERRIDE"):
-                qualified_overrides = active_install_overrides(self.home)
+                with startup_timing.phase('worker.runtime.verify.before_prepare'):
+                    qualified_overrides = active_install_overrides(self.home)
                 install_overrides = (qualified_overrides if qualified_overrides is not None
                     else Path(__file__).with_name("runtime_deps") / "compatibility.txt")
             self.runtime = Runtime(session_id=config["id"], observer=self.observe, max_input_chars=200_000)
@@ -942,7 +943,8 @@ class Worker:
                     ephemeral_mcp_servers=config.get("ephemeralMcpServers"),
                     startup_timing=startup_timing)
             if qualified_overrides is not None:
-                active_install_overrides(self.home, str(qualified_overrides))
+                with startup_timing.phase('worker.runtime.verify.after_prepare'):
+                    active_install_overrides(self.home, str(qualified_overrides))
             self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)

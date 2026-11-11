@@ -1,12 +1,15 @@
 """Private startup clocks keep authority, errors and native history unchanged."""
 import asyncio
 import json
+import os
 from types import SimpleNamespace
+from unittest.mock import call
 
 import pytest
 
 from amplifier_web.worker_diagnostics import StartupTimings
 from test_host_session_resume import mounted_host
+from test_worker_install_overrides import PolicyBoundaryReached, incoming_policy, policy_worker
 
 
 def test_fixed_labels_bounded_rows_private_receipt_and_optional_disk(tmp_path, monkeypatch):
@@ -130,3 +133,95 @@ async def test_worker_failure_receipt_does_not_publish_timings(tmp_path, monkeyp
     assert not any(row['phase'] == 'worker.ready' for row in receipt['phases'])
     assert 'startup-timing' not in json.dumps(events)
     assert 'secret' not in json.dumps(receipt)
+
+
+def verification_receipt(state):
+    path = state.home / 'runtime-reports' / state.config['id'] / 'startup-timing.json'
+    receipt = json.loads(path.read_text())
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert dict(os.environ) == state.parent_env
+    assert state.worker.execution is None
+    assert not any(event.get('type') == 'runtime.ready' for event in state.events)
+    assert 'startup-timing' not in json.dumps(state.events)
+    assert str(state.qualified) not in json.dumps(receipt)
+    assert 'UV_OVERRIDE' not in json.dumps(receipt)
+    state.capture.close.assert_called_once()
+    rows = [row for row in receipt['phases'] if row['phase'].startswith('worker.runtime.verify.')]
+    for row in rows:
+        assert row['elapsedMs'] >= 0 and row['cpuMs'] >= 0 and row['offsetMs'] >= 0
+    return receipt, rows
+
+
+@pytest.mark.parametrize('branch', ['qualified', 'legacy', 'explicit'])
+async def test_worker_verification_clocks_follow_actual_policy_branches(policy_worker, monkeypatch, branch):
+    """The maintained fixture stops after postcheck; this is not a ready-worker proof."""
+    state = policy_worker
+    incoming_policy(state, monkeypatch, 'custom' if branch == 'explicit' else 'absent')
+    state.selected = None if branch == 'legacy' else state.qualified
+    with pytest.raises(PolicyBoundaryReached):
+        await state.worker.start(state.config, raise_errors=True, recover_bundle=False)
+
+    receipt, rows = verification_receipt(state)
+    expected = [] if branch == 'explicit' else ['worker.runtime.verify.before_prepare']
+    if branch == 'qualified':
+        expected.append('worker.runtime.verify.after_prepare')
+    assert [row['phase'] for row in rows] == expected
+    assert all(row['status'] == 'succeeded' and 'errorType' not in row for row in rows)
+    assert receipt['outcome'] == 'failed'  # Deliberate PolicyBoundaryReached after the checks.
+    names = [row['phase'] for row in receipt['phases']]
+    if expected:
+        assert names.index(expected[0]) < names.index('manager.prepare')
+    if branch == 'qualified':
+        assert names.index('manager.prepare') < names.index(expected[1])
+    calls = [] if branch == 'explicit' else [call(state.home)]
+    if branch == 'qualified':
+        calls.append(call(state.home, str(state.qualified)))
+    assert state.policy.call_args_list == calls
+    assert state.order == (['prepare'] if branch == 'explicit' else
+                           ['policy', 'prepare', 'policy'] if branch == 'qualified' else ['policy', 'prepare'])
+    assert state.options['install_overrides'] == (
+        None if branch == 'explicit' else state.qualified if branch == 'qualified' else state.compatibility)
+    state.prepare.assert_awaited_once()
+
+
+@pytest.mark.parametrize('failed_call', [1, 2], ids=['before_prepare', 'after_prepare'])
+@pytest.mark.parametrize('cancel', [False, True], ids=['refusal', 'cancellation'])
+async def test_worker_verification_clocks_preserve_exact_refusal_and_cancellation(
+        policy_worker, monkeypatch, failed_call, cancel):
+    state = policy_worker
+    incoming_policy(state, monkeypatch, 'absent')
+    failure = (asyncio.CancelledError('private verification cancellation') if cancel else
+               ValueError('The worker graph changed after qualification; its recorded generation was preserved.'))
+    original_args = failure.args
+
+    def verify(*args):
+        assert dict(os.environ) == state.parent_env
+        state.order.append('policy')
+        if state.policy.call_count == failed_call:
+            raise failure
+        return state.qualified
+
+    state.policy.side_effect = verify
+    with pytest.raises(type(failure)) as caught:
+        await state.worker.start(state.config, raise_errors=True, recover_bundle=False)
+    assert caught.value is failure and caught.value.args == original_args
+    receipt, rows = verification_receipt(state)
+    expected = ['worker.runtime.verify.before_prepare', 'worker.runtime.verify.after_prepare'][:failed_call]
+    assert [row['phase'] for row in rows] == expected
+    assert receipt['outcome'] == ('cancelled' if cancel else 'failed')
+    assert rows[-1]['status'] == receipt['outcome']
+    assert rows[-1]['errorType'] == type(failure).__name__
+    assert all(row['status'] == 'succeeded' for row in rows[:-1])
+    assert receipt['phases'][-1] == rows[-1]
+    assert str(failure) not in json.dumps(receipt)
+    calls = [call(state.home)]
+    if failed_call == 2:
+        calls.append(call(state.home, str(state.qualified)))
+        state.prepare.assert_awaited_once()
+        assert state.options['install_overrides'] == state.qualified
+    else:
+        state.prepare.assert_not_awaited()
+    assert state.policy.call_args_list == calls
+    assert state.order == (['policy'] if failed_call == 1 else ['policy', 'prepare', 'policy'])
+    if cancel:
+        state.capture.save.assert_not_called()
