@@ -1,6 +1,8 @@
 from copy import deepcopy
 import json
 
+import pytest
+
 from amplifier_web.browser_demand import project
 from amplifier_web.shell_wire import compact
 from test_live_clients import live, command, snapshot
@@ -32,6 +34,100 @@ def test_normal_chat_retains_live_facts_without_settings_history():
     assert result['modelCatalogs'] == {}
     assert 'providerCatalogs' not in result['setup']
     assert result['runtimeControl']['chat']['configuration.providers'] == {'provider': 'ready'}
+
+
+def test_off_chat_notification_candidates_are_content_free_before_demand_filter():
+    state = heavy()
+    state['attention']['items'] += [
+        {'id': 'question:q', 'sessionId': 'other', 'fingerprint': 'v1', 'read': False,
+         'title': 'Private question', 'detail': 'Private details'},
+        {'id': 'approval:a', 'sessionId': 'other', 'fingerprint': 'v2', 'read': True,
+         'detail': 'Private arguments'}]
+    result = project(state)
+    assert result['notificationAttention'] == [
+        {'id': 'question:q', 'sessionId': 'other', 'fingerprint': 'v1', 'read': False},
+        {'id': 'approval:a', 'sessionId': 'other', 'fingerprint': 'v2', 'read': True}]
+    assert not any(row.get('sessionId') == 'other' for row in result['attention']['items'])
+    assert 'Private' not in json.dumps(result['notificationAttention'])
+
+
+@pytest.mark.parametrize('body_size', [32, 100_000])
+async def test_bound_browser_receives_published_off_chat_decision_headers(live, monkeypatch, body_size):
+    from amplifier_web.attention import session_item_at, session_item_count
+    from amplifier_web.directory_attention import DirectoryAttention, receipts
+    from amplifier_web.transcript_window import TranscriptWindowReader
+
+    service, first, second = live
+    await command(service, 'browser-a', 'session.select', {'id': first})
+    await command(service, 'browser-a', 'view.update', {'patch': {'panel': None}})
+    assert snapshot(service, 'browser-a')['notificationAttention'] == []
+    other = service._session(second)
+    private = 'Private off-chat body ' + 'x' * body_size
+    other.update(messages=[{'id': 'other-message', 'role': 'user', 'text': private}],
+                 approvals=[{'id': 'off-chat-approval', 'status': 'pending', 'title': private}],
+                 error=private, errorAt=1, completion={'id': 'other-completion', 'at': 2})
+    question = {'id': 'off-chat-question', 'sessionId': second, 'createdAt': 1,
+                'status': 'pending', 'required': True, 'revision': 1, 'prompt': private}
+    service.questions.store.put(question)
+    service.questions.sync({second})
+    service._publish_changes(sessions={second})
+
+    def current_headers():
+        return [{key: item[key] for key in ('id', 'sessionId', 'fingerprint', 'read')}
+                for slot in range(session_item_count(other))
+                if (item := session_item_at(other, service._state.get('attentionRead', {}), slot))]
+
+    def observe():
+        expected = current_headers()
+        commands = service.db.execute('SELECT count(*) FROM commands').fetchone()[0]
+        def forbidden(*args, **kwargs):
+            raise AssertionError('Ordinary browser projection must not decode notices or load history')
+        with monkeypatch.context() as guarded:
+            guarded.setattr(DirectoryAttention, 'decode', forbidden)
+            guarded.setattr(service.cold_display, 'hydrate', forbidden)
+            guarded.setattr('amplifier_web.automatic_history.read_transcript', forbidden)
+            guarded.setattr(TranscriptWindowReader, 'read_window', forbidden)
+            result = snapshot(service, 'browser-a')
+            # The same scoped producer still carries exact reviewed errors, but
+            # neither off-chat completions nor decision bodies.
+            projected = service.projections.attention(service.state, session_ids=(first,))
+            assert [item for item in projected['items'] if item.get('sessionId') == second] == [
+                item for item in expected if not item['id'].startswith('completion:')]
+            # Existing navigation receipt consumers do not opt into decisions.
+            assert receipts(service.directory, service.state, {second}) == [
+                item for item in expected if item['id'].startswith(('session:', 'completion:'))]
+        candidates = [item for item in expected if item['id'].startswith(('question:', 'approval:'))]
+        assert {item['id'] for item in candidates} == {
+            'question:off-chat-question', 'approval:off-chat-approval'}
+        assert result['notificationAttention'] == candidates
+        assert result['selectedSessionId'] == first
+        assert all(item.get('sessionId') != second for item in result['attention']['items'])
+        assert all(not row.get('messages') for row in result['sessions'] if row['id'] == second)
+        assert private not in json.dumps(result)
+        assert service.db.execute('SELECT count(*) FROM commands').fetchone()[0] == commands
+        assert not result.get('deviceCommands')
+        assert not any(record.get('deviceCommands') for record in service.clients.records.values())
+        assert not service.runtime.started and not service.runtime.sent
+        return candidates
+
+    initial = observe()
+    assert all(not item['read'] for item in initial)
+    # Explicit acknowledgement changes the scalar read fact, not the decision.
+    review = current_headers()
+    await command(service, 'browser-a', 'attention.read', {
+        'ids': [item['id'] for item in review if not item['id'].startswith('completion:')],
+        'fingerprints': {item['id']: item['fingerprint'] for item in review}})
+    assert observe() == [{**item, 'read': True} for item in initial]
+    question['revision'] += 1
+    service.questions.store.put(question)
+    service.questions.sync({second})
+    other['approvals'][0]['title'] = private + ' changed'
+    service._publish_changes(sessions={second})
+    changed = observe()
+    assert all(not item['read'] for item in changed)
+    assert all(item['fingerprint'] != old['fingerprint'] for item, old in zip(changed, initial))
+    assert other['questions'][0]['status'] == other['approvals'][0]['status'] == 'pending'
+    assert other['messages'][0]['text'] == private
 
 
 def test_requested_resources_arrive_and_retire_without_deleting_evidence():

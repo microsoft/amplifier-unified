@@ -8,6 +8,26 @@ test('only a completed whole sequence is described as up to date',()=>{
  assert.equal(updateOverview({application:{status:'current'},sequence:{stage:'complete'}}).tone,'ready');
 });
 
+test('observed configuration holds do not masquerade as running chats in the waiting title',()=>{
+ const hold={kind:'configuration',label:'Configuration operation held',sessionId:'held'};
+ for(const pending of [{pendingApp:{}},{pendingRelease:'candidate'}]){
+  const updates={...pending,phase:'app-staged',blockers:[hold]},before=structuredClone(updates);
+  const result=updateOverview(updates);
+  assert.equal(result.title,'Waiting on configuration recovery holds');
+  assert.match(result.detail,/reported update blockers clear/);
+  assert.match(result.detail,/restarting does not recover held settings/);
+  assert.equal(result.waiting,true);assert.equal(result.busy,true);assert.equal(result.processing,false);
+  assert.deepEqual(updates,before);
+  const mixed=updateOverview({...updates,blockers:[hold,{kind:'conversation',sessionId:'running'},{kind:'worker',sessionId:'running'}]});
+  assert.equal(mixed.title,'Waiting for update blockers');
+  // An omitted hold is not an observed blocker or evidence of recovery.
+  const omitted=updateOverview({...updates,blockers:[{kind:'conversation',sessionId:'running'}],
+   blockerObservation:{configurationHoldCount:3}});
+  assert.equal(omitted.title,'Waiting for 1 chat to finish');
+  assert.doesNotMatch(omitted.detail,/recovered|resolved/);
+ }
+});
+
 const confirmedApp={attemptId:'a'.repeat(32),phase:'restart-ack',version:'0.20.199',revision:'b'.repeat(40),verifiedAt:10};
 const componentFailure={application:{status:'current',current:confirmedApp.version,runningRevision:confirmedApp.revision},
  applicationResult:confirmedApp,phase:'error',error:'Component update failed',sequence:{stage:'other'},

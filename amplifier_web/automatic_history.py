@@ -142,11 +142,8 @@ def native_input_id(row):
     provenance = metadata.get('amplifier_input') if isinstance(metadata, dict) else None
     # Steering keeps the canonical input ID. Media-only and empty occurrences
     # also participate in uniqueness; display text never proves provenance.
-    if (isinstance(provenance, dict) and provenance.get('version') == 1
-            and provenance.get('kind') in ('user', 'steer')
-            and isinstance(provenance.get('id'), str) and 0 < len(provenance['id']) <= 200):
-        return provenance['id']
-    return None
+    from .input_status import native_input_id as marker_input_id
+    return marker_input_id(row['role'], provenance)
 
 
 def display_message(row, index, session, *, include_internal=False):

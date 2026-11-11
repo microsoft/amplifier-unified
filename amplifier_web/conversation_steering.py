@@ -89,6 +89,8 @@ def record(service, session, input_id, disposition, reason=None, *, preserve_pen
         # these exact draft IDs in the same publication as positive steering.
         service.clients.consume_attachments(session, message.get('attachments', []))
     message['delivery'] = {'status': delivery}
+    from .input_status import steering as observe_input_steering
+    observe_input_steering(session, message)
     row = service.db.execute('SELECT receipt FROM commands WHERE id=?', (input_id,)).fetchone()
     if row:
         receipt = json.loads(row[0])

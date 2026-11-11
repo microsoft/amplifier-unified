@@ -72,7 +72,7 @@ function QuestionCard({question,sessionId,state,dispatch,onPreviewChange,history
   <article className="a-question" aria-label={`Question ${q.id}`} data-question-id={q.id}>
   <div className="a-question-kind">{q.status==='pending'?(q.required?'Your answer is needed':'Optional question'):q.status==='answered'?'Answered':'Closed question'}</div>
   {q.status==='pending'?<div key="prompt">{original}</div>:<div key="answer" className="a-question-result" role="status">
-   {q.status==='answered'?<><strong>Your answer:</strong><Markdown text={q.answer.text} userContent fileContext={fileContext}/><small>{delivery==='accepted'?'Answer saved and delivered to Amplifier.':delivery==='sending'?'Answer saved. Confirming delivery…':delivery==='rejected'?'Answer saved. Amplifier could not accept it.': 'Answer saved. Delivery is unconfirmed; it has not been sent again.'}</small>{q.delivery?.message&&delivery!=='accepted'&&<p>{q.delivery.message}</p>}</>:<small>{q.status==='superseded'?'Replaced by a newer question.':'Question cancelled without an answer.'}</small>}
+   {q.status==='answered'?<><strong>Your answer:</strong><Markdown text={q.answer.text} userContent fileContext={fileContext}/><small>{delivery==='accepted'?'Answer saved and delivered to Amplifier.':delivery==='sending'?'Answer saved. Confirming delivery…':delivery==='rejected'?'Answer saved; not delivered.': 'Answer saved. Delivery is unconfirmed; it has not been sent again.'}</small>{q.delivery?.message&&delivery!=='accepted'&&<p>{q.delivery.message}</p>}</>:<small>{q.status==='superseded'?'Replaced by a newer question.':'Question cancelled without an answer.'}</small>}
    {q.status==='answered'&&delivery==='unknown'&&q.delivery?.inputId&&<div className="a-dialog-actions"><button type="button" className="a-soft" disabled={busy} onClick={checkDelivery}>{busy?'Checking delivery…':'Check delivery'}</button></div>}
    {deliveryNote&&delivery!=='accepted'&&<p>{deliveryNote}</p>}
   </div>}
@@ -109,7 +109,11 @@ export function QuestionNotice({session,paneRef}){
  const active=activeQuestions(session);
  if(!active.length)return null;
  const pending=active.filter(q=>q.status==='pending').length;
- return <div className="a-question-notice" role="status"><span>{pending?`${pending===1?'A question needs':pending+' questions need'} your answer`:'An answer needs delivery confirmation'}</span><button type="button" className="a-link" onClick={()=>{const target=paneRef.current?.querySelector('[data-part="questions"]');if(target){target.scrollIntoView({block:'start'});target.focus({preventScroll:true})}}}>Review {pending?'questions':'answer'}</button></div>;
+ const rejected=active.filter(q=>q.status==='answered'&&q.delivery?.status==='rejected').length;
+ const notice=pending?`${pending===1?'A question needs':pending+' questions need'} your answer`
+  :rejected===active.length?`${rejected===1?'An answer was':rejected+' answers were'} saved but not delivered`
+  :rejected?'Saved answers need delivery review':'An answer needs delivery confirmation';
+ return <div className="a-question-notice" role="status"><span>{notice}</span><button type="button" className="a-link" onClick={()=>{const target=paneRef.current?.querySelector('[data-part="questions"]');if(target){target.scrollIntoView({block:'start'});target.focus({preventScroll:true})}}}>Review {pending?'questions':'answer'}</button></div>;
 }
 
 export function Questions({session,state={},dispatch,history=false,reviewState}){

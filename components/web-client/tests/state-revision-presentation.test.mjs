@@ -6,16 +6,18 @@ import {applyStateDelta,onlyStateRevisionChanged} from '../src/state-transport.j
 import {createPendingView} from '../src/pending-view.js';
 import {createConversationNavigation} from '../src/conversation-navigation.js';
 import {createDestinationHistory} from '../src/destination-history.js';
+import {notificationEvents} from '../src/notifications.js';
 
 // Exercise the actual acceptance and command-fence boundary, without mounting
 // unrelated UI. The built-browser check separately measures DOM/render effects.
 const source=readFileSync(new URL('../src/main.jsx',import.meta.url),'utf8');
 const boundary=source.slice(source.indexOf(' const acceptState=useCallback('),source.indexOf(' const dispatch=useCallback('));
 function harness(){
- const painted=[],observed=[],timers=new Map(),requests=[],effects=[],listeners=new Map();
+ const painted=[],observed=[],notified=[],timers=new Map(),requests=[],effects=[],listeners=new Map();
  const context={useCallback:fn=>fn,useEffect:fn=>effects.push(fn),onlyStateRevisionChanged,document:{hidden:false,addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:name=>listeners.delete(name)},
   serverState:{current:null},latest:{current:null},effectHandler:{current:()=>{}},
-  seenEffects:{current:new Set()},notificationMessages:()=>[],lastNotify:{current:new Set()},
+  seenEffects:{current:new Set()},notificationEvents,lastNotify:{current:new Set()},
+  notifySnapshot:{current:state=>notified.push(state)},
   messagesPane:{current:null},historyScrollAnchor:{current:null},stickToBottom:{current:true},
   pendingView:{current:createPendingView()},conversationNavigation:{current:createConversationNavigation()},
   destinationHistory:{current:createDestinationHistory({storage:()=>({getItem:()=>null,setItem(){}}),key:()=>String(observed.length)})},
@@ -23,7 +25,7 @@ function harness(){
   setState:state=>painted.push(state),setTimeout:fn=>{const id=Symbol();timers.set(id,fn);return id},clearTimeout:id=>timers.delete(id),
   request:path=>{requests.push(path);throw Error('Unexpected recovery request')}};
  const api=runInNewContext(`${boundary}\n({acceptState,awaitState})`,context);
- return {...context,...api,painted,observed,timers,requests,effects,listeners};
+ return {...context,...api,painted,observed,notified,timers,requests,effects,listeners};
 }
 function baseline(){return {revision:10,client:{hostInstanceId:'host-a',historyScope:'scope-a'},view:{workSurface:'chat',draft:''},selectedSessionId:'one',sessions:[{id:'one',title:'One',messages:[]}],workspaces:[]}}
 const advance=(state,revision=state.revision+1,changes=[])=>applyStateDelta(state,{baseRevision:state.revision,revision,changes:[{path:['revision'],value:revision},...changes]});
@@ -86,10 +88,22 @@ test('removed, newly undefined, nested and host fields are material; diagnostic 
 
 
 test('hidden observations keep current readback and restore it on visibility without replay',()=>{
- const h=harness(),initial=baseline();h.acceptState(initial);const cleanup=h.effects[0]();h.document.hidden=true;
+ const h=harness(),initial=baseline();
+ initial.attention={items:[{id:'question:existing',sessionId:'one',fingerprint:'existing-v1'}]};
+ h.acceptState(initial);assert.deepEqual([...h.lastNotify.current],notificationEvents(initial).map(event=>event.id));
+ assert.deepEqual(h.notified,[initial]);
+ const cleanup=h.effects[0]();h.document.hidden=true;
  const pending=h.pendingView.current.add({draft:'Kept while hidden'},'one');
- h.acceptState(advance(initial));assert.equal(h.painted.length,1);assert.equal(h.latest.current.revision,11);
+ const next=advance(initial);h.acceptState(next);
+ assert.equal(h.painted.length,1);assert.equal(h.latest.current.revision,11);
+ const attention=advance(next,12,[{path:['attention','items'],value:[...initial.attention.items,{id:'question:new',sessionId:'one',fingerprint:'new-v1'}]}]);
+ h.acceptState(attention);
+ assert.deepEqual(h.notified,[initial,next,attention],'Revision-only and material hidden snapshots reach notifications');
+ assert.equal(h.notified.at(-1),attention);assert.equal(h.observed.at(-1).revision,12);
+ assert.equal(h.painted.length,1,'Hidden attention does not advance presentation');
+ h.acceptState(initial);assert.equal(h.notified.length,3,'Rejected stale snapshots do not reach notifications');
  h.document.hidden=false;h.listeners.get('visibilitychange')();
- assert.equal(h.painted.at(-1).revision,11);assert.equal(h.painted.at(-1).view.draft,'Kept while hidden');
+ assert.equal(h.painted.at(-1).revision,12);assert.equal(h.painted.at(-1).view.draft,'Kept while hidden');
+ assert.equal(h.notified.length,3,'Foreground restoration does not replay the notification callback');
  h.pendingView.current.settle(pending);cleanup();assert.equal(h.listeners.size,0);assert.equal(h.requests.length,0);
 });

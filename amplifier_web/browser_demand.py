@@ -98,6 +98,12 @@ def project(result):
     # Only selected conversation receipts participate in automatic acknowledgement.
     # Full reviewed notices remain available in the Activity and relevant Settings view.
     attention = result.get('attention', {})
+    # Content-free device candidates retain off-chat decisions before the UI
+    # demand filter. Reuse the bounded attention projection; do not scan history.
+    result['notificationAttention'] = [
+        {key: item[key] for key in ('id', 'sessionId', 'fingerprint', 'read') if key in item}
+        for item in attention.get('items', [])
+        if item.get('sessionId') and item.get('id', '').startswith(('question:', 'approval:'))]
     result['attention'] = {**attention,
         'workspaces': {key: value for key, value in attention.get('workspaces', {}).items() if value},
         'items': [item for item in attention.get('items', []) if panel == 'activity'

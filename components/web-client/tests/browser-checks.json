@@ -2,6 +2,11 @@
   "schemaVersion": 1,
   "scenarios": [
     {
+      "id": "input-status",
+      "command": ["node", "tests/input-status-browser.mjs"],
+      "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/input-status"}
+    },
+    {
       "id": "action-spacing",
       "command": ["node", "tests/action-spacing-browser.mjs"],
       "env": {

@@ -1,5 +1,32 @@
 import React from 'react';
 
+const workKinds=new Set(['conversation','runtime','worker','schedule','update-boundary','smart-tools','voice','feedback']);
+const blockerCounts=items=>{
+ const chats=new Set(items.map(item=>item.sessionId).filter(Boolean)).size;
+ return `${items.length} reason${items.length===1?'':'s'} · ${chats} distinct chat${chats===1?'':'s'}`;
+};
+
+export function UpdateBlockers({updates,act}){
+ const blockers=updates.blockers||[];
+ if(!blockers.length)return null;
+ // Classify only the host's observed rows. Counts do not collapse multiple
+ // reasons for one chat or infer that omitted configuration holds recovered.
+ const groups=[
+  ['work','Running, preparing, and background work',blockers.filter(item=>workKinds.has(item.kind))],
+  ['configuration','Configuration recovery holds',blockers.filter(item=>item.kind==='configuration')],
+  ['other','Other update blockers',blockers.filter(item=>item.kind!=='configuration'&&!workKinds.has(item.kind))],
+ ];
+ return <details className="a-update-work" data-part="update-blockers">
+  <summary>View update blockers ({blockerCounts(blockers)})</summary>
+  {groups.filter(([, ,items])=>items.length).map(([kind,title,items])=><section key={kind} aria-label={title}>
+   <h4>{title} ({blockerCounts(items)})</h4>
+   <ul>{items.map((item,index)=><li key={index}>{item.label}{item.sessionId&&<> — <button type="button" className="a-link" data-action="session.select" onClick={async()=>{const result=await act('session.select',{id:item.sessionId});if(result&&result.accepted!==false)await act('view.update',{patch:{panel:null,workSurface:'chat'}})}}>{item.title||'Open conversation'}</button></>}</li>)}</ul>
+  </section>)}
+  <p className="a-caption">Only current update blockers are listed. Configuration holds do not necessarily mean a chat is running, and can remain unresolved even when they no longer block an update. Restarting does not recover held settings or checkout handoffs.</p>
+  <UpdateRestart updates={updates} act={act}/>
+ </details>;
+}
+
 export function UpdateRestart({updates,act}){
  const target=updates.forceRestartTarget;
  const key=JSON.stringify(target||null);

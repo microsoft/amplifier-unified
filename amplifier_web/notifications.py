@@ -15,9 +15,9 @@ class Notifications:
         value=self.read()
         return {k:v for k,v in value.items() if k not in {'topic','token'}} | {'topicConfigured':bool(value.get('topic')),'tokenConfigured':bool(value.get('token'))}
     def save(self,patch):
-        if set(patch)-{'desktop','enabled','server','topic','token','preview','completionBadge'}:raise ValueError('Unknown notification preference')
+        if set(patch)-{'desktop','enabled','server','topic','token','preview','completionBadge','needsInput'}:raise ValueError('Unknown notification preference')
         value=self.read()
-        for key in ('desktop','enabled','preview','completionBadge'):
+        for key in ('desktop','enabled','preview','completionBadge','needsInput'):
             if key in patch and type(patch[key]) is not bool:raise ValueError('Notification switches must be true or false')
         value.update(patch)
         url=urlsplit(value['server'])

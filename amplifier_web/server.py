@@ -299,10 +299,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             from .message_interactions import annotate
             from .peer_attribution import derive, display_annotations
             rows = derive(session, result['messages'], service.peer_attribution.resolve)
-            annotation_source = {'messageAnnotations': display_annotations(session)}
+            annotation_source = {'messageAnnotations': display_annotations(session, (row.get('id') for row in rows))}
             messages = []
             for row in rows:
-                item = compact(annotate(annotation_source, row), session['id'], 'messages', TEXT_LIMIT)
+                item = compact(annotate(annotation_source, row, status_source=session), session['id'], 'messages', TEXT_LIMIT)
                 if row.get('attribution'):
                     item['attribution'] = row['attribution']
                 messages.append(item)
