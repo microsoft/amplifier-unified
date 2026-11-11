@@ -382,3 +382,24 @@ async def test_delayed_start_cannot_cross_stop_epoch(tmp_path):
         assert turn['runtimeOwnerId']=='new-process'
     finally:
         await service.close()
+
+
+async def test_late_terminal_owner_cannot_settle_replacement_controls(tmp_path,monkeypatch):
+    from amplifier_web.execution import ensure_turn
+    runtime=RuntimeManager(command=['unused'])
+    service=AppService(tmp_path/'app',runtime,workspace=tmp_path)
+    session=service._new_session({'title':'Replacement controls'})
+    service.state['sessions']=[session];sid=session['id']
+    tree=ensure_turn(session,'old-input')
+    tree['turns'][0].update(runtimeOwnerId='old-process',generationId='old-generation',phase='completed')
+    runtime.workers[sid]={'runtimeOwnerId':'replacement-process'}
+    calls=[]
+    monkeypatch.setattr(service.operations,'interrupted',lambda s:calls.append('operations'))
+    monkeypatch.setattr(service.schedules,'runtime_ended',lambda s:calls.append('schedules'))
+    try:
+        await runtime._execution_ended(sid,{'runtimeOwnerId':'old-process','emit':service.on_runtime_event},'stopped')
+        assert not calls
+        assert tree['turns'][0]['phase']=='completed'
+    finally:
+        runtime.workers.clear()
+        await service.close()

@@ -4890,7 +4890,7 @@ class AppService:
                     if ended_foreground:
                         settle_stream(session)
                     current_process = getattr(self.runtime, 'workers', {}).get(session['id'], {})
-                    if (ended_foreground or payload.get('runtimeOwnerId') and
+                    if (ended_foreground and not current_process or payload.get('runtimeOwnerId') and
                             current_process.get('runtimeOwnerId') == payload['runtimeOwnerId']):
                         # Controls and accepted schedules can precede the first
                         # conversation generation. Confirm their current process,
