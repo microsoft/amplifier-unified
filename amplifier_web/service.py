@@ -4913,8 +4913,6 @@ class AppService:
                     self._task(self.collaboration.drain(session["id"]))
             elif kind == "runtime.status":
                 if payload.get('event') == 'input.delivered' and payload.get('inputId'):
-                    from .execution import bind_runtime_turn
-                    bind_runtime_turn(session, payload)
                     self._delivery(session, payload['inputId'], 'accepted')
                 # Provider requests/retries describe current work; only lifecycle
                 # events or accepted input can start work. Late/background notices
@@ -5032,9 +5030,12 @@ class AppService:
                 event = {**payload, "at": time.time()}
                 session.setdefault("generations", []).append(event)
                 session["generations"] = session["generations"][-200:]
-                from .input_status import generation as observe_input_generation
+                from .input_status import generation as observe_input_generation, PREFIX
+                input_annotation = PREFIX + str(payload.get('initial_input_id', ''))
+                before_input = session.get('messageAnnotations', {}).get(input_annotation)
                 observe_input_generation(session, payload)
-                if payload.get('event') == 'generation.started' and payload.get('sessionId') == session['id'] and payload.get('rootSessionId') == session['id']:
+                if (payload.get('event') == 'generation.started'
+                        and session.get('messageAnnotations', {}).get(input_annotation) is not before_input):
                     from .execution import bind_runtime_turn
                     bind_runtime_turn(session, payload)
                 from .response_completion import apply as apply_response_completion
