@@ -45,22 +45,6 @@ test('initial seeding, repeated snapshots and enabling later never replay old no
  state.notificationMessages=[{id:'ready',sessionId:'other',role:'assistant',via:'text'}];
  assert.equal(takeNotifications(state,initial,opts).length,1);
 });
-test('pending-view fixture defaults deliver one fresh off-page response only through its selected platform boundary',async()=>{
- const old={id:'old-notice',sessionId:'off-page-chat',role:'assistant',via:'text'};
- const state={selectedSessionId:'chat',notificationMessages:[old]};
- const seen=new Set(notificationEvents(state).map(row=>row.id)),opts={connected:true,permission:'granted',hidden:false};
- assert.deepEqual(takeNotifications(state,seen,opts),[]);
- state.notificationMessages.push({...old,id:'new-notice'});
- const fresh=takeNotifications(state,seen,opts);
- assert.equal(fresh.length,1);assert.deepEqual(takeNotifications(state,seen,opts),[]);
- const notices=[],workerCalls=[];
- const window={Notification:class{constructor(title,options){notices.push({title,options})}}};
- await showBrowserNotification(fresh[0],undefined,{window,navigator:{serviceWorker:{getRegistration:async()=>undefined}}});
- assert.equal(notices.length,1);assert.equal(notices[0].options.body,'Your Amplifier response is ready.');
- await showBrowserNotification(fresh[0],undefined,{window,navigator:{serviceWorker:{getRegistration:async()=>({active:true,showNotification:async(...args)=>workerCalls.push(args)})}}});
- assert.equal(notices.length,1,'An active worker bypasses the constructor counter');
- assert.equal(workerCalls.length,1);
-});
 test('mobile uses active service worker, desktop fallback opens chat only, failures never request permission',async()=>{
  const message={id:'event',sessionId:'chat',kind:'needs-input',text:'private'};
  const shown=[],clicked=[];

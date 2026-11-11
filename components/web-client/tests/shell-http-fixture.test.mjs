@@ -35,37 +35,24 @@ test('mock receipts update accepted scope and omit pages until replacement deman
  assert.throws(()=>f.register(f.demand(3)),/one/);
 });
 
-test('neutral appearance reads bypass controlled actions without claiming storage support',()=>{
- const f=fixture(),read=()=>f.shell.response(f.request('/api/actions',{action:'appearance.preferences.read',args:{}}));
- assert.deepEqual(read(),{accepted:true,result:{renderedPreferences:{}}});
- assert.equal(read().result.namespace,undefined);
- f.state.appearance={renderedPreferences:{scheme:'dark'}};
- assert.deepEqual(read().result,f.state.appearance);
- assert.equal(f.shell.response(f.request('/api/actions',{action:'view.update',args:{patch:{panel:'settings'}}})),undefined);
-});
-
 test('mock stream bootstraps after attachment and closes without late frames',async()=>{
  const previousWindow=globalThis.window,previousFetch=globalThis.fetch;
  const pending=[];
  globalThis.window={};globalThis.fetch=()=>new Promise(resolve=>pending.push(resolve));
  try{
   installFixtureEvents();
-  assert.deepEqual(window.fixtureEventState(),{created:0,opened:0,frames:0,lastRevision:null,sources:0,ready:[]});
   const closed=new window.EventSource(),closedFrames=[];
   closed.addEventListener('state',event=>closedFrames.push(JSON.parse(event.data)));
   await Promise.resolve();closed.close();pending.shift()({json:async()=>({revision:1})});
   await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(closedFrames,[]);
-  assert.deepEqual(window.fixtureEventState(),{created:1,opened:0,frames:0,lastRevision:null,sources:0,ready:[]});
   const live=new window.EventSource(),frames=[];
   live.addEventListener('state',event=>frames.push(JSON.parse(event.data)));
   await Promise.resolve();pending.shift()({json:async()=>({revision:2,client:{id:'attached'}})});
   await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(frames,[{revision:2,client:{id:'attached'}}]);
-  assert.deepEqual(window.fixtureEventState(),{created:2,opened:1,frames:1,lastRevision:2,sources:1,ready:[1]});
   window.emitState({revision:3});live.close();window.emitFixtureState({revision:4});
   assert.deepEqual(frames,[{revision:2,client:{id:'attached'}},{revision:3}]);
-  assert.deepEqual(window.fixtureEventState(),{created:2,opened:1,frames:2,lastRevision:3,sources:0,ready:[]});
  }finally{
   if(previousWindow===undefined)delete globalThis.window;else globalThis.window=previousWindow;
   globalThis.fetch=previousFetch;

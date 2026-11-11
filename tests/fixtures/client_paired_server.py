@@ -13,6 +13,7 @@ stay real. The Node browser driver is separate from the Node-free Python host.
 """
 import argparse
 import asyncio
+import base64
 import hashlib
 import importlib.metadata
 import json
@@ -23,6 +24,7 @@ import shutil
 import signal
 import sys
 import tempfile
+import time
 
 
 def verify_tree(root, expected, *, complete=False):
@@ -151,6 +153,7 @@ async def serve(args):
     with tempfile.TemporaryDirectory(prefix='paired-web-state-', dir=args.state_parent) as directory:
         app = await fixture.main(Path(directory))
         streams = {}
+        appearance_seeded = False
 
         @web.middleware
         async def observe_stream(request, handler):
@@ -204,8 +207,85 @@ async def serve(args):
                 'runtime': 'existing synthetic ChatRuntime',
             })
 
+        async def seed_appearance(request):
+            """One bounded setup, not a state override or a runtime execution."""
+            nonlocal appearance_seeded
+            if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+                raise web.HTTPForbidden()
+            payload = await request.json()
+            service = app['service']
+            if (not isinstance(payload, dict) or set(payload) != {'clientId'}
+                    or not isinstance(payload['clientId'], str)
+                    or service.clients.records.get(payload['clientId'], {}).get('kind') != 'web'):
+                raise web.HTTPBadRequest(text='An attached fixture web client is required.')
+            async with service.lock:
+                if appearance_seeded:
+                    raise web.HTTPConflict(text='Appearance setup already attempted.')
+                # Mark before effects: a failed setup must not be replayed.
+                appearance_seeded = True
+                from amplifier_web.attachments import save
+
+                now = time.time()
+                rows = [service._new_session({
+                    'title': f'Paired appearance chat {index + 1:02}',
+                    'workspace': str(Path(directory) / 'workspace'), 'bundle': 'anchors',
+                }, new_root=True) for index in range(48)]
+                for index, row in enumerate(rows):
+                    row.update(historyManaged=False, historyLoaded=True, historyLoading=False,
+                               recentActivityAt=now - index)
+                owner = rows[0]
+                sid, turn = owner['id'], 'paired-appearance-turn'
+                owner.update(status='working', messages=[
+                    {'id': f'paired-appearance-history-{index}', 'role': 'assistant' if index % 2 else 'user',
+                     'text': f'Saved synthetic paragraph {index}.\n\n'
+                             + 'Retained conversation text for independent scrolling. ' * 8,
+                     'createdAt': now - 500 + index}
+                    for index in range(24)
+                ] + [
+                    {'id': 'paired-appearance-input', 'inputId': turn, 'role': 'user',
+                     'text': 'Inspect this synthetic work without submitting another message.',
+                     'createdAt': now - 25, 'delivery': {'status': 'accepted'}},
+                    {'id': 'paired-appearance-latest', 'role': 'assistant',
+                     'text': 'Latest paired synthetic reply remains readable.', 'createdAt': now - 1},
+                ], activity={'phase': 'tools', 'label': 'Inspecting paired synthetic layout',
+                             'startedAt': now - 25, 'updatedAt': now, 'activeTools': []},
+                    execution={'currentTurnId': turn,
+                        'turns': [{'id': turn, 'inputId': turn, 'anchorMessageId': 'paired-appearance-input',
+                                   'phase': 'running', 'startedAt': now - 25}],
+                        'nodes': [
+                            {'id': 'paired-appearance-completed', 'turnId': turn, 'sessionId': sid,
+                             'kind': 'tool', 'label': 'bash', 'phase': 'completed',
+                             'startedAt': now - 24, 'endedAt': now - 21,
+                             'input': json.dumps({'command': 'printf synthetic-result'}),
+                             'output': json.dumps({'stdout': 'Retained synthetic result.', 'returncode': 0})},
+                            {'id': 'paired-appearance-running', 'turnId': turn, 'sessionId': sid,
+                             'kind': 'llm', 'label': 'Synthetic model step', 'phase': 'running',
+                             'startedAt': now - 20, 'provider': 'fixture', 'model': 'fixture-model',
+                             'usage': {'inputTokens': 1234, 'outputTokens': 56, 'totalTokens': 1290, 'calls': 1}},
+                        ]})
+                service.state['sessions'].extend(rows)
+                ids = [row['id'] for row in rows]
+                service.state['pinnedSessionIds'] = [*service.state.get('pinnedSessionIds', []), *ids]
+                service.state['pinnedItemIds'] = [
+                    *service.state.get('pinnedItemIds', []), *[f'session:{sid}' for sid in ids]]
+                # The real private attachment store and client projection own
+                # the chip; no fake URL, browser response, CSS or asset override.
+                attachment = save(service.data_dir, 'long-retained-reference-' * 7 + '.txt',
+                    base64.b64encode(('A long retained clipboard excerpt with important original text. ' * 12).encode()).decode(),
+                    source='clipboard-text')
+                with service.clients.bind(payload['clientId']):
+                    service.clients.attachments(owner).append(attachment)
+                service._publish_full(reason='Bounded paired appearance fixture setup')
+                return web.json_response({
+                    'sessionId': sid, 'pinnedSessionIds': ids, 'attachment': attachment,
+                    'turnId': turn, 'completedNodeId': 'paired-appearance-completed',
+                    'runningNodeId': 'paired-appearance-running', 'messages': len(owner['messages']),
+                    'runtime': 'synthetic display state; no runtime start, send or native execution',
+                })
+
         app.router.add_get('/fixture/assembly', identity)
         app.router.add_post('/fixture/disconnect', disconnect)
+        app.router.add_post('/fixture/appearance', seed_appearance)
         runner = web.AppRunner(app)
         await runner.setup()
         stopped = asyncio.Event()
