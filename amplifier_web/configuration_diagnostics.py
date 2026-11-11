@@ -12,8 +12,7 @@ _CODES = frozenset({
     "original_authority", "retained_authority", "original_payload",
     "recovery_authority", "native_evidence", "native_terminal", "native_effect",
     "native_binding", "resume_effect", "saved_terminal", "saved_target",
-    "saved_plan", "saved_comparison", "update_hold", "update_activity",
-    "update_binding", "update_attempts", "update_snapshot",
+    "saved_plan", "saved_comparison",
 })
 
 

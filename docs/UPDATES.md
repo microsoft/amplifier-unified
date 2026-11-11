@@ -31,7 +31,7 @@ finish its turn before adopting the new one.
   and rollback. They do not turn a configured moving ref into a permanent pin
   for later updates.
 
-### Explicit app-only requests and terminal configuration holds
+### Explicit app-only requests and idle configuration holds
 
 `updates.app` requests only application preparation and activation, including the
 app package's qualified dependencies. It supersedes an older whole-install
@@ -42,22 +42,25 @@ readiness ends that request; it does not install components from the superseded
 sequence. `updates.install` still requests the whole app → included → other
 sequence. A later ordinary policy check can start a new update cycle.
 
-Normal app replacement may leave an operation-bound configuration error held
-when the exact current operation, immutable request/payload and every bounded
-native attempt prove a terminal known effect, with unchanged saved configuration
-for a saved outcome. The target must have no mounted worker, preparation, running
-turn or child work, refresh, unsettled management task or runtime operation.
-Missing, forged, contradictory, partial or unknown native evidence stays blocked.
-The app owner rechecks the same operation, target, Stop and revision across
-validation waits and holds the absent native writer boundary through activation.
+Normal app replacement does not require recovery of an idle configuration error.
+For example, a lost native receipt can leave settings unresolved without keeping
+the host on an old application release. The target must have no mounted worker,
+preparation, running turn or child work, refresh, unsettled management task or
+runtime operation. Cancellation requested is not settled work. The app owner
+rechecks held-owner, execution/native target and Stop bindings across validation
+waits and holds the absent native writer boundary through activation. A changed
+candidate or intent must be qualified again before replacement.
 
 This is update quiescence, not configuration success or renewed configuration
 authority: the original error, request, payload, settings, authority, attempts,
 native seal and input fence remain unchanged. It never resumes, reconciles,
 mounts, cancels or rewrites that operation, and does not enqueue target model
-input. Component activation does not inherit this app-only exception. Legacy
-non-operation recovery holds retain their existing qualification checks; explicit
-user-only force-restart semantics are unchanged.
+input. Missing, contradictory, partial or unknown historical evidence stays
+unresolved; replacement does not upgrade it to a known outcome. Status reads do
+not rescan native receipts or saved configuration to decide app quiescence.
+Component activation retains its existing stronger configuration gate; explicit
+user-only force-restart semantics are unchanged. Real active work can still
+require waiting or deliberate interruption; an idle recovery hold alone cannot.
 
 ### Partial failure does not abort independent progress
 
