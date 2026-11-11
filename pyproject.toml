@@ -53,8 +53,13 @@ artifacts = ["/amplifier_web/release-source.json"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "amplifier_scheduling", "amplifier_recall", "amplifier_outputs", "amplifier_worktrees", "amplifier_publishing", "amplifier_portability"]
-# The standalone scheduling project shares these same runtime sources.
+# Standalone projects share these same runtime sources; test/build inputs do not ship.
 exclude = [
+    "/amplifier_operations/tests/**", "/amplifier_operations/build/**",
+    "/amplifier_operations/dist/**", "/amplifier_operations/.venv/**",
+    "/amplifier_operations/*.egg-info/**", "/amplifier_operations/pyproject.toml",
+    "/amplifier_operations/MANIFEST.in", "/amplifier_operations/LICENSE",
+    "/amplifier_operations/.gitignore", "/amplifier_operations/README.md",
     "/amplifier_scheduling/tests/**", "/amplifier_scheduling/build/**",
     "/amplifier_scheduling/dist/**", "/amplifier_scheduling/.venv/**",
     "/amplifier_scheduling/*.egg-info/**", "/amplifier_scheduling/pyproject.toml",
@@ -65,6 +70,8 @@ exclude = [
 [tool.hatch.build.targets.sdist]
 exclude = [
     "/.ci/**", "/components/web-client/**",
+    "/amplifier_operations/build/**", "/amplifier_operations/dist/**",
+    "/amplifier_operations/.venv/**", "/amplifier_operations/*.egg-info/**",
     "/amplifier_scheduling/build/**", "/amplifier_scheduling/dist/**",
     "/amplifier_scheduling/.venv/**", "/amplifier_scheduling/*.egg-info/**",
 ]
@@ -122,4 +129,4 @@ artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "re
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "amplifier_scheduling/tests"]
+testpaths = ["tests", "amplifier_scheduling/tests", "amplifier_operations/tests"]
