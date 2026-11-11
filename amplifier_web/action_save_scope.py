@@ -12,7 +12,7 @@ SESSION_ACTIONS = {
     'conversation.delivery', 'conversation.retry', 'conversation.stop',
     'worker.spawn', 'worker.stop', 'worker.steer', 'worker.message',
     'approval.respond', 'attachment.add', 'attachment.remove',
-    'question.create', 'question.answer', 'question.cancel', 'question.supersede',
+    'question.create', 'question.answer', 'question.cancel', 'question.supersede', 'question.dismiss',
     'message.reply', 'message.replyClear', 'message.reaction', 'message.reveal',
     'configuration.operation.reconcile', 'configuration.operation.resume',
 }

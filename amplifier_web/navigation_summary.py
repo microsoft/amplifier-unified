@@ -3,6 +3,7 @@ from collections import Counter
 from functools import lru_cache
 import re
 from .session_activity import activity_flags
+from .questions import reminder_dismissed
 
 
 def task_blocked(state, sid):
@@ -18,6 +19,7 @@ def activity(session, unread=False, *, error_reviewed=False, blocked=False, task
            for row in session.get('questions', [])):
         return {'kind': 'attention', 'label': 'Answer requested'}
     if any((row.get('delivery') or {}).get('status') in {'unknown', 'rejected'}
+           and not reminder_dismissed(row)
            for row in session.get('questions', [])):
         return {'kind': 'attention', 'label': 'Check answer delivery'}
     status = session.get('status', 'idle')

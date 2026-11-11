@@ -2646,7 +2646,7 @@ class AppService:
                     if include_state and getattr(self, '_progress_dirty', False):
                         self._commit_pending_progress()
                     saved_receipt = json.loads(previous[1])
-                    if action == 'question.answer':
+                    if action in {'question.answer', 'question.dismiss'}:
                         saved_receipt['result'] = self.questions.read('question.read', args)
                     return {**saved_receipt, **({'state': self.browser_state()} if include_state else {}), "duplicate": True}
             # A shielded task may have waited on history, configuration, creation
@@ -4106,7 +4106,7 @@ class AppService:
                 # Capture before returning to the HTTP task. Its later resumption
                 # may follow a publication that this client never subscribed to.
                 result['_deliveryStateRevision'] = (json.loads(saved[0]).get('_deliveryStateRevision') if saved else None) or self._state['revision']
-        if action == 'question.answer':result['result'] = self.questions.read('question.read', args)
+        if action in {'question.answer', 'question.dismiss'}:result['result'] = self.questions.read('question.read', args)
         return {**result, **({'state': self.browser_state()} if include_state else {})}
 
     async def _provision_workspace(self, identity, reconcile=False):
