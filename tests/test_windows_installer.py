@@ -161,12 +161,12 @@ class WindowsInstallerSourceTests(unittest.TestCase):
     def test_helpers_have_inspected_official_exact_assets_and_notices(self):
         helper = self.function("Install-VerifiedHelper")
         for value in (
-            "https://github.com/astral-sh/uv/releases/download/0.12.18/uv-x86_64-pc-windows-msvc.zip",
-            "cae6a3bc25239f83dffb467a4b180508d9da23986c04639ebfa44e43e6a84bff",
+            "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-x86_64-pc-windows-msvc.zip",
+            "0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021",
             "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.4/MinGit-2.56.0.4-64-bit.zip",
             "e3bf78351fe777fba47ddee5950082f8a98bb0f02604fdc7ba3ee2cb68ffa877",
             "LICENSE.txt", "LICENSE-MIT", "LICENSE-APACHE", "bootstrap-receipt.json",
-            "01cb90c1a4f88af09906cb60de9766d2add4a062",
+            "316c827e058c16b71d5c507a20729c2995a7bcce",
         ):
             self.assertIn(value, helper)
         self.assertLess(helper.index("Assert-FileChecksum $archive"), helper.index("Expand-ContainedZip"))

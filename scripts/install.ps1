@@ -7,7 +7,8 @@ Save and inspect this file before running it as the signed-in, non-elevated
 owner. Do not change execution policy to run it. Parameters mirror install.sh:
 -Version, -NoOpen, -Anonymous and the built-in -Verbose.
 The separate -PrototypeManifestUrl/-PrototypeManifestSha256 entry prepares an
-explicit unqualified foreground candidate; it does not open the public gate.
+explicit unqualified candidate; -Background selects the owner-logon host rather
+than a foreground console. Neither opens the public installation gate.
 
 Release contract (proposed, owned here until release integration):
 native-windows-support.json must be an asset of the EXACT selected stable
@@ -26,8 +27,9 @@ retained qualification evidence, NOT proof of the installed worker graph.
 Checksums obtained from the publisher are integrity, not independent signatures.
 
 The lifecycle/default-worker qualification handoff is deliberately CLOSED in
-Assert-NativeActivationContract. Current CLI has service install/status,
-doctor and open, but no credential-free default-runtime prepare/inspect command.
+Assert-NativeActivationContract. The candidate CLI has explicit runtime
+prepare/status and owner-logon lifecycle commands. Clean-account bootstrap,
+browser trust and upgrade/rollback acceptance are not yet established.
 Do not remove that gate just because a release publishes a support JSON file.
 The lifecycle owner must integrate exact graph preparation/inspection, retained
 prior generation and authenticated readiness before enabling package mutation.
@@ -42,7 +44,9 @@ param(
     # Explicit experimental entry. This never manufactures a public support record.
     [string] $PrototypeManifestUrl,
     [ValidatePattern('^([0-9a-f]{64})?$')]
-    [string] $PrototypeManifestSha256
+    [string] $PrototypeManifestSha256,
+
+    [switch] $Background
 )
 
 function Assert-NativePlatform {
@@ -681,11 +685,15 @@ function Invoke-InstallChild([string] $Executable, [string[]] $Arguments, [hasht
         $info.EnvironmentVariables['GIT_CONFIG_GLOBAL'] = 'NUL'
         $info.EnvironmentVariables['GIT_CONFIG_SYSTEM'] = 'NUL'
         $info.EnvironmentVariables['GIT_TERMINAL_PROMPT'] = '0'
-        $info.EnvironmentVariables['GIT_CONFIG_COUNT'] = '2'
+        $info.EnvironmentVariables['GIT_CONFIG_COUNT'] = '3'
         $info.EnvironmentVariables['GIT_CONFIG_KEY_0'] = 'credential.helper'
         $info.EnvironmentVariables['GIT_CONFIG_VALUE_0'] = ''
         $info.EnvironmentVariables['GIT_CONFIG_KEY_1'] = 'core.askPass'
         $info.EnvironmentVariables['GIT_CONFIG_VALUE_1'] = ''
+        # Root-local caches can exceed legacy MAX_PATH during a full pinned
+        # checkout. This is Git's child-only support, not an OS policy change.
+        $info.EnvironmentVariables['GIT_CONFIG_KEY_2'] = 'core.longpaths'
+        $info.EnvironmentVariables['GIT_CONFIG_VALUE_2'] = 'true'
     }
     if ($script:InstallStage -like 'prototype*' -or $Environment.ContainsKey('UV_TOOL_DIR')) {
         # Keep the ordinary Windows profile identity. Discard only package/tool
@@ -750,12 +758,12 @@ function Install-VerifiedHelper([string] $Name) {
     # GitHub asset digests, not guessed URLs or claims of signature verification.
     $helpers = @{
         uv = @{
-            version = '0.12.18'
-            url = 'https://github.com/astral-sh/uv/releases/download/0.12.18/uv-x86_64-pc-windows-msvc.zip'
-            sha256 = 'cae6a3bc25239f83dffb467a4b180508d9da23986c04639ebfa44e43e6a84bff'
+            version = '0.13.7'
+            url = 'https://github.com/astral-sh/uv/releases/download/0.13.7/uv-x86_64-pc-windows-msvc.zip'
+            sha256 = '0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021'
             executable = 'uv.exe'
             license = 'LICENSE-MIT'
-            licenseSource = 'https://raw.githubusercontent.com/astral-sh/uv/01cb90c1a4f88af09906cb60de9766d2add4a062'
+            licenseSource = 'https://raw.githubusercontent.com/astral-sh/uv/316c827e058c16b71d5c507a20729c2995a7bcce'
             licenseHashes = @{
                 'LICENSE-MIT' = '860e3d7a86b84e6a7012c7a635fc64df475cebc6cce34dfeb73a5982ec58176c'
                 'LICENSE-APACHE' = 'c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4'
@@ -928,9 +936,9 @@ function Read-PrototypeManifest($Record) {
         throw 'Prototype capsule must name an exact official HTTPS release asset.'
     }
     $mode = Get-PrototypeSourceMode $Record
-    if ($mode -eq 'pinned-vcs' -and ($Record.source -cne '1c4ac3b4f9ed5d2d3f588f6fa6c74a119e439153' -or
-        $Record.version -cne '0.54.5')) {
-        throw 'The pinned VCS prototype is bound to the frozen 0.54.5 candidate.'
+    if ($mode -eq 'pinned-vcs' -and ($Record.source -cne 'd9b26e7bb3c5270d377520b82e498111384e931d' -or
+        $Record.version -cne '0.65.0')) {
+        throw 'The pinned VCS prototype is bound to the reviewed 0.65.0 candidate.'
     }
     return $Record
 }
@@ -966,7 +974,7 @@ function Get-PrototypeEnvironment([string] $Root, [string] $Uv, [string] $Git) {
     }
 }
 
-function Write-PrototypeShortcut([string] $Python, [string] $Launcher) {
+function Write-PrototypeShortcut([string] $Python, [string] $Launcher, [bool] $LogonHost = $false) {
     # A user-owned link inside the private root, not a global shortcut or PATH edit.
     $path = Join-Path $script:InstallWork 'Launch Unified.lnk'
     $empty = $script:InstallStorage.CreateFile($path)
@@ -975,14 +983,15 @@ function Write-PrototypeShortcut([string] $Python, [string] $Launcher) {
     $shortcut = $shell.CreateShortcut($path)
     $shortcut.TargetPath = $Python
     $shortcut.Arguments = '-I -B ' + (ConvertTo-NativeArgument $Launcher)
+    if ($LogonHost) { $shortcut.Arguments += ' --background' }
     $shortcut.WorkingDirectory = $script:InstallWork
-    $shortcut.Description = 'Experimental Amplifier Unified - foreground, Ctrl+C to stop'
+    $shortcut.Description = if ($LogonHost) { 'Experimental Amplifier Unified - owner sign-in background host' } else { 'Experimental Amplifier Unified - foreground, Ctrl+C to stop' }
     $shortcut.Save()
     $script:InstallStorage.HoldFile($path, $false)
     return $path
 }
 
-function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, [bool] $SkipLaunch) {
+function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, [bool] $SkipLaunch, [bool] $LogonHost = $false) {
     $ErrorActionPreference = 'Stop'
     Set-StrictMode -Version 2.0
     # Missing manifest/digest must refuse before any filesystem/network effects.
@@ -999,9 +1008,14 @@ function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, 
     try {
         [Net.ServicePointManager]::SecurityProtocol = $originalTls -bor [Net.SecurityProtocolType]::Tls12
         Write-PrivateInstallText $script:InstallLog '' -Mutable
-        Write-Host 'Experimental foreground setup, NOT a qualified public Windows installation.'
+        Write-Host 'Experimental native setup, NOT a qualified public Windows installation.'
         Write-Host "Private location: $($script:InstallWork)"
-        Write-Host 'Prior installs, PATH, default Python, trust stores and startup tasks stay unchanged.'
+        Write-Host 'Prior installs, PATH, default Python and trust stores stay unchanged.'
+        if ($LogonHost) {
+            Write-Host 'The selected launcher will register only an owned sign-in background task after dependency preparation.'
+        } else {
+            Write-Host 'Foreground mode does not register a startup task.'
+        }
         $planPath = Join-Path $script:InstallWork 'prototype-plan.json'
         Get-BoundedDownload $ManifestUrl $planPath 1048576
         Assert-FileChecksum $planPath $ManifestHash
@@ -1061,7 +1075,7 @@ function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, 
         $childEnv = Get-PrototypeEnvironment $script:InstallWork $uv $git
         if ($mode -eq 'pinned-vcs') {
             $uvVersion = Invoke-InstallChild $uv @('--version') $childEnv
-            if ($uvVersion -cnotmatch '^uv 0\.12\.18(?:\s|$)') { throw 'Pinned bootstrap uv identity mismatch.' }
+            if ($uvVersion -cnotmatch '^uv 0\.13\.7(?:\s|$)') { throw 'Pinned bootstrap uv identity mismatch.' }
         }
         $script:InstallStage = 'private ordinary CPython'
         Write-Host '[2/3] Preparing ordinary CPython 3.13 without changing the system Python.'
@@ -1085,14 +1099,14 @@ function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, 
         $null = Invoke-InstallChild $uv @('venv', '--python', $python, $venv) $childEnv
         $hostPython = Join-Path $venv 'Scripts\python.exe'
         $null = Invoke-InstallChild $uv @('pip', 'install', '--python', $hostPython,
-            '--no-index', '--no-deps', '--require-hashes', '--only-binary', ':all:',
+            '--no-index', '--no-deps', '--link-mode', 'copy', '--require-hashes', '--only-binary', ':all:',
             '--find-links', (Join-Path $capsule 'wheels'), '-r', (Join-Path $capsule 'requirements.txt')) $childEnv
         if ($mode -eq 'pinned-vcs') {
             $script:InstallStage = 'prototype exact Git dependencies'
             Write-Host 'Building five frozen Python packages with private Git and pinned isolated backend wheels.'
             $gitNames = 'amplifier-foundation,amplifier-module-hooks-session-naming,amplifier-memory,amplifier-bundle-ui-use,amplifier-bundle-context-intelligence'
             $null = Invoke-InstallChild $uv @('pip', 'install', '--python', $hostPython,
-                '--no-index', '--no-deps', '--no-require-hashes', '--verify-hashes',
+                '--no-index', '--no-deps', '--link-mode', 'copy', '--no-require-hashes', '--verify-hashes',
                 '--only-binary', ':all:', '--no-binary', $gitNames,
                 '--find-links', (Join-Path $capsule 'build-wheels'),
                 '--build-constraint', (Join-Path $capsule 'build-constraints.txt'),
@@ -1108,18 +1122,24 @@ function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, 
             manifestSha256 = $ManifestHash; capsuleSha256 = $plan.capsule.sha256
             python = $hostPython; uv = $uv; git = $git
             sourceMode = $mode
-            bootstrapUv = if ($mode -eq 'pinned-vcs') { '0.12.18' } else { 'reused-or-private' }
+            bootstrapUv = if ($mode -eq 'pinned-vcs') { '0.13.7' } else { 'reused-or-private' }
         }
         $null = Invoke-InstallChild $hostPython @('-I', '-B', $launcher, '--check') $childEnv
-        $shortcutPath = Write-PrototypeShortcut $hostPython $launcher
+        $shortcutPath = Write-PrototypeShortcut $hostPython $launcher $LogonHost
         Write-Host "Setup prepared. Open this shortcut to launch or relaunch: $shortcutPath"
         Write-Host 'The first launch explains the CA trust decision; it never adds trust silently.'
-        Write-Host 'Stop: Ctrl+C in the Unified window. Uninstall: stop, review/remove trial CA trust yourself, then remove only this printed private directory.'
+        if ($LogonHost) {
+            Write-Host 'Selected: start at sign-in, stop at sign-out. Not a Windows SCM service.'
+            Write-Host 'Stop/remove the task using the private CLI service stop/uninstall commands before removing files. Data and certificate trust are retained.'
+        } else {
+            Write-Host 'Stop: Ctrl+C in the Unified window. Uninstall: stop, review/remove trial CA trust yourself, then remove only this printed private directory.'
+        }
         Write-Host 'Rollback: the previous installation was not replaced; keep using its original launcher.'
         if (-not $SkipLaunch) {
             $info = New-Object Diagnostics.ProcessStartInfo
             $info.FileName = $hostPython
             $info.Arguments = '-I -B ' + (ConvertTo-NativeArgument $launcher)
+            if ($LogonHost) { $info.Arguments += ' --background' }
             $info.WorkingDirectory = $script:InstallWork
             $info.UseShellExecute = $true
             # Normal app filesystem owners take over after bootstrap validation;
@@ -1138,7 +1158,7 @@ function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, 
     if ($null -ne $launchInfo) {
         try {
             $null = [Diagnostics.Process]::Start($launchInfo)
-            Write-Host 'Foreground launcher requested. Browser onboarding and first response are separate checks.'
+            Write-Host 'Selected launcher requested. Browser onboarding and first response are separate checks.'
         } catch {
             throw "Setup is prepared, but the launch request failed. Open the private shortcut yourself: $shortcutPath"
         }
@@ -1148,8 +1168,9 @@ function Invoke-UnifiedPrototype([string] $ManifestUrl, [string] $ManifestHash, 
 # Dot sourcing is only for offline function fixtures; it performs no setup.
 if ($MyInvocation.InvocationName -ne '.') {
     if ($PrototypeManifestUrl -or $PrototypeManifestSha256) {
-        Invoke-UnifiedPrototype $PrototypeManifestUrl $PrototypeManifestSha256 ([bool]$NoOpen)
+        Invoke-UnifiedPrototype $PrototypeManifestUrl $PrototypeManifestSha256 ([bool]$NoOpen) ([bool]$Background)
     } else {
+        if ($Background) { throw 'Background setup requires the reviewed prototype manifest while native activation is pending.' }
         Invoke-UnifiedInstall $Version ([bool]$NoOpen) ([bool]$Anonymous)
     }
 }

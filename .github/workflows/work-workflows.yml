@@ -42,7 +42,7 @@ jobs:
         run: python scripts/integration_checks.py fast-scope --base "$PR_BASE" --head "$PR_HEAD" --output "$GITHUB_OUTPUT"
       - name: Check release identity and post-release reporting contracts
         if: steps.verification-scope.outputs.scope != 'release-smoke'
-        run: uv run --no-sync pytest -q tests/test_release_automation.py tests/test_historical_web_layout.py tests/test_release_qualification.py tests/test_frontend_release_proof.py tests/test_frontend_build_artifact.py tests/test_goal_peer_junit.py tests/test_post_release_checks.py tests/test_integration_checks.py tests/test_integration_clients.py tests/test_browser_check_runner.py tests/test_active_client_diagnostics.py
+        run: uv run --no-sync pytest -q tests/test_release_automation.py tests/test_windows_consumer_release.py tests/test_historical_web_layout.py tests/test_release_qualification.py tests/test_frontend_release_proof.py tests/test_frontend_build_artifact.py tests/test_goal_peer_junit.py tests/test_post_release_checks.py tests/test_integration_checks.py tests/test_integration_clients.py tests/test_browser_check_runner.py tests/test_active_client_diagnostics.py
       - name: Check standing access authorization and revocation
         if: steps.verification-scope.outputs.scope != 'release-smoke'
         run: uv run --no-sync pytest -q tests/test_access_mode.py tests/test_configuration_authority.py

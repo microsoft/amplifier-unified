@@ -89,6 +89,37 @@ class ABITests(unittest.TestCase):
             self.assertEqual(c.sizeof(jobs._ExtendedLimit), 144)
             self.assertEqual(jobs._ExtendedLimit.ProcessMemoryLimit.offset, 112)
 
+    def test_host_lifetime_job_is_retained_without_inheritable_or_force_handles(self):
+        native, k = self.native()
+        self.enterContext(patch.object(jobs, "_Native", return_value=native))
+        self.enterContext(patch.object(jobs, "_require_runtime"))
+        self.enterContext(patch.object(jobs, "_host_lifetime_jobs", []))
+        k.IsProcessInJob.side_effect = lambda process, job, value: setattr(value._obj, "value", 1) or 1
+        result = jobs.contain_current_host()
+        self.assertEqual(result, {"pid": os.getpid(), "created": str(17 | (2 << 32)),
+                                  "killOnClose": True, "inheritable": False})
+        self.assertEqual(jobs._host_lifetime_jobs, [(native, k.CreateJobObjectW.return_value)])
+        k.AssignProcessToJobObject.assert_called_once_with(k.CreateJobObjectW.return_value,
+                                                         k.OpenProcess.return_value)
+        k.CloseHandle.assert_called_once_with(k.OpenProcess.return_value)
+        k.TerminateProcess.assert_not_called()
+        k.TerminateJobObject.assert_not_called()
+
+    def test_failed_host_assignment_closes_only_unassigned_lifeline(self):
+        native, k = self.native()
+        self.enterContext(patch.object(jobs, "_Native", return_value=native))
+        self.enterContext(patch.object(jobs, "_require_runtime"))
+        self.enterContext(patch.object(jobs, "_host_lifetime_jobs", []))
+        k.AssignProcessToJobObject.return_value = 0
+        with self.assertRaises(OSError):
+            jobs.contain_current_host()
+        self.assertEqual(jobs._host_lifetime_jobs, [])
+        self.assertEqual(k.CloseHandle.call_args_list,
+                         [unittest.mock.call(k.OpenProcess.return_value),
+                          unittest.mock.call(k.CreateJobObjectW.return_value)])
+        k.TerminateProcess.assert_not_called()
+        k.TerminateJobObject.assert_not_called()
+
     def test_public_member_verification_is_exact_read_only_and_closes_handle(self):
         native, k = self.native()
         owner = jobs.WindowsOwnedProcess(native, 1, 1)

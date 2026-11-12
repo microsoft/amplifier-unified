@@ -114,13 +114,7 @@ async def _status_once(home, wait=0):
         return {'ok': False, 'service': initial_state, 'message': "The background service manager could not be reached.",
                 'nextStep': service_manager_help() if sys.platform == 'linux' else 'Sign in to your desktop account and retry service status.'}
     if sys.platform == 'win32':
-        # Do not send the control bearer to an unverified loopback listener.
-        # Scheduler Running/EnginePID is not authenticated host-process proof.
-        return {'ok': False, 'service': initial_state, 'responding': None, 'probeAttempted': False,
-                'processVerified': False, 'qualificationPending': True,
-                'message': 'Windows task state: ' + initial_state + '. Authenticated host/process '
-                           'correlation is not yet qualified; task registration is not readiness.',
-                'nextStep': 'Keep native Windows qualification pending; do not treat this task as a healthy host.'}
+        return await _windows_status(home, expected, initial_state)
     try:
         config = load_server_config(home)
         manager = SimpleNamespace(home=home, service=SimpleNamespace(server_config=config, port=config['port']))
@@ -178,6 +172,60 @@ async def _status_once(home, wait=0):
             "listenerUrls": [], "listenerChecks": listener_checks, **diagnostics,
             "message": f"Unified is not ready yet (background service: {state}).",
             "nextStep": "Run amplifier-unified service logs to see why startup has not completed."}
+
+
+async def _windows_status(home, expected, state):
+    """Correlate private task receipt, real PID, listener and authenticated app."""
+    import aiohttp
+    from urllib.parse import urlsplit
+    from . import browser_entry, windows_service
+    from .windows_task_runtime import listener_owned, observe
+    from .deployment import load_server_config
+    result = {"ok": False, "service": state, "responding": False,
+              "probeAttempted": False, "processVerified": False,
+              "message": "Windows background host is not ready.",
+              "nextStep": "Run amplifier-unified service status --verbose; preserve the failed stage before retrying."}
+    try:
+        task, spec = await asyncio.to_thread(windows_service._read, home)
+        if not spec or task.get("state") != 4 or task.get("instances") != 1:
+            return result
+        record = await asyncio.to_thread(observe, spec)
+        if not record or record["phase"] != "listening":
+            return result
+        config = load_server_config(home)
+        # This canonical boundary validates private CA-layout/leaf identity
+        # before the existing control credential is read.
+        urls, pin = browser_entry._owner_probe_targets(home, config)
+        if not isinstance(pin, aiohttp.Fingerprint):
+            return result
+        for url in urls:
+            address = urlsplit(url)
+            if address.scheme != "https":
+                continue
+            if not await asyncio.to_thread(listener_owned, record, address.hostname, address.port):
+                continue
+            token = browser_entry._control_token(home, spec.sid)
+            result["probeAttempted"] = True
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2),
+                                             trust_env=False) as client:
+                async with client.get(url, ssl=pin, allow_redirects=False,
+                                      headers={"Authorization": "Bearer " + token,
+                                               "Host": address.netloc}) as response:
+                    value = await response.json() if response.status == 200 else None
+            current_task, current_spec = await asyncio.to_thread(windows_service._read, home)
+            current = await asyncio.to_thread(observe, spec)
+            if (current_spec == spec and current_task.get("state") == 4
+                    and current_task.get("instances") == 1 and current == record
+                    and await asyncio.to_thread(listener_owned, record, address.hostname, address.port)
+                    and matches_health(value, home, expected)):
+                return {**result, "ok": True, "service": "running", "responding": True,
+                        "processVerified": True, "pid": record["pid"], "created": record["created"],
+                        "url": url.removesuffix("/api/health"),
+                        "publicUrls": config["public_origins"], "publicUrlsVerified": False,
+                        "message": "Unified's owner-logon host is running and responding on this computer."}
+    except (OSError, ValueError, RuntimeError, aiohttp.ClientError, TimeoutError):
+        pass
+    return result
 
 
 def display(result, *, as_json=False, verbose=False):

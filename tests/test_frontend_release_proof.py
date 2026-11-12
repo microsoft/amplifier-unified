@@ -319,7 +319,7 @@ def test_workflows_keep_full_fallback_and_fresh_package_runtime():
     assert ['npm', 'test', '--prefix', '.build/web-client'] in current
     assert ['npm', 'test', '--prefix', 'tests/web'] in current
     assert current[-1] == ['npm', 'run', 'test:artifact-assets', '--prefix', '.build/web-client']
-    assert release['jobs']['release']['needs'] == 'prepare'
+    assert release['jobs']['release']['needs'] == ['prepare', 'windows-consumer']
     for name in ('Build and verify distributions', 'Verify surface context and recipe children through Core and loop-live',
                  'Require native goal and peer continuation regressions without skips'):
         check = next(s for s in frontend if s.get('name') == name)

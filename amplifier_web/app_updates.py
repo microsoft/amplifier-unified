@@ -390,7 +390,8 @@ async def _stage(manager, *, selected=None, extras):
     revision=release['revision']
     if not re.fullmatch('[0-9a-f]{40}',revision):raise ValueError('Invalid release revision')
     generation=uuid.uuid4().hex
-    folder=manager.directory/'applications'/revision/generation
+    from .application_generations import directory
+    folder=directory(manager.home, revision, generation)
     folder.mkdir(parents=True,exist_ok=True,mode=0o700)
     env={**git_environment(),'UV_TOOL_DIR':str(folder/'tools'),'UV_TOOL_BIN_DIR':str(folder/'bin')}
     uv=shutil.which('uv')
@@ -499,6 +500,17 @@ async def _activate_serialized(manager, *, force=None):
 async def installed_target():
     """Only replace the uv tool environment that owns this running host."""
     uv=shutil.which('uv')
+    background = None
+    if os.name == 'nt':
+        from .windows_service import installed_target as background_target
+        from .host.config import app_home
+        background = await asyncio.to_thread(background_target, app_home())
+    if background is not None:
+        if not uv:
+            raise ValueError('The private background installation is missing its uv helper.')
+        prefix, launcher = background
+        return uv, str(launcher), Path(sys.prefix) / 'Scripts/python.exe', {
+            'version': __version__, 'installation': str(prefix), 'source': None}
     # Avoid PATHEXT manufacturing ".EXE" in an otherwise canonical pathname.
     # The native owner deliberately compares exact component spellings.
     executable=shutil.which('amplifier-unified.exe' if os.name=='nt' else 'amplifier-unified')
@@ -564,23 +576,28 @@ async def _activate(manager, *, force=None, holds=None):
                 from .update_restart import RestartRejected
                 raise RestartRejected('The earlier application handoff still needs verification. Its outcome and work gate were preserved.')
             return
-        message=('Automatic Windows application replacement is not available. '
-                 'The running host and prepared candidate are unchanged. '
-                 'Use a qualified manual installation handoff; restarting the '
-                 'current launcher alone does not install this candidate.')
-        manager.diagnostics.begin('application',revision,release.get('attemptId'),
-                                  application_extras=release.get('extras'))
-        manager.diagnostics.record('restart-capability','failed',
-                                   errorType='RuntimeError')
-        await manager.publish(phase='error',error=message,
-            detail='No application pointer, installed package, worker or process was replaced. '
-                   'The staged receipt is retained; automatic activation will not retry it.')
-        if force is not None:
-            from .update_restart import RestartRejected
-            raise RestartRejected(message)
-        return
+        from .windows_service import update_owner
+        owner = await asyncio.to_thread(update_owner, manager.home)
+        if owner is None or force is not None:
+            message=('Automatic Windows application replacement is not available. '
+                     'The running host and prepared candidate are unchanged. '
+                     'Use a qualified manual installation handoff; restarting the '
+                     'current launcher alone does not install this candidate.')
+            manager.diagnostics.begin('application',revision,release.get('attemptId'),
+                                      application_extras=release.get('extras'))
+            manager.diagnostics.record('restart-capability','failed',
+                                       errorType='RuntimeError')
+            await manager.publish(phase='error',error=message,
+                detail='No application pointer, installed package, worker or process was replaced. '
+                       'The staged receipt is retained; automatic activation will not retry it.')
+            if force is not None:
+                from .update_restart import RestartRejected
+                raise RestartRejected(message)
+            return
     folder=manager.directory/'applications'/revision
-    if generation:folder=folder/generation
+    if generation:
+        from .application_generations import directory
+        folder=directory(manager.home, revision, generation)
     marker=folder/'validated.json'
     # Validate one snapshot before closing the runtime or touching the install.
     try:
@@ -660,7 +677,10 @@ async def _activate(manager, *, force=None, holds=None):
     can_promote = bool(generation and supports(bootstrap))
     if can_promote and artifact is not None:
         can_promote = await manager.diagnostics.run('bootstrap-artifact-compatibility',
-            can_read_candidate, process, bootstrap, helper_python, validated)
+            can_read_candidate, process, bootstrap, helper_python, validated, home=manager.home)
+    if sys.platform == 'win32' and (not can_promote or artifact is None):
+        raise ValueError('Windows updates require an official qualified immutable app generation; '
+                         'the current installation was not replaced.')
     if 'managed-browser' in extras:
         current_browser = await qualify_browser(manager, helper_python)
         if current_browser != validated.get('managedBrowser'):
@@ -674,7 +694,7 @@ async def _activate(manager, *, force=None, holds=None):
         await manager.diagnostics.run('replacement-artifact', asyncio.to_thread,
             artifacts.verify, artifact, validated['version'], revision)
     recovery = None
-    if can_promote and force is None and not selected:
+    if can_promote and force is None and (not selected or sys.platform == 'win32'):
         # Capture the serving graph and launch pointer BEFORE changing either.
         # In-place reinstalls have no untouched old environment to restore.
         from .app_features import running_application
@@ -696,6 +716,9 @@ async def _activate(manager, *, force=None, holds=None):
             # Lack of old-host proof does not invalidate a qualified candidate,
             # but cannot authorize reopening the old host after a failed probe.
             pass
+    if sys.platform == 'win32' and recovery is None:
+        raise ValueError('Windows activation requires a verified untouched previous installation for recovery; '
+                         'the running host and launch target were not changed.')
     async with manager.service.lock:
         if force is not None:
             from .update_restart import require
@@ -811,6 +834,7 @@ async def _activate(manager, *, force=None, holds=None):
     manager.diagnostics.clear_failure()
     await manager.publish(phase='activating',pendingApp=None,pendingReplacement=None,appAvailable=False,error=None,
         pendingRestart={'version':validated['version'],'revision':revision,'attemptId':manager.diagnostics.state['attemptId'],
+                        **({'generation': generation} if sys.platform == 'win32' else {}),
                         'sourceInstanceId':manager.running_identity['instanceId'],'requestedAt':time.time(),
                         **({'updateIntent': intent} if intent is not None else {}),
                         **({'forceRestart':replacement['forceRestart']} if 'forceRestart' in replacement else {}),
@@ -823,7 +847,7 @@ async def _activate(manager, *, force=None, holds=None):
     # detached process spawned by this in-process updater.
     from .deployment_service import current_process_is_unit_managed
     if current_process_is_unit_managed(manager.home):
-        await request_managed_restart(manager)
+        await request_managed_restart(manager, **({'recovery': recovery} if sys.platform == 'win32' else {}))
         return
     # A tiny stdlib helper waits until this host releases its port, then starts
     # the already-verified launcher. It does not execute a shell command.
@@ -899,7 +923,7 @@ async def restore_promoted_application(manager, promoted, recovery, bootstrap):
     return True
 
 
-async def request_managed_restart(manager):
+async def request_managed_restart(manager, *, recovery=None):
     """Queue an OS-owned restart; only a ready successor confirms completion.
 
     A service manager can stop this process before its client receives a reply.
@@ -919,9 +943,16 @@ async def request_managed_restart(manager):
     dispatched=False
     try:
         await asyncio.to_thread(prepare_managed_shutdown,manager.home)
-        command=managed_restart_command()
-        dispatched=True
-        result=await process(*command,timeout=30)
+        if sys.platform == 'win32':
+            from .windows_service import request_update_restart
+            target = {key: marker[key] for key in ('revision', 'generation', 'attemptId')}
+            dispatched = True
+            await asyncio.to_thread(request_update_restart, manager.home, target, recovery)
+            result = None
+        else:
+            command=managed_restart_command()
+            dispatched=True
+            result=await process(*command,timeout=30)
     except BaseException as error:
         if not isinstance(error,(Exception,asyncio.CancelledError)):raise
         facts={'durationMs':round((time.monotonic()-started)*1000),'errorType':exception_type(error)}
