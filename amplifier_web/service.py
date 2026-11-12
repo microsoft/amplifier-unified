@@ -3481,6 +3481,8 @@ class AppService:
                     session["status"] = "working"
                     session.pop("error", None)
                     ensure_turn(session,input_id,text)
+                    if session.get('externalAgent'):
+                        session['externalAgent']['activeInputId'] = input_id
                 if not update_message:
                     pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity, args.get('preserveDraft', False))))
             elif action == "conversation.delivery":

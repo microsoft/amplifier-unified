@@ -221,3 +221,40 @@ async def test_stop_settles_when_cancelled_task_did_not_enter_turn_owner(app_fac
     assert session['messages'][0]['delivery']['status'] == 'failed'
     assert session['id'] not in app.external_conversations.turns
     assert not (tmp_path / 'peer/operations.jsonl').exists()
+
+
+async def test_restart_after_admission_preserves_unknown_without_starting_or_replaying(app_factory, tmp_path, monkeypatch):
+    import shutil
+    app = app_factory()
+    session = await create(app, tmp_path)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = app._send
+
+    async def held(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(app, '_send', held)
+    sending = asyncio.create_task(app.dispatch('conversation.send',
+        {'sessionId': session['id'], 'text': 'admitted before host exit'}, command_id='crash-admitted'))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        # Synchronous copy of this synthetic, committed store captures the crash
+        # boundary before the deferred sender starts; no other writer runs here.
+        snapshot = tmp_path / 'crash-snapshot'
+        shutil.copytree(app.data_dir, snapshot)
+        reopened = app_factory(home=snapshot)
+        reopened.server_config = {'externalAgents': [peer(tmp_path)]}
+        restored = reopened._session(session['id'])
+        assert restored['messages'][0]['delivery']['status'] == 'unknown'
+        assert restored['externalAgent']['status'] == 'unknown'
+        assert not restored['externalAgent'].get('activeInputId')
+        duplicate = await reopened.dispatch('conversation.send',
+            {'sessionId': session['id'], 'text': 'admitted before host exit'}, command_id='crash-admitted')
+        assert duplicate['duplicate'] and duplicate['delivery'] == 'unknown'
+        assert not (tmp_path / 'peer/operations.jsonl').exists()
+    finally:
+        await app.dispatch('conversation.stop', {'sessionId': session['id']})
+        release.set()
+        await sending
