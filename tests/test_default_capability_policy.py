@@ -163,6 +163,40 @@ def test_additive_skill_defaults_preserve_effective_source_aliases(sources, poli
     assert base.to_mount_plan() == original
 
 
+@pytest.mark.parametrize('sources', [{}, {'skills': []}, {'skills': None}, {'skills_dirs': []}])
+@pytest.mark.parametrize('policy', ['capability', 'imagegen'])
+def test_additive_skills_keep_implicit_discovery(sources, policy, monkeypatch):
+    from amplifier_web.host.components import imagegen_defaults
+
+    monkeypatch.setenv('AMPLIFIER_SKILLS_DIR', '/synthetic/environment-skills')
+    config = {**sources, 'visibility': {'enabled': False, 'visibility_token_budget': 700}}
+    base = Bundle(name='chosen', tools=[{'module': 'tool-skills', 'config': config}])
+    extra = Bundle(name='extra', tools=[{'module': 'tool-skills', 'config': {'skills': ['curated']}}])
+    parts = capability_defaults(base, extra, {}) if policy == 'capability' else imagegen_defaults(base, extra)
+    result = compose_bundles(*parts)
+    assert result.tools[0]['config']['skills'] == [
+        '/synthetic/environment-skills', '.amplifier/skills', '~/.amplifier/skills', 'curated']
+    assert result.tools[0]['config']['visibility'] == config['visibility']
+
+
+@pytest.mark.parametrize('value', [
+    ['global-path'], {'sources': 'global-path'}, {'dirs': ['global-path']},
+])
+def test_skill_sources_preserve_coordinator_global_shape(value):
+    from amplifier_web.host.components import _skill_sources
+
+    assert _skill_sources({}, {'skills': value}) == ['global-path']
+    assert _skill_sources({'skills': ['local-path']}, {'skills': value}) == ['local-path']
+
+
+@pytest.mark.parametrize('config', [{'skills_dirs': None}, {'skills_dir': None}, {'skills': [None]}])
+def test_invalid_skill_sources_fail_closed(config):
+    from amplifier_web.host.components import _skill_sources
+
+    with pytest.raises(ValueError, match='Skill sources'):
+        _skill_sources(config)
+
+
 async def test_role_resolution_only_fills_unspecified_preferences():
     from amplifier_web.host.model_selection import child_preferences, pinned_delegate_input, ProviderSelectionError
     calls = []

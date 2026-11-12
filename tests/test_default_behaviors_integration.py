@@ -341,6 +341,22 @@ async def test_real_defaults_retain_effective_legacy_source_and_budget(offline_d
 
 
 @pytest.mark.asyncio
+async def test_curated_only_default_preserves_implicit_local_discovery(offline_defaults, monkeypatch):
+    env = offline_defaults
+    monkeypatch.setenv("AMPLIFIER_SKILLS_DIR", str(env.workspace / "environment-skills"))
+    policy = {"enabled": False, "visibility_token_budget": 700}
+    _, bundle, _ = await env.compose(
+        root_patch={"tools": [{"module": "tool-skills", "config": {"visibility": policy}}]},
+        settings={"bundle": {"app": []}, "web_bundles": {"excluded": [
+            uri for uri in env.defaults.DEFAULT_BEHAVIORS if uri != env.defaults.SKILLS_BEHAVIOR_URI]}})
+    config = _row(bundle.tools, "tool-skills")["config"]
+    assert config["skills"] == [
+        str(env.workspace / "environment-skills"), ".amplifier/skills", "~/.amplifier/skills",
+        "git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=skills"]
+    assert config["visibility"] == policy
+
+
+@pytest.mark.asyncio
 async def test_real_defaults_preserve_explicit_ci_desktop_and_routing_policy(
     offline_defaults,
 ):

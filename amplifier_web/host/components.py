@@ -404,13 +404,37 @@ def compose_bundles(base, overlay):
     return result
 
 
-def _skill_sources(config):
-    """Seed additive discovery from the loader's effective source spelling."""
+def _skill_sources(config, plan=None):
+    """Preserve the loader's implicit/local discovery before adding a source.
+
+    tool-skills is worker-owned, not a host dependency. Keep this small
+    composition boundary aligned with its source precedence and verify it with
+    the real installed loader; do not import or resolve optional worker code here.
+    """
+    value = []
     for key in ('skills', 'skills_dirs', 'skills_dir'):
         if key in config:
             value = config[key]
-            return [value] if isinstance(value, str) else value
-    return []
+            # Modern null is the loader's default discovery. Null legacy paths
+            # are invalid, not a request to reinterpret a lower-priority alias.
+            if key == 'skills' and value is None:
+                value = []
+            if key == 'skills_dir' and not isinstance(value, str):
+                raise ValueError('Skill sources must be a string or list of strings.')
+            break
+    else:
+        value = (plan or {}).get('skills', [])
+        if isinstance(value, dict):
+            value = value.get('sources', value.get('dirs', []))
+    value = [value] if isinstance(value, str) else value
+    if not isinstance(value, list) or any(not isinstance(path, str) for path in value):
+        raise ValueError('Skill sources must be a string or list of strings.')
+    if value:
+        return value
+    # Same fallback as tool-skills.discovery.get_default_skills_dirs. Preserve
+    # portable user paths rather than freezing this host's home in a saved plan.
+    env = os.environ.get('AMPLIFIER_SKILLS_DIR')
+    return ([env] if env else []) + ['.amplifier/skills', '~/.amplifier/skills']
 
 
 def imagegen_defaults(base, behavior):
@@ -431,7 +455,7 @@ def imagegen_defaults(base, behavior):
         for row in base.tools:
             if row['module'] == 'tool-skills':
                 config = row.setdefault('config', {})
-                config['skills'] = list(dict.fromkeys([*_skill_sources(config), *skill_paths]))
+                config['skills'] = list(dict.fromkeys([*_skill_sources(config, base.to_mount_plan()), *skill_paths]))
     behavior.tools = [row for row in behavior.tools
                       if row['module'] not in {'tool-image', 'tool-skills'} or row['module'] not in existing]
     return base, behavior
@@ -475,7 +499,7 @@ def capability_defaults(base, behavior, defaults):
             if path_key:
                 for item in previous:
                     config = item.setdefault('config', {})
-                    paths = _skill_sources(config) if path_key == 'skills' else config.get(path_key, [])
+                    paths = _skill_sources(config, base.to_mount_plan()) if path_key == 'skills' else config.get(path_key, [])
                     config[path_key] = list(dict.fromkeys([
                         *paths, *row.get('config', {}).get(path_key, [])]))
         setattr(behavior, section, additions)

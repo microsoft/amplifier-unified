@@ -352,6 +352,31 @@ def test_installed_skills_root_child_and_companions(tmp_path, monkeypatch, caplo
 
         async def exercise():
             nonlocal allowed_command
+            # Host additive defaults preserve the real loader's implicit and
+            # legacy discovery; parity is checked with actual mounted sessions.
+            from amplifier_foundation.bundle import Bundle
+            from amplifier_module_tool_skills.discovery import get_default_skills_dirs
+            from amplifier_web.host.components import capability_defaults, compose_bundles
+
+            for shape in ({}, {"skills": []}, {"skills": None}, {"skills_dirs": [str(local)]}):
+                base = Bundle(name="chosen", tools=[{"module": "tool-skills", "config": {
+                    **base_config, **shape}}])
+                extra = Bundle(name="extra", tools=[{"module": "tool-skills",
+                    "config": {"skills": ["@unified:skills"]}}])
+                added = compose_bundles(*capability_defaults(base, extra, {}))
+                config = added.tools[0]["config"]
+                expected = ([local] if "skills_dirs" in shape else get_default_skills_dirs())
+                assert [Path(value).expanduser().resolve() for value in config["skills"][:-1]] == [
+                    Path(value).expanduser().resolve() for value in expected]
+                session = await prepared(config).create_session(session_cwd=workspace)
+                try:
+                    loaded = await _call(session.coordinator, "load_skill", skill_name="fixture-control")
+                    assert "WORKSPACE-FIRST" in loaded["content"]
+                    loaded = await _call(session.coordinator, "load_skill", skill_name="unified-app")
+                    assert Path(loaded["skill_directory"]).resolve() == packaged / "skills/unified-app"
+                    await _read_exact(session.coordinator, packaged / "skills/unified-app/settings.md")
+                finally:
+                    await session.cleanup()
             # Default discovery, not an explicit reconstruction of the defaults.
             default = prepared(copy.deepcopy(base_config))
             session = await default.create_session(session_cwd=workspace)
