@@ -13,7 +13,7 @@ installed contracts below; do not invent a single appearance-package API.
    Existing modules can have multiple instances where their contract permits.
 3. Preview the returned change, inspect its browser report, then apply within
    the user's requested scope. Preview does not commit a composition. For a
-   custom CSS skin, discover the theme service's current actions.
+   Reference appearance delta, discover `appearance.*` and `theme.*`.
 4. Reinspect after activation. An `awaiting-browser` receipt is not completion.
    Confirm the matching revision mounted, and verify the intended interaction.
    If stale, inspect and prepare again; do not repeatedly force old revisions.
@@ -45,25 +45,25 @@ examples; do not duplicate its styling procedures here. Components still own
 focus, scrolling, responsive safety and action semantics. Theme selection does
 not authorize other preference or runtime changes.
 
-The user-approved PR1916 rollback temporarily retires Reference and Global /
-This browser profiles after the `.078` visual regression. Follow the
-[rollback boundary](../../docs/shell/appearance-contract.md#temporary-rollback-boundary):
-newer saved data stays inert and undeleted, never converted or used to seed the
-legacy path. Missing legacy themes use the safe old default, not a claimed
-automatic recovery of the theme removed by `.078`.
+The accepted production redesign supersedes the PR1916 rollback: Reference plus
+intentional deltas and one complete Global or This browser profile. Legacy themes,
+`.078` profiles/libraries and experiment records remain inert and undeleted; see the
+[preservation boundary](../../docs/shell/appearance-contract.md#temporary-rollback-boundary).
 
-Discover `theme.*`. `theme.preview` / `theme.apply` take a name and exactly one
-of `definition` (a complete version-1 theme), `tokens` (an intentional partial
-palette edit retaining the skin/artwork), or `css` (a complete portable skin).
-Preview is client-scoped; apply commits app-wide. `theme.revert` ends a preview
-first, otherwise conditionally reverses the client's last apply. Saving or
-importing a library entry does not apply it. Portable CSS and format-1 ZIP
-import/export are restored; format-2 Reference deltas are not active inputs.
+Discover `appearance.*` and `theme.*`. Use `appearance.preview` /
+`appearance.preview.cancel` for document-local styling previews, and
+`appearance.preferences.update` at the captured scope/CAS to select a library ID
+or change preferences. First browser selection copies current Global; later
+switches retain independent complete profiles, not field overlays. Storage ACK
+and rendered composition ACK are separate; failure never writes Global as fallback.
+Strict format-2 Reference ZIPs are the portable envelope; retired complete-theme
+actions, raw CSS import and format-1 packages are not supported.
 
-Composition retains its revision, dirty-state fences and lifecycle. Change
-scheme, decorations and other supported `presentation` fields through the
-existing shell prepare/preview/apply/revert protocol, independently of the theme.
-Keep previews, committed styling and private editor drafts distinct.
+Independent composition retains its revision, dirty-state fences and lifecycle.
+Keep temporary previews, committed preferences and private editor drafts distinct.
+Ordinary preferences apply quietly without Saved/Undo rituals; Preview Cancel,
+explicit accent reset and Archive Undo remain available. Suggested experience
+profiles are future design, not implemented package behavior.
 Browser/shared-component source changes belong in `amplifier-client-web`, not
 Unified's selected snapshot or disposable prepared client; follow the linked
 guide's source ownership and two-repository delivery requirements.
