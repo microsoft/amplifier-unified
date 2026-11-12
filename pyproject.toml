@@ -117,6 +117,9 @@ dev = [
     # Installed skills checks exercise the real loader and companion-file tool.
     "amplifier-module-tool-skills @ git+https://github.com/microsoft/amplifier-bundle-skills@2f58408a879535df36da5c92d2b073f49271ade4#subdirectory=modules/tool-skills",
     "amplifier-module-tool-filesystem @ git+https://github.com/microsoft/amplifier-module-tool-filesystem@663f26a878ae71e136f439fa73ded52b2eb24174",
+    # File-policy checks must execute the real patch engines, not skip at import.
+    "amplifier-module-tool-apply-patch @ git+https://github.com/microsoft/amplifier-bundle-filesystem@515599f0d0763a946aa96ed1d0110db723f5c386#subdirectory=modules/tool-apply-patch",
+    "amplifier-module-tool-image @ git+https://github.com/microsoft/amplifier-bundle-imagegen@8acd3773102b77378c0d46da53a901f8297a38fc#subdirectory=modules/tool-image",
 ]
 artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "reportlab>=4,<5", "pypdf>=6,<7", "Pillow>=13,<14"]
 
