@@ -159,7 +159,7 @@ The portable Publisher now supports prospective body policy, one explicit pin
 primitive, current availability and availability-aware backups. These are Python
 library APIs; automatic expiry, the app's Storage/Publishing controls and remote
 protocol support are not yet connected. Existing app behavior stays in place.
-See [the library contract](../amplifier_publishing/README.md#prospective-body-retention-and-pins).
+See [the library contract](../components/publishing/README.md#prospective-body-retention-and-pins).
 
 Under an explicit future policy, two prior successful releases have a default
 30-day automatic rollback window. `previousReleaseId` remains historical; current
