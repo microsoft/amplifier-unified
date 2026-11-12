@@ -20,7 +20,7 @@ def test_storage_is_exact_existing_owner_and_sources_are_complete(tmp_path):
     result = builder.prepare(SCRIPTS, tmp_path / "native")
     body = re.findall(r"Add-Type -TypeDefinition @'\n(.*?)\n'@", (SCRIPTS / "install.ps1").read_text(), re.S)
     assert (tmp_path / "native/InstallStorage.cs").read_bytes() == (body[0] + "\n").encode()
-    assert (tmp_path / "native/NativeInstaller.cs").read_bytes() == (SCRIPTS / "windows_bootstrap_native.cs").read_bytes()
+    assert (tmp_path / "native/NativeInstaller.cs").read_bytes() == (SCRIPTS / "windows_bootstrap_native.cs").read_text(encoding="utf-8").encode("utf-8")
     for name, item in result["sources"].items():
         data = (tmp_path / "native" / name).read_bytes()
         assert item == {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
