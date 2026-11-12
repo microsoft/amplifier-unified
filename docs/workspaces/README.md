@@ -13,6 +13,7 @@ The design direction was accepted on 2026-09-22 after the attachment flow was si
 - [Handoff](contracts/handoff.v1.md): integration, preview ownership and cleanup
 - [Autonomous progress — proposed](contracts/autonomous-progress.v1-candidate.md): own-task settings continuation promises; draft, not implemented. [Design and planned checks](notes/autonomous-progress-20261107.md) are separate.
 - [Acceptance scenarios](notes/ACCEPTANCE.md)
+- [Registration ownership](notes/registration-ownership.md): current reconciliation and host write boundary; durable identity remains future design.
 
 ## Using the workspace flow
 
