@@ -747,6 +747,7 @@ async def test_export(mounted):
         return {
             "source_base_paths": {key: str(value) for key, value in
                                   (getattr(bundle, "source_base_paths", {}) or {}).items()},
+            "resource_bindings": copy.deepcopy(getattr(bundle, "_host_resource_namespaces", {})),
             "registry": {name: {key: getattr(state, key, None) for key in
                          ("uri", "local_path", "is_root", "root_name", "loaded_at")}
                          for name, state in (registry.get_state() if registry else {}).items()},
@@ -808,8 +809,9 @@ async def test_export(mounted):
         }
         with Path(capture).open("x") as stream:
             json.dump(snapshot, stream, indent=2, sort_keys=True, default=str)
-        emit({"status": "export_snapshot", "path": capture,
-              "sha256": hashlib.sha256(Path(capture).read_bytes()).hexdigest()})
+        print("EXPORT_NAMESPACE_CAPTURE " + json.dumps({
+            "path": capture, "sha256": hashlib.sha256(Path(capture).read_bytes()).hexdigest()
+        }, sort_keys=True), flush=True)
     manager = BundleManager(mounted.inputs.config.home)
     exported = manager.export_document(
         mounted.inputs.config.settings, effective_plan=mounted.session.coordinator.config,
@@ -827,8 +829,16 @@ async def test_export(mounted):
     common_rows = [row for row in resources["context"]
                    if row["name"] == "foundation:context/shared/common-agent-base.md"]
     assert len(common_rows) == 1 and common_rows[0]["text"] == common_text
+    assert common_rows[0]["relativePath"] == "context/shared/common-agent-base.md"
+    foundation_head = subprocess.run(
+        ["git", "-C", str(mounted.inputs.env.roots["foundation"]), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True, timeout=2).stdout.strip()
+    assert common_rows[0]["uri"].split("#", 1)[0].endswith("@" + foundation_head)
     assert set(mounted.prepared.bundle.context) <= {row["name"] for row in resources["context"]}, resources["warnings"]
-    document = yaml.safe_load(exported["content"].split("---", 2)[1])
+    # Instruction bodies may contain literal "---" text. Parse actual
+    # frontmatter delimiters rather than splitting inside a quoted YAML scalar.
+    from amplifier_foundation.io.frontmatter import parse_frontmatter
+    document, _ = parse_frontmatter(exported["content"])
     assert exported["includes"] == [] and "includes" not in document
     routing = _support._row(document["hooks"], "hooks-routing")["config"]
     assert routing["default_matrix"] == "balanced" and "custom_routing_dirs" not in routing
@@ -851,9 +861,14 @@ async def test_export(mounted):
             for child in value:
                 yield from string_values(child)
 
+    expanded_agents = []
     for name, row in mounted.prepared.mount_plan.get("agents", {}).items():
         if "@foundation:context/shared/common-agent-base.md" in json.dumps(row):
             assert any(common_text.strip() in text for text in string_values(document["agents"][name]))
+            expanded_agents.append(name)
+    assert set(expanded_agents) == {
+        "computer-use:computer-operator", "context-intelligence:graph-analyst",
+        "context-intelligence:session-navigator", "context-intelligence:server-data-ops"}
     incomplete = copy.deepcopy(resources)
     del incomplete["routingMatrix"]["baseRoles"]
     with pytest.raises(ValueError, match="shipped matrix"):
@@ -861,4 +876,7 @@ async def test_export(mounted):
                                 effective_plan=mounted.session.coordinator.config,
                                 resources=incomplete)
     mounted.report.update(case="export", routing="balanced", base_roles=sorted(expected),
+                          foundation_context_sha256=hashlib.sha256(common_text.encode()).hexdigest(),
+                          expanded_foundation_agents=sorted(expanded_agents),
+                          collector_namespace_state_unchanged=True,
                           export_sha256=hashlib.sha256(exported["content"].encode()).hexdigest())
