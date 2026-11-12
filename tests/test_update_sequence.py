@@ -174,6 +174,45 @@ async def test_configuration_only_change_is_an_ordinary_included_update(manager,
     assert (receipt / 'profiles-qualified.json').read_bytes() == before
 
 
+@pytest.mark.parametrize('case', ['same', 'changed', 'committed', 'rollback'])
+async def test_waiting_configuration_candidate_rechecks_selection_before_pointer_commit(manager, monkeypatch, case):
+    from amplifier_web.host.config import amplifier_home, write_private
+    from amplifier_web import update_health, __version__
+    from unittest.mock import AsyncMock
+    home = manager.home
+    target, previous = 'd' * 32, 'e' * 32
+    stage = manager.directory / 'releases' / target
+    (stage / 'shared-config').mkdir(parents=True)
+    (stage / 'shared-config/settings.yaml').write_text('{}')
+    witness = update_sequence.app_selection(home)['witness']
+    (stage / 'validated.json').write_text(json.dumps({
+        'hostVersion': __version__, 'generationSchema': 1, 'workerProtocol': 1,
+        'appSelection': witness}))
+    if case != 'same':
+        write_private(amplifier_home() / 'settings.yaml', 'routing: {enabled: true}')
+    pointer = {'current': target if case == 'committed' else previous, 'previous': target}
+    write_private(manager.directory / 'active.json', json.dumps(pointer))
+    before = (manager.directory / 'active.json').read_bytes()
+    manager.service.state['updates'].update(pendingRelease=target)
+    manager.diagnostics.begin('ecosystem', target)
+    promoted = []
+    monkeypatch.setattr(manager.service.runtime, 'promote_generation',
+                        lambda value, **kwargs: promoted.append(value), raising=False)
+    monkeypatch.setattr(update_health, 'refresh', AsyncMock())
+    monkeypatch.setattr(manager, 'retire_storage', AsyncMock())
+    await manager._activate(rollback=case == 'rollback')
+    if case == 'changed':
+        assert (manager.directory / 'active.json').read_bytes() == before
+        assert promoted == []
+        assert manager.service.state['updates']['phase'] == 'error'
+        assert manager.service.state['updates']['pendingRelease'] == target
+    else:
+        assert promoted == [target]
+        assert updates.active_release(home)['current'] == target
+        if case == 'committed':
+            assert (manager.directory / 'active.json').read_bytes() == before
+
+
 @pytest.mark.parametrize('action', ['app', 'install'])
 async def test_explicit_app_scope_replaces_old_whole_install_without_changing_policy(manager, monkeypatch, action):
     import copy

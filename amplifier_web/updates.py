@@ -1218,7 +1218,9 @@ class UpdateManager:
                     await self.validate(stage,release)
                 await partial_plan.recheck()
                 await asyncio.to_thread(verify_app_selection, self, self.inventory, stage=stage)
-                write_private(stage/'validated.json',json.dumps({'generationSchema': 1, 'workerProtocol': 1, 'createdAt':time.time(),'sources':len(candidates),'hostVersion':__import__('amplifier_web').__version__, 'updateTier': self.service.state['updates'].get('sequence', {}).get('stage')}))
+                write_private(stage/'validated.json',json.dumps({'generationSchema': 1, 'workerProtocol': 1, 'createdAt':time.time(),'sources':len(candidates),'hostVersion':__import__('amplifier_web').__version__, 'updateTier': self.service.state['updates'].get('sequence', {}).get('stage'),
+                    'appSelection': next(row.get('appSelection') for row in self.inventory
+                                         if row.get('kind') != 'smart tool')}))
                 self.diagnostics.clear_failure()
                 self.diagnostics.record('ecosystem-stage','succeeded',commandId=stage_id)
                 await self.publish(phase='staged',pendingRelease=release,
@@ -1508,6 +1510,14 @@ class UpdateManager:
                 # retains the rollback identity, so finish it without
                 # rewriting previous to the target itself.
                 if pointer.get('current') != target:
+                    if not rollback and 'appSelection' in marker:
+                        # Settings can change while a qualified candidate waits
+                        # for activation. Bind new promotions to the selection
+                        # actually checked; never reinterpret rollback or an
+                        # already committed uncertain promotion as fresh intent.
+                        from .update_sequence import verify_app_selection
+                        verify_app_selection(self, [{'appSelection': marker['appSelection']}],
+                                             stage=self.directory / 'releases' / target)
                     write_private(self.directory/'active.json',json.dumps({'current':target,'previous':pointer.get('current'),'at':time.time()}))
                     if not rollback and 'pendingRollback' in self.service.state['updates']:
                         # The pointer is now the durable rollback authority for
