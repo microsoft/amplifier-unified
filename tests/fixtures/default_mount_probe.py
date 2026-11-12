@@ -664,9 +664,57 @@ async def test_skills(mounted):
     assert "second-opinion" in catalog and "image-vision" in catalog
     assert "coordinate-work" in catalog and "amplifier-shell" in catalog
     assert not loader.loaded_skills
+
+    loaded = await loader.execute({"skill_name": "second-opinion"})
+    assert loaded.success and "--providers-json" in loaded.output["content"]
+    assert Path(loaded.output["skill_directory"]).resolve() == directory
+
+    # Use the existing public setup operation and real settings loader. Only
+    # synthetic guest connections are authored; no credentials/provider mounts.
+    # The outer management action additionally warms catalogs, deliberately not
+    # part of this offline metadata-to-helper case.
+    from amplifier_web.preferences import SettingsStore
+    from amplifier_web.setup import SetupManager
+    workspace = mounted.inputs.env.workspace
+    home = mounted.inputs.config.home
+    SettingsStore(home).update(workspace, "local", lambda values: values.update(config={"providers": [
+        {"id": "review-fixture", "module": "provider-openai",
+         "config": {"default_model": "fixture-review-model", "priority": 2}},
+    ]}))
+    public = await SetupManager(home).perform("providers.list", {"workspace": str(workspace)})
+    assert public["providersWorkspace"] == str(workspace)
+    roster = [{"id": row["id"], "provider_type": row["module"].removeprefix("provider-"),
+               "enabled": row["enabled"], "default_model": row["config"]["default_model"],
+               "priority": row["config"]["priority"]} for row in public["providers"]]
+    assert roster == [{"id": "review-fixture", "provider_type": "openai", "enabled": True,
+                       "default_model": "fixture-review-model", "priority": 2}]
+    scripts = directory / "scripts"
+    assert "provider_discovery" not in sys.modules
+    sys.path.insert(0, str(scripts))
+    try:
+        helper = importlib.import_module("provider_discovery")
+        assert Path(helper.__file__).resolve() == scripts / "provider_discovery.py"
+        unexpected = []
+
+        def no_cli(*args, **kwargs):
+            unexpected.append("cli")
+            raise AssertionError("Host roster must not query CLI")
+
+        resolved, status = helper.run_request(
+            config_id="review-fixture", model="fixture-review-model",
+            providers_json=json.dumps(roster), command_runner=no_cli)
+        assert status == 0 and resolved["ok"], resolved
+        assert resolved["provider_id"] == "review-fixture"
+        assert resolved["model"] == "fixture-review-model"
+        assert resolved["discovery_status"] == "unavailable"
+        assert resolved["inventory_unavailable_provider_ids"] == ["review-fixture"]
+        assert not unexpected
+    finally:
+        sys.path.remove(str(scripts))
     mounted.report.update(case="skills", curated_source=str(curated),
                           helper=str(directory / "scripts/resolve_provider.py"),
-                          catalog_observed=True, provider_completions=0)
+                          catalog_observed=True, public_setup_roster=True,
+                          resolver_host_input=True, cli_calls=0, provider_completions=0)
 
 
 @pytest.mark.asyncio
