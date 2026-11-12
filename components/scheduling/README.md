@@ -57,9 +57,12 @@ do not add a source checkout to `PYTHONPATH`.
 
 ## Ownership and delivery
 
-The Python files here are the sole implementation and the tests here are the sole
-policy/store test suite. Unified continues to bundle these same files and import
-`amplifier_scheduling`; its scheduler, authorization, Stop handling, execution
+This directory is temporarily authored in Amplifier Unified while the planned
+`amplifier-platform-scheduling` repository is unavailable. It is not a generated
+copy or an independently published source selection. The Python files in
+`amplifier_scheduling/` are the sole implementation and `tests/` is the sole
+policy/store test suite. Unified maps this nested package directly into its normal
+wheel and editable install, and continues to import `amplifier_scheduling`; its scheduler, authorization, Stop handling, execution
 admission and browser integration tests remain with Unified. There is no new
 scheduler process, Unified runtime dependency or database migration in this packaging
 step. The `0.1.0` component version is preparation metadata, not a publication or
@@ -70,6 +73,8 @@ install it alongside `amplifier-unified`: Unified still owns the same installed
 package files until a later dependency-selection change removes that overlap.
 
 A later history-preserving repository import can use this project directly.
+Keep changes here until that import and an explicit authoring handoff are complete;
+do not maintain a second implementation at the old repository-root path.
 Independent publication and Unified's dependency selection are separate delivery
 steps. Existing schedule databases, run identities and uncertain outcomes retain
 their current authority throughout that transition.

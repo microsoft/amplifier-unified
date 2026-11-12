@@ -52,21 +52,23 @@ allow-direct-references = true
 artifacts = ["/amplifier_web/release-source.json"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "amplifier_scheduling", "amplifier_recall", "amplifier_outputs", "amplifier_worktrees", "amplifier_publishing", "amplifier_portability"]
-# The standalone scheduling project shares these same runtime sources.
+packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "components/scheduling/amplifier_scheduling", "amplifier_recall", "amplifier_outputs", "amplifier_worktrees", "amplifier_publishing", "amplifier_portability"]
+# Standalone projects share these same runtime sources; test/build inputs do not ship.
 exclude = [
-    "/amplifier_scheduling/tests/**", "/amplifier_scheduling/build/**",
-    "/amplifier_scheduling/dist/**", "/amplifier_scheduling/.venv/**",
-    "/amplifier_scheduling/*.egg-info/**", "/amplifier_scheduling/pyproject.toml",
-    "/amplifier_scheduling/MANIFEST.in", "/amplifier_scheduling/LICENSE",
-    "/amplifier_scheduling/.gitignore",
+    "/amplifier_operations/tests/**", "/amplifier_operations/build/**",
+    "/amplifier_operations/dist/**", "/amplifier_operations/.venv/**",
+    "/amplifier_operations/*.egg-info/**", "/amplifier_operations/pyproject.toml",
+    "/amplifier_operations/MANIFEST.in", "/amplifier_operations/LICENSE",
+    "/amplifier_operations/.gitignore", "/amplifier_operations/README.md",
 ]
 
 [tool.hatch.build.targets.sdist]
 exclude = [
     "/.ci/**", "/components/web-client/**",
-    "/amplifier_scheduling/build/**", "/amplifier_scheduling/dist/**",
-    "/amplifier_scheduling/.venv/**", "/amplifier_scheduling/*.egg-info/**",
+    "/amplifier_operations/build/**", "/amplifier_operations/dist/**",
+    "/amplifier_operations/.venv/**", "/amplifier_operations/*.egg-info/**",
+    "/components/scheduling/build/**", "/components/scheduling/dist/**",
+    "/components/scheduling/.venv/**", "/components/scheduling/*.egg-info/**",
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
@@ -122,4 +124,4 @@ artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "re
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "amplifier_scheduling/tests"]
+testpaths = ["tests", "components/scheduling/tests", "amplifier_operations/tests"]

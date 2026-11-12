@@ -1,4 +1,11 @@
-# Temporary component delivery
+# Component ownership
+
+`components/scheduling/` is temporarily authored here as its independently
+buildable Python project. Preserve its normal `amplifier_scheduling` import;
+Unified builds directly from the nested runtime sources. It has no external
+source-selection record and is not a generated copy. Follow its local README.
+
+## Web client delivery
 
 `web-client/` is a verbatim snapshot of the separate client repository selected
 by `web-client.source.json`. Maintain source, client tests and build tools in that

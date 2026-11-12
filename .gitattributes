@@ -14,10 +14,11 @@
 /tests/** source-context=tests
 /tests/web/** source-context=tests
 /scripts/**/tests/** source-context=tests
-/amplifier_scheduling/tests/** source-context=tests
-/amplifier_scheduling/MANIFEST.in source-context=configuration
-/amplifier_scheduling/.gitignore source-context=configuration
-/amplifier_scheduling/LICENSE source-context=documentation
+/components/scheduling/amplifier_scheduling/** source-context=source
+/components/scheduling/tests/** source-context=tests
+/components/scheduling/MANIFEST.in source-context=configuration
+/components/scheduling/.gitignore source-context=configuration
+/components/scheduling/LICENSE source-context=documentation
 /docs/** source-context=documentation
 /contracts/** source-context=contracts
 /context/** source-context=guidance
@@ -98,3 +99,7 @@ package-lock.json source-context=locks
 /scripts/files1318_integrated_checks.py source-context=evidence linguist-generated=true
 /scripts/scale_runtime_browser.mjs source-context=evidence linguist-generated=true
 /scripts/scale_runtime_workspace_browser.mjs source-context=evidence linguist-generated=true
+/amplifier_operations/tests/** source-context=tests
+/amplifier_operations/MANIFEST.in source-context=configuration
+/amplifier_operations/.gitignore source-context=configuration
+/amplifier_operations/LICENSE source-context=documentation
