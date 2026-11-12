@@ -139,6 +139,82 @@
   color: var(--a-danger);
 }
 
+/* Notice geometry and functional activity are shared by every appearance. */
+#amp-one .a-alert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  min-width: 0;
+  flex-shrink: 0;
+  margin: 0 0 12px;
+  padding: 12px 18px;
+  border: 1px solid color-mix(in srgb, var(--a-danger) 35%, var(--a-line));
+  border-radius: var(--a-control-radius);
+  background: color-mix(in srgb, var(--a-danger) 6%, var(--a-surface));
+  color: var(--a-danger);
+  overflow-wrap: anywhere;
+  max-height: min(40dvh, 20rem);
+  overflow: auto;
+}
+
+#amp-one .a-alert > span {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+#amp-one .a-alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-inline-start: auto;
+  max-width: 100%;
+}
+
+#amp-one .a-alert :is(button, .a-icon) {
+  flex: none;
+  min-height: 34px;
+  max-width: 100%;
+  white-space: normal;
+}
+
+#amp-one .a-alert .a-link {
+  padding: 6px 8px;
+}
+
+#amp-one :is(.a-runtime, .a-ownership) {
+  background: var(--a-tint);
+  border-color: var(--a-line);
+  color: var(--a-ink);
+}
+
+#amp-one .a-progress-spinner {
+  animation: ampSpin 2s linear infinite;
+}
+
+#amp-one :is(.a-execution-dot, .a-dot) {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--a-green);
+}
+
+#amp-one :is(.a-execution-dot, .a-dot.pending) {
+  background: var(--a-accent);
+  animation: ampPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes ampSpin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes ampPulse {
+  50% { opacity: .35; }
+}
+
 #amp-one :where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="hidden"]), select, textarea) {
   min-width: 0;
   max-width: 100%;
@@ -423,6 +499,16 @@ body,
   height: 4px;
   border-radius: 50%;
   background: var(--a-accent);
+  animation: ampPulse 1.3s ease-in-out infinite;
+}
+
+#amp-one .a-activity-pulse b:nth-child(2) { animation-delay: .2s; }
+#amp-one .a-activity-pulse b:nth-child(3) { animation-delay: .4s; }
+
+@media (prefers-reduced-motion: reduce) {
+  #amp-one :is(.a-progress-spinner, .a-activity-pulse b, .a-execution-dot, .a-dot.pending) {
+    animation: none;
+  }
 }
 
 #amp-one .a-activity-elapsed {
