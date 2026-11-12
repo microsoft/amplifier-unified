@@ -1,4 +1,30 @@
 /* Inherit the product's appearance, including custom skins. */
+/* Retain shared form mechanics that previously shipped inside the full skin. */
+#amp-one .a-settings-row{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px;min-width:0}
+#amp-one .a-settings-row>div{flex:1;min-width:0}
+#amp-one .a-inline-form{display:flex;align-items:stretch;gap:10px;min-width:0}
+#amp-one .a-inline-form input{flex:1;min-width:0}
+#amp-one .a-inline-form button{flex-shrink:0}
+#amp-one .a-candidates{max-height:300px;overflow:auto}
+#amp-one .a-dialog label.a-candidate{display:flex;align-items:flex-start;gap:12px;min-width:0;margin:0;padding:14px;cursor:pointer}
+#amp-one .a-candidate>span{flex:1;min-width:0;overflow-wrap:anywhere}
+#amp-one .a-dialog :where(label:has(>input[type=checkbox]),label:has(>input[type=radio]),label.a-inline-checkbox){display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:10px}
+#amp-one .a-dialog :where(input[type=checkbox],input[type=radio]){appearance:auto;display:inline-block;flex:0 0 18px;width:18px;height:18px;min-height:18px;margin:0;padding:0;accent-color:var(--a-accent)}
+#amp-one .a-file-drop{position:relative;display:flex;align-items:center;flex-wrap:wrap;gap:14px;min-width:0;padding:20px;border:1px dashed var(--a-line);border-radius:var(--a-card-radius)}
+#amp-one .a-dialog .a-file-drop input.a-file-input{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;padding:0;pointer-events:none}
+#amp-one .a-file-drop:focus-within{outline:2px solid var(--a-accent);outline-offset:2px}
+#amp-one .a-location-list{max-height:240px;overflow:auto;margin:10px 0}
+#amp-one .a-location-entry{display:flex;gap:8px;align-items:center;justify-content:flex-start;min-width:0;width:100%;text-align:left;padding:9px;overflow-wrap:anywhere}
+#amp-one .a-location-entry svg:last-child{margin-left:auto}
+#amp-one .a-check-result{display:flex;align-items:flex-start;gap:9px;min-width:0;padding:12px 14px;margin:12px 0;border:1px solid currentColor;border-radius:var(--a-control-radius);overflow-wrap:anywhere}
+#amp-one .a-check-result>svg{flex:0 0 18px;width:18px;height:18px}
+#amp-one .a-check-result.success{color:var(--a-green)}
+#amp-one .a-check-result.error{color:var(--a-danger)}
+#amp-one .a-check-result.pending{color:var(--a-muted)}
+#amp-one .a-check-result small{display:block;overflow-wrap:anywhere}
+#amp-one .a-state-view{max-width:100%;max-height:250px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:var(--a-text-sm,13px)/1.6 var(--a-font-code);padding:14px;background:var(--a-soft);border-radius:var(--a-control-radius)}
+#amp-one .a-dialog .a-json-editor,#amp-one .a-dialog .a-full-plan{width:100%;min-width:0;min-height:160px;max-height:50vh;overflow:auto;resize:vertical;font-family:var(--a-font-code)}
+@media(max-width:600px){#amp-one .a-settings-row{flex-wrap:wrap}#amp-one .a-inline-form{flex-wrap:wrap}#amp-one .a-inline-form input{flex:1 1 160px}}
 #amp-one .a-everyday-intro{color:var(--a-muted);margin:0 0 24px;max-width:65ch}
 #amp-one .a-everyday-list{border:1px solid var(--a-line);border-radius:12px;overflow:hidden;margin:16px 0}
 #amp-one button.a-everyday-row{width:100%;display:flex;align-items:center;gap:14px;text-align:left;padding:17px 18px;border:0;border-radius:0;background:var(--a-surface);color:var(--a-ink);min-height:68px}
@@ -77,7 +103,7 @@
 #amp-one .a-tool-catalog-simple .a-catalog-controls{position:relative;padding-top:0}
 #amp-one .a-tool-catalog-simple .a-list-filter{margin-top:0;margin-right:45px}
 #amp-one .a-device-code{display:flex;gap:10px;align-items:center;margin:8px 0}
-#amp-one .a-device-code input{margin:0;font:600 24px ui-monospace,monospace;letter-spacing:2px;min-width:0}
+#amp-one .a-device-code input{margin:0;font:600 24px var(--a-font-code);letter-spacing:2px;min-width:0}
 #amp-one .a-device-code button{flex-shrink:0;min-height:44px}
 #amp-one .a-device-signin .a-primary{display:inline-flex;align-items:center;gap:8px;text-decoration:none}
 #amp-one .a-device-step{margin:24px 0 12px}
@@ -85,24 +111,6 @@
 #amp-one .a-signin-success{display:flex;align-items:center;gap:8px;color:var(--a-green);margin-bottom:14px}
 #amp-one .a-settings-page-heading h3:focus{outline:none}
 #amp-one .a-settings-everyday .a-settings-page-heading{margin-bottom:12px}
-#amp-one .a-appearance-settings[data-appearance-simple=true]{gap:16px;max-width:720px}
-#amp-one [data-appearance-simple=true] .a-appearance-intro p{font-size:14px;font-weight:400;color:var(--a-muted)}
-#amp-one [data-appearance-simple=true] .a-appearance-label{margin:5px 0 0;font-size:15px}
-#amp-one [data-appearance-simple=true] .a-appearance-gallery{gap:12px;grid-template-columns:repeat(2,minmax(0,1fr))}
-#amp-one [data-appearance-simple=true] .a-appearance-card{border-radius:10px;padding:7px 7px 0}
-#amp-one [data-appearance-simple=true] .a-appearance-swatch{height:68px;padding:8px;border-radius:6px}
-#amp-one [data-appearance-simple=true] .a-swatch-header{display:none}
-#amp-one [data-appearance-simple=true] .a-swatch-body{height:52px;gap:6px}
-#amp-one [data-appearance-simple=true] .a-swatch-chat{padding:8px;gap:4px}
-#amp-one [data-appearance-simple=true] .a-swatch-chat strong{font-size:10px}
-#amp-one [data-appearance-simple=true] .a-swatch-prompt{display:none}
-#amp-one [data-appearance-simple=true] .a-appearance-card-caption{padding:8px 4px}
-#amp-one [data-appearance-simple=true] .a-appearance-card-caption strong{font-size:14px}
-#amp-one [data-appearance-simple=true] .a-appearance-preview{position:static;padding:0;border:0;box-shadow:none;background:none;font-size:13px;color:var(--a-muted)}
-#amp-one [data-appearance-simple=true] .a-appearance-options{border:0}
-#amp-one [data-appearance-simple=true] .a-appearance-option{padding:12px 0}
-#amp-one [data-appearance-simple=true] .a-everyday-disclosure{margin:12px 0 0}
-#amp-one [data-appearance-simple=true] .a-everyday-footer{margin-top:4px}
 #amp-one .a-advanced-group{border-top:1px solid var(--a-line)}
 #amp-one .a-advanced-group>summary{list-style:none;padding:17px 18px;display:flex;align-items:center;gap:14px;cursor:pointer}
 #amp-one .a-advanced-group>summary::-webkit-details-marker{display:none}

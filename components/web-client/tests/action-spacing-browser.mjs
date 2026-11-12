@@ -18,7 +18,8 @@ import {NavigationOpen} from '/src/responsive-navigation.jsx';
 import {UpdateRestart} from '/src/update-restart.jsx';
 import {MessageDelivery} from '/src/message-delivery.jsx';
 import {FeedbackReconcile} from '/src/feedback-lifecycle.jsx';
-import '/src/unified.css';
+import {BlockCopy} from '/src/block-copy.js';
+import '/src/reference.css';
 import '/src/updates.css';
 import '/src/message-interactions.css';
 import '/src/chat-presentation.css';
@@ -70,6 +71,7 @@ createRoot(document.getElementById('fixture')).render(<>
  <section aria-label="Failed submission"><h2>Unsent input</h2><Delivery failed/></section>
  <section aria-label="Steering submission"><h2>Live direction</h2><Delivery steering/></section>
  <section aria-label="Feedback"><FeedbackReconcile state={{feedback:{requests:[{requestId:'report',title:'Synthetic report',status:'unknown'}]}}} act={dispatch}/></section>
+ <section aria-label="Block copy"><h2>Copy controls</h2><BlockCopy text="Synthetic code" label="Copy synthetic code" unavailable="Synthetic clipboard failure"><pre>Synthetic code</pre></BlockCopy></section>
 </>);
 `;
 let vite,browser,page;
@@ -240,13 +242,28 @@ try{
    await separated(failed.getByRole('button',{name:'Discard unsent message',exact:true}),failed.getByRole('button',{name:'Dismiss warning',exact:true}),label+' discard');
    const feedback=page.getByRole('region',{name:'Feedback',exact:true});
    await separated(feedback.getByText('Synthetic report',{exact:true}),feedback.getByRole('button',{name:'Check delivery',exact:true}),label+' feedback');
+   const copy=page.getByRole('region',{name:'Block copy',exact:true}),frame=copy.locator('.a-copy-frame');
+   const control=copy.locator('.a-block-copy-control'),copyButton=copy.getByRole('button',{name:'Copy synthetic code',exact:true});
+   const copyGeometry=await frame.evaluate(node=>{
+    const box=node.getBoundingClientRect(),control=node.querySelector('.a-block-copy-control').getBoundingClientRect();
+    return {position:getComputedStyle(node).position,controlPosition:getComputedStyle(node.querySelector('.a-block-copy-control')).position,
+     within:control.left>=box.left&&control.right<=box.right+1,clearance:parseFloat(getComputedStyle(node.querySelector('pre')).paddingRight)};
+   });
+   assert.equal(copyGeometry.position,'relative');assert.equal(copyGeometry.controlPosition,'absolute');
+   assert.ok(copyGeometry.within&&copyGeometry.clearance>=52,'Copy overlay stays contained with content clearance');
+   await expect(control.locator('[role=status]')).toHaveCSS('opacity','1');
+   await expect(copyButton).toBeDisabled();
+   if(viewport.width<=390){
+    const box=await copyButton.boundingBox();assert.ok(box.width>=44&&box.height>=44,'Copy frame keeps 44px touch targets');
+   }
+   metrics.push({label,copyGeometry});
    const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth);
    if(overflow)failures.push(label+' horizontal overflow');
    const clippedButtons=await page.locator('#fixture button:visible:not(.a-dependency-name)').evaluateAll(nodes=>nodes.filter(node=>node.scrollWidth>node.clientWidth+1).map(node=>node.textContent));
    if(clippedButtons.length)failures.push(label+' clipped buttons: '+clippedButtons.join(', '));
    if(viewport.width<=390){
-    const smallTargets=await page.locator('#fixture button:visible').evaluateAll(nodes=>nodes.filter(node=>node.getBoundingClientRect().height<44).map(node=>node.textContent));
-    if(smallTargets.length)failures.push(label+' touch targets below 44px: '+smallTargets.join(', '));
+    const smallTargets=await page.locator('#fixture button:visible').evaluateAll(nodes=>nodes.filter(node=>node.getBoundingClientRect().height<44).map(node=>({text:node.textContent,height:node.getBoundingClientRect().height,region:node.closest('section')?.getAttribute('aria-label')})));
+    if(smallTargets.length)failures.push(label+' touch targets below 44px: '+JSON.stringify(smallTargets));
    }
    await page.evaluate(()=>window.scrollTo(0,0));
    await page.screenshot({path:`${artifacts}/${label}.png`,fullPage:true});

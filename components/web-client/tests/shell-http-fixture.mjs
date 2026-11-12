@@ -6,6 +6,13 @@ import {shellScope,sameScope} from '../src/shell/resources.js';
 
 export function createShellHttpFixture(readState){
  const hostInstanceId='fixture-shell-host',bootstrapKey='fixture-shell-bootstrap';
+ // Non-appearance journeys render a neutral synthetic shell, not a production
+ // host's persisted defaults or a browser-storage ACK model. A disconnected
+ // projection has identity for rendering but never starts controller storage IO.
+ const neutralAppearance={
+  namespace:'amplifier.appearance.v2:'+'0'.repeat(32),generation:'fixture-neutral-document',
+  availability:'disconnected',theme:{id:'reference',name:'Reference',css:''},renderedPreferences:{},
+ };
  let clientId,registration;
  const page=input=>({items:input.sessions||[],total:input.sessions?.length||0,pages:1,page:1,
   scope:{mode:'all',workspaceId:input.selectedWorkspaceId,filter:''}});
@@ -37,11 +44,20 @@ export function createShellHttpFixture(readState){
  }
  function state(){
   const input=readState(),resources=envelope(input);
-  return {...input,client:{id:clientId,kind:'web',hostInstanceId},shellBootstrapKey:bootstrapKey,
+  return {...input,...(!Object.hasOwn(input,'appearance')?{appearance:structuredClone(neutralAppearance)}:{}),
+   client:{id:clientId,kind:'web',hostInstanceId},shellBootstrapKey:bootstrapKey,
    ...(resources?{shellResources:resources}:{})};
  }
  function response(request){
   const url=new URL(request.url()),path=url.pathname;
+  if(path==='/api/actions'&&request.postDataJSON()?.action==='appearance.preferences.read'){
+   // Non-appearance journeys need an explicit inert read, not a simulated
+   // browser-storage protocol or an extra entry in their controlled action queue.
+   // This unsupported read deliberately has no identity; appearance mutation
+   // acceptance belongs to the explicit appearance fixture, not this adapter.
+   const input=readState();
+   return {accepted:true,result:Object.hasOwn(input,'appearance')?input.appearance:{renderedPreferences:{}}};
+  }
   if(path==='/api/clients/attach'){
    clientId=request.postDataJSON().clientId;registration=undefined;
    return {clientId,kind:'web',hostInstanceId,transports:[]};
@@ -66,14 +82,17 @@ export function createShellHttpFixture(readState){
 // and every later injected frame uses the same adapter as HTTP action receipts.
 export function installFixtureEvents(){
  const sources=new Set();
+ const observed={created:0,opened:0,frames:0,lastRevision:null};
+ const deliver=(source,state)=>{observed.frames++;observed.lastRevision=state.revision??null;source.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)}))};
+ window.fixtureEventState=()=>({...observed,sources:sources.size,ready:[...sources].map(source=>source.readyState)});
  window.EventSource=class extends EventTarget{
-  constructor(){super();this.readyState=0;sources.add(this);queueMicrotask(async()=>{
+  constructor(){super();this.readyState=0;sources.add(this);observed.created++;queueMicrotask(async()=>{
    const state=await fetch('/api/state').then(response=>response.json());
    if(this.readyState===2)return;
-   this.readyState=1;this.onopen?.();this.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)}));
+   this.readyState=1;observed.opened++;this.onopen?.();deliver(this,state);
   });}
   close(){this.readyState=2;sources.delete(this);}
  };
  window.emitState=window.emitFixtureState=state=>sources.forEach(source=>
-  source.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)})));
+  deliver(source,state));
 }

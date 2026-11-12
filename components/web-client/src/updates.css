@@ -33,7 +33,7 @@
 .a-update-phase-list .succeeded svg{color:var(--a-success,#23724d)}.a-update-phase-list .failed svg,.a-update-phase-list .interrupted svg,.a-update-phase-list .rejected svg{color:var(--a-danger,#b23d50)}
 .a-update-phase-list .historical svg{color:var(--a-muted,#5c6475)}
 .a-update-phase-list .a-caption{margin:3px 0 0 21px}.a-update-phase-status{margin-left:auto;color:var(--a-muted,#5c6475);font-size:var(--a-text-sm,13px)}
-.a-update-receipt{width:100%;box-sizing:border-box;min-height:100px;max-height:260px;resize:vertical;font:var(--a-text-sm,13px)/1.5 ui-monospace,monospace}
+.a-update-receipt{width:100%;box-sizing:border-box;min-height:100px;max-height:260px;resize:vertical;font:var(--a-text-sm,13px)/1.5 var(--a-font-code)}
 
 .a-release-notices,.a-release-history{margin:18px 0;min-width:0;overflow-wrap:anywhere}
 .a-release-notices h4{display:flex;align-items:center;gap:6px}

@@ -239,8 +239,6 @@ ACTION_DEFINITIONS = {
     "updates.reconcileManualHandoff": ("Verify an already completed manual Windows app handoff against the exact retained pre-effect refusal and the actual installed official wheel, owner, launcher, dependencies and pinned listener. Does not install, restart or promote. Preserves existing whole-sequence Install intent. Read updates.manualHandoffResults for the durable result; never replay an unknown request.", schema({"hostInstanceId":string(200),"revision":string(40),"generation":string(32),"attemptId":string(32)}, ["hostInstanceId","revision","generation","attemptId"])),
     "updates.rollback": ("Restore the previous ecosystem version when idle", schema()),
     "settings.update": ("Change voice, workspace or update defaults. Update checks support intervalHours 1, 4, 8 or 24.", schema({"patch": {"type": "object"}})),
-    "theme.apply": ("Apply a complete single-file CSS skin", schema({"name": string(100), "css": string(1000000)})),
-    "theme.reset": ("Restore the default skin", schema()),
     "state.export": ("Export app state and attached device views", schema()),
     "notification.request": ("Request notification permission on this device", schema()),
     "call.start": ("Start a realtime voice call on the connected browser", schema({"attemptId": string(200)}, [])),
@@ -336,7 +334,7 @@ from .shell_modules import ShellModules, definitions as shell_definitions
 ACTION_DEFINITIONS.update(shell_definitions(schema, string))
 from .canvas_views import CanvasViews, definitions as canvas_view_definitions
 ACTION_DEFINITIONS.update(canvas_view_definitions(schema, string))
-from .canvas_apps import definitions as canvas_app_definitions, THEME_TOKENS
+from .canvas_apps import definitions as canvas_app_definitions
 ACTION_DEFINITIONS.update(canvas_app_definitions(schema, string))
 from .canvas_versions import definitions as canvas_version_definitions
 ACTION_DEFINITIONS.update(canvas_version_definitions(schema, string))
@@ -402,18 +400,8 @@ from .test_queue import definitions as test_queue_definitions
 TEST_QUEUE_ACTIONS = _register_actions(test_queue_definitions(schema, string))
 from .portability import definitions as portability_definitions
 ACTION_DEFINITIONS.update(portability_definitions(schema, string))
-ACTION_DEFINITIONS['theme.preview'] = ('Preview a validated skin on an attached client.', schema({'name': string(100), 'css': string(1000000), 'clientId': string(100)}, ['name', 'css']))
-ACTION_DEFINITIONS['theme.revert'] = ('End a preview or undo this client’s last applied skin if it is still current.', schema({'clientId': string(100)}, []))
-for theme_action in ('theme.apply', 'theme.preview'):
-    ACTION_DEFINITIONS[theme_action] = (("Apply a complete theme definition or CSS skin, or patch the current palette." if theme_action == 'theme.apply' else "Preview a complete theme definition or CSS skin, or a palette patch, on an attached client."), ACTION_DEFINITIONS[theme_action][1])
-    theme_spec = ACTION_DEFINITIONS[theme_action][1]
-    theme_spec['properties']['tokens'] = {'type': 'object', 'minProperties': 1, 'additionalProperties': False,
-        'properties': {key: {'type': 'string', 'pattern': '^#[0-9a-fA-F]{6}$'} for key in THEME_TOKENS}}
-    from .themes import DEFINITION
-    theme_spec['properties']['definition'] = DEFINITION
-    theme_spec['required'] = ['name']
-    theme_spec['oneOf'] = [{'required': [key], 'not': {'anyOf': [{'required': [other]} for other in ('css', 'tokens', 'definition') if other != key]}}
-                           for key in ('css', 'tokens', 'definition')]
+from .appearance_preferences import definitions as appearance_definitions
+ACTION_DEFINITIONS.update(appearance_definitions(schema, string))
 
 
 
@@ -633,12 +621,8 @@ class AppService:
             self.state = load_working(self.db)
         from .managed_deletion import tombstones
         self._deleted_session_ids = {sid for row in tombstones(self.db) for sid in row['ids']}
-        # 0.78 removed this legacy value. Restore a usable default only when it
-        # is absent; Reference/profile records are retained, not migration input.
-        # An earlier custom skin that was already removed cannot be recovered.
-        self.state.setdefault('theme', {'name': 'Amplifier Unified', 'css': self.default_theme()})
-        from .default_typography import upgrade_default
-        upgrade_default(self.state, self.default_theme())
+        # Retain older theme bytes inert. The new appearance generation does not
+        # upgrade, seed from, reconstruct or delete legacy user presentation.
         from .settings_migration import migrate_settings
         migrate_settings(self.data_dir, {self.default_workspace, *[s["workspace"] for s in self.state["sessions"] if not s.get("historyManaged") and s.get("workspace")]})
         if row and not self.state.get("sharedVoiceMigration"):
@@ -769,6 +753,8 @@ class AppService:
         self.event_log_view = EventLogView(self)
         from .client_views import ClientViews
         self.clients = ClientViews(self)
+        from .appearance_preferences import AppearancePreferences
+        self.appearance = AppearancePreferences(self)
         self._client_snapshots = {}
         from .browser_state import SnapshotCopies
         self._snapshot_copies = SnapshotCopies()
@@ -2391,6 +2377,8 @@ class AppService:
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action.startswith("shell."):
             return await self.shell.dispatch(action, args, origin, command_id)
+        if action.startswith("appearance."):
+            return await self.appearance.dispatch(action, args, origin, command_id)
         if action.startswith('terminal.'):
             manager = getattr(self, 'terminal_setup', None)
             if manager is None:
@@ -2613,7 +2601,7 @@ class AppService:
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from None
         pending = []
-        async with self.lock, AsyncExitStack() as recovery_boundary:
+        async with self.shell.action_lock(self.lock, action, args, command_id), AsyncExitStack() as recovery_boundary:
             if action == 'session.select' and 'peerPreview' in args:
                 self.peer_preview.select(args, origin)
                 self.canvas_views.guard_transition(action, args)
@@ -3369,11 +3357,10 @@ class AppService:
                     raise AppError('Choose Markdown to copy a conversation or create a readable snapshot.')
                 if action == 'theme.export':
                     from .theme_library import export
-                    diagnostic_result = export(self, args.get('id'), args.get('format', 'css'))
-                    zipped = diagnostic_result.get('format') == 'zip'
-                    content = {'base64': diagnostic_result['base64']} if zipped else diagnostic_result['css']
-                    mime = 'application/zip' if zipped else 'text/css'
-                    filename = diagnostic_result['filename'] if zipped or args.get('id') else 'amplifier-skin.css'
+                    diagnostic_result = export(self, args['id'])
+                    content = {'base64': diagnostic_result['base64']}
+                    mime = 'application/zip'
+                    filename = diagnostic_result['filename']
                 else:
                     if action == 'session.export':
                         from .work_diagnostics import export_session
@@ -3674,6 +3661,12 @@ class AppService:
                         self._session(target, hydrate=False)
                     elif self.state.get('selectedSessionId') is not None:
                         raise AppError('Attach a client to save a draft without a conversation.')
+                presentation = {key: patch.pop(key) for key in ('scheme', 'layout') if key in patch}
+                if presentation:
+                    routed = self.shell.presentation_patch(client_id, presentation, origin)
+                    if not routed['accepted']:
+                        raise AppError(routed['error'], 409)
+                    diagnostic_result = routed['result']
                 if 'draft' in patch:
                     if client_id is not None:
                         self.clients.draft(target, patch.pop('draft'), rich)
@@ -3899,12 +3892,6 @@ class AppService:
                     diagnostic_result = theme_library.save(self, args)
                 else:
                     diagnostic_result = theme_library.mutate(self, args, deleting=action == 'theme.delete')
-            elif action in {'theme.apply', 'theme.preview', 'theme.revert'}:
-                from .canvas_apps import theme_command
-                theme_command(self, action, args)
-            elif action == "theme.reset":
-                self.state["theme"] = {"name": "Amplifier Unified", "css": self.default_theme()}
-                self.state["view"]["themePreview"] = False
             elif action == "notification.request":
                 effects.append({"type": "notification.request"})
             elif action in {"call.start", "call.mute", "call.end", "call.keepAwake", "call.resumeAudio"}:
@@ -4025,6 +4012,7 @@ class AppService:
                 receipt["requestId"] = args['requestId']
             if action in {'updates.featureInstall', 'updates.forceRestart', 'updates.reconcileManualHandoff'}:
                 receipt['requestId'] = command_id
+            self.shell.stage_action_receipt()
             if command_id:
                 self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
             if defer_publish:
@@ -5756,8 +5744,8 @@ class AppService:
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not receipt_mode)
             elif input_origin is not None and 'clientId' in action_args and (
-                    args['action'].startswith(('canvas.views.', 'canvas.apps.'))
-                    or args['action'] in {'canvas.visibility', 'theme.preview', 'theme.revert'}):
+                    args['action'].startswith(('canvas.views.', 'canvas.apps.', 'appearance.'))
+                    or args['action'] == 'canvas.visibility'):
                 # An explicit Canvas target is independent of screen consent.
                 canvas_client = action_args['clientId']
                 with self.clients.bind(canvas_client):
