@@ -138,6 +138,11 @@ def connection_key(workspace, module, config, source=None, *, home=None, _creden
     raw = copy.deepcopy(config or {})
     for name in ('priority', 'model', 'default_model', 'reasoning_effort', 'model_filters'):
         raw.pop(name, None)
+    if module == 'provider-openai':
+        # These are OpenAI listing policy, not account/endpoint settings.
+        # Do not reinterpret same-named options on unrelated providers.
+        for name in ('hide_dated_models', 'filtered'):
+            raw.pop(name, None)
     credential = environment_credential(module, raw)
     if not raw.get(credential['field']) and credential['available']:
         raw[credential['field']] = '${' + credential['envVar'] + '}'
@@ -195,6 +200,30 @@ def connection_key(workspace, module, config, source=None, *, home=None, _creden
     return fingerprint(['provider-connection-v1',scope,module,source,raw,environment,files])
 
 
+def _openai_legacy_visibility(config):
+    """Identity projection only; the provider still validates construction.
+
+    Match OpenAI's renamed-key and Boolean defaults without importing a provider
+    into the host. Invalid/unresolved values stay distinct from successful
+    discovery, even with explicit filters: OpenAI parses legacy values first.
+    """
+    from .host.config import expand_environment
+    values = []
+    for name in ('hide_dated_models', 'filtered'):
+        value = (config or {}).get(name)
+        try:value = expand_environment(value)
+        except ValueError:pass
+        values.append(value)
+    value = values[0] if values[0] not in (None, '') else values[1]
+    if value is None or value == '':return True
+    if isinstance(value, bool):return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ('true', '1', 'yes'):return True
+        if normalized in ('false', '0', 'no'):return False
+    return ['invalid', value]
+
+
 def configuration_key(workspace, module, config, source=None, *, home=None):
     """Discovery reuse additionally requires the same qualified runtime.
 
@@ -210,6 +239,15 @@ def configuration_key(workspace, module, config, source=None, *, home=None):
         try:value = expand_environment(value)
         except ValueError:pass  # Preserve unresolved references, as connection_key does.
         scope[name] = value
+    if module == 'provider-openai':
+        legacy = _openai_legacy_visibility(config)
+        # None uses provider defaults; an explicit mapping (including {}) replaces
+        # them. Never copy family/shutdown policy into the host's catalog owner.
+        if scope.get('model_filters') is None:
+            scope.pop('model_filters', None)
+            scope['hide_dated_models'] = legacy
+        elif not isinstance(legacy, bool):
+            scope['hide_dated_models'] = legacy
     # The selected recommendation scope is cached, not an unfiltered second
     # catalog. Providers may derive listing defaults from model/default_model.
     # Conservatively retain those constructor inputs without copying their

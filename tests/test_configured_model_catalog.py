@@ -280,3 +280,57 @@ async def test_hidden_exact_pending_selection_survives_display_and_input_prepara
     assert chat['nextMessageRevision']==revision
     assert all(chosen['model'] not in [row['id'] for row in entry['models']]
                for entry in service.state['modelCatalogs'].values())
+
+
+@pytest.mark.parametrize('flag', ['hide_dated_models', 'filtered'])
+async def test_legacy_visibility_edit_preserves_saved_exact_choice_and_only_refetches_changed_catalog(
+        catalog_app, flag):
+    import json
+    from types import SimpleNamespace
+    from amplifier_web.conversation_models import select
+    from amplifier_web.next_message_configuration import prepare
+    from amplifier_web.provider_catalog import mounted_catalog_keys, require_mounted_binding
+
+    service, calls, _, rows = catalog_app
+    chat = service._session()
+    rows[0].update(module='provider-openai', source='fixture-source')
+    rows[0]['config'][flag] = False
+    path = amplifier_home() / 'settings.yaml'
+    write_private(path, yaml.safe_dump({'config': {'providers': rows}}))
+    chosen = {'instance': 'one', 'model': 'hidden-exact-2026-01-01'}
+    await select(service.management, chat, chosen)
+    binding, revision = chat['modelConnectionKey'], chat['nextMessageRevision']
+    saved = service.data_dir / 'sessions' / chat['id'] / 'configuration.json'
+    original_plan = {'providers': deepcopy(rows)}
+    write_private(saved, json.dumps(original_plan))
+    # Capture a real mounted identity before the settings-only edit.
+    sources = {'one': 'fixture-source'}
+    mounted = deepcopy(rows[:1])
+    coordinator = SimpleNamespace(config={'providers': mounted}, get_capability=lambda _: {
+        'home': service.data_dir, 'workspace': chat['workspace'], 'sources': sources,
+        'connectionKeys': mounted_catalog_keys(service.data_dir, chat['workspace'], mounted, sources, binding=True)})
+    await browse(service.management, chat)
+    before = service.state['runtimeControl'][chat['id']]['configuration.catalog']
+    old_key = before['providers'][0]['sharedCatalogKey']
+    assert calls == {'one': 1, 'two': 1, 'broken': 1}
+
+    rows[0]['config'][flag] = True
+    write_private(path, yaml.safe_dump({'config': {'providers': rows}}))
+    await browse(service.management, chat)  # No forced refresh; identity must invalidate.
+    after = service.state['runtimeControl'][chat['id']]['configuration.catalog']
+    assert after['providers'][0]['sharedCatalogKey'] != old_key
+    assert after['providers'][0]['connectionKey'] == binding
+    assert after['connectionBindings'] == {}
+    assert calls == {'one': 2, 'two': 1, 'broken': 1}
+    for _ in range(3):
+        await browse(service.management, chat)
+    assert calls == {'one': 2, 'two': 1, 'broken': 1}, 'Warm reads must not repeat discovery'
+    prepared, guard = await prepare(service, chat)
+    guard()
+    require_mounted_binding(coordinator, 'one', prepared['modelConnectionKey'])
+    assert chat['selection'] == chat['pendingModelSelection'] == prepared['selection'] == chosen
+    assert chat['modelConnectionKey'] == prepared['modelConnectionKey'] == binding
+    assert chat['nextMessageRevision'] == revision
+    assert json.loads(saved.read_text()) == original_plan
+    assert all(chosen['model'] not in [row['id'] for row in entry['models']]
+               for entry in service.state['modelCatalogs'].values())

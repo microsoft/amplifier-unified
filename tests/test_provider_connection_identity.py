@@ -34,6 +34,84 @@ def test_recommendation_scope_invalidates_catalog_not_saved_account_binding(tmp_
     assert configuration_key(tmp_path,module,indirect)!=before
 
 
+@pytest.mark.parametrize('legacy,hide_dated', [
+    ({}, True),
+    ({'hide_dated_models': None}, True),
+    ({'hide_dated_models': ''}, True),
+    ({'filtered': None}, True),
+    ({'filtered': ''}, True),
+    ({'hide_dated_models': True}, True),
+    ({'hide_dated_models': False}, False),
+    ({'filtered': False}, False),
+    ({'filtered': ' NO '}, False),
+    ({'hide_dated_models': ' 0 '}, False),
+    ({'hide_dated_models': 'false'}, False),
+    ({'hide_dated_models': ' YES '}, True),
+    ({'hide_dated_models': '1'}, True),
+    ({'hide_dated_models': 'True'}, True),
+    ({'hide_dated_models': False, 'filtered': True}, False),
+    ({'hide_dated_models': True, 'filtered': False}, True),
+    ({'hide_dated_models': None, 'filtered': False}, False),
+    ({'hide_dated_models': '', 'filtered': False}, False),
+    ({'hide_dated_models': True, 'filtered': 'ignored-invalid-alias'}, True),
+])
+def test_openai_legacy_scope_matches_provider_alias_boolean_and_default_semantics(tmp_path, legacy, hide_dated):
+    from amplifier_web.provider_catalog import configuration_key, connection_key
+    base = {'api_key': 'synthetic-account', 'base_url': 'https://fixture.invalid'}
+    expected = configuration_key(tmp_path, 'provider-openai', {**base, 'hide_dated_models': hide_dated})
+    assert configuration_key(tmp_path, 'provider-openai', {**base, **legacy}) == expected
+    assert connection_key(tmp_path, 'provider-openai', {**base, **legacy}) == connection_key(
+        tmp_path, 'provider-openai', base)
+    assert expected != configuration_key(tmp_path, 'provider-openai', {**base, 'hide_dated_models': not hide_dated})
+
+
+@pytest.mark.parametrize('filters', [{}, {'include': ['custom*']}, {'hide_dated': False}])
+def test_explicit_openai_model_filters_replace_legacy_policy(tmp_path, filters):
+    from amplifier_web.provider_catalog import configuration_key, connection_key
+    base = {'api_key': 'synthetic-account', 'model_filters': filters}
+    configs = [base, {**base, 'hide_dated_models': False}, {**base, 'filtered': True},
+               {**base, 'hide_dated_models': True, 'filtered': False}]
+    assert len({configuration_key(tmp_path, 'provider-openai', row) for row in configs}) == 1
+    assert len({connection_key(tmp_path, 'provider-openai', row) for row in configs}) == 1
+    assert configuration_key(tmp_path, 'provider-openai', base) != configuration_key(
+        tmp_path, 'provider-openai', {'api_key': 'synthetic-account'})
+
+
+def test_openai_none_filters_and_environment_legacy_values_keep_effective_scope(tmp_path, monkeypatch):
+    from amplifier_web.provider_catalog import configuration_key
+    base = {'api_key': 'synthetic-account'}
+    default = configuration_key(tmp_path, 'provider-openai', base)
+    assert default == configuration_key(tmp_path, 'provider-openai', {**base, 'model_filters': None})
+    indirect = {**base, 'hide_dated_models': '${LEGACY_HIDE_DATED}', 'filtered': False}
+    monkeypatch.setenv('LEGACY_HIDE_DATED', 'true')
+    assert configuration_key(tmp_path, 'provider-openai', indirect) == default
+    monkeypatch.setenv('LEGACY_HIDE_DATED', 'false')
+    other = configuration_key(tmp_path, 'provider-openai', indirect)
+    assert other != default
+    assert other == configuration_key(tmp_path, 'provider-openai', {**base, 'filtered': False, 'model_filters': None})
+    monkeypatch.delenv('LEGACY_HIDE_DATED')
+    assert configuration_key(tmp_path, 'provider-openai', indirect) not in (default, other)
+
+
+@pytest.mark.parametrize('invalid', ['typo', ' ', 0, 1, [], {}])
+@pytest.mark.parametrize('filters', [None, {}])
+def test_invalid_openai_legacy_value_cannot_reuse_successful_discovery(tmp_path, invalid, filters):
+    # The provider parses legacy values even before an explicit filter replaces
+    # their policy. Keep invalid/unresolved construction inputs distinct.
+    from amplifier_web.provider_catalog import configuration_key
+    base = {'api_key': 'synthetic-account', 'model_filters': filters}
+    invalid_key = configuration_key(tmp_path, 'provider-openai', {**base, 'hide_dated_models': invalid})
+    for valid in ({}, {'hide_dated_models': True}, {'hide_dated_models': False}):
+        assert invalid_key != configuration_key(tmp_path, 'provider-openai', {**base, **valid})
+
+
+@pytest.mark.parametrize('flag', ['hide_dated_models', 'filtered'])
+def test_legacy_key_exclusion_is_scoped_to_openai_provider(tmp_path, flag):
+    from amplifier_web.provider_catalog import connection_key
+    assert connection_key(tmp_path, 'provider-fixture', {flag: True}) != connection_key(
+        tmp_path, 'provider-fixture', {flag: False})
+
+
 _PROCESS = r'''
 import asyncio, json, os, sys
 from pathlib import Path
@@ -124,6 +202,30 @@ def process_identity(tmp_path, mode, **args):
     assert completed.returncode == 0, completed.stderr
     assert 'synthetic-account' not in completed.stdout
     return json.loads(completed.stdout)
+
+
+@pytest.mark.parametrize('flag', ['hide_dated_models', 'filtered'])
+def test_legacy_visibility_change_keeps_separate_host_worker_binding(tmp_path, monkeypatch, flag):
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+    SettingsStore(tmp_path / 'app').update(tmp_path, 'global', lambda values: values.update(config={'providers': [
+        {'id': 'one', 'module': 'provider-openai', 'source': 'fixture-source',
+         'config': {'api_key': 'synthetic-account-a', 'base_url': 'https://fixture.invalid', flag: False}}]}))
+    # Qualified discovery keys can be compared across the independent processes.
+    receipt = tmp_path / 'app' / 'updates' / 'baseline-runtime'
+    receipt.mkdir(parents=True)
+    (receipt / 'runtime-installed.json').write_text('[]')
+    host = process_identity(tmp_path, 'host')
+    worker = process_identity(tmp_path, 'prepared_worker', expected=host['binding'], change={flag: True})
+    assert worker['verified'], worker
+    assert worker['binding'] == host['binding']
+    assert worker['catalog'] != host['catalog']
+    for change in (
+        {'change': {flag: True, 'api_key': 'synthetic-account-b'}},
+        {'change': {flag: True, 'base_url': 'https://different.invalid'}},
+        {'source': 'different-source', 'change': {flag: True}},
+    ):
+        other = process_identity(tmp_path, 'prepared_worker', expected=host['binding'], **change)
+        assert not other['verified'], change
 
 
 @pytest.mark.parametrize('module,flag', [('provider-openai', 'raw'), ('provider-litellm', 'raw_debug')])
