@@ -80,8 +80,9 @@ def review_browser_trust(root, urls, pin):
     with directory(root / "export", owned_root=root, create=True) as exported:
         exported.publish_private("local-ca.cer", content, replace=True)
     if owner_notice(
-            "Amplifier is running in the background. Windows does not yet trust its local "
-            "HTTPS certificate. Open the certificate viewer to review it?\n\n"
+            "Amplifier is running in the background. Could not verify trusted local HTTPS. "
+            "The local certificate may need your review, or the connection may have changed. "
+            "Open the certificate viewer to review it?\n\n"
             "Only if your device policy permits it, you can choose Current User > Trusted Root "
             "Certification Authorities in the viewer. This trusts certificates signed by this CA. "
             "Amplifier will not import it, request administrator access, change policy or bypass "
