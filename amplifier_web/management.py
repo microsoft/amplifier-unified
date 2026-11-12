@@ -1511,7 +1511,7 @@ class Management:
                         session['messages'].append({'id': uuid.uuid5(uuid.NAMESPACE_URL, f"shared:{result['workspace']}:{result['id']}:{index}").hex,
                             'role': row['role'], 'text': row['text'], 'via': 'chat', 'source': 'shared', 'createdAt': session['createdAt']})
                 self.service.state['selectedSessionId'] = session['id']
-                from .workspace_canvas import select_session_workspace
+                from .workspace_selection import select_session_workspace
                 select_session_workspace(self.service.state, session)
                 # Only UI presentation is saved here. The next worker admission
                 # locks and reads the complete common checkpoint, never bubbles.

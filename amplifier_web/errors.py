@@ -7,3 +7,7 @@ class AppError(Exception):
         self.status = status
         self.code = code
         self.receipt = receipt
+
+
+def _error(message):
+    raise AppError(message)

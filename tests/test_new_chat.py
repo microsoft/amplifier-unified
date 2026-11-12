@@ -189,14 +189,14 @@ async def test_explicit_workspace_creation_is_shared_and_preserves_existing_cont
 
 
 async def test_implicit_missing_workspace_is_not_recreated(app, tmp_path, monkeypatch):
-    from amplifier_web import workspace_canvas
+    from amplifier_web import workspace_selection
     folder = tmp_path / 'removed-workspace'
     folder.mkdir()
     await command(app, 'web', 'workspace.add', {'path': str(folder)})
     folder.rmdir()
     def unexpected(path):
         raise AssertionError('Only an explicit workspace authorizes folder creation')
-    monkeypatch.setattr(workspace_canvas, '_create_workspace_folder', unexpected)
+    monkeypatch.setattr(workspace_selection, '_create_workspace_folder', unexpected)
     with pytest.raises(AppError, match='folder'):
         await command(app, 'web', 'session.create', {})
     assert not folder.exists() and not app.state['sessions']
@@ -204,7 +204,7 @@ async def test_implicit_missing_workspace_is_not_recreated(app, tmp_path, monkey
 
 @pytest.mark.parametrize('invalid', ['selection', 'identity', 'existing-identity', 'inheritance', 'stale', 'pending-progress', 'dirty-canvas'])
 async def test_rejected_create_does_not_attempt_filesystem_creation(app, tmp_path, monkeypatch, invalid):
-    from amplifier_web import workspace_canvas
+    from amplifier_web import workspace_selection
     first = await command(app, 'web', 'session.create', {'title': 'Existing'})
     sid = first['sessionId']
     args = {'workspace': str(tmp_path / 'must-not-be-created'), 'fromDraft': True}
@@ -225,7 +225,7 @@ async def test_rejected_create_does_not_attempt_filesystem_creation(app, tmp_pat
     before = copy.deepcopy(app.clients.records['web'])
     def unexpected(path):
         raise AssertionError('An invalid request must not attempt mkdir')
-    monkeypatch.setattr(workspace_canvas, '_create_workspace_folder', unexpected)
+    monkeypatch.setattr(workspace_selection, '_create_workspace_folder', unexpected)
     with pytest.raises(AppError):
         await command(app, 'web', 'session.create', args, command_id='rejected-create', **kwargs)
     assert not Path(args['workspace']).exists()
@@ -236,14 +236,14 @@ async def test_rejected_create_does_not_attempt_filesystem_creation(app, tmp_pat
 
 
 async def test_duplicate_receipt_and_reused_command_do_not_touch_workspace(app, tmp_path, monkeypatch):
-    from amplifier_web import workspace_canvas
+    from amplifier_web import workspace_selection
     folder = tmp_path / 'created'
     args = {'workspace': str(folder), 'fromDraft': True}
     first = await command(app, 'web', 'session.create', args, command_id='same-create')
     folder.rmdir()
     def unexpected(path):
         raise AssertionError('A recorded command must not recreate its workspace')
-    monkeypatch.setattr(workspace_canvas, '_create_workspace_folder', unexpected)
+    monkeypatch.setattr(workspace_selection, '_create_workspace_folder', unexpected)
     duplicate = await command(app, 'web', 'session.create', args, command_id='same-create', expected_revision=-1)
     assert duplicate['duplicate'] and duplicate['sessionId'] == first['sessionId']
     with pytest.raises(AppError, match='different contents'):
@@ -278,8 +278,8 @@ async def test_workspace_creation_failure_keeps_unsent_chat(app, tmp_path, monke
 
 @pytest.mark.parametrize('conflicting', [False, True])
 async def test_concurrent_create_retries_share_receipt_without_blocking_host(app, tmp_path, monkeypatch, conflicting):
-    from amplifier_web import workspace_canvas
-    create = workspace_canvas._create_workspace_folder
+    from amplifier_web import workspace_selection
+    create = workspace_selection._create_workspace_folder
     loop, started, release = asyncio.get_running_loop(), asyncio.Event(), threading.Event()
     calls = []
     def slow_create(path):
@@ -289,7 +289,7 @@ async def test_concurrent_create_retries_share_receipt_without_blocking_host(app
         loop.call_soon_threadsafe(started.set)
         assert release.wait(5)
         return create(path)
-    monkeypatch.setattr(workspace_canvas, '_create_workspace_folder', slow_create)
+    monkeypatch.setattr(workspace_selection, '_create_workspace_folder', slow_create)
     folder = tmp_path / 'async-create'
     args = {'workspace': str(folder), 'fromDraft': True}
     first = asyncio.create_task(command(app, 'web', 'session.create', args, command_id='racing-create'))
@@ -314,8 +314,8 @@ async def test_concurrent_create_retries_share_receipt_without_blocking_host(app
 
 
 async def test_revision_change_during_mkdir_rejects_chat_without_removing_created_folder(app, tmp_path, monkeypatch):
-    from amplifier_web import workspace_canvas
-    create = workspace_canvas._create_workspace_folder
+    from amplifier_web import workspace_selection
+    create = workspace_selection._create_workspace_folder
     loop, started, release = asyncio.get_running_loop(), asyncio.Event(), threading.Event()
     folder = tmp_path / 'created-before-recheck'
     def slow_create(path):
@@ -324,7 +324,7 @@ async def test_revision_change_during_mkdir_rejects_chat_without_removing_create
         loop.call_soon_threadsafe(started.set)
         assert release.wait(5)
         return result
-    monkeypatch.setattr(workspace_canvas, '_create_workspace_folder', slow_create)
+    monkeypatch.setattr(workspace_selection, '_create_workspace_folder', slow_create)
     await command(app, 'web', 'session.draft')
     await command(app, 'web', 'view.update', {'patch': {'draft': 'Still unsent'}})
     pending = asyncio.create_task(command(app, 'web', 'session.create', {'workspace': str(folder), 'fromDraft': True}, command_id='changed-during-create', expected_revision=app.state['revision']))

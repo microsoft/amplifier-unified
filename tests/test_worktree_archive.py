@@ -115,7 +115,7 @@ async def test_archive_fences_creation_until_git_thread_finishes(tmp_path, monke
 
 @pytest.mark.parametrize('cancel', [False, True])
 async def test_preparing_chat_reserves_checkout_until_directory_thread_finishes(tmp_path, monkeypatch, cancel):
-    from amplifier_web.workspace_canvas import _create_workspace_folder
+    from amplifier_web.workspace_selection import _create_workspace_folder
     app, runtime, root, sid = await fixture(tmp_path, monkeypatch)
     release = threading.Event(); started = asyncio.Event(); task = None
     loop = asyncio.get_running_loop()
@@ -126,7 +126,7 @@ async def test_preparing_chat_reserves_checkout_until_directory_thread_finishes(
             loop.call_soon_threadsafe(started.set)
             assert release.wait(10), 'Test did not release directory preparation'
             return _create_workspace_folder(path)
-        monkeypatch.setattr('amplifier_web.workspace_canvas._create_workspace_folder', paused)
+        monkeypatch.setattr('amplifier_web.workspace_selection._create_workspace_folder', paused)
         task = asyncio.create_task(app.dispatch('session.create', {'workspace': str(nested), 'select': False}))
         await asyncio.wait_for(started.wait(), 5)
         if cancel:

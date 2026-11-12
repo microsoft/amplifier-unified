@@ -567,7 +567,7 @@ class AutomaticHistory:
         async with self.lock:
             try:
                 known = workspace_inputs(self.service.state)
-                from .workspace_canvas import refresh_workspace_availability
+                from .workspace_selection import refresh_workspace_availability
                 cursor = self._availability_cursor % max(1, len(known))
                 availability = known if force else known[cursor:cursor + 64]
                 self._availability_cursor = (cursor + len(availability)) % max(1, len(known))
