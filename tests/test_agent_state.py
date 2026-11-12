@@ -121,7 +121,7 @@ async def _configuration_tool(app, sid, native_role=None):
     from amplifier_web.runtime_worker import Worker
     def native_coordinator(session_id):
         capabilities = {}
-        return SimpleNamespace(session_id=session_id, get_capability=capabilities.get,
+        return SimpleNamespace(session_id=session_id, session_state={}, get_capability=capabilities.get,
                                register_capability=capabilities.__setitem__)
     # Keep constructor-owned execution/activation defaults. Only the synthetic
     # coordinator, generation and host bridge below replace runtime boundaries.
