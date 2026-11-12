@@ -36,14 +36,15 @@ def definitions(schema, string):
             for name, description in {
                 "reconcile": "Reconcile the exact operation with its sealed native receipt at an expected revision. Never applies or warms; absent/partial evidence stays unknown.",
                 "resume": "Continue the original operation under its still-valid authority and target. Proven no effect may apply; a confirmed saved plan may only finish loaded readback or mount if its worker is absent. Exclusive idle admission; unknown or partial writes refuse. No new plan, grant or input.",
+                "cancel": "Abandon an exact settled configuration operation without applying or loading it. Requires fresh Full root authority, unchanged target/payload, proven terminal no-effect or saved-plan evidence, and exclusive stopped native ownership. Saved settings and old failure evidence remain; no input is delivered.",
             }.items()},
     }
 
 
-def caller_authority(management, args, origin, caller, *, active=False):
+def caller_authority(management, args, origin, caller, *, active=False, cancellation=False):
     """Keep grant administration owner-only; recovery has a narrow target route."""
     service = management.service
-    if origin in {'ui', 'user'} or args['sessionId'] == caller:
+    if not cancellation and (origin in {'ui', 'user'} or args['sessionId'] == caller):
         if origin not in {'ui', 'user'}:
             service.configuration_authority.source(args, origin, caller,
                 active=active, allow_descendant=True)
@@ -67,9 +68,11 @@ def caller_authority(management, args, origin, caller, *, active=False):
             'assignmentId': source.get('assignmentId')},
         recoveryTarget={**management.configuration_target_binding(target),
             'nativeSessionId': target.get('runtimeSessionId') or target.get('nativeIdentity') or target['id'],
-            'operationId': args['operationId']})
+            'operationId': args['operationId']},
+        recoveryCancellation=cancellation)
     check_caller(service, authority)
-    peers = service.configuration_authority.full_peer_authorities(source, authority['inputIds'])
+    peers = service.configuration_authority.full_peer_authorities(
+        source, authority['inputIds'], require_full=cancellation)
     # Target identity is never used as the caller, even for an operator original.
     return {'chain': [authority, *peers]}
 
@@ -104,7 +107,8 @@ def check_caller(service, authority):
             or (target.get('runtimeSessionId') or target.get('nativeIdentity') or target['id']) != target_saved['nativeSessionId']
             or target.get('pendingConfiguration', {}).get('operationId') != target_saved['operationId']
             or target.get('configurationOperationFence') not in {None, target_saved['operationId']}
-            or target.get('status') in {'stopped', 'stopping', 'interrupted'}
+            or target.get('status') == 'stopping'
+            or not authority.get('recoveryCancellation') and target.get('status') in {'stopped', 'interrupted'}
             or target.get('fileAccessPending') or service.assignments.blocked(target)
             or target.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}):
         raise ValueError('The recovery target was stopped, moved or fenced by a different owner.')
@@ -119,7 +123,7 @@ def command_status(service, record, identity):
     binding = receipt.get('configurationRecovery') or {}
     if (binding.get('sessionId') != record['request']['sessionId']
             or binding.get('operationId') != record['id']
-            or binding.get('action') not in {'configuration.operation.reconcile', 'configuration.operation.resume'}):
+            or binding.get('action') not in {'configuration.operation.reconcile', 'configuration.operation.resume', 'configuration.operation.cancel'}):
         return result
     return {**result, 'status': 'accepted' if receipt.get('accepted') is True else 'rejected',
         'accepted': receipt.get('accepted') is True,
@@ -132,6 +136,13 @@ def command_status(service, record, identity):
 
 def suppress_input(session, receipt=None):
     """Hold old queued inputs, not new explicit work after operator recovery."""
+    cancelled = session.get('cancelledConfigurationInput')
+    if isinstance(cancelled, dict):
+        if receipt is not None and receipt.get('acceptedAt', 0) <= cancelled['acceptedAt']:
+            return True
+        if cancelled.get('generationId') == (session.get('collaborationGeneration') or {}).get('id'):
+            if receipt is None or receipt.get('dependencyRequestId'):
+                return True
     marker = session.get('pendingConfiguration', {}).get('recoveryNoInput')
     return (isinstance(marker, dict)
         and marker.get('generationId') == (session.get('collaborationGeneration') or {}).get('id')
@@ -393,6 +404,84 @@ def check_saved_cancellation(management, session, record):
     check_saved_effect(management, session, record)
 
 
+def check_cancellation(management, session, record, args, operator):
+    """Fresh abandonment is not authority to resume or erase uncertain effects."""
+    service = management.service
+    service.configuration_authority.check(operator)
+    if not all(item.get('recoveryCancellation') for item in operator['chain'][:1]):
+        raise ValueError('Cancellation needs its own current operator authority.')
+    pending = session.get('pendingConfiguration', {})
+    task = management.pending_config_tasks.get(session['id'])
+    if (pending.get('operationId') != record['id'] or args['expectedRevision'] != record['revision']
+            or record['state']['phase'] != 'error'
+            or session.get('configurationOperationFence') not in {None, record['id']}
+            or task is not None and not task.done() or management.lock.locked()
+            or session.get('configurationPending')
+            or session.get('configurationRefresh', {}).get('phase') in {'queued', 'applying'}
+            or not management.configuration_idle({**session, 'pendingConfiguration': {}, 'configurationBusy': False})):
+        raise ValueError('Wait for the exact configuration operation and its execution to settle.')
+    request = record['request']
+    if (request['sessionId'] != session['id'] or request['workspace'] != session['workspace']
+            or request['workingDirectory'] != session.get('workingDirectory')
+            or request['executionRevision'] != session.get('executionRevision', 0)
+            or fingerprint(request['config']) != request['payloadHash']
+            or fingerprint(json.loads(management.queued_path(session['id']).read_text())) != request['payloadHash']):
+        raise ValueError('The original configuration target or payload changed.')
+    attempt = latest_attempt(record)
+    observed = evidence(attempt, home=service.data_dir) if attempt else None
+    if attempt and attempt.get('nativeSessionId') != (
+            session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']):
+        raise ValueError('The original native target changed.')
+    effect = record['state']['effect']
+    if observed and observed.get('terminal') is True and observed['effect'] == 'saved_not_mounted':
+        if effect not in {'unknown', 'saved_not_mounted'}:
+            raise ValueError('Native evidence conflicts with the retained configuration outcome.')
+        effect = 'saved_not_mounted'
+    if effect == 'saved_not_mounted':
+        # Classify the sealed outcome for abandonment only. The immutable
+        # original remains unchanged until the cancelled transition commits.
+        check_saved_cancellation(management, session,
+            {**record, 'state': {**record['state'], 'effect': effect}})
+    elif (record['state']['effect'] not in {'none', 'unknown'}
+            or attempt and (not observed or observed.get('effect') != 'none' or observed.get('terminal') is not True)
+            or not attempt and (record['state']['effect'] != 'none'
+                or record.get('attempts', []) != [] or record['state'].get('attemptId')
+                or any(row.get('stage') == 'dispatching' or row.get('attemptId')
+                       or row.get('effect') not in {None, 'none'} for row in record['history']))):
+        raise ValueError('Cancellation requires terminal no-effect or unchanged saved-plan evidence; unknown effects stay held.')
+    # This observes absence; it never retires a live worker or acquires its place
+    # by force. The caller holds this context through durable commit/publication.
+    return service.runtime.stopped_boundary(session), (
+        'saved_not_mounted' if effect == 'saved_not_mounted' else 'none')
+
+
+def cancel(management, session, record, args, operator, origin, caller):
+    service = management.service
+    stopped, effect = check_cancellation(management, session, record, args, operator)
+    with stopped as boundary:
+        # An independent writer may finish between passive proof and acquiring
+        # the lease. Re-read the canonical payload/evidence under ownership.
+        record = management.configuration_record(session['id'], record['id'])
+        _, effect = check_cancellation(management, session, record, args, operator)
+        record['recoveryNoInput'] = True
+        marker = {'generationId': (session.get('collaborationGeneration') or {}).get('id'),
+                  'acceptedAt': time.time()}
+        record['recoveryNoInputBinding'] = marker
+        session['pendingConfiguration']['recoveryNoInput'] = marker
+        write_private(management.configuration_record_path(session['id'], record['id']), json.dumps(record))
+        record = management.configuration_transition(session, record['id'], phase='cancelled',
+            stage='saved_cancelled' if effect == 'saved_not_mounted' else 'cancelled',
+            # A terminal no-effect receipt may classify an earlier unknown reply.
+            effect=effect,
+            recoveryRequired=False, error=None,
+            detail='Unfinished configuration abandoned; saved settings and original evidence retained.',
+            recovery_source={'action': 'configuration.operation.cancel', 'origin': origin,
+                             'sessionId': caller, 'boundary': boundary})
+        management.finish_saved_cancellation(session, record)
+        service._publish_changes(sessions={session['id']})
+        return public(record)
+
+
 async def finish_saved(management, identity, operation):
     """Continue readback/mount only, never dispatch the original settings write."""
     from .configuration_authority import CURRENT
@@ -534,7 +623,7 @@ def validate_recovery(management, session, record, attempt, observed, action, ar
 
 def recovery_status(management, session, record, attempt, observed, origin, operator=None, *, diagnostics=None):
     from .errors import AppError
-    status = {"canReconcile": False, "canResume": False,
+    status = {"canReconcile": False, "canResume": False, "canCancel": False,
               "reason": "This change remains held. Its original permission, target or evidence is not currently valid."}
     for verb, key in (("reconcile", "canReconcile"), ("resume", "canResume")):
         try:
@@ -550,12 +639,28 @@ def recovery_status(management, session, record, attempt, observed, origin, oper
             status[key] = True
         except (ValueError, OSError, KeyError, TypeError, AttributeError, AppError):
             pass  # Never publish raw errors, private paths, plan or authority.
+    if operator is not None and operator['chain'][0].get('recoveryCancellation'):
+        try:
+            # Constructing the context does not acquire ownership. Reads inspect
+            # only known local activity; mutation alone takes the native lease.
+            check_cancellation(management, session, record,
+                {'expectedRevision': record['revision']}, operator)
+            runtime = management.service.runtime
+            sid = session['id']
+            row, lock = runtime.workers.get(sid), runtime._locks.get(sid)
+            status['canCancel'] = not (
+                runtime._closed or sid in runtime._preparations or lock and lock.locked()
+                or row and (row['process'].returncode is None or not row.get('executionEnded')))
+        except (ValueError, OSError, KeyError, TypeError, AttributeError, RuntimeError, AppError):
+            pass
     if status["canResume"]:
         status["reason"] = ("Settings were saved. Resume checks the loaded session, or loads the saved plan if its worker is absent; it never repeats the settings write."
             if record['state']['effect'] == 'saved_not_mounted' else
             "No settings write occurred. You can explicitly resume the original change; its permission will be checked again.")
     elif status["canReconcile"]:
         status["reason"] = "Check the saved outcome before deciding what can happen next. Checking never applies changes."
+    elif status['canCancel']:
+        status['reason'] = 'The stopped operation can be explicitly abandoned; saved settings and original failure evidence remain.'
     elif record["state"]["phase"] in {"queued", "applying"} and record["state"].get("stage") != "interrupted":
         status["reason"] = "The original change is queued or still applying. Acceptance is not confirmation that it is mounted."
         if record['request']['source'].get('continuation'):
@@ -571,7 +676,8 @@ def command(management, action, args, origin, caller, *, operator=None):
     """Run under service.lock; use the existing shared command ledger for dedup."""
     service = management.service
     if operator is None:
-        operator = caller_authority(management, args, origin, caller, active=not action.endswith(".read"))
+        operator = caller_authority(management, args, origin, caller, active=not action.endswith(".read"),
+                                    cancellation=action.endswith('.cancel'))
     else:
         service.configuration_authority.source({'sessionId': caller}, origin, caller, active=True)
         service.configuration_authority.check(operator)
@@ -634,6 +740,8 @@ def command(management, action, args, origin, caller, *, operator=None):
                 raise ValueError('An exact command read requires an explicit operation.')
             result['command'] = command_status(service, record, args['commandId'])
         return result
+    if action.endswith('.cancel'):
+        return cancel(management, session, record, args, operator, origin, caller)
     effect, recovery_authority = validate_recovery(
         management, session, record, attempt, observed, action, args, origin, operator)
     from .collaboration import BINDING, PRINCIPAL

@@ -14,7 +14,7 @@ def definitions(schema, string):
         'conversation.configure': ('Save an explicitly targeted conversation’s Next message bundle/model choices without preparing a worker. '
             'Current authenticated Full root operators may target other registered own chats. '
             'expectedRevision is nextMessageRevision, not the app revision. Saved is not mounted; application is validated on genuine input.', value),
-        'conversation.configuration': ('Read only saved bundle/model choices, nextMessageRevision and configuration hold category for an explicit chat. '
+        'conversation.configuration': ('Read only saved bundle/model choices, nextMessageRevision, configuration hold category and retained pending operation identity/revision for an explicit chat. '
             'No runtime demand or history hydration. Private plan, authority, draft and conversation history are not returned.',
             schema({'sessionId': string(200)}, ['sessionId'])),
     }

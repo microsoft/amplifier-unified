@@ -124,6 +124,24 @@ def saved_session(service, identity):
     return rows[0]  # Native-only root has no app-owned next-message override.
 
 
+def pending_operation(session):
+    """Retained discovery metadata only; never native evidence or permission."""
+    import uuid
+    pending = session.get('pendingConfiguration')
+    if not pending:
+        return None
+    try:
+        identity, revision = pending['operationId'], pending['revision']
+        if (str(uuid.UUID(identity)) != identity or type(revision) is not int or revision < 1
+                or pending.get('phase') not in {'queued', 'applying', 'error', 'ready', 'cancelled'}
+                or pending.get('effect') not in {'none', 'unknown', 'saved_not_mounted', 'mounted'}):
+            raise ValueError('Unavailable metadata')
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return {'availability': 'unavailable'}
+    return {'availability': 'retained', 'operationId': identity, 'revision': revision,
+            'phase': pending['phase'], 'effect': pending['effect']}
+
+
 def read(service, args):
     """Small saved-state projection; no private plans, authority or cold history."""
     import copy
@@ -140,5 +158,6 @@ def read(service, args):
             'pendingBundleSelection': ({'bundle': pending['bundle'], 'resetModel': pending.get('resetModel', False)}
                                        if pending else None),
             'pendingModelSelection': copy.deepcopy(session.get('pendingModelSelection')),
+            'pendingOperation': pending_operation(session),
             'status': session.get('nextMessageStatus'), 'blockedReason': blocked,
             'applies': 'next-message', 'mounted': False}

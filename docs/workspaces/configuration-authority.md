@@ -508,6 +508,35 @@ the native settings write again. Cross-owner recovery neither delivers inputs no
 wakes the target's model, including through a saved settings continuation or a
 queued peer input. Ordinary own-task settings continuation is unchanged.
 
+The bounded passive `conversation.configuration` read exposes `pendingOperation`
+with the retained operation ID, revision, phase and effect, or an explicit
+unavailable marker for incomplete legacy metadata. This is discovery, not native
+effect evidence or permission. An operator can discover the ID without private
+fixture state, then inspect the exact operation and its first-failure checks.
+
+`configuration.operation.cancel` adds fresh Full-root abandonment of an exact
+settled operation in the same workspace. Unlike Resume, it does not renew or
+exercise the old request's authority. A target already stopped, or an original
+whose grant was revoked, can be abandoned only when terminal native evidence
+proves no effect or a complete save with the saved plan unchanged. An operation
+proven never dispatched can also be abandoned. Missing, partial, contradictory
+or unauthenticated evidence remains held. Real placement/native identity changes,
+active work and another writer still refuse. The mutation acquires the existing
+native ownership lease through its durable cancellation and publication; the
+read's `canCancel` is only passive eligibility, not proof of exclusive ownership.
+
+Cancellation retains the original request, authority, attempts, receipts and
+failure history. Saved settings are neither removed nor rolled back. It performs
+no write of the old plan, load, input delivery or automatic continuation.
+Pre-existing queued inputs remain suppressed by the original durable cutoff,
+including after restart and a later fresh turn. The original generation's
+dependency continuation remains fenced; genuinely fresh work retains its normal
+admission. The cancelled pending record remains readable until a later operation
+replaces it. Use the exact command read after an uncertain cancellation, never
+another cancellation to discover its outcome. Once cancellation is confirmed,
+read the current `nextMessageRevision`, save the independent future bundle choice
+through `conversation.configure`, and read it back. Saved is not mounted.
+
 `configuration.operation.read` accepts an optional exact recovery `commandId`
 with the explicit target and operation. It returns only target-bound recovery
 admission, expected/observed revision, phase and a bounded error category from
