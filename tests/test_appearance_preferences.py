@@ -660,7 +660,8 @@ async def test_literal_null_new_record_after_startup_fails_without_overwrite(app
     assert failed['availability'] == 'failed'
     assert failed['code'] == 'appearance_preferences_invalid'
     with pytest.raises(AppError) as error:
-        await update(app, {'scheme': 'dark'})
+        await call(app, 'appearance.preferences.update', {
+            'scope': 'shared', 'expectedRevision': 0, 'patch': {'scheme': 'dark'}})
     assert error.value.code == 'appearance_preferences_invalid'
     assert list(app.db.execute('SELECT kind,id,value FROM shell_records ORDER BY kind,id')) == before
 
@@ -677,6 +678,37 @@ async def test_literal_null_new_identity_cold_start_fails_without_new_owner(tmp_
         assert restored.shell.get('appearance-identity', 'v2') is None
         assert restored.db.execute("SELECT value FROM shell_records WHERE kind='appearance-identity' AND id='v2'").fetchone() == ('null',)
         assert restored.shell.get('preferences', 'shared-reference-v2') is None
+    finally:
+        await restored.close()
+
+
+@pytest.mark.parametrize('malformed', [False, True])
+async def test_synthetic_fixture_canaries_precede_cold_start_and_remain_inert(tmp_path, monkeypatch, malformed):
+    import runpy
+    import sys
+    from pathlib import Path
+    fixture = runpy.run_path(str(Path(__file__).parent / 'fixtures/empty_host_ui_server.py'))
+    flags = ['fixture', '--synthetic-discovery', '--appearance-records']
+    if malformed:
+        flags.append('--appearance-malformed')
+    monkeypatch.setattr(sys, 'argv', flags)
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    await fixture['seed_appearance_records'](tmp_path, workspace)
+    before = (tmp_path / 'appearance-canary-sha256').read_text()
+    restored = AppService(tmp_path / 'app', workspace=workspace)
+    try:
+        assert fixture['appearance_record_hash'](restored) == before
+        current = restored.appearance.read()
+        assert current['availability'] == ('failed' if malformed else 'not-attached')
+        if malformed:
+            assert current['code'] == 'appearance_preferences_invalid'
+        else:
+            assert restored.shell.get('preferences', 'shared-reference-v2') is None
+            assert current['shared']['values'] == DEFAULTS
+        assert not (restored.data_dir / 'appearance-library-v1').exists()
+        assert sorted(p.name for p in (restored.data_dir / 'themes').iterdir()) == [
+            'legacy-format1.zip', 'legacy-format2.zip', 'legacy.css']
     finally:
         await restored.close()
 
