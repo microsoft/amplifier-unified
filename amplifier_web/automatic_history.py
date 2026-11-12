@@ -17,6 +17,7 @@ from .session_files import amplifier_home, project_slug
 from .managed_chats import catalog_locations
 from amplifier_foundation.session.history import SessionHistoryStore
 from .shared_state_probe import text_content
+from .workspace_registrations import reconcile as reconcile_workspace_registrations
 
 BUSY = {'starting', 'working', 'running', 'stopping', 'ready'}
 INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSource', 'nativeNameRevision', 'nativeNamePolicyRevision', 'autoName', 'naming', 'description', 'bundle', 'workspace',
@@ -727,110 +728,56 @@ class AutomaticHistory:
                             for row in incoming['sessions']) if directory_mode else
                             all(row.get('sessionKind') == 'worker' for row in incoming['sessions']))
                         and not locations_changed)
-                    hidden_workspaces = set(state.get('hiddenNativeWorkspaces', []))
-                    workspaces = {row['id']: row for row in state['workspaces']}
-                    # Most refreshes contain no unresolved folders. Index the
-                    # exceptions once instead of rescanning every registration
-                    # for every discovered workspace while holding the app lock.
-                    unresolved_by_project = {}
-                    for item in state['workspaces']:
-                        if not item.get('path'):
-                            unresolved_by_project.setdefault(item.get('nativeProject'), {})[item['id']] = item
-                    for row in known:
-                        previous = workspaces.get(row['id'])
-                        if previous and previous.get('path') == row.get('path') and previous.get('available') != row['available']:
-                            previous['available'] = row['available']
-                            changed = True
-                            globals_changed.add('workspaces')
-                    for row in snapshot['workspaces']:
-                        if row.get('path') in managed_paths:
-                            continue
-                        unresolved_id = (uuid.uuid5(uuid.NAMESPACE_URL, f"amplifier-project:{row['nativeProject']}").hex
-                                         if hidden_workspaces and row.get('path') else None)
-                        if unresolved_id is not None and unresolved_id in hidden_workspaces and row['id'] not in hidden_workspaces:
-                            hidden_workspaces.add(row['id'])
-                            state.setdefault('hiddenNativeWorkspaces', []).append(row['id'])
-                            changed = True
-                            globals_changed.add('hiddenNativeWorkspaces')
-                        if row['id'] in hidden_workspaces:
-                            continue
-                        previous = workspaces.get(row['id'])
-                        previous_project = previous.get('nativeProject') if previous else None
-                        unresolved = [item for identity, item in unresolved_by_project.get(row['nativeProject'], {}).items()
-                                      if identity != row['id']]
-                        if previous is None:
-                            state['workspaces'].append(dict(row)); workspaces[row['id']] = state['workspaces'][-1]
-                            previous = workspaces[row['id']]
-                            changed = True
-                            globals_changed.add('workspaces')
-                        else:
-                            for key in ('nativeProject', 'available', 'sessionCount', 'workerSessionCount'):
-                                if key in row and previous.get(key) != row[key]:
-                                    previous[key] = row[key]; changed = True
-                                    globals_changed.add('workspaces')
-                        if not previous.get('path'):
-                            # Later rows in this same scan must see additions
-                            # and identity changes, just as a fresh list scan did.
-                            project = previous.get('nativeProject')
-                            if previous_project != project:
-                                unresolved_by_project.get(previous_project, {}).pop(previous['id'], None)
-                            unresolved_by_project.setdefault(project, {})[previous['id']] = previous
-                        for old in unresolved:
-                            # Migrate the generated placeholder, preserving any
-                            # user customization and every reference to it.
-                            if old.get('name') != old.get('nativeProject'):
-                                if previous.get('name') == row.get('name'):
-                                    previous['name'] = old['name']
-                                elif old.get('name') != previous.get('name'):
-                                    aliases = previous.setdefault('aliases', [])
-                                    if old['name'] not in aliases:
-                                        aliases.append(old['name'])
-                            for key, value in old.items():
-                                if key not in {'id', 'name', 'nativeProject', 'path', 'available', 'sessionCount', 'workerSessionCount'}:
-                                    previous.setdefault(key, copy.deepcopy(value))
-                            if state.get('selectedWorkspaceId') == old['id']:
-                                state['selectedWorkspaceId'] = row['id']
-                                globals_changed.add('selectedWorkspaceId')
-                                if row.get('path'):
-                                    state['settings']['workspace'] = row['path']
-                                    globals_changed.add('settings')
-                            pins = state.get('pinnedWorkspaceIds', [])
-                            if isinstance(pins, list) and old['id'] in pins:
-                                # Replace identity in place; availability and
-                                # unrelated stored values are not migration policy.
-                                remapped, seen = [], set()
-                                for value in pins:
-                                    value = row['id'] if value == old['id'] else value
-                                    if not isinstance(value, str) or value not in seen:
-                                        remapped.append(value)
-                                    if isinstance(value, str):
-                                        seen.add(value)
-                                if remapped != pins:
-                                    state['pinnedWorkspaceIds'] = remapped
-                                    globals_changed.add('pinnedWorkspaceIds')
-                                    if isinstance(state.get('pinnedItemIds'), list):
-                                        items = list(dict.fromkeys(
-                                            'workspace:' + row['id'] if key == 'workspace:' + old['id'] else key
-                                            for key in state['pinnedItemIds']))
-                                        if items != state['pinnedItemIds']:
-                                            state['pinnedItemIds'] = items
-                                            globals_changed.add('pinnedItemIds')
-                            for scoped in state['sessions']:
-                                if scoped.get('workspaceId') == old['id']:
-                                    scoped['workspaceId'] = row['id']
-                                    touched.add(scoped['id'])
-                            canvas_remaps = [(key, scoped) for key, values in (
-                                ('canvasArtifacts', state.get('canvasArtifacts', [])),
-                                ('canvas', [state.get('canvas', {})])) for scoped in values
-                                if scoped.get('workspaceId') == old['id']]
-                            for key, scoped in canvas_remaps:
-                                scoped['workspaceId'] = row['id']
-                                globals_changed.add(key)
-                            state['workspaces'].remove(old)
-                            workspaces.pop(old['id'], None)
-                            unresolved_by_project.get(old.get('nativeProject'), {}).pop(old['id'], None)
-                            changed = True
-                            globals_changed.add('workspaces')
+                    reconciliation = reconcile_workspace_registrations(
+                        state['workspaces'], known, snapshot['workspaces'],
+                        hidden_ids=state.get('hiddenNativeWorkspaces', []), managed_paths=managed_paths)
+                    workspaces = reconciliation.by_id
+                    hidden_workspaces = reconciliation.hidden_ids
+                    if reconciliation.registrations_changed:
+                        changed = True
+                        globals_changed.add('workspaces')
+                    if reconciliation.hidden_changed:
+                        changed = True
+                        globals_changed.add('hiddenNativeWorkspaces')
+                    for old_id, new_id, target_path in reconciliation.remaps:
+                        if state.get('selectedWorkspaceId') == old_id:
+                            state['selectedWorkspaceId'] = new_id
+                            globals_changed.add('selectedWorkspaceId')
+                            if target_path:
+                                state['settings']['workspace'] = target_path
+                                globals_changed.add('settings')
+                        pins = state.get('pinnedWorkspaceIds', [])
+                        if isinstance(pins, list) and old_id in pins:
+                            # Replace identity in place; availability and
+                            # unrelated stored values are not migration policy.
+                            remapped, seen = [], set()
+                            for value in pins:
+                                value = new_id if value == old_id else value
+                                if not isinstance(value, str) or value not in seen:
+                                    remapped.append(value)
+                                if isinstance(value, str):
+                                    seen.add(value)
+                            if remapped != pins:
+                                state['pinnedWorkspaceIds'] = remapped
+                                globals_changed.add('pinnedWorkspaceIds')
+                                if isinstance(state.get('pinnedItemIds'), list):
+                                    items = list(dict.fromkeys(
+                                        'workspace:' + new_id if key == 'workspace:' + old_id else key
+                                        for key in state['pinnedItemIds']))
+                                    if items != state['pinnedItemIds']:
+                                        state['pinnedItemIds'] = items
+                                        globals_changed.add('pinnedItemIds')
+                        for scoped in state['sessions']:
+                            if scoped.get('workspaceId') == old_id:
+                                scoped['workspaceId'] = new_id
+                                touched.add(scoped['id'])
+                        canvas_remaps = [(key, scoped) for key, values in (
+                            ('canvasArtifacts', state.get('canvasArtifacts', [])),
+                            ('canvas', [state.get('canvas', {})])) for scoped in values
+                            if scoped.get('workspaceId') == old_id]
+                        for key, scoped in canvas_remaps:
+                            scoped['workspaceId'] = new_id
+                            globals_changed.add(key)
                     if not delta_mode or self._existing is None:
                         existing = {(s.get('nativeProject') or (project_slug(s['workspace']) if s.get('workspace') else None),
                                      s.get('nativeIdentity') or s.get('runtimeSessionId') or s['id']): s for s in state['sessions']}
