@@ -29,6 +29,11 @@
 /components/worktrees/MANIFEST.in source-context=configuration
 /components/worktrees/.gitignore source-context=configuration
 /components/worktrees/LICENSE source-context=documentation
+/components/portability/amplifier_portability/** source-context=source
+/components/portability/tests/** source-context=tests
+/components/portability/MANIFEST.in source-context=configuration
+/components/portability/.gitignore source-context=configuration
+/components/portability/LICENSE source-context=documentation
 /docs/** source-context=documentation
 /contracts/** source-context=contracts
 /context/** source-context=guidance

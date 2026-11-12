@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "amplifier-portability"
+version = "0.1.0"
+description = "Signed task transfer journals and bounded Git capsules"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "amplifier-worktrees==0.1.0",
+    "cryptography>=44,<51",
+    "filelock>=4.2.1,<5",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["amplifier_portability"]
+include-package-data = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

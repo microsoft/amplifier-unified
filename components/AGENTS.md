@@ -1,5 +1,12 @@
 # Component ownership
 
+`components/portability/` is temporarily authored here as an independently
+buildable Python project. Preserve `amplifier_portability` imports and its existing
+worktree dependency. Its signed-journal and Git-capsule tests stay with the package;
+Unified retains task admission, data projection, native fencing and account probes.
+Normal Unified builds both runtime packages directly; the standalone preparation
+uses an exact local worktrees artifact, not an assumed public dependency.
+
 `components/worktrees/` is temporarily authored here as an independently buildable
 Python project. Preserve `amplifier_worktrees` and `amplifier_worktrees.git` imports;
 Unified builds directly from its nested runtime sources. Its real-Git mechanism
