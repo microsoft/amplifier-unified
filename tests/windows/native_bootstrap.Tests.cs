@@ -28,6 +28,14 @@ namespace UnifiedBootstrap {
             Need(refused);
         }
         static int Main() {
+            // These must run in the standalone compiled entry, not Add-Type or
+            // a PowerShell host whose framework defaults can hide this defect.
+            var framework=(System.Runtime.Versioning.TargetFrameworkAttribute)
+                Attribute.GetCustomAttribute(System.Reflection.Assembly.GetEntryAssembly(),
+                    typeof(System.Runtime.Versioning.TargetFrameworkAttribute));
+            Need(framework!=null && framework.FrameworkName==".NETFramework,Version=v4.8");
+            Need(System.Net.ServicePointManager.SecurityProtocol==System.Net.SecurityProtocolType.SystemDefault);
+            Need(System.Net.ServicePointManager.ServerCertificateValidationCallback==null);
             var json=new JavaScriptSerializer();
             Need((string)NativeInstaller.Plan(json.Serialize(Valid()))["source"]==NativePins.Source);
             foreach(var pair in new[]{
