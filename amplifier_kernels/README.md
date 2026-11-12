@@ -26,7 +26,9 @@ uv pip install --python .venv/bin/python "dist/amplifier_kernels-0.1.0-py3-none-
 
 Before running the tests, install the selected `amplifier-operations` wheel and
 the public managed-process `amplifier-module-tool-bash` artifact, including that
-peer's declared dependencies, into this same environment. The operations project
+peer's declared dependencies, into this same environment. The current BashTool
+also imports Core: install its selected compatible `amplifier-core` wheel even
+if that peer does not declare it in package metadata. The operations project
 currently has preparation artifacts rather than an independent published release;
 build its exact selected source separately and supply that local wheel. Do not
 install Unified to obtain these peers. Record both source/artifact identities.
