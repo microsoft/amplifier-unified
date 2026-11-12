@@ -1,7 +1,8 @@
 """Shared binding identity survives adoption and the real update-probe child.
 
-Synthetic sources, no model/provider execution or public network. The candidate
-inherits prepared test dependencies but installers target only its own venv.
+Synthetic modules, no model generation. The ordinary probe inherits prepared
+test dependencies but installers target only its own venv. The opt-in full
+worker check resolves the packaged graph through its isolated DTU transport.
 """
 import asyncio
 import hashlib
