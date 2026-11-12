@@ -1,8 +1,8 @@
-"""Private POSIX probe-to-host Git execution; the host owns every launched PID.
+"""Private Linux probe-to-host Git execution; the host owns every launched PID.
 
 The disposable probe never starts a detached Git writer. Requests cross a private
 Unix socket to the host that outlives it. This is not a public execution service.
-Windows probes retain their existing Job containment instead.
+Windows retains Job containment; other POSIX systems retain their existing path.
 """
 from __future__ import annotations
 
@@ -85,8 +85,8 @@ def terminal(result):
 
 
 async def query(operation):
-    """Install the host runner around a real probe entrypoint, never on NT."""
-    if os.name == 'posix' and os.environ.get('AMPLIFIER_PROBE_GIT_SOCKET'):
+    """Install only the Linux subreaper-backed runner; preserve other platforms."""
+    if sys.platform == 'linux' and os.environ.get('AMPLIFIER_PROBE_GIT_SOCKET'):
         from amplifier_foundation.sources.git import git_subprocess_runner
         scope = git_subprocess_runner(run_git)
     else:
@@ -99,8 +99,9 @@ class GitProbeOwner:
     """One broker per finite probe, with a bounded cancellation-safe finalizer."""
 
     def __init__(self):
-        # Darwin's per-user TMPDIR can itself approach sockaddr_un's path bound.
-        # Private mode-0700 directory under the ordinary POSIX short temp root.
+        if sys.platform != 'linux':
+            raise RuntimeError('Probe Git ownership requires the Linux child subreaper.')
+        # Private mode-0700 directory and a short sockaddr_un path.
         self.directory = tempfile.TemporaryDirectory(prefix='amplifier-probe-git-', dir='/tmp')
         self.path = str(Path(self.directory.name) / 'control')
         self.server = None

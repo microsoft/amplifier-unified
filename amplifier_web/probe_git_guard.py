@@ -35,6 +35,10 @@ def group_exists(group):
 
 
 def main():
+    if sys.platform != 'linux':
+        # ECHILD cannot establish escaped-descendant absence without adoption.
+        # Refuse before creating either the anchor or a Git writer.
+        raise RuntimeError('Git guard requires the Linux child subreaper')
     if sys.argv[1:] == ['--anchor']:
         sys.stdin.buffer.read()
         return
@@ -42,13 +46,10 @@ def main():
     if not line:
         return  # Creation cancelled before any Git invocation was admitted.
     request = json.loads(line)
-    # Reparent ordinary descendants to this *disposable guard*, never the host.
-    # Other POSIX systems can still confirm group disappearance; otherwise they
-    # report cleanup_error, not a fabricated Windows-like empty-Job guarantee.
-    if sys.platform == 'linux':
-        libc = ctypes.CDLL(None, use_errno=True)
-        if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
-            raise OSError(ctypes.get_errno(), 'Cannot own Git descendant reaping')
+    # Reparent descendants to this *disposable guard*, never the host.
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise OSError(ctypes.get_errno(), 'Cannot own Git descendant reaping')
     anchor = subprocess.Popen([sys.executable, '-I', '-S', __file__, '--anchor'],
                               stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                               stderr=subprocess.DEVNULL, process_group=0)

@@ -215,7 +215,10 @@ async def spawn(*command, owned_git=False, **kwargs):
     if os.name == 'nt':
         return await _spawn_windows(command, kwargs)
     git_owner = None
-    if owned_git:
+    # Only Linux has the guard's required child-subreaper lifetime boundary.
+    # Other POSIX systems retain their existing probe/Foundation execution:
+    # #1852 remains unresolved there, rather than manufacturing settlement.
+    if owned_git and sys.platform == 'linux':
         from .probe_git import GitProbeOwner
         git_owner = GitProbeOwner()
         try:
