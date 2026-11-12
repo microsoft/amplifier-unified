@@ -122,12 +122,13 @@ contracts and version policies. Preserve or deliberately revise those contracts
 with their owners instead of silently changing their promised behavior.
 
 Appearance work follows the [appearance contract](docs/shell/appearance-contract.md)
-and the shared-client consumer UX baseline. Keep ordinary settings focused on the
-user's choice. The user-approved PR1916 rollback temporarily retires Reference
-and Global / This browser profiles after the `.078` visual regression; use the
-restored complete-theme and format-1 library paths. Preserve newer saved data
-inert, not deleted or converted, and do not claim recovery of a removed theme.
-See the contract's rollback boundary before changing appearance persistence.
+and the shared-client consumer UX baseline. The approved production redesign uses
+Reference deltas, strict format-2 packages and complete Global / This browser
+profiles. Keep ordinary choices direct, without Saved/Undo rituals; preserve
+Preview Cancel, explicit accent reset and Archive Undo. Old complete themes,
+`.078` profiles/libraries and trial records remain inert and undeleted, never
+automatic migration/recovery inputs. Preserve independent component placements
+and views. See the contract's persistence/default-impact boundary before changes.
 
 ## Interactive archive boundary
 

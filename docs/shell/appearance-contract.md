@@ -2,42 +2,73 @@
 
 This boundary serves web users, appearance authors, component maintainers and
 agents changing presentation. The [vision](appearances.md) defines the destination.
-[Themes](themes.md) owns current tokens, package fields and API details; the
-[design note](../ux/decisions/20261109-appearances.md) retains the superseded
-November 9 redesign. These promises govern the user-approved PR1916 rollback
-to complete themes and independent shell presentation preferences.
+[Themes](themes.md) owns current tokens, package fields and API details. The
+user-approved production redesign supersedes the temporary PR1916 rollback:
+one Reference foundation, intentional deltas and one active complete profile.
 Discover the target installation's current schemas before acting; source changes
 and this document alone do not establish installed or browser conformance.
 
 ## Temporary rollback boundary
 
-After the `.078` visual regression, Reference and Global / This browser profiles
-are temporarily retired. Restore the pre-cutover behavior at
-`7cfb76cbbadbfdf19d6a142e2b6e910abe16ed07`: legacy `theme.*` preview/apply/revert,
-complete theme definitions and CSS skins, and format-1 library/import/export.
-Reference deltas and format-2 packages are not active authoring inputs.
+This anchor records the retired boundary, not a second active renderer. Legacy
+`theme`, old shell presentation, `reference-v1` / `shared-reference-v1` profiles,
+the 0.80.1 experiment and their browser caches/editors/libraries remain **inert and
+undeleted**. The new production generation never promotes, converts, overwrites
+or reconstructs them. The entire old `themes/` directory, including loose CSS
+and both ZIP versions, stays unlisted and unresolved. Explicit format-2 import
+copies validated content into the new library; it is not automatic recovery.
 
-Retain saved `shared-reference-v1`, browser-local profiles/source choices and
-format-2 library data **inert and undeleted**. Do not activate, convert, seed
-legacy values from, or overwrite those records as part of this rollback.
-Preservation is not migration. The `.078` cutover removed the old `theme`
-setting; where it is absent, use the safe old built-in default. Do not claim
-automatic recovery of a lost personal theme. A remaining valid legacy theme
-continues through its existing path; selecting or reimporting an available
-legacy copy is an explicit action, not evidence of automatic recovery.
+Production profiles use `shared-reference-v2` and an independent durable
+`appearance-identity/v2` in the authenticated owner's private app database.
+The identity is not a preference: absent Global preferences remain virtual
+defaults without a write. Its random owner scopes a stable
+`amplifier.appearance.v2:<owner>` browser namespace across cold restarts and the
+first later Global edit. New preferences use the same owner. Invalid new owner
+or profile records fail explicitly, without a replacement owner, overwrite,
+default fallback or implicit repair. Restoration uses a valid backup, not
+forced revisions. An unavailable selected library item remains selected and
+visible as unavailable, with Reference as usable recovery; no preference rewrite.
 
-The retained redesign is deferred, not an alternative renderer, an active
-profile contract or a rollback release prerequisite. This boundary does not
-authorize deleting unrelated data or weakening package/revision/dirty-state
-guards. Publication and live adoption require their own evidence.
+The new baseline does not preserve the previous look or independent presentation
+choices: Amplifier, system scheme, balanced layout, comfortable density,
+decorations on, standard interface/execution detail, all execution scopes and ten
+metrics, conversation status off, appearance start view, interim replies expanded,
+Plan above composer, and no accent override. The release notice must disclose
+this impact. Independent compatible component placements and module views survive;
+old appearance previews/prepared requests/storage commands do not activate.
+Publication, installed qualification and live adoption remain separate evidence.
+
+### Release notice proposal
+
+This is authored guidance for the release owner, not a claim that this checkout
+is already published:
+
+> **Appearance preferences start from a new baseline.** This update replaces
+> complete themes with Reference-based appearances and independent Global / This
+> browser profiles. The initial profile is Amplifier, system color scheme,
+> balanced layout (Canvas on the right), comfortable spacing, decorations on,
+> standard interface and execution detail, every execution scope and all ten
+> metrics, conversation status off, appearance start view, expanded interim
+> replies, Plan above the composer, and no accent override. Previous presentation
+> choices, complete custom themes and trial profiles remain stored but inactive;
+> they are not automatically converted. Choose an appearance and preferences in
+> Settings, or explicitly import a valid Reference appearance package. “Use
+> appearance accent” removes a color override. No action is needed to continue
+> chatting; review Settings if you want different presentation choices.
+
+Independent component placements, module views, conversations and drafts are not
+reset by this baseline. Returning to an earlier package reads its separate old
+records, not a reconstruction or conversion of new preferences. Back up private
+app data before any manual restoration. The publisher must attach this notice to
+the actual version carrying the paired client/host change and assess any combined
+unpublished changes; this proposal assigns no version or notice acknowledgement.
 
 ## What changes and what does not
 
 ```text
-complete theme -> app-wide committed skin
-               + independent shell presentation preferences
-               + temporary preview on the intended browser
-               -> effective web presentation
+Reference + selected appearance delta
+          + one complete Global OR This browser preference profile
+          + document-local temporary preview -> effective web presentation
 ```
 
 The web client owns presentation; the host owns work, admission and authoritative
@@ -49,28 +80,35 @@ not appearance authority over execution.
 
 ## Shared foundation
 
-The restored built-in skin and shared components supply usable defaults and
-accessibility behavior. Complete themes and custom CSS remain supported; no
-Reference foundation or delta composition is required. Common functional fixes
-belong in shared components, without rewriting saved user skins. An appearance
+Reference and shared components supply usable defaults and accessibility behavior.
+Appearance packages contain deliberate differences, not copied structural rules.
+Common functional fixes belong in shared components, without rewriting saved user
+packages. An appearance
 may tune supported geometry, not replace scrolling, focus, responsive safety or
 control semantics with CSS workarounds.
 
 ## One active preference profile
 
-This section's anchor is retained for existing links. The whole-profile promise
-is temporarily retired; see [the rollback boundary](#temporary-rollback-boundary).
-There is no active Global / This browser switch or per-setting replacement.
+Global and This browser are independent complete profiles, never per-setting
+overlays. Source switching retains both. The first explicit browser selection
+copies current Global at its captured revision. Browser storage persists the
+whole source/record under a generation, mirror revision and fresh storage-version
+CAS; commit and rendered acknowledgement are distinct. Failed/unavailable storage
+never writes Global or claims activation. Reload/new tabs restore confirmed
+records only, not previews. Cross-tab changes retire obsolete pending commands.
 
 ## Independent preferences
 
-Theme definitions, shell presentation and operating-system accessibility
-preferences remain separate inputs. Applying a theme changes the app-wide
-committed look, not personal scheme, decorations, detail or required actions.
-Preview is client-scoped and does not commit that look. Saving/importing/updating
-a library entry is separate from applying it; existing committed CSS survives
-library update or deletion. No profile copying or suggested-settings adoption
-occurs as a side effect of selection.
+Scheme, decorations and detail are independent choices within the active complete
+profile; OS accessibility constraints remain effective. Appearance selection
+changes the captured profile's library ID without adopting suggested settings.
+The appearance owns its default accent: changing to a different ID clears the old
+override unless that same edit explicitly supplies a new color. Same-ID and
+unrelated edits retain it. `patch: {accent: null}` removes only the override at
+captured scope/CAS, never stores null or changes the current look/unrelated fields.
+Preview is document-local. Library mutations do not select an appearance.
+Current selections resolve exact library bytes; deletion is visibly unavailable,
+not retained CSS mislabeled as the package.
 
 - **Scheme:** light, dark or system; every appearance works in both palettes.
 - **Decorations:** artwork on/off, independent of operational feedback.
@@ -92,11 +130,11 @@ submission/authority boundaries. Small common option sets can be visible;
 disclosure should reduce overload, not hide required actions. Compare complete
 keyboard and pointer journeys, not click count alone.
 
-The rollback removes the profile source switch, not the consumer-usability
-baseline. Merely opening or navigating Settings does not apply a theme.
+Merely opening or navigating Settings does not change preferences.
 Leaving Appearance or closing Settings ends its temporary library preview
-without discarding a retained editor draft. Completion, revert and errors stay
-beside the affected control; make client-local preview and app-wide apply clear.
+without discarding a retained editor draft. Ordinary choices apply directly without
+Saved toasts or Undo banners; explicit reset and Preview Cancel remain available.
+Archive Undo is unrelated and preserved. Errors stay beside their control.
 
 Keep the ordinary screen focused on visual choices. Gallery previews use the
 available content width rather than sharing half a row with persistence controls.
@@ -147,18 +185,19 @@ the same admitted operations as UI controls. Client identity routes; it does not
 authenticate. Bounded presentation readback does not reveal private editor drafts.
 Stale changes conflict without forcing old revisions or replacing newer work.
 
-Preview stays local and never changes the app-wide committed skin. `theme.revert`
-ends a local preview first; otherwise it conditionally reverses that client's
-last application only when no newer theme has replaced it. Editor work remains
-intact. Dirty component/viewer guards remain
+Preview stays local and never changes either profile. Public
+`appearance.preferences.undo` remains conditional on its exact whole-profile CAS;
+`appearance_undo_stale` refuses newer work without a fresh-revision retry. Ordinary
+UI does not expose these Undo tokens. Editor work and dirty component/viewer guards remain
 in force. Saved/validated, applied and observed rendering are separate results;
 an absent browser has an explicit availability result, not invented activation.
 
 ## Appearance editing operations
 
-Legacy portable CSS and format-1 ZIP are supported. A ZIP has a root
-`appearance.json` declaring `type: "appearance"` and `formatVersion: 1`, a
-complete stylesheet and optional declared assets/notices. Validate the complete package before mutation;
+Strict format-2 Reference ZIPs are supported. A ZIP has a root
+`appearance.json` declaring `type: "appearance"`, `formatVersion: 2`,
+`base: "reference-v1"`, a delta stylesheet and declared assets/notices.
+Validate the complete package before mutation;
 failed import preserves library, selection, drafts and preferences. Bound sizes
 and members; reject traversal, ambiguous names, links, corrupt/encrypted/special
 members, unsupported types/versions and external fetches. Preserve assets,
@@ -166,26 +205,26 @@ attribution and notices on edit/export. License presence is not rights certifica
 Import does not execute code, grant capabilities or apply presentation. Any later
 component packaging retains the separate component trust/activation contract.
 
-Library mutations and apply are separate operations. Saved-entry mutation uses
-its exact fingerprint. `theme.import` accepts exactly one of `css` or
-`packageBase64`; `theme.export` defaults to CSS, with explicit `format: "zip"`
-for ZIP. A library ID exports that saved entry; omission exports the committed
-appearance, never a preview or editor draft. Editor targets and drafts survive
+Library mutations and selection are separate operations. Saved-entry mutation uses
+its exact fingerprint. `theme.save` wraps named delta CSS as ZIP;
+`theme.import` accepts `packageBase64`; `theme.export` requires a library ID and
+returns that exact ZIP, never a preview or editor draft. Editor targets and drafts survive
 unrelated saves, page changes and late results. Failed persistence is explicit.
 Package update/export retains assets, attribution and notices.
 
-The redesign's clean break is superseded by the rollback. Format-2 saved
-packages remain inert and undeleted, not silently converted into format 1.
+Old library files remain inert and undeleted in `themes/`; new operations target
+only `appearance-library-v1/`. New format-1 imports and raw CSS imports are rejected.
 
 ## Acceptance
 
-Check exact revisions in a real browser: the restored built-in and bundled appearances,
+Check exact paired revisions in a real browser: Reference and bundled appearances,
 light/dark/system, decorations on/off, detail levels, reduced motion, forced
 colors, narrow layout and zoom. Exercise actual pending/failure/recovery states,
-not just thumbnails. Focused rollback checks discriminate active legacy values
-from inert newer records: valid legacy theme retention, absent-theme default,
-format-1 round-trip, rejected format-2 activation without data deletion, and
-preview/apply/revert with independent presentation and drafts preserved.
+not just thumbnails. Focused production checks discriminate fresh active records
+from inert old ones: cold first paint, no Global write on read, stable owner
+identity/reload, strict malformed-record failure, format-2 round-trip, old library
+nonactivation, local ACK/render ACK, source clone/cross-tab, preview/cancel,
+accent reset/switch and draft/Canvas preservation.
 Use the same content for visual A/B review. Package/schema validation alone
 proves neither readability nor accessibility; this document is not that evidence.
 Exercise stale edits, failed saves, reload and disconnect without replaying

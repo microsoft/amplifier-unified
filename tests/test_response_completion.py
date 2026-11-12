@@ -169,9 +169,17 @@ async def test_completion_before_message_reload_and_older_than_event_caps(tmp_pa
 
 
 async def test_folding_preference_is_boolean_and_not_a_new_browser_default(tmp_path):
+    from test_appearance_preferences import report, select, ack
     app = AppService(tmp_path, workspace=tmp_path)
+    queue = None
     try:
         shell = app.shell
+        app.clients.attach("first")
+        with app.clients.bind("first"):
+            queue = app.subscribe()
+        await report(app, client="first")
+        await select(app, client="first")
+        await ack(app, client="first")
         first = shell.client("first")
         composition = deepcopy(first["composition"])
         composition["presentation"]["collapseInterimReplies"] = True
@@ -179,11 +187,17 @@ async def test_folding_preference_is_boolean_and_not_a_new_browser_default(tmp_p
             "expectedRevision": first["revision"], "composition": composition})
         await app.dispatch("shell.changes.apply", {"clientId": "first",
             "expectedRevision": first["revision"], "changeId": receipt["result"]["id"]})
-        assert shell.client("first")["composition"]["presentation"]["collapseInterimReplies"] is True
-        assert "collapseInterimReplies" not in shell.client("second")["composition"]["presentation"]
+        assert app.appearance.read("first")["effective"]["collapseInterimReplies"] is False
+        await ack(app, client="first")
+        assert app.appearance.read("first")["effective"]["collapseInterimReplies"] is True
+        app.clients.attach("second")
+        await report(app, client="second")
+        assert app.appearance.read("second")["effective"]["collapseInterimReplies"] is False
         composition["presentation"]["collapseInterimReplies"] = "true"
         with pytest.raises(AppError, match="boolean"):
             await app.dispatch("shell.changes.prepare", {"clientId": "first",
                 "expectedRevision": shell.client("first")["revision"], "composition": composition})
     finally:
+        if queue is not None:
+            app.unsubscribe(queue)
         await app.close()
