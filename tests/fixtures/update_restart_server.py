@@ -45,7 +45,7 @@ def installed_identity():
         name = str(item)
         path = Path(name)
         metadata = len(path.parts) == 2 and path.parts[0].endswith('.dist-info')
-        if (metadata and path.name in {'INSTALLER', 'REQUESTED', 'direct_url.json', 'RECORD'}
+        if (metadata and path.name in {'INSTALLER', 'REQUESTED', 'direct_url.json', 'RECORD', 'uv_cache.json'}
                 or '__pycache__' in path.parts and path.suffix == '.pyc'):
             continue  # Precisely enumerated installer-created files, not payload.
         if '..' in path.parts:
