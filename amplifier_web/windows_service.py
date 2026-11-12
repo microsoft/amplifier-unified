@@ -23,9 +23,11 @@ import uuid
 import xml.etree.ElementTree as ET
 
 SOURCE = "amplifier-unified owner-logon v1"
-# Development admission remains closed until the supervised native transition
-# and recovery fixtures pass. Task registration alone cannot open this gate.
-SUPERVISED_UPDATES_QUALIFIED = False
+# Supervised transition, readiness-timeout/failed-start rollback, owner Stop and
+# identity-refusal controls are qualified. Admission still requires the actual
+# sole listening owner and a verified stable bootstrap below; a foreground host
+# or task registration alone cannot enable application replacement.
+SUPERVISED_UPDATES_QUALIFIED = True
 NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 LIMIT = 128 * 1024
 LAUNCH_ROOTS = {"AMPLIFIER_HOME", "AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH",

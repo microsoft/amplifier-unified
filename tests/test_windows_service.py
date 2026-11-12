@@ -910,7 +910,7 @@ def test_native_owned_background_failure_before_any_runtime_receipt(tmp_path):
 
 
 def test_unqualified_supervised_update_owner_is_closed_before_any_native_read(monkeypatch):
-    assert service.SUPERVISED_UPDATES_QUALIFIED is False
+    monkeypatch.setattr(service, "SUPERVISED_UPDATES_QUALIFIED", False)
     monkeypatch.setattr(service, "_read", lambda *a: pytest.fail("closed gate must not inspect native tasks"))
     assert service.update_owner(spec().data_dir) is None
 
@@ -943,6 +943,10 @@ def test_supervised_update_owner_preserves_stable_bootstrap(monkeypatch):
     assert len(seen) == 1
 
 
+def test_supervised_release_admission_is_enabled_not_inferred_from_registration():
+    assert service.SUPERVISED_UPDATES_QUALIFIED is True
+
+
 def test_launch_roots_are_public_paths_not_arbitrary_environment():
     value = spec(launch_roots={"AMPLIFIER_HOME": r"C:\Private\shared",
                               "UV_CACHE_DIR": r"C:\Private\cache"})
@@ -957,6 +961,7 @@ def test_launch_roots_are_public_paths_not_arbitrary_environment():
 def test_background_target_discovery_uses_exact_owned_task_not_uv_global_state(tmp_path, monkeypatch, change):
     from pathlib import Path
     from amplifier_web import application_generations, windows_files, windows_task_runtime
+    monkeypatch.setattr(service, "SUPERVISED_UPDATES_QUALIFIED", False)
     prefix = tmp_path / "private-host"
     (prefix / "Scripts").mkdir(parents=True)
     python = prefix / "Scripts/pythonw.exe"

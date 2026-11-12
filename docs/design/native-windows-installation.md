@@ -69,9 +69,45 @@ retry of that same revision. Explicit installation or a changed published
 revision remains a separate ordinary request. User auto-update preferences are
 not silently rewritten. Unknown effects and saved work are not replayed.
 
-These are implementation rules, not a claim that native update/rollback,
-sign-in/out or consumer download acceptance has completed. The Windows automatic
-update gate stays closed while those affected native controls are being qualified.
+The supervised update admission is enabled for the exact owned listening host,
+not for foreground launches or merely registered tasks. Bounded native evidence
+now covers successor acceptance, early-failed successor recovery, the real
+readiness deadline followed by normal shutdown/rollback, explicit owner Stop,
+late Stop during replacement/recovery, unknown-shutdown refusal, stable-bootstrap
+fresh start and changed expected identity refusal. Those results do not establish
+every failure interleaving, actual PID reuse, browser trust or sign-in/out.
+
+The human waived the clean-machine check for the current delivery and selected
+the existing Windows test host only. That coverage is **waived / not executed**,
+not a prerequisite-free installation pass. Signing is deferred separately.
+
+### Consumer release asset
+
+`scripts/windows_consumer_release.py` is a build-machine producer. The normal
+release workflow passes it the original application wheel and an isolated
+Windows installation of that wheel. It verifies the installed archive/RECORD
+payload and observes the exact canonical Windows graph before embedding the
+closed consumer plan in the native WinExe. The publisher verifies the retained
+EXE, plan, source/compiler-input hashes and checksums against the same wheel.
+It publishes `AmplifierUnifiedSetup-<version>-windows-x64.exe`, its plan/build
+receipt and `WINDOWS_SHA256SUMS` through the existing single release owner.
+No target-side compiler, PowerShell invocation or extra agent publisher is used.
+Historical selected sources without the consumer producer retain their original
+Python-only asset set.
+
+This asset is explicitly an **unsigned preview**. An executable checksum is not
+Authenticode or SmartScreen reputation. Consumer browser entry separately checks
+Windows ROOT trust and the private leaf fingerprint before requesting a browser
+grant. If verification fails, the app offers public-certificate review with its
+fingerprint. It never imports trust or bypasses browser policy. Declining keeps
+the background app running and sends no browser-entry command. A successful
+system TLS check is not proof that every browser's policy accepts the connection.
+
+Exact installed-package checks cover real Start-menu entry, refusal of a live
+untrusted listener, certificate-review decline and rendered data-preserving
+uninstall. Public artifact availability, a new installation's human trust
+decision/authenticated browser onboarding, and real sign-out/sign-in remain
+distinct acceptance boundaries; source admission does not label them passed.
 
 Windows app preparation uses a compact `updates/a/<generation>` directory.
 Qualification and pointers retain the full source revision and attempt. The
