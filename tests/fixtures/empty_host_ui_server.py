@@ -121,6 +121,7 @@ async def main(home):
         AMPLIFIER_HOME=str(home / "shared-settings"),
         AMPLIFIER_WEB_HOME=str(home / "app"),
         AMPLIFIER_SESSION_STATE_HOME=str(home / "sessions"),
+        AMPLIFIER_UNIFIED_IMPORT_HOME=str(home / "import-home"),
     )
     # Set isolated homes before importing discovery owners. Keep replacements
     # installed through create_app, requests and full cleanup, including errors;
@@ -517,6 +518,40 @@ async def serve(home):
     port = site._server.sockets[0].getsockname()[1]
     url = f"http://127.0.0.1:{port}"
     app["allowed_origins"] = app["allowed_origins"] | {url}
+    installed_proof = None
+    if installed_mode and '--appearance-records' in sys.argv:
+        # The installed lifecycle must exercise this listener's bundled entry,
+        # not merely a source declaration or a filesystem manifest.
+        import re
+        from urllib.parse import urlsplit
+        from aiohttp import ClientSession, ClientTimeout
+        served = {}
+        async with ClientSession(timeout=ClientTimeout(total=20),
+                                 headers={'Authorization': 'Bearer fixture-browser-control-token'}) as client:
+            async def fetched(path, relative):
+                async with client.get(url + path) as response:
+                    assert response.status == 200, (path, response.status)
+                    body = await response.read()
+                assert body == (package_root / 'static' / relative).read_bytes(), path
+                served[relative] = {'bytes': len(body), 'sha256': hashlib.sha256(body).hexdigest()}
+                return body
+            index = await fetched('/', 'index.html')
+            paths = re.findall(r'''(?:src|href)=["'](/[^"']+\.(?:js|css)(?:\?[^"']*)?)["']''',
+                               index.decode())
+            assert any(urlsplit(path).path.endswith('.js') for path in paths)
+            assert any(urlsplit(path).path.endswith('.css') for path in paths)
+            for path in paths:
+                await fetched(path, urlsplit(path).path.lstrip('/'))
+            for name in ('client-component.json', 'build.json'):
+                await fetched('/' + name, name)
+        installed_proof = {'installedIdentity': installed_identity, 'served': served,
+                           'sourceMode': False, 'syntheticRuntime': True,
+                           'case': 'malformed' if '--appearance-malformed' in sys.argv else 'normal',
+                           'payloadAfterCleanup': False}
+        proof_path = Path(os.environ['AMPLIFIER_TEST_ARTIFACTS']) / (
+            'installed-host-' + installed_proof['case'] + '.json')
+        assert not proof_path.exists()
+        proof_path.write_text(json.dumps(installed_proof, sort_keys=True) + '\n')
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
     # Windows event loops cannot register Unix signals; preserve fixture startup
@@ -544,6 +579,13 @@ async def serve(home):
                     transport.abort()
                 stalled_body_release.set()
             await runner.cleanup()
+            if installed_proof is not None:
+                for name, digest in expected['files'].items():
+                    source = Path(dist.locate_file(name)).resolve()
+                    assert source.is_relative_to(prefix)
+                    assert hashlib.sha256(source.read_bytes()).hexdigest() == digest, name
+                installed_proof['payloadAfterCleanup'] = True
+                proof_path.write_text(json.dumps(installed_proof, sort_keys=True) + '\n')
             if stalled_body_mode:
                 print(json.dumps({'canvasRendererStalledBody': {
                     'event': 'cleanup-complete', 'stalledResponses': len(stalled_body_transports)}}), flush=True)
