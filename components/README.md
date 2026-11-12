@@ -1,5 +1,12 @@
 # Component projects
 
+[`amplifier_kernels/`](../amplifier_kernels/README.md) prepares the independently
+buildable computation mechanism in its existing source location, preserving
+runtime bootstrap origin checks. Its real Python/Node tests use selected process
+and operation-journal peers without starting Unified. The host retains authority,
+question and recovery tests. Unified bundles this source; the ACP adapter's
+temporary delivery copy requires a separate qualified update when it changes.
+
 [`outputs/`](outputs/README.md) prepares the independently buildable output
 relationship, saved-body decoder and read-only Git evidence package. Its existing
 Git/SQLite mechanism tests run without Unified or Core; host authorization,

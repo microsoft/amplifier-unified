@@ -109,10 +109,17 @@ remain unavailable. The operation journal's loss/uncertainty contract also appli
 
 ## Validation
 
-`pytest tests/test_kernels.py` exercises real Python and Node subprocesses when the
-managed bash module is importable. It covers persistent variables, errors, reset,
+`pytest amplifier_kernels/tests tests/test_kernels.py` exercises real Python and
+Node subprocesses when the managed bash module is importable. It covers persistent variables, errors, reset,
 interruption, exact code approval, generation/session boundaries, dependency
 questions, bounded output and no replay. Host action tests also preserve the
 selected conversation and draft while using the shared journal. These checks do
 not use a live model provider and do not establish deployment or full Work bundle
 acceptance. The bundled chat does not expose a separate Computation panel.
+
+The [standalone mechanism project](../amplifier_kernels/README.md) owns the direct
+process tests and unchanged runtime files. `tests/test_kernels.py` retains the
+host action, approval, question and recovery tests. Both remain in normal test
+discovery and the existing integration selections. Independent preparation does
+not change the host's permissions or runtime bootstrap, select a new dependency,
+or update the ACP adapter's temporary delivery copy.
