@@ -133,7 +133,9 @@ try{
    icon:rect(kind==='live'?'.a-activity-pulse':'.a-dependency-content>svg'),
    text:rect(kind==='live'?'.a-live-activity>div':'.a-dependency-single'),
    composer:rect('.a-composer'),conversation:rect(':scope'),
-   color:getComputedStyle(node.querySelector(kind==='live'?'.a-live-activity strong':'.a-dependency-content')).color,
+   // The live status container and dependency prose share the muted role;
+   // Thinking's strong title intentionally uses the separate ink role.
+   color:getComputedStyle(node.querySelector(kind==='live'?'.a-live-activity':'.a-dependency-content')).color,
    mutedToken:style.getPropertyValue('--a-muted').trim(),accentToken:style.getPropertyValue('--a-accent').trim(),
    readingWidth:parseFloat(style.getPropertyValue('--a-reading-width')),
    overflow:node.scrollWidth>node.clientWidth+1};
