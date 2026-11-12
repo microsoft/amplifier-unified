@@ -73,13 +73,14 @@ def capture_artifact(manager):
     from . import application_generations, app_component_graph as components
     from .app_replacement import qualified
     state = manager.service.state['updates']
-    for key in ('pendingReplacement', 'pendingRestart', 'applicationResult'):
+    for key in ('pendingReplacement', 'pendingRestart', 'applicationResult', 'applicationRecovery'):
         target = state.get(key)
         if not isinstance(target, dict):
             continue
         try:
-            if key == 'applicationResult':
-                if (target.get('phase') not in {'restart-ack', 'restart-superseded', 'restart-reconcile'}
+            if key in {'applicationResult', 'applicationRecovery'}:
+                if (target.get('phase') not in ({'restart-rollback'} if key == 'applicationRecovery'
+                                              else {'restart-ack', 'restart-superseded', 'restart-reconcile'})
                         or not isinstance(target.get('installation'), dict)):
                     continue
             elif (not valid_target(target) or not qualified(target)
@@ -95,6 +96,13 @@ def capture_artifact(manager):
     try:
         active = application_generations.active(manager.home)
         if not active or Path(sys.prefix).resolve() != active['prefix'].resolve():
+            if sys.platform == 'win32':
+                # A first consumer install has no prior app-generation/manual
+                # handoff receipt. Its full setup audit owns that qualification.
+                from .windows_consumer import delivery_proof
+                proof = delivery_proof(manager.home)
+                if proof:
+                    return _observed_artifact(manager, proof['qualification'], proof['installation'])
             return None
         validated = json.loads((active['folder'] / 'validated.json').read_text())
         if not isinstance(validated.get('installation'), dict) or not validated.get('artifact'):
@@ -198,7 +206,7 @@ def recovery_candidate(manager):
 
 def same_target(first, second):
     return bool(first and second and all(first.get(key) == second.get(key)
-                for key in ('attemptId', 'version', 'revision', 'sourceInstanceId', 'legacy', 'featureSelection', 'dependencyDigest', 'qualification', 'updateIntent')))
+                for key in ('attemptId', 'version', 'revision', 'generation', 'sourceInstanceId', 'legacy', 'featureSelection', 'dependencyDigest', 'qualification', 'updateIntent')))
 
 
 async def qualify_successor(manager, target):
@@ -368,6 +376,16 @@ async def confirm_readiness(manager, health, expected=None, command_id=None, *, 
                 detail = 'The current installation is healthy. The previous restart command issue is retained in the update history; no additional restart is needed.'
                 phase = 'restart-reconcile'
             else:
+                if sys.platform == 'win32' and target.get('generation'):
+                    from .windows_service import update_owner
+                    from .windows_app_recovery import acknowledge
+                    spec = update_owner(manager.home)
+                    if spec is None:
+                        return False
+                    # Retire parent rollback authority before publishing the
+                    # authenticated new-host result. Unknown commits stay fenced.
+                    if not acknowledge(spec, target):
+                        return False
                 manager.diagnostics.clear_failure()
                 state.pop('reconciliation', None)
                 detail = 'Application update installed and the restarted server is healthy.'
@@ -634,8 +652,13 @@ async def wait_for_readiness(manager, token, *, timeout=60, interval=.25):
                                 value = await response.json() if response.status == 200 else None
                                 if asyncio.get_running_loop().time() >= deadline:
                                     raise TimeoutError
-                                if response.status == 200 and await confirm_readiness(manager, value, expected=target, command_id=command_id, successor=successor):
-                                    return
+                                if response.status == 200:
+                                    if sys.platform == 'win32':
+                                        from .windows_app_recovery import confirm
+                                        if await confirm(manager, value):
+                                            return
+                                    if await confirm_readiness(manager, value, expected=target, command_id=command_id, successor=successor):
+                                        return
                         except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
                             pass
                     await asyncio.sleep(interval)
