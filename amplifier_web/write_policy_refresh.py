@@ -8,6 +8,7 @@ are not dependencies of a file invocation.
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -69,18 +70,29 @@ class WritePolicySource:
         selected = {key: {'tools': _rows(settings.get(key, {}).get('tools', []))}
                     for key in ('modules', 'config')}
         from .access_mode import walk_tools
-        identities = {row.get('id') or row.get('instance_id') or row['module'] for row in [
-            *walk_tools(self), *selected['modules']['tools'], *selected['config']['tools']]}
+        rows = [*walk_tools(self), *selected['modules']['tools'], *selected['config']['tools']]
+        identities = {row.get('id') or row.get('instance_id') or row['module'] for row in rows}
         selected['overrides'] = {key: copy.deepcopy(value)
             for key, value in settings.get('overrides', {}).items() if key in identities | MODULES}
+        # Ordinary mounts also resolve sources.modules, with override sources
+        # taking precedence (HostConfig.module_sources). Retain only effective
+        # selections for declared writers, including children; snapshots use
+        # their saved declaration sources instead (host.session.module_source).
+        sources = replace(self.config, settings=settings).module_sources if not self.snapshot else {}
+        selected['sources'] = {'modules': {module: copy.deepcopy(sources[module])
+            for module in {row['module'] for row in rows} if sources.get(module)}}
         return selected
 
     def build(self, settings):
+        return self.build_selected(self.select(settings))
+
+    def build_selected(self, selected):
+        """Compose an already selected dependency without projecting it again."""
         from .host.session import _apply_host_policy, _apply_settings
         from .host.config import runtime_settings
         # Project before relocation/copying: the same selected dependency is
         # checked by refresh. Never compose new providers, hooks or credentials.
-        selected = runtime_settings(self.select(settings), self.config.home, self.config.registry_home)
+        selected = runtime_settings(selected, self.config.home, self.config.registry_home)
         bundle = SimpleNamespace(tools=copy.deepcopy(self.tools), agents=copy.deepcopy(self.agents),
                                  providers=[], hooks=[], session={})
         config = SimpleNamespace(workspace=self.config.workspace, settings=selected,
@@ -124,7 +136,7 @@ class LiveWritePolicy:
         if _without_writes(selected) != self.mount_settings:
             raise WritePolicyRefreshRequired('Writer configuration changed; the runtime must refresh before writing.')
         changed = selected != self.settings
-        bundle = self.source.build(selected) if changed else self.bundle
+        bundle = self.source.build_selected(selected) if changed else self.bundle
         if self.cache._signature(paths) != signature or not self.current():
             raise WritePolicyRefreshRequired('File settings or runtime changed during the live refresh.')
         if changed:

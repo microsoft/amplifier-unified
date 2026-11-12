@@ -212,6 +212,8 @@ async def test_unrelated_settings_and_new_session_decisions_do_not_poison_live_w
                    'tools': [{'module': 'tool-unrelated', 'source': 'file:///chosen/tool',
                               'config': {'arbitrary_future_setting': True}}]},
         'overrides': {'unrelated-named-tool': {'config': {'future_choice': 'saved'}}},
+        'sources': {'modules': {'tool-unrelated': 'file:///new/tool',
+                                'provider-chosen': 'file:///new/provider'}},
         'future_app_setting': {'anything': ['not', 'a', 'writer', 'dependency']},
     }
     update_settings(path, lambda value: {**value, **unrelated})
@@ -229,6 +231,7 @@ async def test_unrelated_settings_and_new_session_decisions_do_not_poison_live_w
     saved = read_settings(workspace, session_id='root')
     assert saved['decision_models'] == unrelated['decision_models']
     assert saved['config'] == unrelated['config']
+    assert saved['sources'] == unrelated['sources']
     assert saved['overrides']['unrelated-named-tool'] == unrelated['overrides']['unrelated-named-tool']
     assert tools[writer].tool is raw and raw.config == mounted_config
 
@@ -252,6 +255,43 @@ async def test_actual_writer_composition_dependencies_require_lifecycle(tmp_path
     assert result.error['code'] == 'file_policy_refresh_required'
     assert policy.revision == prior_revision and policy.bundle is prior_bundle
     assert not (tmp_path / 'new').exists()
+
+
+@pytest.mark.parametrize('module,shadowed', [
+    (module, shadowed) for module in ('tool-filesystem', 'tool-apply-patch', 'tool-image')
+    for shadowed in (False, True)
+])
+async def test_writer_module_source_selection_fences_confirmation_with_host_precedence(tmp_path, module, shadowed):
+    path = settings_paths(tmp_path, session_id='root')['session']
+    initial = {'sources': {'modules': {module: 'file:///old-writer'}}}
+    if shadowed:
+        initial['overrides'] = {module: {'source': 'file:///selected-writer'}}
+    update_settings(path, lambda _: initial)
+    coordinator, tools, policy = await root(tmp_path, agents={'image-child': {
+        'tools': [{'module': 'tool-image'}]}})
+    assert (await tools['apply_patch'].execute(create(tmp_path / 'before'))).success
+    prior_revision, prior_bundle = policy.revision, policy.bundle
+    def change(value):
+        value['sources']['modules'][module] = 'file:///changed-writer'
+    update_settings(path, change)
+    settings = read_settings(tmp_path, session_id='root')
+    revision = fingerprint(settings)
+    # Assert the actual mount owner's winner, not a second precedence model.
+    winner = read_config(tmp_path, session_id='root').module_sources[module]
+    assert policy.source.select(settings)['sources']['modules'][module] == winner
+    if shadowed:
+        assert winner == 'file:///selected-writer'
+        assert policy.confirm(revision)['settingsRevision'] == revision
+        assert policy.bundle is prior_bundle
+        assert (await tools['apply_patch'].execute(create(tmp_path / 'after'))).success
+    else:
+        assert winner == 'file:///changed-writer'
+        with pytest.raises(ValueError, match='Writer configuration changed'):
+            policy.confirm(revision)
+        refused = await tools['apply_patch'].execute(create(tmp_path / 'after'))
+        assert not refused.success and refused.error['code'] == 'file_policy_refresh_required'
+        assert refused.error['effect'] == 'none' and not (tmp_path / 'after').exists()
+        assert policy.revision == prior_revision and policy.bundle is prior_bundle
 
 
 async def test_captured_child_declarations_are_not_mutated_by_parent_grant(tmp_path):
@@ -525,20 +565,24 @@ async def test_unchanged_admission_does_not_reparse_copy_or_hash_settings(tmp_pa
     global_path = settings_paths(tmp_path)['global']
     update_settings(global_path, lambda _: {'unrelated': {'large': 'x' * settings_bytes}})
     coordinator, tools, policy = await root(tmp_path)
-    original_read, original_hash = refresh.read_settings, refresh.fingerprint
-    reads, hashes = [], []
+    original_read, original_hash, original_select = refresh.read_settings, refresh.fingerprint, policy.source.select
+    reads, hashes, selections = [], [], []
     def read(*args, **kwargs):
         reads.append(1)
         return original_read(*args, **kwargs)
     def digest(value):
         hashes.append(1)
         return original_hash(value)
+    def select(value):
+        selections.append(1)
+        return original_select(value)
     monkeypatch.setattr(refresh, 'read_settings', read)
     monkeypatch.setattr(refresh, 'fingerprint', digest)
+    monkeypatch.setattr(policy.source, 'select', select)
     for index in range(10):
         assert (await tools['write_file'].execute({
             'file_path': str(tmp_path / str(index)), 'content': 'new'})).success
-    assert len(reads) == len(hashes) == 1
+    assert len(reads) == len(hashes) == len(selections) == 1
     # The warm refresh is metadata-only even with a large unrelated payload.
     # Fail on any copy, projection, parse or digest, rather than just counting
     # YAML reads while overlooking repeated traversal of the retained settings.
@@ -550,12 +594,13 @@ async def test_unchanged_admission_does_not_reparse_copy_or_hash_settings(tmp_pa
         warm.setattr(refresh, 'copy', SimpleNamespace(deepcopy=unexpected, copy=unexpected))
         warm.setattr(policy.source, 'select', unexpected)
         warm.setattr(policy.source, 'build', unexpected)
+        warm.setattr(policy.source, 'build_selected', unexpected)
         for _ in range(10):
             assert policy.refresh(expected=policy.revision)['settingsRevision'] == policy.revision
     save(tmp_path, 'root', [], [tmp_path / 'denied'])
     denied = await tools['write_file'].execute({'file_path': str(tmp_path / 'denied'), 'content': 'bad'})
     assert not denied.success
-    assert len(reads) == len(hashes) == 2
+    assert len(reads) == len(hashes) == len(selections) == 2
 
 
 async def test_actual_read_config_runtime_relocation_preserves_denied_subtree(tmp_path):
