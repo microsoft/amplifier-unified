@@ -29,7 +29,8 @@ def executable_directory():
 def identity(pid):
     try:
         stat = Path(f'/proc/{pid}/stat').read_text().split(') ', 1)[1].split()
-        return {'state': stat[0], 'group': int(stat[2]), 'session': int(stat[3]), 'start': stat[19]}
+        return {'state': stat[0], 'parent': int(stat[1]), 'group': int(stat[2]),
+                'session': int(stat[3]), 'start': stat[19]}
     except FileNotFoundError:
         return None
 
@@ -493,3 +494,294 @@ async def observed(request):
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         # Fixture cleanup is the same owner path, never a guessed/stale PID kill.
+
+
+def test_subreaper_refusal_precedes_anchor_or_git_creation(monkeypatch):
+    """Unavailable Linux adoption must fail closed before admitting a writer."""
+    import errno
+    import io
+    from amplifier_web import probe_git_guard as guard
+
+    monkeypatch.setattr(guard, 'sys', SimpleNamespace(
+        platform='linux', argv=['guard'], stdin=SimpleNamespace(
+            buffer=io.BytesIO(b'{"args":["git"]}\n'))))
+    monkeypatch.setattr(guard.ctypes, 'CDLL',
+                        lambda *a, **k: SimpleNamespace(prctl=lambda *a: -1))
+    monkeypatch.setattr(guard.ctypes, 'get_errno', lambda: errno.EPERM)
+    def forbidden(*args, **kwargs):
+        pytest.fail('Failed adoption must not create an anchor or Git writer')
+    monkeypatch.setattr(guard.subprocess, 'Popen', forbidden)
+    with pytest.raises(OSError) as caught:
+        guard.main()
+    assert caught.value.errno == errno.EPERM
+
+
+@pytest.fixture
+def fixture_subreaper():
+    """Recover the negative control's orphans without changing the test host."""
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    previous = ctypes.c_int()
+    assert libc.prctl(37, ctypes.byref(previous), 0, 0, 0) == 0
+    assert libc.prctl(36, 1, 0, 0, 0) == 0
+    try:
+        yield
+    finally:
+        assert libc.prctl(36, previous.value, 0, 0, 0) == 0
+
+
+@pytest.mark.parametrize('mode', ['cancel', 'timeout', 'success', 'default_negative'])
+async def test_real_git_pack_transfer_settles_before_probe_cleanup(
+        tmp_path, monkeypatch, executable_directory, fixture_subreaper, mode, record_property):
+    """Cancel actual Git mid-pack, not an executable gated before exec.
+
+    The fixture SSH transport runs only a fixed local git-upload-pack. It forwards
+    real protocol/pack bytes, then stops reading that server's pipe. No socket,
+    credential, external remote or artificial Git executable is involved.
+    """
+    from amplifier_web import draft_defaults
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.host import config
+    from amplifier_web.bundles import SNAPSHOT_VERSION
+    import amplifier_foundation.sources.git as foundation_git
+
+    real_git = shutil.which('git')
+    assert real_git
+    repository = tmp_path / 'repository'
+    repository.mkdir()
+    (repository / 'bundle.md').write_text(
+        f'---\nbundle:\n  name: pack-fixture\n  version: {SNAPSHOT_VERSION}\n'
+        'session:\n  orchestrator:\n    module: loop-live\n'
+        '  context:\n    module: context-simple\n---\n')
+    # Incompressible, finite payload exceeds the explicitly reduced server pipe.
+    (repository / 'payload').write_bytes(hashlib.shake_256(b'1852-local-pack').digest(1024 * 1024))
+    environment = {**os.environ, 'HOME': str(tmp_path), 'GIT_CONFIG_NOSYSTEM': '1',
+                   'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_COUNT': '1',
+                   'GIT_CONFIG_KEY_0': 'protocol.version', 'GIT_CONFIG_VALUE_0': '0',
+                   'GIT_TERMINAL_PROMPT': '0', 'GIT_SSH_VARIANT': 'ssh'}
+    def git(*args):
+        return subprocess.check_output([real_git, *args], env=environment, text=True)
+    pack_objects = Path(git('--exec-path').strip()) / 'git-pack-objects'
+    git('init', '-q', '--initial-branch=main', str(repository))
+    git('-C', str(repository), 'add', '.')
+    git('-C', str(repository), '-c', 'user.name=Synthetic',
+        '-c', 'user.email=synthetic@example.invalid', 'commit', '-qm', 'pack fixture')
+    revision = git('-C', str(repository), 'rev-parse', 'HEAD').strip()
+    started, ready, gate, late, origin, diagnostic = (
+        tmp_path / name for name in ('started', 'pack-ready', 'gate', 'late', 'origin', 'diagnostic'))
+    transport = executable_directory / 'local-ssh'
+    transport.write_text(f'''#!{sys.executable}
+import fcntl,json,os,pathlib,selectors,subprocess,sys,time
+def publish(path, value):
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(value))
+    os.replace(temporary, path)
+def observe(pid):
+    root = pathlib.Path('/proc') / str(pid)
+    fields = (root / 'stat').read_text().split(') ',1)[1].split()
+    return {{'pid':pid,'state':fields[0],'parent':int(fields[1]),'group':int(fields[2]),
+             'session':int(fields[3]),'start':fields[19],
+             'exe':str((root/'exe').resolve()),
+             'argv':(root/'cmdline').read_bytes().replace(b'\\0',b' ').decode()}}
+assert 'fixture.invalid' in sys.argv[1:]
+assert sys.argv[-1].startswith('git-upload-pack ')
+server = subprocess.Popen([{real_git!r},'upload-pack',{str(repository)!r}],
+                          stdin=subprocess.PIPE,stdout=subprocess.PIPE)
+try:
+    fcntl.fcntl(server.stdout, fcntl.F_SETPIPE_SZ, 4096)
+    client = observe(os.getppid())
+    publish(pathlib.Path({str(started)!r}), {{'proxy':observe(os.getpid()),
+        'server':observe(server.pid),'client':client}})
+except BaseException:
+    # No client protocol has been forwarded yet, so no pack helper can exist.
+    server.kill()
+    server.wait(timeout=5)
+    raise
+with selectors.DefaultSelector() as selector:
+    selector.register(0, selectors.EVENT_READ, 'input')
+    selector.register(server.stdout, selectors.EVENT_READ, 'output')
+    tail = b''
+    forwarded = 0
+    pack_start = None
+    paused = False
+    while selector.get_map():
+        for key,_ in selector.select(.05):
+            data = os.read(key.fd,4096)
+            if not data:
+                selector.unregister(key.fileobj)
+                if key.data == 'input': server.stdin.close()
+                continue
+            destination = server.stdin.fileno() if key.data == 'input' else 1
+            view = memoryview(data)
+            while view:
+                view = view[os.write(destination, view):]
+            if key.data == 'output':
+                if pack_start is None and b'PACK' in tail + data:
+                    pack_start = forwarded - len(tail) + (tail + data).index(b'PACK')
+                forwarded += len(data)
+                tail = data[-3:]
+                if pack_start is not None and forwarded >= pack_start + 12 + 64 and not paused:
+                    paused = True
+                    children = pathlib.Path(f'/proc/{{server.pid}}/task/{{server.pid}}/children')
+                    helpers = [observe(int(pid)) for pid in children.read_text().split()]
+                    publish(pathlib.Path({str(ready)!r}), {{
+                        'proxy':observe(os.getpid()),'server':observe(server.pid),
+                        'client':observe(client['pid']),'helpers':helpers,
+                        'forwarded':forwarded,'checkpoint':time.monotonic(),
+                        'packPayloadBytes':forwarded-pack_start-12,
+                        'pipeBytes':fcntl.fcntl(server.stdout,fcntl.F_GETPIPE_SZ)}})
+                    while not pathlib.Path({str(gate)!r}).exists(): time.sleep(.01)
+                    pathlib.Path({str(late)!r}).write_text('transport resumed')
+sys.exit(server.wait(timeout=5))
+''')
+    transport.chmod(0o700)
+    wrapper = f'''import hashlib,json,os,pathlib,traceback
+import amplifier_foundation.sources.git as git
+from amplifier_web import draft_defaults_probe as entry
+from amplifier_foundation.sources.git import git_subprocess_runner
+original = entry.query
+async def observed(request):
+    runner = git._git_subprocess_runner.get()
+    pathlib.Path({str(origin)!r}).write_text(json.dumps({{
+        'pid':os.getpid(),'session':os.getsid(0),'broker':runner is not None,
+        'sha256':hashlib.sha256(pathlib.Path(git.__file__).read_bytes()).hexdigest()}}))
+    try:
+        if {mode!r} == 'default_negative':
+            with git_subprocess_runner(None):
+                return await original(request)
+        return await original(request)
+    except BaseException:
+        pathlib.Path({str(diagnostic)!r}).write_text(traceback.format_exc())
+        raise
+entry.query = observed
+entry.main()
+'''
+    monkeypatch.setattr(RuntimeManager, '_command', lambda *a, **k: [sys.executable, '-c', wrapper, 'unused'])
+    environment.update({
+        'GIT_SSH': str(transport), 'AMPLIFIER_HOME': str(tmp_path / 'community'),
+        'AMPLIFIER_SOURCE_STORE': str(tmp_path / 'sources'), 'PYTHONDONTWRITEBYTECODE': '1',
+        'AMPLIFIER_GIT_CLONE_TIMEOUT_S': '5' if mode == 'timeout' else '30'})
+    monkeypatch.setattr(config, 'worker_environment', lambda: environment)
+    home = tmp_path / 'app'
+    home.mkdir()
+    uri = f'git+ssh://fixture.invalid{repository}@{revision}'
+    task = asyncio.create_task(draft_defaults.resolve_defaults(home, str(tmp_path), bundle=uri))
+    descriptors = {}
+    def retain(pid, expected=None):
+        try:
+            descriptor = os.pidfd_open(pid)
+        except ProcessLookupError:
+            return
+        current = identity(pid)
+        if not current or expected is not None and current['start'] != expected:
+            os.close(descriptor)
+            return
+        if pid in descriptors:
+            os.close(descriptor)
+            return
+        descriptors[pid] = descriptor
+        # Fixture-only observation of our real Git tree, never production kills
+        # from a process scan. Child descriptors are identity-bound before use.
+        children = Path(f'/proc/{pid}/task/{pid}/children')
+        try:
+            child_ids = children.read_text().split()
+        except FileNotFoundError:
+            return
+        for child_id in child_ids:
+            child = identity(int(child_id))
+            parent = identity(pid)
+            if (child and child['parent'] == pid and parent and
+                    parent['start'] == current['start']):
+                retain(int(child_id), child['start'])
+    recorded = None
+    try:
+        async with asyncio.timeout(10):
+            while not ready.exists():
+                if task.done():
+                    pytest.fail(diagnostic.read_text()[-3000:] if diagnostic.exists() else repr(task.exception()))
+                await asyncio.sleep(.01)
+        recorded, loaded = await marker(ready), await marker(origin)
+        record_property('pack_checkpoint', json.dumps(recorded))
+        record_property('foundation_git_sha256', loaded['sha256'])
+        processes = [recorded[key] for key in ('client', 'proxy', 'server')] + recorded['helpers']
+        assert recorded['helpers'], 'PACK checkpoint must include a live real pack-objects helper'
+        assert any('pack-objects' in row['argv'] for row in recorded['helpers'])
+        assert recorded['packPayloadBytes'] >= 64 and recorded['pipeBytes'] == 4096
+        assert loaded['broker'], 'Actual entrypoint must install the broker scope'
+        assert loaded['sha256'] == hashlib.sha256(Path(foundation_git.__file__).read_bytes()).hexdigest()
+        for row in processes:
+            current = identity(row['pid'])
+            assert current and current['state'] != 'Z' and current['start'] == row['start']
+            assert row['session'] != loaded['session']
+            assert row['session'] == recorded['client']['session']
+            assert row['group'] == recorded['client']['group']
+            retain(row['pid'], row['start'])
+        if mode != 'default_negative':
+            # Actual anchored guard session, not a cached group to be killed.
+            for pid in (recorded['client']['group'], recorded['client']['session']):
+                assert identity(pid) is not None
+                retain(pid)
+        # Actual client binary, not a script proxy named "git".
+        assert Path(recorded['client']['exe']).samefile(real_git)
+        assert Path(recorded['server']['exe']).samefile(real_git)
+        assert all(Path(row['exe']).samefile(pack_objects) for row in recorded['helpers'])
+        stage = Path(f"/proc/{recorded['client']['pid']}/cwd").resolve()
+        assert '.source-' in str(stage) and stage.is_relative_to(tmp_path / 'sources')
+        record_property('shared_stage', str(stage))
+        if mode in {'cancel', 'default_negative'}:
+            for _ in range(3):
+                task.cancel()
+                await asyncio.sleep(0)
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 6)
+        elif mode == 'timeout':
+            with pytest.raises(ValueError, match='Draft default resolution failed'):
+                await asyncio.wait_for(task, 12)
+        else:
+            gate.touch()
+            assert (await asyncio.wait_for(task, 10))['providers'] == []
+        if mode == 'default_negative':
+            # Controlled former mechanism, not attribution of the historical CI
+            # failure: outer probe exits, detached real Git remains a writer.
+            assert identity(recorded['client']['pid'])['state'] != 'Z'
+            assert identity(recorded['server']['pid'])['state'] != 'Z'
+            assert identity(loaded['pid']) is None
+        else:
+            assert all(identity(row['pid']) is None for row in processes)
+            assert all(identity(pid) is None for pid in descriptors)
+            shutil.rmtree(home)  # Safe immediately at the returned boundary.
+            if mode != 'success':
+                gate.touch()
+                assert not late.exists()
+        if mode in {'cancel', 'default_negative'}:
+            assert stage.exists(), 'Abrupt probe death must not unwind shared-stage removal'
+    finally:
+        try:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            # Only fixture-owned identities, never a scan-derived process kill.
+            # Early checkpoint failure still has startup identities for recovery.
+            for path in (started, ready):
+                if path.exists():
+                    recovered = json.loads(path.read_text())
+                    rows = [recovered[key] for key in ('client', 'proxy', 'server')]
+                    rows.extend(recovered.get('helpers', []))
+                    for row in rows:
+                        retain(row['pid'], row['start'])
+            for descriptor in descriptors.values():
+                try:
+                    signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            async with asyncio.timeout(5):
+                while any(identity(pid) is not None for pid in descriptors):
+                    for pid in descriptors:
+                        try:
+                            os.waitpid(pid, os.WNOHANG)
+                        except ChildProcessError:
+                            pass  # Wait for its real parent or adoption first.
+                    await asyncio.sleep(.01)
+        finally:
+            for descriptor in descriptors.values():
+                os.close(descriptor)
