@@ -72,3 +72,29 @@ returned malformed data, or reported unavailable required Work. Only a refusal
 observed at the adapter's local pretransport boundary may identify the request as
 unsent; a provider exception with the same type cannot make that claim.
 The recovery event is metadata only and does not prove provider admission.
+
+## Current context and reasoning continuity
+
+Unified prepares current host observations before measurement, without saving a
+second provider transcript or retaining superseded authority, memory or pixels.
+Ambient observations have a stable position after the latest ordinary accepted
+input, before its assistant/tool continuation. Explicitly acquired evidence stays
+after its owning complete tool-result batch; it must not appear before acquisition
+or split a parallel call/result batch. Focus without an acquiring receipt retains
+request-time placement. This placement does not authenticate input or grant authority.
+
+Unchanged current observations reproduce the same provider-visible prefix during
+an ordinary tool loop. Known observation-sampling clocks are omitted from prompt
+presentation, not from the source records; semantic revisions, expiry, grants,
+source identities and fresh private request bindings remain intact. Each request
+still reads current context, and existing final revocation/currentness checks and
+exact-fit refusal/refit rules still apply.
+
+A real context change, acquired evidence, new input, lost receipt, resume or
+compaction may deliberately replace that prefix. The provider owns native
+reasoning validity and selective invalidation against its actual system, tools
+and message envelope. Unified neither edits signed thinking nor replays old
+observations to make it valid. This is not append-only continuity across turns:
+necessary invalidation can lose reasoning and incur provider latency/token costs.
+Host and provider qualification must distinguish unchanged-prefix preservation
+from successful requests that discarded incompatible reasoning.
