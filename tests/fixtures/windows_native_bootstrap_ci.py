@@ -57,7 +57,7 @@ def main() -> int:
             raise RuntimeError("Actual native bootstrap tests failed.")
         actual = json.loads(tested.stdout.decode("utf-8-sig"))
         if (set(actual) != {"ok", "assertions", "actualCSharpParserAndWindowsArgv", "networkOrInstallEffects"}
-                or actual["ok"] is not True or actual["assertions"] != 61
+                or actual["ok"] is not True or actual["assertions"] != 64
                 or actual["actualCSharpParserAndWindowsArgv"] is not True
                 or actual["networkOrInstallEffects"] is not False):
             raise RuntimeError("Incomplete native bootstrap test receipt.")
