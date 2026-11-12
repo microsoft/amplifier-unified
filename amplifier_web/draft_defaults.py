@@ -41,7 +41,7 @@ async def resolve_defaults(home, workspace, bundle=None, app_bundle=None, *, glo
         environment = {**worker_environment(), 'AMPLIFIER_WEB_HOME': str(home),
                        'AMPLIFIER_UNIFIED_RELEASE': generation or ''}
         try:
-            process=await spawn(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,cwd=cwd,env=environment)
+            process=await spawn(*command,owned_git=True,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,cwd=cwd,env=environment)
         except BaseException:
             # A native spawn failure can retain unconfirmed process custody.
             # Keep the lease conservatively; never infer no process from None.
