@@ -237,8 +237,64 @@ jobs:
           name: host-source-resolution
           path: ${{ runner.temp }}/host-resolution
           if-no-files-found: ignore
-  release:
+  windows-consumer:
     needs: prepare
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      UV_NO_BUILD_PACKAGE: amplifier-core
+      UV_NO_CONFIG: '1'
+      UV_LINK_MODE: copy
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      GIT_TERMINAL_PROMPT: '0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-distributions
+          path: dist
+      - name: Install original wheel and produce bound unsigned consumer entry
+        shell: pwsh
+        env:
+          RELEASE_REVISION: ${{ needs.prepare.outputs.revision }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Historical releases keep their original asset set.
+          if (-not (Test-Path -LiteralPath scripts/windows_consumer_release.py)) { exit 0 }
+          $wheel = @(Get-ChildItem -LiteralPath dist -Filter *.whl)
+          if ($wheel.Count -ne 1) { throw 'Expected the one original qualified application wheel.' }
+          $environment = Join-Path $env:RUNNER_TEMP 'windows-consumer-app'
+          uv venv --python 3.13 $environment
+          if ($LASTEXITCODE -ne 0) { throw 'Windows environment preparation failed.' }
+          $python = Join-Path $environment 'Scripts/python.exe'
+          uv pip install --python $python $wheel[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Original wheel installation failed.' }
+          uv pip check --python $python
+          if ($LASTEXITCODE -ne 0) { throw 'Windows package dependency check failed.' }
+          python scripts/windows_consumer_release.py build --wheel $wheel[0].FullName --python $python --revision $env:RELEASE_REVISION --output windows-consumer
+          if ($LASTEXITCODE -ne 0) { throw 'Bound consumer entry build failed.' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-consumer
+          path: |
+            windows-consumer/AmplifierUnifiedSetup-*-windows-x64.exe
+            windows-consumer/windows-consumer-plan.json
+            windows-consumer/windows-consumer-release.json
+            windows-consumer/WINDOWS_SHA256SUMS
+          if-no-files-found: ignore
+  release:
+    needs: [prepare, windows-consumer]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -264,6 +320,12 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-distributions
+          path: dist
+      - name: Retrieve original consumer build when selected source supports it
+        if: hashFiles('scripts/windows_consumer_release.py') != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: windows-consumer
           path: dist
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
