@@ -207,6 +207,11 @@ async def test_waiting_configuration_candidate_rechecks_selection_before_pointer
         assert manager.service.state['updates']['phase'] == 'checked'
         assert manager.service.state['updates']['pendingRelease'] is None
         assert (stage / 'validated.json').is_file()
+        retired = [row for row in manager.diagnostics.state['events']
+                   if row.get('phase') == 'ecosystem-selection-retired']
+        assert len(retired) == 1 and retired[0]['status'] == 'succeeded'
+        assert not manager.diagnostics.state.get('activeFailures')
+        write_private(amplifier_home() / 'settings.yaml', '{}')
         manager.service.state['settings']['updates'].update(autoCheck=False, autoInstall=False)
         await manager.tick()
         assert promoted == []
@@ -215,6 +220,11 @@ async def test_waiting_configuration_candidate_rechecks_selection_before_pointer
         await manager.check()
         assert manager.service.state['updates']['error'] is None
         assert manager.service.state['updates']['sequence']['stage'] == 'complete'
+        # Check no longer replays the retired B candidate or creates repair debt
+        # for restored A. Graph evidence here remains an explicit health seam.
+        assert update_health.current(manager.service.state['updates'],
+            {'generation': previous, 'startedAt': 1, 'packages': set(), 'components': set()})['status'] == 'current'
+        assert retired[0] in manager.diagnostics.state['events']
     else:
         assert promoted == [target]
         assert updates.active_release(home)['current'] == target

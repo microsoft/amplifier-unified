@@ -1526,7 +1526,7 @@ class UpdateManager:
                             candidate = None
                             self.inventory = []
                             write_private(self.directory / 'inventory.json', '[]')
-                            self.diagnostics.record('ecosystem-selection', 'failed', errorType='ValueError')
+                            self.diagnostics.record('ecosystem-selection-retired', 'succeeded')
                             await self.publish(pendingRelease=None, available=0, includedCanProceed=False,
                                 phase='checked', error=None, sequence={'stage': 'application', 'install': False},
                                 items=[row for row in state.get('items', []) if row.get('id') == 'application'],
