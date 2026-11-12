@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import {chromium,expect as assertions} from '@playwright/test';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
+import {updateAppearance} from './settings-fixture.mjs';
 const expect=assertions.configure({timeout:10000}),root=fileURLToPath(new URL('../../',import.meta.url));
 const out=process.env.AMPLIFIER_TEST_ARTIFACTS||root+'output/night-drive';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py','--appearance-states'],{stdio:['ignore','pipe','inherit']});
@@ -43,12 +44,7 @@ try{
  const app=page.locator('#amp-one'),header=app.locator('[data-part=header]');
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  const action=(name,args={})=>page.evaluate(async([name,args])=>{const result=await window.amplifier.dispatch(name,args);if(!result.accepted)throw Error(name+' refused');return result},[name,args]);
- const presentation=patch=>page.evaluate(async patch=>{
-  const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
-  const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:shell.revision,composition:{...shell.effectiveComposition,presentation:{...shell.effectiveComposition.presentation,...patch}}});
-  if(!prepared.accepted)throw Error('Prepare refused');
-  const receipt=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:shell.revision,changeId:prepared.result.id});if(!receipt.accepted)throw Error('Apply refused');
- },patch);
+ const presentation=patch=>updateAppearance(page,patch);
  const status=async(id,value)=>{const response=await page.request.post(url+'/fixture/appearance-status',{data:{sessionId:id,status:value}});assert.ok(response.ok())};
  const shot=async name=>{assert.ok(report.screenshots.length<8);const bytes=await page.screenshot({path:out+'/'+name+'.png'});report.screenshots.push({name,sha256:hash(bytes)})};
  const scanner=()=>header.evaluate(el=>{const style=getComputedStyle(el,'::after'),box=el.getBoundingClientRect();return {animation:style.animationName,duration:style.animationDuration,position:style.backgroundPosition,image:style.backgroundImage,height:parseFloat(style.height),top:box.bottom-parseFloat(style.bottom)-parseFloat(style.height)-2,bottom:box.bottom-parseFloat(style.bottom),display:style.display,content:style.content}});
@@ -70,7 +66,9 @@ try{
  await action('session.create');const selected=(await state()).selectedSessionId;
  await action('session.create');const other=(await state()).selectedSessionId;assert.notEqual(other,selected);
  await action('session.select',{id:selected});
- await action('theme.apply',{name:'Night Drive',css});
+ const saved=await action('theme.save',{name:'Night Drive',css});
+ assert.equal(saved.result.packageVersion,2);assert.equal(saved.result.base,'reference-v1');
+ await updateAppearance(page,{appearanceId:saved.result.id});
  await page.getByRole('textbox',{name:'Message Amplifier',exact:true}).fill('Retained Night Drive draft');
  await expect(app).toHaveAttribute('data-app-activity','idle');assert.equal((await measure('initial idle')).animation,'none');
  await status(other,'working');await expect(app).toHaveAttribute('data-app-activity','active');
@@ -82,6 +80,8 @@ try{
   await status(other,prior);
   const previousActivity=prior==='working'?'active':'idle',next=prior==='working'?'idle':'working';
   await expect(app).toHaveAttribute('data-app-activity',previousActivity);
+  await expect.poll(async()=>(await state()).appActivity.active).toBe(prior==='working');
+  report.reconnects.push({phase:'before-hold',prior,appActivity:(await state()).appActivity});
   const previousSocket=sockets.at(-1);assert.ok(previousSocket,'Real state WebSocket is used');
   holdFrames=true;
   try{
