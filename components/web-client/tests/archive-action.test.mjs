@@ -79,6 +79,37 @@ test('dismiss does not resurrect a pending result or redirect',async()=>{
  wait.resolve({accepted:true,result:{id:'a',archived:true}});await run;
  assert.equal(f.feedback.notice,null);assert.equal(f.navigations.length,0);
 });
+test('captured expiry cannot dismiss a later notice, including same chat',async()=>{
+ const f=fixture();await f.action.run(chat);const first=f.feedback.notice.operation;
+ await f.action.run(chat,false);const latest=f.feedback.notice;
+ f.action.expire(first);assert.deepEqual(f.feedback.notice,latest);
+ f.action.expire(latest.operation);assert.equal(f.feedback.notice,null);
+ assert.equal(f.calls.length,2);
+});
+test('navigation failure is a persistent confirmation, not an expiring routine success',async()=>{
+ const f=fixture(undefined,()=>({accepted:false}));await f.action.run(chat);
+ assert.equal(f.feedback.notice.phase,'success');assert.equal(f.feedback.notice.persistent,true);
+ const latest=f.feedback.notice;f.action.expire(latest.operation);assert.deepEqual(f.feedback.notice,latest);
+});
+test('held browse cannot lose a later warning to routine expiry; mutation lock is still released',async()=>{
+ const held=deferred(),entered=deferred(),f=fixture(undefined,()=>{entered.resolve();return held.promise});
+ const run=f.action.run(chat);await entered.promise;
+ const latest=f.feedback.notice;assert.equal(latest.navigationPending,true);assert.deepEqual(f.feedback.pending,[]);
+ f.action.expire(latest.operation);assert.deepEqual(f.feedback.notice,latest);
+ held.reject(Error('Late browse failure'));await run;
+ assert.equal(f.feedback.notice.persistent,true);assert.match(f.feedback.notice.text,/Could not open/);
+});
+test('Keep open belongs to the captured notice, survives renderer changes and is not inherited',async()=>{
+ const held=deferred(),entered=deferred(),f=fixture(undefined,()=>{entered.resolve();return held.promise});
+ const run=f.action.run(chat);await entered.promise;const operation=f.feedback.notice.operation;
+ f.action.keep(operation,true);assert.equal(f.feedback.notice.kept,true);
+ f.action.expire(operation);assert.equal(f.feedback.notice.kept,true);
+ held.resolve({accepted:false});await run;assert.equal(f.feedback.notice.kept,true);
+ await f.action.run(chat,false);const latest=f.feedback.notice;
+ f.action.keep(operation,true);assert.deepEqual(f.feedback.notice,latest);assert.equal(f.feedback.notice.kept,undefined);
+ f.action.keep(latest.operation,true);assert.equal(f.feedback.notice.kept,true);
+ f.action.keep(latest.operation,false);assert.equal(f.feedback.notice.kept,false);
+});
 for(const next of ['undo','other','dismiss'])for(const outcome of ['rejected','thrown']){
  test(`held navigation releases mutation lock; ${next} supersedes late ${outcome} browse`,async()=>{
   const held=deferred(),entered=deferred();let ownsNavigation;

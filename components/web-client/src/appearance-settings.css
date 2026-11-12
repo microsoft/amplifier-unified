@@ -91,3 +91,8 @@
 #amp-one .a-appearance-profile-switch{flex:0 1 280px;width:min(100%,280px);min-width:min(100%,240px);margin:0}
 #amp-one .a-appearance-profile-switch .a-sidebar-organizations{width:100%;flex:1}
 #amp-one .a-appearance-profile-feedback{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:-12px 0 0;color:var(--a-muted);font-size:12px;line-height:1.5}
+#amp-one .a-appearance-more{min-width:0;border-top:1px solid var(--a-line);padding-top:16px}
+#amp-one .a-appearance-more>summary{cursor:pointer;font-size:14px;font-weight:600;min-height:34px}
+#amp-one .a-appearance-more>p{font-size:13px;color:var(--a-muted);margin:12px 0}
+#amp-one .a-appearance-more[open]>*+*{margin-top:20px}
+#amp-one .a-appearance-disclosure-status{font-weight:400;color:var(--a-muted);font-size:12px;margin-inline-start:12px}
