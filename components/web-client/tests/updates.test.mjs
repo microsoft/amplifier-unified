@@ -267,7 +267,7 @@ test('component adoption wait and completion retain an explicit failed applicati
  for(const activation of ['per-worker',undefined]){
   const html=render({...independentComponentUpdate,phase:'staged',pendingRelease:'candidate',plan:{activation},
    componentResults:[{id:component.id,status:'awaiting-adoption'}]});
-  assert.match(html,activation==='per-worker'?/Finishing your update/:/Waiting for your work to finish/);
+  assert.match(html,activation==='per-worker'?/Finishing your update/:/Waiting for work to finish/);
   assert.match(html,/Community bundle<\/strong> · Awaiting adoption/);
   assert.match(html,/a-app-update-status failed/);assert.match(html,/Could not read published-release metadata/);
   assert.doesNotMatch(html,/You’re up to date|Latest release installed|data-action="updates.install"/);
@@ -333,7 +333,7 @@ test('staged app, restart, interrupted install and successful restart report the
  const staged=render({pendingApp,phase:'app-staged',detail:'Waiting for active work to finish.'});
  assert.match(staged,/Ready to restart/);
  assert.match(staged,/smart tools/);
- assert.match(staged,/Waiting for your work to finish/);
+ assert.match(staged,/Waiting for work to finish/);
  assert.doesNotMatch(staged,/a-check-result success/);
  const restarting=render({phase:'activating',pendingRestart:{version:'0.6.4'},detail:'Application installed. Restarting the local host…'});
  assert.match(restarting,/Restarting Amplifier/);
@@ -374,7 +374,7 @@ test('queued release refresh is read-only and only available before an app hando
   }finally{await renderAct(async()=>root.unmount())}
  }
  const offline=render({...queued,applicationCheckWarning:'Could not check for a newer release. The prepared update is still available.'});
- assert.match(offline,/prepared update is still available/);assert.match(offline,/Waiting for your work to finish/);
+ assert.match(offline,/prepared update is still available/);assert.match(offline,/Waiting for work to finish/);
  assert.doesNotMatch(offline,/Updates need attention/);
 });
 
