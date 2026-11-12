@@ -505,6 +505,18 @@ If bounded activation history has aged out, a matching selected graph can be
 reported as retained with activation verification unavailable, not falsely healthy
 or a request to reinstall. Newer failures, failed activation and unrelated source
 scope remain actionable. Settings revalidation uses a neutral pending state.
+If the selected installation's graph, lock and activation still verify but its
+source-configuration key no longer matches, health reports incomplete component
+verification, not a renewed claim that an older source conflict is occurring.
+Only covered failures predating that installation remain historical; newer
+failures, missing source scope and uncertain operations retain their priority.
+This explanatory proof cannot authorize partial-source retention or declare the
+changed configuration qualified. No settings or qualification receipts are rewritten.
+An ordinary Check offers an included runtime qualification when app-level source
+declarations differ, even if every Git branch is unchanged. Install still uses
+the checked selection and existing unchanged-input, source-policy and activation
+guards. A successful new qualification can establish current health; Check alone
+does not prepare or activate it.
 
 Preparation remembers its input witness and disposition independently of the
 displayed application or Smart Tool batch. A settled failure performs no duplicate

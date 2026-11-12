@@ -10,7 +10,55 @@ import sys
 import tempfile
 
 installed_mode = os.environ.get('AMPLIFIER_TEST_INSTALLED') == '1'
+pr36_mode = os.environ.get('AMPLIFIER_TEST_PR36') == '1'
 sys.path.insert(0, str(Path(__file__).resolve().parent if installed_mode else Path(__file__).resolve().parents[2]))
+
+
+def pr36_installed_inputs():
+    """Strict opt-in: bind wheel files before any application/discovery import."""
+    import importlib.metadata
+    assert installed_mode and sys.flags.isolated and sys.dont_write_bytecode
+    assert 'PYTHONPATH' not in os.environ and 'PYTHONHOME' not in os.environ
+    assert '--synthetic-discovery' in sys.argv and '--appearance-records' in sys.argv
+    assert not os.environ.get('AMPLIFIER_TEST_SHARED_WORK_HOME')
+    expected = json.loads(Path(os.environ['AMPLIFIER_TEST_INSTALLED_IDENTITY']).read_text())
+    package = Path(os.environ['AMPLIFIER_TEST_PACKAGE_ROOT']).resolve(strict=True)
+    prefix = Path(sys.prefix).resolve()
+    dist = importlib.metadata.distribution('amplifier-unified')
+    base = Path(dist.locate_file('')).resolve()
+    assert package == Path(dist.locate_file('amplifier_web')).resolve()
+    assert base.is_relative_to(prefix) and package.is_relative_to(prefix)
+    assert dist.read_text('WHEEL')
+    assert not json.loads(dist.read_text('direct_url.json') or '{}').get('dir_info', {}).get('editable')
+    files = expected['files']
+    assert files and len(expected['wheelSha256']) == 64
+    owned = {str(path) for path in dist.files or ()}
+    assert set(files) <= owned
+    for name, digest in files.items():
+        relative = Path(name)
+        path = base / relative
+        assert not relative.is_absolute() and '..' not in relative.parts
+        assert not path.is_symlink() and path.resolve().is_relative_to(base)
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, name
+    shipped = {str(path.relative_to(base)) for path in package.rglob('*')
+               if path.is_file() and (path.suffix == '.py' or 'static' in path.relative_to(package).parts)}
+    assert shipped <= set(files), 'Identity must cover every package Python/static file'
+    roots = {Path(name).parts[0] for name in files
+             if name.endswith('.py') and len(Path(name).parts) > 1}
+    origins = {}
+    for name, module in tuple(sys.modules.items()):
+        if name.split('.')[0] not in roots:
+            continue
+        if getattr(module, '__file__', None):
+            path = Path(module.__file__).resolve()
+            assert path.is_relative_to(base), (name, path)
+            relative = str(path.relative_to(base))
+            assert relative in files, (name, relative)
+            origins[name] = {'file': relative, 'sha256': files[relative]}
+        for path in getattr(module, '__path__', ()):
+            assert Path(path).resolve().is_relative_to(base), (name, path)
+    return {'verified': True, 'isolated': True, 'noPythonPath': True,
+            'fileCount': len(files), 'modules': origins}
 
 
 class Runtime:
@@ -106,7 +154,6 @@ def appearance_record_hash(service):
 
 async def main(home):
     from contextlib import nullcontext
-    from configured_browser import synthetic_discovery
     synthetic = '--synthetic-discovery' in sys.argv
     if any(flag in sys.argv for flag in ('--appearance-records', '--appearance-malformed')):
         if not synthetic or '--appearance-records' not in sys.argv:
@@ -123,6 +170,17 @@ async def main(home):
         AMPLIFIER_SESSION_STATE_HOME=str(home / "sessions"),
         AMPLIFIER_UNIFIED_IMPORT_HOME=str(home / "import-home"),
     )
+    pre_import = None
+    if pr36_mode:
+        user_home = home / 'user'
+        user_home.mkdir()
+        os.environ.update(HOME=str(user_home), XDG_CACHE_HOME=str(home / 'cache'),
+                          XDG_CONFIG_HOME=str(home / 'config'), XDG_DATA_HOME=str(home / 'data'))
+        pre_import = pr36_installed_inputs()
+        assert not pre_import['modules'], 'No wheel application module may precede isolated homes/input checks'
+    # This sibling helper remains importable with -I and a fixture staged outside
+    # the source checkout. Its application imports occur only after isolated homes.
+    from configured_browser import synthetic_discovery
     # Set isolated homes before importing discovery owners. Keep replacements
     # installed through create_app, requests and full cleanup, including errors;
     # other browser scenarios retain their own probes.
@@ -131,10 +189,10 @@ async def main(home):
             workspace = home / 'workspace'
             workspace.mkdir(exist_ok=True)
             await seed_appearance_records(home, workspace)
-        await serve(home)
+        await serve(home, pre_import=pre_import)
 
 
-async def serve(home):
+async def serve(home, *, pre_import=None):
     from configured_browser import seed_connection
     seed_connection(home / 'shared-settings')
     from aiohttp import web
@@ -551,6 +609,9 @@ async def serve(home):
                            'sourceMode': False, 'syntheticRuntime': True,
                            'case': 'malformed' if '--appearance-malformed' in sys.argv else 'normal',
                            'payloadAfterCleanup': False}
+        if pr36_mode:
+            installed_proof['strictPreImport'] = pre_import
+            installed_proof['strictBefore'] = pr36_installed_inputs()
         proof_path = Path(os.environ['AMPLIFIER_TEST_ARTIFACTS']) / (
             'installed-host-' + installed_proof['case'] + '.json')
         assert not proof_path.exists()
@@ -588,6 +649,8 @@ async def serve(home):
                     assert source.is_relative_to(prefix)
                     assert hashlib.sha256(source.read_bytes()).hexdigest() == digest, name
                 installed_proof['payloadAfterCleanup'] = True
+                if pr36_mode:
+                    installed_proof['strictAfter'] = pr36_installed_inputs()
                 proof_path.write_text(json.dumps(installed_proof, sort_keys=True) + '\n')
             if stalled_body_mode:
                 print(json.dumps({'canvasRendererStalledBody': {

@@ -356,7 +356,9 @@ class PublicationTests(unittest.TestCase):
             self.renamed = False
             self.bytes = bytearray()
 
-        def open(self, path, *, directory=False, create=False, cleanup=False):
+        def open(self, path, *, directory=False, create=False, cleanup=False, exclusive=False):
+            if exclusive:
+                self.events.append(("exclusive", path.name))
             self.events.append(("open", path.name, create))
             if not create and not cleanup and not self.present and not self.renamed:
                 raise FileNotFoundError(path)
@@ -411,6 +413,34 @@ class PublicationTests(unittest.TestCase):
         pinned._pins = [(Path("private"), 1, (1, 0, 1), True)]
         pinned._check = lambda: None
         return pinned
+
+    def test_private_removal_uses_exact_open_object_and_content(self):
+        import hashlib
+        api = self.API()
+        api.read = lambda handle, limit: b"owned link"
+        pinned = self.pinned(api)
+        pinned.remove_private("Launch.lnk", hashlib.sha256(b"owned link").hexdigest())
+        self.assertIn(("exclusive", "Launch.lnk"), api.events)
+        self.assertEqual(api.events[-2:], [("discard", "Launch.lnk"), ("close", 10)])
+
+    def test_private_removal_refuses_changed_content_without_discard(self):
+        import hashlib
+        api = self.API()
+        api.read = lambda handle, limit: b"changed link"
+        with self.assertRaisesRegex(ValueError, "changed"):
+            self.pinned(api).remove_private("Launch.lnk", hashlib.sha256(b"old").hexdigest())
+        self.assertNotIn(("discard", "Launch.lnk"), api.events)
+        self.assertEqual(api.events[-1], ("close", 10))
+
+    def test_prepared_private_removal_keeps_handle_until_called_or_abandoned(self):
+        import hashlib
+        api = self.API()
+        api.read = lambda handle, limit: b"owned link"
+        with self.pinned(api).removal_private("Launch.lnk", hashlib.sha256(b"owned link").hexdigest()):
+            self.assertNotIn(("close", 10), api.events)
+            self.assertNotIn(("discard", "Launch.lnk"), api.events)
+        self.assertEqual(api.events[-1], ("close", 10))
+        self.assertNotIn(("discard", "Launch.lnk"), api.events)
 
     def test_flush_failure_never_renames(self):
         api = self.API()

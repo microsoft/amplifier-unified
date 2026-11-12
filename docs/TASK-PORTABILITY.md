@@ -178,7 +178,8 @@ admission receipt remains `outcome_unknown` on import and cannot replay its work
 
 ## Boundaries and implementation
 
-`amplifier_portability` owns signed protocol records and bounded Git packages.
+[`amplifier_portability`](../components/portability/README.md) owns signed protocol
+records and bounded Git packages.
 `amplifier_web.portability` supplies host admission and transport-file actions;
 `portability_data` projects supported task data. Foundation owns the native writer
 fence shared by supported consumers. There is no second execution scheduler.

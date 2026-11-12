@@ -53,6 +53,7 @@ class RouteTests(unittest.TestCase):
         shells = re.findall(r"^        shell: (.*)$", body, re.M)
         self.assertEqual(shells, [
             "python -I -S -B {0}",
+            "python -I -S -B {0}",
             "powershell -NoLogo -NoProfile -NonInteractive -File {0}",
             "pwsh -NoLogo -NoProfile -NonInteractive -File {0}",
             "python -I -S -B {0}",
@@ -71,6 +72,8 @@ class RouteTests(unittest.TestCase):
         self.assertIn("if: always()", body)
         self.assertIn("persist-credentials: false", body)
         self.assertIn("result.json", body)
+        self.assertIn("tests/fixtures/windows_native_bootstrap_ci.py", body)
+        self.assertIn("unified-native-bootstrap-offline/result.json", body)
         self.assertIn("if-no-files-found: error", body)
         self.assertIn("timeout-minutes: 12", body)
 

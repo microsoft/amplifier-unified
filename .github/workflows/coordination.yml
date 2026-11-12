@@ -111,6 +111,9 @@ on:
       - 'components/web-client/src/workspace-resource-*.jsx'
       - 'tests/test_resource_reservations.py'
       - 'tests/test_multi_repository_worktrees.py'
+      - 'components/worktrees/tests/test_worktree_library.py'
+      - 'components/worktrees/tests/test_worktree_concurrency.py'
+      - 'components/worktrees/tests/worktree_fixtures.py'
       - 'components/web-client/src/worktrees.jsx'
       - 'tests/fixtures/worktrees_ui_server.py'
       - 'tests/web/multi-repository-worktrees-browser.mjs'
@@ -205,6 +208,7 @@ jobs:
           tests/test_runtime_profile_inputs.py tests/test_runtime_source_declarations.py
           tests/test_state_write_scopes.py tests/test_host_storage.py
           tests/test_workspace_repair_outcomes.py tests/test_worktrees.py
+          components/worktrees/tests/test_worktree_library.py
           tests/test_handoff_model_admission.py
           tests/test_peer_creation_operation.py
           tests/test_resource_reservations.py
@@ -212,7 +216,7 @@ jobs:
           tests/test_coordination_delivery.py
           tests/test_output_images.py tests/test_output_image_pairs.py
           tests/test_voice_visual.py tests/test_computer_visual.py
-          tests/test_multi_repository_worktrees.py
+          tests/test_multi_repository_worktrees.py components/worktrees/tests/test_worktree_concurrency.py
           tests/test_file_access_policy.py tests/test_canvas_files.py tests/test_management.py
           tests/test_service.py tests/test_runtime.py tests/test_agent_chat_controls.py -q
       - name: Verify delegated evidence reads through the native boundary

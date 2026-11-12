@@ -698,7 +698,7 @@ async def test_resolved_metadata_migrates_workspace_customization_and_canvas_sco
 async def test_incremental_workspace_resolution_persists_pin_remap_before_full_save(
         tmp_path, app_factory, monkeypatch, pin_case):
     import time
-    from amplifier_web.workspace_canvas import _registration
+    from amplifier_web.workspace_selection import _registration
 
     workspace = tmp_path / 'incrementally-resolved'
     directory = native_session(workspace, 'incremental-resolved-chat',

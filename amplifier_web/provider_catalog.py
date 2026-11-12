@@ -124,7 +124,8 @@ def _chatgpt_account(contents, config):
         return None
 
 
-def connection_key(workspace, module, config, source=None, *, home=None, _credential_generation=False):
+def connection_key(workspace, module, config, source=None, *, home=None, _credential_generation=False,
+                   _legacy_visibility=False, _binding_pair=False):
     """Stable private connection binding shared by host and worker processes.
 
     The connection binding ignores selection defaults, model filters and priority. Every other provider
@@ -138,6 +139,11 @@ def connection_key(workspace, module, config, source=None, *, home=None, _creden
     raw = copy.deepcopy(config or {})
     for name in ('priority', 'model', 'default_model', 'reasoning_effort', 'model_filters'):
         raw.pop(name, None)
+    if module == 'provider-openai' and not (_legacy_visibility or _binding_pair):
+        # These are OpenAI listing policy, not account/endpoint settings.
+        # Do not reinterpret same-named options on unrelated providers.
+        for name in ('hide_dated_models', 'filtered'):
+            raw.pop(name, None)
     credential = environment_credential(module, raw)
     if not raw.get(credential['field']) and credential['available']:
         raw[credential['field']] = '${' + credential['envVar'] + '}'
@@ -192,7 +198,52 @@ def connection_key(workspace, module, config, source=None, *, home=None, _creden
     relative=any(isinstance(value,str) and value and not Path(value).expanduser().is_absolute()
                  for name,value in leaves if any(part in name for part in ('path','file','directory')))
     scope=str(Path(workspace).resolve()) if relative or source and not str(source).startswith(('git+','https://','http://','/')) else None
-    return fingerprint(['provider-connection-v1',scope,module,source,raw,environment,files])
+    envelope = ['provider-connection-v1',scope,module,source,raw,environment,files]
+    previous = fingerprint(envelope)
+    if not _binding_pair:
+        return previous
+    if module != 'provider-openai':
+        return previous, previous
+    # Both digests share ONE captured materialization, environment, source and
+    # credential-file witness. Never re-read credentials after proving the old
+    # digest: external replacement is possible even without an await.
+    current_raw = {name:value for name,value in raw.items() if name not in ('hide_dated_models', 'filtered')}
+    current_leaves = list(fields(current_raw))
+    current_files = {name:value for name,value in files.items()
+                     if name.split('.')[1] not in ('hide_dated_models', 'filtered')}
+    relative = any(isinstance(value,str) and value and not Path(value).expanduser().is_absolute()
+                   for name,value in current_leaves if any(part in name for part in ('path','file','directory')))
+    current_scope = str(Path(workspace).resolve()) if relative or source and not str(source).startswith(('git+','https://','http://','/')) else None
+    current = fingerprint(['provider-connection-v1',current_scope,module,source,current_raw,environment,current_files])
+    return current, previous
+
+
+def _openai_legacy_visibility(config):
+    """Identity projection only; the provider still validates construction.
+
+    Match OpenAI's renamed-key and Boolean defaults without importing a provider
+    into the host. Invalid/unresolved values stay distinct from successful
+    discovery, even with explicit filters: OpenAI parses legacy values first.
+    """
+    from .host.config import expand_environment
+    values = []
+    unresolved = {}
+    for name in ('hide_dated_models', 'filtered'):
+        value = (config or {}).get(name)
+        try:value = expand_environment(value)
+        except ValueError:unresolved[name] = value
+        values.append(value)
+    # Materialization visits every field before the provider resolves aliases.
+    # A shadowed but unresolved alias is not a successful construction input.
+    if unresolved:return ['unresolved', unresolved, values]
+    value = values[0] if values[0] not in (None, '') else values[1]
+    if value is None or value == '':return True
+    if isinstance(value, bool):return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ('true', '1', 'yes'):return True
+        if normalized in ('false', '0', 'no'):return False
+    return ['invalid', value]
 
 
 def configuration_key(workspace, module, config, source=None, *, home=None):
@@ -210,6 +261,15 @@ def configuration_key(workspace, module, config, source=None, *, home=None):
         try:value = expand_environment(value)
         except ValueError:pass  # Preserve unresolved references, as connection_key does.
         scope[name] = value
+    if module == 'provider-openai':
+        legacy = _openai_legacy_visibility(config)
+        # None uses provider defaults; an explicit mapping (including {}) replaces
+        # them. Never copy family/shutdown policy into the host's catalog owner.
+        if scope.get('model_filters') is None:
+            scope.pop('model_filters', None)
+            scope['hide_dated_models'] = legacy
+        elif not isinstance(legacy, bool):
+            scope['hide_dated_models'] = legacy
     # The selected recommendation scope is cached, not an unfiltered second
     # catalog. Providers may derive listing defaults from model/default_model.
     # Conservatively retain those constructor inputs without copying their
@@ -243,21 +303,28 @@ def mounted_catalog_keys(home,workspace,rows,sources,*,binding=False):
 def model_key(identity):
     return ('providers.models', identity)
 
-def configured_binding(home, workspace, instance, *, global_only=False):
+def configured_binding(home, workspace, instance, *, global_only=False, saved=None):
+    """Current binding, optionally proving a retained pre-filter-split digest.
+
+    The prior digest is reconstructed from the current exact connection, not
+    historical guesses. A listing edit before first verified adoption still
+    requires explicit review/save. No saved choice or mount is rewritten here.
+    """
     from .setup import SetupManager
     manager = SetupManager(home, global_only=global_only, allow_missing_workspace=True)
     with manager.read_snapshot(workspace):
         if not any(row['id'] == instance and row['enabled'] for row in manager.provider_rows(workspace)):
             return None
-        return manager.catalog_key({'id':instance}, workspace, binding=True)
+        if saved:
+            current, previous = manager.catalog_key({'id':instance}, workspace, binding=True, _binding_pair=True)
+            if saved not in (current, previous):
+                raise ValueError('The configured connection changed after this choice was saved. Review the connection and save the model again.')
+        else:
+            current = manager.catalog_key({'id':instance}, workspace, binding=True)
+        return current
 
 
-def conversation_bindings(home, workspace, session_id, providers, *, global_only=False):
-    """Report known conversation overrides separately from the shared inventory.
-
-    No bundle preparation, provider import, transcript or worker is needed.
-    The actual mount repeats the exact-identity check before input admission.
-    """
+def _conversation_connections(home, workspace, session_id, *, global_only=False):
     from .host.config import load_config, provider_mount_sources
     config = load_config(workspace, home=home, session_id=session_id, global_only=global_only)
     rows = config.configured_connections
@@ -271,6 +338,36 @@ def conversation_bindings(home, workspace, session_id, providers, *, global_only
     # retaining all rows below so disabled selections are still refused.
     sources = provider_mount_sources([row for row in rows if row.get('enabled', True)], config.settings)
     by_id = {row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-'):row for row in rows}
+    return by_id, sources
+
+
+def retained_conversation_binding(home, workspace, session_id, instance, expected, *, global_only=False):
+    """Prove an old digest from the retained plan, never impose shared defaults.
+
+    Unknown/current digests pass unchanged to the authoritative mounted guard.
+    Only an exact old OpenAI digest can be projected, and the mounted receipt
+    must still verify it before any persistent promotion or input.
+    """
+    rows, sources = _conversation_connections(home, workspace, session_id, global_only=global_only)
+    row = rows.get(instance)
+    if (not row or row.get('enabled') is False or row['module'] != 'provider-openai'
+            or not any(name in row.get('config', {}) for name in ('hide_dated_models', 'filtered'))):
+        return expected
+    config = mounted_provider_config(row)
+    current, previous = connection_key(workspace, row['module'], config, sources.get(instance),
+                                      home=home, _binding_pair=True)
+    if previous != expected:
+        return expected
+    return current
+
+
+def conversation_bindings(home, workspace, session_id, providers, *, global_only=False):
+    """Report known conversation overrides separately from the shared inventory.
+
+    No bundle preparation, provider import, transcript or worker is needed.
+    The actual mount repeats the exact-identity check before input admission.
+    """
+    by_id, sources = _conversation_connections(home, workspace, session_id, global_only=global_only)
     result = {}
     for provider in providers:
         row = by_id.get(provider['id'])

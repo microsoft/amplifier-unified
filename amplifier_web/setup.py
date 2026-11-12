@@ -331,7 +331,7 @@ class SetupManager:
             row['info'] = metadata.get('info', {})
         return {'providers': rows, 'catalogs': entries}
 
-    def catalog_key(self,args,workspace,*,binding=False):
+    def catalog_key(self,args,workspace,*,binding=False,_legacy_visibility=False,_binding_pair=False):
         from .provider_catalog import configuration_key, connection_key
         config=self.config(workspace)
         row=next((row for row in config.configured_connections if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==args.get('id')),None)
@@ -348,7 +348,9 @@ class SetupManager:
             # must still prove its installed implementation independently.
             rows = [value for value in config.configured_connections if value.get('enabled', True)]
             source = provider_mount_sources(rows, config.settings).get(args.get('id'))
-        return identity(workspace,module,raw,source,home=self.home)
+        return identity(workspace,module,raw,source,home=self.home,
+            **({'_legacy_visibility':True} if binding and _legacy_visibility else {}),
+            **({'_binding_pair':True} if binding and _binding_pair else {}))
 
     async def cached_probe(self,action,args,workspace,*,_rotation_retry=True):
         from .provider_catalog import model_key, CatalogInvalidated, public_failure

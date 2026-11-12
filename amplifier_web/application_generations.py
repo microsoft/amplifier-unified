@@ -8,6 +8,7 @@ of reinstalling the already-tested packages into the serving environment.
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 import json
 import os
 import re
@@ -20,7 +21,20 @@ def directory(home, revision, generation):
         "[a-f0-9]{32}", generation
     ):
         raise ValueError("Invalid app generation identity")
-    return Path(home).resolve() / "updates/applications" / revision / generation
+    home = Path(home).resolve()
+    legacy = home / "updates/applications" / revision / generation
+    if sys.platform != "win32":
+        return legacy
+    # Windows DLL loading can still refuse >MAX_PATH package files even when
+    # Git/Python filesystem operations succeeded. Keep full source/attempt
+    # identities in the immutable qualification, not duplicated in this path.
+    compact = home / "updates/a" / generation
+    old_exists, compact_exists = os.path.lexists(legacy), os.path.lexists(compact)
+    if old_exists and compact_exists:
+        raise ValueError("Ambiguous Windows app generation locations; neither was changed")
+    # Retained older candidates are data, not a fallback installation. Never
+    # move, copy, normalize or discard them while selecting a new candidate.
+    return legacy if old_exists else compact
 
 
 def active(home):
@@ -74,12 +88,20 @@ def promote(home, validated, bootstrap):
         return _promote(home, validated, bootstrap)
 
 
+@contextmanager
 def _pointer_lock(home):
     from filelock import FileLock
 
     folder = Path(home) / 'updates'
-    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-    return FileLock(folder / 'application-active.lock', timeout=0, mode=0o600)
+    if os.name == "nt":
+        from .windows_files import directory
+        with directory(folder, owned_root=home, create=True):
+            with FileLock(folder / 'application-active.lock', timeout=0, mode=0o600):
+                yield
+    else:
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with FileLock(folder / 'application-active.lock', timeout=0, mode=0o600):
+            yield
 
 
 def _promote(home, validated, bootstrap):
@@ -100,7 +122,8 @@ def _promote(home, validated, bootstrap):
             for key, value in pointer.items()
             if key not in {"folder", "prefix", "previous"}
         }
-    write_private(Path(home) / "updates/application-active.json", json.dumps(record))
+    write_private(Path(home) / "updates/application-active.json", json.dumps(record),
+                  **({"owned_root": home} if os.name == "nt" else {}))
     return active(home)
 
 
@@ -127,7 +150,8 @@ def _restore(home, promoted, previous, bootstrap, expected_bootstrap):
         path.unlink()
     else:
         write_private(path, json.dumps({key: value for key, value in previous.items()
-                                       if key not in {'folder', 'prefix'}}))
+                                       if key not in {'folder', 'prefix'}}),
+                      **({"owned_root": home} if os.name == "nt" else {}))
     if active(home) != previous:
         raise ValueError('The previous application launch target was not restored')
 
@@ -151,7 +175,7 @@ def verify_candidate(target):
         raise ValueError('Active app packages changed; its generation was preserved')
 
 
-async def can_read_candidate(process, bootstrap, python, validated):
+async def can_read_candidate(process, bootstrap, python, validated, *, home=None):
     """Prove the actual bootstrap can read this graph before choosing promotion.
 
     Older launchers lack the archive-aware reader. The caller retains its normal
@@ -161,7 +185,10 @@ async def can_read_candidate(process, bootstrap, python, validated):
 from pathlib import Path
 from amplifier_web import application_generations as generations
 verify = getattr(generations, "verify_candidate", None)
-if verify is None:
+folder = Path(sys.argv[2])
+readable = not (sys.platform == "win32" and sys.argv[4] and
+ generations.directory(sys.argv[4], sys.argv[5], sys.argv[6]).resolve() != folder.resolve())
+if verify is None or not readable:
  print("unsupported")
 else:
  verify({"prefix": Path(sys.argv[1]), "folder": Path(sys.argv[2]), "componentDigest": sys.argv[3]})
@@ -170,7 +197,8 @@ else:
     prefix = Path(python).parent.parent
     launcher = Path(bootstrap) / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
     output = await process(str(launcher), '-I', '-c', script, str(prefix),
-        str(prefix.parent.parent), validated['componentDigest'], timeout=40)
+        str(prefix.parent.parent), validated['componentDigest'], str(home or ''),
+        validated.get('revision', ''), validated.get('generation', ''), timeout=40)
     if output.strip() not in {'unsupported', 'compatible'}:
         raise ValueError('The application bootstrap compatibility check returned invalid data')
     return output.strip() == 'compatible'

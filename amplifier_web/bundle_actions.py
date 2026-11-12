@@ -220,7 +220,7 @@ async def perform(management, action, args):
                 raise
             async with app.lock:
                 from .canvas_library import fork_artifacts, remember
-                from .workspace_canvas import select_session_workspace
+                from .workspace_selection import select_session_workspace
                 from .naming import persist
                 remember(app.state, app.db)
                 app.clients.remember_canvas()

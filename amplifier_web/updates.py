@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import time
 import tomllib
@@ -251,8 +252,12 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False):
         from .reset import git_filesystem_environment
         env = git_filesystem_environment(env)
     started=time.monotonic()
+    # All commands here use captured pipes, never an interactive console. A
+    # pythonw consumer entry must not create a console for its CLI children.
+    native = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
     proc = await asyncio.create_subprocess_exec(*map(str,args), cwd=cwd, env=env,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=os.name != 'nt')
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        start_new_session=os.name != 'nt', **native)
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
     except BaseException as error:
@@ -1052,6 +1057,9 @@ class UpdateManager:
         if getattr(self, '_manual_handoff_commit_unknown', False):return
         if self.awaiting_restart() or self.lock.locked():return
         state = self.service.state['updates']
+        from .windows_app_recovery import automatic_retry_held
+        if automatic and automatic_retry_held(state):
+            return  # Do not loop on an exactly failed Windows app revision.
         from .manual_app_handoff import verify_continuation
         manual = await verify_continuation(self)
         if manual and automatic and state.get('sequence', {}).get('install') is not True:
@@ -1210,7 +1218,9 @@ class UpdateManager:
                     await self.validate(stage,release)
                 await partial_plan.recheck()
                 await asyncio.to_thread(verify_app_selection, self, self.inventory, stage=stage)
-                write_private(stage/'validated.json',json.dumps({'generationSchema': 1, 'workerProtocol': 1, 'createdAt':time.time(),'sources':len(candidates),'hostVersion':__import__('amplifier_web').__version__, 'updateTier': self.service.state['updates'].get('sequence', {}).get('stage')}))
+                write_private(stage/'validated.json',json.dumps({'generationSchema': 1, 'workerProtocol': 1, 'createdAt':time.time(),'sources':len(candidates),'hostVersion':__import__('amplifier_web').__version__, 'updateTier': self.service.state['updates'].get('sequence', {}).get('stage'),
+                    'appSelection': next(row.get('appSelection') for row in self.inventory
+                                         if row.get('kind') != 'smart tool')}))
                 self.diagnostics.clear_failure()
                 self.diagnostics.record('ecosystem-stage','succeeded',commandId=stage_id)
                 await self.publish(phase='staged',pendingRelease=release,
@@ -1500,6 +1510,28 @@ class UpdateManager:
                 # retains the rollback identity, so finish it without
                 # rewriting previous to the target itself.
                 if pointer.get('current') != target:
+                    if not rollback and 'appSelection' in marker:
+                        # Settings can change while a qualified candidate waits
+                        # for activation. Bind new promotions to the selection
+                        # actually checked; never reinterpret rollback or an
+                        # already committed uncertain promotion as fresh intent.
+                        from .update_sequence import verify_app_selection, StaleAppSelection
+                        try:
+                            verify_app_selection(self, [{'appSelection': marker['appSelection']}],
+                                                 stage=self.directory / 'releases' / target)
+                        except StaleAppSelection:
+                            if active_release(self.home) != pointer:
+                                raise  # A raced/uncertain pointer is not safe retirement.
+                            await self.service.discard_runtime(candidate)
+                            candidate = None
+                            self.inventory = []
+                            write_private(self.directory / 'inventory.json', '[]')
+                            self.diagnostics.record('ecosystem-selection-retired', 'succeeded')
+                            await self.publish(pendingRelease=None, available=0, includedCanProceed=False,
+                                phase='checked', error=None, sequence={'stage': 'application', 'install': False},
+                                items=[row for row in state.get('items', []) if row.get('id') == 'application'],
+                                detail='Component choices changed while this candidate waited. Check for updates to qualify the current configuration; the unused candidate and its receipts are preserved.')
+                            return
                     write_private(self.directory/'active.json',json.dumps({'current':target,'previous':pointer.get('current'),'at':time.time()}))
                     if not rollback and 'pendingRollback' in self.service.state['updates']:
                         # The pointer is now the durable rollback authority for
@@ -1703,7 +1735,8 @@ class UpdateManager:
             # paths above still run. No component availability/install is replayed.
             if settings.get('autoCheck', True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
                 await self.check(tier='application', fresh=False, automatic=True)
-            if state.get('appAvailable') and settings.get('autoInstall', True):
+            from .windows_app_recovery import automatic_retry_held
+            if state.get('appAvailable') and settings.get('autoInstall', True) and not automatic_retry_held(state):
                 await self.app()
             return
         if sequence.get('nextStage') and state.get('phase') not in {'error','interrupted'}:

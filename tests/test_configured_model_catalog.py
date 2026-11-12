@@ -280,3 +280,365 @@ async def test_hidden_exact_pending_selection_survives_display_and_input_prepara
     assert chat['nextMessageRevision']==revision
     assert all(chosen['model'] not in [row['id'] for row in entry['models']]
                for entry in service.state['modelCatalogs'].values())
+
+
+@pytest.mark.parametrize('flag', ['hide_dated_models', 'filtered'])
+async def test_legacy_visibility_edit_preserves_saved_exact_choice_and_only_refetches_changed_catalog(
+        catalog_app, flag):
+    import json
+    from types import SimpleNamespace
+    from amplifier_web.conversation_models import select
+    from amplifier_web.next_message_configuration import prepare
+    from amplifier_web.provider_catalog import mounted_catalog_keys, require_mounted_binding
+
+    service, calls, _, rows = catalog_app
+    chat = service._session()
+    rows[0].update(module='provider-openai', source='fixture-source')
+    rows[0]['config'][flag] = False
+    path = amplifier_home() / 'settings.yaml'
+    write_private(path, yaml.safe_dump({'config': {'providers': rows}}))
+    chosen = {'instance': 'one', 'model': 'hidden-exact-2026-01-01'}
+    await select(service.management, chat, chosen)
+    binding, revision = chat['modelConnectionKey'], chat['nextMessageRevision']
+    saved = service.data_dir / 'sessions' / chat['id'] / 'configuration.json'
+    original_plan = {'providers': deepcopy(rows)}
+    write_private(saved, json.dumps(original_plan))
+    # Capture a real mounted identity before the settings-only edit.
+    sources = {'one': 'fixture-source'}
+    mounted = deepcopy(rows[:1])
+    coordinator = SimpleNamespace(config={'providers': mounted}, get_capability=lambda _: {
+        'home': service.data_dir, 'workspace': chat['workspace'], 'sources': sources,
+        'connectionKeys': mounted_catalog_keys(service.data_dir, chat['workspace'], mounted, sources, binding=True)})
+    await browse(service.management, chat)
+    before = service.state['runtimeControl'][chat['id']]['configuration.catalog']
+    old_key = before['providers'][0]['sharedCatalogKey']
+    assert calls == {'one': 1, 'two': 1, 'broken': 1}
+
+    rows[0]['config'][flag] = True
+    write_private(path, yaml.safe_dump({'config': {'providers': rows}}))
+    await browse(service.management, chat)  # No forced refresh; identity must invalidate.
+    after = service.state['runtimeControl'][chat['id']]['configuration.catalog']
+    assert after['providers'][0]['sharedCatalogKey'] != old_key
+    assert after['providers'][0]['connectionKey'] == binding
+    assert after['connectionBindings'] == {}
+    assert calls == {'one': 2, 'two': 1, 'broken': 1}
+    for _ in range(3):
+        await browse(service.management, chat)
+    assert calls == {'one': 2, 'two': 1, 'broken': 1}, 'Warm reads must not repeat discovery'
+    prepared, guard = await prepare(service, chat)
+    guard()
+    require_mounted_binding(coordinator, 'one', prepared['modelConnectionKey'])
+    assert chat['selection'] == chat['pendingModelSelection'] == prepared['selection'] == chosen
+    assert chat['modelConnectionKey'] == prepared['modelConnectionKey'] == binding
+    assert chat['nextMessageRevision'] == revision
+    assert json.loads(saved.read_text()) == original_plan
+    assert all(chosen['model'] not in [row['id'] for row in entry['models']]
+               for entry in service.state['modelCatalogs'].values())
+
+
+@pytest.mark.parametrize('filters', [None, {}])
+@pytest.mark.parametrize('field', ['hide_dated_models', 'filtered'])
+async def test_unresolved_legacy_visibility_cache_error_and_fixed_inputs_stay_separate(
+        catalog_app, monkeypatch, filters, field):
+    from amplifier_web.provider_environment import materialize_provider_config
+    service, _, _, rows = catalog_app
+    rows[0].update(module='provider-openai', source='fixture-source')
+    rows[0]['config'].update(hide_dated_models=True, model_filters=filters)
+    rows[0]['config'][field] = '${UNSET_LEGACY_VISIBILITY}'
+    write_private(amplifier_home() / 'settings.yaml', yaml.safe_dump({'config': {'providers': rows}}))
+    monkeypatch.delenv('UNSET_LEGACY_VISIBILITY', raising=False)
+    calls = []
+    async def probe(self, action, args, workspace):
+        calls.append(1)
+        # Real pre-construction materialization, even for a shadowed alias.
+        materialize_provider_config(self.probe_snapshot(action, args, workspace)['config'], {'fields': []})
+        return {'models': [{'id': 'real'}], 'modelsSupported': True}
+    monkeypatch.setattr(SetupManager, 'probe', probe)
+    manager = SetupManager(service.data_dir, catalog=service.management.provider_catalog)
+    failed = await manager.discover_catalog(service.default_workspace, instance='one', selected_only=True)
+    failed_key = failed['providers'][0]['sharedCatalogKey']
+    assert failed['catalogs'][failed_key]['phase'] == 'error'
+    monkeypatch.setenv('UNSET_LEGACY_VISIBILITY', 'true')
+    fixed = await manager.discover_catalog(service.default_workspace, instance='one', selected_only=True)
+    fixed_key = fixed['providers'][0]['sharedCatalogKey']
+    assert fixed_key != failed_key
+    assert fixed['catalogs'][fixed_key]['phase'] == 'ready'
+    monkeypatch.delenv('UNSET_LEGACY_VISIBILITY')
+    again = await manager.discover_catalog(service.default_workspace, instance='one', selected_only=True)
+    assert again['providers'][0]['sharedCatalogKey'] == failed_key
+    assert again['catalogs'][failed_key]['phase'] == 'error'
+    assert calls == [1, 1], 'Reuse only the matching error/success, never the other construction state'
+
+
+@pytest.mark.parametrize('flag', ['hide_dated_models', 'filtered'])
+@pytest.mark.parametrize('intent', ['pending', 'applied', 'initial'])
+async def test_pre_fix_persisted_choice_adopts_only_proven_current_connection(catalog_app, monkeypatch, flag, intent):
+    import json
+    from types import SimpleNamespace
+    from amplifier_web.next_message_configuration import bind, applied
+    from amplifier_web.provider_catalog import fingerprint, mounted_catalog_keys, require_mounted_binding
+    from amplifier_web.runtime import RuntimeManager, RuntimeStartupError
+    from amplifier_web.setup import PROVIDER_ENV
+
+    service, _, _, rows = catalog_app
+    chat = service._session()
+    for name in PROVIDER_ENV['provider-openai']:
+        monkeypatch.delenv(name, raising=False)
+    source = 'git+https://fixture.invalid/openai@' + 'a' * 40
+    row = {'id': 'one', 'module': 'provider-openai', 'source': source,
+           'config': {'api_key': 'synthetic-account', 'base_url': 'https://fixture.invalid', flag: False}}
+    write_private(amplifier_home() / 'settings.yaml', yaml.safe_dump({'config': {'providers': [row]}}))
+    # Persist an independently calculated PRE-FIX binding and exact choice, then
+    # read those bytes back as the startup snapshot under the candidate source.
+    previous = fingerprint(['provider-connection-v1', None, row['module'], source, row['config'],
+                            {name: None for name in PROVIDER_ENV['provider-openai']}, {}])
+    chosen = {'instance': 'one', 'model': 'hidden-exact-2026-01-01'}
+    chat.update(selection=chosen, modelConnectionKey=previous)
+    chat.pop('pendingModelSelection', None)
+    chat.pop('nextMessageRevision', None)
+    if intent != 'initial':
+        chat['nextMessageRevision'] = 1
+    if intent == 'pending':
+        chat['pendingModelSelection'] = chosen
+    if intent == 'applied':
+        chat['appliedConfigurationRevision'] = 1
+    saved = service.data_dir / 'sessions' / chat['id'] / 'configuration.json'
+    write_private(saved, json.dumps({'providers': [row]}))
+    saved_bytes = saved.read_bytes()
+    startup_path = service.data_dir / 'pre-fix-choice.json'
+    startup = {key: deepcopy(chat[key]) for key in (
+        'id', 'workspace', 'selection', 'modelConnectionKey', 'nextMessageRevision', 'pendingModelSelection') if key in chat}
+    write_private(startup_path, json.dumps(startup))
+    runtime = RuntimeManager()
+    service.runtime = runtime
+    bind(service, runtime)
+    starts, controls, events = [], [], []
+    sources = {'one': source}
+    mounted = {'providers': [deepcopy(row)]}
+    captured = {'home': service.data_dir, 'workspace': chat['workspace'], 'sources': sources,
+                'connectionKeys': mounted_catalog_keys(service.data_dir, chat['workspace'], mounted['providers'], sources, binding=True)}
+    coordinator = SimpleNamespace(config=mounted, get_capability=lambda _: captured)
+    async def start(snapshot, emit, **kwargs):
+        kwargs['guard']()
+        starts.append(deepcopy(snapshot))
+    async def control(sid, operation, args, **kwargs):
+        kwargs['guard']()
+        require_mounted_binding(coordinator, args['instance'], args['expectedConnectionKey'])
+        controls.append(operation)
+    async def emit(kind, payload):
+        events.append(kind)
+        if kind == 'runtime.nextMessageApplied':
+            if 'bindingTransition' in payload:
+                assert chat['modelConnectionKey'] == previous
+            applied(chat, payload)
+    monkeypatch.setattr(runtime, 'start', start)
+    monkeypatch.setattr(runtime, 'control', control)
+    await runtime._start_for_input(json.loads(startup_path.read_text()), emit)
+    current = captured['connectionKeys']['one']
+    assert current != previous and starts[0]['modelConnectionKey'] == current
+    assert starts[0]['selection'] == chosen
+    assert controls == ['provider.verifyConnection'] + (['provider.select'] if intent == 'pending' else [])
+    assert 'runtime.nextMessageApplied' in events
+    assert chat['modelConnectionKey'] == current and saved.read_bytes() == saved_bytes
+    assert startup_path.read_text() == json.dumps(startup)
+    assert chat.get('nextMessageRevision', 0) == (0 if intent == 'initial' else 1)
+    # A live old-format capture is not relabelled by the host. It must retire
+    # normally before fresh mounting; the attempted input remains unsent.
+    captured['connectionKeys']['one'] = previous
+    with pytest.raises(RuntimeStartupError, match='No input was sent'):
+        await runtime._start_for_input(json.loads(startup_path.read_text()), emit)
+    assert captured['connectionKeys']['one'] == previous
+    assert saved.read_bytes() == saved_bytes
+    # Once the verified receipt promotes the digest, a later visibility edit
+    # works without reselecting the model or inventing historical configuration.
+    captured['connectionKeys']['one'] = current
+    row['config'][flag] = True
+    write_private(amplifier_home() / 'settings.yaml', yaml.safe_dump({'config': {'providers': [row]}}))
+    events.clear()
+    await runtime._start_for_input(deepcopy(chat), emit)
+    assert chat['modelConnectionKey'] == current and saved.read_bytes() == saved_bytes
+    assert not events or events == ['runtime.nextMessageApplied']
+
+
+@pytest.mark.parametrize('change', [
+    {'config': {'api_key': 'different-account'}},
+    {'config': {'base_url': 'https://different.invalid'}},
+    {'config': {'organization': 'different-organization'}},
+    {'source': 'git+https://fixture.invalid/openai@' + 'b' * 40},
+    {'config': {'filtered': True}},  # No proof of prior scope: do not guess it.
+    {'enabled': False},
+])
+async def test_pre_fix_binding_cannot_adopt_changed_account_or_unproven_scope(catalog_app, monkeypatch, change):
+    from amplifier_web.next_message_configuration import prepare
+    from amplifier_web.provider_catalog import fingerprint
+    from amplifier_web.runtime import RuntimeStartupError
+    from amplifier_web.setup import PROVIDER_ENV
+    service, _, _, _ = catalog_app
+    chat = service._session()
+    for name in PROVIDER_ENV['provider-openai']:
+        monkeypatch.delenv(name, raising=False)
+    source = 'git+https://fixture.invalid/openai@' + 'a' * 40
+    row = {'id': 'one', 'module': 'provider-openai', 'source': source,
+           'config': {'api_key': 'synthetic-account', 'filtered': False}}
+    previous = fingerprint(['provider-connection-v1', None, row['module'], source, row['config'],
+                            {name: None for name in PROVIDER_ENV['provider-openai']}, {}])
+    chosen = {'instance': 'one', 'model': 'hidden-exact'}
+    chat.update(selection=chosen, pendingModelSelection=chosen, modelConnectionKey=previous, nextMessageRevision=1)
+    changed = {**deepcopy(row), **{key: value for key, value in change.items() if key != 'config'}}
+    changed['config'].update(change.get('config', {}))
+    write_private(amplifier_home() / 'settings.yaml', yaml.safe_dump({'config': {'providers': [changed]}}))
+    with pytest.raises(RuntimeStartupError, match='No input was sent'):
+        await prepare(service, deepcopy(chat))
+    assert chat['modelConnectionKey'] == previous
+    assert chat['selection'] == chat['pendingModelSelection'] == chosen
+
+
+@pytest.mark.parametrize('change', ['new-choice', 'new-revision'])
+def test_verified_binding_transition_never_overwrites_newer_choice(change):
+    from amplifier_web.next_message_configuration import applied
+    session = {'nextMessageRevision': 2, 'modelConnectionKey': 'previous',
+               'bundle': 'newer-bundle',
+               'selection': {'instance': 'one', 'model': 'exact'}}
+    payload = {'revision': 2, 'bindingOnly': True, 'bundle': 'older-bundle',
+               'bindingTransition': {'previous': 'previous', 'current': 'current', 'instance': 'one'}}
+    if change == 'new-choice':session['modelConnectionKey'] = 'newer-owner-key'
+    else:session['nextMessageRevision'] = 3
+    before = deepcopy(session)
+    applied(session, payload)
+    assert session == before
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+@pytest.mark.parametrize('module', ['provider-openai', 'provider-fixture'])
+async def test_established_conversation_override_keeps_actual_binding_not_shared_roster(
+        catalog_app, monkeypatch, legacy, module):
+    import json
+    from types import SimpleNamespace
+    from amplifier_web.next_message_configuration import bind, applied
+    from amplifier_web.provider_catalog import connection_key, mounted_catalog_keys, require_mounted_binding
+    from amplifier_web.runtime import RuntimeManager, RuntimeStartupError
+    service, _, _, _ = catalog_app
+    chat = service._session()
+    source = 'git+https://fixture.invalid/provider@' + 'a' * 40
+    shared = {'id': 'one', 'module': module, 'source': source,
+              'config': {'api_key': 'shared-account-a', 'base_url': 'https://shared.invalid', 'filtered': False}}
+    override = deepcopy(shared)
+    override['config'].update(api_key='saved-account-b', base_url='https://saved.invalid')
+    write_private(amplifier_home() / 'settings.yaml', yaml.safe_dump({'config': {'providers': [shared]}}))
+    saved = service.data_dir / 'sessions' / chat['id'] / 'configuration.json'
+    write_private(saved, json.dumps({'providers': [override]}))
+    saved_bytes = saved.read_bytes()
+    chosen = {'instance': 'one', 'model': 'hidden-exact'}
+    expected = connection_key(chat['workspace'], module, override['config'], source, home=service.data_dir,
+                              _legacy_visibility=legacy)
+    chat.update(selection=chosen, modelConnectionKey=expected, nextMessageRevision=1, appliedConfigurationRevision=1)
+    chat.pop('pendingModelSelection', None)
+    runtime = RuntimeManager()
+    service.runtime = runtime
+    bind(service, runtime)
+    sources = {'one': source}
+    plan = {'providers': [deepcopy(override)]}
+    captured = {'home': service.data_dir, 'workspace': chat['workspace'], 'sources': sources,
+                'connectionKeys': mounted_catalog_keys(service.data_dir, chat['workspace'], plan['providers'], sources, binding=True)}
+    coordinator = SimpleNamespace(config=plan, get_capability=lambda _: captured)
+    operations = []
+    async def start(snapshot, emit, **kwargs):
+        kwargs['guard']()
+    async def control(sid, operation, args, **kwargs):
+        kwargs['guard']()
+        require_mounted_binding(coordinator, 'one', args['expectedConnectionKey'])
+        operations.append(operation)
+    async def emit(kind, payload):
+        if kind == 'runtime.nextMessageApplied':applied(chat, payload)
+    async def no_discovery(*args, **kwargs):
+        pytest.fail('An established override must not query the shared catalog')
+    from amplifier_web import draft_defaults
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', no_discovery)
+    monkeypatch.setattr(runtime, 'start', start)
+    monkeypatch.setattr(runtime, 'control', control)
+    await runtime._start_for_input(deepcopy(chat), emit)
+    assert operations == ['provider.verifyConnection']
+    assert chat['modelConnectionKey'] == captured['connectionKeys']['one']
+    assert chat['selection'] == chosen and saved.read_bytes() == saved_bytes
+    # Real mounted credential/source drift is still refused, including when
+    # shared settings have never matched this deliberate conversation override.
+    for field, value in [('api_key', 'changed-account'), ('base_url', 'https://changed.invalid')]:
+        plan['providers'][0]['config'][field] = value
+        with pytest.raises(RuntimeStartupError, match='No input was sent'):
+            await runtime._start_for_input(deepcopy(chat), emit)
+        plan['providers'][0]['config'] = deepcopy(override['config'])
+    sources['one'] = 'git+https://fixture.invalid/changed@' + 'b' * 40
+    with pytest.raises(RuntimeStartupError, match='No input was sent'):
+        await runtime._start_for_input(deepcopy(chat), emit)
+    assert saved.read_bytes() == saved_bytes
+
+
+@pytest.mark.parametrize('intent', ['pending', 'established'])
+@pytest.mark.parametrize('mutation', ['file', 'environment'])
+async def test_legacy_adoption_never_joins_old_account_proof_to_new_credential_capture(
+        catalog_app, monkeypatch, intent, mutation):
+    import json
+    from types import SimpleNamespace
+    from amplifier_web import provider_catalog
+    from amplifier_web.next_message_configuration import bind, applied
+    from amplifier_web.runtime import RuntimeManager, RuntimeStartupError
+    service, _, _, _ = catalog_app
+    chat = service._session()
+    credential = service.data_dir / 'synthetic-credential.json'
+    credential.write_text('account-a')
+    monkeypatch.setenv('SYNTHETIC_ADOPTION_KEY', 'account-a')
+    source = 'git+https://fixture.invalid/openai@' + 'a' * 40
+    row = {'id': 'one', 'module': 'provider-openai', 'source': source,
+           'config': {'api_key': '${SYNTHETIC_ADOPTION_KEY}', 'credential_file': str(credential), 'filtered': False}}
+    write_private(amplifier_home() / 'settings.yaml', yaml.safe_dump({'config': {'providers': [row]}}))
+    saved = service.data_dir / 'sessions' / chat['id'] / 'configuration.json'
+    write_private(saved, json.dumps({'providers': [row]}))
+    previous = provider_catalog.connection_key(chat['workspace'], row['module'], row['config'], source,
+                                               home=service.data_dir, _legacy_visibility=True)
+    current_a = provider_catalog.connection_key(chat['workspace'], row['module'], row['config'], source, home=service.data_dir)
+    chosen = {'instance': 'one', 'model': 'hidden-exact'}
+    chat.update(selection=chosen, modelConnectionKey=previous, nextMessageRevision=1)
+    chat.pop('pendingModelSelection', None)
+    if intent == 'pending':chat['pendingModelSelection'] = chosen
+    else:chat['appliedConfigurationRevision'] = 1
+    original_fingerprint = provider_catalog.fingerprint
+    changed = []
+    def replace_after_proof(value):
+        result = original_fingerprint(value)
+        if (not changed and isinstance(value, list) and value[0] == 'provider-connection-v1'
+                and value[4].get('filtered') is False):
+            assert result == previous  # Exact account-A proof just captured.
+            changed.append(True)
+            if mutation == 'file':credential.write_text('account-b')
+            else:monkeypatch.setenv('SYNTHETIC_ADOPTION_KEY', 'account-b')
+        return result
+    monkeypatch.setattr(provider_catalog, 'fingerprint', replace_after_proof)
+    runtime = RuntimeManager()
+    service.runtime = runtime
+    bind(service, runtime)
+    starts, verified, events = [], [], []
+    async def start(snapshot, emit, **kwargs):
+        kwargs['guard']()
+        starts.append(deepcopy(snapshot))
+    async def control(sid, operation, args, **kwargs):
+        kwargs['guard']()
+        mounted_b = provider_catalog.connection_key(chat['workspace'], row['module'], row['config'], source, home=service.data_dir)
+        coordinator = SimpleNamespace(config={'providers': [row]}, get_capability=lambda _: {
+            'home': service.data_dir, 'workspace': chat['workspace'], 'sources': {'one': source},
+            'connectionKeys': {'one': mounted_b}})
+        provider_catalog.require_mounted_binding(coordinator, 'one', args['expectedConnectionKey'])
+        verified.append(operation)
+    async def emit(kind, payload):
+        events.append(kind)
+        if kind == 'runtime.nextMessageApplied':applied(chat, payload)
+    monkeypatch.setattr(runtime, 'start', start)
+    monkeypatch.setattr(runtime, 'control', control)
+    with pytest.raises(RuntimeStartupError, match='No input was sent'):
+        await runtime._start_for_input(deepcopy(chat), emit)
+    assert changed == [True]
+    if intent == 'established':
+        assert starts[0]['modelConnectionKey'] == current_a, 'Projection must use account A from the proof capture'
+    else:
+        assert not starts, 'Pending selection must fail its catalog binding recheck before mounting'
+    assert not verified and not events
+    assert chat['modelConnectionKey'] == previous and chat['selection'] == chosen

@@ -1,5 +1,32 @@
 # Component projects
 
+[`amplifier_kernels/`](../amplifier_kernels/README.md) prepares the independently
+buildable computation mechanism in its existing source location, preserving
+runtime bootstrap origin checks. Its real Python/Node tests use selected process
+and operation-journal peers without starting Unified. The host retains authority,
+question and recovery tests. Unified bundles this source; the ACP adapter's
+temporary delivery copy requires a separate qualified update when it changes.
+
+[`outputs/`](outputs/README.md) prepares the independently buildable output
+relationship, saved-body decoder and read-only Git evidence package. Its existing
+Git/SQLite mechanism tests run without Unified or Core; host authorization,
+transactions, resource storage and retention stay in Unified. Normal Unified
+builds the same source directly, without a separately installed outputs dependency.
+
+[`portability/`](portability/README.md) is the temporary authoring home for the
+independently buildable signed transfer journal and Git capsule package. Its
+standalone development uses the prepared worktrees artifact; the local dependency
+and installed-test instructions are in its README. Unified builds both source
+owners directly, without a separately installed portability/worktrees dependency.
+
+[`worktrees/`](worktrees/README.md) is the temporary authoring home for the
+independently buildable managed Git worktree package and its real-Git tests.
+Unified consumes the same sources directly. From that directory, `uv build` builds
+the standalone wheel/source distribution and `uv run --extra test pytest` runs its
+mechanism tests; no Unified or Core installation is needed. Normal Unified builds
+already include the package: do not coinstall its standalone distribution there.
+The future repository and delivery transition remain separate decisions.
+
 [`publishing/`](publishing/README.md) is the temporary authoring home for the
 independently buildable static publishing package and its portable tests. Unified
 consumes its nested runtime sources directly; its host publishing adapters and

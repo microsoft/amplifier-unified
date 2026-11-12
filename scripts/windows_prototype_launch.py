@@ -1,11 +1,13 @@
-"""Foreground prototype launcher; copied into a verified bootstrap capsule.
+"""Prototype launcher; copied into a verified bootstrap capsule.
 
-No service, scheduled task, credential copying or automatic trust-store edits.
+Foreground by default; --background selects the owner-logon Task Scheduler host.
+No credential copying or automatic trust-store edits.
 The normal installed CLI owns migration, TLS initialization, serving and entry.
 """
 from __future__ import annotations
 
 import argparse
+import asyncio
 import importlib.metadata
 import json
 import os
@@ -38,6 +40,16 @@ def child_environment(root: Path, receipt: dict) -> dict[str, str]:
             }:
                 del result[name]
         result["UV_NO_CONFIG"] = "1"
+        # Keep caller-owned Git/credential settings, then append only the
+        # Git-for-Windows path support needed by this root's longer cache paths.
+        # No user/machine gitconfig or Windows registry policy is changed.
+        count = result.get("GIT_CONFIG_COUNT", "0")
+        if not count.isascii() or not count.isdecimal() or not 0 <= int(count) <= 64:
+            raise RuntimeError("Inherited Git configuration count is invalid; no launch requested.")
+        index = int(count)
+        result["GIT_CONFIG_COUNT"] = str(index + 1)
+        result[f"GIT_CONFIG_KEY_{index}"] = "core.longpaths"
+        result[f"GIT_CONFIG_VALUE_{index}"] = "true"
     result.update({
         "AMPLIFIER_WEB_HOME": str(root / "app"),
         "AMPLIFIER_HOME": str(root / "shared"),
@@ -228,9 +240,61 @@ def launch(root: Path, receipt: dict) -> None:
     keep_foreground(server, interrupted=interrupted)
 
 
+def launch_background(root: Path, receipt: dict) -> None:
+    from amplifier_web.windows_installation import prepare_background
+    from amplifier_web.windows_files import directory
+    launcher = check_installation(root, receipt)
+    env = child_environment(root, receipt)
+    result = asyncio.run(prepare_background(root, launcher, env))
+    print("Owner-logon background host is ready. You may close this window.", flush=True)
+    print("It starts at sign-in and stops at sign-out; it is not a Windows SCM service.", flush=True)
+    if (result.get("runtime") or {}).get("connectionRequired"):
+        print("Dependencies are prepared. Connect an AI account in the app; no model request was sent.", flush=True)
+    scope = ["--data-dir", str(root / "app")]
+    public_ca = run_cli(launcher, [*scope, "setup-tls", "export"], env)
+    with directory(root / "export", owned_root=root) as pinned:
+        pinned.publish_private("trial-ca.cer", public_ca, replace=True)
+    ca = root / "export/trial-ca.cer"
+    if not browser_trust_ready():
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes
+        fingerprint = x509.load_pem_x509_certificate(public_ca).fingerprint(hashes.SHA256())
+        print("Local CA SHA-256: " + ":".join(f"{byte:02X}" for byte in fingerprint), flush=True)
+        print(f"Public CA for review: {ca}", flush=True)
+        print("Browser entry is pending trusted HTTPS. Setup never imports a certificate or bypasses a warning.", flush=True)
+        if sys.stdin is None:
+            from amplifier_web.windows_installation import owner_notice
+            approved = owner_notice(
+                "Amplifier uses HTTPS for its private local connection. Windows does not yet trust "
+                "this installation's local certificate.\n\n"
+                "Open the Windows certificate viewer to review it? Certificate trust is your choice. "
+                "Amplifier will not import it or bypass a browser warning.\n\n"
+                "SHA-256: " + ":".join(f"{byte:02X}" for byte in fingerprint),
+                confirm=True)
+            if approved:
+                os.startfile(str(ca))
+                owner_notice("After finishing your certificate review, select OK to check the local connection again.")
+        elif sys.stdin.isatty():
+            answer = input("Type REVIEW to open the public certificate for your own trust decision, or Enter to leave the host running: ")
+            if answer == "REVIEW":
+                os.startfile(str(ca))
+                input("After your own certificate decision, press Enter to recheck trust: ")
+    if browser_trust_ready():
+        open_owned_browser(launcher, root, env)
+    else:
+        print("Host left running; browser entry remains pending your certificate decision.", flush=True)
+        if sys.stdin is None:
+            from amplifier_web.windows_installation import owner_notice
+            owner_notice("Amplifier is running in the background, but browser entry still needs trusted local HTTPS. "
+                         "Your work and settings are kept. Open Amplifier again after your certificate decision.")
+    print(f'Normal stop: "{launcher}" --data-dir "{root / "app"}" service stop', flush=True)
+    print("Removal: service uninstall stops/removes only the owned task; app data and trust are preserved.", flush=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="Validate only; no listener, TLS or browser changes")
+    parser.add_argument("--background", action="store_true", help="Use the owner-logon Task Scheduler host")
     args = parser.parse_args()
     root = Path(__file__).absolute().parent.parent
     try:
@@ -240,6 +304,8 @@ def main() -> int:
         if args.check:
             check_installation(root, receipt)
             print("Prototype installed identity checked; not runtime or browser qualification.")
+        elif args.background:
+            launch_background(root, receipt)
         else:
             launch(root, receipt)
         return 0
@@ -249,7 +315,11 @@ def main() -> int:
             "your previous install was not replaced. Do not bypass TLS/ownership or retry unknown effects.",
             file=sys.stderr, flush=True,
         )
-        if not args.check and sys.stdin.isatty():
+        if not args.check and sys.stdin is None:
+            from amplifier_web.windows_installation import owner_notice
+            owner_notice("Amplifier could not finish opening. Your previous installation and data were not replaced. "
+                         "Keep the installation for support; do not repeat an uncertain installation or bypass a browser warning.")
+        elif not args.check and sys.stdin.isatty():
             try:
                 input("Press Enter to close this failed prototype launcher: ")
             except (EOFError, KeyboardInterrupt):

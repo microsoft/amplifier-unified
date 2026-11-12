@@ -684,7 +684,7 @@ class AppService:
         update_options.setdefault("autoInstall", update_options["autoCheck"])
         update_options.setdefault("intervalHours", DEFAULT_CHECK_INTERVAL_HOURS)
         self.state["devices"] = {}
-        from .workspace_canvas import initialize
+        from .workspace_selection import initialize
         initialize(self.state)
         from .workspace_provisioning import recover as recover_setup
         for workspace_row in self.state['workspaces']:
@@ -2440,7 +2440,7 @@ class AppService:
         if action == 'session.create' and (managed_creation or args.get('workspace', '').strip()):
             from .new_chat import selection
             from .session_creation import prepare
-            from .workspace_canvas import _create_workspace_folder
+            from .workspace_selection import _create_workspace_folder
             async with self.lock:
                 if expected_revision is not None and getattr(self, '_progress_dirty', False):
                     self._commit_pending_progress()
@@ -2828,7 +2828,7 @@ class AppService:
                 except (ValueError, OSError) as exc:
                     raise AppError(str(exc), 409) from None
             elif action.startswith("workspace."):
-                from .workspace_canvas import workspace_command
+                from .workspace_selection import workspace_command
                 if action == 'workspace.remove':
                     removed = next((w for w in self.state['workspaces'] if w['id'] == args['id']), None)
                     if removed and len(self.state['workspaces']) > 1:
@@ -3098,7 +3098,7 @@ class AppService:
                 if args.get('select', True) and not args.get('purpose'):
                     if self.state['view'].get('setupJourney') == 'welcome':
                         self.state['view']['setupJourney'] = 'done'
-                    from .workspace_canvas import select_session_workspace
+                    from .workspace_selection import select_session_workspace
                     select_session_workspace(self.state, session)
                     self.state["selectedSessionId"] = session["id"]
                     self.state['view']['workSurface'] = 'chat'
@@ -3114,7 +3114,7 @@ class AppService:
             elif action == "session.select":
                 bundled = client_id is not None and self.clients.records.get(client_id, {}).get('kind') == 'web'
                 session = self._session(args["id"], hydrate=not bundled)
-                from .workspace_canvas import select_session_workspace
+                from .workspace_selection import select_session_workspace
                 select_session_workspace(self.state, session)
                 previous = next((row for row in self.state['sessions'] if row['id'] == self.state.get('selectedSessionId')), None)
                 if client_id is None and previous is not None and (self.state['view'].get('draft') or 'draft' in previous):
@@ -3285,7 +3285,7 @@ class AppService:
                     self.state['sessions'].insert(0,session)
                     self.state['selectedSessionId']=session['id']
                     self.state['view']['messageEdit']=None
-                    from .workspace_canvas import select_session_workspace
+                    from .workspace_selection import select_session_workspace
                     select_session_workspace(self.state,session)
                     pending.append((self._send,(copy.deepcopy(session),text,input_id)))
             elif action == 'session.inspect':
@@ -3319,7 +3319,7 @@ class AppService:
                 self.state['view']['messageEdit']=None
                 if action == 'session.recover':
                     diagnostic_result = {'sessionId': session['id'], 'sourceSessionId': source['id'], 'workReplayed': False, 'status': 'idle'}
-                from .workspace_canvas import select_session_workspace
+                from .workspace_selection import select_session_workspace
                 select_session_workspace(self.state,session)
             elif action == 'session.export' and args.get('format') == 'markdown':
                 from .resource_files import put

@@ -17,7 +17,7 @@ CRASH = r'''
 import asyncio, json, os, sys
 from pathlib import Path
 from amplifier_web.service import AppService
-from amplifier_web import workspace_canvas
+from amplifier_web import workspace_selection
 
 async def main():
     home, original, root = map(Path, sys.argv[1:])
@@ -27,7 +27,7 @@ async def main():
     def crash_before_registration(state, action, args):
         assert action == 'workspace.add' and args['path'] == plan['path']
         os._exit(86)
-    workspace_canvas.workspace_command = crash_before_registration
+    workspace_selection.workspace_command = crash_before_registration
     await app.dispatch('workspace.create', {'planId': plan['planId']}, command_id='crashed-workspace-create')
     raise AssertionError('Did not reach the crash window')
 

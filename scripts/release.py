@@ -300,6 +300,27 @@ def release_notes(root, expected):
     return module.markdown(entries, expected)
 
 
+def consumer_assets(root, dist, version, revision):
+    """Require the selected consumer producer's original Windows bytes.
+
+    Historical checkouts without this producer keep their original asset set.
+    An unsigned executable is not Authenticode/SmartScreen or browser trust.
+    """
+    producer = root / "scripts/windows_consumer_release.py"
+    if not producer.is_file():
+        return []
+    value = json.loads(run(sys.executable, str(producer), "verify",
+                           "--wheel", str(next(dist.glob("*.whl"))),
+                           "--revision", revision, "--version", version,
+                           "--output", str(dist), cwd=root))
+    expected = [f"AmplifierUnifiedSetup-{version}-windows-x64.exe",
+                "windows-consumer-plan.json", "windows-consumer-release.json", "WINDOWS_SHA256SUMS"]
+    if (not isinstance(value, list)
+            or value != [str(dist / name) for name in expected]):
+        raise ValueError("Consumer publisher received an unexpected asset set.")
+    return [dist / name for name in expected]
+
+
 def publish(root, repository, tag, revision, dist):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ValueError("Invalid release repository")
@@ -308,6 +329,7 @@ def publish(root, repository, tag, revision, dist):
     if run("git", "rev-parse", "HEAD", cwd=root) != revision:
         raise ValueError("Release commit changed after validation")
     verify_dist(root, dist, tag[1:], repository, revision)
+    windows = consumer_assets(root, dist, tag[1:], revision)
     # Recheck remote immediately before mutation. Tags are never moved or deleted.
     remote = run("git", "ls-remote", "origin", "refs/tags/" + tag, "refs/tags/" + tag + "^{}", cwd=root)
     rows = [line.split() for line in remote.splitlines()]
@@ -336,7 +358,7 @@ def publish(root, repository, tag, revision, dist):
             "Amplifier Unified " + tag[1:], *(['--notes-file', str(notes_file)] if notes else ['--generate-notes']))
     elif notes:
         run('gh', 'release', 'edit', tag, '--repo', repository, '--notes-file', str(notes_file))
-    assets = [*sorted(dist.glob("*.whl")), *sorted(dist.glob("*.tar.gz")), dist / "SHA256SUMS"]
+    assets = [*sorted(dist.glob("*.whl")), *sorted(dist.glob("*.tar.gz")), dist / "SHA256SUMS", *windows]
     run("gh", "release", "upload", tag, *map(str, assets), "--repo", repository, "--clobber")
     # Do not make an older repair release latest over an already published newer version.
     newer = any(VERSION.fullmatch(item["tagName"].removeprefix("v"))
