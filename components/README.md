@@ -1,5 +1,11 @@
 # Component projects
 
+[`portability/`](portability/README.md) is the temporary authoring home for the
+independently buildable signed transfer journal and Git capsule package. Its
+standalone development uses the prepared worktrees artifact; the local dependency
+and installed-test instructions are in its README. Unified builds both source
+owners directly, without a separately installed portability/worktrees dependency.
+
 [`worktrees/`](worktrees/README.md) is the temporary authoring home for the
 independently buildable managed Git worktree package and its real-Git tests.
 Unified consumes the same sources directly. From that directory, `uv build` builds
