@@ -294,48 +294,57 @@ async def test_old_fenced_sender_cannot_settle_a_newer_explicit_turn(app_factory
         await until(lambda: session['id'] not in app.external_conversations.turns)
 
 
-async def test_forced_cancel_keeps_admission_until_connection_retired(app_factory, tmp_path, monkeypatch):
+@pytest.mark.parametrize('failure', ['forced-cancel', 'lost-response'])
+async def test_terminal_cleanup_keeps_admission_and_stop_joins_owner(app_factory, tmp_path, monkeypatch, failure):
+    from amplifier_web.acp_participant import ACPParticipant
     app = app_factory()
     session = await create(app, tmp_path)
     sid = session['id']
-    await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'wait-for-stop'}, command_id='retiring-old-input')
-    await until(lambda: bool(session.get('streaming')))
-    remote = session['externalAgent']['sessionId']
-    turn = app.external_conversations.turns[sid]
-    participant = turn.participant
     entered, release = asyncio.Event(), asyncio.Event()
-    original_close, original_cancel = participant.close, participant.cancel
+    original_close, original_cancel = ACPParticipant.close, ACPParticipant.cancel
     closed_connections = []
 
-    async def failed_cancel():
+    async def failed_cancel(_self):
         raise TimeoutError('Synthetic unconfirmed cancellation')
 
-    async def held_close():
-        if participant.context is not None:
-            closed_connections.append(participant.session_id)
+    async def held_close(self):
+        if self.context is not None:
+            closed_connections.append(self.session_id)
             entered.set()
             await release.wait()
-        await original_close()
+        await original_close(self)
 
-    monkeypatch.setattr(participant, 'cancel', failed_cancel)
-    monkeypatch.setattr(participant, 'close', held_close)
+    monkeypatch.setattr(ACPParticipant, 'cancel', failed_cancel)
+    monkeypatch.setattr(ACPParticipant, 'close', held_close)
+    text = 'wait-for-stop' if failure == 'forced-cancel' else 'drop-after-effect'
     try:
-        await app.dispatch('conversation.stop', {'sessionId': sid})
+        await app.dispatch('conversation.send', {'sessionId': sid, 'text': text}, command_id='retiring-old-input')
+        if failure == 'forced-cancel':
+            await until(lambda: bool(session.get('streaming')))
+            await app.dispatch('conversation.stop', {'sessionId': sid})
         await asyncio.wait_for(entered.wait(), 5)
+        remote = session['externalAgent']['sessionId']
+        turn = app.external_conversations.turns[sid]
         assert session['messages'][0]['delivery']['status'] == 'unknown'
+        # Stop during an ordinary error, or a repeated Stop during forced
+        # cancellation, must join retirement rather than interrupting close.
+        await app.dispatch('conversation.stop', {'sessionId': sid})
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert app.external_conversations.turns[sid] is turn
+        assert session['status'] == 'error'
         with pytest.raises(AppError, match='still working'):
             await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'too early'}, command_id='retirement-refused')
-        assert app.external_conversations.turns[sid] is turn
-        assert [row['text'] for row in operations(tmp_path) if row['kind'] == 'prompt'] == ['wait-for-stop']
+        assert [row['text'] for row in operations(tmp_path) if row['kind'] == 'prompt'] == [text]
         release.set()
         await until(lambda: sid not in app.external_conversations.turns)
         assert closed_connections == [remote]
-        monkeypatch.setattr(participant, 'cancel', original_cancel)
+        monkeypatch.setattr(ACPParticipant, 'cancel', original_cancel)
         await send(app, session, 'explicit continuation', 'after-retirement')
         assert session['externalAgent']['sessionId'] == remote
         assert session['messages'][0]['delivery']['status'] == 'unknown'
         assert [row['kind'] for row in operations(tmp_path)] == ['new', 'prompt', 'resume', 'prompt']
-        assert [row['text'] for row in operations(tmp_path) if row['kind'] == 'prompt'] == ['wait-for-stop', 'explicit continuation']
+        assert [row['text'] for row in operations(tmp_path) if row['kind'] == 'prompt'] == [text, 'explicit continuation']
     finally:
         release.set()
         await until(lambda: sid not in app.external_conversations.turns)

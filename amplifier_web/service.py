@@ -3528,7 +3528,8 @@ class AppService:
                 session = self._session(args.get("sessionId"))
                 session["interruptionRevision"] = session.get("interruptionRevision", 0) + 1
                 session["lastInterruption"] = {"commandId": command_id, "at": time.time(), "origin": origin}
-                session["status"] = "stopping"
+                if session.get('externalAgent', {}).get('status') not in {'unknown', 'error'}:
+                    session["status"] = "stopping"
                 from .input_status import interrupt as interrupt_input_status
                 interrupt_input_status(session)
                 pending.append((self._stop, (session["id"],)))

@@ -138,6 +138,7 @@ class ExternalConversations:
                                'stopped' if response.stop_reason == 'cancelled' else 'idle',
                                stop_reason=response.stop_reason)
         except asyncio.CancelledError:
+            turn.stop = True
             await self._settle(sid, turn, 'unknown' if turn.dispatched else 'failed',
                                'unknown' if turn.dispatched else 'stopped')
             # Keep admission owned until the SDK retires this connection. A
@@ -145,6 +146,7 @@ class ExternalConversations:
             await turn.participant.close()
             raise
         except Exception:
+            turn.stop = True
             await self._settle(sid, turn, 'unknown' if turn.dispatched else 'failed',
                                'unknown' if turn.dispatched else 'error',
                                error=('External delivery could not be confirmed. Work was not replayed.'
@@ -213,6 +215,11 @@ class ExternalConversations:
                 if session['externalAgent'].get('status') != 'unknown':
                     session['status'] = session['externalAgent']['status'] = 'stopped'
                 self.service._publish_changes(sessions={sid})
+            return
+        if turn.stop:
+            # A terminal owner is already cancelling/retiring. Join it without
+            # cancelling the SDK cleanup a second time.
+            await asyncio.shield(asyncio.gather(turn.task, return_exceptions=True))
             return
         turn.stop = True
         if not turn.dispatched:
