@@ -188,3 +188,99 @@ async def test_changed_native_task_after_capture_still_refuses_without_rebinding
         assert target['task']['revision'] == 1
     finally:
         await native.close()
+
+
+@pytest.mark.parametrize('late_old_reply', [False, True])
+async def test_different_task_revision_is_ordered_by_current_native_owner(app, monkeypatch, late_old_reply):
+    """A retained high revision is not an ordering proof for another task ID."""
+    source = app.state['sessions'][0]
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(app.data_dir))
+    native = controls(source['id'])
+    try:
+        await create(native)
+        current = native.tasks.canonical_snapshot()
+        old = copy.deepcopy(current['task'])
+        old.update(id='retained-task', revision=73, status='completed')
+        # Model the stale host view surviving native control-state relocation.
+        source['task'] = old
+        app.state.setdefault('runtimeControl', {})[source['id']] = {'task.get': {'task': old}}
+        saved = native.state_path().read_bytes()
+        publication, revision = task_continuity.publish_task_observation(app, source['id'], current)
+        assert publication == {'status': 'published'} and revision == current['task']['revision']
+        assert source['task'] == current['task']
+        assert app.coordination.task(source['id']) == current['task']
+        if late_old_reply:
+            before = copy.deepcopy((source['task'], app.state['runtimeControl'][source['id']]))
+            publication, revision = task_continuity.publish_task_observation(app, source['id'], {'task': old})
+            assert publication == {'status': 'superseded'} and revision == current['task']['revision']
+            assert (source['task'], app.state['runtimeControl'][source['id']]) == before
+        assert native.state_path().read_bytes() == saved
+    finally:
+        await native.close()
+
+
+@pytest.mark.parametrize('saved_authority', ['current', 'missing', 'corrupt'])
+async def test_unrelated_high_revision_cannot_replace_current_task(app, monkeypatch, saved_authority):
+    source = app.state['sessions'][0]
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(app.data_dir))
+    native = controls(source['id'])
+    try:
+        await create(native)
+        current = native.tasks.canonical_snapshot()
+        task_continuity.publish_task_observation(app, source['id'], current)
+        before = copy.deepcopy((source['task'], app.state['runtimeControl'][source['id']]))
+        if saved_authority == 'missing':
+            native.state_path().unlink()
+        elif saved_authority == 'corrupt':
+            native.state_path().write_text('{broken')
+        old = {**current['task'], 'id': 'unrelated-old-task', 'revision': 73, 'status': 'completed'}
+        publication, revision = task_continuity.publish_task_observation(app, source['id'], {'task': old})
+        assert publication == {'status': 'superseded'} and revision == current['task']['revision']
+        assert (source['task'], app.state['runtimeControl'][source['id']]) == before
+    finally:
+        await native.close()
+
+
+def test_same_task_progress_never_reads_control_history(tmp_path, monkeypatch):
+    old = {'id': 'same-task', 'revision': 3, 'status': 'active'}
+    session = {'id': 'one', 'task': old}
+    service = SimpleNamespace(data_dir=tmp_path, state={'runtimeControl': {
+        'one': {'task.get': {'task': old}}}})
+    monkeypatch.setattr(task_continuity, '_load_control',
+                        Mock(side_effect=AssertionError('ordinary task progress must not read persisted history')))
+    assert task_continuity.observe_task(service, session, {'task': {**old, 'revision': 4}}) == (True, 4)
+    assert task_continuity.observe_task(service, session, {'task': old}) == (False, 4)
+
+
+async def test_delayed_other_task_equal_revision_reply_is_not_current(app, monkeypatch):
+    source = app.state['sessions'][0]
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(app.data_dir))
+    native = controls(source['id'])
+    try:
+        await create(native)
+        await native.perform('task.update', {'commandId': 'progress-B', 'expectedRevision': 1,
+                                            'correction': 'Current task B'})
+        current = native.tasks.canonical_snapshot()
+        task_continuity.publish_task_observation(app, source['id'], current)
+        old = {**copy.deepcopy(current['task']), 'id': 'old-task-A', 'status': 'completed'}
+        receipt = {'commandId': 'old-task-reply', 'taskId': old['id'], 'revision': old['revision'],
+                   'action': 'task.complete', 'status': 'completed'}
+        saved = native.state_path().read_bytes()
+        async def delayed(*args, **kwargs):
+            return {'task': old, 'history': [], 'goal': None, 'receipt': copy.deepcopy(receipt)}
+        monkeypatch.setattr(app.runtime, 'control', delayed, raising=False)
+        monkeypatch.setattr(app, 'management', SimpleNamespace(
+            ensure_runtime=AsyncMock(), close=AsyncMock(), setup_manager=None,
+            global_setup_manager=None, workspace_setup_managers={},
+            provider_catalog=SimpleNamespace(close=AsyncMock())))
+        result = (await task_continuity.dispatch(app, 'task.complete', {
+            'sessionId': source['id'], 'expectedRevision': 1, 'condition': old['objective'],
+            'evidence': ['Historical result']}, 'agent', 'old-task-reply', False))['result']
+        assert result['publication'] == {'status': 'superseded'}
+        assert result['currentRevision'] == old['revision'] == current['task']['revision']
+        assert result['snapshotIsCurrent'] is False
+        assert result['task']['id'] == old['id'] and result['receipt'] == receipt
+        assert source['task'] == current['task']
+        assert native.state_path().read_bytes() == saved
+    finally:
+        await native.close()

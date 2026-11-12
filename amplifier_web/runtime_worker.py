@@ -331,6 +331,9 @@ class Worker:
         assigned_execution = (assignment[4] if assignment is not None and len(assignment) > 4 else
             {key: (self.start_config or {}).get(key, 0) for key in
              ('interruptionRevision', 'executionRevision', 'configurationPendingRevision')})
+        assigned_task = copy.deepcopy(assignment[5] if assignment is not None and len(assignment) > 5
+            else {key: (self.session.coordinator.session_state.get('task') or {}).get(key)
+                  for key in ('id', 'revision', 'status')})
         assigned_runtime, assigned_gate = self.runtime, self.activation_gate
         root_policy = self.session.coordinator.get_capability('web.write_policy')
         if root_policy is not None:
@@ -352,7 +355,8 @@ class Worker:
                 return None
             return {'rootSessionId': self.session.coordinator.session_id,
                     'runtimeSessionId': coordinator.session_id, 'generationId': assigned_generation,
-                    'inputIds': list(assigned), 'runId': assigned_run, **assigned_execution}
+                    'inputIds': list(assigned), 'runId': assigned_run,
+                    'taskBinding': copy.deepcopy(assigned_task), **assigned_execution}
         coordinator.register_capability('web.child_execution', child_origin)
         def origin_scope():
             runtime = getattr(self, 'runtime', None)
@@ -542,9 +546,12 @@ class Worker:
                     context = {i: copy.deepcopy(self.context_bindings[i]) for i in inputs if i in self.context_bindings}
                     assignment = (inputs, context, generation.get('id'), self.stop_revision,
                         {key: generation.get(key, (self.start_config or {}).get(key, 0)) for key in
-                         ('interruptionRevision', 'executionRevision', 'configurationPendingRevision')})
+                         ('interruptionRevision', 'executionRevision', 'configurationPendingRevision')},
+                        {key: (self.session.coordinator.session_state.get('task') or {}).get(key)
+                         for key in ('id', 'revision', 'status')})
                 else:
-                    assignment = (assigned, assigned_context, assigned_generation, assigned_stop, assigned_execution)
+                    assignment = (assigned, assigned_context, assigned_generation, assigned_stop,
+                                  assigned_execution, assigned_task)
                 async def install_child_access(child_coordinator):
                     from amplifier_web.app_guidance import install_app_access
                     await install_app_access(child_coordinator, self.app_access_bridge(child_coordinator,

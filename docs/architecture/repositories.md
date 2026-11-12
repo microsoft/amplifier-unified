@@ -6,10 +6,28 @@ repositories. Compare retained candidate implementations before choosing a home.
 Use existing ownership and public APIs where they fit. Independent repositories
 may publish libraries, executables or optional capabilities; not all are services.
 
-The independent web client's [temporary source delivery](../../components/README.md)
-keeps a pinned copy in this repository while its owning repository awaits public
-availability. The selection can switch to repository delivery without changing
-the component's build or runtime boundary; this does not adopt it as the shipped client.
+The independent web client is the selected source for Unified's normal build.
+Its [temporary source delivery](../../components/README.md) keeps a pinned copy in
+`components/web-client` while the owning repository awaits public availability.
+Author client changes in `amplifier-client-web`, then refresh that selected copy
+and its provenance together. Public availability alone does not switch delivery:
+an approved cutover must change the selection and retire the copy. The old
+`frontend/` source, wrapper build package and duplicate client tests are removed;
+Unified retains host/browser integration tests in `tests/web` and its assembler.
+
+## Repository names and existing identities
+
+Reserve `amplifier-<name>` for products. Supporting domains use
+`amplifier-platform-<domain>`; adapters, SDKs and clients use
+`amplifier-adapter-*`, `amplifier-sdk-*` and `amplifier-client-*`. Existing family
+names remain valid. Repository names do not rename installed packages, imports
+or protocol identities.
+
+The target names below record the agreed direction, not completed creation or
+renaming. Reuse the existing ACP adapter, shell SDK and TUI repositories and their
+history when reconciling their names; do not create competing copies. Repository
+access, artifact publication, default selection and installed adoption remain
+separate states. An inaccessible repository is not evidence that it was deleted.
 
 ## Core boundaries
 
@@ -17,13 +35,16 @@ the component's build or runtime boundary; this does not adopt it as the shipped
 | --- | --- | --- | --- |
 | `amplifier-unified` | Existing; become family/distribution, installer, integration docs and release composition | Component manifest, installation and adoption receipts; family vision | Private copies of client/agent implementation |
 | [`amplifier-client-web`](https://github.com/microsoft/amplifier-client-web) | **Independent client source**: historical `frontend/` import preserved; Unified selects a delivery copy through its [assembly owner](../../components/README.md). Client units/build tools stay here; Unified owns host integration checks. Retained `amplifier-unified-client-web` is a separate AHP candidate | Browser persistence, UI, accessibility and transport adapter; current HTTP/SSE first, qualified AHP later | Python service objects, native session files |
-| Shell SDK and authored components | **Proposed extraction** of `packages/shell-sdk`, authoring guidance and fixtures; components may release separately | Public slot/navigation/renderer contracts and validation | Built-in shell internals, app API singleton or private React contexts |
-| `amplifier-app-tui` | Existing separate repo; evolve connected backend to AHP | Terminal interaction, local persistence and AHP; replace legacy CLI over time | Web rendering or native runtime in connected mode |
+| `amplifier-sdk-shell` (target name; existing owner `amplifier-shell-sdk`) | Standalone source/artifact preparation covers `packages/shell-sdk`, authoring guidance and fixtures; repository access/publication and Unified artifact adoption remain pending. Authored components may release separately | Existing public slot/navigation/renderer contracts and validation | Built-in shell internals, app API singleton or private React contexts |
+| `amplifier-client-tui` (target name; existing owner `amplifier-app-tui`) | Reuse the existing separate repo; evolve connected backend to AHP | Terminal interaction, local persistence and AHP; replace legacy CLI over time | Web rendering or native runtime in connected mode |
 | [`amplifier-client-macos`](https://github.com/microsoft/amplifier-client-macos) | Existing; independently released Amplifier for Mac, with optional Tempo | Current HTTP client, native interaction, private local state, signing/updates; [desktop scope](../clients/desktop-clients.md) | Host internals, agent runtime, duplicated shared semantics |
-| Windows desktop client (repo unassigned) | Planned; select native mechanisms and supported journeys before implementation | Shared DC/CX/CS behavior; platform-owned presentation and distribution | Mac-only frameworks, private host objects, copied normative contracts |
+| `amplifier-client-windows` (**new**) | Planned Windows client; select native mechanisms and supported journeys before implementation | Shared DC/CX/CS behavior; platform-owned presentation and distribution | Mac-only frameworks, private host objects, copied normative contracts |
+| `amplifier-client-linux` (**new**) | Planned Linux desktop client; implementation and packaging are not selected | Shared client behavior; platform-owned presentation and distribution | Private host objects or another client's platform frameworks |
+| `amplifier-client-ios` (**new**) | Planned iOS/iPadOS client; implementation is not selected | Shared client behavior; mobile interaction, local state and distribution | Embedded native agent runtime as a prerequisite for connected use |
+| `amplifier-client-android` (**new**) | Planned Android client; implementation is not selected | Shared client behavior; mobile interaction, local state and distribution | Embedded native agent runtime as a prerequisite for connected use |
 | Generic host owner | **Proposed extraction**; compare `amplifierd` and retained `amplifier-unified-host` candidate | Admission, routing, negotiated AHP/ACP, catalog/resource interfaces and lifecycle coordination | Amplifier core/loop imports, conversation bodies for routine routing, web widgets, Converge domain types |
-| Conversation experience owner | **Proposed boundary**; Unified and external experiences can be different implementations | Shared transcript, participants, delivery identities and authorized retrieval; legacy projection preserves native history | Every agent's private working context or mandatory collaboration workflow |
-| Native ACP adapter owner | Reuse/evolve the retained adapter where qualified; retain current Core/Foundation execution | ACP agent, native runtime composition, ownership and execution identity mapping | Web client, generic host private objects |
+| Conversation experience owner | **Proposed Unified boundary**; qualify existing `amplifier-constellation-conversations` rather than creating another conversation hub. Unified and external experiences can remain different implementations | Shared transcript, participants, delivery identities and authorized retrieval; legacy projection preserves native history | Every agent's private working context or mandatory collaboration workflow |
+| `amplifier-adapter-acp` (target name; existing owner `amplifier-app-acp`) | Reuse/evolve the existing native adapter where qualified; retain Core/Foundation execution. Its private repository must not become a prerequisite for public Unified installation | ACP agent, native runtime composition, ownership and execution identity mapping | Web client, generic host private objects |
 | Experience connectors / agent participation | Reuse Constellation connectors and adapter SDKs where their semantics fit | Conversation access and event delivery to an agent; runtime chooses context and memory strategy | A second canonical conversation transcript or one required agent memory layout |
 | `amplifier-core`, `amplifier-foundation`, module/bundle repos | Existing; retain kernel and reusable native mechanisms | Native composition, persistence and ownership mechanisms | AHP UI concepts or product-specific catalogs |
 | `amplifier-agent` | Existing separate building block; excluded from this migration | Its own independent product contracts | Native Unified execution; it is not our current or intended runtime |
@@ -53,15 +74,16 @@ existing suitable repo if the inventory finds one.
 
 | Candidate owner | Current source / existing overlap | Boundary and independence test |
 | --- | --- | --- |
-| `amplifier-resources` (**new**) | `resource_files.py`, attachments, `amplifier_outputs/`, artifact storage | Stable resources, content/metadata access, version checks and auth; retrieve a large artifact without loading its agent |
-| `amplifier-canvas` (**new**) | Canvas bridge/documents/views, frontend renderers and shell integration | Capability package and renderer SDK; ordinary chat works with it absent, agents invoke the same public operations |
+| `amplifier-platform-workspaces` (**new**) | Workspace placement, grouping and shared context in `amplifier_web/`; compare existing owners before choosing the first extraction | Workspace identity and shared locations without taking over conversation history, task execution or an agent's private context |
+| `amplifier-platform-resources` (**new**) | `resource_files.py`, attachments, `amplifier_outputs/`, artifact storage | Stable resources, content/metadata access, version checks and auth; retrieve a large artifact without loading its agent |
+| `amplifier-platform-canvas` (**new**) | Canvas bridge/documents/views, frontend renderers and shell integration | Capability package and renderer SDK; ordinary chat works with it absent, agents invoke the same public operations |
 | Voice/device capability owner | `voice*.py`, device dispatch; existing `amplifier-voice`, browser bridge | Reuse/evolve existing repos after comparison; media transport separate, exactly targeted permission and lifecycle |
 | Configuration/composition owner | Shared settings, bundles and provider discovery; Foundation overlap | Native mechanisms stay Foundation; extract product admin/catalog UI capability, not a second settings authority |
-| `amplifier-scheduling` (**independently buildable library; repository delivery pending**) | [`amplifier_scheduling/`](../../amplifier_scheduling/README.md) owns recurrence, SQLite run admission and its pure tests; Unified still bundles its unchanged Python sources | Build wheel/sdist and exercise due identities, leases and unknown-outcome recovery without the app; host authorization, Stop, task admission and execution stay in Unified |
-| `amplifier-operations` (**new extraction**) | `amplifier_operations/`, durable questions/tasks | Durable operations API and capability; independent of a particular agent engine and frontend |
-| `amplifier-publishing` (**new extraction**) | `amplifier_publishing/` | Publishing library/capability and resources; own tests without an app boot |
+| `amplifier-platform-scheduling` (**new repo; independently buildable package**) | [`amplifier_scheduling/`](../../amplifier_scheduling/README.md) owns recurrence, SQLite run admission and its pure tests; repository delivery is pending. The distribution remains `amplifier-scheduling`; Unified still bundles its unchanged Python sources | Build wheel/sdist and exercise due identities, leases and unknown-outcome recovery without the app; host authorization, Stop, task admission and execution stay in Unified |
+| `amplifier-platform-operations` (**new extraction**) | `amplifier_operations/`, durable operation receipts and delivery cursors | Durable operations API and capability; independent of a particular agent engine and frontend; execution, authorization and task policy stay with their current owners |
+| `amplifier-platform-publishing` (**new extraction**) | `amplifier_publishing/` | Publishing library/capability and resources; own tests without an app boot |
 | Worktree/resource lifecycle owner (**proposed extraction**) | `amplifier_worktrees/`, `amplifier_web/task_environments.py` and their owning tools | Exact resource ownership, consumers, reconciliation and cleanup; archive does not destroy active work or review holds |
-| `amplifier-portability` (**new extraction**) | `amplifier_portability/` | Explicit transfer/inspection and receipts; never implicit cross-engine conversion |
+| `amplifier-platform-portability` (**new extraction**) | `amplifier_portability/` | Explicit transfer/inspection and receipts; never implicit cross-engine conversion |
 | Recall/history capability owner | `amplifier_recall/`, native history readers; Foundation and catalog overlaps | Search/read-only enrichment; index loss never changes native resume |
 | ACP client bridge owner | Reuse an existing compatible bridge or propose a small separate repo | ACP server facing an editor, AHP client facing the host; no second history/authority, capability loss documented |
 | Converge family repos | Existing Method, Agents, Queue, Service, Onramp, Direction, Operation, Experience SDK and bundles | Optional domain capabilities through generic host/client seams; no host imports of Converge-specific workflows |
