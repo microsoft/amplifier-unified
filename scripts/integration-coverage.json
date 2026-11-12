@@ -615,43 +615,43 @@
       "prerequisite": "amplifier_module_tool_bash"
     },
     {
-      "node": "amplifier_kernels/tests/test_kernel_mechanism.py::test_real_state_cells_error_reset_and_runtime_identity[python]",
+      "node": "tests/test_kernels.py::test_real_state_cells_error_reset_and_runtime_identity[python]",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "amplifier_module_tool_bash"
     },
     {
-      "node": "amplifier_kernels/tests/test_kernel_mechanism.py::test_real_state_cells_error_reset_and_runtime_identity[node]",
+      "node": "tests/test_kernels.py::test_real_state_cells_error_reset_and_runtime_identity[node]",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "amplifier_module_tool_bash"
     },
     {
-      "node": "amplifier_kernels/tests/test_kernel_mechanism.py::test_interrupt_serialization_and_explicit_fresh_reset[python]",
+      "node": "tests/test_kernels.py::test_interrupt_serialization_and_explicit_fresh_reset[python]",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "amplifier_module_tool_bash"
     },
     {
-      "node": "amplifier_kernels/tests/test_kernel_mechanism.py::test_interrupt_serialization_and_explicit_fresh_reset[node]",
+      "node": "tests/test_kernels.py::test_interrupt_serialization_and_explicit_fresh_reset[node]",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "amplifier_module_tool_bash"
     },
     {
-      "node": "amplifier_kernels/tests/test_kernel_mechanism.py::test_unknown_termination_never_claims_clean_reset",
+      "node": "tests/test_kernels.py::test_unknown_termination_never_claims_clean_reset",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "amplifier_module_tool_bash"
     },
     {
-      "node": "amplifier_kernels/tests/test_kernel_mechanism.py::test_output_budget_and_protocol_damage_remain_honest",
+      "node": "tests/test_kernels.py::test_output_budget_and_protocol_damage_remain_honest",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "amplifier_module_tool_bash"
     },
     {
-      "node": "amplifier_kernels/tests/test_kernel_mechanism.py::test_restart_keeps_cells_but_cannot_replay_or_resume_variables",
+      "node": "tests/test_kernels.py::test_restart_keeps_cells_but_cannot_replay_or_resume_variables",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "amplifier_module_tool_bash"
@@ -693,7 +693,7 @@
       "prerequisite": "amplifier_module_tool_bash"
     },
     {
-      "node": "amplifier_kernels/tests/test_kernel_mechanism.py::test_reader_cancellation_cannot_lose_a_started_final_receipt",
+      "node": "tests/test_kernels.py::test_reader_cancellation_cannot_lose_a_started_final_receipt",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "amplifier_module_tool_bash"
