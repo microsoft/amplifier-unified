@@ -319,6 +319,8 @@ async def test_legacy_and_modern_holds_both_retain_native_exclusion_and_unwind_p
         f.process.assert_not_awaited()
         f.restart.assert_not_awaited()
         assert not f.app.state['updates'].get('pendingReplacement')
+        assert f.app.state['updates']['currentStatus']['actionRequired']
+        assert 'cannot confirm earlier work' in f.app.state['updates']['currentStatus']['detail']
         acquired = first.acquire(app='partial-boundary-released')
         acquired.release()
     finally:
@@ -430,7 +432,9 @@ async def test_active_or_unobservable_operation_stays_blocked(terminal, monkeypa
     release = asyncio.Event()
     task = None
     if fault == 'working': session['status'] = 'working'
-    elif fault == 'refresh': session['configurationPending'] = True
+    elif fault == 'refresh':
+        session['configurationRefresh'] = {'phase': 'applying'}
+        app.runtime.workers[session['id']] = {'process': SimpleNamespace(returncode=0)}
     elif fault == 'child': session['workers'] = [{'status': 'working'}]
     elif fault == 'worker': app.runtime.workers[session['id']] = {'process': SimpleNamespace(returncode=0)}
     elif fault == 'observer-unknown': monkeypatch.setattr(app.runtime, 'has_pending_operations', lambda: None)
@@ -456,7 +460,7 @@ async def test_active_or_unobservable_operation_stays_blocked(terminal, monkeypa
         if task: await task
         if fault == 'management': app.management.lock.release()
         if fault == 'preparation': app.runtime._locks[session['id']].release()
-        if fault == 'worker': app.runtime.workers.clear()
+        if fault in {'worker', 'refresh'}: app.runtime.workers.clear()
 
 
 @pytest.mark.parametrize('fault', ['missing', 'forged', 'unknown', 'partial', 'wrong-session', 'stale-attempt',
@@ -542,3 +546,153 @@ async def test_activation_rechecks_same_hold_after_target_discovery(terminal, mo
         monkeypatch.setattr(app_updates, 'installed_target', original)
         await app_updates.activate(f.manager)
         f.restart.assert_awaited_once()
+
+
+@pytest.mark.parametrize('refresh', ['pending', 'queued', 'applying'])
+@pytest.mark.parametrize('saved', [False, True], ids=['mixed-history', 'four-saved-unloaded'])
+async def test_four_stopped_configuration_records_do_not_block_unrelated_app_replacement(terminal, monkeypatch, refresh, saved):
+    """Saved flags are not executing work, including stale queued/applying views."""
+    f = terminal
+    sessions = [f.session]
+    for _ in range(3):
+        await f.app.dispatch('session.create', {})
+        sessions.append(f.app._session())
+    for session, pending in zip(sessions, (
+            {'phase': 'error', 'recoveryRequired': True},
+            {'phase': 'error', 'effect': 'none', 'operationId': 'retained-none'},
+            {'phase': 'queued', 'effect': 'saved_not_mounted', 'operationId': 'retained-saved'},
+            {'phase': 'applying', 'effect': 'unknown', 'operationId': 'retained-unknown'})):
+        session.update(status='stopped', interruptionRevision=1, configurationBusy=True, configurationPending=True,
+            configurationPendingRevision=23, configurationRefresh={'phase': refresh},
+            pendingConfiguration=({**pending, 'phase': 'error', 'effect': 'saved_not_mounted', 'stage': 'reading',
+                'error': 'Saved configuration does not match loaded-plan readback. Its operation remains unresolved.'}
+                if saved else pending))
+    before = copy.deepcopy(sessions)
+    files = {str(p): p.read_bytes() for p in f.app.data_dir.rglob('*')
+             if p.is_file() and '/sessions/' in str(p)}
+    start = AsyncMock(side_effect=AssertionError('No historical owner may mount'))
+    drain = AsyncMock(side_effect=AssertionError('Update cannot drain stopped inputs'))
+    monkeypatch.setattr(f.app.runtime, 'start', start)
+    monkeypatch.setattr(f.app.collaboration, 'drain', drain)
+    observed = update_blockers.assess(f.app, application=True)
+    assert not observed['blockers']
+    assert observed['observation']['configurationReasonCounts'] == {'idle-configuration-hold': 4}
+    assert f.manager.busy()  # Stronger component adoption is unchanged.
+    await app_updates.activate(f.manager)
+    f.restart.assert_awaited_once()
+    assert sessions == before
+    assert files == {str(p): p.read_bytes() for p in f.app.data_dir.rglob('*')
+                     if p.is_file() and '/sessions/' in str(p)}
+    start.assert_not_awaited()
+    drain.assert_not_awaited()
+    assert not f.transport.calls and not f.transport.inputs
+
+
+@pytest.mark.parametrize('phase', ['queued', 'applying'])
+async def test_saved_configuration_without_busy_still_retains_native_writer_exclusion(terminal, monkeypatch, phase):
+    from amplifier_foundation.session import SharedSessionStore, SessionBusyError
+    f = terminal
+    f.session.update(configurationBusy=False, configurationPending=True)
+    f.session['pendingConfiguration']['phase'] = phase
+    f.session.pop('configurationOperationFence', None)
+    store = SharedSessionStore(f.session['workspace'], f.session['id'])
+    async def replace(*args, **kwargs):
+        with pytest.raises(SessionBusyError):
+            store.acquire(app='independent-writer')
+        return '99.0.0'
+    monkeypatch.setattr(app_updates, 'process', replace)
+    await app_updates.activate(f.manager)
+    f.restart.assert_awaited_once()
+    lease = store.acquire(app='after-replacement')
+    lease.release()
+
+
+@pytest.mark.parametrize('terminal', ['none'], indirect=True)
+@pytest.mark.parametrize('proof', ['terminal', 'missing', 'partial', 'forged', 'unknown', 'saved', 'conflict', 'native',
+    'malformed-history', 'malformed-attempt', 'different-fence'])
+async def test_startup_observes_only_terminal_none_without_waking_stopped_owner(terminal, monkeypatch, proof):
+    from amplifier_web.service import AppService
+    from amplifier_web.configuration_recovery import suppress_input
+    f = terminal
+    app, session = f.app, f.session
+    operation = f.attempt['operationId']
+    receipt = receipt_path(f.attempt, home=app.data_dir)
+    if proof == 'missing':
+        receipt.unlink()
+    elif proof in {'partial', 'forged', 'unknown', 'saved'}:
+        data = seal(f.attempt, {'unknown': 'unknown', 'saved': 'saved_not_mounted'}.get(proof, 'none'),
+            terminal=proof != 'partial')
+        if proof == 'forged': data['signature'] = '0' * 64
+        receipt.write_text(json.dumps(data))
+    if proof == 'conflict':
+        app.management.configuration_transition(session, operation, effect='saved_not_mounted')
+    app.management.configuration_transition(session, operation, phase='applying', stage='dispatching',
+        effect='unknown', recoveryRequired=True, error='Retained interrupted attempt')
+    if proof.startswith('malformed-'):
+        app.management.configuration_transition(session, operation, phase='error')
+        record_path = app.management.configuration_record_path(session['id'], operation)
+        malformed = json.loads(record_path.read_text())
+        malformed['history' if proof == 'malformed-history' else 'attempts'] = ['malformed']
+        record_path.write_text(json.dumps(malformed))
+    session.update(status='stopped', configurationPending=True, configurationPendingRevision=7)
+    if proof == 'different-fence': session['configurationOperationFence'] = 'independent-operation'
+    if proof == 'native': session['runtimeSessionId'] = 'different-native'
+    original = copy.deepcopy(app.management.configuration_record(session['id'], operation))
+    home, workspace, sid = app.data_dir, app.default_workspace, session['id']
+    app._save_changes(sessions={sid})
+    await app.close()
+    for _ in range(2):
+        runtime = RuntimeManager()
+        runtime.start = AsyncMock(side_effect=AssertionError('Bookkeeping must not warm runtime'))
+        runtime.send = AsyncMock(side_effect=AssertionError('Bookkeeping must not deliver old input'))
+        current = AppService(home, runtime, workspace=workspace)
+        drain = AsyncMock(side_effect=AssertionError('Terminal bookkeeping cannot drain old inputs'))
+        monkeypatch.setattr(current.collaboration, 'drain', drain)
+        current.management = Management(current)
+        try:
+            await asyncio.gather(*list(current.tasks))
+            restored = current._session(sid)
+            retained = current.management.configuration_record(sid, operation)
+            assert restored['status'] == 'stopped'
+            assert retained['request'] == original['request']
+            assert retained['attempts'] == original['attempts']
+            assert retained['history'][:len(original['history'])] == original['history']
+            if proof == 'terminal':
+                assert retained['state']['effect'] == 'none'
+                assert retained['state']['stage'] == 'reconciled'
+                assert not restored['configurationBusy']
+                assert not restored.get('configurationOperationFence')
+                assert suppress_input(restored, {'acceptedAt': 0})
+                assert retained['recoveryNoInput']
+            else:
+                assert restored['configurationBusy']
+                assert restored['configurationOperationFence'] == (
+                    'independent-operation' if proof == 'different-fence' else operation)
+                assert retained['state']['effect'] == 'unknown'
+            runtime.start.assert_not_awaited()
+            runtime.send.assert_not_awaited()
+            drain.assert_not_awaited()
+        finally:
+            await current.close()
+
+
+@pytest.mark.parametrize('terminal', ['none'], indirect=True)
+async def test_startup_does_not_reclassify_already_settled_none_failure(terminal, monkeypatch):
+    f = terminal
+    app, session = f.app, f.session
+    operation = f.attempt['operationId']
+    app.management.configuration_transition(session, operation, phase='error', stage='reconciled',
+        effect='none', recoveryRequired=False)
+    app.management.settle_configuration_fence(session, operation)
+    session['status'] = 'idle'
+    before = copy.deepcopy(session['pendingConfiguration'])
+    record = app.management.configuration_record(session['id'], operation)
+    drain = AsyncMock()
+    monkeypatch.setattr(app.collaboration, 'drain', drain)
+    app.management = Management(app)
+    await asyncio.gather(*list(app.tasks))
+    assert session['pendingConfiguration'] == before
+    assert app.management.configuration_record(session['id'], operation) == record
+    assert not session.get('cancelledConfigurationInput')
+    assert not session['configurationBusy']
+    drain.assert_awaited_once_with(session['id'])  # Ordinary continuation remains eligible.

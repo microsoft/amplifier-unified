@@ -732,6 +732,11 @@ async def _activate(manager, *, force=None, holds=None):
             try:
                 retain_operation_holds(manager.service, held_configuration, holds)
             except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
+                state['error'] = ('Automatic restart is paused because Amplifier cannot confirm earlier work has finished. '
+                                  'The current app is kept.')
+                from .update_health import publish as publish_health
+                publish_health(manager)
+                manager.service._publish_changes(globals={'updates'})
                 return  # No recovery, interruption, candidate discard or effect.
         if selected:
             # Candidate and target probes await external processes. Recheck the

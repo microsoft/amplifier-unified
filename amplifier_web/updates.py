@@ -566,9 +566,9 @@ class UpdateManager:
             self.service.state['updates'].update(values)
             state = self.service.state['updates']
             from .update_health import publish as publish_health
-            publish_health(self)
             state['blockers'] = (self.app_blockers() if state.get('pendingApp')
                                  else self.blockers()) if self.requires_idle(state) else []
+            publish_health(self)
             from .update_restart import target
             state['forceRestartTarget'] = target(self)
             self.service._publish_changes(globals={'updates','settings'})

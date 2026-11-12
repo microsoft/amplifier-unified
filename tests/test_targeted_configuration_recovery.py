@@ -730,6 +730,53 @@ async def test_cancelled_cutoff_survives_pending_replacement_during_drain(proces
 
 
 @pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
+async def test_startup_none_bookkeeping_preserves_old_queue_but_allows_fresh_explicit_input(process_boundary, monkeypatch):
+    from amplifier_web.management import Management
+    b = process_boundary
+    original = await operator_failure(b)
+    b.owner['status'] = 'idle'
+    source = await manager(b)
+    drain = b.app.collaboration.drain
+    monkeypatch.setattr(b.app.collaboration, 'drain', AsyncMock())
+    args = {'sessionId': b.owner['id'], 'text': 'Retained input before interrupted settings', 'mode': 'queue'}
+    await agent(b.app, source, 'coordination.send', args, 'startup-old-peer')
+    await b.runtime.stop(b.owner['id'], reason='configuration')
+    b.owner['status'] = 'stopped'
+    b.app.management = Management(b.app)
+    await asyncio.gather(*list(b.app.tasks))
+    assert not b.owner['configurationBusy']
+    marker = deepcopy(b.owner['cancelledConfigurationInput'])
+    settled = operation(b)
+    assert settled['request'] == original['request'] and settled['attempts'] == original['attempts']
+    b.app.management = Management(b.app)
+    await asyncio.gather(*list(b.app.tasks))
+    assert b.owner['cancelledConfigurationInput'] == marker and operation(b) == settled
+    # A later retained operator observation may have tightened the cutoff.
+    # Startup must not restore its older persisted marker over the newer fence.
+    newer = {**marker, 'acceptedAt': marker['acceptedAt'] + .001}
+    b.owner['pendingConfiguration']['recoveryNoInput'] = newer
+    b.app.management = Management(b.app)
+    await asyncio.gather(*list(b.app.tasks))
+    assert b.owner['cancelledConfigurationInput'] == newer
+    settled = operation(b)
+    assert b.app.collaboration.receipt('startup-old-peer')['delivery'] == 'queued'
+    b.owner['status'] = 'idle'  # Synthetic new operator intent, not startup resuming Stop.
+    await agent(b.app, source, 'coordination.send', {**args, 'text': 'Fresh explicit work'}, 'startup-fresh-peer')
+    admitted = []
+    async def input_adapter(session, values, guard, emit):
+        assert guard() is None
+        assert b.app.collaboration.admission(session['id'], values)['admitted']
+        admitted.append(values['inputId'])
+        return {'accepted': True}
+    monkeypatch.setattr(b.runtime, 'collaboration_input', input_adapter)
+    await drain(b.owner['id'])
+    assert admitted == ['startup-fresh-peer']
+    assert b.app.collaboration.receipt('startup-old-peer')['delivery'] == 'queued'
+    assert not b.runtime.workers
+    assert operation(b) == settled
+
+
+@pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
 @pytest.mark.parametrize('change', ['full-off-on', 'placement', 'task-epoch', 'target-native'])
 async def test_operator_capture_precedes_dispatch_wait(process_boundary, monkeypatch, change):
     b = process_boundary
