@@ -512,6 +512,11 @@ Only covered failures predating that installation remain historical; newer
 failures, missing source scope and uncertain operations retain their priority.
 This explanatory proof cannot authorize partial-source retention or declare the
 changed configuration qualified. No settings or qualification receipts are rewritten.
+An ordinary Check offers an included runtime qualification when app-level source
+declarations differ, even if every Git branch is unchanged. Install still uses
+the checked selection and existing unchanged-input, source-policy and activation
+guards. A successful new qualification can establish current health; Check alone
+does not prepare or activate it.
 
 Preparation remembers its input witness and disposition independently of the
 displayed application or Smart Tool batch. A settled failure performs no duplicate

@@ -513,6 +513,46 @@ async def test_real_global_configuration_change_explains_retained_failure(tmp_pa
     assert m.service.state['updates']['currentStatus']['status'] == 'unverified'
     assert m.service.state['updates']['currentStatus']['component'] is None
     assert settings.read_bytes() == before
+    # An ordinary qualification writes the new key, so this is not a permanent
+    # unverified state. Exercise the real qualification/configuration owner;
+    # subprocess mounts are the same explicit offline seam as its unit tests.
+    from amplifier_web import updates, runtime_environment, runtime_qualification
+    from unittest.mock import AsyncMock
+    import shutil
+    old_files = {p.name: p.read_bytes() for p in stage.iterdir() if p.is_file()}
+    new_stage = stage.parent / ('d' * 32)
+    shutil.copytree(stage, new_stage)
+    (new_stage / 'shared-config/settings.yaml').write_bytes(before)
+    m.inventory = []
+    async def prepared(*args, **kwargs):
+        return tmp_path / 'runtime'
+    async def overrides(project, target, **kwargs):
+        return target
+    probes = []
+    async def process(*args, **kwargs):
+        assert '--read-only' in args and '--global-only' in args
+        probes.append(args)
+    monkeypatch.setattr(runtime_environment, 'stage', prepared)
+    monkeypatch.setattr(runtime_qualification, 'prepare_overrides', overrides)
+    monkeypatch.setattr(updates, 'process', process)
+    m.publish = AsyncMock()
+    await updates.UpdateManager.validate(m, new_stage, new_stage.name)
+    assert len(probes) == 4
+    qualified = json.loads((new_stage / 'profiles-qualified.json').read_text())
+    assert qualified['configuration'] == real_key(health.configuration(m)[1].settings, m.home, new_stage)
+    # A synthetic activation receipt is explicit: no real resolver/install or
+    # worker promotion is claimed by this temporary-home health regression.
+    pointer = json.loads((m.directory / 'active.json').read_text())
+    (m.directory / 'active.json').write_text(json.dumps({**pointer, 'current': new_stage.name}))
+    activation = next(row for row in m.diagnostics.state['completedBatches']
+                      if row.get('revision') == stage.name)
+    m.diagnostics.state['completedBatches'].append({**activation, 'revision': new_stage.name})
+    await health.refresh(m)
+    health.publish(m)
+    assert m.service.state['updates']['currentStatus']['status'] == 'current'
+    assert old_files == {p.name: p.read_bytes() for p in stage.iterdir() if p.is_file()}
+    assert settings.read_bytes() == before
+    (m.directory / 'active.json').write_text(json.dumps(pointer))
     settings.write_text('{}')
     await health.refresh(m)
     health.publish(m)

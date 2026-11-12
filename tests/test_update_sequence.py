@@ -129,6 +129,51 @@ async def test_public_check_does_not_offer_retained_preparation_as_retry(manager
     assert calls==[False,False]
 
 
+@pytest.mark.parametrize('case', ['changed', 'same', 'malformed'])
+async def test_configuration_only_change_is_an_ordinary_included_update(manager, monkeypatch, case):
+    from amplifier_web import runtime_environment, runtime_profiles, runtime_policy_reconciliation
+    from amplifier_web.host.config import read_config
+    from amplifier_web.builtin_behaviors import CONTEXT_INTELLIGENCE_BEHAVIOR_URI
+    home = manager.home
+    generation = 'c' * 32
+    receipt = home / 'updates/releases' / generation
+    receipt.mkdir(parents=True)
+    (manager.directory / 'active.json').write_text(json.dumps({'current': generation}))
+    config = read_config(home, home=home, global_only=True)
+    key = runtime_profiles.configuration_key(config.settings, home, receipt)
+    (receipt / 'profiles-qualified.json').write_text(json.dumps({
+        'profiles': ['work'], 'configuration': None if case == 'malformed' else key}))
+    from amplifier_web.host.config import amplifier_home, write_private
+    write_private(amplifier_home() / 'settings.yaml', json.dumps({
+        'web_bundles': {'excluded': [CONTEXT_INTELLIGENCE_BEHAVIOR_URI]}}) if case != 'same' else '{}')
+    monkeypatch.setattr(runtime_environment, 'locked_sources', lambda *args: {})
+    monkeypatch.setattr(runtime_policy_reconciliation, 'pending', lambda *args: None)
+    # The existing full inventory/graph is an explicit empty seam here: this
+    # test isolates a configuration candidate, not installed-source discovery.
+    async def inventory(**kwargs):
+        rows = runtime_environment.inventory(home, installed={}, graph=[])
+        selection = update_sequence.app_selection(home)
+        for row in rows:
+            row.update(updateTier='included', appSelection=selection['witness'])
+        return rows
+    monkeypatch.setattr(manager, 'inventory_sources', inventory)
+    before = (receipt / 'profiles-qualified.json').read_bytes()
+    await manager.check()
+    u = manager.service.state['updates']
+    assert u['error'] is None
+    assert u['available'] == (1 if case == 'changed' else 0)
+    assert bool(manager.inventory) == (case == 'changed')
+    if case == 'changed':
+        row = manager.inventory[0]
+        assert row['kind'] == 'runtime environment' and row['current'] == key
+        assert row['latest'] != key and row['eligible']
+        assert u['sequence']['stage'] == 'included'
+        first = row['latest']
+        await manager.check(fresh=True)
+        assert manager.inventory[0]['latest'] == first  # no effect/retry from Check
+    assert (receipt / 'profiles-qualified.json').read_bytes() == before
+
+
 @pytest.mark.parametrize('action', ['app', 'install'])
 async def test_explicit_app_scope_replaces_old_whole_install_without_changing_policy(manager, monkeypatch, action):
     import copy
