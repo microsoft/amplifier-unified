@@ -19,15 +19,25 @@ async def app(tmp_path):
     ('view.update', {'patch':{'draft':'A saved draft'}}),
     ('attention.read', {'ids':[]}),
     ('settings.update', {'patch':{'notifications':False}}),
-    ('theme.reset', {}),
+    ('view.update', {'patch':{'scheme':'dark'}}),
     ('session.rename', {'title':'Renamed'}),
     ('session.archive', {}),
     ('session.restore', {}),
     ('session.pinOrder', {'ids':[]}),
 ])
 async def test_command_scope_is_durable_and_matches_complete_reconciliation(app, monkeypatch, action, args):
+    from contextlib import nullcontext
+    from test_appearance_preferences import report, initialize, ack
     sid=app.state['selectedSessionId']
     args=copy.deepcopy(args)
+    appearance = action == 'view.update' and 'scheme' in args['patch']
+    queue = None
+    if appearance:
+        app.clients.attach('scope-browser')
+        with app.clients.bind('scope-browser'):
+            queue = app.subscribe()
+        await report(app, client='scope-browser')
+        await initialize(app, client='scope-browser')
     if action in {'session.rename','session.archive','session.restore'}:args['id']=sid
     scopes=[]; original=app._save
     def capture():
@@ -36,16 +46,29 @@ async def test_command_scope_is_durable_and_matches_complete_reconciliation(app,
         assert scope <= {sid}, 'Unrelated conversation visited'
         scopes.append((set(scope),set(app._publish_global_keys)))
         original()
-    with monkeypatch.context() as patch:
-        patch.setattr(app,'_save',capture)
-        await app.dispatch(action,args,command_id='scoped',include_state=False)
-    assert scopes
-    scoped=load(app.db)
-    app._save()
-    complete=load(app.db)
-    assert scoped==complete
-    duplicate=await app.dispatch(action,args,command_id='scoped',include_state=False)
-    assert duplicate['duplicate']
+    try:
+        with app.clients.bind('scope-browser') if appearance else nullcontext():
+            with monkeypatch.context() as patch:
+                patch.setattr(app,'_save',capture)
+                await app.dispatch(action,args,command_id='scoped',include_state=False)
+            assert scopes
+            scoped=load(app.db)
+            shell_rows=list(app.db.execute('SELECT kind,id,value FROM shell_records ORDER BY kind,id'))
+            if appearance:
+                assert app.appearance.read('scope-browser')['effective']['scheme'] == 'system'
+                assert app.appearance.read('scope-browser')['command']['after']['values']['scheme'] == 'dark'
+            app._save()
+            complete=load(app.db)
+            assert scoped==complete
+            assert list(app.db.execute('SELECT kind,id,value FROM shell_records ORDER BY kind,id'))==shell_rows
+            duplicate=await app.dispatch(action,args,command_id='scoped',include_state=False)
+            assert duplicate['duplicate']
+            if appearance:
+                await ack(app, client='scope-browser')
+                assert app.appearance.read('scope-browser')['effective']['scheme'] == 'dark'
+    finally:
+        if queue is not None:
+            app.unsubscribe(queue)
 
 
 @pytest.mark.parametrize('kind,payload', [
