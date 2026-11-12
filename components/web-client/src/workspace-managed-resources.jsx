@@ -53,7 +53,7 @@ export function ManagedResources({workspace,state,act,active,readOnly}){
     {page.operations.nextCursor&&<button className="a-soft" type="button" disabled={busy} onClick={()=>refresh({...cursors,operationsBefore:page.operations.nextCursor})}>More recorded operations</button>}
     <TaskStorage key={sid} workspaceId={workspace.id} sessionId={sid} initial={page.storage} act={act} active={active&&opened} readOnly={readOnly}/>
     <TaskEnvironments key={'environment:'+sid} workspaceId={workspace.id} sessionId={sid} act={act} active={active&&opened} readOnly={readOnly}/>
-    <p>Dynamic application preview ports, remote publishing targets and external processes are not inspected here. Cooperative reservations below do not establish physical isolation.</p>
+    <p>Dynamic application preview ports, remote publishing targets and external processes are not inspected here.</p>
    </>}
   </section>
  </details>;
