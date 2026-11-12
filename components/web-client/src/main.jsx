@@ -1045,7 +1045,7 @@ function App(){
    return result;
   },
  });
- const archiveValue={...archiveFeedback,run:archiveAction.current.run,dismiss:archiveAction.current.dismiss};
+ const archiveValue={...archiveFeedback,run:archiveAction.current.run,dismiss:archiveAction.current.dismiss,keep:archiveAction.current.keep,expire:archiveAction.current.expire};
  const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat,openRecordings,history:destinationTrail,visitHistory,visitRecent,
   sidebarView:view,updateSidebar:patch=>act('view.update',{patch}),
   home:(extra={})=>act('view.update',{patch:homePatch(presentation,extra,view)}),
