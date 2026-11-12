@@ -4,10 +4,13 @@ Synthetic sources, no model/provider execution or public network. The candidate
 inherits prepared test dependencies but installers target only its own venv.
 """
 import asyncio
+import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
+import socket
+import stat
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -127,10 +130,52 @@ async def test_shared_binding_cannot_authorize_another_identity(shared_source, c
     assert not c.binding.exists() if change == 'missing' else c.binding.read_bytes() == before
 
 
-@pytest.mark.parametrize('choice', ['equivalent', 'host', 'repository', 'commit', 'ref', 'subdirectory'])
+@pytest.mark.parametrize('choice', ['equivalent', 'equivalent-runtime-partial',
+                                  'host', 'repository', 'commit', 'ref', 'subdirectory'])
 async def test_real_probe_installs_checked_shared_hook_after_adoption_and_freezes(
-        shared_source, tmp_path, monkeypatch, record_property, choice):
+        shared_source, tmp_path, monkeypatch, record_property, request, choice):
     c = shared_source
+    endpoints = choice == 'equivalent-runtime-partial'
+    if endpoints and (os.name != 'posix' or not hasattr(socket, 'AF_UNIX')):
+        pytest.skip('Real Unix socket/FIFO build input requires POSIX')
+    endpoint = None
+    if endpoints:
+        from amplifier_foundation.sources.shared import resolve_shared_source, source_id
+        resolved = await resolve_shared_source(
+            'git+' + URL + '.git@main#subdirectory=' + SUBDIRECTORY,
+            c.stage / 'foundation/cache')
+        assert resolved.active_path == c.obj / SUBDIRECTORY
+        # Runtime Git metadata can contain endpoints even in an otherwise
+        # immutable checkout. Never add them to tracked module content.
+        git_dir = c.obj / '.git'
+        mode = stat.S_IMODE(git_dir.stat().st_mode)
+        git_dir.chmod(mode | 0o700)
+        endpoint = socket.socket(socket.AF_UNIX)
+        request.addfinalizer(endpoint.close)
+        # Linux sockaddr_un is short; a relative bind still creates a real
+        # endpoint in the long commit-addressed object path.
+        previous = Path.cwd()
+        try:
+            os.chdir(git_dir)
+            endpoint.bind('fsmonitor.sock')
+            os.mkfifo('fsmonitor.fifo')
+        finally:
+            os.chdir(previous)
+            git_dir.chmod(mode)
+        build = c.store.root / 'builds' / source_id(URL + '.git', c.revision)
+        (build / '.git').mkdir(parents=True)
+        (build / '.amplifier_cache_meta.json').write_bytes(c.immutable)
+        residue = build / 'unrelated-local-work'
+        residue.write_bytes(b'preserve attributable partial contents\n')
+        residue.chmod(0o440)
+        partial_before = residue.read_bytes(), stat.S_IMODE(residue.stat().st_mode)
+        # Include Git bytes and every mode, without opening socket/FIFO nodes.
+        def inventory():
+            return {str(path.relative_to(c.obj)):
+                    (stat.S_IMODE(path.lstat().st_mode),
+                     hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None)
+                    for path in [c.obj, *c.obj.rglob('*')]}
+        object_before = inventory()
     assert sys.version_info[:2] == (3, 13)
     uv = shutil.which('uv')
     assert uv, 'Requires the prepared Python 3.13 Docker fixture'
@@ -219,7 +264,7 @@ async def test_real_probe_installs_checked_shared_hook_after_adoption_and_freeze
     facts = [json.loads(line.removeprefix(PROBE_PREFIX)) for line in result.stdout.splitlines()
              if line.startswith(PROBE_PREFIX)][-1]
     assert {path: path.read_bytes() for path in before} == before
-    if choice != 'equivalent':
+    if choice not in {'equivalent', 'equivalent-runtime-partial'}:
         assert result.returncode == 1, result.stdout + result.stderr
         assert not facts['ok'] and facts['errorType'] == 'ProtectedRuntimeSource'
         assert qualification.package_content(project) == payload_before
@@ -236,3 +281,20 @@ async def test_real_probe_installs_checked_shared_hook_after_adoption_and_freeze
     qualification.verify_recorded(final, c.stage)
     assert environments.installed_sources(final)[NAME]['current'] == c.revision
     assert c.store.verify(URL, c.revision) == c.obj
+    if endpoints:
+        assert inventory() == object_before
+        assert stat.S_ISSOCK((git_dir / 'fsmonitor.sock').lstat().st_mode)
+        assert stat.S_ISFIFO((git_dir / 'fsmonitor.fifo').lstat().st_mode)
+        assert not (build / '.git/fsmonitor.sock').exists()
+        assert not (build / '.git/fsmonitor.fifo').exists()
+        assert json.loads((build / '.amplifier_cache_meta.json').read_text())['buildInput'] is True
+        retained = list(build.parent.glob('.' + build.name + '.incomplete-*/checkout'))
+        assert len(retained) == 1
+        saved = retained[0] / residue.name
+        assert (saved.read_bytes(), stat.S_IMODE(saved.stat().st_mode)) == partial_before
+        record_property('buildRecovery', json.dumps({
+            'build': str(build), 'retained': str(retained[0]),
+            'sourceRevision': c.revision, 'subdirectory': SUBDIRECTORY,
+            'sourceInventorySha256': hashlib.sha256(
+                json.dumps(object_before, sort_keys=True).encode()).hexdigest()}))
+        endpoint.close()
