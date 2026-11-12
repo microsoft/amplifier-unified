@@ -12,6 +12,35 @@ active `Publisher` per storage root. Ownership transitions are serialized; body
 traversal and unlink run outside that lock. Blocking calls belong on worker
 threads. No source or deploy commands run inside this library.
 
+## Build and test independently
+
+This directory is the temporary authoring home for the independently buildable
+package intended for `amplifier-platform-publishing`. The six runtime files remain
+the sole implementation. Unified consumes them directly in editable installs,
+wheels and source distributions; no separate repository or source fetch is needed.
+
+From this directory in an owned Python 3.13 or newer POSIX environment:
+
+```sh
+uv build
+uv venv .venv
+uv pip install --python .venv/bin/python "dist/amplifier_publishing-0.1.0-py3-none-any.whl[test]"
+.venv/bin/python -m pytest -q tests
+```
+
+For an installed-artifact check, copy only `tests/` and `pyproject.toml` to a
+separate directory and run the installed interpreter there without adding the
+source to `PYTHONPATH`. Tests use owned temporary stores, loopback listeners and
+private Unix sockets, including real process recovery; they require no Unified,
+Core, provider, credentials or SSH host. SSH transport remains simulated.
+
+The existing `python -m amplifier_publishing.service` entrypoint is unchanged.
+Unified keeps its host adapters, authorization, target selection and integration
+tests. The wheel contains runtime files only; the source distribution also carries
+these portable tests. The `0.1.0` version is preparation metadata, not a published
+release. Use a separate environment for this distribution: do not coinstall it
+with `amplifier-unified` while Unified still owns the same installed package files.
+
 ## API
 
 ```python
@@ -145,7 +174,7 @@ the request ID, action, or release can confuse an older request with changed
 arguments. Historical receipts do not acquire proof merely by being read.
 Their original exact-retry checks must verify the supplied arguments first.
 An interrupted RPC without a committed outcome stays unknown, even if an inner
-receipt has the same ID. See [the private service contract](../docs/PUBLISHING-TARGET.md)
+receipt has the same ID. See [the private service contract](https://github.com/microsoft/amplifier-unified/blob/main/docs/PUBLISHING-TARGET.md)
 for the transport and legacy recovery boundaries.
 
 ## Exposure and storage boundaries

@@ -1,5 +1,11 @@
 # Component ownership
 
+`components/publishing/` is temporarily authored here as its independently
+buildable Python project. Preserve its `amplifier_publishing` imports and existing
+module entrypoint; Unified builds directly from the nested runtime sources.
+Its portable tests stay with the package, while host policy and integration tests
+stay in Unified. It is not a generated delivery copy.
+
 `components/scheduling/` is temporarily authored here as its independently
 buildable Python project. Preserve its normal `amplifier_scheduling` import;
 Unified builds directly from the nested runtime sources. It has no external

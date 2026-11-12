@@ -19,6 +19,11 @@
 /components/scheduling/MANIFEST.in source-context=configuration
 /components/scheduling/.gitignore source-context=configuration
 /components/scheduling/LICENSE source-context=documentation
+/components/publishing/amplifier_publishing/** source-context=source
+/components/publishing/tests/** source-context=tests
+/components/publishing/MANIFEST.in source-context=configuration
+/components/publishing/.gitignore source-context=configuration
+/components/publishing/LICENSE source-context=documentation
 /docs/** source-context=documentation
 /contracts/** source-context=contracts
 /context/** source-context=guidance
