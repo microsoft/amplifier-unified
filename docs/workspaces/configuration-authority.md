@@ -59,6 +59,9 @@ source-checked file tools recheck after waiting for file admission. In-flight ca
 retain their invocation snapshot. Existing or preparing children can only narrow
 their captured ceilings; new children inherit the refreshed parent plan. Read
 policy, bundle restrictions, hooks and approval checks are not replaced.
+Unrelated provider, decision-model and application settings are not dependencies
+of file admission. Only changes to the selected writer declarations, sources and
+non-write configuration require the ordinary writer lifecycle.
 No extra user message, replay or synthetic input is needed.
 Before the canonical file write, the existing host record durably fences new
 input with a pending file-access change. New root/worker/voice execution is rejected,
@@ -68,7 +71,7 @@ available as steering. They cannot fall forward into a new turn if that run ends
 before delivery; an undelivered message remains saved with its delivery state.
 Answers, approvals and Stop remain available for existing work.
 The confirmed live boundary clears only its own write-change fence. Unavailable,
-lost or superseded refresh replies and unrelated configuration changes remain
+lost or superseded refresh replies and genuine writer configuration changes remain
 pending for the existing retirement path; inspect `fileAccessPending` rather than
 equating saved settings with mounted access. Finish or stop existing child work
 when that fallback is required.
