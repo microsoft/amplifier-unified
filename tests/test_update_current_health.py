@@ -373,6 +373,152 @@ async def test_configuration_revalidation_gap_is_neutral_but_failed_proof_is_not
     assert m.service.state['updates']['currentStatus']['actionRequired']
 
 
+@pytest.mark.parametrize('case', ['changed', 'restored', 'newer', 'pending',
+                                  'graph', 'lock', 'unknown', 'outside-graph'])
+async def test_changed_configuration_does_not_resurrect_a_covered_source_conflict(tmp_path, monkeypatch, case):
+    from amplifier_web import runtime_profiles
+    from amplifier_web.builtin_behaviors import CONTEXT_INTELLIGENCE_BEHAVIOR_URI
+    real_key = runtime_profiles.configuration_key
+    m, stage, project, source = mounted_fixture(tmp_path, monkeypatch)
+    u = m.service.state['updates']
+    settings = {}
+    monkeypatch.setattr(runtime_profiles, 'configuration_key', real_key)
+    monkeypatch.setattr(health, 'configuration', lambda manager: (
+        real_key(settings, manager.home), SimpleNamespace(settings=settings)))
+    qualified = real_key(settings, m.home, stage)
+    (stage / 'profiles-qualified.json').write_text(json.dumps({
+        'profiles': ['work'], 'configuration': qualified}))
+    failure = next(iter(u['diagnostics']['activeFailures'].values()))['latest']
+    failure.update(reason='runtime-source-constraint', package='amplifier-foundation',
+                   phase='ecosystem-source-preflight')
+    settings['web_bundles'] = {'excluded': [CONTEXT_INTELLIGENCE_BEHAVIOR_URI]}
+    assert real_key(settings, m.home, stage) != qualified
+    if case == 'restored':
+        settings.clear()
+    elif case == 'newer':
+        failure['at'] = 10**11
+    elif case == 'pending':
+        u['pendingRelease'] = 'b' * 32
+    elif case == 'graph':
+        source['runtime-installed.json'][0]['version'] = 'changed'
+    elif case == 'lock':
+        (project / 'uv.lock').write_text('changed')
+    elif case == 'unknown':
+        u['diagnostics']['componentPreparation'] = {'retry': {'mode': 'inspect'}}
+    elif case == 'outside-graph':
+        failure['package'] = 'not-in-qualified-graph'
+    before = copy.deepcopy(m.diagnostics.state)
+    # Preparation's existing strict evidence contract must not acquire a new
+    # baseline merely because the display can explain an old installation.
+    if case == 'changed':
+        assert health.active_evidence(m) == {}
+        from amplifier_web.update_partial import Preparation
+        with pytest.raises(ValueError, match='verified working component generation'):
+            await Preparation(m, stage, []).verify_baseline()
+    await health.refresh(m)
+    health.publish(m)
+    status = u['currentStatus']
+    if case == 'changed':
+        assert status['status'] == 'unverified'
+        assert status['title'] == 'Component verification is incomplete'
+        assert status['component'] is None
+        assert status['actionRequired'] and status['action'] == 'check'
+        assert 'configuration' in status['detail']
+    elif case == 'restored':
+        assert status['status'] == 'current'
+    elif case == 'pending':
+        assert status['status'] == 'waiting'
+    else:
+        assert status['actionRequired'] and status['status'] != 'current'
+        assert status['title'] != 'Component verification is incomplete'
+    assert m.diagnostics.state == before
+
+
+@pytest.mark.parametrize('race', ['configuration', 'pointer'])
+def test_configuration_explanation_rejects_racing_observations(tmp_path, monkeypatch, race):
+    from amplifier_web import runtime_profiles, runtime_qualification
+    m, _, _, source = mounted_fixture(tmp_path, monkeypatch)
+    calls = 0
+    def key(*args):
+        nonlocal calls
+        calls += 1
+        return 'changed' if calls == 1 or race == 'pointer' else 'changed-again'
+    monkeypatch.setattr(runtime_profiles, 'configuration_key', key)
+    if race == 'pointer':
+        def graph(project):
+            (m.directory / 'active.json').write_text(json.dumps({'current': 'b' * 32}))
+            return source['runtime-installed.json']
+        monkeypatch.setattr(runtime_qualification, 'installed_graph', graph)
+    assert health.active_evidence(m, explain_configuration=True) == {}
+
+
+@pytest.mark.parametrize('key', [None, {}, [], '', 'different', 'a' * 63, 'G' * 64])
+def test_malformed_configuration_receipt_is_not_an_explained_change(tmp_path, monkeypatch, key):
+    m, stage, _, _ = mounted_fixture(tmp_path, monkeypatch)
+    (stage / 'profiles-qualified.json').write_text(json.dumps({
+        'profiles': ['work'], 'configuration': key}))
+    before = copy.deepcopy(m.diagnostics.state)
+    assert health.active_evidence(m, explain_configuration=True) == {}
+    assert m.diagnostics.state == before
+
+
+@pytest.mark.parametrize('case', ['quiet', 'newer', 'inspection', 'replacement'])
+def test_explained_configuration_change_stays_neutral_during_next_revalidation(tmp_path, monkeypatch, case):
+    from amplifier_web import runtime_profiles
+    m, _, _, source = mounted_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(runtime_profiles, 'configuration_key', lambda *args: 'b' * 64)
+    m._active_update_evidence = health.active_evidence(m, explain_configuration=True)
+    m._update_health_configuration_revision = 1
+    assert m._active_update_evidence['configurationChanged']
+    u = m.service.state['updates']
+    if case == 'newer':
+        next(iter(u['diagnostics']['activeFailures'].values()))['latest']['at'] = 10**11
+    elif case == 'inspection':
+        u['diagnostics']['componentPreparation'] = {'retry': {'mode': 'inspect'}}
+    elif case == 'replacement':
+        u['pendingReplacement'] = {'unconfirmed': True}
+    before = copy.deepcopy(m.diagnostics.state)
+    m.service.state['configurationRevision'] = 2
+    health.publish(m)
+    assert (u['currentStatus']['title'] == 'Checking current configuration') == (case == 'quiet')
+    assert u['currentStatus']['actionRequired'] == (case != 'quiet')
+    assert m.diagnostics.state == before
+
+
+async def test_real_global_configuration_change_explains_retained_failure(tmp_path, monkeypatch):
+    from amplifier_web import runtime_profiles
+    from amplifier_web.host.config import read_config
+    from amplifier_web.builtin_behaviors import CONTEXT_INTELLIGENCE_BEHAVIOR_URI
+    real_configuration, real_key = health.configuration, runtime_profiles.configuration_key
+    m, stage, _, _ = mounted_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(health, 'configuration', real_configuration)
+    monkeypatch.setattr(runtime_profiles, 'configuration_key', real_key)
+    shared = tmp_path / 'canonical-shared'
+    shared.mkdir()
+    monkeypatch.setenv('AMPLIFIER_HOME', str(shared))
+    staged_shared = stage / 'shared-config'
+    staged_shared.mkdir()
+    (staged_shared / 'settings.yaml').write_text('{}')
+    workspace = stage / 'qualification-workspace'
+    workspace.mkdir()
+    config = read_config(workspace, home=stage, shared_home=staged_shared, global_only=True)
+    (stage / 'profiles-qualified.json').write_text(json.dumps({
+        'profiles': ['work'], 'configuration': real_key(config.settings, m.home, stage)}))
+    assert health.active_evidence(m)
+    settings = shared / 'settings.yaml'
+    settings.write_text(json.dumps({'web_bundles': {'excluded': [CONTEXT_INTELLIGENCE_BEHAVIOR_URI]}}))
+    before = settings.read_bytes()
+    await health.refresh(m)
+    health.publish(m)
+    assert m.service.state['updates']['currentStatus']['status'] == 'unverified'
+    assert m.service.state['updates']['currentStatus']['component'] is None
+    assert settings.read_bytes() == before
+    settings.write_text('{}')
+    await health.refresh(m)
+    health.publish(m)
+    assert m.service.state['updates']['currentStatus']['status'] == 'current'
+
+
 @pytest.mark.parametrize('case',['available','invalid-graph','local-only'])
 def test_local_customization_does_not_mask_available_updates_or_invalid_graph(tmp_path,monkeypatch,case):
     m,stage,_,_=mounted_fixture(tmp_path,monkeypatch);u=m.service.state['updates']
