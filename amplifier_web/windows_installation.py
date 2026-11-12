@@ -7,10 +7,13 @@ and the CLI keep ownership of registration, readiness, serving, and removal.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 from pathlib import Path
 import socket
+import ssl
+from urllib.parse import urlsplit
 
 
 def owner_notice(message, *, confirm=False):
@@ -38,6 +41,61 @@ def listener_present(port=8942):
         return False
     except OSError as error:
         raise RuntimeError("Cannot establish whether the installation address is occupied.") from error
+
+
+def browser_trust_ready(urls, pin):
+    """Read Windows ROOT trust and match the already verified private leaf.
+
+    No bearer, grant, HTTP request, custom CA, environment override or trust
+    mutation participates in this check. Browser policy can still refuse entry.
+    """
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    for certificate, encoding, trust in ssl.enum_certificates("ROOT"):
+        if encoding == "x509_asn" and (trust is True or ssl.Purpose.SERVER_AUTH.oid in trust):
+            context.load_verify_locations(cadata=ssl.DER_cert_to_PEM_cert(certificate))
+    for url in urls:
+        address = urlsplit(url)
+        if address.scheme != "https" or address.hostname not in {"127.0.0.1", "::1"}:
+            raise ValueError("Browser trust requires a verified HTTPS loopback target.")
+        try:
+            with socket.create_connection((address.hostname, address.port), timeout=2) as transport:
+                with context.wrap_socket(transport, server_hostname=address.hostname) as connection:
+                    if hashlib.sha256(connection.getpeercert(binary_form=True)).digest() == pin.fingerprint:
+                        return True
+        except (OSError, ssl.SSLError):
+            continue
+    return False
+
+
+def review_browser_trust(root, urls, pin):
+    """Offer public-certificate review; only the human can change trust."""
+    if browser_trust_ready(urls, pin):
+        return True
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from .tls import exported_ca_bytes
+    from .windows_files import directory
+    content = exported_ca_bytes(root / "app")
+    fingerprint = x509.load_pem_x509_certificate(content).fingerprint(hashes.SHA256())
+    with directory(root / "export", owned_root=root, create=True) as exported:
+        exported.publish_private("local-ca.cer", content, replace=True)
+    if owner_notice(
+            "Amplifier is running in the background. Windows does not yet trust its local "
+            "HTTPS certificate. Open the certificate viewer to review it?\n\n"
+            "Only if your device policy permits it, you can choose Current User > Trusted Root "
+            "Certification Authorities in the viewer. This trusts certificates signed by this CA. "
+            "Amplifier will not import it, request administrator access, change policy or bypass "
+            "a browser warning. Select No to keep the app running without browser entry.\n\n"
+            "Certificate SHA-256: " + ":".join(f"{byte:02X}" for byte in fingerprint),
+            confirm=True):
+        os.startfile(str(root / "export/local-ca.cer"))
+        owner_notice("After your own certificate decision, select OK to recheck the local connection.")
+        if browser_trust_ready(urls, pin):
+            return True
+    owner_notice("Amplifier is still running in the background. Browser entry is waiting for "
+                 "trusted local HTTPS. No trust or security policy was changed by Amplifier. "
+                 "Open Amplifier again after your certificate decision.")
+    return False
 
 
 async def prepare_background(root, launcher, environment, *, port=8942):

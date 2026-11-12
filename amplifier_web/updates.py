@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import time
 import tomllib
@@ -251,8 +252,12 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False):
         from .reset import git_filesystem_environment
         env = git_filesystem_environment(env)
     started=time.monotonic()
+    # All commands here use captured pipes, never an interactive console. A
+    # pythonw consumer entry must not create a console for its CLI children.
+    native = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
     proc = await asyncio.create_subprocess_exec(*map(str,args), cwd=cwd, env=env,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=os.name != 'nt')
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        start_new_session=os.name != 'nt', **native)
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
     except BaseException as error:

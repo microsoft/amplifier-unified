@@ -147,7 +147,7 @@ def environment(root, value):
 
 
 async def launch(root, *, open_browser=True):
-    from .windows_installation import prepare_background, owner_notice
+    from .windows_installation import prepare_background, owner_notice, review_browser_trust
     root, value = installation(root)
     env = environment(root, value)
     os.environ.update(env)  # Own shortcut process only; no saved settings.
@@ -158,9 +158,11 @@ async def launch(root, *, open_browser=True):
         from . import browser_entry
         from .deployment import load_server_config
         config = load_server_config(root / "app")
-        _urls, pin = browser_entry._owner_probe_targets(root / "app", config)
+        urls, pin = browser_entry._owner_probe_targets(root / "app", config)
         if pin is None:
             raise RuntimeError("The installation's private HTTPS identity is unavailable.")
+        if not await asyncio.to_thread(review_browser_trust, root, urls, pin):
+            return {**result, "browser": {"opened": False, "reason": "certificate-review-pending"}}
         # The normal owner entry controls browser authentication and trust
         # behavior. Do not print or expose its transient grant in this process.
         from .updates import process

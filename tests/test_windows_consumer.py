@@ -185,6 +185,26 @@ def test_no_browser_launch_composes_existing_background_owner_without_reinstall(
     assert calls == [(tmp_path, tmp_path / "tools/amplifier-unified/Scripts/amplifier-unified.exe", {})]
 
 
+def test_pending_certificate_review_does_not_issue_browser_grant(tmp_path, monkeypatch):
+    from amplifier_web import windows_installation, deployment, browser_entry, updates
+    monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
+    monkeypatch.setattr(consumer, "environment", lambda *a: {})
+    async def prepared(*args):
+        return {"background": True, "created": False, "health": {"ok": True}}
+    monkeypatch.setattr(windows_installation, "prepare_background", prepared)
+    monkeypatch.setattr(deployment, "load_server_config", lambda home: {})
+    monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (["private-target"], "private-pin"))
+    reviews = []
+    monkeypatch.setattr(windows_installation, "review_browser_trust",
+                        lambda *a: reviews.append(a) or False)
+    async def forbidden(*args, **kwargs):
+        pytest.fail("No browser command or transient grant before certificate decision")
+    monkeypatch.setattr(updates, "process", forbidden)
+    result = asyncio.run(consumer.launch(tmp_path))
+    assert result["browser"] == {"opened": False, "reason": "certificate-review-pending"}
+    assert result["health"]["ok"] and reviews == [(tmp_path, ["private-target"], "private-pin")]
+
+
 def test_os_entries_require_audited_first_install_proof(tmp_path, monkeypatch):
     from amplifier_web import windows_consumer_shell
     monkeypatch.setattr(consumer, "installation", lambda root: (root, {"version": "1.0.0"}))

@@ -154,3 +154,96 @@ def test_windowless_notice_failure_is_not_approval(monkeypatch):
     monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **kw: SimpleNamespace(MessageBoxW=Dialog()), raising=False)
     with pytest.raises(OSError, match="could not be displayed"):
         setup.owner_notice("Review?", confirm=True)
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("exit_code", [0, 2])
+async def test_captured_cli_children_never_need_a_windows_console(monkeypatch, native, exit_code):
+    from amplifier_web.update_diagnostics import CommandFailure
+    calls = []
+
+    class Child:
+        returncode = exit_code
+
+        async def communicate(self):
+            return b"fixture output", b""
+
+    async def spawn(*args, **kwargs):
+        calls.append((args, kwargs))
+        return Child()
+
+    monkeypatch.setattr(updates, "os", SimpleNamespace(
+        name="nt" if native else "posix", environ={}))
+    monkeypatch.setattr(updates.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(updates.asyncio, "create_subprocess_exec", spawn)
+    if exit_code:
+        with pytest.raises(CommandFailure):
+            await updates.process("fixture.exe", "status", env={})
+    else:
+        assert await updates.process("fixture.exe", "status", env={}) == "fixture output"
+    args, kwargs = calls[0]
+    assert args == ("fixture.exe", "status")
+    assert kwargs["stdout"] == kwargs["stderr"] == asyncio.subprocess.PIPE
+    assert kwargs["start_new_session"] is not native
+    assert kwargs.get("creationflags", 0) == (0x08000000 if native else 0)
+
+
+@pytest.mark.parametrize("trusted,match,expected", [
+    (True, True, True), (False, True, False), (True, False, False)])
+def test_browser_trust_requires_windows_roots_and_exact_private_leaf(monkeypatch, trusted, match, expected):
+    import hashlib
+    from contextlib import contextmanager
+    events = []
+    leaf = b"synthetic-leaf"
+    pin = SimpleNamespace(fingerprint=hashlib.sha256(leaf if match else b"other").digest())
+    class Context:
+        def load_verify_locations(self, **kwargs):
+            events.append(("roots", kwargs))
+
+        @contextmanager
+        def wrap_socket(self, transport, *, server_hostname):
+            events.append(("tls", server_hostname))
+            if not trusted:
+                raise setup.ssl.SSLError("Untrusted")
+            yield SimpleNamespace(getpeercert=lambda **kw: leaf)
+    @contextmanager
+    def connect(address, timeout):
+        events.append(("connect", address, timeout))
+        yield object()
+    monkeypatch.setattr(setup.ssl, "SSLContext", lambda protocol: Context())
+    monkeypatch.setattr(setup.ssl, "enum_certificates",
+                        lambda store: [(b"root", "x509_asn", True)], raising=False)
+    monkeypatch.setattr(setup.ssl, "DER_cert_to_PEM_cert", lambda value: "public-root")
+    monkeypatch.setattr(setup.socket, "create_connection", connect)
+    assert setup.browser_trust_ready(["https://127.0.0.1:8953/api/health"], pin) is expected
+    assert events == [("roots", {"cadata": "public-root"}),
+                      ("connect", ("127.0.0.1", 8953), 2), ("tls", "127.0.0.1")]
+    with pytest.raises(ValueError, match="loopback"):
+        setup.browser_trust_ready(["https://example.invalid/api/health"], pin)
+
+
+@pytest.mark.parametrize("review,recheck,expected", [(False, False, False), (True, False, False), (True, True, True)])
+def test_certificate_review_is_public_only_and_never_imports_trust(tmp_path, monkeypatch, review, recheck, expected):
+    from contextlib import contextmanager
+    from cryptography import x509
+    from amplifier_web import tls, windows_files
+    checks = iter([False, recheck])
+    monkeypatch.setattr(setup, "browser_trust_ready", lambda *a: next(checks))
+    monkeypatch.setattr(tls, "exported_ca_bytes", lambda home: b"public-ca")
+    monkeypatch.setattr(x509, "load_pem_x509_certificate",
+                        lambda content: SimpleNamespace(fingerprint=lambda algorithm: b"\x12" * 32))
+    events = []
+    @contextmanager
+    def directory(path, **kwargs):
+        assert path == tmp_path / "export" and kwargs == {"owned_root": tmp_path, "create": True}
+        yield SimpleNamespace(publish_private=lambda *a, **kw: events.append(("export", a, kw)))
+    monkeypatch.setattr(windows_files, "directory", directory)
+    monkeypatch.setattr(setup.os, "startfile", lambda path: events.append(("viewer", path)), raising=False)
+    notices = []
+    monkeypatch.setattr(setup, "owner_notice", lambda text, **kw:
+                        notices.append((text, kw)) or review)
+    assert setup.review_browser_trust(tmp_path, ["verified-url"], "private-pin") is expected
+    assert events[0] == ("export", ("local-ca.cer", b"public-ca"), {"replace": True})
+    assert [row[0] for row in events] == ["export"] + (["viewer"] if review else [])
+    assert "Current User" in notices[0][0] and notices[0][1] == {"confirm": True}
+    assert "12:12:" in notices[0][0] and "will not import" in notices[0][0]
