@@ -6,6 +6,25 @@ import sys
 import threading
 
 
+class _PosixProbe:
+    """Outer probe plus its host-owned detached Git invocations."""
+
+    def __init__(self, process, git_owner):
+        self.process, self.git_owner = process, git_owner
+        self.cleanup_complete = False
+
+    def __getattr__(self, name):
+        return getattr(self.process, name)
+
+    @property
+    def returncode(self):
+        # Existing generation lease consumers must not mistake root exit for
+        # confirmed cleanup after the owner reports an actual cleanup failure.
+        if self.git_owner.errors:
+            return None
+        return self.process.returncode
+
+
 class _WindowsProbe:
     """Subprocess-shaped view of the existing Job owner, not a second launcher."""
 
@@ -132,6 +151,19 @@ async def isolated(operation):
 
 async def _stop(process, readers=(), grace=0):
     readers = tuple(asyncio.ensure_future(reader) for reader in readers)
+    if isinstance(process, _PosixProbe):
+        from .probe_git import _CLEANUP_SECONDS, _failed_owners, GitProbeCleanupError
+        try:
+            async with asyncio.timeout(grace + _CLEANUP_SECONDS):
+                await _stop(process.process, readers, grace)
+        except BaseException as exc:
+            process.git_owner.errors.append(exc)
+            _failed_owners.add(process.git_owner)
+            raise GitProbeCleanupError(process.git_owner) from exc
+        finally:
+            await process.git_owner.close()
+        process.cleanup_complete = True
+        return
     if isinstance(process, _WindowsProbe):
         try:
             # The public owner offers finite force-close, not graceful signals.
@@ -179,15 +211,34 @@ async def stop(process, *readers, grace=0):
     await _settle(asyncio.create_task(_stop(process, readers, grace)))
 
 
-async def spawn(*command, **kwargs):
+async def spawn(*command, owned_git=False, **kwargs):
     if os.name == 'nt':
         return await _spawn_windows(command, kwargs)
+    git_owner = None
+    if owned_git:
+        from .probe_git import GitProbeOwner
+        git_owner = GitProbeOwner()
+        try:
+            await git_owner.start()
+        except BaseException:
+            await _settle(asyncio.create_task(git_owner.close()))
+            raise
+        kwargs['env'] = {**(kwargs.get('env') or os.environ),
+                         'AMPLIFIER_PROBE_GIT_SOCKET': git_owner.path}
     # asyncio otherwise kills only the initial child if creation is cancelled
     # while pipe transports connect. Its already-started descendants survive.
     start = asyncio.create_task(asyncio.create_subprocess_exec(
         *command, **kwargs, start_new_session=True))
+    if git_owner is not None:
+        # Install before yielding: the child can reach Foundation while asyncio
+        # is still connecting its pipes.
+        async def abort_probe():
+            process = await asyncio.shield(start)
+            await _stop(process)
+        git_owner.abort_probe = abort_probe
     try:
-        return await asyncio.shield(start)
+        process = await asyncio.shield(start)
+        return _PosixProbe(process, git_owner) if git_owner else process
     except asyncio.CancelledError:
         async def finish_start():
             try:
@@ -198,5 +249,30 @@ async def spawn(*command, **kwargs):
             # before waiting for tree exit, just as after ownership transfer.
             drain = asyncio.create_task(process.communicate())
             await _stop(process, (drain,))
-        await _settle(asyncio.create_task(finish_start()))
+        try:
+            finalizer = asyncio.create_task(finish_start())
+            if git_owner is None:
+                await _settle(finalizer)
+            else:
+                from .probe_git import _CLEANUP_SECONDS, _failed_owners, GitProbeCleanupError
+                # A wedged pipe connection is unconfirmed custody, not an
+                # indefinitely blocked cancellation or permission to respawn.
+                git_owner.finalizers.add(finalizer)
+                finalizer.add_done_callback(git_owner.finalizers.discard)
+                async def bounded_start():
+                    try:
+                        async with asyncio.timeout(_CLEANUP_SECONDS):
+                            await asyncio.shield(finalizer)
+                    except TimeoutError as exc:
+                        git_owner.errors.append(exc)
+                        _failed_owners.add(git_owner)
+                        raise GitProbeCleanupError(git_owner) from exc
+                await _settle(asyncio.create_task(bounded_start()))
+        finally:
+            if git_owner is not None:
+                await _settle(asyncio.create_task(git_owner.close()))
+        raise
+    except BaseException:
+        if git_owner is not None:
+            await _settle(asyncio.create_task(git_owner.close()))
         raise
