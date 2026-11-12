@@ -216,6 +216,7 @@ async def test_stop_settles_when_cancelled_task_did_not_enter_turn_owner(app_fac
     await app.dispatch('conversation.send', {'sessionId': session['id'], 'text': 'cancel before connect'}, command_id='cancel-new-turn')
     await asyncio.wait_for(entered.wait(), 5)
     await app.dispatch('conversation.stop', {'sessionId': session['id']}, command_id='cancel-new-turn-stop')
+    await until(lambda: session['id'] not in app.external_conversations.turns)
     assert session['status'] == 'stopped'
     assert session['messages'][0]['delivery']['status'] == 'failed'
     assert session['id'] not in app.external_conversations.turns
