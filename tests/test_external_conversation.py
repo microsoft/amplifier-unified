@@ -258,3 +258,37 @@ async def test_restart_after_admission_preserves_unknown_without_starting_or_rep
         await app.dispatch('conversation.stop', {'sessionId': session['id']})
         release.set()
         await sending
+
+
+async def test_old_fenced_sender_cannot_settle_a_newer_explicit_turn(app_factory, tmp_path, monkeypatch):
+    app = app_factory()
+    session = await create(app, tmp_path)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = app._send
+
+    async def held(snapshot, text, input_id, *args, **kwargs):
+        if input_id == 'older-admitted':
+            entered.set()
+            await release.wait()
+        return await original(snapshot, text, input_id, *args, **kwargs)
+
+    monkeypatch.setattr(app, '_send', held)
+    older = asyncio.create_task(app.dispatch('conversation.send',
+        {'sessionId': session['id'], 'text': 'old never dispatched'}, command_id='older-admitted'))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        await app.dispatch('conversation.stop', {'sessionId': session['id']})
+        await until(lambda: session['status'] == 'stopped')
+        await app.dispatch('conversation.send', {'sessionId': session['id'], 'text': 'wait-for-stop'}, command_id='newer-running')
+        await until(lambda: bool(session.get('streaming')))
+        release.set()
+        assert (await older)['delivery'] == 'failed'
+        assert session['status'] == 'working'
+        assert session['externalAgent']['activeInputId'] == 'newer-running'
+        assert session['execution']['currentTurnId'] == 'newer-running'
+        assert [row['text'] for row in operations(tmp_path) if row['kind'] == 'prompt'] == ['wait-for-stop']
+    finally:
+        release.set()
+        await asyncio.gather(older, return_exceptions=True)
+        await app.dispatch('conversation.stop', {'sessionId': session['id']})
+        await until(lambda: session['id'] not in app.external_conversations.turns)

@@ -89,9 +89,10 @@ class ExternalConversations:
             current = self.service._session(sid)
             if current.get('interruptionRevision', 0) != session.get('interruptionRevision', 0):
                 self.service._delivery(current, input_id, 'failed')
-                current['externalAgent'].update(status='stopped')
-                current['externalAgent'].pop('activeInputId', None)
-                finish(current, 'stopped')
+                if current['externalAgent'].get('activeInputId') == input_id:
+                    current['externalAgent'].update(status='stopped')
+                    current['externalAgent'].pop('activeInputId', None)
+                    finish(current, 'stopped')
                 self.service._publish_changes(sessions={sid})
                 return {'delivery': 'failed', 'inputId': input_id}
             self.guard(current, 'conversation.send', {}, admitted=True)
