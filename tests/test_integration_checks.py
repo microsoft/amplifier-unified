@@ -408,7 +408,7 @@ def test_new_runtime_owners_are_additive_to_frozen_skip_baseline():
         'tests/test_default_export_literals.py::test_literal_examples_survive_foundation_export_roundtrip': 'native',
         **{f'tests/test_{name}.py': 'default-installed' for name in (
             'default_behaviors_integration', 'default_runtime_safety',
-            'default_mount_runtime', 'default_routing_runtime')},
+            'default_mount_runtime', 'default_routing_runtime', 'curated_resolver_installed')},
         'tests/fixtures/status_emitter_probe.py': 'status-installed',
         'tests/fixtures/status_package_probe.py': 'status-installed',
         'tests/test_default_desktop_safety.py': 'default-desktop-safety',
@@ -470,6 +470,7 @@ def test_desktop_safety_owner_uses_its_manual_runner_without_changing_ic13(tmp_p
         'tests/test_default_runtime_safety.py',
         'tests/test_default_mount_runtime.py',
         'tests/test_default_routing_runtime.py',
+        'tests/test_curated_resolver_installed.py',
     ]
     output = tmp_path / 'not-generic-pytest'
     with pytest.raises(ValueError, match='explicit qualification runner'):
