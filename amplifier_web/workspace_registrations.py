@@ -18,7 +18,8 @@ def reconcile(registrations, known, observed, *, hidden_ids, managed_paths):
     """Update registration rows in place and report ordered reference remaps.
 
     The caller owns both mutable lists, applies each remap in order, and persists
-    the affected state under its existing lock. Observations are not modified.
+    the affected state under its existing lock. New rows retain the existing
+    shallow-copy semantics for observed fields.
     A remap carries the observed destination path at that point in the scan.
     """
     hidden_workspaces = set(hidden_ids)
