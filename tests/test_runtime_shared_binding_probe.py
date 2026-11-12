@@ -5,6 +5,7 @@ inherits prepared test dependencies but installers target only its own venv.
 """
 import asyncio
 import hashlib
+import importlib.metadata as metadata
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tomllib
 from types import SimpleNamespace
 
 import pytest
@@ -33,6 +35,13 @@ GENERATION = 'e' * 32
 
 @pytest.fixture
 async def shared_source(tmp_path, monkeypatch):
+    if os.environ.get('FOUNDATION_INTEGRATION_REVISION'):
+        import amplifier_foundation.sources.shared as implementation
+        assert hashlib.sha256(Path(implementation.__file__).read_bytes()).hexdigest() == (
+            os.environ['FOUNDATION_INTEGRATION_SHARED_SHA256'])
+        direct = json.loads(metadata.distribution('amplifier-foundation').read_text('direct_url.json'))
+        assert direct['vcs_info']['commit_id'] == os.environ['FOUNDATION_INTEGRATION_REVISION']
+        assert direct['url'].removesuffix('.git') == 'https://github.com/microsoft/amplifier-foundation'
     from amplifier_foundation.sources.shared import SharedSourceStore
     home = tmp_path / 'app'
     stage = environments.receipt_directory(home, GENERATION)
@@ -245,11 +254,24 @@ async def test_real_probe_installs_checked_shared_hook_after_adoption_and_freeze
                '--install-overrides', str(overrides), '--global-only']
     record_property('probeCommand', json.dumps(command))
     identity = subprocess.check_output([command[0], '-c',
-        'import importlib.metadata as m,json,sys; import amplifier_foundation; '
+        'import importlib.metadata as m,hashlib,json,sys; from pathlib import Path; '
+        'import amplifier_foundation; import amplifier_foundation.sources.shared as s; '
         'print(json.dumps({"python":sys.version,"executable":sys.executable,'
-        '"foundation":m.version("amplifier-foundation"),"foundationPath":amplifier_foundation.__file__}))'],
+        '"foundation":m.version("amplifier-foundation"),"foundationPath":amplifier_foundation.__file__,'
+        '"sharedSha256":hashlib.sha256(Path(s.__file__).read_bytes()).hexdigest(),'
+        '"origins":{n:json.loads(m.distribution(n).read_text("direct_url.json")) for n in '
+        '("amplifier-foundation","amplifier-module-hooks-session-naming")}}))'],
         text=True, env=env)
     record_property('probeIdentity', identity.strip())
+    expected = os.environ.get('FOUNDATION_INTEGRATION_REVISION')
+    if expected:
+        facts = json.loads(identity)
+        assert facts['sharedSha256'] == os.environ['FOUNDATION_INTEGRATION_SHARED_SHA256']
+        for name, direct in facts['origins'].items():
+            assert direct['url'].removesuffix('.git') == 'https://github.com/microsoft/amplifier-foundation'
+            assert direct['vcs_info']['commit_id'] == expected
+            assert direct.get('subdirectory', '') == (
+                'modules/hooks-session-naming' if name.endswith('session-naming') else '')
     record_property('unifiedSource', str(probe))
     # The actual child must encounter different raw URL spellings, not a test
     # that accidentally normalizes both records before reaching the collector.
@@ -298,3 +320,204 @@ async def test_real_probe_installs_checked_shared_hook_after_adoption_and_freeze
             'sourceInventorySha256': hashlib.sha256(
                 json.dumps(object_before, sort_keys=True).encode()).hexdigest()}))
         endpoint.close()
+
+
+@pytest.mark.skipif(not os.environ.get('FOUNDATION_INTEGRATION_REVISION'),
+                    reason='Opt-in full packaged worker graph in the owned cross-repository DTU')
+async def test_packaged_worker_preparation_and_included_foundation_update(
+        tmp_path, monkeypatch, record_property):
+    """Real full worker graph and UpdateManager.validate, no model generation.
+
+    The DTU serves the exact candidate repository as its isolated main; this is
+    candidate transport evidence, never proof of upstream main acceptance.
+    """
+    from amplifier_web.service import AppService
+    from amplifier_web.bundles import SNAPSHOT_VERSION
+
+    revision = os.environ['FOUNDATION_INTEGRATION_REVISION']
+    update_revision = os.environ.get('FOUNDATION_INTEGRATION_UPDATE_REVISION', revision)
+    expected_hash = os.environ['FOUNDATION_INTEGRATION_SHARED_SHA256']
+    assert len(revision) == 40 and all(c in '0123456789abcdef' for c in revision)
+    assert len(expected_hash) == 64 and all(c in '0123456789abcdef' for c in expected_hash)
+    url = 'https://github.com/microsoft/amplifier-foundation'
+    names = {'amplifier-foundation': '',
+             'amplifier-module-hooks-session-naming': 'modules/hooks-session-naming'}
+    root = Path(__file__).resolve().parents[1]
+    home, shared = tmp_path / 'app', tmp_path / 'shared'
+    home.mkdir(); shared.mkdir()
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(home))
+    monkeypatch.setenv('AMPLIFIER_HOME', str(shared))
+    monkeypatch.setenv('PYTHONDONTWRITEBYTECODE', '1')
+    for key in ('AMPLIFIER_UNIFIED_RELEASE', 'AMPLIFIER_SOURCE_STORE', 'PYTHONPATH',
+                'UV_OVERRIDE', 'UV_CONSTRAINT', 'UV_BUILD_CONSTRAINT',
+                'UV_PROJECT_ENVIRONMENT', 'UV_CONFIG_FILE', 'UV_OFFLINE', 'UV_NO_INDEX'):
+        monkeypatch.delenv(key, raising=False)
+    uv = shutil.which('uv')
+    assert uv and sys.version_info[:2] == (3, 13)
+    baseline = environments.prepare_project(home)
+    packaged = environments.manifest_path().read_bytes()
+    assert (baseline / 'pyproject.toml').read_bytes() == packaged
+    predecessor_lock = Path(os.environ.get('FOUNDATION_INTEGRATION_BASELINE_LOCK', root / 'uv.lock'))
+    shutil.copyfile(predecessor_lock, baseline / 'uv.lock')
+    # The full packaged graph preserves the host's old Foundation resolution.
+    await updates.process(uv, 'sync', '--project', str(baseline), '--python', '3.13', timeout=900)
+    old = environments.locked_sources(predecessor_lock)['amplifier-foundation'].fragment
+    assert old != revision
+    assert environments.installed_sources(baseline)['amplifier-foundation']['current'] == old
+    baseline_graph = qualification.installed_graph(baseline)
+    baseline_payload = qualification.package_content(baseline)
+    # A served DTU branch may have a mechanically created snapshot commit.
+    # Prove the exact input commit separately rather than relabel that snapshot.
+    fresh_home = tmp_path / 'fresh-candidate'
+    fresh_data = tomllib.loads(packaged.decode())
+    for name in names:
+        fresh_data['tool']['uv']['sources'][name]['rev'] = revision
+    fresh_content = ('\n'.join(json.dumps(key) + ' = ' + environments.toml_value(value)
+                              for key, value in fresh_data.items()) + '\n').encode()
+    fresh = environments.prepare_project(fresh_home, content=fresh_content)
+    shutil.copyfile(baseline / 'uv.lock', fresh / 'uv.lock')
+    await updates.process(uv, 'sync', '--project', str(fresh), '--python', '3.13', timeout=900)
+    fresh_sources = environments.installed_sources(fresh)
+    for name, subdirectory in names.items():
+        assert fresh_sources[name]['current'] == revision
+        assert fresh_sources[name]['url'].removesuffix('.git') == url
+        assert fresh_sources[name]['subdirectory'] == subdirectory
+    fresh_identity = json.loads(await updates.process(str(fresh / '.venv/bin/python'), '-I', '-c',
+        'import hashlib,json,sys; from pathlib import Path; '
+        'import amplifier_foundation.sources.shared as s; '
+        'print(json.dumps({"prefix":sys.prefix,"source":s.__file__,'
+        '"sha256":hashlib.sha256(Path(s.__file__).read_bytes()).hexdigest()}))'))
+    assert Path(fresh_identity['source']).resolve().is_relative_to((fresh / '.venv').resolve())
+    assert fresh_identity['sha256'] == expected_hash
+    receipt = environments.receipt_directory(home)
+    receipt.mkdir(parents=True, exist_ok=True)
+    for source, target in [('pyproject.toml', 'runtime.toml'), ('uv.lock', 'runtime.lock')]:
+        shutil.copyfile(baseline / source, receipt / target)
+    def predecessor_receipts():
+        return {str(path.relative_to(receipt)): path.read_bytes()
+                for path in receipt.rglob('*') if path.is_file()}
+    before = predecessor_receipts()
+    beforelock = (baseline / 'uv.lock').read_bytes()
+
+    provider = tmp_path / 'provider-fixture'
+    provider.mkdir()
+    (provider / '__init__.py').write_text('''
+from pathlib import Path
+from amplifier_core.models import ProviderInfo
+__amplifier_module_type__ = "provider"
+class FixtureProvider:
+    name = "fixture"
+    def __init__(self, config): self.config = config
+    def get_info(self):
+        return ProviderInfo(id="fixture", display_name="Fixture", defaults={"model": "offline"})
+    def get_config_schema(self): return {"fields": []}
+    async def list_models(self): return []
+    def parse_tool_calls(self, response): return []
+    async def complete(self, request, **kwargs):
+        Path(self.config["calls"]).write_text("unexpected model call")
+        raise AssertionError("Worker qualification must not generate")
+async def mount(coordinator, config=None):
+    await coordinator.mount("providers", FixtureProvider(config), name="fixture")
+''')
+    fixture_package = 'amplifier-module-provider-fixture'
+    (provider / 'pyproject.toml').write_text(
+        '[project]\nname="' + fixture_package + '"\nversion="1.0"\ndependencies=[]\n'
+        '[build-system]\nrequires=[]\nbuild-backend="backend"\nbackend-path=["."]\n')
+    (provider / 'backend.py').write_text(BACKEND.replace(
+        "wheel.writestr(name + '.py', 'version = ' + repr(version))",
+        "wheel.writestr(name + '/__init__.py', Path('__init__.py').read_text())"))
+    calls = tmp_path / 'model-calls'
+    profile = tmp_path / 'profile.yaml'
+    profile.write_text(json.dumps({
+        'bundle': {'name': 'foundation-integration', 'version': SNAPSHOT_VERSION},
+        'session': {'orchestrator': {'module': 'loop-streaming'},
+                    'context': {'module': 'context-simple'}},
+        'providers': [{'module': 'provider-fixture', 'source': str(provider),
+                       'config': {'calls': str(calls)}}]}))
+    settings = {'bundle': {'active': 'foundation-integration',
+                          'added': {'foundation-integration': str(profile)}},
+                'web_bundles': {'excluded': list(builtin_behaviors.DEFAULT_BEHAVIORS),
+                    'entries': [{'name': name, 'uri': uri, 'role': 'standalone', 'enabled': False}
+                                for name, uri in PRECONFIGURED_BUNDLES.items()]}}
+    (shared / 'settings.yaml').write_text(json.dumps(settings))
+    monkeypatch.chdir(tmp_path)
+
+    class Runtime:
+        workers = {}
+        async def close(self): pass
+        def has_pending_operations(self): return False
+    app = AppService(home, Runtime(), workspace=tmp_path)
+    manager = updates.UpdateManager(app)
+    app.update_manager = manager
+    generation = 'f' * 32
+    stage = environments.receipt_directory(home, generation)
+    stage.mkdir(parents=True)
+    shutil.copytree(shared, stage / 'shared-config')
+    rows = await environments.update_inventory(home)
+    # Request only these two upgrades; verify the actual graph delta below.
+    manager.inventory = [{**row, 'latest': update_revision, 'status': 'update',
+                          'updateTier': 'included'}
+                         for row in rows if row.get('package') in names]
+    assert {row['package'] for row in manager.inventory} == set(names)
+    assert all(row['eligible'] and row['ref'] == 'main' for row in manager.inventory)
+    report = {'candidateRevision': revision, 'updateRevision': update_revision,
+              'predecessorRevision': old,
+              'freshCandidateSources': {name: fresh_sources[name] for name in names},
+              'freshCandidateIdentity': fresh_identity,
+              'freshCandidateManifestSha256': hashlib.sha256(fresh_content).hexdigest(),
+              'packagedManifestSha256': hashlib.sha256(packaged).hexdigest(),
+              'selected': manager.inventory}
+    try:
+        await manager.validate(stage, generation)
+        final = environments.project_path(home, generation)
+        assert all((stage / name).is_file() for name in (
+            'runtime-installed.json', 'runtime-project.json', 'profiles-qualified.json',
+            'runtime-base.toml', 'runtime.toml', 'runtime.lock', 'runtime-sources.json'))
+        qualification.verify_recorded(final, stage)
+        graph = qualification.installed_graph(final)
+        def source_identity(row):
+            direct = row.get('directUrl') or {}
+            vcs = direct.get('vcs_info') or {}
+            # Freeze intentionally replaces requested main with its exact SHA.
+            # That spelling change is not an upgrade to another source commit.
+            return (row['version'], direct.get('url'), vcs.get('commit_id'),
+                    direct.get('subdirectory', ''), direct.get('dir_info'))
+        old_graph = {row['name']: source_identity(row) for row in baseline_graph}
+        new_graph = {row['name']: source_identity(row) for row in graph}
+        changed = {name for name in old_graph.keys() | new_graph.keys()
+                   if old_graph.get(name) != new_graph.get(name)}
+        assert changed == set(names) | {fixture_package}, changed
+        selected = {row['name']: row for row in graph if row['name'] in names}
+        for name, subdirectory in names.items():
+            direct = selected[name]['directUrl']
+            assert direct['url'].removesuffix('.git') == url
+            assert direct['vcs_info']['commit_id'] == update_revision
+            assert direct.get('subdirectory', '') == subdirectory
+        identity = json.loads(await updates.process(str(final / '.venv/bin/python'), '-I', '-c',
+            'import hashlib,json,sys; from pathlib import Path; '
+            'import amplifier_foundation.sources.shared as s; '
+            'print(json.dumps({"prefix":sys.prefix,"source":s.__file__,'
+            '"sha256":hashlib.sha256(Path(s.__file__).read_bytes()).hexdigest()}))'))
+        assert Path(identity['source']).resolve().is_relative_to((final / '.venv').resolve())
+        assert Path(identity['prefix']).resolve() == (final / '.venv').resolve()
+        assert identity['sha256'] == expected_hash
+        assert (baseline / 'uv.lock').read_bytes() == beforelock
+        assert predecessor_receipts() == before
+        assert qualification.installed_graph(baseline) == baseline_graph
+        assert qualification.package_content(baseline) == baseline_payload
+        assert not calls.exists()
+        report.update(installedFoundation=selected, identity=identity,
+            receipts={p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                      for p in stage.iterdir() if p.is_file()},
+            graphDelta=sorted(changed),
+            predecessorReceipts={name: hashlib.sha256(content).hexdigest()
+                                 for name, content in before.items()},
+            predecessorLockSha256=hashlib.sha256(beforelock).hexdigest(),
+            predecessorUnchanged=True, providerCalls=0)
+        record_property('fullWorkerIntegration', json.dumps(report))
+        output = os.environ.get('FOUNDATION_INTEGRATION_OUTPUT')
+        if output:
+            Path(output).write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+    finally:
+        await app.close()
+        assert not calls.exists()
