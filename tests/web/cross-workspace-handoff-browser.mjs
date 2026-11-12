@@ -86,6 +86,9 @@ try{
  await expect(review).toContainText(info.target);await expect(review).toContainText('fixture-model');await expect(review).toContainText('anchors');
  phase='other-client-isolation';await other.reload();await expect(otherComposer).toBeVisible();assert.equal((await state(other)).selectedSessionId,info.sourceId);
  await expect(other.getByRole('region',{name:'New chat requests',exact:true})).toHaveCount(0);assert.deepEqual((await state(other)).handoffs,[],'fresh owner projection excludes another client’s review');
+ const deniedRead=await action(other,'session.handoff.read',{requestId:proposal.requestId}).then(value=>({value}),error=>({error:error.message}));
+ assert.ok(deniedRead.error||deniedRead.value?.accepted===false,'another client cannot inspect the private review by exact ID');
+ assert.deepEqual(await inspect(),observations.before,'refused private review read must not create or send work');
  await action(other,'session.select',{id:info.otherSourceId});await otherComposer.fill('Other browser private draft');await expect(otherComposer).toHaveDraft('Other browser private draft');
  assert.deepEqual(await inspect(),observations.before,'a proposal does not create or start work');
  phase='pending-review-reload';const reloadStarted=Date.now();await page.reload();await expect(review).toBeVisible();await expect(composer).toHaveDraft(draft);assert.equal((await row(proposal.requestId)).reviewHash,proposal.reviewHash);timings.reloadReviewMs=Date.now()-reloadStarted;
@@ -303,6 +306,7 @@ try{
   await expect(history().locator('pre:visible')).toHaveCount(0);
   await expect(history().getByText('Opening brief acceptance is not work completion.',{exact:true})).toBeVisible();
   await details(directCard);await expect(directCard.locator('pre')).toHaveText(direct.text);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'expanded history details must not overflow the viewport');
   await expect(directCard.getByRole('button',{name:'Open chat',exact:true})).toBeVisible();
   await summary().focus();await summary().press('Space');await collapsed(8);
   assert.equal(actions.length,before,'history expansion/details/collapse must not change app state or send input');
