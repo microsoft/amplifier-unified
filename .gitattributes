@@ -98,3 +98,7 @@ package-lock.json source-context=locks
 /scripts/files1318_integrated_checks.py source-context=evidence linguist-generated=true
 /scripts/scale_runtime_browser.mjs source-context=evidence linguist-generated=true
 /scripts/scale_runtime_workspace_browser.mjs source-context=evidence linguist-generated=true
+/amplifier_operations/tests/** source-context=tests
+/amplifier_operations/MANIFEST.in source-context=configuration
+/amplifier_operations/.gitignore source-context=configuration
+/amplifier_operations/LICENSE source-context=documentation
