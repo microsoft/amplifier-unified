@@ -1,5 +1,12 @@
 # Component ownership
 
+`components/outputs/` is temporarily authored here as an independently buildable
+Python project. Preserve `amplifier_outputs` imports and its saved-body formats.
+Its Git/SQLite mechanism tests belong with the package; Unified retains
+transactions, authorization, source access, content integrity and retention.
+Normal Unified builds these same runtime sources directly; do not coinstall the
+standalone distribution. This is not a generated copy or the whole resources domain.
+
 `components/portability/` is temporarily authored here as an independently
 buildable Python project. Preserve `amplifier_portability` imports and its existing
 worktree dependency. Its signed-journal and Git-capsule tests stay with the package;

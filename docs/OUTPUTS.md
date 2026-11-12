@@ -14,6 +14,12 @@ Forks copy only linked outputs anchored to retained message IDs, reuse immutable
 
 `amplifier_outputs` owns portable relationship storage and read-only Git evidence. Unified owns authorization, workspace/source access, private resources and presentation. No provider-specific artifact library is required.
 
+Its temporary authoring home is [`components/outputs`](../components/outputs/README.md),
+with standalone build and mechanism-test instructions. Unified packages the same
+sources directly; there is no separate runtime dependency or repository-delivery
+cutover. Host integration tests remain in `tests/`. This preparation does not
+change resource ownership, retention, stored representations or action behavior.
+
 New saved Canvas outputs reuse the Canvas's immutable resource with the
 `canvas-json-v1` body format. Their downloaded JSON bytes and SHA-256 keep the
 existing representation; later Canvas edits cannot alter that saved output.
