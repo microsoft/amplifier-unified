@@ -1,7 +1,8 @@
 # Desktop and browser setup
 
 Open **Settings → Desktop & browser → Check desktop and browser setup**, or call
-`app_control(operation="dispatch", action="desktop.readiness", args={})`. The optional `args.sessionId` selects
+`app_control(operation="dispatch", args={"action":"desktop.readiness","args":{}})`.
+The optional inner `args.sessionId` selects
 the conversation; agent calls are bound to their calling conversation. UI and
 agent use the same action and receive the same report.
 

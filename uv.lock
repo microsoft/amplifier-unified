@@ -337,7 +337,7 @@ source = { git = "https://github.com/microsoft/amplifier-bundle-filesystem?subdi
 [[package]]
 name = "amplifier-module-tool-computer-use"
 version = "0.1.0"
-source = { git = "https://github.com/microsoft/amplifier-bundle-computer-use?subdirectory=modules%2Ftool-computer-use&rev=main#951181f829cd6b3de7653a31bf8826f8a0b76456" }
+source = { git = "https://github.com/microsoft/amplifier-bundle-computer-use?subdirectory=modules%2Ftool-computer-use&rev=main#27202d8d7717ad216335af00a797d8c0ad277e39" }
 dependencies = [
     { name = "pillow" },
     { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'" },
