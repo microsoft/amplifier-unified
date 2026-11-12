@@ -15,7 +15,7 @@ from .session_activity import navigation_busy
 SUMMARY_FIELDS = ('location', 'id', 'title', 'titleSource', 'nativeNameSource', 'autoName', 'naming', 'configurationBusy', 'configurationPending', 'configurationRefresh', 'fileAccessPending', 'description', 'status', 'workspace', 'workingDirectory', 'executionRevision',
     'workspaceId', 'workspaceAvailable', 'bundle', 'createdAt', 'recentActivityAt', 'navigationActivityAt',
     'sessionKind', 'sessionPurpose', 'parentId', 'nativeParentId', 'nativeIdentity', 'nativeProject',
-    'runtimeSessionId', 'historyManaged', 'historyLoaded', 'historyReadOnlyReason', 'nativeAvailable',
+    'runtimeSessionId', 'externalAgent', 'historyManaged', 'historyLoaded', 'historyReadOnlyReason', 'nativeAvailable',
     'sharedHistoryTotal', 'turnCount', 'unreadCompletion', 'creationCommandId')
 ACTIVE = {'starting', 'working', 'running', 'stopping'}
 
@@ -253,7 +253,7 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
     result['conversationOrganization'] = organization_projection(state, visible, directory=directory)
     # Report history is read through bounded coordination cursors, never copied
     # into every browser progress snapshot. The worker's latest report remains.
-    result['sessions'] = [{**row, 'workers': [{key: value for key, value in worker.items() if key != 'reportReceipts'}
+    result['sessions'] = [{**{key: value for key, value in row.items() if key != '_externalAgentSource'}, 'workers': [{key: value for key, value in worker.items() if key != 'reportReceipts'}
                            for worker in row.get('workers', [])]} for row in result['sessions']]
     # Only the selected owner's current, indexed waits; no transcript or peer
     # configuration loads, and this read never consumes a return notification.

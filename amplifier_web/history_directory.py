@@ -32,7 +32,7 @@ FIELDS = {
     'description', 'bundle', 'workspace', 'workspaceId', 'workspaceAvailable',
     'workingDirectory', 'executionRevision', 'executionHost', 'executionHandoffId', 'assignmentId', 'interruptionRevision',
     'createdAt', 'updatedAt', 'recentActivityAt', 'navigationActivityAt',
-    'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
+    'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'externalAgent', 'parentId', 'nativeParentId',
     'nativeRevision', 'turnCount', 'shared', 'historyManaged', 'historyLoaded',
     'historyLoading', 'sharedHistoryTotal', 'displayMessageCount', 'sessionKind', 'sessionPurpose', 'location', 'nativeAvailable',
     'historyReadOnlyReason', 'status', 'configurationBusy', 'configurationPending', 'fileAccessPending',

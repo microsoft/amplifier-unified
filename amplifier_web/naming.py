@@ -66,6 +66,9 @@ def automatic_metadata(metadata):
 
 
 def set_automatic(home, session, enabled):
+    if session.get('externalAgent'):
+        session['autoName'] = enabled
+        return
     from amplifier_foundation.session.metadata import metadata_lock
     store = SessionMetadataStore(directory_for(home, session))
     if store.history.exists():
@@ -241,6 +244,8 @@ def adopt(directory, session=None):
 
 
 def refresh(home, session, *, migrate=False):
+    if session.get('externalAgent'):
+        return
     directory = directory_for(home, session)
     metadata = adopt(directory, session) if migrate else SessionMetadataStore(directory).read()
     if metadata.get('name'):
@@ -274,6 +279,8 @@ def prepare_regeneration(home, session):
 
 
 def persist(home, session, *, shared_rename=False, expected_revision=None):
+    if session.get('externalAgent'):
+        return
     directory = directory_for(home, session)
     store = SessionMetadataStore(directory)
     if not store.history.exists():
