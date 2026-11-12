@@ -71,7 +71,7 @@ async def prior_partial(review, monkeypatch):
     # This pointer/baseline seam is NOT actual activation or qualification.
     p.pointer.write_text(json.dumps({'current': p.stage.name, 'previous': 'a' * 32}))
     monkeypatch.setattr(update_health, 'active_evidence',
-                        lambda manager: {'generation': p.stage.name, 'verifiedAt': 1})
+                        lambda manager, **kwargs: {'generation': p.stage.name, 'verifiedAt': 1})
     p.current_rows = partial.adopted_inventory(p.rows, p.prior)
     for row in p.current_rows:
         row['status'] = 'not_checked'

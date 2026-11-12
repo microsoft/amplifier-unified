@@ -81,7 +81,7 @@ async def preparation(tmp_path, monkeypatch, request):
     (previous / 'runtime-sources.json').write_text(json.dumps(policies))
     (previous / 'runtime-installed.json').write_text(json.dumps(graph))
     # This explicit seam is not a claim of installed/profile verification.
-    monkeypatch.setattr(update_health, 'active_evidence', lambda manager: {'generation': 'a'*32, 'verifiedAt': 1})
+    monkeypatch.setattr(update_health, 'active_evidence', lambda manager, **kwargs: {'generation': 'a'*32, 'verifiedAt': 1})
     monkeypatch.setattr(update_health, 'pointer_witness', lambda manager: json.loads(pointer.read_text()))
     async def collected(manager, stage, generation):
         import hashlib
@@ -156,7 +156,7 @@ async def test_dynamic_optional_requirements_refuse_before_any_install(preparati
 @pytest.mark.parametrize('change', ['baseline', 'dirty', 'drift', 'pin', 'unknown', 'origin', 'duplicate-dirty'])
 async def test_partial_never_invents_retention_for_unsafe_inputs(preparation, monkeypatch, change):
     p = preparation
-    if change == 'baseline': monkeypatch.setattr(update_health, 'active_evidence', lambda manager: {})
+    if change == 'baseline': monkeypatch.setattr(update_health, 'active_evidence', lambda manager, **kwargs: {})
     if change == 'dirty': (p.stage/'foundation/cache/a/pyproject.toml').write_text('user edit')
     if change == 'drift': p.rows[0]['current'] = 'e'*40
     if change == 'pin': p.rows[0]['ref'] = p.old['a']

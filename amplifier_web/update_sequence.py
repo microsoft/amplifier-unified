@@ -10,6 +10,10 @@ import tomllib
 from urllib.parse import urlsplit
 
 
+class StaleAppSelection(ValueError):
+    """Known checked-selection mismatch, not an uncertain promotion."""
+
+
 def git_source(uri):
     """Read Foundation-consumed declarations without resolving their sources.
 
@@ -122,12 +126,12 @@ def verify_app_selection(manager, rows, *, stage=None):
     if not expected:
         return
     if None in expected or expected != {app_selection(manager.home)['witness']}:
-        raise ValueError('App behavior selection changed or was not checked; check for updates again.')
+        raise StaleAppSelection('App behavior selection changed or was not checked; check for updates again.')
     if stage is not None:
         from .host.config import read_config
         config = read_config(stage, home=stage, shared_home=stage/'shared-config', global_only=True)
         if expected != {app_selection(stage, config=config, original_home=manager.home)['witness']}:
-            raise ValueError('Staged app behavior selection differs from the checked configuration.')
+            raise StaleAppSelection('Staged app behavior selection differs from the checked configuration.')
 
 
 def classify(home, rows, *, selection=None):
