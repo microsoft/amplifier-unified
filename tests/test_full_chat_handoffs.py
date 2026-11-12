@@ -386,6 +386,7 @@ async def test_full_creation_respects_existing_destination_ask(handoff):
 
 @pytest.mark.parametrize('change', ['complete', 'revoke', 'off-on', 'stop', 'target-ask', 'target-full'])
 async def test_full_handoff_schedule_keeps_original_lineage_at_final_admission(handoff, monkeypatch, change):
+    from unittest.mock import AsyncMock
     from test_full_schedules import preview, invoke
     from test_schedules import Runtime, attach
 
@@ -400,6 +401,10 @@ async def test_full_handoff_schedule_keeps_original_lineage_at_final_admission(h
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(app.data_dir))
     runtime, now = Runtime(), [1800000000.0]
     attach(app, runtime, now)
+    # Stop's pending-action dispatcher compares against management.command.
+    # The schedule-only fixture omits that interface; its AttributeError would
+    # be caught as unknown before scheduled_input can observe the actual Stop.
+    app.management.command = AsyncMock(side_effect=AssertionError('Unexpected management command'))
     await app.dispatch('task.create', {'sessionId': target['id'], 'expectedRevision': 0,
         'objective': 'Continue the independently handed-off report'}, command_id='target-task')
     request = await preview(app, target, now[0])
@@ -411,6 +416,7 @@ async def test_full_handoff_schedule_keeps_original_lineage_at_final_admission(h
     source['collaborationGeneration']['terminal'] = True
     target.pop('collaborationGeneration', None)
     original = runtime.scheduled_input
+    admissions = []
 
     async def held(sid, values, guard):
         if change in {'revoke', 'off-on', 'target-full'}:
@@ -418,10 +424,14 @@ async def test_full_handoff_schedule_keeps_original_lineage_at_final_admission(h
             if change == 'off-on':
                 await save(app, source)
         elif change == 'stop':
-            await app.dispatch('conversation.stop', {'sessionId': source_id})
+            before = source.get('interruptionRevision', 0)
+            stopped = await app.dispatch('conversation.stop', {'sessionId': source_id})
+            assert stopped['accepted'] and source['interruptionRevision'] == before + 1
         elif change == 'target-ask':
             await save(app, target, mode='ask')
-        return await original(sid, values, guard)
+        result = await original(sid, values, guard)
+        admissions.append(result)
+        return result
 
     runtime.scheduled_input = held
     now[0] += 61
@@ -429,12 +439,18 @@ async def test_full_handoff_schedule_keeps_original_lineage_at_final_admission(h
     run = app.schedules.store.runs(target['id'])[0]
     assert run['authorizationCommandId'] == record['authorization']['commandId'] == 'target-schedule'
     assert len(handoff_runtime.sent) == 1
+    assert len(admissions) == 1, run.get('detail')
+    app.management.command.assert_not_awaited()
     if change in {'complete', 'target-full'}:
         assert run['phase'] == 'accepted', run
         assert len(runtime.inputs) == 1
         assert app.access_mode.full(target)
     else:
-        assert run['phase'] == 'skipped', run
+        assert admissions[0]['accepted'] is False
+        assert run['phase'] == 'skipped', run.get('detail')
         assert not runtime.inputs
         assert app.schedules.store.get(target['id'], record['id'])['status'] == 'needs_review'
+        if change == 'stop':
+            assert 'Full schedule authority changed' in admissions[0]['reason']
+            assert run['detail'] == admissions[0]['reason']
     assert app.schedules.store.get(target['id'], record['id'])['authorization']['authority'] == authority

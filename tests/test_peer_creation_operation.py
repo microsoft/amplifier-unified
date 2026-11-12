@@ -123,17 +123,26 @@ async def test_peer_woken_manager_commissions_headless_once_with_durable_return(
     assert len([row for row in target['messages'] if row.get('inputId') == request]) == 1
     assert app.collaboration.receipt(request)['subscription']['continuationId'] == created['subscription']['continuationId']
     await generation(app, target, 'recipient-' + request, [request])
-    await agent_action(app, target, 'coordination.reply', {
+    declared = await agent_action(app, target, 'coordination.reply', {
         'requestId': request, 'kind': 'result', 'outcome': 'success',
-        'text': 'The assigned result is ready.'}, 'background-reply')
+        'text': 'The assigned result is ready.',
+        'references': ['urn:fixture:background-manager-result']}, 'background-reply')
+    assert declared['result']['status'] == 'staged' and declared['result']['qualified'] is False
     await finish(app, target, request)
     await finish(app, target, request)
+    response = app.collaboration.receipt(request)['response']
+    assert response['status'] == 'sealed' and response['qualified'] is True, response
+    assert response['nativeTerminal']['generationId'] == 'recipient-' + request
+    assert response['references'] == ['urn:fixture:background-manager-result']
     continuation = created['subscription']['continuationId']
     assert app.collaboration.receipt(continuation)['dependencySatisfied'] is True
     assert len([row for row in source['messages'] if row.get('inputId') == continuation]) == 1
     result = await agent_action(app, source, 'coordination.result',
         {'requestId': created['requestId']}, 'background-read')
+    assert result['result']['qualified'] is True
     assert result['result']['initialRequest']['response']['outcome'] == 'success'
+    assert len(app.state['sessions']) == roots + 1
+    assert len([row for row in app.runtime.inputs if row[0] == target['id']]) == 1
     assert app.state['selectedSessionId'] == selected and app.state['view'] == view
     assert not app.clients.records
 

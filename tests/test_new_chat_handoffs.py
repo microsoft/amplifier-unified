@@ -684,30 +684,62 @@ async def test_detached_handoff_preserves_dirty_canvas_but_open_keeps_navigation
     assert snapshot(app, 'owner')['selectedSessionId'] == source
 
 
-async def test_main_and_source_streams_receive_private_review_and_late_receipt(handoff, monkeypatch):
+@pytest.mark.parametrize('mode', ['review', 'ask', 'full'])
+async def test_main_and_source_streams_receive_private_review_and_late_receipt(handoff, monkeypatch, mode):
+    from test_access_mode import save
+
     app, runtime, source, _, args = handoff
-    owner = asyncio.Queue(maxsize=1); other = asyncio.Queue(maxsize=1)
-    for client, queue in [('owner', owner), ('other', other)]:
+    if mode == 'full':
+        await save(app, app._session(source))
+    app.clients.attach('observer')
+    await command(app, 'observer', 'session.select', {'id': source})
+    await command(app, 'observer', 'view.update', {'patch': {'draft': 'Unsent observer'}})
+    before = {client: private_view(app, client) for client in ('owner', 'other', 'observer')}
+    queues = {client: asyncio.Queue(maxsize=1) for client in before}
+    for client, queue in queues.items():
         app.queues.add(queue); app.queue_clients[queue] = client; app.queue_sessions[queue] = None
         snapshot(app, client)  # Warm the retained frame before the new DB row.
-    row = await propose(app, source, args)
-    assert owner.get_nowait()['handoffs'][0]['requestId'] == row['requestId']
-    detail = next(q for q in app.queues if app.queue_sessions[q] == source)
-    detail_frame = detail.get_nowait()
-    assert detail_frame['sessions'][0]['id'] == source
-    assert 'handoffs' not in detail_frame  # Session-detail readers do not inherit private client reviews.
-    assert snapshot(app, 'other')['handoffs'] == []
-    if not other.empty():
-        assert other.get_nowait()['handoffs'] == []
-    async def uncertain(session, text, identity, emit):
+    async def uncertain(session, text, identity, emit, *, admission_check=None):
+        if admission_check:
+            admission_check()
         runtime.sent.append((session['id'], text, identity))
         raise TimeoutError('Lost acknowledgement')
     monkeypatch.setattr(runtime, 'send', uncertain)
-    await confirm(app, row); result = await finish(app, row)
-    while not owner.empty():
-        owner.get_nowait()
+    row = await (propose(app, source, args) if mode == 'review' else start(app, source, args))
+    assert queues['owner'].get_nowait()['handoffs'][0]['requestId'] == row['requestId']
+    detail = next(q for q in app.queues if app.queue_sessions[q] == source)
+    detail_frame = detail.get_nowait()
+    assert detail_frame['sessions'][0]['id'] == source
+    assert 'handoffs' not in detail_frame  # Handoffs are projected on each main client stream.
+    visible = ['owner'] if mode == 'review' else ['owner', 'observer']
+    hidden = ['other', 'observer'] if mode == 'review' else ['other']
+    for client in hidden:
+        assert snapshot(app, client)['handoffs'] == []
+        if not queues[client].empty():
+            assert queues[client].get_nowait()['handoffs'] == []
+    if mode != 'review':
+        assert queues['observer'].get_nowait()['handoffs'][0]['requestId'] == row['requestId']
+    else:
+        await confirm(app, row)
+    result = await finish(app, row)
+    assert result['status'] == result['delivery'] == 'unknown'
+    for queue in queues.values():
+        while not queue.empty():
+            queue.get_nowait()
     await app.on_runtime_event('runtime.delivery', {'sessionId': result['targetSessionId'], 'inputId': result['inputId'], 'delivery': 'accepted'})
-    assert owner.get_nowait()['handoffs'][0]['status'] == 'accepted'
+    for client in visible:
+        received = queues[client].get_nowait()['handoffs'][0]
+        assert received['requestId'] == row['requestId']
+        assert received['status'] == received['delivery'] == 'accepted'
+        assert received['revision'] > result['revision']
+        read = (await command(app, client, PREFIX + 'read', {'requestId': row['requestId']}))['result']
+        assert read['status'] == 'accepted'
+    for client in hidden:
+        assert snapshot(app, client)['handoffs'] == []
+        if not queues[client].empty():
+            assert queues[client].get_nowait()['handoffs'] == []
+    for client in before:
+        assert private_view(app, client) == before[client]
     assert len(runtime.sent) == 1
 
 
