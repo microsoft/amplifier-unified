@@ -2,7 +2,7 @@
 import asyncio
 import copy
 import json
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -358,6 +358,92 @@ async def test_invocation_binds_mount_cached_validator_to_one_policy(tmp_path, w
     # Neither a refresh nor a later call can mutate the admitted snapshot.
     assert str(extra) in invocation.config['allowed_write_paths']
     assert str(extra) not in raw.config.get('allowed_write_paths', [])
+
+
+@pytest.mark.parametrize('writer', ['write_file', 'native', 'function'])
+@pytest.mark.parametrize('layers', [1, 2])
+async def test_receiver_aware_instance_interceptors_keep_snapshot_and_denial(tmp_path, writer, layers):
+    from amplifier_core import ToolResult
+    workspace, extra = tmp_path / 'project', tmp_path / 'approved'
+    workspace.mkdir()
+    coordinator, tools, policy = await root(workspace, engine=writer if writer != 'write_file' else 'function')
+    name = 'write_file' if writer == 'write_file' else 'apply_patch'
+    module = 'tool-filesystem' if writer == 'write_file' else 'tool-apply-patch'
+    raw = tools[name].tool
+    raw_config = copy.deepcopy(raw.config)
+    entered, release = asyncio.Event(), asyncio.Event()
+    held, protected = workspace / 'held', extra / 'protected'
+    seen = []
+    def arguments(path):
+        return ({'file_path': str(path), 'content': 'new'} if writer == 'write_file'
+                else create(path, writer))
+    def intercept(inner, layer):
+        async def execute(self, args):
+            seen.append((layer, self))
+            if layer == 0 and args == arguments(protected):
+                return ToolResult(success=False, error={'code': 'instance_guard_denied', 'effect': 'none'})
+            if layer == 0 and args == arguments(held):
+                entered.set()
+                await release.wait()
+            # Receiver-aware stacking retains the intercepted function, not
+            # the earlier bound receiver or a lookup on the tool class.
+            return await inner(self, args)
+        return execute
+    for layer in range(layers):
+        raw.execute = MethodType(intercept(raw.execute.__func__, layer), raw)
+    intercepted = raw.execute.__func__
+    old = policy.invocation(raw, module, coordinator)
+    assert old.execute.__self__ is old and old.execute.__func__ is intercepted
+    pending = asyncio.create_task(old.execute(arguments(held)))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert seen == [(layer, old) for layer in reversed(range(layers))]
+        save(workspace, 'root', [extra])
+        fresh = policy.invocation(raw, module, coordinator)
+        assert fresh.execute.__self__ is fresh and fresh.execute.__func__ is intercepted
+        assert old.config is not fresh.config and fresh.config is not raw.config
+        assert str(extra) not in old.config['allowed_write_paths']
+        assert str(extra) in fresh.config['allowed_write_paths']
+        if name == 'apply_patch':
+            assert old._engine is not fresh._engine and fresh._engine is not raw._engine
+            assert old._engine.config is old.config and fresh._engine.config is fresh.config
+            assert fresh._engine.allowed_write_paths is fresh.config['allowed_write_paths']
+        seen.clear()
+        assert (await fresh.execute(arguments(extra / 'granted'))).success
+        assert seen == [(layer, fresh) for layer in reversed(range(layers))]
+        assert (extra / 'granted').read_text().strip() == 'new'
+        seen.clear()
+        denied = await fresh.execute(arguments(protected))
+        assert seen == [(layer, fresh) for layer in reversed(range(layers))]
+        assert not denied.success and denied.error == {'code': 'instance_guard_denied', 'effect': 'none'}
+        assert not protected.exists()
+        save(workspace, 'root', [], [extra])
+        revoked = policy.invocation(raw, module, coordinator)
+        denied = await revoked.execute(arguments(extra / 'revoked'))
+        assert not denied.success and 'Access denied' in denied.error['message']
+        assert not (extra / 'revoked').exists()
+        assert str(extra) in fresh.config['allowed_write_paths']  # Admitted snapshot is unchanged.
+        release.set()
+        assert (await pending).success and held.read_text().strip() == 'new'
+        assert raw.config == raw_config and raw.execute.__func__ is intercepted
+        assert raw.execute.__self__ is raw
+    finally:
+        release.set()
+        if not pending.done():
+            pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+async def test_plain_instance_execute_is_preserved_without_guessing_a_receiver(tmp_path):
+    from amplifier_core import ToolResult
+    coordinator, tools, policy = await root(tmp_path)
+    raw = tools['write_file'].tool
+    async def harmless(arguments):
+        return ToolResult(success=True, output=arguments)
+    raw.execute = harmless
+    snapshot = policy.invocation(raw, 'tool-filesystem', coordinator)
+    assert snapshot.execute is harmless
+    assert (await snapshot.execute({'probe': 'no effect'})).output == {'probe': 'no effect'}
 
 
 @pytest.mark.parametrize('writer', ['write_file', 'native', 'function'])

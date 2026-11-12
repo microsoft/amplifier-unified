@@ -583,18 +583,18 @@ async def test_approved_session_save_updates_active_mounted_tools_without_turn_o
 
 
 @pytest.mark.parametrize('engine', ['native', 'function'])
-@pytest.mark.parametrize('candidate_guard', [False, True], ids=['reference', 'candidate-captured-execute'])
+@pytest.mark.parametrize('candidate_guard', [False, True], ids=['reference', 'candidate-receiver-aware'])
 async def test_public_save_confirm_actual_writer_managed_native_scope(app, tmp_path, monkeypatch,
                                                                      engine, candidate_guard):
-    """Composed boundary, plus an explicit diagnostic of the captured-execute gap.
+    """Public save confirms the actual invocation receiver, including its guard.
 
-    The candidate variant characterizes an UNFIXED failure, not successful live
-    adoption. It requires the real selected hook (no importorskip); see
-    amplifier-bundle-converge@5d77bfb/modules/hooks-candidate-guard. Do not turn
-    its unknown receipt into no-effect or remove that guard to make writes work.
+    Requires the real receiver-aware candidate hook, not a copied adapter or an
+    import skip. The earlier closure's native inner-failure evidence is retained
+    in the parent's v1 DTU artifacts; that old dependency must fail this check.
     Only transport and Work admission are controlled; save, Worker confirmation,
     Core/Live/QuickJS, wrappers and both patch validators are production code.
     """
+    import inspect
     from pathlib import Path
     from amplifier_core import AmplifierSession, HookResult
     from amplifier_core.message_models import ToolCall
@@ -640,9 +640,10 @@ async def test_public_save_confirm_actual_writer_managed_native_scope(app, tmp_p
         raw = c.get('tools')['apply_patch']
         if candidate_guard:
             import amplifier_module_hooks_candidate_guard as candidate
+            original_execute = raw.execute.__func__
             cleanup = await candidate.mount(c)
-            # This is the selected hook's actual closed-over bound method.
-            assert raw.execute.__converge_candidate_guard_original__.__self__ is raw
+            assert inspect.ismethod(raw.execute) and raw.execute.__self__ is raw
+            assert raw.execute.__func__ is not original_execute
         worker = Worker()
         worker.session, worker.shared_handle = native, object()
         worker.activation_gate = ActivationGate()
@@ -712,8 +713,14 @@ async def test_public_save_confirm_actual_writer_managed_native_scope(app, tmp_p
             return result
 
         denied = await invoke(external / 'before')
-        assert not denied['success'] and denied['error']['code'] == 'file_source_access'
-        assert denied['error']['effect'] == 'none' and not (external / 'before').exists()
+        # Native validation returns a denied pair; FunctionEngine raises its
+        # _PatchError. Both refuse before execution, but the source guard's
+        # existing exception mapping gives them different codes.
+        denial_code = 'file_source_access' if engine == 'native' else 'file_source_check_failed'
+        assert not denied['success'] and denied['error'] == {
+            'code': denial_code, 'effect': 'none',
+            'message': f'Access denied: {external / "before"} is not within allowed write paths'}
+        assert not (external / 'before').exists()
         await grant(app, ['file_access'], ['session'], 'composed-file-grant')
         await agent(app, source, 'permissions.save',
             args(app, allowed=[str(external)], denied=[]), 'composed-live-save',
@@ -756,25 +763,17 @@ async def test_public_save_confirm_actual_writer_managed_native_scope(app, tmp_p
             target = external / ('nested' if nested else 'direct')
             result = await invoke(target, nested=nested)
             assert checks[:2] == [(False, True), (False, True)]  # Both outer preflights passed.
-            if candidate_guard:
-                # Confirm accepted fresh copied attributes, but the hook's
-                # closure still executes the original denied engine. Preserve
-                # this actual inner-failure receipt; this is NOT a fixed claim.
-                assert checks[2:] == [(True, False)]
-                assert not result['success'] and result['error']['effect'] == 'unknown'
-                assert 'code' not in result['error'] and 'Access denied' in result['error']['message']
-                assert not target.exists()  # Fixture-only observation, not a reclassification.
-            else:
-                assert checks[2:] == [(False, True)]
-                assert result['success'] and target.read_text().strip() == 'new'
+            assert checks[2:] == [(False, True)]  # Inner execute uses the copied engine too.
+            assert result['success'] and target.read_text().strip() == 'new'
         await agent(app, source, 'permissions.save',
             args(app, allowed=[], denied=[str(external)]), 'composed-revoke',
             _runtimeSessionId=native.session_id)
         done = await finished(app, 'composed-revoke')
         assert done['phase'] == 'ready' and len(confirmations) == 2
         revoked = await invoke(external / 'revoked', nested=True)
-        assert not revoked['success'] and revoked['error']['effect'] == 'none'
-        assert revoked['error']['code'] == 'file_source_access'
+        assert not revoked['success'] and revoked['error'] == {
+            'code': denial_code, 'effect': 'none',
+            'message': f'Access denied: {external / "revoked"} is within denied directories'}
         assert not (external / 'revoked').exists()
         assert tools['apply_patch'] is wrapped and guarded.tool is raw
         assert work_check.await_count >= calls and not app.runtime.calls

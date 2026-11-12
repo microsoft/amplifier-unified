@@ -8,9 +8,10 @@ are not dependencies of a file invocation.
 from __future__ import annotations
 
 import copy
+import inspect
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 
 from .configuration_authority import fingerprint
 from .shared_settings import SettingsReadCache, read_settings, settings_paths
@@ -271,6 +272,12 @@ class LiveWritePolicy:
         # A private invocation copy retains hooks/approvals and engine state,
         # but never changes an object currently executing in another task.
         result = copy.copy(tool)
+        execute = tool.execute
+        if inspect.ismethod(execute) and execute.__self__ is tool:
+            # Instance interceptors can be receiver-aware bound methods too.
+            # Keep the exact intercepted function, bound to this snapshot;
+            # neither class lookup nor closure unwrapping preserves that chain.
+            result.execute = MethodType(execute.__func__, result)
         result.config = config
         target = result
         if module == 'tool-apply-patch':
