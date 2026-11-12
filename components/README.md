@@ -1,5 +1,11 @@
 # Component projects
 
+[`outputs/`](outputs/README.md) prepares the independently buildable output
+relationship, saved-body decoder and read-only Git evidence package. Its existing
+Git/SQLite mechanism tests run without Unified or Core; host authorization,
+transactions, resource storage and retention stay in Unified. Normal Unified
+builds the same source directly, without a separately installed outputs dependency.
+
 [`portability/`](portability/README.md) is the temporary authoring home for the
 independently buildable signed transfer journal and Git capsule package. Its
 standalone development uses the prepared worktrees artifact; the local dependency

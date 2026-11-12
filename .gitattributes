@@ -34,6 +34,11 @@
 /components/portability/MANIFEST.in source-context=configuration
 /components/portability/.gitignore source-context=configuration
 /components/portability/LICENSE source-context=documentation
+/components/outputs/amplifier_outputs/** source-context=source
+/components/outputs/tests/** source-context=tests
+/components/outputs/MANIFEST.in source-context=configuration
+/components/outputs/.gitignore source-context=configuration
+/components/outputs/LICENSE source-context=documentation
 /docs/** source-context=documentation
 /contracts/** source-context=contracts
 /context/** source-context=guidance

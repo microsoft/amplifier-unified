@@ -52,7 +52,7 @@ allow-direct-references = true
 artifacts = ["/amplifier_web/release-source.json"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "components/scheduling/amplifier_scheduling", "amplifier_recall", "amplifier_outputs", "components/worktrees/amplifier_worktrees", "components/publishing/amplifier_publishing", "components/portability/amplifier_portability"]
+packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "components/scheduling/amplifier_scheduling", "amplifier_recall", "components/outputs/amplifier_outputs", "components/worktrees/amplifier_worktrees", "components/publishing/amplifier_publishing", "components/portability/amplifier_portability"]
 # Standalone projects share these same runtime sources; test/build inputs do not ship.
 exclude = [
     "/amplifier_operations/tests/**", "/amplifier_operations/build/**",
@@ -75,6 +75,8 @@ exclude = [
     "/components/worktrees/.venv/**", "/components/worktrees/*.egg-info/**",
     "/components/portability/build/**", "/components/portability/dist/**",
     "/components/portability/.venv/**", "/components/portability/*.egg-info/**",
+    "/components/outputs/build/**", "/components/outputs/dist/**",
+    "/components/outputs/.venv/**", "/components/outputs/*.egg-info/**",
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
@@ -134,4 +136,4 @@ artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "re
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "components/scheduling/tests", "amplifier_operations/tests", "components/publishing/tests", "components/worktrees/tests", "components/portability/tests"]
+testpaths = ["tests", "components/scheduling/tests", "amplifier_operations/tests", "components/publishing/tests", "components/worktrees/tests", "components/portability/tests", "components/outputs/tests"]
