@@ -215,8 +215,11 @@ async def serve(home):
         from amplifier_web.runtime import RuntimeManager
         # Settings exercise the actual manager policy without starting a model.
         runtime = RuntimeManager(command=[sys.executable, '-c', 'raise RuntimeError("Unexpected worker start in settings fixture")'])
+    isolated_appearance = installed_mode and '--appearance-records' in sys.argv
     app = await create_app(home / "app", workspace=str(workspace), runtime=runtime,
-                           voice='--voice-settings' in sys.argv, background_updates=False)
+                           voice='--voice-settings' in sys.argv, background_updates=False,
+                           **({'background_work': False, 'preload_providers': False}
+                              if isolated_appearance else {}))
     app["control_token"] = "fixture-browser-control-token"
     runtime.service = app['service']
     appearance_before = (home / 'appearance-canary-sha256').read_text() if '--appearance-records' in sys.argv else None
