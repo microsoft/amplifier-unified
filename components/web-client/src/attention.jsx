@@ -1,4 +1,5 @@
 import React from 'react';
+import {useNarrowScreen,NAVIGATION_NARROW_QUERY} from './responsive-navigation';
 export function AttentionBadge({state={},section,page,count:explicit,settings=false}){
  const count=explicit??(settings?state.attention?.settingsUnread:page?state.attention?.pages?.[page]:section?state.attention?.sections?.[section]:(state.attention?.badgeUnread??state.attention?.unread));
  const unresolved=state.attention?.items?.some(i=>i.actionRequired&&(!page||i.page===page)&&(!section||i.section===section));
@@ -124,7 +125,8 @@ export function completionToRead(state){
 }
 export function useReadCompletion(state,act,pane,ready=true){
  const item=completionToRead(state);
- const blocked=!!state?.view?.panel||!!state?.view?.canvasFocused||!!state?.view?.navExpanded&&matchMedia('(max-width:760px)').matches||!!state?.canvas?.open&&matchMedia('(max-width:760px)').matches;
+ const navigationNarrow=useNarrowScreen(NAVIGATION_NARROW_QUERY),compactCanvas=useNarrowScreen();
+ const blocked=!!state?.view?.panel||!!state?.view?.canvasFocused||!!state?.view?.navExpanded&&navigationNarrow||!!state?.canvas?.open&&compactCanvas;
  React.useEffect(()=>{
   if(!ready||!item||blocked||!pane.current)return;
   const element=pane.current;let timer;

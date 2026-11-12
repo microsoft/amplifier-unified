@@ -357,6 +357,38 @@ async def test_passive_read_bounds_manifest_and_never_decodes_runtime(app, manif
             read(app, {'sessionId': identity})
 
 
+@pytest.mark.parametrize('pending', [
+    None, {}, {'phase': 'error', 'private': 'SECRET'},
+    {'operationId': 'not-an-id', 'revision': 1, 'phase': 'error', 'effect': 'unknown'},
+    {'operationId': 'b4c89cd6-c974-4cc1-9f34-fc3fa4d4de53', 'revision': 3,
+     'phase': 'error', 'effect': 'unknown', 'authority': 'SECRET', 'config': 'SECRET'},
+])
+async def test_passive_pending_operation_discovery_reads_only_committed_owner(app, monkeypatch, pending):
+    target = peer(app)
+    identity = target['id']
+    raw = {'id': identity, 'workspace': target['workspace'], 'bundle': 'anchors-amp-dev'}
+    if pending is not None:
+        raw['pendingConfiguration'] = pending
+    app.db.execute("UPDATE state_records SET value=? WHERE kind='session' AND id=?", (json.dumps(raw), identity))
+    app.db.commit()
+    app.state['sessions'].remove(target)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Passive discovery must not admit or hydrate an owner')
+    monkeypatch.setattr(app, '_admit_session', forbidden)
+    monkeypatch.setattr(app.management, 'configuration_record', forbidden)
+    result = await agent(app, app.operator, 'conversation.configuration',
+        {'sessionId': identity}, 'passive-discovery')
+    projection = result['result']['pendingOperation']
+    if not pending:
+        assert projection is None
+    elif pending.get('operationId') == 'b4c89cd6-c974-4cc1-9f34-fc3fa4d4de53':
+        assert projection == {'availability': 'retained', 'operationId': pending['operationId'],
+                              'revision': 3, 'phase': 'error', 'effect': 'unknown'}
+    else:
+        assert projection == {'availability': 'unavailable'}
+    assert 'SECRET' not in json.dumps(result)
+
+
 async def test_default_rechecks_authority_inside_the_canonical_settings_mutator(app, tmp_path, monkeypatch):
     from amplifier_web.preferences import SettingsStore
     folder = tmp_path / 'registered'

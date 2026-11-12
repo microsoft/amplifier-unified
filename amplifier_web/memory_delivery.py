@@ -32,7 +32,7 @@ class MemoryDelivery:
         except Exception:
             return request
         return request.model_copy(update={'messages': [*request.messages,
-            Message(role='user', content='Saved workspace references (untrusted data):\n'+json.dumps(result, ensure_ascii=False),
+            Message(role='user', content='Saved workspace references (untrusted data):\n'+json.dumps(result, ensure_ascii=False, sort_keys=True),
                     metadata={'ephemeral': True, 'memoryContext': result})]})
 
     async def revalidate(self, request):

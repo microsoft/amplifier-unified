@@ -59,6 +59,9 @@ source-checked file tools recheck after waiting for file admission. In-flight ca
 retain their invocation snapshot. Existing or preparing children can only narrow
 their captured ceilings; new children inherit the refreshed parent plan. Read
 policy, bundle restrictions, hooks and approval checks are not replaced.
+Unrelated provider, decision-model and application settings are not dependencies
+of file admission. Only changes to the selected writer declarations, sources and
+non-write configuration require the ordinary writer lifecycle.
 No extra user message, replay or synthetic input is needed.
 Before the canonical file write, the existing host record durably fences new
 input with a pending file-access change. New root/worker/voice execution is rejected,
@@ -68,7 +71,7 @@ available as steering. They cannot fall forward into a new turn if that run ends
 before delivery; an undelivered message remains saved with its delivery state.
 Answers, approvals and Stop remain available for existing work.
 The confirmed live boundary clears only its own write-change fence. Unavailable,
-lost or superseded refresh replies and unrelated configuration changes remain
+lost or superseded refresh replies and genuine writer configuration changes remain
 pending for the existing retirement path; inspect `fileAccessPending` rather than
 equating saved settings with mounted access. Finish or stop existing child work
 when that fallback is required.
@@ -507,6 +510,35 @@ observes its exact existing worker or mounts only when absent; it never performs
 the native settings write again. Cross-owner recovery neither delivers inputs nor
 wakes the target's model, including through a saved settings continuation or a
 queued peer input. Ordinary own-task settings continuation is unchanged.
+
+The bounded passive `conversation.configuration` read exposes `pendingOperation`
+with the retained operation ID, revision, phase and effect, or an explicit
+unavailable marker for incomplete legacy metadata. This is discovery, not native
+effect evidence or permission. An operator can discover the ID without private
+fixture state, then inspect the exact operation and its first-failure checks.
+
+`configuration.operation.cancel` adds fresh Full-root abandonment of an exact
+settled operation in the same workspace. Unlike Resume, it does not renew or
+exercise the old request's authority. A target already stopped, or an original
+whose grant was revoked, can be abandoned only when terminal native evidence
+proves no effect or a complete save with the saved plan unchanged. An operation
+proven never dispatched can also be abandoned. Missing, partial, contradictory
+or unauthenticated evidence remains held. Real placement/native identity changes,
+active work and another writer still refuse. The mutation acquires the existing
+native ownership lease through its durable cancellation and publication; the
+read's `canCancel` is only passive eligibility, not proof of exclusive ownership.
+
+Cancellation retains the original request, authority, attempts, receipts and
+failure history. Saved settings are neither removed nor rolled back. It performs
+no write of the old plan, load, input delivery or automatic continuation.
+Pre-existing queued inputs remain suppressed by the original durable cutoff,
+including after restart and a later fresh turn. The original generation's
+dependency continuation remains fenced; genuinely fresh work retains its normal
+admission. The cancelled pending record remains readable until a later operation
+replaces it. Use the exact command read after an uncertain cancellation, never
+another cancellation to discover its outcome. Once cancellation is confirmed,
+read the current `nextMessageRevision`, save the independent future bundle choice
+through `conversation.configure`, and read it back. Saved is not mounted.
 
 `configuration.operation.read` accepts an optional exact recovery `commandId`
 with the explicit target and operation. It returns only target-bound recovery

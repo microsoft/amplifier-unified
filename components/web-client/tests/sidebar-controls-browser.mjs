@@ -9,6 +9,7 @@ import './composer-test-helpers.mjs';
 
 const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS||'output/sidebar-controls';
 const baseline=process.env.AMPLIFIER_SIDEBAR_BASELINE==='1';
+const responsive=process.env.AMPLIFIER_SIDEBAR_RESPONSIVE==='1';
 const results=[],errors=[],calls=[],regressions=[],menuRegressions=[],explicitStops=[],attachmentRequests=[],cleanupErrors=[];
 let browser,vite,page,failure,activeMenuProof,menuPhase;
 
@@ -413,12 +414,160 @@ async function appearanceRegression({page,scenario,readState,emit,stopGuard}){
  await capture('draft-and-attachment-retained');proof.passed=true;
 }
 
+// The navigation breakpoint is independent of UA, Canvas and compact header
+// styling. Exercise the existing real shell fixture, including saved preferences.
+async function responsiveRegression({scenario,readState,emit}){
+ const nav=page.locator('#workspace-navigation'),composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
+ const proof={scenario:scenario.name,width:scenario.width,baseline,checkpoints:[]};
+ regressions.push(proof);
+ const draft='Unsent synthetic fold/unfold draft.';
+ const start=calls.length,session=JSON.stringify(readState().sessions[0]);
+ const patch=async view=>{Object.assign(readState().view,view);await emit()};
+ const capture=async label=>{
+  if(!baseline&&scenario.width>640){
+   // Saved-width changes animate the visible rail independently of its layout
+   // slot. Observe convergence before recording geometry, not an arbitrary frame.
+   await expect.poll(()=>nav.evaluate(node=>{
+    const expected=node.dataset.docked==='true'?node.getBoundingClientRect().width:parseFloat(getComputedStyle(node).getPropertyValue('--nav-width'));
+    return Math.abs(node.querySelector('.a-nav-rail').getBoundingClientRect().width-expected);
+   })).toBeLessThan(1);
+  }
+  const geometry=await page.evaluate(()=>{
+   const rect=node=>{if(!node)return null;const r=node.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};
+   const nav=document.querySelector('#workspace-navigation'),chat=document.querySelector('.a-conversation'),layout=document.querySelector('.a-layout');
+   return {nav:rect(nav),rail:rect(nav.querySelector('.a-nav-rail')),chat:rect(chat),available:layout.clientWidth,gap:getComputedStyle(layout).columnGap,
+    docked:nav.dataset.docked,role:nav.getAttribute('role'),modal:nav.getAttribute('aria-modal'),
+    chatInert:!!chat.closest('[inert]'),scrims:document.querySelectorAll('.a-navigation-scrim').length,
+    overflow:document.documentElement.scrollWidth>innerWidth,viewport:innerWidth,
+    canvas:rect(document.querySelector('#workspace-canvas')),canvasOverlay:layout.dataset.canvasOverlay};
+  });
+  proof.checkpoints.push({label,...geometry});
+  if(['phone-390','fold-656','fold-720','fold-768','desktop-1280'].includes(scenario.name))
+   await page.screenshot({path:`${artifacts}/${scenario.name}-${label}.png`});
+  return geometry;
+ };
+ const modal=baseline?scenario.width<=900:scenario.width<=640;
+ if(modal){
+  const geometry=await capture('modal');
+  assert.equal(geometry.modal,'true');assert.equal(geometry.chatInert,true);assert.equal(geometry.scrims,1);
+  if(scenario.width<=640)assert.ok(Math.abs(geometry.nav.width-scenario.width)<1);
+  await page.getByRole('slider',{name:'Filter conversations by age'}).focus();
+  await page.keyboard.press('Escape');await expect(nav).toBeHidden();
+  // Initial saved expansion has no user opener. Reopen explicitly to test
+  // the real trigger's focus-return contract rather than assuming one.
+  await page.locator('#navigation-toggle').focus();await page.locator('#navigation-toggle').press('Enter');
+  await expect(nav).toHaveAttribute('aria-modal','true');
+  await page.getByRole('slider',{name:'Filter conversations by age'}).focus();
+  await page.keyboard.press('Escape');await expect(nav).toBeHidden();
+  await expect(page.locator('#navigation-toggle')).toBeFocused();
+  assert.equal(await composer.evaluate(node=>!!node.closest('[inert]')),false);
+ }else{
+  await expect(nav).toHaveAttribute('data-docked','true');
+  const geometry=await capture('side-by-side');
+  assert.equal(geometry.role,null);assert.equal(geometry.modal,null);assert.equal(geometry.chatInert,false);assert.equal(geometry.scrims,0);
+  assert.ok(geometry.nav.width>=216&&geometry.nav.width<=240,'Normal sidebar width: '+JSON.stringify(geometry));
+  assert.ok(geometry.chat.width>=359&&geometry.nav.right<=geometry.chat.left+1&&!geometry.overflow,JSON.stringify(geometry));
+  if(!baseline)for(const button of await page.locator('.a-sidebar-modes button,.a-nav-search-launch').all()){
+   const box=await visibleGeometry(button);assert.ok(box.height>=44&&box.width>=44,JSON.stringify({label:await button.getAttribute('aria-label')||await button.textContent(),box}));
+  }
+ }
+ if(baseline){proof.passed=true;return}
+ await composer.fill(draft);await expect(composer).toHaveDraft(draft);
+ await expect.poll(()=>readState().view.draft).toBe(draft);
+ if(!modal){
+  await visibleGeometry(page.locator('[data-part="composer-primary-action"]'));
+  // Header disclosure/Escape is ordinary at these widths, not a navigation modal.
+  const trigger=page.getByRole('button',{name:'Chat',exact:true});
+  await trigger.click();await expect(page.getByRole('button',{name:'Copy session ID',exact:true})).toBeFocused();
+  await page.keyboard.press('Escape');await expect(trigger).toBeFocused();
+  await page.locator('#navigation-toggle').click();await expect(nav).toBeHidden();
+  assert.equal(readState().view.navPinned,false);
+  // A closed, unpinned navigation never opens merely because the viewport changes.
+  await page.setViewportSize({width:390,height:900});await expect(nav).toBeHidden();
+  await page.setViewportSize({width:scenario.width,height:900});await expect(nav).toBeHidden();
+  assert.equal(readState().view.navPinned,false);assert.equal(readState().view.navExpanded,false);
+  await page.locator('#navigation-toggle').click();await expect(nav).toHaveAttribute('data-docked','true');
+  assert.equal(readState().view.navPinned,true);assert.equal(readState().view.navExpanded,true);
+  // Explicit nonpinned expansion uses a normal-width overlay, never fullwidth
+  // and never shrinks the chat. This is distinct from the pinned default.
+  await patch({navPinned:false,navExpanded:true});
+  await expect(nav).toHaveAttribute('data-docked','false');
+  const overlay=await capture('unpinned');
+  assert.equal(overlay.nav.width,0);assert.ok(overlay.rail.width>=216&&overlay.rail.width<=240);
+  assert.equal(overlay.chatInert,false);assert.ok(overlay.chat.width>=scenario.width-24);
+  await visibleGeometry(nav.getByRole('button',{name:'New chat',exact:true}));
+  await patch({navPinned:true,navExpanded:false,navWidth:2000});
+  await expect(nav).toHaveAttribute('data-docked','true');
+  const clamped=await capture('saved-width-clamped');
+  assert.ok(clamped.chat.width>=359&&clamped.nav.right<=clamped.chat.left+1&&!clamped.overflow);
+  assert.ok(Math.abs(clamped.rail.width-clamped.nav.width)<1&&clamped.rail.right<=clamped.chat.left+1);
+  await visibleGeometry(nav.getByRole('button',{name:'New chat',exact:true}));
+  await patch({navWidth:240,navExpanded:true});
+  // Canvas remains the existing two-pane/overlay arbitration; never force
+  // three columns into a foldable viewport that cannot fit their minima.
+  readState().canvas={open:true,kind:'text',title:'Synthetic Canvas',content:'Retained fixture document'};
+  await emit();await expect(page.locator('#workspace-canvas')).toBeVisible();
+  const canvas=await capture('canvas-open');
+  assert.equal(canvas.overflow,false);assert.ok(canvas.canvas.width>0&&canvas.canvas.right<=scenario.width+1);
+  if(scenario.width<=760&&canvas.docked==='true'){
+   const gap=parseFloat(canvas.gap)||0;
+   assert.ok(Math.abs(canvas.canvas.left-canvas.nav.right-gap)<1,'Compact Canvas uses the measured gap: '+JSON.stringify(canvas));
+   assert.ok(Math.abs(canvas.canvas.right-scenario.width)<1,'Compact Canvas fills the remaining width');
+  }
+  if(canvas.canvasOverlay==='false'&&canvas.available<900)assert.equal(canvas.docked,'false');
+  await visibleGeometry(nav.getByRole('button',{name:'New chat',exact:true}));
+  await page.locator('#navigation-toggle').click();await expect(nav).toBeHidden();
+  await page.locator('#navigation-toggle').click();await expect(nav).not.toHaveAttribute('hidden');
+  await expect(nav.locator('.a-nav-rail')).toBeVisible();
+  await visibleGeometry(nav.getByRole('button',{name:'New chat',exact:true}));
+  // Disclosure must be actionable on top of compact Canvas, not merely have
+  // a positive bounding box behind it. Escape closes only the nested menu.
+  const app=nav.getByRole('button',{name:'App options',exact:true});
+  await app.click();await expect(nav.getByRole('button',{name:'What agents see',exact:true})).toBeVisible();
+  await page.keyboard.press('Escape');await expect(app).toBeFocused();
+  await page.locator('#navigation-toggle').click();await expect(nav).toBeHidden();
+  if(scenario.width<=760){
+   await page.getByRole('button',{name:'Hide canvas',exact:true}).click();
+   await expect(page.locator('#workspace-canvas')).toBeHidden();
+  }
+  readState().canvas.open=false;await patch({navPinned:true,navExpanded:true});
+  await expect(nav).toHaveAttribute('data-docked','true');
+ }
+ // One representative round trip verifies modal focus/inert cleanup with the
+ // same mounted composer and saved pinned preference.
+ if(scenario.width===656){
+  await composer.focus();
+  await page.setViewportSize({width:390,height:900});await expect(nav).toBeHidden();
+  assert.equal(readState().view.navPinned,true);
+  await page.locator('#navigation-toggle').focus();await page.locator('#navigation-toggle').press('Enter');await expect(nav).toHaveAttribute('aria-modal','true');
+  await expect(composer).toHaveDraft(draft);
+  await page.setViewportSize({width:656,height:900});
+  await expect(nav).not.toHaveAttribute('aria-modal','true');
+  await expect(nav).toHaveAttribute('data-docked','true');
+  await expect(page.locator('#navigation-toggle')).toBeFocused();
+  await expect(composer).toBeEditable();await composer.focus();await expect(composer).toBeFocused();
+  assert.equal(await composer.evaluate(node=>!!node.closest('[inert]')),false);
+  await capture('unfold-inert-released');
+ }
+ await expect(composer).toHaveDraft(draft);
+ assert.equal(JSON.stringify(readState().sessions[0]),session,'No session/history/model mutation');
+ assert.ok(calls.slice(start).every(call=>['view.update','shell.report','canvas.visibility'].includes(call.action)),'Only synthetic view changes and explicit Canvas hide');
+ proof.passed=true;
+}
+
 await mkdir(artifacts,{recursive:true});
 try{
- vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false}});
+ vite=await createServer({configFile:false,root:process.env.AMPLIFIER_SIDEBAR_FIXTURE_ROOT||fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false}});
  await vite.listen();
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});
- for(const scenario of [
+ for(const scenario of responsive?[
+  ...[320,360,390,639,640].map(width=>({name:'phone-'+width,width,touch:true})),
+  ...[641,656,673,690,720,750,760,761,768,820,900,901].map(width=>({name:'fold-'+width,width,touch:true})),
+  {name:'fold-gap-work',width:656,touch:true,gap:8,work:true},
+  {name:'fold-dark',width:720,touch:true,dark:true},
+  {name:'fold-enlarged',width:720,touch:true,enlarged:true},
+  {name:'desktop-1280',width:1280,touch:true},
+ ]:[
   {name:'desktop-216',width:1280,navWidth:216},
   {name:'desktop-320',width:1280,navWidth:320},
   {name:'pinned-216',width:1280,navWidth:216,pinned:true},
@@ -429,13 +578,17 @@ try{
   {name:'forced-colors',width:1280,navWidth:216,forced:true},
  ]){
   let state={revision:1,settings:{workspace:'/fixture',bundle:'anchors'},runtime:{available:true},
-   view:{navPinned:true,navExpanded:true,navWidth:scenario.navWidth||216,navAge:'all',navMode:scenario.navMode||'browse'},
+   view:{navPinned:true,navExpanded:true,navWidth:scenario.navWidth||(responsive?240:216),navAge:'all',navMode:scenario.navMode||'browse'},
    sessions:[{id:'chat',nativeIdentity:'native-'+scenario.name,sessionKind:'root',title:'Saved synthetic chat',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[]}],
    workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',
    setup:{providers:[{id:'fixture',module:'provider-fixture',enabled:true,config:{default_model:'fixture-model'}}],providersLoadedAt:1,providersWorkspace:'/fixture'},canvas:{open:false},attention:{badgeUnread:2,settingsUnread:3}};
   if(scenario.pinned)state.pinnedNavigation={items:[{id:'chat:chat',kind:'chat',row:state.sessions[0]}],total:1};
   const shell=createShellHttpFixture(()=>state),stopGuard={armed:false};
-  page=await browser.newPage({viewport:{width:scenario.width,height:900},hasTouch:!!scenario.touch,isMobile:!!scenario.touch});
+  // Retain the shared fixture's disconnected Reference identity. This is a
+  // rendering preference only, not a production profile or storage ACK model.
+  if(scenario.work)state.appearance={...shell.state().appearance,renderedPreferences:{layout:'work'}};
+  page=await browser.newPage({viewport:{width:scenario.width,height:900},hasTouch:!!scenario.touch,isMobile:!!scenario.touch,
+   ...(responsive?{userAgent:'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',colorScheme:scenario.dark?'dark':'light'}:{})});
   page.on('pageerror',error=>errors.push(error.message));
   page.on('request',request=>{if(new URL(request.url()).pathname.startsWith('/api/attachments/'))attachmentRequests.push(request.url())});
   await page.addInitScript(installFixtureEvents);
@@ -462,6 +615,7 @@ try{
      return route.fulfill({status:409,json:{accepted:false,error:'This rendering fixture refuses effects.'}});
     }
     if(body.action==='view.update')state={...state,revision:state.revision+1,view:{...state.view,...body.args.patch}};
+    if(responsive&&body.action==='canvas.visibility')state={...state,revision:state.revision+1,canvas:{...state.canvas,open:body.args.open}};
     return route.fulfill({json:{accepted:true,state:shell.state(),result:{}}});
    }
    return route.fulfill({json:{ok:true}});
@@ -471,7 +625,20 @@ try{
   await page.goto(vite.resolvedUrls.local[0]);
   await page.getByRole('slider',{name:'Filter conversations by age'}).waitFor();
   await page.locator('.a-sidebar-section').first().waitFor();
+  if(scenario.gap){
+   await page.addStyleTag({content:`#amp-one .a-layout[data-pane-layout]{gap:${scenario.gap}px!important}`});
+   // A real viewport resize asks the existing layout observer to resample this
+   // synthetic nondefault gap; no new fixture-only production measurement API.
+   await page.setViewportSize({width:scenario.width+1,height:900});
+   await expect.poll(()=>page.locator('.a-layout').evaluate(node=>getComputedStyle(node).getPropertyValue('--layout-gap').trim())).toBe(scenario.gap+'px');
+   await page.setViewportSize({width:scenario.width,height:900});
+  }
   if(scenario.enlarged)await page.addStyleTag({content:'#amp-one{--a-text-xs:24px;--a-text-sm:26px;--a-text-base:28px;font-size:28px}'});
+  if(responsive){
+   const emit=async()=>{const revision=++state.revision;await page.evaluate(value=>window.emitFixtureState(value),shell.state());await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().revision)).toBeGreaterThanOrEqual(revision)};
+   await responsiveRegression({scenario,readState:()=>state,emit});
+   await page.close();page=null;continue;
+  }
   const slider=page.getByRole('slider',{name:'Filter conversations by age'});
   const metrics=await page.evaluate(()=>{
    const filter=document.querySelector('.a-chat-age-filter'),label=filter.querySelector('label'),range=filter.querySelector('input'),first=document.querySelector('.a-sidebar-section');
@@ -546,9 +713,9 @@ try{
  }
  assert.deepEqual(errors,[]);
  assert.ok(calls.every(call=>!['session.select','conversation.send','session.history','session.create'].includes(call.action)),'Passive controls never execute or reload history');
- assert.equal(explicitStops.length,1);assert.deepEqual(attachmentRequests,[]);
- assert.ok(regressions.length===2&&regressions.every(row=>row.passed));
- if(!baseline)assert.ok(menuRegressions.length===8&&menuRegressions.every(row=>row.passed));
+ assert.equal(explicitStops.length,responsive?0:1);assert.deepEqual(attachmentRequests,[]);
+ assert.ok(regressions.length===(responsive?21:2)&&regressions.every(row=>row.passed));
+ if(!baseline&&!responsive)assert.ok(menuRegressions.length===8&&menuRegressions.every(row=>row.passed));
  console.log(JSON.stringify({scope:'synthetic client browser',baseline,scenarios:results,regressions,menuRegressions,errors},null,2));
 }catch(error){
  failure=error;

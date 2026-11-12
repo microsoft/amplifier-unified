@@ -20,7 +20,9 @@ def test_manager_guidance_keeps_open_objectives_alive_across_process_boundaries(
 
     assert 'A progress report is not a completion boundary' in CANVAS_GUIDANCE
     assert 'Do not promise to continue after ending the current turn' in CANVAS_GUIDANCE
-    assert 'independent root has no automatic result return' in CANVAS_GUIDANCE
+    assert 'Commission manager-owned work with coordination.create in the inherited workspace' in CANVAS_GUIDANCE
+    assert 'session.handoff.start for independent work in a destination folder, without automatic result return' in CANVAS_GUIDANCE
+    assert 'Neither requires an open browser; review and navigation do' in CANVAS_GUIDANCE
     assert 'coordination.send mode:auto' in CANVAS_GUIDANCE
 
 

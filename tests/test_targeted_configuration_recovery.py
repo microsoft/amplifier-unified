@@ -59,6 +59,328 @@ async def saved_failure(b, monkeypatch):
 
 
 @pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
+async def test_operator_discovers_operation_then_reconciles_and_saves_future_bundle(process_boundary, monkeypatch):
+    b = process_boundary
+    saved = await operator_failure(b)
+    b.owner['status'] = 'idle'
+    source = await manager(b)
+    messages = deepcopy(b.owner['messages'])
+    drain = AsyncMock()
+    monkeypatch.setattr(b.app.collaboration, 'drain', drain)
+    choices = (await agent(b.app, source, 'conversation.configuration',
+        {'sessionId': b.owner['id']}, 'discover-held-operation'))['result']
+    discovered = choices['pendingOperation']
+    assert discovered['availability'] == 'retained'
+    assert discovered['operationId'] == saved['id']
+    assert discovered['revision'] == saved['revision']
+    args = {'sessionId': b.owner['id'], 'operationId': discovered['operationId'],
+            'expectedRevision': discovered['revision']}
+    view = (await agent(b.app, source, 'configuration.operation.read',
+        {**args, 'includeRecovery': True, 'diagnostic': 'first_failure'}, 'inspect-discovered'))['result']
+    assert view['nativeEffect'] == 'none' and view['recovery']['canReconcile']
+    await agent(b.app, source, 'configuration.operation.reconcile', args, 'reconcile-discovered')
+    current = (await agent(b.app, source, 'conversation.configuration',
+        {'sessionId': b.owner['id']}, 'read-before-future-save'))['result']
+    assert current['blockedReason'] is None
+    result = await agent(b.app, source, 'conversation.configure',
+        {'sessionId': b.owner['id'], 'expectedRevision': current['nextMessageRevision'],
+         'bundle': 'work-amp-dev'}, 'future-bundle-after-reconcile')
+    assert result['result']['mounted'] is False
+    final = (await agent(b.app, source, 'conversation.configuration',
+        {'sessionId': b.owner['id']}, 'read-future-save'))['result']
+    assert final['pendingBundleSelection'] == {'bundle': 'work-amp-dev', 'resetModel': False}
+    assert final['nextMessageRevision'] == 1
+    assert b.owner['messages'] == messages
+    assert operation(b)['attempts'] == saved['attempts']
+    assert not override_path(b.owner['runtimeSessionId']).exists()
+    drain.assert_not_awaited()
+
+
+@pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
+@pytest.mark.parametrize('effect', ['none', 'saved', 'unknown-saved'])
+async def test_fresh_cancel_then_future_bundle_keeps_original_authority_and_inputs(process_boundary, monkeypatch, effect):
+    from test_saved_configuration_cancel import saved_mount_failure, stop_worker
+    from amplifier_web.configuration_recovery import suppress_input
+    from amplifier_web.management import Management
+    b = process_boundary
+    if effect == 'none':
+        original = await operator_failure(b)
+    elif effect == 'saved':
+        original = await saved_mount_failure(b)
+    else:
+        original = await saved_failure(b, monkeypatch)
+    before_settings = override_path(b.owner['runtimeSessionId']).read_bytes() if effect != 'none' else None
+    before_receipt = receipt_path(original['attempts'][-1]).read_bytes()
+    await stop_worker(b)
+    # A fresh operator can abandon proven effects; it may never renew this
+    # revoked/stopped original's authority to resume its effect.
+    await mode_for(b, b.owner, 'ask')
+    source = await manager(b)
+    with pytest.raises(AppError):
+        await invoke(b, source, 'resume')
+    messages = deepcopy(b.owner['messages'])
+    old = {'acceptedAt': 1, 'dependencyRequestId': None}
+    drains = AsyncMock()
+    monkeypatch.setattr(b.app.collaboration, 'drain', drains)
+    saved = operation(b)
+    args = {'sessionId': b.owner['id'], 'operationId': saved['id'], 'expectedRevision': saved['revision']}
+    choices = (await agent(b.app, source, 'conversation.configuration',
+        {'sessionId': b.owner['id']}, 'discover-cancel'))['result']
+    assert choices['pendingOperation']['operationId'] == saved['id']
+    observed = (await agent(b.app, source, 'configuration.operation.read',
+        {**args, 'includeRecovery': True}, 'read-cancel'))['result']
+    assert not observed['recovery']['canResume']
+    assert observed['recovery']['canCancel']
+    receipt = await agent(b.app, source, 'configuration.operation.cancel', args, 'cancel-exact')
+    cancelled = operation(b)
+    assert cancelled['state']['phase'] == 'cancelled'
+    assert cancelled['state']['effect'] == ('none' if effect == 'none' else 'saved_not_mounted')
+    assert cancelled['request'] == original['request']
+    assert cancelled['attempts'] == original['attempts']
+    assert cancelled['history'][:len(original['history'])] == original['history']
+    assert b.owner['messages'] == messages
+    assert not b.owner['configurationBusy'] and not b.runtime.workers
+    assert receipt_path(original['attempts'][-1]).read_bytes() == before_receipt
+    if before_settings is not None:
+        assert override_path(b.owner['runtimeSessionId']).read_bytes() == before_settings
+    else:
+        assert not override_path(b.owner['runtimeSessionId']).exists()
+    # Lost reply recovery reads the command, not another effect.
+    status = (await agent(b.app, source, 'configuration.operation.read',
+        {**args, 'commandId': 'cancel-exact'}, 'read-cancel-receipt'))['result']
+    assert status['command']['accepted'] and status['command']['action'] == 'configuration.operation.cancel'
+    duplicate = await agent(b.app, source, 'configuration.operation.cancel', args, 'cancel-exact')
+    assert duplicate['duplicate'] and duplicate['result'] == receipt['result']
+    # Startup reconstruction keeps the original marker, not a new cutoff.
+    marker = deepcopy(b.owner['cancelledConfigurationInput'])
+    b.app.management = Management(b.app)
+    assert b.owner['cancelledConfigurationInput'] == marker
+    assert suppress_input(b.owner, old)
+    result = await agent(b.app, source, 'conversation.configure',
+        {'sessionId': b.owner['id'], 'expectedRevision': 0, 'bundle': 'work-amp-dev'}, 'future-after-cancel')
+    assert result['result']['mounted'] is False
+    assert b.owner['pendingBundleSelection']['bundle'] == 'work-amp-dev'
+    b.owner['collaborationGeneration'] = {'id': 'genuinely-new-turn', 'inputIds': ['new']}
+    assert suppress_input(b.owner, old)
+    assert not suppress_input(b.owner, {'acceptedAt': marker['acceptedAt'] + 1})
+    drains.assert_not_awaited()
+
+
+@pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
+@pytest.mark.parametrize('change', ['running', 'saved', 'missing-receipt', 'partial', 'native',
+    'placement', 'revision', 'payload', 'refresh', 'writer', 'ask', 'child'])
+async def test_operator_cancel_refuses_unproven_boundary(process_boundary, monkeypatch, change):
+    from test_saved_configuration_cancel import saved_mount_failure
+    from amplifier_web.configuration_recovery import seal
+    from amplifier_foundation.session import SharedSessionStore
+    b = process_boundary
+    original = await saved_mount_failure(b)
+    b.owner['status'] = 'idle'
+    source = await manager(b)
+    if change != 'running':
+        await b.runtime.stop(b.owner['id'], reason='configuration')
+    transport, held = {}, None
+    if change == 'saved':
+        override_path(b.owner['runtimeSessionId']).write_text(json.dumps(plan(3)))
+    elif change == 'missing-receipt':
+        receipt_path(original['attempts'][-1]).unlink()
+    elif change == 'partial':
+        attempt = original['attempts'][-1]
+        receipt_path(attempt).write_text(json.dumps(seal(attempt, 'unknown', terminal=True)))
+    elif change == 'native':
+        b.owner['runtimeSessionId'] = 'another-native-target'
+    elif change == 'placement':
+        b.owner['executionRevision'] = 1
+    elif change == 'payload':
+        b.app.management.queued_path(b.owner['id']).write_text(json.dumps(plan(3)))
+    elif change == 'refresh':
+        b.owner['configurationRefresh'] = {'phase': 'applying'}
+    elif change == 'writer':
+        held = SharedSessionStore(b.owner['workspace'], b.owner['runtimeSessionId']).acquire(app='independent-writer')
+    elif change == 'ask':
+        await mode_for(b, source, 'ask')
+    elif change == 'child':
+        transport['_childOrigin'] = {}
+    args = {'sessionId': b.owner['id'], 'operationId': original['id'],
+            'expectedRevision': original['revision'] + (1 if change == 'revision' else 0)}
+    try:
+        with pytest.raises((AppError, ValueError, RuntimeError)):
+            await agent(b.app, source, 'configuration.operation.cancel', args, 'refused-cancel', **transport)
+    finally:
+        if held:
+            held.release()
+    assert operation(b) == original
+    assert b.owner['configurationBusy']
+
+
+@pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
+@pytest.mark.parametrize('change', ['full-off-on', 'caller-stop', 'target-stop', 'placement', 'native'])
+async def test_cancel_capture_survives_no_dispatch_wait_renewal(process_boundary, monkeypatch, change):
+    b = process_boundary
+    original = await operator_failure(b)
+    await b.runtime.stop(b.owner['id'], reason='configuration')
+    b.owner['status'] = 'idle'
+    source = await manager(b)
+    entered, release = asyncio.Event(), asyncio.Event()
+    route = b.app.collaboration.route
+    async def delayed(action, *args):
+        if action == 'configuration.operation.cancel':
+            entered.set()
+            await release.wait()
+        return await route(action, *args)
+    monkeypatch.setattr(b.app.collaboration, 'route', delayed)
+    pending = asyncio.create_task(invoke(b, source, 'cancel', identity='cancel-wait'))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        if change == 'full-off-on':
+            await mode_for(b, source, 'ask')
+            await mode_for(b, source, 'full')
+        elif change == 'caller-stop':
+            source['interruptionRevision'] = 1
+        elif change == 'target-stop':
+            b.owner['interruptionRevision'] = 1
+        elif change == 'placement':
+            b.owner['executionRevision'] = 1
+        else:
+            b.owner['runtimeSessionId'] = 'different-native'
+    finally:
+        release.set()
+    with pytest.raises(AppError):
+        await pending
+    assert operation(b) == original
+
+
+@pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
+@pytest.mark.parametrize('effect', ['none', 'saved'])
+async def test_cancel_durable_commit_recovers_projection_without_replaying(process_boundary, monkeypatch, effect):
+    from test_saved_configuration_cancel import saved_mount_failure, stop_worker
+    from amplifier_web.management import Management
+    b = process_boundary
+    original = await (operator_failure(b) if effect == 'none' else saved_mount_failure(b))
+    await stop_worker(b)
+    source = await manager(b)
+    before = deepcopy(b.owner)
+    publish = b.app._publish_changes
+    def crash(*args, **kwargs):
+        if b.owner['pendingConfiguration'].get('phase') == 'cancelled':
+            raise OSError('Injected publication loss after durable cancellation')
+        return publish(*args, **kwargs)
+    monkeypatch.setattr(b.app, '_publish_changes', crash)
+    with pytest.raises(AppError):
+        await invoke(b, source, 'cancel', identity='cancel-lost-publication')
+    committed = operation(b)
+    marker = committed['recoveryNoInputBinding']
+    assert committed['state']['phase'] == 'cancelled'
+    # Restore the lagging projection as it existed before the durable file commit.
+    b.owner.clear()
+    b.owner.update(before)
+    monkeypatch.setattr(b.app, '_publish_changes', publish)
+    b.app.management = Management(b.app)
+    assert b.owner['pendingConfiguration']['phase'] == 'cancelled'
+    assert b.owner['cancelledConfigurationInput'] == marker
+    assert not b.owner['configurationBusy']
+    assert operation(b) == committed
+    assert committed['request'] == original['request'] and committed['attempts'] == original['attempts']
+    assert not b.runtime.workers
+
+
+@pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
+async def test_cancel_availability_read_never_acquires_native_ownership(process_boundary, monkeypatch):
+    from contextlib import contextmanager
+    b = process_boundary
+    original = await operator_failure(b)
+    await b.runtime.stop(b.owner['id'], reason='configuration')
+    b.owner['status'] = 'idle'
+    source = await manager(b)
+    acquisitions = []
+    @contextmanager
+    def forbidden_enter(session):
+        acquisitions.append(session['id'])
+        raise AssertionError('Read acquired native ownership')
+        yield
+    monkeypatch.setattr(b.runtime, 'stopped_boundary', forbidden_enter)
+    result = (await invoke(b, source, 'read', includeRecovery=True))['result']
+    assert result['recovery']['canCancel']
+    assert not acquisitions and operation(b) == original
+
+
+@pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
+async def test_cancel_rechecks_saved_plan_after_acquiring_native_lease(process_boundary, monkeypatch):
+    from contextlib import contextmanager
+    from test_saved_configuration_cancel import saved_mount_failure, stop_worker
+    b = process_boundary
+    original = await saved_mount_failure(b)
+    await stop_worker(b)
+    source = await manager(b)
+    stopped = b.runtime.stopped_boundary
+    @contextmanager
+    def intervening_writer(session):
+        # A writer finished and released its lease after the initial read.
+        override_path(session['runtimeSessionId']).write_text(json.dumps(plan(3)))
+        with stopped(session) as owned:
+            yield owned
+    monkeypatch.setattr(b.runtime, 'stopped_boundary', intervening_writer)
+    with pytest.raises(AppError):
+        await invoke(b, source, 'cancel', identity='cancel-raced-save')
+    assert operation(b) == original and b.owner['configurationBusy']
+
+
+@pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
+@pytest.mark.parametrize('kind', ['missing', 'nonterminal', 'forged', 'unknown', 'contradictory-attempt'])
+async def test_cancel_does_not_erase_unknown_no_effect_evidence(process_boundary, kind):
+    from amplifier_web.configuration_recovery import seal
+    b = process_boundary
+    original = await operator_failure(b)
+    await b.runtime.stop(b.owner['id'], reason='configuration')
+    b.owner['status'] = 'idle'
+    source = await manager(b)
+    attempt = original['attempts'][-1]
+    path = receipt_path(attempt)
+    if kind == 'missing':
+        path.unlink()
+    elif kind == 'forged':
+        raw = json.loads(path.read_text())
+        raw['signature'] = '00' * 32
+        path.write_text(json.dumps(raw))
+    elif kind == 'contradictory-attempt':
+        raw = deepcopy(original)
+        raw['attempts'] = []
+        b.app.management.configuration_record_path(b.owner['id'], raw['id']).write_text(json.dumps(raw))
+    else:
+        path.write_text(json.dumps(seal(attempt, 'none' if kind == 'nonterminal' else 'unknown',
+                                       terminal=kind != 'nonterminal')))
+    before = operation(b)
+    with pytest.raises(AppError):
+        await invoke(b, source, 'cancel', identity='unknown-cancel')
+    assert operation(b) == before
+    assert 'cancelledConfigurationInput' not in b.owner
+
+
+@pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
+@pytest.mark.parametrize('peer_mode', ['ask', 'narrow-grant', 'full'])
+async def test_cancel_intersects_full_peer_lineage(process_boundary, peer_mode):
+    b = process_boundary
+    original = await operator_failure(b)
+    await b.runtime.stop(b.owner['id'], reason='configuration')
+    b.owner['status'] = 'idle'
+    source, sender = await manager(b), await manager(b, 'full' if peer_mode == 'full' else 'ask')
+    if peer_mode == 'narrow-grant':
+        await b.app.dispatch('capability.grant', {'sessionId': sender['id'],
+            'effects': ['runtime_configuration'], 'scopes': ['session'], 'reason': 'Owner-local only'})
+    request = await agent(b.app, sender, 'coordination.send',
+        {'sessionId': source['id'], 'text': 'Abandon the other configuration', 'mode': 'notify'}, 'cancel-peer')
+    source['collaborationGeneration'] = {'id': 'cancel-from-peer', 'terminal': False,
+                                         'inputIds': [request['requestId']]}
+    if peer_mode == 'full':
+        result = await invoke(b, source, 'cancel', identity='peer-cancel')
+        assert result['result']['state']['phase'] == 'cancelled'
+    else:
+        with pytest.raises(AppError):
+            await invoke(b, source, 'cancel', identity='peer-cancel')
+        assert operation(b) == original
+
+
+@pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
 async def test_targeted_saved_resume_never_rewrites_or_wakes(process_boundary, monkeypatch):
     b = process_boundary
     saved = await saved_failure(b, monkeypatch)
@@ -357,6 +679,54 @@ async def test_cross_owner_no_effect_recovery_holds_existing_queued_input(proces
             await asyncio.sleep(.01)
     assert admitted == ['fresh-after-recovery']
     assert b.app.collaboration.receipt('queued-before-recovery')['delivery'] == 'queued'
+
+
+@pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
+@pytest.mark.parametrize('pending_state', ['removed', 'replacement'])
+async def test_cancelled_cutoff_survives_pending_replacement_during_drain(process_boundary, monkeypatch, pending_state):
+    b = process_boundary
+    original = await operator_failure(b)
+    b.owner['status'] = 'idle'
+    source = await manager(b)
+    # Retain genuine queued peer receipts on both sides of cancellation. Only
+    # the transport is adapted; queue selection, fences and admission are real.
+    drain = b.app.collaboration.drain
+    monkeypatch.setattr(b.app.collaboration, 'drain', AsyncMock())
+    args = {'sessionId': b.owner['id'], 'text': 'Old queued input', 'mode': 'queue'}
+    await agent(b.app, source, 'coordination.send', args, 'cutoff-old-peer')
+    assert b.app.collaboration.receipt('cutoff-old-peer')['delivery'] == 'queued'
+    await b.runtime.stop(b.owner['id'], reason='configuration')
+    await invoke(b, source, 'cancel', identity='cancel-before-pending-change')
+    marker = deepcopy(b.owner['cancelledConfigurationInput'])
+    cancelled = operation(b)
+    assert cancelled['request'] == original['request']
+    assert cancelled['state']['phase'] == 'cancelled'
+    if pending_state == 'removed':
+        b.owner.pop('pendingConfiguration')
+    else:
+        # A later settled operation has replaced the cancelled projection. It
+        # must neither supply nor erase the durable old-input boundary.
+        b.owner['pendingConfiguration'] = {'operationId': 'replacement-operation',
+            'phase': 'ready', 'effect': 'mounted'}
+    b.owner['status'] = 'idle'
+    await agent(b.app, source, 'coordination.send',
+        {**args, 'text': 'Fresh explicitly requested input'}, 'cutoff-fresh-peer')
+    assert b.app.collaboration.receipt('cutoff-fresh-peer')['acceptedAt'] > marker['acceptedAt']
+    admitted = []
+    async def input_adapter(session, values, guard, emit):
+        assert guard() is None
+        result = b.app.collaboration.admission(session['id'], values)
+        assert result['admitted'], result
+        admitted.append(values['inputId'])
+        return {'accepted': True}
+    monkeypatch.setattr(b.runtime, 'collaboration_input', input_adapter)
+    await drain(b.owner['id'])
+    assert admitted == ['cutoff-fresh-peer']
+    assert b.app.collaboration.receipt('cutoff-old-peer')['delivery'] == 'queued'
+    assert b.app.collaboration.receipt('cutoff-fresh-peer')['delivery'] == 'accepted'
+    assert b.owner['cancelledConfigurationInput'] == marker
+    assert not b.runtime.workers  # No model or native execution in this adapter.
+    assert b.app.management.configuration_record(b.owner['id'], original['id']) == cancelled
 
 
 @pytest.mark.parametrize('process_boundary', ['full'], indirect=True)

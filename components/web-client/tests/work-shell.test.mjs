@@ -387,6 +387,19 @@ test('collapsed navigation gives all space back, including between chat and canv
  const expanded=fitPanels({available:1000,navPinned:true,canvasOpen:true});
  assert.ok(expanded.nav+expanded.canvas+360+24<=1000);
 });
+test('foldable navigation fits measured space without squeezing chat or forcing three panes',()=>{
+ for(const width of [641,656,673,690,720,750,768,820]){
+  const available=width-24; // Standard shell side padding; compact shell has more.
+  for(const navWidth of [216,240,2000]){
+   const fitted=fitPanels({available,navPinned:true,navWidth});
+   assert.equal(fitted.docked,true);
+   assert.ok(fitted.nav>=216&&fitted.nav+360+12<=available);
+  }
+  const canvas=fitPanels({available,navPinned:true,canvasOpen:true});
+  if(!canvas.overlay)assert.equal(canvas.docked,false,'Canvas/chat minima win when three panes cannot fit');
+ }
+ assert.equal(fitPanels({available:580,navPinned:true}).docked,false,'Actual available width still governs docking');
+});
 test('collapsed sidebar toggle lives in the header without duplicate chat controls',()=>{
  const html=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{view:{}},session:{id:'a',title:'Chat'},presentation:{},act:host.dispatch})));
  assert.match(html,/Open navigation/);assert.doesNotMatch(html,/Chat controls/);

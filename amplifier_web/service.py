@@ -2015,13 +2015,15 @@ class AppService:
         from .workspace_work_effects import guard as work_effect_guard
         work_effect_guard(self, action, args, origin, caller_session_id)
         recovery_operator = None
-        if (action in {'configuration.operation.read', 'configuration.operation.reconcile', 'configuration.operation.resume'}
-                and origin not in {'ui', 'user'} and args.get('sessionId') != caller_session_id):
+        if (action in {'configuration.operation.read', 'configuration.operation.reconcile', 'configuration.operation.resume', 'configuration.operation.cancel'}
+                and origin not in {'ui', 'user'}
+                and (args.get('sessionId') != caller_session_id or action.endswith('.cancel'))):
             from .configuration_recovery import caller_authority
             # Capture the actual caller before routing/lock waits. A later Full
             # off/on or placement/task change cannot renew this invocation.
             try:
-                recovery_operator = caller_authority(self.management, args, origin, caller_session_id, active=True)
+                recovery_operator = caller_authority(self.management, args, origin, caller_session_id, active=True,
+                    cancellation=action.endswith(('.cancel', '.read')))
             except (ValueError, OSError, KeyError, TypeError):
                 raise AppError('Targeted recovery requires a current authenticated Full root, exact operation and same workspace. Nothing was retried.', 403) from None
         if action == 'canvas.openGif' and (origin != 'ui' or client_id is None
@@ -3049,7 +3051,9 @@ class AppService:
                                                 new_root=True)
                     if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
                     handoff = self.handoffs.execution(action, args, origin, command_id, caller_session_id)
-                    if handoff is not None:
+                    if handoff is not None and handoff['mode'] == 'full':
+                        # Input attribution applies to every direct handoff;
+                        # standing-access inheritance belongs only to Full.
                         session['handoffOrigin'] = self.handoffs.lineage(handoff)
                     if origin == 'scheduler' and args.get('inheritConfiguration', {}).get('scheduledRunId'):
                         source = self._session(args['inheritConfiguration']['sessionId'])
@@ -3749,11 +3753,12 @@ class AppService:
                     raise AppError(str(exc), 409) from None
                 except (OSError, KeyError, TypeError):
                     raise AppError('Patch configuration cannot be verified; no binding was admitted.', 409) from None
-            elif action in {'configuration.operation.reconcile', 'configuration.operation.resume'}:
+            elif action in {'configuration.operation.reconcile', 'configuration.operation.resume', 'configuration.operation.cancel'}:
                 from .configuration_recovery import command as recovery_command, caller_authority
                 # Authenticate before retaining a target-bound rejection. A
                 # claimed target or command ID alone grants no receipt access.
-                caller_authority(self.management, args, origin, caller_session_id, active=True)
+                caller_authority(self.management, args, origin, caller_session_id, active=True,
+                    cancellation=action.endswith('.cancel'))
                 try:
                     diagnostic_result = recovery_command(self.management, action, args, origin, caller_session_id,
                         **({'operator': recovery_operator} if recovery_operator is not None else {}))
@@ -4002,7 +4007,7 @@ class AppService:
                     receipt['navigationPost'] = copy.deepcopy(message['navigationPost'])
             if action == 'conversation.retry':receipt['result']={'delivery':'sending', 'message':'The saved message is being checked and sent. No additional resend was started.'}
             if diagnostic_result is not None:receipt['result']=diagnostic_result
-            if action in {'configuration.operation.reconcile', 'configuration.operation.resume'}:
+            if action in {'configuration.operation.reconcile', 'configuration.operation.resume', 'configuration.operation.cancel'}:
                 receipt['configurationRecovery'] = {'action': action, 'sessionId': args['sessionId'],
                     'operationId': args['operationId'], 'expectedRevision': args['expectedRevision']}
             if action in {"locations.create", "notifications.save"} or action.startswith("providers.") or action.startswith("smartTools.") and action != "smartTools.context" or action.startswith('permissions.') and args.get('scope') == 'session':

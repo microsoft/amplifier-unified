@@ -14,7 +14,7 @@ SESSION_ACTIONS = {
     'approval.respond', 'attachment.add', 'attachment.remove',
     'question.create', 'question.answer', 'question.cancel', 'question.supersede', 'question.dismiss',
     'message.reply', 'message.replyClear', 'message.reaction', 'message.reveal',
-    'configuration.operation.reconcile', 'configuration.operation.resume',
+    'configuration.operation.reconcile', 'configuration.operation.resume', 'configuration.operation.cancel',
 }
 GLOBAL_ACTIONS = {
     'view.update': set(),

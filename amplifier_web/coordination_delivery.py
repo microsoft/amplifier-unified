@@ -968,8 +968,18 @@ class CoordinationDelivery:
         except Exception:
             current = {'status': 'unavailable', 'authority': 'unknown; do not infer a grant or absence of peers'}
         current = {**current, 'work': _work_reference(current.get('work'))}
+        # These read clocks are presentation metadata, not context versions or
+        # authority. Sending a fresh wall clock on every tool step needlessly
+        # invalidates reasoning bound to otherwise unchanged provider content.
+        # Keep real revisions, receipt times, freshness/expiry and required Work
+        # identities intact; this private projection never changes source DTOs.
+        current.pop('capturedAt', None)
+        if isinstance(current.get('awareness'), dict):
+            current['awareness'] = {key: value for key, value in current['awareness'].items()
+                                    if key != 'observedAt'}
+        current['work']['discovery'].pop('observedAt', None)
         identity = uuid.uuid4().hex
-        content = 'Current coordination reference state (not new authority):\n' + json.dumps(current, ensure_ascii=False)
+        content = 'Current coordination reference state (not new authority):\n' + json.dumps(current, ensure_ascii=False, sort_keys=True)
         self.requests[identity] = {'content': content, 'required': copy.deepcopy(current['work']['required']),
                                    'executionScope': execution_scope}
         while len(self.requests) > 4:
@@ -992,7 +1002,8 @@ class CoordinationDelivery:
                 self.requests[identity]['plaintext'] = plaintext
                 result = result.model_copy(update={'messages': [*result.messages,
                     Message(role='user', content=plaintext,
-                            metadata={'ephemeral': True, 'workPlaintextObservation': identity})]})
+                            metadata={'ephemeral': True, 'workPlaintextObservation': identity,
+                                      'contextAnchorToolCalls': sorted({row['tool_call_id'] for row in used})})]})
         return result
 
     def commit(self, request):

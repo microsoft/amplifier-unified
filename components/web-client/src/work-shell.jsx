@@ -18,7 +18,7 @@ import {WorkspaceResourcesOwner,WorkspaceResourcesSlot} from './workspace-resour
 import {WorkspaceBundleDefault} from './bundle-controls';
 import {newChatSetup} from './new-chat';
 import {useActivityClock,CopyDetail} from './navigation-details';
-import {useModalFocus,useNarrowScreen,navigationExpanded} from './responsive-navigation';
+import {useModalFocus,useNarrowScreen,navigationExpanded,NAVIGATION_NARROW_QUERY} from './responsive-navigation';
 import {ShellSlot} from './shell/runtime';
 import {CanvasToggle} from './shell-panels';
 import {AttentionBadge} from './attention';
@@ -93,7 +93,7 @@ export function WorkHeader({state,session,act,open,narrow,presentation,fileDropH
  const displayTitle=useChatTitle(session,{eager:!browsing}).title;
  const setup=!session&&!browsing?newChatSetup(state):null;
  const workspace=state.workspaces?.find(row=>setup?setup.location?.kind!=='managed'&&row.path===setup.workspace:row.id===(browsing?state.view.workWorkspaceId:state.selectedWorkspaceId));
- const navigationNarrow=useNarrowScreen('(max-width: 900px)');
+ const navigationNarrow=useNarrowScreen(NAVIGATION_NARROW_QUERY);
  const navOpen=navigationExpanded(state.view,navigationNarrow),header=useRef(null);
  useLayoutEffect(()=>{
   const node=header.current;if(!node)return;

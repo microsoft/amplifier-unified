@@ -36,7 +36,9 @@ class Management:
         restored = set()
         for session in service.state.get('sessions',[]):
             pending = session.get('pendingConfiguration', {})
-            if pending.get('phase') not in {'queued', 'applying', 'error'}:
+            if (pending.get('phase') not in {'queued', 'applying', 'error'}
+                    and not (pending.get('phase') == 'cancelled'
+                             and isinstance(pending.get('recoveryNoInput'), dict))):
                 continue
             try:
                 record = self.configuration_record(session['id'], pending.get('operationId'))
@@ -561,7 +563,9 @@ class Management:
     def finish_saved_cancellation(self, session, record):
         """Finish an already committed cancellation after interrupted publication."""
         state = record['state']
-        if state.get('phase') != 'cancelled' or state.get('stage') != 'saved_cancelled':
+        if state.get('phase') != 'cancelled' or not (
+                state.get('stage') == 'saved_cancelled'
+                or state.get('stage') == 'cancelled' and record.get('recoveryNoInputBinding')):
             return False
         pending = session.get('pendingConfiguration', {})
         if pending.get('operationId') != record['id']:
@@ -569,7 +573,13 @@ class Management:
         self.queued_path(session['id']).unlink(missing_ok=True)
         pending.update(copy.deepcopy(state))
         self.settle_configuration_fence(session, record['id'])
-        session.pop('pendingConfiguration', None)
+        if record.get('recoveryNoInputBinding'):
+            # Keep the existing per-generation input fence through restart, even
+            # though this cancelled operation no longer holds configuration.
+            pending['recoveryNoInput'] = copy.deepcopy(record['recoveryNoInputBinding'])
+            session['cancelledConfigurationInput'] = copy.deepcopy(record['recoveryNoInputBinding'])
+        else:
+            session.pop('pendingConfiguration', None)
         return True
 
     def create_configuration_operation(self, session, config, command_id, authority, source):

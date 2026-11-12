@@ -153,7 +153,7 @@ def definitions(schema, string):
             **sid, "proposalId": string(200), "decision": {"enum": ["allow", "deny"]},
         }, ["sessionId", "proposalId", "decision"])),
         "coordination.send": ("Commit attributed task input to an exact existing root in this user's Unified installation, including other workspaces and managed chats. Discover IDs with coordination.list scope=all. No assignment, permissions, files or resume authority transfers. Auto (the default) delivers at the next supported model request boundary or when idle. Explicit queue waits for idle; notify never wakes. Preparation continues under service ownership. Read results, never replay uncertain input. For an agent-recorded dependency block, use ordinary auto/queue WITHOUT resume or humanInput: the recipient may inspect fresh input and deliberately resume its own task once the dependency is verified resolved. Human blocks, unknown block provenance and actual Stop remain protected. Reserve resume for a stopped/paused/failed commissioned same-workspace member after an explicit human instruction; use queue with resume={sourceMessageId, expectedInterruptionRevision}; the host binds the current human input and exact Stop/task/assignment boundaries. This admits one fresh input without resetting budgets, permissions or replaying old work. For explicit human repair of existing same-workspace schedules, scheduleRepair scopes the sourceMessageId and exact target IDs/revisions; the owner may resume those schedules unchanged.", schema(message, ["sessionId", "text"])),
-        "coordination.create": ("Commission one authorized durable worker; repeat independently for as many parallel tasks as needed. Inherits configuration and workspace. Optional execution creates a clean isolated checkout and optional objective installs its saved goal before the first brief can run. A saved return notification reports its outcome. This does not create an independent user chat in a different folder. Inspect this operation's requestId for its initial result. Returns before preparation and does not select the peer. Set returnNotification:false only when no automatic return is wanted.", schema({
+        "coordination.create": ("Commission a manager-owned durable worker without a browser; repeat for parallel deliverables. Inherits the calling manager's configuration and workspace, with a saved result return. Optional execution creates a clean isolated checkout and optional objective saves its goal before the brief runs. Use session.handoff.start instead for genuinely independent work in a destination folder, without manager ownership or automatic return. Inspect this operation's requestId for its initial result. Returns before preparation; preserves selection and drafts. Set returnNotification:false only when no automatic return is wanted.", schema({
             "senderSessionId": string(200), "grantId": string(200), "title": {**string(100), "minLength": 1},
             "text": {**string(16000), "minLength": 1}, "references": references,
             "returnNotification": {"type": "boolean", "default": True},
@@ -1139,13 +1139,13 @@ class Collaboration:
         freed_return = False
         try:
             async with self.service.lock:
-                from .configuration_recovery import suppress_input
+                from .configuration_recovery import input_cutoff, suppress_input
                 current = self.service._session(sid)
-                holding = suppress_input(current)
-                if not holding:
+                cutoff = input_cutoff(current)
+                if cutoff is None:
                     self.resume_outcomes(sid)
                 rows = self.fair_rows(sid, active=current.get('status') in BUSY,
-                    accepted_after=current['pendingConfiguration']['recoveryNoInput']['acceptedAt'] if holding else None)
+                    accepted_after=cutoff)
             for identity, encoded in rows:
                 async with self.service.lock:
                     receipt = self.receipt(identity)

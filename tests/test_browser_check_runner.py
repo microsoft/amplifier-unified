@@ -42,9 +42,10 @@ def coverage_plan():
     # historical inventory. Its exact owner is checked separately below.
     retained_ids = retained_update_recovery_browser_addition(plan['scenarios'])
     appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
+    responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
     rows = []
     for row in plan['scenarios']:
-        if row['id'] in retained_ids | appearance_ids:
+        if row['id'] in retained_ids | appearance_ids | responsive_ids:
             continue
         row = {**row, 'command': [coverage_paths(part) for part in row['command']]}
         row.pop('cwd', None)
@@ -627,6 +628,99 @@ def appearance_lifecycle_browser_addition(rows, readiness_scripts=()):
     return {expected['id']}
 
 
+def sidebar_responsive_browser_addition(rows, readiness_scripts=()):
+    """Validate both sidebar modes before subtracting only the new mode."""
+    script = 'tests/sidebar-controls-browser.mjs'
+    ordinary = {
+        'id': 'sidebar-controls', 'command': ['node', script],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/sidebar-controls'},
+        'cwd': '.build/web-client',
+    }
+    responsive = {
+        'id': 'sidebar-responsive', 'command': ['node', script],
+        'env': {'AMPLIFIER_SIDEBAR_RESPONSIVE': '1',
+                'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/sidebar-responsive'},
+        'cwd': '.build/web-client',
+    }
+    owners = [row for row in rows
+              if row['id'] in {'sidebar-controls', 'sidebar-responsive'}
+              or script in row['command']
+              or 'AMPLIFIER_SIDEBAR_RESPONSIVE' in row.get('env', {})]
+    assert sorted(owners, key=lambda row: row['id']) == [ordinary, responsive], \
+        'sidebar-controls/sidebar-responsive: expected exact ordinary and responsive selected-client owners'
+    assert script not in readiness_scripts, 'sidebar-controls/sidebar-responsive: duplicate readiness owner'
+    return {responsive['id']}
+
+
+def test_sidebar_responsive_is_composed_once_without_replacing_ordinary_controls():
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    client_path = source_test('tests/sidebar-controls-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    name = 'sidebar-responsive'
+    assert not any(row['id'] == name or 'AMPLIFIER_SIDEBAR_RESPONSIVE' in row.get('env', {})
+                   for row in host['scenarios'])
+    assert host['scenarioOrder'].count(name) == 1
+    index = host['scenarioOrder'].index(name)
+    assert host['scenarioOrder'][index - 1:index + 2] == [
+        'sidebar-controls', name, 'new-chat-recovery']
+    plan = current_plan()
+    assert sidebar_responsive_browser_addition(plan['scenarios']) == {name}
+    for identity in ('sidebar-controls', name):
+        selected, = [row for row in client['scenarios'] if row['id'] == identity]
+        assert [row for row in plan['scenarios'] if row['id'] == identity] == [
+            {**selected, 'cwd': '.build/web-client'}]
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+
+
+@pytest.mark.parametrize('fault', [
+    'missing', 'duplicate', 'identical-duplicate', 'renamed', 'command',
+    'extra-argument', 'missing-mode', 'wrong-mode', 'environment',
+    'wrong-artifacts', 'extra-environment', 'cwd', 'missing-cwd',
+    'readiness', 'ordinary-missing', 'ordinary-mode',
+])
+def test_sidebar_responsive_addition_rejects_changed_or_duplicate_owner(fault):
+    rows = current_plan()['scenarios']
+    assert sidebar_responsive_browser_addition(rows) == {'sidebar-responsive'}
+    owner = next(row for row in rows if row['id'] == 'sidebar-responsive')
+    ordinary = next(row for row in rows if row['id'] == 'sidebar-controls')
+    readiness = set()
+    if fault == 'missing':
+        rows.remove(owner)
+    elif fault == 'duplicate':
+        rows.append({**owner, 'id': 'sidebar-responsive-duplicate'})
+    elif fault == 'identical-duplicate':
+        rows.append(json.loads(json.dumps(owner)))
+    elif fault == 'renamed':
+        owner['id'] += '-renamed'
+    elif fault == 'command':
+        owner['command'][1] = 'tests/home-sidebar-browser.mjs'
+    elif fault == 'extra-argument':
+        owner['command'].append('--extra')
+    elif fault == 'missing-mode':
+        del owner['env']['AMPLIFIER_SIDEBAR_RESPONSIVE']
+    elif fault == 'wrong-mode':
+        owner['env']['AMPLIFIER_SIDEBAR_RESPONSIVE'] = '0'
+    elif fault == 'environment':
+        owner.pop('env')
+    elif fault == 'wrong-artifacts':
+        owner['env']['AMPLIFIER_TEST_ARTIFACTS'] = ordinary['env']['AMPLIFIER_TEST_ARTIFACTS']
+    elif fault == 'extra-environment':
+        owner['env']['UNEXPECTED'] = 'extra'
+    elif fault == 'cwd':
+        owner['cwd'] = 'tests/web'
+    elif fault == 'missing-cwd':
+        owner.pop('cwd')
+    elif fault == 'readiness':
+        readiness.add(owner['command'][1])
+    elif fault == 'ordinary-missing':
+        rows.remove(ordinary)
+    else:
+        ordinary['env']['AMPLIFIER_SIDEBAR_RESPONSIVE'] = '1'
+    with pytest.raises(AssertionError, match='sidebar-responsive'):
+        sidebar_responsive_browser_addition(rows, readiness)
+
+
 @pytest.mark.parametrize('fault', ['missing', 'duplicate', 'command', 'artifacts', 'root', 'cwd', 'readiness'])
 def test_appearance_lifecycle_addition_rejects_missing_duplicate_or_changed_owner(fault):
     rows = [{
@@ -912,6 +1006,9 @@ def test_question_fade_browser_addition_rejects_missing_duplicate_or_wrong_envir
 
 def selected_client_browser_addition(rows, readiness_scripts, identity, *, current=False):
     """Validate the selected client's additive journey before freezing prior owners."""
+    if current and identity == 'sidebar-controls':
+        responsive_ids = sidebar_responsive_browser_addition(rows, readiness_scripts)
+        rows = [row for row in rows if row['id'] not in responsive_ids]
     script = f'tests/{identity}-browser.mjs'
     expected = {
         'id': identity, 'command': ['node', script],
@@ -943,6 +1040,7 @@ def action_spacing_browser_addition(rows, readiness_scripts, *, current=False):
 ])
 def test_sidebar_controls_browser_owner_is_distinct_and_additive(identity, current, fault):
     rows = (current_plan() if current else coverage_plan())['scenarios']
+    assert selected_client_browser_addition(rows, set(), identity, current=current) == {identity}
     owner = next(row for row in rows if row['id'] == identity)
     readiness = set()
     if fault == 'missing':
@@ -1137,6 +1235,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     readiness_scripts = {match.group(1) for _, line in commands
                          if (match := re.search(r'node (tests/[^ ]+-browser\.mjs)', line))}
     appearance_lifecycle_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    sidebar_responsive_browser_addition(current_plan()['scenarios'], readiness_scripts)
     plan = coverage_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], readiness_scripts)
     sidebar_ids = sidebar_controls_browser_addition(plan['scenarios'], readiness_scripts)
@@ -3531,12 +3630,13 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     client_addition_ids = input_status_and_action_spacing_browser_additions(plan['scenarios'], set(), current=True)
     retained_ids = retained_update_recovery_browser_addition(plan['scenarios'])
     appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids]
+    responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids)
-    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids)
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids)
+    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
-    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids)
+    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids) + len(responsive_ids)
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')

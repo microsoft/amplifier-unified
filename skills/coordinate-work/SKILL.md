@@ -32,7 +32,8 @@ not current acceptance evidence or new authority.
    dependencies, existing authority and result destination. Keep genuinely
    sequential dependencies explicit; use real machine/provider capacity and any
    deliberately configured limits, not an invented fixed worker count.
-2. Use `coordination.create` for durable independent task roots. Its `text` is
+2. Use `coordination.create` for durable manager-owned workers, without a browser.
+   It inherits the calling manager's workspace and configuration. Its `text` is
    the complete brief, including acceptance and permission limits; there is no
    separate `acceptance` field. Supply `objective` to save its durable goal;
    optional `constraints` belong to that objective. Creation reserves its result
@@ -59,6 +60,13 @@ needs a result, retaining its stable command ID and exact target. Omitted `mode`
 uses ordinary busy-boundary/idle delivery. `notify` is a non-waking note; use it
 only when no continuation is needed. Ordinary collaboration within the assigned
 intent needs no separate approval. Do not enroll independent chats implicitly.
+
+Use `session.handoff.start` only for independent work in a destination folder,
+without manager ownership or automatic result return. Direct starts need no
+browser: Ask requires an explicit request through the current root; Full also
+supports qualified children and trusted systems. Review and navigation still
+require a client. For work owned by another existing manager, send that manager
+the brief; commissioning from here would inherit this workspace instead.
 
 ## Continue when a dependency is resolved
 
