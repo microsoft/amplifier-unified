@@ -1622,7 +1622,8 @@ class RuntimeManager:
         try:
             guard = None
             captured_revision = session.get('nextMessageRevision', 0)
-            if self._input_configuration and session.get('nextMessageRevision'):
+            saved_binding = session.get('modelConnectionKey')
+            if self._input_configuration and (session.get('nextMessageRevision') or session.get('modelConnectionKey')):
                 if self._closed:
                     raise RuntimeHostClosingError()
                 sid = session['id']
@@ -1684,10 +1685,14 @@ class RuntimeManager:
                 await self.control(session['id'],'provider.select',{
                     **requested, **({'expectedConnectionKey':session['modelConnectionKey']} if session.get('modelConnectionKey') else {})
                 }, **guarded)
-            if configuration_guard:
+            adopted_binding = saved_binding and saved_binding != session.get('modelConnectionKey')
+            if configuration_guard and (captured_revision or adopted_binding):
                 guard()
                 await emit('runtime.nextMessageApplied', {'sessionId': session['id'],
-                    'revision': captured_revision, 'bundle': session.get('bundle'), 'selection': requested})
+                    'revision': captured_revision, 'bundle': session.get('bundle'), 'selection': requested,
+                    **({'bindingTransition': {'previous': saved_binding, 'current': session['modelConnectionKey'],
+                        'instance': (requested or session['selection'])['instance']},
+                        'bindingOnly': not captured_revision} if adopted_binding else {})})
             elif requested:
                 await emit('runtime.modelSelectionApplied',{'sessionId':session['id'],'selection':requested})
             return guard

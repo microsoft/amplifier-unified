@@ -187,6 +187,24 @@ async def prepare(service, captured, *, frozen=False):
     failure = None
     try:
         check()
+        bound_selection = selection or session.get('selection')
+        if session.get('modelConnectionKey') and bound_selection:
+            from .provider_catalog import configured_binding, retained_conversation_binding
+            # Adopt only an exact previous-algorithm digest of TODAY's selected
+            # connection. No guesses about historical flags/credentials, no saved
+            # data rewrite. The actual mounted connection still gates admission.
+            if selection:
+                current_binding = configured_binding(service.data_dir, session['workspace'], bound_selection['instance'],
+                    global_only=session.get('location', {}).get('kind') == 'managed',
+                    saved=session['modelConnectionKey'])
+            else:
+                current_binding = retained_conversation_binding(service.data_dir, session['workspace'],
+                    session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'],
+                    bound_selection['instance'], session['modelConnectionKey'],
+                    global_only=session.get('location', {}).get('kind') == 'managed')
+            if not current_binding:
+                raise ValueError('The saved provider is unavailable. Choose an available connection.')
+            session['modelConnectionKey'] = current_binding
         if pending:
             checked = await resolve_defaults(service.data_dir, session['workspace'], pending['bundle'],
                 session_id=session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'],
@@ -292,12 +310,23 @@ def validate_selection(selected, catalog):
 def applied(session, payload):
     """Exact revision acknowledgment cannot clear a newer A→B→A choice."""
     revision = payload.get('revision')
-    if (type(revision) is not int or revision > session.get('nextMessageRevision', 0)
-            or revision <= session.get('appliedConfigurationRevision', -1)):
+    if type(revision) is not int or revision > session.get('nextMessageRevision', 0):
         return
     pending = session.get('pendingBundleSelection')
     if (revision == session.get('nextMessageRevision', 0)
             and pending and pending['bundle'] != payload.get('bundle')):
+        return
+    transition = payload.get('bindingTransition')
+    if transition and revision == session.get('nextMessageRevision', 0):
+        selected = session.get('pendingModelSelection') or session.get('selection') or {}
+        if (session.get('modelConnectionKey') == transition['previous']
+                and selected.get('instance') == transition['instance']):
+            # Only the host's guarded, mounted-verification receipt promotes
+            # this one proven digest. Newer choices and saved plans are untouched.
+            session['modelConnectionKey'] = transition['current']
+    if payload.get('bindingOnly'):
+        return
+    if revision <= session.get('appliedConfigurationRevision', -1):
         return
     # A slow earlier mount may finish after the user saves a future choice.
     # Record its actual root, without clearing or relabelling that newer intent.
