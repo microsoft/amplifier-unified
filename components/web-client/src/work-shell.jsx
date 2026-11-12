@@ -97,9 +97,15 @@ export function WorkHeader({state,session,act,open,narrow,presentation,fileDropH
  const navOpen=navigationExpanded(state.view,navigationNarrow),header=useRef(null);
  useLayoutEffect(()=>{
   const node=header.current;if(!node)return;
+  const overlay=window.navigator?.windowControlsOverlay;let frame=null;
   const measure=()=>node.closest('#amp-one')?.style.setProperty('--a-navigation-top',`${node.getBoundingClientRect().bottom}px`);
-  measure();const observer=new ResizeObserver(measure);observer.observe(node);window.addEventListener('resize',measure);
-  return()=>{observer.disconnect();window.removeEventListener('resize',measure)};
+  const schedule=()=>{
+   if(frame!==null)window.cancelAnimationFrame(frame);
+   frame=window.requestAnimationFrame(()=>{frame=window.requestAnimationFrame(()=>{frame=null;measure()})});
+  };
+  // Overlay clearance changes before the next layout measurement.
+  measure();const observer=new ResizeObserver(measure);observer.observe(node);window.addEventListener('resize',schedule);overlay?.addEventListener?.('geometrychange',schedule);
+  return()=>{observer.disconnect();window.removeEventListener('resize',schedule);overlay?.removeEventListener?.('geometrychange',schedule);if(frame!==null)window.cancelAnimationFrame(frame)};
  },[]);
  const title=surface==='home'?'Home':surface==='workspaces'?'All workspaces':surface==='chats'?'All chats':surface==='workspace'?workspace?.name||'Workspace':displayTitle;
  return <header ref={header} className="a-work-header" data-part="header" inert={!!state.view?.panel} {...fileDropHandlers}>
@@ -166,7 +172,7 @@ function WorkBrowser({host,workspaceHost,state,act,dispatch,presentation,resourc
  const title=surface==='workspace'?workspacePending?'Loading workspace…':workspace?.name||'Workspace unavailable':surface==='workspaces'?'All workspaces':'All chats';
  const description=surface==='workspace'?'Your chats, files, and related work in one place.':surface==='workspaces'?'Find a workspace, browse its folders, or start something new.':'Find a conversation or see what needs your attention.';
  const readingKey=JSON.stringify([mode,tab,view.navFilter,view.navStatusFilter,view.navArchive,view.navSort,view.navGroup,view.navAge,view.navLocationFilter,view.navShowAgentCreated,page?.index,workspaceModel.state.workspaceExplorer?.page,workspaceModel.state.workspaceExplorer?.filter,workspaceModel.state.workspaceExplorer?.mode,workspaceModel.state.workspaceExplorer?.archive,workspaceModel.state.workspaceExplorer?.path]);
- return <WorkLandingFrame mode={mode} presentation={presentation} identity={identity} readingKey={readingKey} ready={!(surface==='workspace'&&tab==='chats')&&!page?.pending&&!workspacePending&&(surface!=='workspaces'||hasNavigationResource(workspaceModel.state,'workspaceExplorer'))} title={title} description={description}
+ return <WorkLandingFrame mode={mode} presentation={presentation} identity={identity} contentKind={surface==='workspace'&&tab!=='chats'?'material':'landing'} readingKey={readingKey} ready={!(surface==='workspace'&&tab==='chats')&&!page?.pending&&!workspacePending&&(surface!=='workspaces'||hasNavigationResource(workspaceModel.state,'workspaceExplorer'))} title={title} description={description}
   toolbar={surface!=='workspace'&&<LandingToolbar mode={mode} onMode={setMode} presentation={presentation} actions={<button type="button" className="a-home-create a-soft" aria-label={surface==='workspaces'?'New workspace':'New chat'} onClick={()=>surface==='workspaces'?nav.create():nav.newChat()}><Plus/><span>{surface==='workspaces'?'New workspace':'New chat'}</span></button>}/>}
  ><NavigationEditor model={model} deleteOwner={active}/><NavigationEditor model={workspaceModel}/>
  <WorkspaceResourcesSlot connect={resourceSlot} workspace={surface==='workspace'&&tab==='details'&&!workspacePending&&workspace?.available!==false?workspace:undefined} unavailableId={surface==='workspace'&&tab==='details'&&!workspacePending&&(!workspace||workspace.available===false)?state.view.workWorkspaceId:undefined}/>{active&&<>
