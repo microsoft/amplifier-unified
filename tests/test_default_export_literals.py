@@ -405,3 +405,73 @@ async def test_resource_binding_follows_punctuated_transitive_namespace(tmp_path
         "foundation:context/shared/common-agent-base.md.", "second:child.md"}
     exported = BundleManager(tmp_path).export_document({}, effective_plan=plan, resources=resources)
     assert "TRANSITIVE CHILD" in exported["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["removed-agent", "introduced-agent", "instruction-file"])
+async def test_resource_binding_waits_for_effective_runtime_plan_and_instruction_files(
+        tmp_path, monkeypatch, change):
+    from amplifier_foundation import Bundle
+    from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
+    from amplifier_web.host.components import prepare_bundle
+    from amplifier_web.host.mentions import include_instruction_files
+    from amplifier_web.host.session import apply_runtime_plan, compose_configured_bundle
+
+    controls, plan, registry, root, config, calls = collected_export(tmp_path, monkeypatch)
+    bundle = controls.prepared.bundle
+    bundle.session = {"orchestrator": {"module": "loop-live"}, "context": {"module": "context-simple"}}
+    bundle.providers = [{"module": "provider-fixture"}]
+    config.settings.update(bundle={"app": []}, web_bundles={"excluded": list(DEFAULT_BEHAVIORS)})
+    if change != "removed-agent":
+        bundle.agents = {}
+    bundle = await compose_configured_bundle(registry, bundle, config)
+    assert not calls, "Initial composition must not resolve soon-to-be-removed references"
+    edited = copy.deepcopy(bundle.to_mount_plan())
+    edited["agents"] = {} if change != "introduced-agent" else plan["agents"]
+    bundle = apply_runtime_plan(bundle, edited, config, config.workspace)
+    if change == "instruction-file":
+        (config.workspace / "AGENTS.md").write_text("@foundation:context/shared/common-agent-base.md")
+    bundle = include_instruction_files(bundle, config_home=tmp_path / "config",
+        execution_workspace=config.workspace, workspace=config.workspace)
+    expected = copy.deepcopy(bundle.to_mount_plan())
+
+    async def activate(self, **kwargs):
+        assert self.to_mount_plan() == expected
+        return SimpleNamespace(bundle=self, mount_plan=self.to_mount_plan())
+    monkeypatch.setattr(Bundle, "prepare", activate)
+    prepared = await prepare_bundle(bundle)
+    assert prepared.bundle.to_mount_plan() == expected
+    assert len(calls) == (0 if change == "removed-agent" else 1)
+    assert ("foundation" in bundle.source_base_paths) is (change != "removed-agent")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bound", ["file", "count", "total"])
+async def test_context_discovery_bounds_do_not_become_startup_admission_limits(tmp_path, monkeypatch, bound):
+    from amplifier_foundation import Bundle
+    from amplifier_web.host.components import prepare_bundle
+
+    controls, plan, registry, root, config, calls = collected_export(tmp_path, monkeypatch)
+    bundle = controls.prepared.bundle
+    bundle.agents = {}
+    bundle.context = {}
+    count, size = {"file": (1, 1_000_001), "count": (501, 1), "total": (9, 1_000_000)}[bound]
+    for index in range(count):
+        path = tmp_path / f"context-{index}.md"
+        path.write_text("x" * size)
+        bundle.context[f"fixture:{index}"] = path
+    bundle._host_resource_context = (registry, config)
+    before = copy.deepcopy(bundle.to_mount_plan())
+    async def activate(self, **kwargs):
+        return SimpleNamespace(bundle=self)
+    monkeypatch.setattr(Bundle, "prepare", activate)
+    prepared = await prepare_bundle(bundle)
+    assert prepared.bundle.to_mount_plan() == before
+    assert not calls and bundle._host_resource_scan_warnings
+    if bound == "count":
+        # Ordinary preparation succeeds; portable export still rejects its
+        # independent file-count limit rather than silently accepting the plan.
+        with pytest.raises(ValueError, match="500 file portable export limit"):
+            controls.export_resources()
+    else:
+        assert controls.export_resources()["warnings"], "Discovery limits remain visible, not silent acceptance"

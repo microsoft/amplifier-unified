@@ -77,6 +77,13 @@ async def prepare_bundle(bundle, *, source_home=None, **kwargs):
     walk assumes every nested agents value is a mapping. Flatten an activation-
     only copy, then retain the exact executable plan and original bundle.
     """
+    resource_context = getattr(bundle, "_host_resource_context", None)
+    if resource_context is not None:
+        from .session import _bind_resource_namespaces, is_snapshot
+        if not is_snapshot(bundle):
+            registry, config = resource_context
+            await _bind_resource_namespaces(bundle, registry, config,
+                getattr(bundle, "_host_components", None) or HostComponents())
     if source_home is not None:
         # Canonicalize before Foundation records source-qualified provider
         # paths and before Core/modes capture the plan. Never relabel those

@@ -696,6 +696,7 @@ class RuntimeControls:
         registry = self.coordinator.get_capability("web.registry")
         bundle = self.prepared.bundle if self.prepared else None
         result = {"instruction":getattr(bundle,"instruction",None) or "", "context":[], "namespaces":[], "warnings":[]}
+        result["warnings"].extend(getattr(bundle, "_host_resource_scan_warnings", []))
         resolver = self.coordinator.get_capability("model_role_resolver")
         # This metadata belongs to the pinned routing-matrix implementation.
         # Other resolver implementations need not expose their strategy; never

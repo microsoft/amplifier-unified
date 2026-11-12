@@ -705,7 +705,7 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
 async def _bind_resource_namespaces(bundle, registry, config, components):
     """Bind referenced, registered resources without composing their capabilities.
 
-    This runs once per ordinary composition, never during provider requests or
+    This runs after effective plan edits at preparation, never during provider requests or
     synchronous export. Only missing namespaces in effective prose are resolved.
     Source selection/admission remains the same as other preparation inputs.
     """
@@ -738,6 +738,7 @@ async def _bind_resource_namespaces(bundle, registry, config, components):
     # Read only the admitted context closure, not all registered bundles.
     context = deque(Path(path) for path in bundle.context.values())
     seen, attempted, total = set(), set(), 0
+    warnings = []
     bindings = dict(getattr(bundle, "_host_resource_namespaces", {}))
     resolver = SimpleSourceResolver(cache_dir=config.registry_home / "cache", base_path=config.workspace)
     while context or pending:
@@ -745,13 +746,19 @@ async def _bind_resource_namespaces(bundle, registry, config, components):
             path = context.popleft().resolve()
             if path in seen or not path.is_file():
                 continue
-            if len(seen) >= 500 or path.stat().st_size > 1_000_000:
-                raise ValueError("Bundle resource preparation exceeds portable file limits")
+            if len(seen) >= 500:
+                warnings.append("Resource namespace discovery stopped at 500 context files; export remains subject to its portable limits.")
+                break
             seen.add(path)
+            size = path.stat().st_size
+            if size > 1_000_000:
+                warnings.append("Resource namespace discovery skipped a context larger than 1 MB; export remains subject to its portable limits.")
+                continue
+            if total + size > 8_000_000:
+                warnings.append("Resource namespace discovery stopped at 8 MB of context; export remains subject to its portable limits.")
+                break
             text = path.read_text(encoding="utf-8")
             total += len(text.encode("utf-8"))
-            if total > 8_000_000:
-                raise ValueError("Bundle resources exceed the 8 MB portable export limit")
             references(text)
             continue
         namespace, relative = pending.popleft()
@@ -759,7 +766,8 @@ async def _bind_resource_namespaces(bundle, registry, config, components):
             continue
         if namespace not in bundle.source_base_paths and namespace not in attempted:
             if len(attempted) >= 500:
-                raise ValueError("Bundle resource preparation exceeds the 500 namespace limit")
+                warnings.append("Resource namespace discovery stopped at 500 namespaces; unresolved references still block export.")
+                break
             attempted.add(namespace)
             # A namespace in prose is not permission to invent a repository.
             if registry.find(namespace) is not None:
@@ -806,6 +814,7 @@ async def _bind_resource_namespaces(bundle, registry, config, components):
             if path.is_relative_to(root):
                 context.append(path)
     bundle._host_resource_namespaces = bindings
+    bundle._host_resource_scan_warnings = warnings
 
 
 async def compose_configured_bundle(registry, loaded, config, *, execution_workspace=None):
@@ -924,7 +933,9 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
     for key in (("providers", "tools", "hooks", "session", "agents") if snapshot else ("session", "agents")):
         setattr(loaded, key, _expand_module_configuration(getattr(loaded, key)))
     if not snapshot:
-        await _bind_resource_namespaces(loaded, registry, config, components)
+        # Retain only the selection context here. Resource binding must wait for
+        # runtime removals/replacements and instruction-file inclusion.
+        loaded._host_resource_context = (registry, config)
     # This Python attribute is host provenance, not bundle/configuration data.
     # Recomputed from raw intent on root resume; never imported from snapshots.
     hooks = routing_hooks(loaded.to_mount_plan())
