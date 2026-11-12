@@ -161,7 +161,8 @@ async def test_stop_fences_admitted_message_before_connection_and_overlapping_in
 
 async def test_explicit_configuration_target_is_not_replaced_by_selected_chat(app_factory, tmp_path):
     app = app_factory()
-    native = app._session(app.state['selectedSessionId'])
+    created = await app.dispatch('session.create', {'workspace': app.default_workspace}, command_id='native-control-create')
+    native = app._session(created['result']['sessionId'])
     external = await create(app, tmp_path)
     # The ordinary native request reaches its existing unavailable-manager path.
     with pytest.raises(AppError, match='Management service is unavailable'):
@@ -200,3 +201,22 @@ async def test_durable_stop_revokes_full_permission_before_async_cancellation(ap
     finally:
         release.set()
         await stopping
+
+
+async def test_stop_settles_when_cancelled_task_did_not_enter_turn_owner(app_factory, tmp_path, monkeypatch):
+    app = app_factory()
+    session = await create(app, tmp_path)
+    entered = asyncio.Event()
+
+    async def not_started(*_args):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(app.external_conversations, '_run', not_started)
+    await app.dispatch('conversation.send', {'sessionId': session['id'], 'text': 'cancel before connect'}, command_id='cancel-new-turn')
+    await asyncio.wait_for(entered.wait(), 5)
+    await app.dispatch('conversation.stop', {'sessionId': session['id']}, command_id='cancel-new-turn-stop')
+    assert session['status'] == 'stopped'
+    assert session['messages'][0]['delivery']['status'] == 'failed'
+    assert session['id'] not in app.external_conversations.turns
+    assert not (tmp_path / 'peer/operations.jsonl').exists()

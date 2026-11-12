@@ -211,6 +211,13 @@ class ExternalConversations:
         turn.stop = True
         if not turn.dispatched:
             turn.task.cancel()
+            await asyncio.gather(turn.task, return_exceptions=True)
+            # A task cancelled before its coroutine enters cannot run its own
+            # exception/finally settlement. Stop still owns that admitted input.
+            if self.turns.get(sid) is turn:
+                await self._settle(sid, turn, 'failed', 'stopped')
+                self.turns.pop(sid)
+            return
         try:
             await asyncio.wait_for(turn.participant.cancel(), 5)
             await asyncio.wait_for(asyncio.shield(turn.task), 10)
