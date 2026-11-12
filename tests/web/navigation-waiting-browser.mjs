@@ -198,6 +198,7 @@ try{
     if(width>=1280){
      const more=nav.locator('.a-nav-chat[data-session-id="'+ready.ids[0]+'"]')
       .getByRole('button',{name:'Details and actions for Release manager',exact:true});
+     await nav.locator('.a-nav-chat[data-session-id="'+ready.ids[0]+'"]').hover();
      await more.click();
      const flyout=page.getByRole('dialog',{name:'Details for Release manager',exact:true});
      const flyoutContent=flyout.locator('.a-dependency-content');
@@ -292,6 +293,7 @@ try{
   const receipt=(await inspect()).receiptSha256,before=actions.length;
   const more=nav.locator('.a-nav-chat[data-session-id="'+ready.ids[0]+'"]')
    .getByRole('button',{name:'Details and actions for Release manager',exact:true});
+  await nav.locator('.a-nav-chat[data-session-id="'+ready.ids[0]+'"]').hover();
   await more.click();
   const flyout=page.getByRole('dialog',{name:'Details for Release manager',exact:true});
   await expect(flyout.locator('.a-dependency-content details')).not.toHaveAttribute('open');
