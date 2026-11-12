@@ -149,6 +149,9 @@ def test_previous_binding_projection_matches_pre_fix_envelope(tmp_path, monkeypa
     previous = fingerprint(['provider-connection-v1', None, 'provider-openai', source, config,
                             {name: None for name in PROVIDER_ENV['provider-openai']}, {}])
     assert connection_key(tmp_path, 'provider-openai', config, source, _legacy_visibility=True) == previous
+    current, paired_previous = connection_key(tmp_path, 'provider-openai', config, source, _binding_pair=True)
+    assert paired_previous == previous
+    assert current == connection_key(tmp_path, 'provider-openai', config, source)
     if legacy:
         assert connection_key(tmp_path, 'provider-openai', config, source) != previous
 

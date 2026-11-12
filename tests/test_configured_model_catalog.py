@@ -571,3 +571,74 @@ async def test_established_conversation_override_keeps_actual_binding_not_shared
     with pytest.raises(RuntimeStartupError, match='No input was sent'):
         await runtime._start_for_input(deepcopy(chat), emit)
     assert saved.read_bytes() == saved_bytes
+
+
+@pytest.mark.parametrize('intent', ['pending', 'established'])
+@pytest.mark.parametrize('mutation', ['file', 'environment'])
+async def test_legacy_adoption_never_joins_old_account_proof_to_new_credential_capture(
+        catalog_app, monkeypatch, intent, mutation):
+    import json
+    from types import SimpleNamespace
+    from amplifier_web import provider_catalog
+    from amplifier_web.next_message_configuration import bind, applied
+    from amplifier_web.runtime import RuntimeManager, RuntimeStartupError
+    service, _, _, _ = catalog_app
+    chat = service._session()
+    credential = service.data_dir / 'synthetic-credential.json'
+    credential.write_text('account-a')
+    monkeypatch.setenv('SYNTHETIC_ADOPTION_KEY', 'account-a')
+    source = 'git+https://fixture.invalid/openai@' + 'a' * 40
+    row = {'id': 'one', 'module': 'provider-openai', 'source': source,
+           'config': {'api_key': '${SYNTHETIC_ADOPTION_KEY}', 'credential_file': str(credential), 'filtered': False}}
+    write_private(amplifier_home() / 'settings.yaml', yaml.safe_dump({'config': {'providers': [row]}}))
+    saved = service.data_dir / 'sessions' / chat['id'] / 'configuration.json'
+    write_private(saved, json.dumps({'providers': [row]}))
+    previous = provider_catalog.connection_key(chat['workspace'], row['module'], row['config'], source,
+                                               home=service.data_dir, _legacy_visibility=True)
+    current_a = provider_catalog.connection_key(chat['workspace'], row['module'], row['config'], source, home=service.data_dir)
+    chosen = {'instance': 'one', 'model': 'hidden-exact'}
+    chat.update(selection=chosen, modelConnectionKey=previous, nextMessageRevision=1)
+    chat.pop('pendingModelSelection', None)
+    if intent == 'pending':chat['pendingModelSelection'] = chosen
+    else:chat['appliedConfigurationRevision'] = 1
+    original_fingerprint = provider_catalog.fingerprint
+    changed = []
+    def replace_after_proof(value):
+        result = original_fingerprint(value)
+        if (not changed and isinstance(value, list) and value[0] == 'provider-connection-v1'
+                and value[4].get('filtered') is False):
+            assert result == previous  # Exact account-A proof just captured.
+            changed.append(True)
+            if mutation == 'file':credential.write_text('account-b')
+            else:monkeypatch.setenv('SYNTHETIC_ADOPTION_KEY', 'account-b')
+        return result
+    monkeypatch.setattr(provider_catalog, 'fingerprint', replace_after_proof)
+    runtime = RuntimeManager()
+    service.runtime = runtime
+    bind(service, runtime)
+    starts, verified, events = [], [], []
+    async def start(snapshot, emit, **kwargs):
+        kwargs['guard']()
+        starts.append(deepcopy(snapshot))
+    async def control(sid, operation, args, **kwargs):
+        kwargs['guard']()
+        mounted_b = provider_catalog.connection_key(chat['workspace'], row['module'], row['config'], source, home=service.data_dir)
+        coordinator = SimpleNamespace(config={'providers': [row]}, get_capability=lambda _: {
+            'home': service.data_dir, 'workspace': chat['workspace'], 'sources': {'one': source},
+            'connectionKeys': {'one': mounted_b}})
+        provider_catalog.require_mounted_binding(coordinator, 'one', args['expectedConnectionKey'])
+        verified.append(operation)
+    async def emit(kind, payload):
+        events.append(kind)
+        if kind == 'runtime.nextMessageApplied':applied(chat, payload)
+    monkeypatch.setattr(runtime, 'start', start)
+    monkeypatch.setattr(runtime, 'control', control)
+    with pytest.raises(RuntimeStartupError, match='No input was sent'):
+        await runtime._start_for_input(deepcopy(chat), emit)
+    assert changed == [True]
+    if intent == 'established':
+        assert starts[0]['modelConnectionKey'] == current_a, 'Projection must use account A from the proof capture'
+    else:
+        assert not starts, 'Pending selection must fail its catalog binding recheck before mounting'
+    assert not verified and not events
+    assert chat['modelConnectionKey'] == previous and chat['selection'] == chosen

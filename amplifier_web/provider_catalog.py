@@ -125,7 +125,7 @@ def _chatgpt_account(contents, config):
 
 
 def connection_key(workspace, module, config, source=None, *, home=None, _credential_generation=False,
-                   _legacy_visibility=False):
+                   _legacy_visibility=False, _binding_pair=False):
     """Stable private connection binding shared by host and worker processes.
 
     The connection binding ignores selection defaults, model filters and priority. Every other provider
@@ -139,7 +139,7 @@ def connection_key(workspace, module, config, source=None, *, home=None, _creden
     raw = copy.deepcopy(config or {})
     for name in ('priority', 'model', 'default_model', 'reasoning_effort', 'model_filters'):
         raw.pop(name, None)
-    if module == 'provider-openai' and not _legacy_visibility:
+    if module == 'provider-openai' and not (_legacy_visibility or _binding_pair):
         # These are OpenAI listing policy, not account/endpoint settings.
         # Do not reinterpret same-named options on unrelated providers.
         for name in ('hide_dated_models', 'filtered'):
@@ -198,7 +198,24 @@ def connection_key(workspace, module, config, source=None, *, home=None, _creden
     relative=any(isinstance(value,str) and value and not Path(value).expanduser().is_absolute()
                  for name,value in leaves if any(part in name for part in ('path','file','directory')))
     scope=str(Path(workspace).resolve()) if relative or source and not str(source).startswith(('git+','https://','http://','/')) else None
-    return fingerprint(['provider-connection-v1',scope,module,source,raw,environment,files])
+    envelope = ['provider-connection-v1',scope,module,source,raw,environment,files]
+    previous = fingerprint(envelope)
+    if not _binding_pair:
+        return previous
+    if module != 'provider-openai':
+        return previous, previous
+    # Both digests share ONE captured materialization, environment, source and
+    # credential-file witness. Never re-read credentials after proving the old
+    # digest: external replacement is possible even without an await.
+    current_raw = {name:value for name,value in raw.items() if name not in ('hide_dated_models', 'filtered')}
+    current_leaves = list(fields(current_raw))
+    current_files = {name:value for name,value in files.items()
+                     if name.split('.')[1] not in ('hide_dated_models', 'filtered')}
+    relative = any(isinstance(value,str) and value and not Path(value).expanduser().is_absolute()
+                   for name,value in current_leaves if any(part in name for part in ('path','file','directory')))
+    current_scope = str(Path(workspace).resolve()) if relative or source and not str(source).startswith(('git+','https://','http://','/')) else None
+    current = fingerprint(['provider-connection-v1',current_scope,module,source,current_raw,environment,current_files])
+    return current, previous
 
 
 def _openai_legacy_visibility(config):
@@ -298,11 +315,12 @@ def configured_binding(home, workspace, instance, *, global_only=False, saved=No
     with manager.read_snapshot(workspace):
         if not any(row['id'] == instance and row['enabled'] for row in manager.provider_rows(workspace)):
             return None
-        current = manager.catalog_key({'id':instance}, workspace, binding=True)
-        if saved and saved != current:
-            previous = manager.catalog_key({'id':instance}, workspace, binding=True, _legacy_visibility=True)
-            if saved != previous:
+        if saved:
+            current, previous = manager.catalog_key({'id':instance}, workspace, binding=True, _binding_pair=True)
+            if saved not in (current, previous):
                 raise ValueError('The configured connection changed after this choice was saved. Review the connection and save the model again.')
+        else:
+            current = manager.catalog_key({'id':instance}, workspace, binding=True)
         return current
 
 
@@ -336,11 +354,11 @@ def retained_conversation_binding(home, workspace, session_id, instance, expecte
             or not any(name in row.get('config', {}) for name in ('hide_dated_models', 'filtered'))):
         return expected
     config = mounted_provider_config(row)
-    previous = connection_key(workspace, row['module'], config, sources.get(instance),
-                              home=home, _legacy_visibility=True)
+    current, previous = connection_key(workspace, row['module'], config, sources.get(instance),
+                                      home=home, _binding_pair=True)
     if previous != expected:
         return expected
-    return connection_key(workspace, row['module'], config, sources.get(instance), home=home)
+    return current
 
 
 def conversation_bindings(home, workspace, session_id, providers, *, global_only=False):
