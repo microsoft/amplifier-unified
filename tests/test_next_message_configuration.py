@@ -540,7 +540,9 @@ async def test_saved_portable_plan_reaches_next_input_and_refuses_changed_connec
                            app.on_runtime_event)
     assert isinstance(refused.value.__cause__, ValueError)
     assert 'configured connection changed' in str(refused.value.__cause__)
-    assert resolutions[-1] != expected_key
+    # The canonical retained-binding proof now refuses before catalog lookup.
+    assert resolutions == [expected_key]
+    assert configured_binding(c.home, current['workspace'], 'one') != expected_key
     assert len(starts) == 1 and len(commands) == 2 and inputs == ['portable-input']
     assert current['nextMessageRevision'] == 2 and current['appliedConfigurationRevision'] == 1
     assert current['pendingModelSelection'] == selected and current['modelConnectionKey'] == expected_key

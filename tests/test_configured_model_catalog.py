@@ -400,6 +400,8 @@ async def test_pre_fix_persisted_choice_adopts_only_proven_current_connection(ca
         chat['nextMessageRevision'] = 1
     if intent == 'pending':
         chat['pendingModelSelection'] = chosen
+    if intent == 'applied':
+        chat['appliedConfigurationRevision'] = 1
     saved = service.data_dir / 'sessions' / chat['id'] / 'configuration.json'
     write_private(saved, json.dumps({'providers': [row]}))
     saved_bytes = saved.read_bytes()

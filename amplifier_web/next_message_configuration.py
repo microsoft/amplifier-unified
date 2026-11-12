@@ -304,23 +304,14 @@ def validate_selection(selected, catalog):
 def applied(session, payload):
     """Exact revision acknowledgment cannot clear a newer A→B→A choice."""
     revision = payload.get('revision')
-    if (type(revision) is not int or revision > session.get('nextMessageRevision', 0)
-            or revision <= session.get('appliedConfigurationRevision', -1)):
+    if type(revision) is not int or revision > session.get('nextMessageRevision', 0):
         return
     pending = session.get('pendingBundleSelection')
     if (revision == session.get('nextMessageRevision', 0)
             and pending and pending['bundle'] != payload.get('bundle')):
         return
-    # A slow earlier mount may finish after the user saves a future choice.
-    # Record its actual root, without clearing or relabelling that newer intent.
-    if payload.get('bundle') and not payload.get('bindingOnly'):
-        session['bundle'] = payload['bundle']
-    if not payload.get('bindingOnly'):
-        session['appliedConfigurationRevision'] = revision
-    if revision != session.get('nextMessageRevision', 0):
-        return
     transition = payload.get('bindingTransition')
-    if transition:
+    if transition and revision == session.get('nextMessageRevision', 0):
         selected = session.get('pendingModelSelection') or session.get('selection') or {}
         if (session.get('modelConnectionKey') == transition['previous']
                 and selected.get('instance') == transition['instance']):
@@ -328,6 +319,15 @@ def applied(session, payload):
             # this one proven digest. Newer choices and saved plans are untouched.
             session['modelConnectionKey'] = transition['current']
     if payload.get('bindingOnly'):
+        return
+    if revision <= session.get('appliedConfigurationRevision', -1):
+        return
+    # A slow earlier mount may finish after the user saves a future choice.
+    # Record its actual root, without clearing or relabelling that newer intent.
+    if payload.get('bundle'):
+        session['bundle'] = payload['bundle']
+    session['appliedConfigurationRevision'] = revision
+    if revision != session.get('nextMessageRevision', 0):
         return
     if pending:
         session['bundle'] = pending['bundle']
