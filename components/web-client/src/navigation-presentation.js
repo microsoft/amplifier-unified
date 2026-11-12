@@ -4,13 +4,29 @@ export function sessionIdentity(chat){
  return chat.runtimeSessionId||chat.nativeIdentity||chat.id;
 }
 
+// Presentation only: do not reinterpret failures/results or mutate saved host facts.
+export const neutralDependencyPhase=phase=>!phase||phase==='pending'||phase==='deferred';
+export const adverseDependencyStatus=status=>['error','failed','unknown','stopped','cancelled','interrupted','paused'].includes(status);
+export function pendingDependency(activity){
+ const waiting=activity?.waiting;
+ return activity?.kind==='waiting'&&!!waiting?.targets?.length&&neutralDependencyPhase(waiting.phase)
+  &&waiting.targets.every(row=>neutralDependencyPhase(row.phase)&&!adverseDependencyStatus(row.status));
+}
+function presentActivity(activity){
+ if(!pendingDependency(activity))return activity;
+ const {targets,hasMore}=activity.waiting;
+ const label=targets.length===1&&!hasMore?`Waiting on ${targets[0].title}${targets[0].available===false?' (unavailable)':''}`:
+  `Waiting on ${targets.length}${hasMore?'+':''} chats`;
+ return {...activity,label};
+}
+
 export function activityFor(chat,state){
  // Page membership can be retained while a catalog read is pending. Current
  // admitted-owner activity arrives separately in the bounded shell context.
  const activities=state?.navigationActivityById;
  const current=activities&&Object.hasOwn(activities,chat.id)?activities[chat.id]:null;
- if(current)return current;
- if(chat.activity)return chat.activity;
+ if(current)return presentActivity(current);
+ if(chat.activity)return presentActivity(chat.activity);
  if(chat.approvals?.some(row=>row.status==null||row.status==='pending'))return {kind:'attention',label:'Approval requested'};
  if(chat.questions?.some(row=>row.status==='pending'&&row.required))return {kind:'attention',label:'Answer requested'};
  if(chat.questions?.some(row=>['unknown','rejected'].includes(row.delivery?.status)))return {kind:'attention',label:'Check answer delivery'};
