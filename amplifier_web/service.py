@@ -386,8 +386,8 @@ def _register_actions(definitions):
     return frozenset(definitions)
 
 
-from .workspace_resources import definitions as resource_reservation_definitions
-RESOURCE_RESERVATION_ACTIONS = _register_actions(resource_reservation_definitions(schema, string))
+from .workspace_resources import definitions as workspace_resource_definitions
+WORKSPACE_RESOURCE_ACTIONS = _register_actions(workspace_resource_definitions(schema, string))
 from .task_environments import definitions as environment_definitions
 ENVIRONMENT_ACTIONS = _register_actions(environment_definitions(schema, string))
 from .test_capacity_settings import definitions as test_capacity_definitions
@@ -469,7 +469,7 @@ for _access, _actions in {
         *canvas_view_definitions(schema, string), *canvas_app_definitions(schema, string),
         *canvas_version_definitions(schema, string),
         *publishing_definitions(schema, string),
-        *RESOURCE_RESERVATION_ACTIONS,
+        *WORKSPACE_RESOURCE_ACTIONS,
         *ENVIRONMENT_ACTIONS,
         *TEST_QUEUE_ACTIONS,
         *TEST_CAPACITY_ACTIONS,
@@ -2125,9 +2125,9 @@ class AppService:
         if action in ENVIRONMENT_ACTIONS:
             from .task_environments import dispatch as environment_dispatch
             return await environment_dispatch(self, action, args, origin, caller_session_id, configuration_authority)
-        if action in RESOURCE_RESERVATION_ACTIONS:
-            from .workspace_resources import dispatch_reservation
-            return await dispatch_reservation(self, action, args, origin, command_id, caller_session_id)
+        if action in WORKSPACE_RESOURCE_ACTIONS:
+            from .workspace_resources import dispatch
+            return await dispatch(self, action, args, origin, command_id, caller_session_id)
         if action.startswith("profiling."):
             host = getattr(self, "profiling_host", None)
             if host is None:
@@ -5675,7 +5675,7 @@ class AppService:
                     result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.')) or args['action'] == 'runtime.provenance' or args['action'] in RESOURCE_RESERVATION_ACTIONS
+            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.')) or args['action'] == 'runtime.provenance'
             task_action = action_args.get('operation') if args['action'] == 'runtime.control' else args['action']
             compact_task_receipt = (isinstance(task_action, str) and task_action in task_definitions(schema, string)
                                     or args['action'].startswith('assignment.task.'))
