@@ -301,6 +301,24 @@ def inventory(home, *, installed=None, graph=None):
                        'label': 'Refresh included components', 'status': 'update', 'eligible': True,
                        'current': 'legacy-policy', 'latest': policy_refresh['configuration'],
                        'usage': 'configured', 'usageEvidence': ['Check versions used by your current setup']})
+    # A behavior/module selection can change without any tracked Git branch
+    # moving. Offer ordinary guarded qualification, not a permanent unverified
+    # health card or an implicit rewrite of the old generation's receipt.
+    descriptor = receipt_directory(home, generation) / 'profiles-qualified.json'
+    if descriptor.is_file() and not any(row.get('id') == 'runtime:environment' for row in rows):
+        qualified = json.loads(descriptor.read_text()).get('configuration')
+        if isinstance(qualified, str) and re.fullmatch('[a-f0-9]{64}', qualified):
+            from .host.config import read_config
+            from .runtime_profiles import configuration_key
+            config = read_config(home, home=home, global_only=True)
+            desired = configuration_key(config.settings, home, descriptor.parent)
+            if desired != qualified:
+                rows.insert(0, {'id': 'runtime:environment', 'kind': 'runtime environment',
+                               'label': 'Qualify current component configuration',
+                               'status': 'update', 'eligible': True,
+                               'current': qualified, 'latest': desired,
+                               'usage': 'configured',
+                               'usageEvidence': ['Changed app-level component declarations']})
     return rows
 
 

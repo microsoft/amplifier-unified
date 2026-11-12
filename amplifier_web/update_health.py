@@ -23,8 +23,13 @@ def configuration(manager):
     return configuration_key(config.settings, manager.home), config
 
 
-def active_evidence(manager):
-    """Read existing immutable qualification and actual graph; never prepare it."""
+def active_evidence(manager, *, explain_configuration=False):
+    """Verify the selected graph, never prepare it or admit changed declarations.
+
+    Preparation requires the default, configuration-matching proof. The health
+    owner can also explain a verified older installation whose current settings
+    no longer match, without resurrecting failures predating its activation.
+    """
     from .updates import active_release
     from .runtime_environment import project_path
     from .runtime_qualification import verify_recorded
@@ -57,11 +62,15 @@ def active_evidence(manager):
                 or marker.get('generationSchema') != 1 or marker.get('workerProtocol') != 1
                 or not graph or any(not isinstance(row, dict) or not row.get('name') for row in graph)
                 or not profiles.get('profiles')
+                or not isinstance(profiles.get('configuration'), str)
+                or not re.fullmatch('[a-f0-9]{64}', profiles['configuration'])
                 or not 0 < marker['createdAt'] <= pointer['at']
                 or activation and not 0 < activation['startedAt'] <= marker['createdAt'] <= pointer['at'] <= activation['completedAt']):
             return {}
         _, config = configuration(manager)
-        if profiles.get('configuration') != configuration_key(config.settings, manager.home, stage):
+        observed_configuration = configuration_key(config.settings, manager.home, stage)
+        configuration_changed = profiles.get('configuration') != observed_configuration
+        if configuration_changed and not explain_configuration:
             return {}
         project = project_path(manager.home, generation)
         if (project / 'uv.lock').read_bytes() != (stage / 'runtime.lock').read_bytes():
@@ -72,8 +81,9 @@ def active_evidence(manager):
         if active_release(manager.home) != pointer:
             return {}
         _, current_config = configuration(manager)
-        if profiles['configuration'] != configuration_key(current_config.settings, manager.home, stage):
+        if observed_configuration != configuration_key(current_config.settings, manager.home, stage):
             return {}
+        limitation = {'configurationChanged': True} if configuration_changed else {}
         from urllib.parse import urlsplit
         components = {row['name'] for row in graph}
         for row in graph:
@@ -86,11 +96,11 @@ def active_evidence(manager):
             # history therefore yields a neutral limitation, never healthy proof.
             return {'generation': generation, 'activationUnknown': True,
                     'qualifiedAt': marker['createdAt'], 'configuration': profiles['configuration'],
-                    'packages': {row['name'] for row in graph}, 'components': components}
+                    'packages': {row['name'] for row in graph}, 'components': components, **limitation}
         return {'generation': generation, 'verifiedAt': activation['completedAt'],
                 'startedAt': activation['startedAt'],
                 'configuration': profiles['configuration'], 'attemptId': activation['attemptId'],
-                'packages': {row['name'] for row in graph}, 'components': components}
+                'packages': {row['name'] for row in graph}, 'components': components, **limitation}
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return {}  # Unknown evidence is not a healthy installed graph.
 
@@ -472,6 +482,10 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False)
                       app.get('detail') or 'The application release could not be checked. Component results remain separate; check for updates again.',
                       action='check', component='Amplifier Unified')
     if local_changes or seq.get('stage') == 'complete' and app.get('status') == 'current':
+        if evidence.get('configurationChanged'):
+            return result('unverified', 'Component verification is incomplete',
+                          'The active installation still matches its recorded graph, but the current source configuration differs from its qualification. Current components are kept; earlier attempts remain in history. Check for updates and review the changed source choices before installing.',
+                          action='check')
         if evidence.get('activationUnknown'):
             return result('unchecked', 'Current components kept',
                           'The installed graph matches its recorded qualification. Its older activation receipt is no longer retained, so full activation verification is unavailable. No reinstall is requested.')
@@ -492,7 +506,11 @@ def publish(manager):
     # each publication. Only an owner check/activation can establish it again.
     revision = manager.service.state.get('configurationRevision')
     if getattr(manager, '_update_health_configuration_revision', revision) != revision:
-        if current(state, evidence)['status'] in {'current', 'unchecked'}:
+        # A known configuration limitation is pending revalidation too. Removing
+        # only that limitation must still leave an otherwise quiet projection;
+        # a newer failure or uncertain operation keeps its ordinary priority.
+        prior = {**evidence, 'configurationChanged': False} if evidence.get('configurationChanged') else evidence
+        if current(state, prior)['status'] in {'current', 'unchecked'}:
             state['currentStatus'] = {'status': 'unchecked', 'title': 'Checking current configuration',
                 'detail': 'Update health will refresh against the changed settings. Existing components remain active.',
                 'actionRequired': False, 'action': None, 'component': None}
@@ -507,7 +525,7 @@ def publish(manager):
 async def refresh(manager):
     import asyncio
     revision = manager.service.state.get('configurationRevision')
-    evidence = await asyncio.to_thread(active_evidence, manager)
+    evidence = await asyncio.to_thread(active_evidence, manager, explain_configuration=True)
     from .update_partial import retained_after_check
     from .update_sequence import verify_app_selection
     def retry_action():
