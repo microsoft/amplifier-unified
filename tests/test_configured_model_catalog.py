@@ -506,3 +506,68 @@ def test_verified_binding_transition_never_overwrites_newer_choice(change):
     before = deepcopy(session)
     applied(session, payload)
     assert session == before
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+@pytest.mark.parametrize('module', ['provider-openai', 'provider-fixture'])
+async def test_established_conversation_override_keeps_actual_binding_not_shared_roster(
+        catalog_app, monkeypatch, legacy, module):
+    import json
+    from types import SimpleNamespace
+    from amplifier_web.next_message_configuration import bind, applied
+    from amplifier_web.provider_catalog import connection_key, mounted_catalog_keys, require_mounted_binding
+    from amplifier_web.runtime import RuntimeManager, RuntimeStartupError
+    service, _, _, _ = catalog_app
+    chat = service._session()
+    source = 'git+https://fixture.invalid/provider@' + 'a' * 40
+    shared = {'id': 'one', 'module': module, 'source': source,
+              'config': {'api_key': 'shared-account-a', 'base_url': 'https://shared.invalid', 'filtered': False}}
+    override = deepcopy(shared)
+    override['config'].update(api_key='saved-account-b', base_url='https://saved.invalid')
+    write_private(amplifier_home() / 'settings.yaml', yaml.safe_dump({'config': {'providers': [shared]}}))
+    saved = service.data_dir / 'sessions' / chat['id'] / 'configuration.json'
+    write_private(saved, json.dumps({'providers': [override]}))
+    saved_bytes = saved.read_bytes()
+    chosen = {'instance': 'one', 'model': 'hidden-exact'}
+    expected = connection_key(chat['workspace'], module, override['config'], source, home=service.data_dir,
+                              _legacy_visibility=legacy)
+    chat.update(selection=chosen, modelConnectionKey=expected, nextMessageRevision=1, appliedConfigurationRevision=1)
+    chat.pop('pendingModelSelection', None)
+    runtime = RuntimeManager()
+    service.runtime = runtime
+    bind(service, runtime)
+    sources = {'one': source}
+    plan = {'providers': [deepcopy(override)]}
+    captured = {'home': service.data_dir, 'workspace': chat['workspace'], 'sources': sources,
+                'connectionKeys': mounted_catalog_keys(service.data_dir, chat['workspace'], plan['providers'], sources, binding=True)}
+    coordinator = SimpleNamespace(config=plan, get_capability=lambda _: captured)
+    operations = []
+    async def start(snapshot, emit, **kwargs):
+        kwargs['guard']()
+    async def control(sid, operation, args, **kwargs):
+        kwargs['guard']()
+        require_mounted_binding(coordinator, 'one', args['expectedConnectionKey'])
+        operations.append(operation)
+    async def emit(kind, payload):
+        if kind == 'runtime.nextMessageApplied':applied(chat, payload)
+    async def no_discovery(*args, **kwargs):
+        pytest.fail('An established override must not query the shared catalog')
+    from amplifier_web import draft_defaults
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', no_discovery)
+    monkeypatch.setattr(runtime, 'start', start)
+    monkeypatch.setattr(runtime, 'control', control)
+    await runtime._start_for_input(deepcopy(chat), emit)
+    assert operations == ['provider.verifyConnection']
+    assert chat['modelConnectionKey'] == captured['connectionKeys']['one']
+    assert chat['selection'] == chosen and saved.read_bytes() == saved_bytes
+    # Real mounted credential/source drift is still refused, including when
+    # shared settings have never matched this deliberate conversation override.
+    for field, value in [('api_key', 'changed-account'), ('base_url', 'https://changed.invalid')]:
+        plan['providers'][0]['config'][field] = value
+        with pytest.raises(RuntimeStartupError, match='No input was sent'):
+            await runtime._start_for_input(deepcopy(chat), emit)
+        plan['providers'][0]['config'] = deepcopy(override['config'])
+    sources['one'] = 'git+https://fixture.invalid/changed@' + 'b' * 40
+    with pytest.raises(RuntimeStartupError, match='No input was sent'):
+        await runtime._start_for_input(deepcopy(chat), emit)
+    assert saved.read_bytes() == saved_bytes

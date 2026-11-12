@@ -306,12 +306,7 @@ def configured_binding(home, workspace, instance, *, global_only=False, saved=No
         return current
 
 
-def conversation_bindings(home, workspace, session_id, providers, *, global_only=False):
-    """Report known conversation overrides separately from the shared inventory.
-
-    No bundle preparation, provider import, transcript or worker is needed.
-    The actual mount repeats the exact-identity check before input admission.
-    """
+def _conversation_connections(home, workspace, session_id, *, global_only=False):
     from .host.config import load_config, provider_mount_sources
     config = load_config(workspace, home=home, session_id=session_id, global_only=global_only)
     rows = config.configured_connections
@@ -325,6 +320,36 @@ def conversation_bindings(home, workspace, session_id, providers, *, global_only
     # retaining all rows below so disabled selections are still refused.
     sources = provider_mount_sources([row for row in rows if row.get('enabled', True)], config.settings)
     by_id = {row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-'):row for row in rows}
+    return by_id, sources
+
+
+def retained_conversation_binding(home, workspace, session_id, instance, expected, *, global_only=False):
+    """Prove an old digest from the retained plan, never impose shared defaults.
+
+    Unknown/current digests pass unchanged to the authoritative mounted guard.
+    Only an exact old OpenAI digest can be projected, and the mounted receipt
+    must still verify it before any persistent promotion or input.
+    """
+    rows, sources = _conversation_connections(home, workspace, session_id, global_only=global_only)
+    row = rows.get(instance)
+    if (not row or row.get('enabled') is False or row['module'] != 'provider-openai'
+            or not any(name in row.get('config', {}) for name in ('hide_dated_models', 'filtered'))):
+        return expected
+    config = mounted_provider_config(row)
+    previous = connection_key(workspace, row['module'], config, sources.get(instance),
+                              home=home, _legacy_visibility=True)
+    if previous != expected:
+        return expected
+    return connection_key(workspace, row['module'], config, sources.get(instance), home=home)
+
+
+def conversation_bindings(home, workspace, session_id, providers, *, global_only=False):
+    """Report known conversation overrides separately from the shared inventory.
+
+    No bundle preparation, provider import, transcript or worker is needed.
+    The actual mount repeats the exact-identity check before input admission.
+    """
+    by_id, sources = _conversation_connections(home, workspace, session_id, global_only=global_only)
     result = {}
     for provider in providers:
         row = by_id.get(provider['id'])

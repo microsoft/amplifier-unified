@@ -189,13 +189,19 @@ async def prepare(service, captured, *, frozen=False):
         check()
         bound_selection = selection or session.get('selection')
         if session.get('modelConnectionKey') and bound_selection:
-            from .provider_catalog import configured_binding
+            from .provider_catalog import configured_binding, retained_conversation_binding
             # Adopt only an exact previous-algorithm digest of TODAY's selected
             # connection. No guesses about historical flags/credentials, no saved
             # data rewrite. The actual mounted connection still gates admission.
-            current_binding = configured_binding(service.data_dir, session['workspace'], bound_selection['instance'],
-                global_only=session.get('location', {}).get('kind') == 'managed',
-                saved=session['modelConnectionKey'])
+            if selection:
+                current_binding = configured_binding(service.data_dir, session['workspace'], bound_selection['instance'],
+                    global_only=session.get('location', {}).get('kind') == 'managed',
+                    saved=session['modelConnectionKey'])
+            else:
+                current_binding = retained_conversation_binding(service.data_dir, session['workspace'],
+                    session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'],
+                    bound_selection['instance'], session['modelConnectionKey'],
+                    global_only=session.get('location', {}).get('kind') == 'managed')
             if not current_binding:
                 raise ValueError('The saved provider is unavailable. Choose an available connection.')
             session['modelConnectionKey'] = current_binding
