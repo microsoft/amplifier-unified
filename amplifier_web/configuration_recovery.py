@@ -134,20 +134,26 @@ def command_status(service, record, identity):
         'reason': 'Retained command admission only; current operation and native evidence remain authoritative.'}
 
 
+def input_cutoff(session):
+    """Effective current-generation cutoff, independent of pending replacement."""
+    generation = (session.get('collaborationGeneration') or {}).get('id')
+    markers = (session.get('cancelledConfigurationInput'),
+               session.get('pendingConfiguration', {}).get('recoveryNoInput'))
+    return max((marker.get('acceptedAt', 0) for marker in markers
+                if isinstance(marker, dict) and marker.get('generationId') == generation),
+               default=None)
+
+
 def suppress_input(session, receipt=None):
     """Hold old queued inputs, not new explicit work after operator recovery."""
     cancelled = session.get('cancelledConfigurationInput')
     if isinstance(cancelled, dict):
         if receipt is not None and receipt.get('acceptedAt', 0) <= cancelled['acceptedAt']:
             return True
-        if cancelled.get('generationId') == (session.get('collaborationGeneration') or {}).get('id'):
-            if receipt is None or receipt.get('dependencyRequestId'):
-                return True
-    marker = session.get('pendingConfiguration', {}).get('recoveryNoInput')
-    return (isinstance(marker, dict)
-        and marker.get('generationId') == (session.get('collaborationGeneration') or {}).get('id')
+    cutoff = input_cutoff(session)
+    return (cutoff is not None
         and (receipt is None or receipt.get('dependencyRequestId')
-             or receipt.get('acceptedAt', 0) <= marker.get('acceptedAt', 0)))
+             or receipt.get('acceptedAt', 0) <= cutoff))
 
 
 def recovery_child(service, session, request=None):

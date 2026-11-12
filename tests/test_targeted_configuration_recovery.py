@@ -682,6 +682,54 @@ async def test_cross_owner_no_effect_recovery_holds_existing_queued_input(proces
 
 
 @pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
+@pytest.mark.parametrize('pending_state', ['removed', 'replacement'])
+async def test_cancelled_cutoff_survives_pending_replacement_during_drain(process_boundary, monkeypatch, pending_state):
+    b = process_boundary
+    original = await operator_failure(b)
+    b.owner['status'] = 'idle'
+    source = await manager(b)
+    # Retain genuine queued peer receipts on both sides of cancellation. Only
+    # the transport is adapted; queue selection, fences and admission are real.
+    drain = b.app.collaboration.drain
+    monkeypatch.setattr(b.app.collaboration, 'drain', AsyncMock())
+    args = {'sessionId': b.owner['id'], 'text': 'Old queued input', 'mode': 'queue'}
+    await agent(b.app, source, 'coordination.send', args, 'cutoff-old-peer')
+    assert b.app.collaboration.receipt('cutoff-old-peer')['delivery'] == 'queued'
+    await b.runtime.stop(b.owner['id'], reason='configuration')
+    await invoke(b, source, 'cancel', identity='cancel-before-pending-change')
+    marker = deepcopy(b.owner['cancelledConfigurationInput'])
+    cancelled = operation(b)
+    assert cancelled['request'] == original['request']
+    assert cancelled['state']['phase'] == 'cancelled'
+    if pending_state == 'removed':
+        b.owner.pop('pendingConfiguration')
+    else:
+        # A later settled operation has replaced the cancelled projection. It
+        # must neither supply nor erase the durable old-input boundary.
+        b.owner['pendingConfiguration'] = {'operationId': 'replacement-operation',
+            'phase': 'ready', 'effect': 'mounted'}
+    b.owner['status'] = 'idle'
+    await agent(b.app, source, 'coordination.send',
+        {**args, 'text': 'Fresh explicitly requested input'}, 'cutoff-fresh-peer')
+    assert b.app.collaboration.receipt('cutoff-fresh-peer')['acceptedAt'] > marker['acceptedAt']
+    admitted = []
+    async def input_adapter(session, values, guard, emit):
+        assert guard() is None
+        result = b.app.collaboration.admission(session['id'], values)
+        assert result['admitted'], result
+        admitted.append(values['inputId'])
+        return {'accepted': True}
+    monkeypatch.setattr(b.runtime, 'collaboration_input', input_adapter)
+    await drain(b.owner['id'])
+    assert admitted == ['cutoff-fresh-peer']
+    assert b.app.collaboration.receipt('cutoff-old-peer')['delivery'] == 'queued'
+    assert b.app.collaboration.receipt('cutoff-fresh-peer')['delivery'] == 'accepted'
+    assert b.owner['cancelledConfigurationInput'] == marker
+    assert not b.runtime.workers  # No model or native execution in this adapter.
+    assert b.app.management.configuration_record(b.owner['id'], original['id']) == cancelled
+
+
+@pytest.mark.parametrize('process_boundary', ['full'], indirect=True)
 @pytest.mark.parametrize('change', ['full-off-on', 'placement', 'task-epoch', 'target-native'])
 async def test_operator_capture_precedes_dispatch_wait(process_boundary, monkeypatch, change):
     b = process_boundary

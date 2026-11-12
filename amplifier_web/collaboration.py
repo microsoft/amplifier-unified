@@ -1139,13 +1139,13 @@ class Collaboration:
         freed_return = False
         try:
             async with self.service.lock:
-                from .configuration_recovery import suppress_input
+                from .configuration_recovery import input_cutoff, suppress_input
                 current = self.service._session(sid)
-                holding = suppress_input(current)
-                if not holding:
+                cutoff = input_cutoff(current)
+                if cutoff is None:
                     self.resume_outcomes(sid)
                 rows = self.fair_rows(sid, active=current.get('status') in BUSY,
-                    accepted_after=current['pendingConfiguration']['recoveryNoInput']['acceptedAt'] if holding else None)
+                    accepted_after=cutoff)
             for identity, encoded in rows:
                 async with self.service.lock:
                     receipt = self.receipt(identity)
