@@ -19,6 +19,9 @@ def test_native_full_operator_discovers_cancels_and_saves(tmp_path):
     assert report['actualManagerTool'] and report['publicDiscovery'] and report['exactCancellation']
     assert report['savedWithoutStarting'] and report['noTargetInputOrContinuation']
     assert report['oneSettingsSave'] and report['originalAuthorityPreserved']
+    assert report['restartFutureChoiceVerified'] and report['freshTurnCompleted']
+    assert report['nativeHistoryExactlyOnce'] and report['oldInputStillSuppressed']
+    assert report['restartCleanup'] == {'allExited': True, 'runtimeRows': 0}
     assert not report['cleanupErrors'] and not report['cleanupFallbackSignals']
     assert report['writerAvailableAfterClose'] and report['runtimeRowsAfterClose'] == 0
     assert all(row['returncode'] is not None for row in report['processes'])

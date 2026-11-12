@@ -66,6 +66,8 @@ async def restart_and_consume(root):
     report_path = root / 'evidence.json'
     report = json.loads(report_path.read_text())
     data = json.loads((root / 'scenario.json').read_text())
+    data['migrationFresh'] = True
+    (root / 'scenario.json').write_text(json.dumps(data))
     sid = data['sid']
     original_command = RuntimeManager._command
     def prepared_command(self, *args, **kwargs):
@@ -99,11 +101,17 @@ async def restart_and_consume(root):
             'text': 'RECOVERY_NEXT', 'expectedConfigurationRevision': 1},
             command_id='fresh-input-after-cancel', include_state=False)
         assert receipt['accepted']
-        await base.until(lambda: target.get('collaborationGeneration', {}).get('terminal'), seconds=60)
+        await base.until(lambda: 'fresh-input-after-cancel' in
+            target.get('collaborationGeneration', {}).get('inputIds', [])
+            and target['collaborationGeneration'].get('terminal'), seconds=60)
+        turn = next(row for row in target['execution']['turns'] if row['id'] == 'fresh-input-after-cancel')
+        report['freshTurn'] = copy.deepcopy(turn)
+        report['freshTargetStatus'] = target.get('status')
+        report['freshTargetError'] = target.get('error')
+        report['freshCalls'] = [json.loads(line) for line in calls.read_text().splitlines()][before_calls:]
+        assert turn['phase'] == 'completed', {'turn': turn, 'error': target.get('error')}
         await base.until(lambda: runtime.workers.get(sid, {}).get('parked'), seconds=60)
         processes = [row['process'] for row in runtime.workers.values()]
-        turn = next(row for row in target['execution']['turns'] if row['id'] == 'fresh-input-after-cancel')
-        assert turn['phase'] == 'completed', turn
         assert target['bundle'] == data['nextBundle'] and target['appliedConfigurationRevision'] == 1
         assert not target.get('pendingBundleSelection') and suppress_input(target, old_request)
         native_id = runtime.workers[sid]['runtime_id']
@@ -111,10 +119,17 @@ async def restart_and_consume(root):
         ids = [(row.get('metadata') or {}).get('amplifier_input', {}).get('id') for row in history]
         assert ids.count('fresh-input-after-cancel') == 1
         assert ids.count('native-original-input') == 1
-        assert override_path(sid).read_bytes() == settings
+        fresh_calls = [json.loads(line) for line in calls.read_text().splitlines()][before_calls:]
+        assert len([row for row in fresh_calls if not row['evaluation']]) == 1, fresh_calls
+        # Bundle replacement intentionally retires the original mount-plan
+        # override; cancellation itself preserved its bytes above.
+        assert not override_path(sid).exists()
         report.update(restartFutureChoiceVerified=True, freshTurnCompleted=True,
             appliedRevision=1, nativeHistoryExactlyOnce=True, oldInputStillSuppressed=True)
     finally:
+        report['freshCalls'] = [json.loads(line) for line in calls.read_text().splitlines()][before_calls:]
+        report['freshGeneration'] = copy.deepcopy(app._session(sid).get('collaborationGeneration'))
+        report['freshTargetError'] = app._session(sid).get('error')
         processes.extend(row['process'] for row in runtime.workers.values() if row['process'] not in processes)
         await app.close()
         RuntimeManager._command = original_command
@@ -182,6 +197,15 @@ if __name__ == '__main__':
     begin = base.PROVIDER.index('        if users and "RECOVERY_MANAGER" in users[-1]:')
     end = base.PROVIDER.index('        if scenario.get("continuation"):', begin)
     base.PROVIDER = base.PROVIDER[:begin] + MANAGER + base.PROVIDER[end:]
+    needle = '        if users and "RECOVERY_NEXT" in users[-1]:'
+    replacement = '''        if scenario.get("migrationFresh") and evaluation:
+            return ChatResponse(content=[TextBlock(text="YES\\\\nFresh migration input is complete.")])
+        if users and "RECOVERY_NEXT" in users[-1] and scenario.get("migrationFresh"):
+            assert "app_control" in tools and "read_file" in tools, tools
+            return ChatResponse(content=[TextBlock(text="migration-fresh-turn-verified")])
+'''
+    assert base.PROVIDER.count(needle) == 1
+    base.PROVIDER = base.PROVIDER.replace(needle, replacement + needle)
     base.targeted_saved = cancel_migration
     async def main():
         root = Path(sys.argv[1]).resolve()
