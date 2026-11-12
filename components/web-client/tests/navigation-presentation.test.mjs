@@ -19,6 +19,19 @@ test('waiting is host evidence, pause and unknown interruption are different',()
  assert.equal(activityFor({status:'interrupted'}).label,'Outcome unknown');
  assert.equal(activityFor({status:'working',task:{status:'paused'}}).kind,'working');
 });
+test('neutral dependency copy is shared, immutable and respects current host precedence',()=>{
+ const waiting={kind:'waiting',label:'Dependency deferred',waiting:{phase:'deferred',targets:[{sessionId:'release',title:'Release Manager',phase:'deferred'}]}};
+ const before=JSON.stringify(waiting),chat={id:'owner',activity:waiting};
+ assert.equal(activityFor(chat).label,'Waiting on Release Manager');
+ for(const phase of ['failed','unknown','cancelled','decision','returned','reported']){
+  const current={...waiting,label:'Host '+phase,waiting:{...waiting.waiting,phase}};
+  assert.equal(activityFor(chat,{navigationActivityById:{owner:current}}),current);
+ }
+ assert.equal(activityFor({activity:{...waiting,kind:'attention'}}).label,'Dependency deferred');
+ assert.equal(activityFor({activity:{...waiting,waiting:{...waiting.waiting,targets:[{...waiting.waiting.targets[0],status:'unknown'}]}}}).label,'Dependency deferred');
+ assert.equal(activityFor({activity:{...waiting,waiting:{...waiting.waiting,hasMore:true}}}).label,'Waiting on 1+ chats');
+ assert.equal(JSON.stringify(waiting),before);
+});
 test('reviewing an exact failure clears its marker without hiding current obligations',()=>{
  const chat={id:'failed',status:'error',error:'Saved failure'};
  const item={id:'session:failed',sessionId:'failed',read:true,fingerprint:'current'};

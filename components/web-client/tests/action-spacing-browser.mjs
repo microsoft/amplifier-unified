@@ -8,8 +8,13 @@ import assert from 'node:assert/strict';
 const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS||'/artifacts/action-spacing';
 await mkdir(artifacts,{recursive:true});
 const fixture=`
-import React from 'react';
+import React,{useState} from 'react';
 import {createRoot} from 'react-dom/client';
+import {DependencyWaiting} from '/src/dependency-waiting.jsx';
+import {LiveActivity} from '/src/live-activity.jsx';
+import {ChatDetails} from '/src/shell/navigation-components.jsx';
+import {NavigationRow} from '/src/navigation-details.jsx';
+import {NavigationOpen} from '/src/responsive-navigation.jsx';
 import {UpdateRestart} from '/src/update-restart.jsx';
 import {MessageDelivery} from '/src/message-delivery.jsx';
 import {FeedbackReconcile} from '/src/feedback-lifecycle.jsx';
@@ -22,6 +27,7 @@ const target={hostInstanceId:'synthetic',revision:'a'.repeat(40),generation:'b'.
 window.calls=[];
 const dispatch=async(action,args)=>{
  window.calls.push({action,args});
+ if(action==='session.select')return {accepted:true};
  if(action==='conversation.delivery')return {accepted:true,result:{...args,delivery:'unknown',message:'Still uncertain. Nothing was resent.'}};
  throw Error('This spacing fixture refuses effects: '+action);
 };
@@ -37,7 +43,27 @@ function Delivery({saved=false,failed=false,steering=false}){
   localDelivery={saved||steering?undefined:{commandId:row.inputId,status:failed?'failed':'unknown'}}
   dispatch={dispatch} retry={()=>dispatch('conversation.send',{})} discard={()=>dispatch('discard',{})}/></div>;
 }
+window.longName='Release Manager — a very long dependency name '.repeat(8);
+function Dependencies(){
+ const [activity,setActivity]=useState({sessionId:'manager',kind:'waiting',label:'Dependency deferred',
+  waiting:{phase:'deferred',targets:[{sessionId:'release',title:window.longName,phase:'deferred',label:'Dependency deferred'}]}});
+ window.setDependency=setActivity;
+ const chat={id:'manager',title:'Manager',activity,workspace:'/synthetic'};
+ const model={state:{view:{},sessions:[chat]},act:dispatch,draft:{},setDraft:()=>{},choose:()=>{},prefix:'fixture'};
+ return <section aria-label="Dependency alignment">
+  <div className="a-conversation">
+   <LiveActivity session={{id:'manager',status:'working'}}/>
+   <DependencyWaiting activity={activity} sessionId="manager" act={dispatch}/>
+   <div className="a-composer">Composer content</div>
+  </div>
+  <div className="a-navigation-flyout" style={{position:'static',width:'100%',maxWidth:370,boxSizing:'border-box',marginTop:20}}>
+   <ChatDetails chat={chat} model={model} now={Date.now()/1000} close={()=>{}}/>
+  </div>
+  <NavigationOpen.Provider value={true}><NavigationRow label="Portal manager" details={({close})=><ChatDetails chat={chat} model={model} now={Date.now()/1000} close={close}/>}>Portal manager</NavigationRow></NavigationOpen.Provider>
+ </section>;
+}
 createRoot(document.getElementById('fixture')).render(<>
+ <Dependencies/>
  <section aria-label="Update restart" className="a-dialog a-updates"><h2>Updates</h2><UpdateRestart updates={updates} act={dispatch}/></section>
  <section aria-label="Original submission"><h2>Delivery recovery</h2><Delivery/></section>
  <section aria-label="Saved submission"><h2>Saved input</h2><Delivery saved/></section>
@@ -101,9 +127,92 @@ try{
     // full-page screenshot shows every surface rather than the last scroll.
     for(const node of [document.documentElement,document.body])Object.assign(node.style,{height:'auto',overflow:'visible'});
     document.querySelector('#fixture>.a-dialog').style.maxHeight='none';
+    const conversation=document.querySelector('[aria-label="Dependency alignment"] .a-conversation');
+    Object.assign(conversation.style,{containerType:'inline-size',containerName:'conversation',minWidth:0});
    });
-   if(enlarged)await page.locator('#amp-one').evaluate(node=>node.style.setProperty('--a-text-base','24px'));
+   if(enlarged)await page.locator('#amp-one').evaluate(node=>{node.style.setProperty('--a-text-base','24px');node.style.setProperty('--a-text-sm','24px')});
    const label=`${viewport.width}-${scheme}${enlarged?'-large-text':''}`;
+   const dependencies=page.getByRole('region',{name:'Dependency alignment'});
+   const mainDependency=dependencies.locator('.a-dependency-waiting');
+   const flyout=dependencies.locator('.a-navigation-flyout');
+   const longName=await page.evaluate(()=>window.longName);
+   const setDependency=async(phase='pending',targets=[{sessionId:'release',title:longName,phase}],extra={})=>{
+    await page.evaluate(({phase,targets,extra})=>window.setDependency({sessionId:'manager',kind:['failed','unknown','cancelled','decision'].includes(phase)?'attention':'waiting',label:'Host '+phase,waiting:{phase,targets,...extra}}),{phase,targets,extra});
+    await expect(mainDependency).toBeVisible();
+   };
+   for(const availableWidth of [null,...(viewport.width>=1280?[520]:[])]){
+    await dependencies.locator('.a-conversation').evaluate((node,width)=>node.style.maxWidth=width?width+'px':'none',availableWidth);
+    for(const phase of ['pending','deferred']){
+     await setDependency(phase);
+     await expect(mainDependency).toContainText('Waiting on');
+     await expect(mainDependency).not.toContainText('Dependency deferred');
+     const name=mainDependency.getByRole('button',{name:longName,exact:true});
+     await expect(name).toHaveAttribute('title',longName);
+     await expect(flyout.getByRole('button',{name:longName,exact:true})).toBeVisible();
+     for(const link of [name,flyout.getByRole('button',{name:longName,exact:true})]){
+      const geometry=await link.evaluate(node=>({width:node.clientWidth,scroll:node.scrollWidth,ellipsis:getComputedStyle(node).textOverflow}));
+      metrics.push({label,availableWidth,phase,name:geometry});
+      assert.ok(geometry.scroll>geometry.width,'Long visible name actually ellipsizes');
+      assert.equal(geometry.ellipsis,'ellipsis');
+     }
+     const geometry=await dependencies.locator('.a-conversation').evaluate(node=>{
+      const rect=selector=>{const n=node.querySelector(selector),r=n.getBoundingClientRect();return {x:r.x,width:r.width,contentX:r.x+parseFloat(getComputedStyle(n).paddingLeft)+(parseFloat(getComputedStyle(n).borderLeftWidth)||0)}};
+      return {activity:rect('.a-live-activity'),waiting:rect('.a-dependency-waiting'),composer:rect('.a-composer'),icon:rect('.a-dependency-content>svg'),pulse:rect('.a-activity-pulse'),text:rect('.a-dependency-single'),status:rect('.a-live-activity>div')};
+     });
+     metrics.push({label,availableWidth,phase,geometry});
+     assert.ok(Math.abs(geometry.waiting.x-geometry.activity.x)<1,'Activity/wait column');
+     assert.ok(Math.abs(geometry.waiting.x-geometry.composer.x)<1,'Composer column');
+     assert.ok(Math.abs(geometry.waiting.width-geometry.composer.width)<1,'Composer available width');
+     assert.ok(Math.abs(geometry.icon.x-geometry.pulse.x)<1,'Clock/pulse alignment');
+     assert.ok(Math.abs(geometry.text.x-geometry.status.x)<1,'Waiting/status text alignment');
+     const before=await page.evaluate(()=>window.calls.length);
+     await name.hover();await name.focus();await expect(name).toBeFocused();
+     assert.equal(await page.evaluate(()=>window.calls.length),before,'Hover and focus are passive');
+     assert.notEqual(await name.evaluate(node=>getComputedStyle(node).outlineStyle),'none','Native visible focus remains');
+     await name.press('Enter');await name.click();
+     assert.deepEqual(await page.evaluate(start=>window.calls.slice(start),before),[{action:'session.select',args:{id:'release'}},{action:'session.select',args:{id:'release'}}]);
+    }
+   }
+   for(const phase of ['failed','unknown','cancelled','decision','returned','reported']){
+    await setDependency(phase,[{sessionId:'release',title:longName,phase,label:'Host '+phase}]);
+    await expect(mainDependency).toContainText('Host '+phase);
+    await expect(mainDependency).not.toContainText('Waiting on');
+    await setDependency(phase,[{sessionId:'release',title:longName,phase:'returned',label:'Result ready'},{sessionId:'second',title:'Other',status:'failed'}]);
+    for(const surface of [mainDependency,flyout.locator('.a-dependency-content')]){
+     await expect(surface.locator('details')).not.toHaveAttribute('open');
+     await expect(surface.locator('summary')).toBeVisible();
+     await expect(surface.locator('summary')).toContainText('Host '+phase);
+     await expect(surface.locator('summary')).toContainText('Result ready');
+     await expect(surface.locator('summary')).toContainText('chat failed');
+    }
+    await setDependency(phase,[{sessionId:'release',title:longName,phase:'returned',label:'Result ready'}]);
+    await expect(mainDependency.getByText('— Host '+phase,{exact:true})).toBeVisible();
+   }
+   await setDependency('pending',[{sessionId:'release',title:longName,status:'failed'}]);
+   await expect(mainDependency).toContainText('chat failed');await expect(mainDependency).not.toContainText('Waiting on');
+   await setDependency('pending',[{sessionId:'release',title:longName},{sessionId:'second',title:longName+' second'}],{hasMore:true});
+   await expect(mainDependency.locator('summary')).toHaveText('Waiting on 2+ chats');
+   const beforeExpand=await page.evaluate(()=>window.calls.length);
+   await mainDependency.locator('summary').focus();await mainDependency.locator('summary').press('Enter');
+   await expect(mainDependency.getByRole('button')).toHaveCount(2);
+   await expect(mainDependency).toContainText('More references are not shown');
+   assert.equal(await page.evaluate(()=>window.calls.length),beforeExpand,'Expanding targets is passive');
+   for(const link of await mainDependency.getByRole('button').all()){
+    assert.ok(await link.evaluate(node=>node.scrollWidth>node.clientWidth),'Multi-target names ellipsize');
+   }
+   await mainDependency.getByRole('button',{name:longName+' second',exact:true}).click();
+   assert.deepEqual(await page.evaluate(()=>window.calls.at(-1)),{action:'session.select',args:{id:'second'}});
+   await setDependency('pending');
+   const beforePortal=await page.evaluate(()=>window.calls.length);
+   const portalTrigger=dependencies.getByRole('button',{name:'Details and actions for Portal manager',exact:true});
+   await portalTrigger.click();
+   const portal=page.getByRole('dialog',{name:'Details for Portal manager',exact:true});
+   const portalLink=portal.getByRole('button',{name:longName,exact:true});
+   await expect(portalLink).toBeFocused();await expect(portalLink).toHaveAttribute('title',longName);
+   assert.equal(await page.evaluate(()=>window.calls.length),beforePortal,'Opening real portal is passive');
+   await portalLink.press('Enter');
+   assert.deepEqual(await page.evaluate(start=>window.calls.slice(start),beforePortal),[{action:'session.select',args:{id:'release'}}]);
+   await portalLink.press('Escape');await expect(portal).toHaveCount(0);await expect(portalTrigger).toBeFocused();
    const updates=page.getByRole('region',{name:'Update restart',exact:true});
    const restart=updates.getByRole('button',{name:'Interrupt work and restart',exact:true});
    await expect(restart).toBeVisible();
@@ -133,7 +242,7 @@ try{
    await separated(feedback.getByText('Synthetic report',{exact:true}),feedback.getByRole('button',{name:'Check delivery',exact:true}),label+' feedback');
    const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth);
    if(overflow)failures.push(label+' horizontal overflow');
-   const clippedButtons=await page.locator('#fixture button:visible').evaluateAll(nodes=>nodes.filter(node=>node.scrollWidth>node.clientWidth+1).map(node=>node.textContent));
+   const clippedButtons=await page.locator('#fixture button:visible:not(.a-dependency-name)').evaluateAll(nodes=>nodes.filter(node=>node.scrollWidth>node.clientWidth+1).map(node=>node.textContent));
    if(clippedButtons.length)failures.push(label+' clipped buttons: '+clippedButtons.join(', '));
    if(viewport.width<=390){
     const smallTargets=await page.locator('#fixture button:visible').evaluateAll(nodes=>nodes.filter(node=>node.getBoundingClientRect().height<44).map(node=>node.textContent));
@@ -141,7 +250,7 @@ try{
    }
    await page.evaluate(()=>window.scrollTo(0,0));
    await page.screenshot({path:`${artifacts}/${label}.png`,fullPage:true});
-   assert.ok((await page.evaluate(()=>window.calls)).every(call=>call.action==='conversation.delivery'),'No send, retry, discard or restart effect');
+   assert.ok((await page.evaluate(()=>window.calls)).every(call=>['conversation.delivery','session.select'].includes(call.action)),'Only explicit target selection or delivery checks; no send, draft, history, retry, discard or restart effect');
    }
   }
   await page.close();

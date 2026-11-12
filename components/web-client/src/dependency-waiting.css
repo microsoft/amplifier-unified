@@ -1,8 +1,15 @@
-#amp-one .a-dependency-waiting{display:flex;align-items:flex-start;gap:8px;margin:6px 16px;color:var(--a-muted);font-size:var(--a-text-sm,13px);line-height:1.5;min-width:0}
-#amp-one .a-dependency-waiting>svg{width:16px;height:20px;flex:0 0 16px}
-#amp-one .a-dependency-waiting :is(span,details){min-width:0;overflow-wrap:anywhere}
-#amp-one .a-dependency-waiting button{display:inline;text-align:left;white-space:normal;overflow-wrap:anywhere}
-#amp-one .a-dependency-waiting summary{cursor:pointer}
-#amp-one .a-dependency-waiting ul{margin:6px 0;padding-left:18px;max-height:180px;overflow:auto}
-#amp-one .a-dependency-waiting li{padding:3px 0}
-@media(pointer:coarse){#amp-one .a-dependency-waiting button,#amp-one .a-dependency-waiting summary{min-height:44px;padding-block:10px}}
+#amp-one .a-dependency-waiting{margin:6px 26px 9px;min-width:0}
+#amp-one .a-dependency-content{display:flex;align-items:flex-start;gap:10px;color:var(--a-muted);font-size:var(--a-text-sm,13px);line-height:1.5;min-width:0;width:100%}
+#amp-one .a-dependency-content>svg{width:18px;height:20px;flex:0 0 18px}
+#amp-one .a-dependency-content :is(span,details,div){min-width:0;overflow-wrap:anywhere}
+#amp-one .a-dependency-content> :is(div,details){flex:1}
+#amp-one .a-dependency-single,#amp-one .a-dependency-target{display:flex;align-items:baseline;gap:4px}
+#amp-one .a-dependency-single{flex-wrap:wrap}
+#amp-one .a-dependency-prefix{flex:none}
+#amp-one .a-dependency-target{flex:1;max-width:100%}
+#amp-one .a-dependency-target>span:not(.a-dependency-name){flex:0 1 auto}
+#amp-one .a-dependency-content .a-dependency-name{display:block;flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font:inherit;padding-block:0}
+#amp-one .a-dependency-content summary{cursor:pointer}
+#amp-one .a-dependency-content ul{margin:6px 0;padding-left:18px;max-height:180px;overflow:auto}
+#amp-one .a-dependency-content li{padding:3px 0}
+@media(pointer:coarse){#amp-one .a-dependency-content button,#amp-one .a-dependency-content summary{min-height:44px;padding-block:10px}}

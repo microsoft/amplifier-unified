@@ -416,7 +416,7 @@ test('App options keeps builtin slot, destinations and badges in the requested d
  assert.ok(slot);const trigger=()=>slot.find(node=>node.type==='button'&&node.props['aria-label']==='App options');
  assert.equal(trigger().props['aria-expanded'],false);
  assert.equal(trigger().findByProps({role:'status'}).children.join(''),'3');
- const labels=['Activity','Send feedback','Automations','What the agents see','Settings'];
+ const labels=['Activity','Send feedback','Automations','What agents see','Settings'];
  for(let index=0;index<labels.length;index++){
   await act(async()=>trigger().props.onClick());
   const group=slot.findByProps({role:'group'}),buttons=group.findAllByType('button');
