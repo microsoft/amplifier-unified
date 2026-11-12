@@ -167,6 +167,11 @@ try{
   // Fixture projection changes intentionally replace synthetic receipts. Every
   // navigation/focus/resize step must retain the receipt of its current case.
   let projectionReceipt=(await inspect()).receiptSha256;
+  // These automatic reads/reports describe the selected browser's current
+  // presentation; they are not preference mutations or execution admission.
+  const passivePresentationActions=new Set([
+   'appearance.preferences.read','theme.list','appearance.client.report','shell.report',
+  ]);
   const observe=async(phase,detail={})=>{
    result.phase='navigation-seam-'+phase;await settle();
    const measured=await layoutGeometry(),current=await state(),host=await inspect();
@@ -184,7 +189,8 @@ try{
    assert.deepEqual(preservation,{historyUnchanged:true,runtimeStarts:0,runtimeSends:0,
     receiptUnchanged:true,fixtureIdsUnchanged:true,selectedChatUnchanged:true,workspaceUnchanged:true,
     clientUnchanged:true,sessionIdsUnchanged:true,draftUnchanged:true,themeUnchanged:true});
-   assert.deepEqual(actions.filter(row=>row.action!=='view.update'),[],'The seam journey only changes private view state');
+   assert.deepEqual(actions.filter(row=>row.action!=='view.update'&&!passivePresentationActions.has(row.action)),[],
+    'Only private view changes and named passive presentation reads/reports are permitted');
    return measured;
   };
   const usable=async measured=>{
@@ -263,7 +269,8 @@ try{
    await expect(link).toHaveAttribute('aria-describedby',tooltipId);
    const focus=await link.evaluate(node=>({style:getComputedStyle(node).outlineStyle,width:getComputedStyle(node).outlineWidth}));
    assert.notEqual(focus.style,'none');assert.ok(parseFloat(focus.width)>0);
-   assert.deepEqual(actions.slice(before),[],'Dependency focus/tooltip never selects or sends');
+   assert.deepEqual(actions.slice(before).filter(row=>!passivePresentationActions.has(row.action)),[],
+    'Dependency focus/tooltip never selects, mutates preferences or sends');
    await observe(label+'-tooltip',{fullNameARIA:true,tooltipDescribedBy:true,focus});
   };
   await page.emulateMedia({colorScheme:'light'});await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme','light');
@@ -328,7 +335,7 @@ try{
   assert.equal(finalState.selectedSessionId,idsBefore.session);assert.equal(finalState.selectedWorkspaceId,idsBefore.workspace);
   assert.equal(finalState.client.id,idsBefore.client);assert.deepEqual(finalState.sessions.map(row=>row.id).sort(),idsBefore.sessions);
   await expect(composer).toHaveDraft(draftBefore);
-  assert.deepEqual(actions.filter(row=>row.action!=='view.update'),[]);
+  assert.deepEqual(actions.filter(row=>row.action!=='view.update'&&!passivePresentationActions.has(row.action)),[]);
   const final=await inspect();assert.equal(final.receiptSha256,projectionReceipt,'Final saved receipt unchanged since the last projection');
   assert.deepEqual(final.ids,ready.ids);
   observations.push({id:'installed-nav-seam-complete',widths:[641,690,750,820,640,390],scheme:'light',
