@@ -1,11 +1,9 @@
 """Real repositories prove passive reads do not execute conversion commands."""
 import subprocess
-from pathlib import Path
 
 import pytest
 
 from amplifier_outputs.git_review import anchors, snapshot
-from amplifier_worktrees import GitWorktrees
 
 
 def git(root, *arguments):
@@ -46,30 +44,6 @@ async def test_review_neutralizes_configured_filter_commands_without_config_chan
     assert not marker.exists()
     assert (root / '.git/config').read_bytes() == config
     assert (root / 'tracked.txt').read_text() == 'changed raw bytes\n'
-
-
-@pytest.mark.parametrize('kind', ['clean-smudge', 'process'])
-def test_managed_inspection_checkout_apply_and_cleanup_never_execute_filters(tmp_path, kind):
-    root = repository(tmp_path)
-    (root / 'tracked.txt').write_text('staged\n')
-    git(root, 'add', 'tracked.txt')
-    (root / 'tracked.txt').write_text('staged\nunstaged\n')
-    marker, config = configured_filter(root, tmp_path, kind)
-    index = (root / '.git/index').read_bytes()
-    manager = GitWorktrees(tmp_path / 'managed')
-    inspected = manager.inspect(root)
-    assert not marker.exists()
-    clean = manager.create(root, command_id='clean', expected_revision=inspected['sourceRevision'])
-    assert (Path(clean['path']) / 'tracked.txt').read_text() == 'original\n'
-    carried = manager.create(root, command_id='carry', expected_revision=inspected['sourceRevision'], mode='carry_dirty')
-    assert (Path(carried['path']) / 'tracked.txt').read_text() == 'staged\nunstaged\n'
-    assert git(Path(carried['path']), 'show', ':tracked.txt') == b'staged\n'
-    assert manager.status(carried['id'])['checkout']['dirty']
-    assert manager.remove(clean['id'], clean['revision'])['status'] == 'removed'
-    assert not marker.exists()
-    assert (root / '.git/config').read_bytes() == config
-    assert (root / '.git/index').read_bytes() == index
-    assert (root / 'tracked.txt').read_text() == 'staged\nunstaged\n'
 
 
 @pytest.mark.parametrize('name', ['résumé.txt', 'tab\tname.txt', 'quote"name.txt', 'back\\slash.txt', 'space name.txt'])

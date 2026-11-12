@@ -51,3 +51,25 @@ A host may inject an opaque JSON `execution_host` descriptor at construction. It
 is copied into new create/attach records as `executionHost`, never derived from
 private machine data by this library. Legacy records are not rewritten. The host
 owns identity validation and guards before mutation or runtime admission.
+
+## Standalone development
+
+This temporary authoring project requires Python 3.13 or newer, Git on `PATH`,
+and `filelock>=4.2.1,<5` (installed as its sole runtime dependency). With `uv`
+available, run the existing real-Git mechanism tests from this directory:
+
+```sh
+uv run --extra test pytest
+```
+
+`uv build` creates a wheel and source distribution. To check an installed artifact,
+install the wheel and the `test` extra in a separate environment, copy `tests/`
+there, and run those tests outside this source checkout. Unified and Core are not
+required. These tests create synthetic repositories in temporary directories.
+Current packaging qualification covers Linux ARM64 with Python 3.13; it does not
+establish Windows or macOS acceptance.
+
+Version `0.1.0` identifies package preparation, not a separate published release.
+Unified already includes this same runtime source in its normal install; do not
+coinstall the standalone distribution into that environment. A separate repository
+and dependency-delivery transition require their own reviewed handoff.

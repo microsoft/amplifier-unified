@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "amplifier-worktrees"
+version = "0.1.0"
+description = "Managed Git worktrees with durable ownership and recovery receipts"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = ["filelock>=4.2.1,<5"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["amplifier_worktrees"]
+include-package-data = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
