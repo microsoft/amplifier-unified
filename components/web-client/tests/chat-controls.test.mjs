@@ -14,6 +14,17 @@ const optionValues=(root,id)=>field(root,id).findAllByType('option').map(node=>n
 const renderedText=node=>typeof node==='string'?node:Array.isArray(node)?node.map(renderedText).join(''):renderedText(node?.children||[]);
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
+test('external agent label does not discover or configure local models and bundles',async()=>{
+ const calls=[],session={id:'external-chat',externalAgent:{id:'remote',label:'Project assistant'}};
+ let root;
+ try{
+  await renderAct(async()=>root=create(React.createElement(ComposerOptions,{state:{view:{}},session,act:record(calls)})));
+  assert.match(renderedText(root.toJSON()),/Project assistant/);
+  assert.equal(root.root.findAllByProps({'aria-label':'Model and reasoning settings'}).length,0);
+  assert.equal(root.root.findAllByProps({role:'dialog'}).length,0);
+  assert.deepEqual(calls,[],'External presentation must not load the local runtime');
+ }finally{await renderAct(async()=>root?.unmount())}
+});
 test('one compact model panel embeds bundle choices under Advanced and shares its revision chain',async()=>{
  const calls=[],session={id:'chat',status:'idle',bundle:'work',nextMessageRevision:4};
  const selection={instance:'one',model:'model',effort:'high'};

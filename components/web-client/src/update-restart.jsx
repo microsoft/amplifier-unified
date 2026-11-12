@@ -1,28 +1,11 @@
 import React from 'react';
 
-const workKinds=new Set(['conversation','runtime','worker','schedule','update-boundary','smart-tools','voice','feedback']);
-const blockerCounts=items=>{
- const chats=new Set(items.map(item=>item.sessionId).filter(Boolean)).size;
- return `${items.length} reason${items.length===1?'':'s'} · ${chats} distinct chat${chats===1?'':'s'}`;
-};
-
 export function UpdateBlockers({updates,act}){
  const blockers=updates.blockers||[];
  if(!blockers.length)return null;
- // Classify only the host's observed rows. Counts do not collapse multiple
- // reasons for one chat or infer that omitted configuration holds recovered.
- const groups=[
-  ['work','Running, preparing, and background work',blockers.filter(item=>workKinds.has(item.kind))],
-  ['configuration','Configuration recovery holds',blockers.filter(item=>item.kind==='configuration')],
-  ['other','Other update blockers',blockers.filter(item=>item.kind!=='configuration'&&!workKinds.has(item.kind))],
- ];
  return <details className="a-update-work" data-part="update-blockers">
-  <summary>View update blockers ({blockerCounts(blockers)})</summary>
-  {groups.filter(([, ,items])=>items.length).map(([kind,title,items])=><section key={kind} aria-label={title}>
-   <h4>{title} ({blockerCounts(items)})</h4>
-   <ul>{items.map((item,index)=><li key={index}>{item.label}{item.sessionId&&<> — <button type="button" className="a-link" data-action="session.select" onClick={async()=>{const result=await act('session.select',{id:item.sessionId});if(result&&result.accepted!==false)await act('view.update',{patch:{panel:null,workSurface:'chat'}})}}>{item.title||'Open conversation'}</button></>}</li>)}</ul>
-  </section>)}
-  <p className="a-caption">Only current update blockers are listed. Configuration holds do not necessarily mean a chat is running, and can remain unresolved even when they no longer block an update. Restarting does not recover held settings or checkout handoffs.</p>
+  <summary>View work delaying the update</summary>
+  <ul>{blockers.map((item,index)=><li key={index}>{item.label}{item.sessionId&&<> — <button type="button" className="a-link" data-action="session.select" onClick={async()=>{const result=await act('session.select',{id:item.sessionId});if(result&&result.accepted!==false)await act('view.update',{patch:{panel:null,workSurface:'chat'}})}}>{item.title||'Open conversation'}</button></>}</li>)}</ul>
  </details>;
 }
 
@@ -73,7 +56,7 @@ export function UpdateRestart({updates,act}){
    <p>{version?`Restart into prepared Amplifier ${version}.`:'Restart into the prepared update.'}</p>
    {latest&&version&&latest!==version&&<p className="a-caption">Amplifier {latest} is available, but this action uses the prepared version above. Wait for the newer release to finish preparing to use it instead.</p>}
    <p>Running chats, workers, tools, and calls will be interrupted. Saved history and drafts will be kept; interrupted work will not be replayed automatically.</p>
-   <p className="a-caption">Restarting does not recover held settings or checkout handoffs. You can wait for work to finish instead.</p>
+   <p className="a-caption">You can wait for work to finish instead.</p>
   </div>
   <button type="button" className="a-soft" data-action="updates.forceRestart" aria-describedby={description} disabled={!!request} onClick={restart}>{request?.status==='unknown'?'Restart outcome unknown':request?'Restart requested…':'Interrupt work and restart'}</button>
   {error&&<p role="alert">{error}</p>}

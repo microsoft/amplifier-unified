@@ -32,7 +32,6 @@ function sequenceOverview(updates={},options={}){
  const independentUpdate=runnerOnlyPending&&(appAvailable||rows.some(row=>row.status==='update'));
  const blockingPending=pending&&!independentUpdate;
  const waiting=!failed&&!active&&!updates.pendingRestart&&blockingPending&&!(runnerOnlyPending&&seq.nextStage)&&!(updates.pendingRelease&&updates.plan?.activation==='per-worker'&&!updates.pendingApp&&toolResultsIndependent);
- const blockers=updates.blockers||[],chats=new Set(blockers.filter(row=>row.kind==='conversation'&&row.sessionId).map(row=>row.sessionId));
  const stage=seq.nextStage||seq.stage||'application';
  const batch=updates.diagnostics?.batch;
  const currentBatch=batch?.attemptId===updates.diagnostics?.attemptId?batch:null;
@@ -60,10 +59,7 @@ function sequenceOverview(updates={},options={}){
  if(updates.pendingRestart)return {...result,title:updates.pendingRestart.requestStatus==='uncertain'?'Waiting for restart confirmation':'Restarting Amplifier',detail:'Waiting for a healthy restarted app before continuing with the remaining updates.',tone:'working'};
  if(updates.pendingRelease&&updates.plan?.activation==='per-worker'&&!updates.pendingApp&&toolResultsIndependent)return {...result,title:'Finishing your update',detail:'We’re getting the updated components ready for new work. This continues automatically; active chats can keep going.',tone:'working'};
  if(waiting&&runnerOnlyPending)return {...result,title:'Finishing test runner update',detail:updates.pendingSmartTools.some(row=>row.runnerWaiting==='unknown')?'We’re confirming the isolated check’s result before switching runners. Existing chats and checks can continue.':'The updated runner is waiting for machine capacity or completing its isolated check. Existing chats and checks can continue.',tone:'working'};
- if(waiting&&blockers.some(row=>row.kind==='configuration'))return {...result,
-  title:blockers.every(row=>row.kind==='configuration')?'Waiting on configuration recovery holds':'Waiting for update blockers',
-  detail:`Your update is ready. ${updates.pendingApp?'Amplifier will restart':'It will continue'} automatically when the reported update blockers clear. Configuration holds are separate from running chats; restarting does not recover held settings. Your conversations and drafts will be kept.`,tone:'working'};
- if(waiting)return {...result,title:chats.size&&blockers.every(row=>row.kind==='conversation')?`Waiting for ${chats.size} ${chats.size===1?'chat':'chats'} to finish`:'Waiting for your work to finish',detail:updates.pendingApp?'Your update is ready. Amplifier will restart automatically when active work finishes. Your conversations and drafts will be kept.':'Your update is ready. It will continue automatically when active work and calls finish.',tone:'working'};
+ if(waiting)return {...result,title:'Waiting for work to finish',detail:updates.detail||(updates.pendingApp?'Your update is ready. Amplifier will restart automatically when active work finishes. Your conversations and drafts will be kept.':'Your update is ready. It will continue automatically when active work and calls finish.'),tone:'working'};
  if(active){
   const progressDetail=currentProgress?`${currentProgress.phase==='prepare'?'Preparing':'Checking'} configurations: ${currentProgress.completed} of ${currentProgress.total} completed. Failed checks do not count as completed.`:null;
   return {...result,title:updates.phase==='checking'?'Checking for updates':currentBatch?.kind==='smart-tools'?'Updating Smart Tools':stage==='application'?'Updating Amplifier':stage==='included'?'Updating included components':'Updating other components',detail:progressDetail||updates.detail||(updates.phase==='checking'?(stage==='application'?'Checking for a new app version first.':stage==='included'?'Checking included components…':'Checking other components…'):'Preparing and verifying the update…'),tone:'working'};

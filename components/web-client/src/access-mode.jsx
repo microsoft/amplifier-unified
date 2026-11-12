@@ -21,7 +21,8 @@ export function AccessMode({session,act,globalOnly=false}){
  useEffect(()=>{setReport(null);run('access.get');return()=>{generation.current++}},[session?.id,globalOnly]);
  return <section className="a-settings-section" aria-label="Access and approvals">
   {globalOnly&&<p>Default for all existing and new chats across every workspace on this Amplifier host. Explicit chat and workspace choices still take precedence.</p>}
-  <p>Full access lets Amplifier use files, tools and configuration without asking for each permission. Enable it for work you trust.</p>
+  <p>{session?.externalAgent?'Full access allows permission requests from this agent without asking each time. The agent controls its own tools and execution.':'Full access lets Amplifier use files, tools and configuration without asking for each permission. Enable it for work you trust.'}</p>
+  {session?.externalAgent&&<p>Permission prompts are not shown in this early integration. Requests are declined unless Full access applies.</p>}
   {report&&<p role="status">Current mode: <strong>{report.mode==='full'?'Full access':'Ask when needed'}</strong> · {({session:'This chat',workspace:'Workspace default',app:'App default',default:'Default',inherited:'Source task settings',unavailable:'Source settings unavailable'})[report.source]}</p>}
   <fieldset className="a-permissions-fields" disabled={busy||!report}>
    {!globalOnly&&<label>Apply to <select aria-label="Access scope" value={scope} onChange={e=>{setScope(e.target.value);setMode(report.overrides[e.target.value].mode)}}>

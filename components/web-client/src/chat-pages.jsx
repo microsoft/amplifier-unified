@@ -82,6 +82,17 @@ export function ChatPages({page,state,session,act,dispatch=act,open,working,comp
  const show=key=>visited.current.has(key);
  const back=<button type="button" className="a-link a-chat-back" onClick={()=>open('chat-advanced')}><ArrowLeft/>Back to Advanced</button>;
  if(!session)return <p>Select a chat to see its information and options.</p>;
+ if(session.externalAgent&&page==='chat-rename')return <ConversationName session={session} act={dispatch} details={false}/>;
+ if(session.externalAgent&&page==='chat-help')return <Help state={state} act={act} open={open}/>;
+ if(session.externalAgent&&page==='chat-write-files')return <AccessMode key={'access-'+session.id} session={session} act={act}/>;
+ if(session.externalAgent)return <div className="a-chat-info" data-external-agent-info>
+  <p><strong>{session.externalAgent.label||session.externalAgent.id}</strong> manages its model, tools and execution.</p>
+  <CopyDetail label="Chat ID" value={session.id}/>
+  {session.externalAgent.sessionId&&<CopyDetail label="Agent session ID" value={session.externalAgent.sessionId}/>}
+  {session.workspace&&<CopyDetail label="Workspace" value={session.workspace}/>}
+  <p role="status">{session.error||session.externalAgent.error||session.status}</p>
+  <button type="button" className="a-link" onClick={()=>open('chat-write-files')}>Access &amp; approvals</button>
+ </div>;
  return <div className="a-chat-pages">
   {show('chat-error')&&<div hidden={page!=='chat-error'}><ConversationDetails key={session.id} session={session} act={dispatch} focused open={open}/>{page==='chat-error'&&<ErrorFeedback state={state} act={dispatch}/>}</div>}
   {show('session-details')&&<div hidden={page!=='session-details'}><Info key={session.id} session={session} state={state} act={dispatch} open={open} questionReviewState={questionReviewState}/></div>}

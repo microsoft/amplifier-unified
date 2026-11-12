@@ -22,3 +22,13 @@ test('progress uses reported text without fabricating percentages or completed s
  assert.equal(sessionStatus({status:'working',progress:'Preparing the requested tool'}).detail,'Preparing the requested tool');
  assert.equal(sessionStatus({status:'error',progress:'Earlier progress'}).detail,'');
 });
+
+test('external startup identifies its participant without promising local bundle loading',()=>{
+ const externalAgent={id:'remote',label:'Project assistant'};
+ const starting=sessionStatus({status:'starting',externalAgent});
+ assert.equal(starting.label,'Connecting to Project assistant…');
+ assert.match(starting.explanation,/message stays/);
+ assert.doesNotMatch(starting.explanation,/bundle|Amplifier/);
+ assert.equal(sessionStatus({status:'working',externalAgent}).label,'Project assistant is working…');
+ assert.equal(sessionStatus({status:'error',externalAgent}).label,'Project assistant needs your attention');
+});
