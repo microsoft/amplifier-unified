@@ -14,6 +14,14 @@
       }
     },
     {
+      "id": "sidebar-responsive",
+      "command": ["node", "tests/sidebar-controls-browser.mjs"],
+      "env": {
+        "AMPLIFIER_SIDEBAR_RESPONSIVE": "1",
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/sidebar-responsive"
+      }
+    },
+    {
       "id": "sidebar-controls",
       "command": [
         "node",

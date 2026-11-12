@@ -215,19 +215,20 @@
 /* A collapsed sidebar consumes no width and cannot reopen on hover. */
 #amp-one.a-approachable-shell .a-work-nav-toggle{order:-1;flex:none}
 /* The header control remains part of the narrow navigation's focus loop. */
-@media(max-width:900px){
+@media(max-width:640px){
  #amp-one.a-approachable-shell:has(.a-nav-slot.is-expanded) .a-work-header{position:relative;z-index:91}
  #amp-one.a-approachable-shell .a-navigation-scrim{top:var(--a-navigation-top,56px)}
- #amp-one.a-approachable-shell .a-layout[data-pane-layout][data-narrow="true"]>.a-nav-slot[data-docked]{top:var(--a-navigation-top,56px);height:calc(100dvh - var(--a-navigation-top,56px))}
+ #amp-one.a-approachable-shell .a-layout[data-pane-layout][data-navigation-narrow="true"]>.a-nav-slot[data-docked]{top:var(--a-navigation-top,56px);height:calc(100dvh - var(--a-navigation-top,56px))}
  #amp-one.a-approachable-shell .a-nav-slot .a-sidebar-modes{flex-direction:row;justify-content:flex-start}
  #amp-one.a-approachable-shell .a-sidebar-modes button,#amp-one.a-approachable-shell .a-nav-search-launch{min-height:44px}
 }
-@media(max-width:760px){
- #amp-one.a-approachable-shell .a-layout[data-pane-layout][data-narrow="true"]>.a-nav-slot[data-docked]{width:100%;max-width:none;border-radius:0}
-}
-@media(min-width:761px){
+@media(min-width:641px){
  #amp-one.a-approachable-shell .a-layout[data-pane-layout]>.a-nav-slot[data-docked="false"]{position:absolute;inset:0 auto 0 0;width:0;min-width:0;flex:none}
  #amp-one.a-approachable-shell .a-layout[data-pane-layout]>.a-nav-slot[data-docked="false"] .a-nav-rail{width:var(--nav-width)}
+}
+@media(pointer:coarse){
+ #amp-one.a-approachable-shell .a-sidebar-modes button,#amp-one.a-approachable-shell .a-nav-search-launch{min-height:44px}
+ #amp-one.a-approachable-shell .a-sidebar-modes>.a-sidebar-new{flex-basis:44px;width:44px;min-width:44px;min-height:44px;height:44px}
 }
 
 /* Composite search fields own one focus ring, including in custom themes. */

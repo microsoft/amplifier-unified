@@ -33,14 +33,14 @@ export function CanvasToggle({state,act,layout}){
 export function WorkspaceRail({state,session,act,selectSession,newSession,shell,footer}){
  const layout=usePanelLayout(state,act);
  const navigation=useContext(WorkNavigationContext),supportsStatus=shell.composition.instances.some(row=>row.package==='builtin.chats');
- const view=state.view||{},pinned=!layout.narrow&&!!view.navPinned,expanded=navigationExpanded(view,layout.narrow),draft=view.workspaceDraft||{};
- const nav=useRef(null),wasNarrow=useRef(layout.narrow),close=()=>patch(act,{navExpanded:false});
- useEffect(()=>{if(layout.narrow&&!wasNarrow.current&&view.navExpanded)close();wasNarrow.current=layout.narrow},[layout.narrow]);
- useModalFocus(nav,layout.narrow&&expanded,close,'#navigation-toggle');
+ const view=state.view||{},narrow=!!layout.navigationNarrow,pinned=!narrow&&!!view.navPinned,expanded=navigationExpanded(view,narrow),draft=view.workspaceDraft||{};
+ const nav=useRef(null),wasNarrow=useRef(narrow),close=()=>patch(act,{navExpanded:false});
+ useEffect(()=>{if(narrow&&!wasNarrow.current&&view.navExpanded)close();wasNarrow.current=narrow},[narrow]);
+ useModalFocus(nav,narrow&&expanded,close,'#navigation-toggle');
  const workspaces=visibleWorkspaces(state),workspace=workspaces.find(w=>w.id===state.selectedWorkspaceId);
  const add=()=>{(newSession||(()=>act('session.draft',{})))();if(!pinned)patch(act,{navExpanded:false})};
- return <NavigationOpen.Provider value={expanded}><ChatShortcutScope navigation={nav} enabled={expanded&&!view.panel&&!view.toolbarMenuOpen&&!draft.mode&&!view.canvasFocused} scope={[state.selectedSessionId,view.workSurface,view.workWorkspaceId,view.navChatScope].join(':')}>{layout.narrow&&expanded&&<div className="a-navigation-scrim" onClick={close}/>}
- <aside ref={nav} id="workspace-navigation" role={layout.narrow?'dialog':undefined} aria-modal={layout.narrow&&expanded||undefined} aria-owns={layout.narrow&&expanded?'navigation-toggle':undefined} hidden={!expanded} inert={!expanded} className={`a-nav-slot ${pinned?'is-pinned':''} ${expanded?'is-expanded':''}`} data-docked={layout.docked} data-part="navigation" aria-label="Workspaces and chats" onClick={e=>{if(layout.narrow&&e.target.closest('[data-navigation-select],[data-action="session.select"]'))close()}}>
+ return <NavigationOpen.Provider value={expanded}><ChatShortcutScope navigation={nav} enabled={expanded&&!view.panel&&!view.toolbarMenuOpen&&!draft.mode&&!view.canvasFocused} scope={[state.selectedSessionId,view.workSurface,view.workWorkspaceId,view.navChatScope].join(':')}>{narrow&&expanded&&<div className="a-navigation-scrim" onClick={close}/>}
+ <aside ref={nav} id="workspace-navigation" role={narrow?'dialog':undefined} aria-modal={narrow&&expanded||undefined} aria-owns={narrow&&expanded?'navigation-toggle':undefined} hidden={!expanded} inert={!expanded} className={`a-nav-slot ${pinned?'is-pinned':''} ${expanded?'is-expanded':''}`} data-docked={layout.docked} data-part="navigation" aria-label="Workspaces and chats" onClick={e=>{if(narrow&&e.target.closest('[data-navigation-select],[data-action="session.select"]'))close()}}>
   <div className="a-nav-rail">
    <div className="a-nav-head a-sidebar-modes"><div className="a-sidebar-organizations" role="group" aria-label="Sidebar view">{supportsStatus?['browse','status'].map(mode=><button type="button" key={mode} aria-pressed={(view.navMode||'browse')===mode} onClick={()=>patch(act,{navMode:mode})}>{mode==='browse'?'Browse':'Status'}</button>):<strong>Browse</strong>}</div><button className="a-sidebar-new a-icon" type="button" onClick={add} data-action="session.draft" aria-label="New chat" title="New chat"><MessageSquarePlus/></button></div>
    <div className="a-nav-content a-nav-reveal">

@@ -1,4 +1,4 @@
-import {useNarrowScreen} from './responsive-navigation';
+import {useNarrowScreen,NAVIGATION_NARROW_QUERY} from './responsive-navigation';
 import React,{createContext,useContext,useLayoutEffect,useRef,useState} from 'react';
 
 export const CHAT_MIN=360,CANVAS_MIN=300,NAV_MIN=216;
@@ -24,21 +24,22 @@ export function showingOverview(state){
 const Layout=createContext(null);
 export function WorkspaceLayout({state,act,children,presentation={},appearanceCss='',appearanceScheme=''}){
  const narrow=useNarrowScreen('(max-width: 900px)');
+ const navigationNarrow=useNarrowScreen(NAVIGATION_NARROW_QUERY);
  const host=useRef(null),[metrics,setMetrics]=useState({available:1200,gap:12,rail:0}),[draft,setDraft]=useState(null);
  useLayoutEffect(()=>{
   const el=host.current;if(!el)return;
   const measure=()=>setMetrics({available:el.clientWidth,gap:parseFloat(getComputedStyle(el).columnGap)||0,rail:0});
   const observer=new ResizeObserver(measure);observer.observe(el);measure();return()=>observer.disconnect();
  },[appearanceCss,appearanceScheme,presentation.layout,state.view?.layout]);
- const view=state.view||{},canvasOnLeft=(presentation.layout||view.layout)==='work',overview=showingOverview(state),widthKey=overview?'canvasOverviewWidth':'canvasWidth',canvasWidth=view[widthKey]??(overview?320:(presentation.layout||view.layout)==='conversation'?440:Math.max(440,metrics.available*.5)),sizes=fitPanels({...metrics,navPinned:!narrow&&!!view.navPinned,canvasOpen:!!state.selectedSessionId&&!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,...draft});
+ const view=state.view||{},canvasOnLeft=(presentation.layout||view.layout)==='work',overview=showingOverview(state),widthKey=overview?'canvasOverviewWidth':'canvasWidth',canvasWidth=view[widthKey]??(overview?320:(presentation.layout||view.layout)==='conversation'?440:Math.max(440,metrics.available*.5)),sizes=fitPanels({...metrics,navPinned:!navigationNarrow&&!!view.navPinned,canvasOpen:!!state.selectedSessionId&&!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,...draft});
  const persist=(key,value)=>{
-  const fitted=fitPanels({...metrics,navPinned:!narrow&&!!view.navPinned,canvasOpen:!!state.selectedSessionId&&!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,[key]:value,priority:key==='navWidth'?'nav':'canvas'});
+  const fitted=fitPanels({...metrics,navPinned:!navigationNarrow&&!!view.navPinned,canvasOpen:!!state.selectedSessionId&&!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,[key]:value,priority:key==='navWidth'?'nav':'canvas'});
   const patch={[key==='canvasWidth'?widthKey:key]:Math.round(value)};
   if(fitted.docked&&state.canvas?.open&&!fitted.overlay){patch.navWidth=Math.round(fitted.nav);patch[widthKey]=Math.round(fitted.canvas)}
   setDraft(null);act('view.update',{patch});
  };
- return <Layout.Provider value={{...sizes,narrow,canvasOnLeft,preview:(key,value)=>setDraft({[key]:value,priority:key==='navWidth'?'nav':'canvas'}),cancel:()=>setDraft(null),persist}}>
-  <main ref={host} className="a-layout" data-part="workspace" data-narrow={narrow} data-canvas-open={!!state.selectedSessionId&&!!state.canvas?.open} data-pane-layout="" data-canvas-mode={overview?'overview':'artifact'} data-canvas-overlay={sizes.overlay} style={{'--nav-width':sizes.expandedNav+'px','--canvas-width':sizes.canvas+'px','--chat-min':CHAT_MIN+'px'}}>{children}</main>
+ return <Layout.Provider value={{...sizes,narrow,navigationNarrow,canvasOnLeft,preview:(key,value)=>setDraft({[key]:value,priority:key==='navWidth'?'nav':'canvas'}),cancel:()=>setDraft(null),persist}}>
+  <main ref={host} className="a-layout" data-part="workspace" data-narrow={narrow} data-navigation-narrow={navigationNarrow} data-canvas-open={!!state.selectedSessionId&&!!state.canvas?.open} data-pane-layout="" data-canvas-mode={overview?'overview':'artifact'} data-canvas-overlay={sizes.overlay} style={{'--nav-width':sizes.expandedNav+'px','--canvas-width':sizes.canvas+'px','--chat-min':CHAT_MIN+'px','--layout-gap':metrics.gap+'px'}}>{children}</main>
  </Layout.Provider>;
 }
 export function usePanelLayout(state,act){

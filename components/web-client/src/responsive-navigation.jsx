@@ -1,6 +1,9 @@
 import React,{createContext,useEffect,useLayoutEffect,useRef,useState} from 'react';
 
 export const NavigationOpen=createContext(true);
+// Navigation can sit beside a 360px chat and a 216–240px sidebar above this
+// width. Keep separate from compact header/Canvas rules at 760/900px.
+export const NAVIGATION_NARROW_QUERY='(max-width: 640px)';
 const inertOwners=new WeakMap();
 export const navigationExpanded=(view={},narrow=false)=>(!narrow&&!!view.navPinned||!!view.navExpanded)
  &&(!narrow||!view.canvasFocused&&!view.panel&&!view.toolbarMenuOpen);

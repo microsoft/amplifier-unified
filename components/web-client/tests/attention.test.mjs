@@ -6,7 +6,7 @@ import {create} from 'react-test-renderer';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {AttentionBadge,AttentionReview,ActivityPanel,FailureDisposition,FailureDispositions,readItems,reviewItems,completionToRead}=await server.ssrLoadModule('/src/attention.jsx');
+const {AttentionBadge,AttentionReview,ActivityPanel,FailureDisposition,FailureDispositions,readItems,reviewItems,completionToRead,useReadCompletion}=await server.ssrLoadModule('/src/attention.jsx');
 const {request}=await server.ssrLoadModule('/src/api.js');
 const {FeedbackNotice}=await server.ssrLoadModule('/src/feedback.jsx');
 const {browserPreviewPolicy,BrowserPreview}=await server.ssrLoadModule('/src/canvas-library.jsx');
@@ -41,6 +41,37 @@ test('viewing a conversation can only acknowledge its completion, not errors or 
  const completion={id:'completion:target',sessionId:'target'};state.attention.items.push(completion);
  assert.equal(completionToRead(state),completion);completion.read=true;
  assert.equal(completionToRead(state),undefined);
+});
+test('visible foldable chat can acknowledge completion beside navigation, not behind phone drawer or Canvas',async()=>{
+ const names=['matchMedia','document','window','ResizeObserver','getComputedStyle','setTimeout','clearTimeout'];
+ const originals=Object.fromEntries(names.map(name=>[name,Object.getOwnPropertyDescriptor(globalThis,name)]));
+ let root,width=656,timers=[];
+ const listeners={addEventListener(){},removeEventListener(){}};
+ const pane={current:{...listeners,clientHeight:500,scrollHeight:500,scrollTop:0,children:[],closest:()=>null}};
+ const calls=[],act=async(name,args)=>calls.push({name,args});
+ let state={selectedSessionId:'chat',view:{navPinned:true,navExpanded:true},canvas:{open:false},attention:{items:[{id:'completion:chat',fingerprint:'exact',read:false}]}};
+ const Hook=()=>{useReadCompletion(state,act,pane);return null};
+ try{
+  Object.assign(globalThis,{
+   matchMedia:query=>({...listeners,matches:width<=Number(query.match(/(\d+)px/)[1])}),
+   document:{...listeners,hidden:false,hasFocus:()=>true},window:listeners,
+   ResizeObserver:class {observe(){}disconnect(){}},getComputedStyle:()=>({visibility:'visible'}),
+   setTimeout:fn=>{timers.push(fn);return fn},clearTimeout:fn=>{timers=timers.filter(item=>item!==fn)},
+  });
+  await renderAct(async()=>{root=create(React.createElement(Hook))});
+  assert.equal(timers.length,1,'Docked sidebar does not cover the visible chat');
+  await renderAct(async()=>{await timers[0]()});
+  assert.deepEqual(calls,[{name:'attention.read',args:{ids:['completion:chat'],fingerprints:{'completion:chat':'exact'}}}]);
+  state={...state,canvas:{open:true}};await renderAct(async()=>root.update(React.createElement(Hook)));
+  assert.equal(timers.length,0,'Compact Canvas still hides chat through 760px');
+  await renderAct(async()=>root.unmount());root=null;
+  width=390;state={...state,canvas:{open:false}};
+  await renderAct(async()=>{root=create(React.createElement(Hook))});
+  assert.equal(timers.length,0,'Phone modal navigation still blocks acknowledgement');
+ }finally{
+  if(root)await renderAct(async()=>root.unmount());
+  for(const name of names){if(originals[name])Object.defineProperty(globalThis,name,originals[name]);else delete globalThis[name]}
+ }
 });
 test('off-page errors and approvals open their owning conversation through shared actions',async()=>{
  const state={attention:{items:[{id:'session:failed',sessionId:'failed',title:'Conversation needs attention'},{id:'approval:permission',sessionId:'blocked',title:'Approval requested'}]}},calls=[];

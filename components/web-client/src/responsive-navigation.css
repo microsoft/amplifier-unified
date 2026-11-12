@@ -21,13 +21,6 @@
  #amp-one.a-chat-shell .a-layout[data-pane-layout]{gap:0;position:relative}
  #amp-one.a-chat-shell .a-layout[data-pane-layout] .a-conversation{min-width:0;width:100%;border-radius:0;border-left:0;border-right:0}
  #amp-one.a-chat-shell .a-layout[data-narrow="true"][data-canvas-open="true"]>.a-conversation{visibility:hidden;pointer-events:none}
- #amp-one.a-chat-shell .a-layout[data-pane-layout][data-narrow="true"] .a-nav-slot[data-docked]{position:fixed;inset:0;z-index:90;width:100%;height:100dvh;flex:none;transform:none}
- #amp-one.a-chat-shell .a-layout[data-pane-layout] .a-nav-slot .a-nav-rail{position:relative;width:100%;max-width:100%;height:100%;max-height:100%;border:0;border-radius:0;box-shadow:none;transition:none;padding:calc(12px + env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left));overflow:visible}
- #amp-one.a-chat-shell .a-nav-slot .a-nav-reveal{visibility:visible;opacity:1;pointer-events:auto}
- #amp-one.a-chat-shell .a-nav-slot .a-nav-head{flex-direction:row-reverse;justify-content:space-between;flex:none}
- #amp-one.a-chat-shell .a-nav-slot .a-nav-head .a-icon{width:44px;height:44px}
- #amp-one.a-chat-shell .a-nav-slot .a-nav-main{min-height:44px}
- #amp-one.a-chat-shell .a-nav-slot .a-nav-content{min-height:0;overflow:auto;overscroll-behavior:contain}
  #amp-one.a-chat-shell .a-nav-slot .a-navigation-more{opacity:1;width:40px;min-width:40px;height:44px}
  #amp-one.a-chat-shell .a-navigation-flyout{left:8px!important;right:8px;top:auto!important;bottom:8px;width:auto;max-height:calc(100dvh - 32px);z-index:92;padding:22px 18px calc(18px + env(safe-area-inset-bottom));border-radius:18px}
  #amp-one.a-chat-shell .a-details-scrim{z-index:91}
@@ -45,13 +38,21 @@
  #amp-one.a-chat-shell :is(input,textarea,select){font-size:max(16px,var(--a-text-base,14px))!important}
 }
 
-/* Navigation becomes modal at the panel layout's tablet breakpoint, before
-   the phone shell changes at 760px. Give the modal a real, visible box. */
-@media(min-width:761px) and (max-width:900px){
- #amp-one.a-chat-shell .a-layout[data-pane-layout][data-narrow="true"]>.a-nav-slot[data-docked]{position:fixed;inset:0 auto 0 0;z-index:90;width:min(360px,85vw);min-width:0;height:100dvh;flex:none;transform:none}
- #amp-one.a-chat-shell .a-layout[data-pane-layout][data-narrow="true"]>.a-nav-slot[data-docked] .a-nav-rail{position:relative;inset:0;width:100%;max-width:100%;height:100%;max-height:100%;border:0;border-right:1px solid var(--a-line);border-radius:0;box-shadow:8px 0 30px #0002;transition:none;padding:12px 10px;overflow:visible}
- #amp-one.a-chat-shell .a-layout[data-narrow="true"] .a-nav-reveal{visibility:visible;opacity:1;pointer-events:auto}
- #amp-one.a-chat-shell .a-layout[data-narrow="true"] .a-nav-head{flex-direction:row-reverse;justify-content:space-between}
- #amp-one.a-chat-shell .a-layout[data-narrow="true"] .a-nav-head .a-icon{width:44px;height:44px}
- #amp-one.a-chat-shell .a-layout[data-narrow="true"] .a-nav-content{min-height:0;overflow:auto;overscroll-behavior:contain}
+/* Match NAVIGATION_NARROW_QUERY, independently of compact header/Canvas. */
+@media(min-width:641px) and (max-width:760px){
+ /* Compact Canvas still replaces chat here. Navigation remains usable above
+    it, like the ordinary unpinned overlay, rather than becoming a hidden
+    "Close navigation" target behind Canvas. Focused Canvas keeps its higher
+    modal layer. Use the same measured gap as panel fitting, not a skin default. */
+ #amp-one.a-chat-shell .a-layout[data-pane-layout][data-canvas-open="true"]>.a-nav-slot.is-expanded{z-index:21}
+ #amp-one.a-chat-shell .a-layout[data-pane-layout][data-canvas-open="true"]:has(>.a-nav-slot[data-docked="true"]:not([hidden]))>.a-canvas-panel:not([data-focused="true"]){left:calc(var(--nav-width) + var(--layout-gap,0px));width:auto}
+}
+@media(max-width:640px){
+ #amp-one.a-chat-shell .a-layout[data-pane-layout][data-navigation-narrow="true"]>.a-nav-slot[data-docked]{position:fixed;inset:0;z-index:90;width:100%;min-width:0;height:100dvh;flex:none;transform:none}
+ #amp-one.a-chat-shell .a-layout[data-pane-layout][data-navigation-narrow="true"]>.a-nav-slot .a-nav-rail{position:relative;inset:0;width:100%;max-width:100%;height:100%;max-height:100%;border:0;border-radius:0;box-shadow:none;transition:none;padding:calc(12px + env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left));overflow:visible}
+ #amp-one.a-chat-shell .a-nav-slot .a-nav-reveal{visibility:visible;opacity:1;pointer-events:auto}
+ #amp-one.a-chat-shell .a-nav-slot .a-nav-head{flex-direction:row-reverse;justify-content:space-between;flex:none}
+ #amp-one.a-chat-shell .a-nav-slot .a-nav-head .a-icon{width:44px;height:44px}
+ #amp-one.a-chat-shell .a-nav-slot .a-nav-main{min-height:44px}
+ #amp-one.a-chat-shell .a-nav-slot .a-nav-content{min-height:0;overflow:auto;overscroll-behavior:contain}
 }
