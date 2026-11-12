@@ -24,6 +24,11 @@
 /components/publishing/MANIFEST.in source-context=configuration
 /components/publishing/.gitignore source-context=configuration
 /components/publishing/LICENSE source-context=documentation
+/components/worktrees/amplifier_worktrees/** source-context=source
+/components/worktrees/tests/** source-context=tests
+/components/worktrees/MANIFEST.in source-context=configuration
+/components/worktrees/.gitignore source-context=configuration
+/components/worktrees/LICENSE source-context=documentation
 /docs/** source-context=documentation
 /contracts/** source-context=contracts
 /context/** source-context=guidance

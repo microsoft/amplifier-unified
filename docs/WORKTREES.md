@@ -9,7 +9,7 @@ that commit. Legacy `sourceRevision` remains an opaque full working-folder
 snapshot digest, never a Git SHA; its existing validation is unchanged.
 Clean committed checkout is default; including uncommitted
 changes is an explicit option. The reusable library contract and limits live in
-[amplifier_worktrees](../amplifier_worktrees/README.md).
+[amplifier_worktrees](../components/worktrees/README.md).
 
 A task keeps its canonical session.workspace, native identity, history, settings,
 voice records, task goal, drafts and artifact references. Its workingDirectory is

@@ -1,5 +1,13 @@
 # Component projects
 
+[`worktrees/`](worktrees/README.md) is the temporary authoring home for the
+independently buildable managed Git worktree package and its real-Git tests.
+Unified consumes the same sources directly. From that directory, `uv build` builds
+the standalone wheel/source distribution and `uv run --extra test pytest` runs its
+mechanism tests; no Unified or Core installation is needed. Normal Unified builds
+already include the package: do not coinstall its standalone distribution there.
+The future repository and delivery transition remain separate decisions.
+
 [`publishing/`](publishing/README.md) is the temporary authoring home for the
 independently buildable static publishing package and its portable tests. Unified
 consumes its nested runtime sources directly; its host publishing adapters and
