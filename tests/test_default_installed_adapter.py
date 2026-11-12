@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import subprocess
 import tarfile
+import tomllib
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -93,6 +94,17 @@ def test_pins_require_exact_sources(tmp_path):
     path.write_text(json.dumps(data))
     with pytest.raises(ValueError, match='Exact repository'):
         adapter.pins(path)
+
+
+def test_computer_use_installed_baseline_matches_optional_host_lock():
+    data = adapter.pins(ROOT / 'scripts/default-installed-pins.json')
+    baseline = next(row for row in data['repositories']
+                    if row['name'] == 'amplifier-bundle-computer-use')
+    lock = tomllib.loads((ROOT / 'uv.lock').read_text())
+    tool = next(row for row in lock['package']
+                if row['name'] == 'amplifier-module-tool-computer-use')
+    assert tool['source']['git'].rsplit('#', 1)[1] == baseline['commit']
+    assert baseline['packages'] == ['modules/tool-computer-use', 'modules/hook-computer-use']
 
 
 def test_environment_contains_no_caller_credentials(monkeypatch):
