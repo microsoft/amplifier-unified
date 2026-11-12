@@ -559,6 +559,7 @@ def test_repeated_reference_amplification_and_license_metadata_are_bounded():
 
 async def test_import_export_result_and_download_effect_never_apply(app):
     before, sid = deepcopy(app.appearance.shared()), app.state['selectedSessionId']
+    retained_theme = deepcopy(app.state.get('theme'))
     local_before = deepcopy(app.appearance.read('one'))
     saved = await imported(app)
     assert saved['format'] == 'zip' and saved['packageVersion'] == 2 and saved['base'] == 'reference-v1'
@@ -578,6 +579,7 @@ async def test_import_export_result_and_download_effect_never_apply(app):
     assert base64.b64decode(value['base64'], validate=True) == path.read_bytes()
     assert value['fingerprint'] == saved['fingerprint']
     assert app.appearance.shared() == before and app.state['selectedSessionId'] == sid
+    assert app.state.get('theme') == retained_theme
     assert app.appearance.read('one') == local_before
     assert {item.name for item in path.parent.iterdir()} == {path.name}, 'No extracted assets or sidecars'
 
@@ -931,6 +933,8 @@ async def test_zip_collision_lookup_only_opens_existing_bounded_family_members(a
     far_name = name[:-4] + '-1000.zip'
     (root / name).rename(root / far_name)
     (root / 'unrelated.zip').write_bytes(b'not an appearance')
+    for suffix in ('1', '0002', '1001'):
+        (root / (name[:-4] + '-' + suffix + '.zip')).symlink_to(root / 'absent.zip')
     opened, original = [], theme_library.read_package_bytes
     def inspect(path, descriptor):
         opened.append(path.name)

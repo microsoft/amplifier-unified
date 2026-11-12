@@ -20,7 +20,7 @@ async def test_retired_profile_prepared_changes_cannot_activate(app, action):
               'preferenceFence': {'activeScope': 'shared', 'sharedRevision': 1},
               'status': 'prepared'}
     app.shell.put('change', 'old-change', change)
-    with pytest.raises(AppError, match='retired appearance'):
+    with pytest.raises(AppError, match='earlier appearance generation'):
         await call(app, action, {'clientId': 'one', 'expectedRevision': before['revision'], 'changeId': 'old-change'})
     assert app.shell.get('change', 'old-change') == change
     assert app.shell.client('one') == before
