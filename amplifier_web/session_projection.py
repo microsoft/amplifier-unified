@@ -9,6 +9,9 @@ from .host.storage import SessionStore
 
 
 def view_path(home, session):
+    if session.get('externalAgent'):
+        identity = hashlib.sha256(session['id'].encode()).hexdigest()
+        return Path(home) / 'external-conversations' / identity / 'view.json'
     store = SessionStore.for_app(home, session['workspace'])
     return store.directory(session.get('runtimeSessionId') or session['id']) / 'unified' / 'view.json'
 
@@ -368,7 +371,7 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
         # body. Do not invent defaults or backfill older sparse references.
         result['sessions'].append({**{key: session[key] for key in (
             'id', 'workspace', 'runtimeSessionId', 'sessionKind', 'workingDirectory',
-            'executionRevision', 'interruptionRevision') if key in session}, '$view': 1,
+            'executionRevision', 'interruptionRevision', 'externalAgent') if key in session}, '$view': 1,
                                    **({'$viewPayload': payload} if payload else {}),
                                    **({MARKER: copy.deepcopy(value[MARKER])} if value.get(MARKER) else {})})
     if references is not None:
