@@ -124,7 +124,8 @@ def _chatgpt_account(contents, config):
         return None
 
 
-def connection_key(workspace, module, config, source=None, *, home=None, _credential_generation=False):
+def connection_key(workspace, module, config, source=None, *, home=None, _credential_generation=False,
+                   _legacy_visibility=False):
     """Stable private connection binding shared by host and worker processes.
 
     The connection binding ignores selection defaults, model filters and priority. Every other provider
@@ -138,7 +139,7 @@ def connection_key(workspace, module, config, source=None, *, home=None, _creden
     raw = copy.deepcopy(config or {})
     for name in ('priority', 'model', 'default_model', 'reasoning_effort', 'model_filters'):
         raw.pop(name, None)
-    if module == 'provider-openai':
+    if module == 'provider-openai' and not _legacy_visibility:
         # These are OpenAI listing policy, not account/endpoint settings.
         # Do not reinterpret same-named options on unrelated providers.
         for name in ('hide_dated_models', 'filtered'):
@@ -209,11 +210,15 @@ def _openai_legacy_visibility(config):
     """
     from .host.config import expand_environment
     values = []
+    unresolved = {}
     for name in ('hide_dated_models', 'filtered'):
         value = (config or {}).get(name)
         try:value = expand_environment(value)
-        except ValueError:pass
+        except ValueError:unresolved[name] = value
         values.append(value)
+    # Materialization visits every field before the provider resolves aliases.
+    # A shadowed but unresolved alias is not a successful construction input.
+    if unresolved:return ['unresolved', unresolved]
     value = values[0] if values[0] not in (None, '') else values[1]
     if value is None or value == '':return True
     if isinstance(value, bool):return value
@@ -281,13 +286,24 @@ def mounted_catalog_keys(home,workspace,rows,sources,*,binding=False):
 def model_key(identity):
     return ('providers.models', identity)
 
-def configured_binding(home, workspace, instance, *, global_only=False):
+def configured_binding(home, workspace, instance, *, global_only=False, saved=None):
+    """Current binding, optionally proving a retained pre-filter-split digest.
+
+    The prior digest is reconstructed from the current exact connection, not
+    historical guesses. A listing edit before first verified adoption still
+    requires explicit review/save. No saved choice or mount is rewritten here.
+    """
     from .setup import SetupManager
     manager = SetupManager(home, global_only=global_only, allow_missing_workspace=True)
     with manager.read_snapshot(workspace):
         if not any(row['id'] == instance and row['enabled'] for row in manager.provider_rows(workspace)):
             return None
-        return manager.catalog_key({'id':instance}, workspace, binding=True)
+        current = manager.catalog_key({'id':instance}, workspace, binding=True)
+        if saved and saved != current:
+            previous = manager.catalog_key({'id':instance}, workspace, binding=True, _legacy_visibility=True)
+            if saved != previous:
+                raise ValueError('The configured connection changed after this choice was saved. Review the connection and save the model again.')
+        return current
 
 
 def conversation_bindings(home, workspace, session_id, providers, *, global_only=False):

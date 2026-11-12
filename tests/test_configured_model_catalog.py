@@ -334,3 +334,173 @@ async def test_legacy_visibility_edit_preserves_saved_exact_choice_and_only_refe
     assert json.loads(saved.read_text()) == original_plan
     assert all(chosen['model'] not in [row['id'] for row in entry['models']]
                for entry in service.state['modelCatalogs'].values())
+
+
+@pytest.mark.parametrize('filters', [None, {}])
+@pytest.mark.parametrize('field', ['hide_dated_models', 'filtered'])
+async def test_unresolved_legacy_visibility_cache_error_and_fixed_inputs_stay_separate(
+        catalog_app, monkeypatch, filters, field):
+    from amplifier_web.provider_environment import materialize_provider_config
+    service, _, _, rows = catalog_app
+    rows[0].update(module='provider-openai', source='fixture-source')
+    rows[0]['config'].update(hide_dated_models=True, model_filters=filters)
+    rows[0]['config'][field] = '${UNSET_LEGACY_VISIBILITY}'
+    write_private(amplifier_home() / 'settings.yaml', yaml.safe_dump({'config': {'providers': rows}}))
+    monkeypatch.delenv('UNSET_LEGACY_VISIBILITY', raising=False)
+    calls = []
+    async def probe(self, action, args, workspace):
+        calls.append(1)
+        # Real pre-construction materialization, even for a shadowed alias.
+        materialize_provider_config(self.probe_snapshot(action, args, workspace)['config'], {'fields': []})
+        return {'models': [{'id': 'real'}], 'modelsSupported': True}
+    monkeypatch.setattr(SetupManager, 'probe', probe)
+    manager = SetupManager(service.data_dir, catalog=service.management.provider_catalog)
+    failed = await manager.discover_catalog(service.default_workspace, instance='one', selected_only=True)
+    failed_key = failed['providers'][0]['sharedCatalogKey']
+    assert failed['catalogs'][failed_key]['phase'] == 'error'
+    monkeypatch.setenv('UNSET_LEGACY_VISIBILITY', 'true')
+    fixed = await manager.discover_catalog(service.default_workspace, instance='one', selected_only=True)
+    fixed_key = fixed['providers'][0]['sharedCatalogKey']
+    assert fixed_key != failed_key
+    assert fixed['catalogs'][fixed_key]['phase'] == 'ready'
+    monkeypatch.delenv('UNSET_LEGACY_VISIBILITY')
+    again = await manager.discover_catalog(service.default_workspace, instance='one', selected_only=True)
+    assert again['providers'][0]['sharedCatalogKey'] == failed_key
+    assert again['catalogs'][failed_key]['phase'] == 'error'
+    assert calls == [1, 1], 'Reuse only the matching error/success, never the other construction state'
+
+
+@pytest.mark.parametrize('flag', ['hide_dated_models', 'filtered'])
+@pytest.mark.parametrize('intent', ['pending', 'applied', 'initial'])
+async def test_pre_fix_persisted_choice_adopts_only_proven_current_connection(catalog_app, monkeypatch, flag, intent):
+    import json
+    from types import SimpleNamespace
+    from amplifier_web.next_message_configuration import bind, applied
+    from amplifier_web.provider_catalog import fingerprint, mounted_catalog_keys, require_mounted_binding
+    from amplifier_web.runtime import RuntimeManager, RuntimeStartupError
+    from amplifier_web.setup import PROVIDER_ENV
+
+    service, _, _, rows = catalog_app
+    chat = service._session()
+    for name in PROVIDER_ENV['provider-openai']:
+        monkeypatch.delenv(name, raising=False)
+    source = 'git+https://fixture.invalid/openai@' + 'a' * 40
+    row = {'id': 'one', 'module': 'provider-openai', 'source': source,
+           'config': {'api_key': 'synthetic-account', 'base_url': 'https://fixture.invalid', flag: False}}
+    write_private(amplifier_home() / 'settings.yaml', yaml.safe_dump({'config': {'providers': [row]}}))
+    # Persist an independently calculated PRE-FIX binding and exact choice, then
+    # read those bytes back as the startup snapshot under the candidate source.
+    previous = fingerprint(['provider-connection-v1', None, row['module'], source, row['config'],
+                            {name: None for name in PROVIDER_ENV['provider-openai']}, {}])
+    chosen = {'instance': 'one', 'model': 'hidden-exact-2026-01-01'}
+    chat.update(selection=chosen, modelConnectionKey=previous)
+    chat.pop('pendingModelSelection', None)
+    chat.pop('nextMessageRevision', None)
+    if intent != 'initial':
+        chat['nextMessageRevision'] = 1
+    if intent == 'pending':
+        chat['pendingModelSelection'] = chosen
+    saved = service.data_dir / 'sessions' / chat['id'] / 'configuration.json'
+    write_private(saved, json.dumps({'providers': [row]}))
+    saved_bytes = saved.read_bytes()
+    startup_path = service.data_dir / 'pre-fix-choice.json'
+    startup = {key: deepcopy(chat[key]) for key in (
+        'id', 'workspace', 'selection', 'modelConnectionKey', 'nextMessageRevision', 'pendingModelSelection') if key in chat}
+    write_private(startup_path, json.dumps(startup))
+    runtime = RuntimeManager()
+    service.runtime = runtime
+    bind(service, runtime)
+    starts, controls, events = [], [], []
+    sources = {'one': source}
+    mounted = {'providers': [deepcopy(row)]}
+    captured = {'home': service.data_dir, 'workspace': chat['workspace'], 'sources': sources,
+                'connectionKeys': mounted_catalog_keys(service.data_dir, chat['workspace'], mounted['providers'], sources, binding=True)}
+    coordinator = SimpleNamespace(config=mounted, get_capability=lambda _: captured)
+    async def start(snapshot, emit, **kwargs):
+        kwargs['guard']()
+        starts.append(deepcopy(snapshot))
+    async def control(sid, operation, args, **kwargs):
+        kwargs['guard']()
+        require_mounted_binding(coordinator, args['instance'], args['expectedConnectionKey'])
+        controls.append(operation)
+    async def emit(kind, payload):
+        events.append(kind)
+        if kind == 'runtime.nextMessageApplied':
+            if 'bindingTransition' in payload:
+                assert chat['modelConnectionKey'] == previous
+            applied(chat, payload)
+    monkeypatch.setattr(runtime, 'start', start)
+    monkeypatch.setattr(runtime, 'control', control)
+    await runtime._start_for_input(json.loads(startup_path.read_text()), emit)
+    current = captured['connectionKeys']['one']
+    assert current != previous and starts[0]['modelConnectionKey'] == current
+    assert starts[0]['selection'] == chosen
+    assert controls == ['provider.verifyConnection'] + (['provider.select'] if intent == 'pending' else [])
+    assert 'runtime.nextMessageApplied' in events
+    assert chat['modelConnectionKey'] == current and saved.read_bytes() == saved_bytes
+    assert startup_path.read_text() == json.dumps(startup)
+    assert chat.get('nextMessageRevision', 0) == (0 if intent == 'initial' else 1)
+    # A live old-format capture is not relabelled by the host. It must retire
+    # normally before fresh mounting; the attempted input remains unsent.
+    captured['connectionKeys']['one'] = previous
+    with pytest.raises(RuntimeStartupError, match='No input was sent'):
+        await runtime._start_for_input(json.loads(startup_path.read_text()), emit)
+    assert captured['connectionKeys']['one'] == previous
+    assert saved.read_bytes() == saved_bytes
+    # Once the verified receipt promotes the digest, a later visibility edit
+    # works without reselecting the model or inventing historical configuration.
+    captured['connectionKeys']['one'] = current
+    row['config'][flag] = True
+    write_private(amplifier_home() / 'settings.yaml', yaml.safe_dump({'config': {'providers': [row]}}))
+    events.clear()
+    await runtime._start_for_input(deepcopy(chat), emit)
+    assert chat['modelConnectionKey'] == current and saved.read_bytes() == saved_bytes
+    assert not events or events == ['runtime.nextMessageApplied']
+
+
+@pytest.mark.parametrize('change', [
+    {'config': {'api_key': 'different-account'}},
+    {'config': {'base_url': 'https://different.invalid'}},
+    {'config': {'organization': 'different-organization'}},
+    {'source': 'git+https://fixture.invalid/openai@' + 'b' * 40},
+    {'config': {'filtered': True}},  # No proof of prior scope: do not guess it.
+    {'enabled': False},
+])
+async def test_pre_fix_binding_cannot_adopt_changed_account_or_unproven_scope(catalog_app, monkeypatch, change):
+    from amplifier_web.next_message_configuration import prepare
+    from amplifier_web.provider_catalog import fingerprint
+    from amplifier_web.runtime import RuntimeStartupError
+    from amplifier_web.setup import PROVIDER_ENV
+    service, _, _, _ = catalog_app
+    chat = service._session()
+    for name in PROVIDER_ENV['provider-openai']:
+        monkeypatch.delenv(name, raising=False)
+    source = 'git+https://fixture.invalid/openai@' + 'a' * 40
+    row = {'id': 'one', 'module': 'provider-openai', 'source': source,
+           'config': {'api_key': 'synthetic-account', 'filtered': False}}
+    previous = fingerprint(['provider-connection-v1', None, row['module'], source, row['config'],
+                            {name: None for name in PROVIDER_ENV['provider-openai']}, {}])
+    chosen = {'instance': 'one', 'model': 'hidden-exact'}
+    chat.update(selection=chosen, pendingModelSelection=chosen, modelConnectionKey=previous, nextMessageRevision=1)
+    changed = {**deepcopy(row), **{key: value for key, value in change.items() if key != 'config'}}
+    changed['config'].update(change.get('config', {}))
+    write_private(amplifier_home() / 'settings.yaml', yaml.safe_dump({'config': {'providers': [changed]}}))
+    with pytest.raises(RuntimeStartupError, match='No input was sent'):
+        await prepare(service, deepcopy(chat))
+    assert chat['modelConnectionKey'] == previous
+    assert chat['selection'] == chat['pendingModelSelection'] == chosen
+
+
+@pytest.mark.parametrize('change', ['new-choice', 'new-revision'])
+def test_verified_binding_transition_never_overwrites_newer_choice(change):
+    from amplifier_web.next_message_configuration import applied
+    session = {'nextMessageRevision': 2, 'modelConnectionKey': 'previous',
+               'bundle': 'newer-bundle',
+               'selection': {'instance': 'one', 'model': 'exact'}}
+    payload = {'revision': 2, 'bindingOnly': True, 'bundle': 'older-bundle',
+               'bindingTransition': {'previous': 'previous', 'current': 'current', 'instance': 'one'}}
+    if change == 'new-choice':session['modelConnectionKey'] = 'newer-owner-key'
+    else:session['nextMessageRevision'] = 3
+    before = deepcopy(session)
+    applied(session, payload)
+    assert session == before

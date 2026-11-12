@@ -93,6 +93,22 @@ def test_openai_none_filters_and_environment_legacy_values_keep_effective_scope(
     assert configuration_key(tmp_path, 'provider-openai', indirect) not in (default, other)
 
 
+@pytest.mark.parametrize('filters', [None, {}])
+@pytest.mark.parametrize('field', ['hide_dated_models', 'filtered'])
+def test_unresolved_legacy_field_keeps_discovery_witness_even_when_shadowed(tmp_path, monkeypatch, filters, field):
+    from amplifier_web.provider_catalog import configuration_key
+    monkeypatch.delenv('UNSET_LEGACY_VISIBILITY', raising=False)
+    base = {'api_key': 'synthetic-account', 'hide_dated_models': True, 'model_filters': filters}
+    indirect = {**base, field: '${UNSET_LEGACY_VISIBILITY}'}
+    unresolved = configuration_key(tmp_path, 'provider-openai', indirect)
+    assert unresolved != configuration_key(tmp_path, 'provider-openai', base)
+    monkeypatch.setenv('UNSET_LEGACY_VISIBILITY', 'true')
+    assert configuration_key(tmp_path, 'provider-openai', indirect) == configuration_key(
+        tmp_path, 'provider-openai', base)
+    monkeypatch.delenv('UNSET_LEGACY_VISIBILITY')
+    assert configuration_key(tmp_path, 'provider-openai', indirect) == unresolved
+
+
 @pytest.mark.parametrize('invalid', ['typo', ' ', 0, 1, [], {}])
 @pytest.mark.parametrize('filters', [None, {}])
 def test_invalid_openai_legacy_value_cannot_reuse_successful_discovery(tmp_path, invalid, filters):
@@ -110,6 +126,58 @@ def test_legacy_key_exclusion_is_scoped_to_openai_provider(tmp_path, flag):
     from amplifier_web.provider_catalog import connection_key
     assert connection_key(tmp_path, 'provider-fixture', {flag: True}) != connection_key(
         tmp_path, 'provider-fixture', {flag: False})
+
+
+@pytest.mark.parametrize('legacy', [
+    {'hide_dated_models': False}, {'filtered': True}, {'filtered': 'false'},
+    {'hide_dated_models': None}, {'hide_dated_models': ''},
+    {'hide_dated_models': True, 'filtered': False}, {},
+])
+def test_previous_binding_projection_matches_pre_fix_envelope(tmp_path, monkeypatch, legacy):
+    from amplifier_web.provider_catalog import connection_key, fingerprint
+    from amplifier_web.setup import PROVIDER_ENV
+    for name in PROVIDER_ENV['provider-openai']:
+        monkeypatch.delenv(name, raising=False)
+    config = {'api_key': 'synthetic-account', **legacy}
+    source = 'git+https://fixture.invalid/openai@' + 'a' * 40
+    # The literal pre-#1620 envelope retains both raw legacy names. This is not
+    # computed using the candidate's exclusion/adoption helper.
+    previous = fingerprint(['provider-connection-v1', None, 'provider-openai', source, config,
+                            {name: None for name in PROVIDER_ENV['provider-openai']}, {}])
+    assert connection_key(tmp_path, 'provider-openai', config, source, _legacy_visibility=True) == previous
+    if legacy:
+        assert connection_key(tmp_path, 'provider-openai', config, source) != previous
+
+
+@pytest.mark.parametrize('change', ['credential-env', 'credential-file', 'missing-file', 'source', 'endpoint', 'account'])
+def test_previous_binding_proof_retains_effective_credential_and_source_fences(tmp_path, monkeypatch, change):
+    from copy import deepcopy
+    from amplifier_web.provider_catalog import configured_binding
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'shared'))
+    monkeypatch.setenv('SYNTHETIC_BINDING_KEY', 'synthetic-a')
+    path = tmp_path / 'credential.json'
+    path.write_text('synthetic-file-a')
+    row = {'id': 'one', 'module': 'provider-openai',
+           'source': 'git+https://fixture.invalid/openai@' + 'a' * 40,
+           'config': {'api_key': '${SYNTHETIC_BINDING_KEY}', 'credential_file': str(path),
+                      'base_url': 'https://fixture.invalid', 'filtered': False}}
+    store = SettingsStore(tmp_path / 'app')
+    def save(item):
+        store.update(tmp_path, 'global', lambda values: values.update(config={'providers': [item]}))
+    save(row)
+    manager = SetupManager(tmp_path / 'app')
+    previous = manager.catalog_key({'id': 'one'}, tmp_path, binding=True, _legacy_visibility=True)
+    assert configured_binding(tmp_path / 'app', tmp_path, 'one', saved=previous) != previous
+    changed = deepcopy(row)
+    if change == 'credential-env':monkeypatch.setenv('SYNTHETIC_BINDING_KEY', 'synthetic-b')
+    elif change == 'credential-file':path.write_text('synthetic-file-b')
+    elif change == 'missing-file':path.unlink()
+    elif change == 'source':changed['source'] = 'git+https://fixture.invalid/other@' + 'b' * 40
+    elif change == 'endpoint':changed['config']['base_url'] = 'https://different.invalid'
+    else:changed['config']['organization'] = 'different-account'
+    save(changed)
+    with pytest.raises(ValueError, match='configured connection changed'):
+        configured_binding(tmp_path / 'app', tmp_path, 'one', saved=previous)
 
 
 _PROCESS = r'''
