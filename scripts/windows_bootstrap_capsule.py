@@ -21,13 +21,17 @@ from urllib.parse import parse_qs, urlsplit
 import zipfile
 
 
-APP_SOURCE = "1c4ac3b4f9ed5d2d3f588f6fa6c74a119e439153"
-APP_VERSION = "0.54.5"
-APP_SHA256 = "de950fe6dcf43e9944bfae4c45b6adeedc4b2fdbee4eda565443516a3ffcc9f5"
-APP_BYTES = 10218316
-APP_METADATA_SHA256 = "f5291c87ec784e2b7ece5a77db9f4d4c543eeab7c16e16189e3232c1e974aa9f"
-LOCK_SHA256 = "02ca2a403cb6546238e1e3b1eed2b07e2b848f7f1edc301fc67f4cc956f89c45"
-PRODUCTION_REQUIREMENTS_SHA256 = "4013b4a681ce2e7729c7763069a0fc621d46b34e5bc0511c17fa074f1bafa6a0"
+# Exact reviewed prototype inputs, not a general support declaration. This app
+# wheel was built from the byte-verified d9b26 source snapshot; later bootstrap
+# edits do not manufacture a different Git origin for those immutable bytes.
+# The older 0.54.5 prototype and its receipts remain in history, not as fallback.
+APP_SOURCE = "d9b26e7bb3c5270d377520b82e498111384e931d"
+APP_VERSION = "0.65.0"
+APP_SHA256 = "2c7c7797513eaa5c85ba88937074c635d5cbc8af3a81454d9ab124f0814b977e"
+APP_BYTES = 10353517
+APP_METADATA_SHA256 = "04c86275a237665915a51af12d65ba35dc4a6e66a89a205c79adc1abeef46b85"
+LOCK_SHA256 = "a430eea8399afdb460ea3755f656b9692dfa1ee7c696171e6251b7b7b40538c6"
+PRODUCTION_REQUIREMENTS_SHA256 = "6249ca66ef434f47735286eed61756c4c37e1ead9de607c7724c3adb6b7ffeb5"
 BUILD_PACKAGES = {
     "hatchling": "1.32.4", "packaging": "26.3", "pathspec": "1.1.1",
     "pluggy": "1.6.0", "tomlkit": "0.15.2", "trove-classifiers": "2026.9.21.13",
@@ -45,7 +49,7 @@ GIT_SOURCES = {
     },
     "amplifier-foundation": {
         "url": "https://github.com/microsoft/amplifier-foundation",
-        "commit": "c716df3cea84b2539aabdfea58a69ae676a1e853", "subdirectory": "", "extra": "",
+        "commit": "a52ad1558419c828c86c0139b9b4bc351e3a618f", "subdirectory": "", "extra": "",
     },
     "amplifier-memory": {
         "url": "https://github.com/microsoft/amplifier-bundle-memory",
@@ -53,13 +57,13 @@ GIT_SOURCES = {
     },
     "amplifier-module-hooks-session-naming": {
         "url": "https://github.com/microsoft/amplifier-foundation",
-        "commit": "c716df3cea84b2539aabdfea58a69ae676a1e853",
+        "commit": "a52ad1558419c828c86c0139b9b4bc351e3a618f",
         "subdirectory": "modules/hooks-session-naming", "extra": "",
     },
 }
 SOURCE_MODE = "pinned-vcs"
 BOOTSTRAP_HELPERS = {
-    "uv": {"version": "0.12.18", "sha256": "cae6a3bc25239f83dffb467a4b180508d9da23986c04639ebfa44e43e6a84bff"},
+    "uv": {"version": "0.13.7", "sha256": "0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021"},
     "git": {"version": "2.56.0.windows.4", "sha256": "e3bf78351fe777fba47ddee5950082f8a98bb0f02604fdc7ba3ee2cb68ffa877"},
 }
 MAX_WHEEL_BYTES = 134217728

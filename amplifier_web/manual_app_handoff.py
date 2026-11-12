@@ -125,7 +125,8 @@ def _native_binding(manager):
 def _staged(manager, pending):
     from . import app_release_artifacts as artifacts, app_component_graph as components
     from .app_updates import validated_extras
-    folder = manager.directory / 'applications' / pending['revision'] / pending['generation']
+    from .application_generations import directory
+    folder = directory(manager.home, pending['revision'], pending['generation'])
     raw = _read(folder / 'validated.json')
     value = json.loads(raw)
     _require(all(value.get(key) == pending[key] for key in ('revision', 'generation', 'attemptId')))

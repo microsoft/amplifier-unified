@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import time
 import tomllib
@@ -251,8 +252,12 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False):
         from .reset import git_filesystem_environment
         env = git_filesystem_environment(env)
     started=time.monotonic()
+    # All commands here use captured pipes, never an interactive console. A
+    # pythonw consumer entry must not create a console for its CLI children.
+    native = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
     proc = await asyncio.create_subprocess_exec(*map(str,args), cwd=cwd, env=env,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=os.name != 'nt')
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        start_new_session=os.name != 'nt', **native)
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
     except BaseException as error:
@@ -1052,6 +1057,9 @@ class UpdateManager:
         if getattr(self, '_manual_handoff_commit_unknown', False):return
         if self.awaiting_restart() or self.lock.locked():return
         state = self.service.state['updates']
+        from .windows_app_recovery import automatic_retry_held
+        if automatic and automatic_retry_held(state):
+            return  # Do not loop on an exactly failed Windows app revision.
         from .manual_app_handoff import verify_continuation
         manual = await verify_continuation(self)
         if manual and automatic and state.get('sequence', {}).get('install') is not True:
@@ -1703,7 +1711,8 @@ class UpdateManager:
             # paths above still run. No component availability/install is replayed.
             if settings.get('autoCheck', True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
                 await self.check(tier='application', fresh=False, automatic=True)
-            if state.get('appAvailable') and settings.get('autoInstall', True):
+            from .windows_app_recovery import automatic_retry_held
+            if state.get('appAvailable') and settings.get('autoInstall', True) and not automatic_retry_held(state):
                 await self.app()
             return
         if sequence.get('nextStage') and state.get('phase') not in {'error','interrupted'}:

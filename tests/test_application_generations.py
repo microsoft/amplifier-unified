@@ -68,6 +68,41 @@ def test_changed_qualification_receipt_is_not_a_launch_target(qualified):
         generations.active(home)
 
 
+def test_windows_compact_directory_retains_full_receipt_identity_and_old_bytes(tmp_path, monkeypatch):
+    monkeypatch.setattr(generations, "sys", SimpleNamespace(platform="win32"))
+    home, revision, generation = tmp_path / "app", "a" * 40, "b" * 32
+    compact = generations.directory(home, revision, generation)
+    assert compact == home / "updates/a" / generation
+    legacy = home / "updates/applications" / revision / generation
+    legacy.mkdir(parents=True)
+    (legacy / "retained-evidence").write_bytes(b"unchanged")
+    assert generations.directory(home, revision, generation) == legacy
+    compact.mkdir(parents=True)
+    with pytest.raises(ValueError, match="Ambiguous"):
+        generations.directory(home, revision, generation)
+    assert (legacy / "retained-evidence").read_bytes() == b"unchanged"
+    assert compact.is_dir()  # Refusal never normalizes, moves or removes either.
+
+
+def test_windows_short_folder_does_not_relax_revision_binding(qualified, monkeypatch):
+    home, bootstrap, _, target, _ = qualified
+    monkeypatch.setattr(generations, "sys", SimpleNamespace(platform="win32"))
+    assert generations.active(home) == target  # Exact older retained receipt.
+    receipt = json.loads((target["folder"] / "validated.json").read_text())
+    receipt["generation"] = "c" * 32
+    folder = generations.directory(home, receipt["revision"], receipt["generation"])
+    folder.mkdir(parents=True)
+    (folder / "validated.json").write_text(json.dumps(receipt))
+    new = generations.promote(home, receipt, bootstrap)
+    assert new["folder"] == home / "updates/a" / receipt["generation"]
+    pointer = home / "updates/application-active.json"
+    actual = json.loads(pointer.read_text())
+    pointer.write_text(json.dumps({**actual, "revision": "f" * 40}))
+    with pytest.raises(ValueError, match="qualification"):
+        generations.active(home)
+    assert json.loads((folder / "validated.json").read_text()) == receipt
+
+
 @pytest.mark.parametrize('previous_exists', [False, True])
 def test_restore_exact_promoted_target_preserves_previous_chain(qualified, previous_exists):
     home, bootstrap, _, original, _ = qualified
