@@ -117,6 +117,7 @@ try{
  };
  if(pair){
   const checkpoints=[];
+  let initialOwnerHash;
   const unchanged=observed=>{
    const value=observed.pair;assert.ok(value);
    assert.equal(value.historicalIds.length,4);assert.equal(new Set(value.historicalIds).size,4);
@@ -126,12 +127,17 @@ try{
     assert.equal(owner.pendingConfiguration.effect,'saved_not_mounted');
    }
    assert.equal(value.historyAndConfigurationUnchanged,true);assert.equal(value.savedOwnerFilesUnchanged,true);
+   assert.equal(value.committedOwnerReadbacksUnchanged,true);assert.equal(value.committedOwnerCount,4);
+   assert.equal(Object.keys(value.savedFilesPerOwner).length,4);
+   assert.ok(Object.values(value.savedFilesPerOwner).every(count=>count>0));
+   assert.match(value.committedOwnerSha256,/^[a-f0-9]{64}$/);
+   assert.equal(value.committedOwnerSha256,initialOwnerHash);
    assert.deepEqual(value.runtimeCalls,[]);assert.equal(value.componentBusy,true);
    assert.equal(observed.calls.length,0);assert.equal(value.provenance.wheelIdentitySha256,boot.pair.wheelIdentitySha256);
    assert.equal(value.provenance.sourceStamp.revision,assembly.server.revision);
    checkpoints.push(value);
   };
-  const initial=await evidence();unchanged(initial);
+  const initial=await evidence();initialOwnerHash=initial.pair.committedOwnerSha256;unchanged(initial);
   assert.equal(initial.pair.mode,'historical');assert.equal(initial.pair.appBusy,false);
   assert.equal(initial.pair.activationGate.blocked,false);assert.deepEqual(initial.pair.blockers,[]);
   assert.deepEqual(initial.pair.activationGate.configurationReasonCounts,{'idle-configuration-hold':4});

@@ -94,6 +94,7 @@ def installed_identity():
         raise ValueError('Source selection does not bind this accepted client and digest')
     verify_imports(package)
     # Origin-check every loaded application package, not only amplifier_web.
+    loaded = {}
     for name, module in tuple(sys.modules.items()):
         if name.split('.')[0] in app_roots:
             for directory in getattr(module, '__path__', ()):
@@ -107,10 +108,16 @@ def installed_identity():
             relative = path.relative_to(install_root).as_posix()
             if relative not in files or hashlib.sha256(path.read_bytes()).hexdigest() != files[relative]:
                 raise ValueError('Unmanifested installed module: ' + name)
+            loaded[name] = {'path': str(path), 'sha256': files[relative]}
     return {'installedPackage': str(package), 'sourceStamp': stamp, 'clientSource': source,
             'fixtureSha256': fixture_digest,
             'clientInputsSha256': CLIENT_DIGEST, 'wheelPayloadFiles': len(payload),
             'wheelIdentitySha256': hashlib.sha256(identity_path.read_bytes()).hexdigest(),
+            'loadedApplicationModules': len(loaded), 'applicationPackageRoots': sorted(app_roots),
+            'changedBoundaryOrigins': {name: loaded[name] for name in (
+                'amplifier_web.service', 'amplifier_web.management', 'amplifier_web.configuration_recovery',
+                'amplifier_web.updates', 'amplifier_web.update_blockers', 'amplifier_web.update_health',
+                'amplifier_web.app_updates') if name in loaded},
             'serverFiles': len(record['server']['files']), 'outsideCheckout': True,
             'isolated': True, 'bytecodeDisabled': True, 'nodeUnavailable': True}
 
@@ -162,6 +169,9 @@ async def serve():
         historical = []
         if pair:
             from amplifier_web.update_blockers import assess
+            from amplifier_web.host.storage import SessionStore
+            from amplifier_web.session_projection import hydrate, view_path
+            from amplifier_web.state_records import load_owner
             historical.append(session)
             for index in range(1, 4):
                 owner = service._new_session({'title': f'Stopped saved owner {index + 1}'})
@@ -176,13 +186,51 @@ async def serve():
                         'phase': 'error', 'stage': 'reading', 'effect': 'saved_not_mounted',
                         'recoveryRequired': True,
                         'error': 'Saved configuration does not match loaded-plan readback. Its operation remains unresolved.'})
+                service._message(owner, 'user', f'Retained fixture request {index + 1}')
+                service._message(owner, 'assistant', f'Retained fixture answer {index + 1}; never replay')
             service._save_changes(sessions={row['id'] for row in historical})
             originals = copy.deepcopy(historical)
+
+            def committed_owners():
+                values = {}
+                for owner in historical:
+                    sid = owner['id']
+                    saved, control = load_owner(service.db, sid)
+                    assert saved and saved['id'] == sid and saved.get('$viewPayload')
+                    stored = {'sessions': [copy.deepcopy(saved)], 'runtimeControl': (
+                        {sid: copy.deepcopy(control)} if control is not None else {})}
+                    hydrate(service.data_dir, stored, service.db)
+                    row = stored['sessions'][0]
+                    assert row['id'] == sid and len(row['messages']) == 2
+                    assert row['configurationPendingRevision'] == 23
+                    assert row['pendingConfiguration'] == owner['pendingConfiguration']
+                    values[sid] = {'reference': saved, 'runtime': control,
+                                   'hydrated': json.loads(json.dumps(row))}
+                assert len(values) == 4
+                return values
+
             def saved_files():
-                return {str(path.relative_to(service.data_dir)): hashlib.sha256(path.read_bytes()).hexdigest()
-                        for owner in historical
-                        for path in (service.data_dir / 'sessions' / owner['id']).rglob('*') if path.is_file()}
+                values = {}
+                for owner in historical:
+                    directory = SessionStore.for_app(service.data_dir, owner['workspace']).directory(
+                        owner.get('runtimeSessionId') or owner['id'])
+                    view = view_path(service.data_dir, owner)
+                    assert view.is_file() and view.is_relative_to(directory)
+                    files = {path.relative_to(directory).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                             for path in directory.rglob('*') if path.is_file()}
+                    assert files and 'unified/view.json' in files
+                    # Recovery files still use their owning management path; retain
+                    # those too when present, not just the compatible view.
+                    recovery = service.management.queued_path(owner['id']).parent
+                    files.update({'configuration/' + path.relative_to(recovery).as_posix():
+                                  hashlib.sha256(path.read_bytes()).hexdigest()
+                                  for path in recovery.rglob('*') if path.is_file()})
+                    values[owner['id']] = files
+                assert len(values) == 4
+                return values
+
             original_files = saved_files()
+            original_committed = committed_owners()
             active = service._new_session({'title': 'Genuine active work'})
             service.state['sessions'].append(active)
             active.update(status='idle', configurationBusy=False)
@@ -211,7 +259,10 @@ async def serve():
                      'blockers': service.state['updates']['blockers'],
                      'currentStatus': service.state['updates']['currentStatus']}
             if pair:
+                current = {row['id']: row for row in service.state['sessions']}
+                assert [current[row['id']] for row in historical] == originals
                 assert historical == originals and saved_files() == original_files
+                assert committed_owners() == original_committed
                 assert service.runtime.calls == [] and not service.runtime.workers and not service.runtime._preparations
                 gate = assess(service, application=True)
                 value['pair'] = {'mode': mode, 'historicalIds': [row['id'] for row in historical],
@@ -219,6 +270,12 @@ async def serve():
                         'configurationPending', 'configurationPendingRevision', 'pendingConfiguration')}
                         for row in historical],
                     'historyAndConfigurationUnchanged': True, 'savedOwnerFilesUnchanged': True,
+                    'committedOwnerReadbacksUnchanged': True,
+                    'committedOwnerCount': len(original_committed),
+                    'savedFilesPerOwner': {sid: len(files) for sid, files in original_files.items()},
+                    'committedOwnerSha256': hashlib.sha256(json.dumps(
+                        original_committed, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
+                    'committedOwnerReadbacks': original_committed,
                     'appBusy': manager.app_busy(), 'componentBusy': manager.busy(),
                     'activationGate': gate['observation'], 'blockers': gate['blockers'],
                     'runtimeCalls': service.runtime.calls, 'activeId': active['id'],
