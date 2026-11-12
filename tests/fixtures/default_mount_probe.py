@@ -500,10 +500,11 @@ async def mounted(inputs, monkeypatch, request):
     from amplifier_core import HookResult
     from amplifier_core.events import MODULE_LOAD_FAILED, MODULE_ON_SESSION_READY_FAILED
     from amplifier_web.host.model_selection import prepare_default_routing
+    from amplifier_web.host.components import prepare_bundle
     from amplifier_web.runtime_controls import RuntimeControls
 
     data.state.phase("real preparation; installs disabled")
-    prepared = await asyncio.wait_for(data.loaded.prepare(
+    prepared = await asyncio.wait_for(prepare_bundle(data.loaded, source_home=data.config.home,
         strict=True, install_deps=False, cache_dir=data.config.registry_home / "cache",
         source_resolver=lambda module, source: data.module_source(
             data.config, False, module, source, data.components),
@@ -739,7 +740,21 @@ async def test_export(mounted):
     from amplifier_web.bundles import BundleManager
 
     expected = check_routing(mounted)
+    bundle = mounted.prepared.bundle
+    registry = mounted.session.coordinator.get_capability("web.registry")
+
+    def namespace_state():
+        return {
+            "source_base_paths": {key: str(value) for key, value in
+                                  (getattr(bundle, "source_base_paths", {}) or {}).items()},
+            "registry": {name: {key: getattr(state, key, None) for key in
+                         ("uri", "local_path", "is_root", "root_name", "loaded_at")}
+                         for name, state in (registry.get_state() if registry else {}).items()},
+        }
+
+    before_collector = copy.deepcopy(namespace_state())
     resources = mounted.controls.export_resources()
+    assert namespace_state() == before_collector, "Collection must not resolve or repair namespaces"
     before = copy.deepcopy(resources)
     if capture := os.environ.get("UNIFIED_EXPORT_CAPTURE"):
         # Opt-in causal snapshot immediately before the unchanged serializer.
@@ -764,6 +779,7 @@ async def test_export(mounted):
         snapshot = {
             "bundle": {"name": bundle.name, "base_path": str(getattr(bundle, "base_path", None)),
                        "source_base_paths": {key: str(value) for key, value in roots.items()}},
+            "before_collector": before_collector,
             "registry": {name: {key: getattr(state, key, None) for key in
                          ("uri", "local_path", "is_root", "root_name", "loaded_at")}
                          for name, state in states.items()},
@@ -805,7 +821,12 @@ async def test_export(mounted):
     matrix = resources["routingMatrix"]
     assert matrix["roles"] and set(matrix["baseRoles"]) == set(expected)
     namespaces = {row["namespace"] for row in resources["namespaces"]}
-    assert {"unified", "imagegen", "computer-use", "context-intelligence", "routing-matrix"} <= namespaces
+    assert {"unified", "imagegen", "computer-use", "context-intelligence", "routing-matrix", "foundation"} <= namespaces
+    common_path = mounted.inputs.env.roots["foundation"] / "context/shared/common-agent-base.md"
+    common_text = common_path.read_text()
+    common_rows = [row for row in resources["context"]
+                   if row["name"] == "foundation:context/shared/common-agent-base.md"]
+    assert len(common_rows) == 1 and common_rows[0]["text"] == common_text
     assert set(mounted.prepared.bundle.context) <= {row["name"] for row in resources["context"]}, resources["warnings"]
     document = yaml.safe_load(exported["content"].split("---", 2)[1])
     assert exported["includes"] == [] and "includes" not in document
@@ -819,6 +840,20 @@ async def test_export(mounted):
         row["module"] for row in mounted.prepared.mount_plan["tools"]
     }
     assert set(document.get("agents", {})) == set(mounted.prepared.mount_plan.get("agents", {}))
+
+    def string_values(value):
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for child in value.values():
+                yield from string_values(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from string_values(child)
+
+    for name, row in mounted.prepared.mount_plan.get("agents", {}).items():
+        if "@foundation:context/shared/common-agent-base.md" in json.dumps(row):
+            assert any(common_text.strip() in text for text in string_values(document["agents"][name]))
     incomplete = copy.deepcopy(resources)
     del incomplete["routingMatrix"]["baseRoles"]
     with pytest.raises(ValueError, match="shipped matrix"):
