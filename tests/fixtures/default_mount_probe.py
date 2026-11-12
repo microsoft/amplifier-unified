@@ -147,7 +147,12 @@ def guarded_environment(request, monkeypatch, tmp_path):
             absent.append("installed distribution " + distribution)
     if absent:
         missing(absent)
-    attempts, git_reads, blocked_platform_probes = [], [], []
+    attempts, git_reads, metadata_reads, blocked_platform_probes = [], [], [], []
+    # The host discovers local decision declarations in a credential-free,
+    # isolated child which installs its own network audit before entry loading.
+    # Admit only that exact installed script, not arbitrary Python/CLI helpers.
+    catalog = Path(importlib.metadata.distribution("amplifier-unified").locate_file(
+        "amplifier_web/decision_account_catalog.py")).resolve(strict=True)
     active = True
     phase = "fixture/imports"
 
@@ -164,8 +169,18 @@ def guarded_environment(request, monkeypatch, tmp_path):
                 # no socket is bound and no application request is permitted.
                 blocked_platform_probes.append("urllib3 IPv6 availability bind")
                 raise OSError("IPv6 probe disabled in offline qualification")
-        if event == "subprocess.Popen":
+        if event in {"subprocess.Popen", "os.posix_spawn"}:
             argv = args[1]
+            child_env = args[3] if event == "subprocess.Popen" else args[2]
+            if (isinstance(argv, (list, tuple))
+                    and list(argv) == [sys.executable, "-I", str(catalog)]
+                    and str(args[0]) == sys.executable
+                    and isinstance(child_env, dict)
+                    and set(child_env) <= {"PATH", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL", "TZ",
+                                          "TMPDIR", "TEMP", "TMP"}):
+                metadata_reads.append({"event": event, "argv": list(argv), "sha256": hashlib.sha256(
+                    catalog.read_bytes()).hexdigest()})
+                return
             if (isinstance(argv, (list, tuple)) and len(argv) == 5
                     and str(args[0]) == argv[0] == "git" and argv[1] == "-C"
                     and argv[3] == "rev-parse" and argv[4] in {"HEAD", "--show-toplevel"}
@@ -216,7 +231,8 @@ def guarded_environment(request, monkeypatch, tmp_path):
         monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
         monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
         yield SimpleNamespace(env=env, repositories=repositories, attempts=attempts,
-                              git_reads=git_reads, blocked_platform_probes=blocked_platform_probes,
+                              git_reads=git_reads, metadata_reads=metadata_reads,
+                              blocked_platform_probes=blocked_platform_probes,
                               phase=set_phase)
     finally:
         active = False
@@ -621,6 +637,7 @@ async def mounted(inputs, monkeypatch, request):
                   "skill_substitutions": data.substitutions,
                   "agents_retained": sorted(prepared.mount_plan.get("agents", {})),
                   "blocked_platform_probes": data.state.blocked_platform_probes,
+                  "metadata_reads": data.state.metadata_reads,
                   "git_reads": data.state.git_reads})
 
 

@@ -136,7 +136,10 @@ async def _read_exact(coordinator, path):
     expected = path.read_text(encoding="utf-8").splitlines()
     assert result["lines_read"] == result["total_lines"] == len(expected)
     assert result["offset"] == 1 and Path(result["file_path"]).resolve() == path.resolve()
-    assert result["content"] == "\n".join(f"{n:6d}\t{line}" for n, line in enumerate(expected, 1))
+    # The real filesystem tool bounds each rendered line, independently of the
+    # wheel/resource byte verification above. Long host guidance is not corruption.
+    rendered = [line[:2000] + "... [truncated]" if len(line) > 2000 else line for line in expected]
+    assert result["content"] == "\n".join(f"{n:6d}\t{line}" for n, line in enumerate(rendered, 1))
     return result
 
 
