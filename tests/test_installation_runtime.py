@@ -130,7 +130,8 @@ def test_no_account_installs_only_declared_dependencies_without_claiming_worker_
     monkeypatch.setattr(setup.shutil, "which", lambda name: "/usr/bin/uv")
     monkeypatch.setattr(runtime_qualification, "installed_graph",
                         lambda path: [{"name": "amplifier-core", "version": "2.0.2"}])
-    async def overrides(project, target):
+    async def overrides(project, target, *, owned_root=None):
+        assert owned_root == tmp_path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("amplifier-core==2.0.2\n")
     monkeypatch.setattr(runtime_qualification, "prepare_overrides", overrides)
@@ -181,3 +182,45 @@ def test_runtime_preparation_failure_keeps_closed_command_facts(tmp_path):
     saved = json.loads((owner.stage / "install-failure.json").read_text())
     assert saved["exitCode"] == 1 and saved["stderrBytes"] == 42
     assert "SECRET" not in json.dumps(saved)
+
+
+def test_baseline_composes_real_override_writer_with_explicit_private_owner(tmp_path, monkeypatch):
+    """Do not stub prepare_overrides: the missing root was hidden by that seam."""
+    from pathlib import Path
+    from amplifier_web import deployment
+    original_write = deployment.write_private
+    writes, commands = [], []
+
+    def require_owner(path, text, *, owned_root=None):
+        # Same precondition as the native writer, without changing host os.name.
+        assert owned_root == tmp_path, "Windows private writes require an explicit owned_root"
+        assert Path(path).is_relative_to(owned_root)
+        writes.append(Path(path).name)
+        return original_write(path, text, owned_root=owned_root)
+
+    async def command(*argv, **kwargs):
+        commands.append(argv[1])
+        if argv[1] == "lock":
+            project = Path(argv[argv.index("--project") + 1])
+            (project / "uv.lock").write_text("version = 1\n")
+        if argv[1] == "export":
+            assert "--frozen" in argv and "--offline" in argv
+            return "amplifier-core==2.0.2\n"
+        return ""
+
+    monkeypatch.setattr(deployment, "write_private", require_owner)
+    monkeypatch.setattr(updates, "process", command)
+    monkeypatch.setattr(setup.shutil, "which", lambda name: "/usr/bin/uv")
+    monkeypatch.setattr(runtime_qualification, "installed_graph",
+                        lambda path: [{"name": "amplifier-core", "version": "2.0.2"}])
+    # Only the later inventory recheck is outside this writer-composition control.
+    monkeypatch.setattr(setup, "_baseline_status", lambda home: {"prepared": True})
+    assert asyncio.run(setup._prepare_baseline(tmp_path)) == {"prepared": True}
+    receipt = runtime_environment.receipt_directory(tmp_path)
+    assert (receipt / "runtime-install-overrides.txt").read_text() == "amplifier-core==2.0.2\n"
+    policy = json.loads((receipt / "runtime-install-policy.json").read_text())
+    assert policy["version"] == 2
+    assert writes.index("runtime-install-overrides.txt") < writes.index("runtime-install-policy.json")
+    assert writes.index("runtime-install-policy.json") < writes.index("installation-prepared.json")
+    assert commands == ["lock", "sync", "pip", "export"]
+    assert not (tmp_path / "updates/active.json").exists()

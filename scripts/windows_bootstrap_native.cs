@@ -21,6 +21,12 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using System.Drawing;
 
+// The in-box compiler otherwise emits an un-targeted entry that opts into
+// legacy .NET networking compatibility (SSL3/TLS1.0), even on .NET 4.8 hosts.
+// Retarget this process, not machine policy; OS TLS and certificate checks own
+// the actual connection. Do not pin older protocols or bypass validation.
+[assembly:System.Runtime.Versioning.TargetFramework(".NETFramework,Version=v4.8")]
+
 namespace UnifiedBootstrap {
     internal static class NativeInstaller {
         static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength=1048576, RecursionLimit=16 };
