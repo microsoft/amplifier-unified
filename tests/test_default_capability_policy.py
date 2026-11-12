@@ -144,6 +144,25 @@ async def test_curated_default_preserves_selected_loader_and_scoped_source_opt_o
     assert tool['config'] == {**selected['config'], 'skills': ['only-chosen']}
 
 
+@pytest.mark.parametrize('sources', [
+    {'skills': 'chosen-path'}, {'skills_dirs': ['chosen-path']},
+    {'skills_dirs': 'chosen-path'}, {'skills_dir': 'chosen-path'},
+    {'skills': ['chosen-path'], 'skills_dirs': ['inactive-legacy']},
+])
+@pytest.mark.parametrize('policy', ['capability', 'imagegen'])
+def test_additive_skill_defaults_preserve_effective_source_aliases(sources, policy):
+    from amplifier_web.host.components import imagegen_defaults
+
+    config = {**sources, 'visibility': {'enabled': False, 'visibility_token_budget': 700}}
+    base = Bundle(name='chosen', tools=[{'module': 'tool-skills', 'config': config}])
+    extra = Bundle(name='extra', tools=[{'module': 'tool-skills', 'config': {'skills': ['curated']}}])
+    original = copy.deepcopy(base.to_mount_plan())
+    parts = capability_defaults(base, extra, {}) if policy == 'capability' else imagegen_defaults(base, extra)
+    result = compose_bundles(*parts)
+    assert result.tools[0]['config'] == {**config, 'skills': ['chosen-path', 'curated']}
+    assert base.to_mount_plan() == original
+
+
 async def test_role_resolution_only_fills_unspecified_preferences():
     from amplifier_web.host.model_selection import child_preferences, pinned_delegate_input, ProviderSelectionError
     calls = []

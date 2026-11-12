@@ -404,6 +404,15 @@ def compose_bundles(base, overlay):
     return result
 
 
+def _skill_sources(config):
+    """Seed additive discovery from the loader's effective source spelling."""
+    for key in ('skills', 'skills_dirs', 'skills_dir'):
+        if key in config:
+            value = config[key]
+            return [value] if isinstance(value, str) else value
+    return []
+
+
 def imagegen_defaults(base, behavior):
     """Add image discovery without replacing an explicit root tool's policy.
 
@@ -422,7 +431,7 @@ def imagegen_defaults(base, behavior):
         for row in base.tools:
             if row['module'] == 'tool-skills':
                 config = row.setdefault('config', {})
-                config['skills'] = list(dict.fromkeys([*config.get('skills', []), *skill_paths]))
+                config['skills'] = list(dict.fromkeys([*_skill_sources(config), *skill_paths]))
     behavior.tools = [row for row in behavior.tools
                       if row['module'] not in {'tool-image', 'tool-skills'} or row['module'] not in existing]
     return base, behavior
@@ -466,8 +475,9 @@ def capability_defaults(base, behavior, defaults):
             if path_key:
                 for item in previous:
                     config = item.setdefault('config', {})
+                    paths = _skill_sources(config) if path_key == 'skills' else config.get(path_key, [])
                     config[path_key] = list(dict.fromkeys([
-                        *config.get(path_key, []), *row.get('config', {}).get(path_key, [])]))
+                        *paths, *row.get('config', {}).get(path_key, [])]))
         setattr(behavior, section, additions)
     # A default can introduce a specialist, not reconfigure a same-named one.
     behavior.agents = {name: agent for name, agent in behavior.agents.items()

@@ -328,6 +328,19 @@ async def test_real_curated_default_preserves_chosen_loader_and_exclusions(offli
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("key,value", [
+    ("skills", "chosen-path"), ("skills_dirs", ["chosen-path"]), ("skills_dir", "chosen-path"),
+])
+async def test_real_defaults_retain_effective_legacy_source_and_budget(offline_defaults, key, value):
+    selected = {"module": "tool-skills", "config": {
+        key: value, "visibility": {"enabled": False, "visibility_token_budget": 700}}}
+    _, bundle, _ = await offline_defaults.compose(root_patch={"tools": [selected]})
+    config = _row(bundle.tools, "tool-skills")["config"]
+    assert config["skills"][0] == "chosen-path"
+    assert config["visibility"] == selected["config"]["visibility"]
+
+
+@pytest.mark.asyncio
 async def test_real_defaults_preserve_explicit_ci_desktop_and_routing_policy(
     offline_defaults,
 ):
