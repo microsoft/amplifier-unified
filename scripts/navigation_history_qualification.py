@@ -143,7 +143,7 @@ def main():
             harness = Path(temporary)
             helpers = stage_web_test_harness(ROOT, harness, python_tests=True,
                 source_helpers=('destination-history.js', 'settings-navigation.js'))
-            schedule_test = ROOT / 'amplifier_scheduling/tests/test_policy_store.py'
+            schedule_test = ROOT / 'components/scheduling/tests/test_policy_store.py'
             installed_schedule_test = harness / 'tests/scheduling/test_policy_store.py'
             installed_schedule_test.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(schedule_test, installed_schedule_test)

@@ -41,7 +41,7 @@ permits exact future repair through `schedule.repairPreview/repairResume`; only 
 fresh explicitly identified trusted system request may cross owner Stop without
 a human, never an old stopped native chain. See [automation recovery](contracts/automation-overview.md).
 
-The reusable [policy/store](../amplifier_scheduling/README.md) is authoritative for
+The reusable [policy/store](../components/scheduling/README.md) is authoritative for
 due identity and leases. The app runs one lightweight owner loop, checks existing
 task state, global update/stop state and questions, writes a durable submitting
 receipt, then uses internal schedule.submit. That worker control checks the

@@ -41,9 +41,10 @@ def coverage_plan():
     # Validate the new independent client mode before comparing the unchanged
     # historical inventory. Its exact owner is checked separately below.
     retained_ids = retained_update_recovery_browser_addition(plan['scenarios'])
+    appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
     rows = []
     for row in plan['scenarios']:
-        if row['id'] in retained_ids:
+        if row['id'] in retained_ids | appearance_ids:
             continue
         row = {**row, 'command': [coverage_paths(part) for part in row['command']]}
         row.pop('cwd', None)
@@ -611,6 +612,50 @@ def breadbin_browser_addition(rows, readiness_scripts):
     return {script}
 
 
+def appearance_lifecycle_browser_addition(rows, readiness_scripts=()):
+    """Validate the exact new client owner before frozen-baseline subtraction."""
+    script = 'tests/appearance-lifecycle-browser.mjs'
+    expected = {
+        'id': 'appearance-lifecycle', 'command': ['node', script],
+        'env': {'AMPLIFIER_UNIFIED_ROOT': '{root}',
+                'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/appearance-lifecycle'},
+        'cwd': '.build/web-client',
+    }
+    owners = [row for row in rows if row['id'] == expected['id'] or script in row['command']]
+    assert owners == [expected], f'{script}: expected one exact selected-client owner'
+    assert script not in readiness_scripts, f'{script}: duplicate readiness owner'
+    return {expected['id']}
+
+
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'command', 'artifacts', 'root', 'cwd', 'readiness'])
+def test_appearance_lifecycle_addition_rejects_missing_duplicate_or_changed_owner(fault):
+    rows = [{
+        'id': 'appearance-lifecycle', 'command': ['node', 'tests/appearance-lifecycle-browser.mjs'],
+        'env': {'AMPLIFIER_UNIFIED_ROOT': '{root}',
+                'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/appearance-lifecycle'},
+        'cwd': '.build/web-client',
+    }]
+    assert appearance_lifecycle_browser_addition(rows) == {'appearance-lifecycle'}
+    owner = rows[0]
+    readiness = set()
+    if fault == 'missing':
+        rows.clear()
+    elif fault == 'duplicate':
+        rows.append({**owner, 'id': 'duplicate'})
+    elif fault == 'command':
+        owner['command'].append('--different-mode')
+    elif fault == 'artifacts':
+        owner['env']['AMPLIFIER_TEST_ARTIFACTS'] += '-wrong'
+    elif fault == 'root':
+        del owner['env']['AMPLIFIER_UNIFIED_ROOT']
+    elif fault == 'cwd':
+        owner.pop('cwd')
+    elif fault == 'readiness':
+        readiness.add('tests/appearance-lifecycle-browser.mjs')
+    with pytest.raises(AssertionError):
+        appearance_lifecycle_browser_addition(rows, readiness)
+
+
 @pytest.mark.parametrize('fault', ['missing', 'duplicate', 'different-command',
                                   'missing-python', 'wrong-artifacts', 'managed-contract',
                                   'readiness-owner'])
@@ -1091,6 +1136,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
                 for line in current_layout_commands(step.get('run', '')).splitlines()]
     readiness_scripts = {match.group(1) for _, line in commands
                          if (match := re.search(r'node (tests/[^ ]+-browser\.mjs)', line))}
+    appearance_lifecycle_browser_addition(current_plan()['scenarios'], readiness_scripts)
     plan = coverage_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], readiness_scripts)
     sidebar_ids = sidebar_controls_browser_addition(plan['scenarios'], readiness_scripts)
@@ -1354,7 +1400,7 @@ def test_destination_history_manual_route_is_fixed_and_preserves_default_coverag
                    'test_approachable_shell.py', 'test_automation_overview.py', 'test_schedules.py',
                    'test_schedule_new_tasks.py'):
         assert f'tests/{target}' in run
-    assert 'amplifier_scheduling/tests/test_policy_store.py' in run
+    assert 'components/scheduling/tests/test_policy_store.py' in run
     assert 'tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage' in run
     assert 'tests/test_release_qualification.py' not in run
     for target in ('destination-history', 'destination-history-ui', 'api',
@@ -3484,12 +3530,13 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], set(), current=True)
     client_addition_ids = input_status_and_action_spacing_browser_additions(plan['scenarios'], set(), current=True)
     retained_ids = retained_update_recovery_browser_addition(plan['scenarios'])
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids]
+    appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152
-    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids)
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids)
+    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
-    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17
+    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids)
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')

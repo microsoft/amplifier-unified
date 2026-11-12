@@ -51,10 +51,10 @@ export function LandingToolbar({mode,onMode,presentation={},actions,onReset,home
  </>;
 }
 
-export function WorkLandingFrame({paneRef,mode,presentation={},title,description,toolbar,children,identity='home',readingKey,ready=true}){
+export function WorkLandingFrame({paneRef,mode,presentation={},title,description,toolbar,children,identity='home',readingKey,ready=true,contentKind='landing'}){
  const own=useRef(null),pane=paneRef||own;
  useLayoutEffect(()=>{if(identity!=='home'&&ready&&pane.current)return rememberHomeScroll(pane.current,readingKey||mode,'amplifier.work-reading.v1:'+identity)},[identity,ready,readingKey,mode]);
- return <div ref={pane} className={'a-adaptive-home'+(identity!=='home'?' a-work-browser':'')} data-view={mode} data-level={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-landing={identity.split(':')[0]} data-part="work-browser"><div className="a-home-content">{toolbar}<div className="a-home-intro"><h1>{title}</h1>{description&&<p>{description}</p>}</div>{children}</div></div>;
+ return <div ref={pane} className={'a-adaptive-home'+(identity!=='home'?' a-work-browser':'')} data-view={mode} data-level={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-landing={identity.split(':')[0]} data-content-kind={contentKind} data-part="work-browser"><div className="a-home-content">{toolbar}<div className="a-home-intro"><h1>{title}</h1>{description&&<p>{description}</p>}</div>{children}</div></div>;
 }
 
 export function WorkStatusFilters({value='all',counts={},onChange,overview='Overview'}){

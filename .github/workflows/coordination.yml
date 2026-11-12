@@ -6,6 +6,7 @@ on:
       - 'scripts/web_client_*.py'
       - 'components/web-client/commands.json'
       - 'amplifier_operations/coordination.py'
+      - 'amplifier_operations/tests/test_operations_coordination.py'
       - 'amplifier_web/coordination.py'
       - 'amplifier_web/peer_scope.py'
       - 'tests/test_cross_workspace_coordination.py'
@@ -188,6 +189,7 @@ jobs:
       - run: >-
           uv run --no-sync pytest
           tests/test_coordination.py tests/test_coordination_generation.py
+          amplifier_operations/tests/test_operations_coordination.py
           tests/test_cross_workspace_coordination.py tests/test_peer_scope.py
           tests/test_coordination_revisions.py tests/test_request_cancellation.py tests/test_outcome_acknowledgement.py
           tests/test_coordination_return_policy.py

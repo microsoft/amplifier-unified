@@ -1,32 +1,4 @@
 {
   "name": "Quiet study",
-  "definition": {
-    "version": 1,
-    "palette": {
-      "light": {
-        "bg": "#F7F5F0",
-        "surface": "#FFFFFF",
-        "soft": "#EDEAE3",
-        "ink": "#242D32",
-        "muted": "#58636B",
-        "line": "#C9CCC8",
-        "accent": "#285E70",
-        "tint": "#E1EFF2",
-        "green": "#256440",
-        "danger": "#AC2938"
-      },
-      "dark": {
-        "bg": "#171E24",
-        "surface": "#202A32",
-        "soft": "#29353E",
-        "ink": "#EFF2F3",
-        "muted": "#B4C0C8",
-        "line": "#51616C",
-        "accent": "#9DD7E5",
-        "tint": "#29444E",
-        "green": "#9AD5AC",
-        "danger": "#FFAFB7"
-      }
-    }
-  }
+  "css": "#amp-one{--a-bg:light-dark(#f7f5f0,#171e24);--a-surface:light-dark(#ffffff,#202a32);--a-soft:light-dark(#edeae3,#29353e);--a-ink:light-dark(#242d32,#eff2f3);--a-muted:light-dark(#58636b,#b4c0c8);--a-line:light-dark(#c9ccc8,#51616c);--a-accent:light-dark(#285e70,#9dd7e5);--a-on-accent:light-dark(#ffffff,#142d38);--a-tint:light-dark(#e1eff2,#29444e);--a-green:light-dark(#256440,#9ad5ac);--a-danger:light-dark(#ac2938,#ffafb7);--a-font-ui:ui-sans-serif,system-ui,sans-serif;--a-font-heading:Georgia,serif;--a-font-chat:var(--a-font-ui);--a-font-code:ui-monospace,monospace;--a-panel-radius:10px;--a-control-radius:6px}"
 }

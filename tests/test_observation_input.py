@@ -101,7 +101,7 @@ async def test_actual_worker_overwrites_claimed_input_provenance_and_freezes_chi
     from amplifier_web.runtime_worker import Worker
     def coordinator(session_id):
         capabilities = {}
-        return SimpleNamespace(session_id=session_id, get_capability=capabilities.get,
+        return SimpleNamespace(session_id=session_id, session_state={}, get_capability=capabilities.get,
                                register_capability=capabilities.__setitem__)
     worker=Worker()
     worker.session=SimpleNamespace(coordinator=coordinator('actual-root'))

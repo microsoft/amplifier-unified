@@ -358,13 +358,22 @@ async def test_busy_admission_preserves_browser_draft_attachments_and_history(tm
 
 async def test_shared_agent_control_state_and_stale_revisions(service):
     before = service.get_state()
-    await service.app_bridge("dispatch", {"action": "view.update", "args": {"patch": {"scheme": "dark", "panel": "appearance"}}, "expectedRevision": before["revision"]}, before["selectedSessionId"])
-    assert service.get_state()["view"]["scheme"] == "dark"
+    await service.app_bridge("dispatch", {"action": "view.update", "args": {"patch": {"panel": "appearance"}}, "expectedRevision": before["revision"]}, before["selectedSessionId"])
+    assert service.get_state()["view"]["panel"] == "appearance"
     with pytest.raises(AppError, match="app changed"):
-        await service.dispatch("view.update", {"patch": {"scheme": "light"}}, expected_revision=before["revision"])
+        await service.dispatch("view.update", {"patch": {"panel": None}}, expected_revision=before["revision"])
+    current = service.appearance.shared()
+    await service.app_bridge("dispatch", {"action": "appearance.preferences.update", "args": {
+        "scope": "shared", "expectedRevision": current["revision"], "patch": {"scheme": "dark"}}}, before["selectedSessionId"])
+    with pytest.raises(AppError, match="changed"):
+        await service.app_bridge("dispatch", {"action": "appearance.preferences.update", "args": {
+            "scope": "shared", "expectedRevision": current["revision"], "patch": {"scheme": "light"}}}, before["selectedSessionId"])
     snapshot = service.get_state()
-    snapshot["view"]["scheme"] = "corrupted"
-    assert service.get_state()["view"]["scheme"] == "dark"
+    snapshot["view"]["panel"] = "corrupted"
+    assert service.get_state()["view"]["panel"] == "appearance"
+    preferences = service.appearance.read()
+    preferences["effective"]["scheme"] = "corrupted"
+    assert service.appearance.read()["effective"]["scheme"] == "dark"
 
 
 async def test_voice_pins_session_and_end_does_not_stop_work(service):
@@ -381,31 +390,62 @@ async def test_voice_pins_session_and_end_does_not_stop_work(service):
 
 
 async def test_skin_roundtrip_and_external_assets_rejected(service):
+    from copy import deepcopy
+    import base64
+    from amplifier_web import appearance_packages
     css = '#amp-one {color: #4338f4; background: #e8eeff;}'
-    await service.dispatch("theme.apply", {"name": "Custom violet", "css": css}, origin="agent")
-    exported = await service.dispatch("theme.export", {})
-    assert exported["effects"][0]["content"] == css
+    before = deepcopy(service.appearance.shared())
+    saved = (await service.dispatch("theme.save", {"name": "Custom violet", "css": css}, origin="agent"))["result"]
+    exported = await service.dispatch("theme.export", {"id": saved["id"]})
+    raw = base64.b64decode(exported["result"]["base64"])
+    package = appearance_packages.load(raw)
+    assert package.css == css and package.manifest["formatVersion"] == 2
+    assert package.manifest["base"] == "reference-v1"
+    assert exported["effects"][0]["content"] == {"base64": exported["result"]["base64"]}
+    imported = (await service.dispatch("theme.import", {"packageBase64": exported["result"]["base64"]}))["result"]
+    assert imported["id"] == saved["id"]
     for bad in ['@import "https://example.com/a.css";', '#amp-one {background:url("https://example.com/x")}']:
         with pytest.raises(AppError):
             validate_theme(bad)
-    assert service.get_state()["theme"]["css"] == css
+        with pytest.raises(AppError):
+            await service.dispatch("theme.save", {"name": "Unsafe", "css": bad})
+    assert service.appearance.shared() == before
+    assert (await service.dispatch("theme.read", {"id": saved["id"]}))["result"]["css"] == css
 
 
 async def test_saved_skin_survives_changed_defaults_until_explicit_reset(tmp_path, monkeypatch):
+    from copy import deepcopy
+    from amplifier_web import appearance_preferences
     saved = {"name": "Saved studio skin", "css": "/* Private palette */ #amp-one {--a-accent: #765432;}"}
+    retired = {"name": "Retired inert skin", "css": "#amp-one {--a-accent: #abcdef;}"}
     app = AppService(tmp_path, Runtime(), workspace=tmp_path)
-    await app.dispatch("theme.apply", saved, origin="agent")
+    # Retired bytes stay inert; only explicit new-generation edits select.
+    app._state["theme"] = deepcopy(retired)
+    app._save()
+    row = (await app.dispatch("theme.save", saved, origin="agent"))["result"]
+    await app.dispatch("appearance.preferences.update", {"scope": "shared", "expectedRevision": 0,
+        "patch": {"appearanceId": row["id"], "accent": "#765432", "scheme": "dark"}}, origin="agent")
+    before = deepcopy(app.appearance.shared())
+    owner = app.appearance.owner
+    old_bytes = app.db.execute("SELECT value FROM shell_records WHERE kind='preferences' AND id='shared-reference-v2'").fetchone()[0]
     await app.close()
 
-    replacement = "#amp-one {--a-accent: #123456;}"
-    monkeypatch.setattr(AppService, "default_theme", lambda self: replacement)
+    replacement = deepcopy(appearance_preferences.DEFAULTS)
+    replacement.update(appearanceId="builtin:graphite", scheme="light")
+    monkeypatch.setattr(appearance_preferences, "DEFAULTS", replacement)
     restored = AppService(tmp_path, Runtime(), workspace=tmp_path)
     try:
-        assert restored.get_state()["theme"] == saved
-        exported = await restored.dispatch("theme.export", {}, origin="agent")
-        assert exported["effects"][0]["content"] == saved["css"]
-        await restored.dispatch("theme.reset", {}, origin="ui")
-        assert restored.get_state()["theme"] == {"name": "Amplifier Unified", "css": replacement}
+        assert restored.get_state()["theme"] == retired
+        assert restored.appearance.shared() == before and restored.appearance.owner == owner
+        assert restored.db.execute("SELECT value FROM shell_records WHERE kind='preferences' AND id='shared-reference-v2'").fetchone()[0] == old_bytes
+        assert restored.appearance.read()["effective"]["appearanceId"] == row["id"]
+        assert (await restored.dispatch("theme.read", {"id": row["id"]}))["result"]["css"] == saved["css"]
+        await restored.dispatch("appearance.preferences.update", {"scope": "shared",
+            "expectedRevision": before["revision"], "patch": {"accent": None}}, origin="ui")
+        expected = {key: value for key, value in before["values"].items() if key != "accent"}
+        assert restored.appearance.shared()["values"] == expected
+        assert restored.appearance.read()["theme"]["css"] == saved["css"]
+        assert restored.get_state()["theme"] == retired, "Reset never rewrites retired state"
     finally:
         await restored.close()
 

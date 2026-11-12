@@ -504,7 +504,7 @@ class InstalledWorkAdapter:
         coordinator = SimpleNamespace(get_capability=self.capabilities.get,
             get=lambda kind: self.tools if kind == 'tools' else None,
             register_capability=self.capabilities.__setitem__, mount=mount, hooks=self.hooks,
-            session_id=child['id'], process_hook_result=process_hook_result,
+            session_id=child['id'], session_state={}, process_hook_result=process_hook_result,
             cancellation=SimpleNamespace(is_immediate=False, register_tool_start=lambda *a: None,
                                          register_tool_complete=lambda *a: None))
         self.coordinator = coordinator

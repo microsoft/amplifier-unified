@@ -10,6 +10,7 @@ import {followLaterHistory} from '../history-scroll';
 import {request} from '../api';
 import {NavigationRow,NavigationStatus,ActivityTime,CopyDetail,WorkspaceDetails,useActivityClock,navigationDetailsContext} from '../navigation-details';
 import {activityFor,relativeActivity,compactParent,sessionIdentity} from '../navigation-presentation';
+import {DependencyWaitingContent} from '../dependency-waiting';
 import {ReorderList} from '../reorder-list';
 import '../sidebar-navigation.css';
 import {WorkspaceForm} from '../workspace-setup';
@@ -155,7 +156,7 @@ export function ChatDetails({chat,model,now,close}){
  const review=async()=>{if(reviewing||!errorItem)return;setReviewing(true);setReviewError('');try{await readItems(act,[errorItem])}catch(error){setReviewError(error.message||'Could not mark this error reviewed.')}finally{setReviewing(false)}};
  return <><div className="a-navigation-detail-heading"><MessageCircle/>Chat details</div><h3>{title}</h3>
   {chat.titlePreviewSource==='first-message'&&<p className="a-caption">Preview from the first message. Rename this chat to give it a permanent name.</p>}
-  <div className="a-navigation-detail-status"><NavigationStatus activity={activity}/><strong>{activity.label}</strong></div>
+  <div className="a-navigation-detail-status">{activity.waiting?.targets?.length?<DependencyWaitingContent activity={activity} act={act}/>:<><NavigationStatus activity={activity}/><strong>{activity.label}</strong></>}</div>
   <dl><dt>Last activity</dt><dd>{relativeActivity(chat.recentActivityAt,now).long}</dd></dl>
   <CopyDetail label="Session ID" value={sessionIdentity(chat)}/>
   <dl><dt>Workspace</dt><dd>{managed?'No workspace':chat.workspaceName||chat.workspace?.split(/[\\/]/).filter(Boolean).at(-1)}</dd></dl>

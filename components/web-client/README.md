@@ -194,15 +194,83 @@ persistence model, not a completed migration. Settings editors have their own
 
 Browser effects (call media, notification permission, and file download) are delivered in `deviceCommands`, with command IDs deduplicated against HTTP responses. Existing effects are not replayed when opening the app. Microphone and notification grants remain browser permission prompts.
 
-## Themes
+## Appearances
 
-`src/unified.css` is the complete Amplifier Unified skin. It includes an embedded Amplifier logo from microsoft/amplifier and has no external asset dependencies. The build always links a real CSS file in HTML; theme application does not depend on enabling a disabled stylesheet or on `@scope` support. The same source is copied to `dist/unified.amplifier.css` for reset and export.
+`src/reference.css` supplies the shared usable foundation: typography roles,
+native controls, bounded scrolling, responsive layouts and accessibility. The
+selected appearance adds a host-validated delta with both color schemes and
+self-contained artwork. The build links real CSS before first paint and exports
+`dist/reference.amplifier.css`. The retained `src/unified.css` is not loaded by
+this renderer.
 
-The stable root is `#amp-one`, with named `data-part` surfaces. A skin can replace
-variables or component styles. See [themes](https://github.com/microsoft/amplifier-unified/blob/816c7a67dbafc20bfb28723dd317c71d3bd2bb28/docs/shell/themes.md) for surface
-names, library/editor operations, preview versus Apply, and portable CSS validation.
-Applied skins are validated by the Python service; use embedded data assets rather
-than remote URLs.
+One complete **Global** or **This browser** profile supplies appearance and
+presentation preferences; values are not mixed across profiles. Choosing This
+browser for the first time explicitly copies the current validated Global
+profile using its revision. Later source switches retain each profile.
+Browser writes and source changes become effective only after generation-bound,
+exact-record storage acknowledgement. A failed or uncertain browser write does
+not silently select Global or replay a command.
+
+Changing to a different appearance clears the prior accent override, while
+leaving other preferences alone. **Use appearance accent** removes only that
+override. **Restore neutral appearance** selects Reference. Successful preference
+changes stay quiet; pending changes and actionable failures remain visible.
+Temporary previews are browser-scoped and never commit a profile; leaving
+Appearance cancels its preview without discarding the private editor draft.
+Library save/import/update/export and selection remain separate operations.
+The library accepts host-validated format-2 Reference ZIP packages; importing
+does not execute code or apply the look. Updating an existing entry changes the
+look of profiles that select it, without changing their other preferences.
+Deleting it retains those profiles' selected ID, visibly marks it unavailable,
+and shows Reference until the user chooses another appearance or explicitly
+restores neutral appearance.
+
+### Production initialization and retained data
+
+Only a newly validated production record is used. Legacy themes, format-1
+libraries, recovered `.078` format-2 data, old shell presentation preferences
+and the `0.80.1` experiment's host/browser records remain **inert and undeleted**.
+They are not automatically converted, promoted, read as defaults or copied to
+Global. This is not recovery of a lost personal theme or preservation of the
+previous effective look. No appearance setting changes providers, execution,
+permissions, conversation selection, drafts or artifact identity.
+
+The paired host owns the new `shared-reference-v2` record and a separate
+`appearance-identity/v2` owner identifier. Creating that identifier is not a
+preference write: absent Global preferences remain virtual until an explicit
+edit. The browser's `amplifier.appearance.v2:<owner>` namespace stays stable
+across cold restarts, local-only edits and later Global edits. Libraries use the
+new `appearance-library-v1` folder; old library directories are not scanned.
+
+When the new production record is absent, the paired host supplies these
+complete defaults without importing previous independent shell choices:
+
+| Preference | New production default |
+| --- | --- |
+| Appearance / accent | Amplifier / appearance palette, no override |
+| Scheme / decorations / density | System / on / comfortable |
+| Layout | Balanced, Canvas on the right |
+| Interface and work detail | Standard |
+| Work visibility | Step, turn and conversation all visible |
+| Work metrics | Elapsed time; input, output and total tokens; cache read/write; reasoning; voice; cost; calls |
+| Conversation status / collapse interim replies | Off / off |
+| Starting work view / Plan placement | Follow appearance / above composer |
+
+Existing valid records in that new production namespace are retained on reload.
+Malformed production state must produce an explicit failure and supported
+recovery, never a fresh Global write or an old-record fallback. The synchronous
+first-paint cache colors only the loading screen from a confirmed committed
+composition; it is not a profile or an activation receipt. Private editor drafts
+are tab-scoped and separated from profile persistence. Only
+`amplifier.appearance-composition.v4` (version 4, including owner namespace) is
+read for first paint. Only `amplifier.appearance-editor.v3:<namespace>` (version
+3) is restored by the editor. Neither reads or deletes older keys.
+
+The stable root remains `#amp-one` with named `data-part` surfaces. Common
+functional repairs belong to shared components rather than copied appearance
+workarounds. Unified owns the paired host contract, catalog, snapshot assembly,
+actual-browser acceptance and release adoption; a client fixture pass alone does
+not establish those boundaries.
 
 ## Validation
 

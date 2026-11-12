@@ -7,9 +7,8 @@ export function useThemeScheme(requested){
  return requested==='dark'||(requested==='system'&&dark)?'dark':'light';
 }
 
-// Read the painted header rather than palette metadata: legacy CSS skins and
-// previews need not have a structured theme definition. Browsers expect a
-// resolved opaque color, not a var()/light-dark() expression or a gradient.
+// Browser chrome follows the rendered Reference composition, not a separate
+// palette or definition-based theme model.
 export function effectiveChromeColor(root){
  const header=root.querySelector('[data-part="header"]');
  const color=getComputedStyle(header||root).backgroundColor;
@@ -19,9 +18,9 @@ export function effectiveChromeColor(root){
  return opaque(background)?background:(root.dataset.themeScheme==='dark'?'#151b31':'#e8eeff');
 }
 
-export function useWindowChrome({root,state,shell,mode,css}){
+export function useWindowChrome({root,shell,mode,compositionId}){
  useLayoutEffect(()=>{
-  if(!root.current||!shell.ready)return;
+  if(!root.current||!shell.ready||!compositionId)return;
   const sync=()=>{
    const app=root.current,header=app.querySelector('[data-part="header"]'),layer=app.querySelector('.a-window-chrome-blend');
    const meta=document.querySelector('meta[name="theme-color"]');
@@ -52,37 +51,36 @@ export function useWindowChrome({root,state,shell,mode,css}){
   observer.observe(app,{attributes:true,attributeFilter:['data-theme-scheme','data-decorations','data-layout','data-density','style']});
   window.addEventListener('resize',sync);
   return()=>{observer.disconnect();window.removeEventListener('resize',sync);delete app.dataset.windowChromeBlend;app.querySelector('.a-window-chrome-blend')?.style.removeProperty('--a-window-chrome-color')};
- },[root,shell.ready,state?.theme,mode,css]);
+ },[root,shell.ready,mode,compositionId]);
 }
 
-export function useAppearanceCache({root,state,shell,scheme,mode,preview,css}){
+export function useAppearanceCache({root,shell,namespace,scheme,mode,preview,compositionId,activeScope,storageVersion,confirmed=false,invalidate=false}){
  useLayoutEffect(()=>{
-  if(!root.current||!shell.ready||preview||state?.view?.themePreview||shell.data?.preview)return;
-  const style=getComputedStyle(root.current);
-  // This hash is only a cache-generation key, never an integrity credential.
-  // Otherwise an unvisited light palette could retain the previous skin's
-  // chrome color after committing a new dark-only appearance.
-  let hash=0;for(let i=0;i<css.length;i++)hash=(Math.imul(hash,31)+css.charCodeAt(i))|0;
-  const themeKey=css.length+':'+hash,colors={};
-  try{const saved=JSON.parse(sessionStorage.getItem('amplifier.appearance')||'null');if(saved?.themeKey===themeKey)Object.assign(colors,saved.colors)}catch{}
+  if(preview)return;
+  let cached=null;
+  try{cached=JSON.parse(sessionStorage.getItem('amplifier.appearance-composition.v4')||'null')}catch{}
+  const identityChanged=!!cached&&(
+   typeof namespace==='string'&&cached.namespace!==namespace||
+   typeof activeScope==='string'&&cached.activeScope!==activeScope||
+   typeof storageVersion==='string'&&cached.storageVersion!==storageVersion||
+   typeof compositionId==='string'&&cached.compositionId!==compositionId);
+  if(invalidate||identityChanged){
+   try{sessionStorage.removeItem('amplifier.appearance-composition.v4')}catch{}
+   const documentRoot=document.documentElement;
+   documentRoot.style.removeProperty('--boot-bg');documentRoot.style.removeProperty('--boot-ink');
+   documentRoot.style.removeProperty('color-scheme');delete documentRoot.dataset.bootScheme;
+  }
+  if(!confirmed||!root.current||!shell.ready||!/^amplifier\.appearance\.v2:[a-f0-9]{32}$/.test(namespace||'')||!compositionId||!['shared','client'].includes(activeScope)||typeof storageVersion!=='string'||!storageVersion)return;
+  const style=getComputedStyle(root.current),themeKey=String(compositionId),colors={};
+  try{
+   const saved=JSON.parse(sessionStorage.getItem('amplifier.appearance-composition.v4')||'null');
+   if(saved?.version===4&&saved.namespace===namespace&&saved.activeScope===activeScope&&saved.storageVersion===storageVersion&&saved.compositionId===compositionId&&saved.themeKey===themeKey&&saved.colors&&typeof saved.colors==='object')Object.assign(colors,saved.colors);
+  }catch{}
   colors[mode]={background:style.backgroundColor,foreground:style.color,chrome:effectiveChromeColor(root.current)};
-  const palette=state?.theme?.definition?.palette;
-  if(palette)for(const key of ['light','dark'])colors[key]={background:palette[key].bg,foreground:palette[key].ink,chrome:key===mode?colors[key].chrome:palette[key].bg};
-  const appearance={version:1,themeKey,scheme:['light','dark','system'].includes(scheme)?scheme:'light',colors};
-  try{sessionStorage.setItem('amplifier.appearance',JSON.stringify(appearance))}catch{}
+  const appearance={version:4,namespace,activeScope,storageVersion,compositionId,themeKey,scheme:['light','dark','system'].includes(scheme)?scheme:'light',colors};
+  try{sessionStorage.setItem('amplifier.appearance-composition.v4',JSON.stringify(appearance))}catch{}
   document.documentElement.style.colorScheme=mode;
   document.documentElement.style.setProperty('--boot-bg',colors[mode].background);
   document.documentElement.style.setProperty('--boot-ink',colors[mode].foreground);
- },[root,shell.ready,shell.data?.preview,state?.view?.themePreview,state?.theme,scheme,mode,preview,css]);
-}
-
-export function ThemeDecorationControl({shell,onError}){
- const committed=shell.composition.presentation.decorations!==false;
- const [saving,setSaving]=useState(false),[enabled,setEnabled]=useState(committed);
- useEffect(()=>{if(!saving)setEnabled(committed)},[committed,saving]);
- async function change(event){
-  const next=event.target.checked;setEnabled(next);setSaving(true);
-  try{await shell.setPresentation({decorations:next})}catch(error){setEnabled(committed);onError(error.message)}finally{setSaving(false)}
- }
- return <label className="a-inline-checkbox"><input type="checkbox" checked={enabled} disabled={saving} data-action="shell.changes.apply" onChange={change}/>Show decorative theme background</label>;
+ },[root,shell.ready,namespace,scheme,mode,preview,compositionId,activeScope,storageVersion,confirmed,invalidate]);
 }

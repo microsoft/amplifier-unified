@@ -152,9 +152,10 @@ class ClientViews:
             self.records[identity] = record
             self.dirty.add(identity)
             if resume:
-                shell = self.service.shell.get("client", resume)
+                shell = self.service.shell.client(resume)
                 if shell:
                     shell.update(preview=None, reported=None)
+                    shell.pop('preferenceCommand', None)
                     self.service.shell.put("client", identity, shell)
         # Retire the saved modal route on upgrade. Do not auto-open a new
         # Canvas document over a retained viewer or its edits; the existing
@@ -400,6 +401,11 @@ class ClientViews:
                               "hostInstanceId": self.service.instance_id, "reconnect": "snapshot"}
         if record['kind'] == 'web':
             snapshot['client']['build'] = self.service.installed_build.project()
+            appearance = self.service.appearance.read(self.current.get())
+            snapshot['appearance'] = appearance
+            if appearance.get('availability') != 'failed':
+                snapshot['view'] = {**snapshot.get('view', {}), **{
+                    key: value for key, value in appearance['effective'].items() if key in ('scheme', 'layout')}}
         snapshot["computerVisual"] = self.service.computer_visual.project(self.current.get())
         snapshot["draftAttachments"] = copy.deepcopy(record.get("attachments", {}).get("", []))
         snapshot["attachmentDraftId"] = self.attachment_draft_id()

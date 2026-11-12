@@ -1,70 +1,42 @@
 # Appearance authoring examples
 
-These are authoring inputs, not automatic commands. Discover installed
-`theme.*` schemas and the intended browser/scope first. The PR1916 rollback
-temporarily retires Reference and Global / This browser profiles; see the
-[rollback boundary](../../docs/shell/appearance-contract.md#temporary-rollback-boundary).
+Inputs below are not automatic commands. Discover the installed `appearance.*`
+and `theme.*` schemas and intended browser/profile first. See the
+[production preservation boundary](../../docs/shell/appearance-contract.md#temporary-rollback-boundary).
 
 <a id="small-reference-delta-quiet-study"></a>
 
-## Complete theme: Quiet study
+## Small Reference delta: Quiet study
 
-Read [quiet-study.json](quiet-study.json). It is a `name` / `definition` action
-input, **not a ZIP manifest**. Its version-1 definition supplies all ten colors
-in both palettes and omits background for a flat treatment. It starts from the
-built-in skin, not earlier artwork. The former Reference-delta example is retired.
-
-Discover `theme.preview` and send this input with the intended `clientId` in the
-`app_control` dispatch envelope. Use `theme.revert` to end the preview. Preview
-does not save or apply it; authorized `theme.apply` commits app-wide. For an
-intentional partial palette change, use `{name, tokens}` instead and expect the
-existing skin/artwork to remain. Supply exactly one of definition, tokens or CSS.
-Use `theme.save` with complete CSS to retain a library copy; read its returned
-ID/fingerprint before editing.
+[quiet-study.json](quiet-study.json) is a `name` / `css` preview/save input,
+not a ZIP manifest. It uses both color palettes through `light-dark()` over the
+bundled Reference. Preview with `appearance.preview` and intended `clientId`;
+end with `appearance.preview.cancel`. Save with `theme.save`, inspect its returned
+ID/fingerprint, then select that ID only at authorized captured profile/CAS.
+Do not use retired complete-theme definitions, token patches or `theme.apply`.
 
 ## Geometry and paint
 
-Read the complete saved skin before editing. Preserve its unchanged body and
-make only demonstrated changes using
-documented tokens, for example:
+Prefer supported tokens and stable parts. Read exact saved CSS before editing.
+For example, a deliberate delta can tune `--a-composer-radius: 12px`,
+`--a-message-radius: 10px`, `--a-message-gap: 24px`, `--a-panel-gap: 7px`.
+Paint `.a-message-body` or `[data-part="composer-surface"]`, not structural
+message/action rows, status or the form/model selectors. Reference still owns
+scrolling, masks, focus, control geometry and responsive layout.
 
-```css
-#amp-one {
-  --a-composer-radius: 12px;
-  --a-message-radius: 10px;
-  --a-message-gap: 24px;
-  --a-panel-gap: 7px;
-}
-```
-
-Inspect actual computed styles. Paint the message body, not its row/footer;
-paint the inner composer surface, not the form/model-selector/status:
-
-```css
-#amp-one .a-message.a-user > .a-message-body {
-  background: var(--a-tint);
-  color: var(--a-ink);
-}
-#amp-one [data-part="composer-surface"] {
-  background: var(--a-surface);
-}
-```
-
-Prefer supported artwork tokens. Do not reposition descendants to create a
-background layer or copy transcript masks; those are shared mechanics.
-Check actual font inheritance so authored text styles reach their intended
-content without indiscriminately changing UI labels.
-Explicit Light/Dark choices override OS mode. Match scheme-selector specificity
-in forced-color resets, including any optional logo filter reset.
+Keep independent UI/heading/prose/code type roles and inspect actual fonts.
+Artwork disappears with decorations off/forced colors; reduced motion stops
+movement without removing operational feedback.
 
 ## ZIP with local assets
 
-At root `appearance.json`:
+Root `appearance.json`:
 
 ```json
 {
   "type": "appearance",
-  "formatVersion": 1,
+  "formatVersion": 2,
+  "base": "reference-v1",
   "name": "Quiet studio",
   "stylesheet": "theme.css",
   "assets": [
@@ -74,38 +46,35 @@ At root `appearance.json`:
 }
 ```
 
-Include a complete self-contained light/dark skin, not a Reference delta, plus
-the exact declared asset/notice bytes. `theme.css` references
-`url("assets/paper.png")`; no remote fetch is performed. Discover `theme.import`
-and send actual ZIP bytes as `packageBase64`. Read the
-saved entry, preview its resolved CSS, and apply only within the requested scope.
-Export that saved ID with `format: "zip"` and reimport downloaded bytes in disposable
-storage to verify portability. Export defaults to CSS; omitting ID exports the
-committed appearance, not an unsaved draft or preview. The manifest
-and limits live in [Themes](../../docs/shell/themes.md#zip-appearance-packages).
+Include delta CSS and exact declared asset/notice bytes. `theme.css` can reference
+`url("assets/paper.png")`; the host validates and embeds it without network fetch
+or extraction. Import actual ZIP bytes as `packageBase64`. Read the saved entry,
+preview its exact resolved CSS, and select only within the requested profile.
+Export by that ID with `theme.export({id})`; ZIP is the sole envelope. Reimport
+actual exported bytes in disposable storage before claiming portability.
+Raw CSS import, format-1 ZIP and no-ID export are unsupported. Old files remain
+inert/undeleted; explicit valid format-2 import creates a new library entry.
 
-ZIP is not a component installer. Preserve original asset/font licenses and
-attribution; a notice filename alone proves no rights. Compare realistic text
-before adding fonts. Reduced motion stops decorative movement; forced colors and
-decorations-off remove artwork without removing operational feedback.
+ZIP is not a component installer. Preserve fonts/assets/licenses and attribution;
+a notice filename alone proves no rights. Package/schema acceptance is not visual
+or accessibility certification.
 
 ## Review cases
 
-- Preview over a different appearance; verify no inherited artwork in either
-  scheme for a complete definition; intentional token-only edits retain existing
-  artwork. Check explicit mode vs OS mode and narrow/zoom readability.
-- Use long chat/code and actual pending/error controls. Check focus, message/action
-  separation, composer expansion and top/middle/bottom/short transcript overflow.
-  Final actions stay readable; keyboard/editor/iframe focus suppresses fades.
-- Check decorations off, reduced motion and forced colors. Restore any temporary
-  preferences and preserve unsent/dirty work without reading private contents.
-- Compare exact preview/apply, reload and conditional revert; keep other clients'
-  conversation selection intact. Stale library writes fail
-  without replacing editor work. A saved package is not an applied/rendered result.
-- For rollback persistence changes, exercise a valid legacy theme and an absent
-  one separately. The latter uses the safe old default, not an automatic recovery.
-  Retain `shared-reference-v1`, browser-local profiles and format-2 library data
-  unchanged and inactive; reject unsupported imports without library mutation.
+- Preview over a different look, then cancel; retain private editor and other
+  documents. Saved/imported is not selected or rendered.
+- Check both schemes/system, decorations/accessibility, narrow/zoom, keyboard,
+  long chat/code, composer expansion and actual pending/error/recovery controls.
+- Select in captured Global or This browser, verify whole-record storage ACK and
+  exact composition render ACK. Cross-tab/reload retain confirmed source/profile,
+  never previews or inherited editor access. Storage failure never writes Global.
+- An explicit accent may be reset with `patch: {accent: null}`. Switching to a
+  different appearance drops the old override; same-ID/unrelated changes retain
+  it. No hardcoded color is a reset. Stale Undo must not overwrite newer work.
+- Seed old theme/profile/cache/format-1 and recovered format-2 records in isolated
+  fixtures: startup/listing leaves them inert and byte-preserved. Missing new
+  Global reads complete defaults without a preference write; malformed new
+  records fail without silent repair or namespace rotation.
 
-Keep package validity, installed skill discovery, observed browser interaction and
-human acceptance separate. Quiet study is a starting input, not certification.
+Keep validity, installed discovery, source/build identity, observed interaction and
+human acceptance distinct. Quiet study is a starting delta, not certification.

@@ -97,7 +97,7 @@ def _installed_package_probe(packages):
            + chunk(b"IDAT", zlib.compress(b"\0\x33\x66\x99\xff")) + chunk(b"IEND", b""))
     notice = b"Copyright Example Contributors\r\nPermission for this synthetic fixture.\r\n"
     manifest = {
-        "type": "appearance", "formatVersion": 1, "name": "Installed paper",
+        "type": "appearance", "formatVersion": 2, "base": "reference-v1", "name": "Installed paper",
         "description": "Offline ZIP fixture", "author": "Example Contributors",
         "stylesheet": "theme.css",
         "assets": [{"path": "assets/probe.png", "mediaType": "image/png",
@@ -116,14 +116,8 @@ def _installed_package_probe(packages):
     embedded = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
 
     def check_css(value, name, description):
-        header, separator, body = value.partition(" */\n")
-        assert separator and header.startswith("/* amplifier-appearance: ")
-        meta = json.loads(header.removeprefix("/* amplifier-appearance: "))
-        assert meta["name"] == name and meta["description"] == description
-        assert meta["author"] == manifest["author"]
-        assert meta["packageNotices"] == {"licenses/probe.txt": notice.decode("utf-8")}
-        assert body == css.replace("assets/probe.png", embedded)
-        encoded = body.split('url("data:image/png;base64,', 1)[1].split('")', 1)[0]
+        assert value == css.replace("assets/probe.png", embedded)
+        encoded = value.split('url("data:image/png;base64,', 1)[1].split('")', 1)[0]
         assert base64.b64decode(encoded, validate=True) == png
 
     check_css(package.css, manifest["name"], manifest["description"])
@@ -131,16 +125,15 @@ def _installed_package_probe(packages):
         assert len(archive.namelist()) == len(files)
         assert {name: archive.read(name) for name in archive.namelist()} == files
 
-    # CSS-only export must carry the embedded image and original notice bytes too.
-    exported = packages.from_css(package.css, "Installed copy", "Offline export")
+    # Named package editing/export retains declared assets and notices.
+    exported = packages.with_metadata(package, "Installed copy", "Offline export")
     raw = packages.encode(exported.files)
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-        assert sorted(archive.namelist()) == ["appearance.json", "licenses/probe.txt", "theme.css"]
+        assert sorted(archive.namelist()) == ["appearance.json", "assets/probe.png", "licenses/probe.txt", "theme.css"]
         assert archive.read("licenses/probe.txt") == notice
         exported_manifest = json.loads(archive.read("appearance.json"))
-        assert exported_manifest == {**manifest, "name": "Installed copy", "description": "Offline export",
-                                     "assets": []}
-        check_css(archive.read("theme.css").decode("utf-8"), "Installed copy", "Offline export")
+        assert exported_manifest == {**manifest, "name": "Installed copy", "description": "Offline export"}
+        assert archive.read("theme.css").decode("utf-8") == css
     check_css(packages.load(raw).css, "Installed copy", "Offline export")
 
 
@@ -195,8 +188,6 @@ if __name__ == "__main__":
         assert appearance == appearance_expected["metadata"]
         assert css.encode("utf-8") == data
         assert theme_library.fingerprint(css) == appearance_expected["sha256"]
-        assert theme_library.metadata(css)[0] == {
-            field: appearance_expected["metadata"][field] for field in ("name", "description")}
     asyncio.run(_loader_probe(resource_root(), Path(sys.argv[3])))
     _installed_package_probe(appearance_packages)
     print("APPEARANCE_PACKAGE_INSTALLED_OK")
@@ -210,16 +201,15 @@ import yaml
 
 def test_palette_example_compiles_and_validates():
     from amplifier_web.builtin_behaviors import resource_root
-    from amplifier_web.themes import DEFINITION, compile_definition
+    from amplifier_web import appearance_packages
     from amplifier_web.service import validate_theme
-    from jsonschema import validate
 
     sample = json.loads((resource_root() / "skills/appearance-authoring/quiet-study.json").read_text())
-    validate(sample["definition"], DEFINITION)
-    css = compile_definition(SimpleNamespace(default_theme=lambda: "#amp-one{color:var(--a-ink)}"),
-                             sample["definition"])
+    css = sample["css"]
     validate_theme(css)
-    assert 'data-theme-scheme="light"' in css and 'data-theme-scheme="dark"' in css
+    package = appearance_packages.from_css(css, sample['name'])
+    assert package.manifest['formatVersion'] == 2 and package.manifest['base'] == 'reference-v1'
+    assert 'light-dark(' in css
 
 
 @pytest.mark.parametrize("deferred,omitted", [(False, False), (True, False), (False, True)])
@@ -303,7 +293,9 @@ def test_wheel_installed_loader_outside_checkout(tmp_path):
             "resource": resource.relative_to(checkout).as_posix(),
             "sha256": hashlib.sha256(resource.read_bytes()).hexdigest(),
             "metadata": {"id": f"builtin:{key}", "source": "built-in",
-                         **theme_library.RESOURCE_PRESETS[key]},
+                         "base": "reference-v1", "readOnly": True,
+                         "fingerprint": hashlib.sha256(resource.read_bytes()).hexdigest(),
+                         **theme_library.BUILTINS[key]},
         }
     wheels = tmp_path / "wheels"
     wheels.mkdir()

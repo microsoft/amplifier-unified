@@ -135,6 +135,14 @@
       "env": {
         "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/history-refresh"
       }
+    },
+    {
+      "id": "appearance-lifecycle",
+      "command": ["node", "tests/appearance-lifecycle-browser.mjs"],
+      "env": {
+        "AMPLIFIER_UNIFIED_ROOT": "{root}",
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/appearance-lifecycle"
+      }
     }
   ]
 }

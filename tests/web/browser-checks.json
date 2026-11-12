@@ -1222,6 +1222,7 @@
     "selected-context",
     "registry-validation",
     "empty-host",
+    "appearance-lifecycle",
     "empty-host-fail-create",
     "empty-host-lost-create",
     "new-chat",

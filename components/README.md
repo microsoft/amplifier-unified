@@ -1,4 +1,18 @@
-# Web client ownership and assembly
+# Component projects
+
+[`publishing/`](publishing/README.md) is the temporary authoring home for the
+independently buildable static publishing package and its portable tests. Unified
+consumes its nested runtime sources directly; its host publishing adapters and
+authorization remain in Unified. It stays here until a separate repository and
+authoring handoff are ready.
+
+[`scheduling/`](scheduling/README.md) is the temporary authoring home for the
+independently buildable scheduling package. Unified consumes its nested runtime
+sources directly in normal editable installs, wheels and source distributions.
+It stays here until its separate repository and authoring handoff are ready.
+The web client has a different ownership arrangement, described below.
+
+## Web client ownership and assembly
 
 The [Amplifier web client](https://github.com/microsoft/amplifier-client-web) owns
 browser source, client tests, production dependencies and its build tools.

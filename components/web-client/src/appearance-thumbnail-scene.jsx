@@ -2,8 +2,9 @@ import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {Markdown} from './markdown';
 import {appearanceThumbnailDocument} from './appearance-thumbnail-document';
+import {composeAppearanceStyles} from './appearance-composition';
 import base from './base.css?raw';
-import unified from './unified.css?raw';
+import reference from './reference.css?raw';
 import shell from './work-shell.css?raw';
 import refresh from './main-refresh.css?raw';
 import chat from './chat-presentation.css?raw';
@@ -23,7 +24,7 @@ const markup=renderToStaticMarkup(<>
    <div className="a-nav-chat is-selected"><button className="a-nav-chat-select"><span className="a-nav-chat-title">A new idea</span></button></div>
    <div className="a-nav-chat"><button className="a-nav-chat-select"><span className="a-nav-chat-title">Weekend plans</span></button></div>
   </div></aside>
-  <main data-part="conversation">
+  <main className="a-conversation" data-part="conversation">
    <div className="a-messages" data-part="messages">
     <article className="a-message a-user"><div className="a-message-body"><Markdown text="Make room for a new idea." userContent/></div></article>
     <article className="a-message a-assistant"><div className="a-message-body"><Markdown text={'## Start with something small\n\nA clear space for **your next idea**, with a useful [reference](#sample).\n\n```js\nconst next = "Make it real";\n```'}/></div></article>
@@ -35,5 +36,5 @@ const markup=renderToStaticMarkup(<>
   </main>
  </div>
 </>);
-const hostCss=[base,unified,shell,refresh,chat,composer,navigation,detail,markdown].join('\n');
+const hostCss=composeAppearanceStyles(base,reference)+'\n'+[shell,refresh,chat,composer,navigation,detail,markdown].join('\n');
 export const renderAppearanceThumbnail=(css,scheme)=>appearanceThumbnailDocument({css,scheme,hostCss,markup});

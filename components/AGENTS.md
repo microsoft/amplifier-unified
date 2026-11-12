@@ -1,4 +1,17 @@
-# Temporary component delivery
+# Component ownership
+
+`components/publishing/` is temporarily authored here as its independently
+buildable Python project. Preserve its `amplifier_publishing` imports and existing
+module entrypoint; Unified builds directly from the nested runtime sources.
+Its portable tests stay with the package, while host policy and integration tests
+stay in Unified. It is not a generated delivery copy.
+
+`components/scheduling/` is temporarily authored here as its independently
+buildable Python project. Preserve its normal `amplifier_scheduling` import;
+Unified builds directly from the nested runtime sources. It has no external
+source-selection record and is not a generated copy. Follow its local README.
+
+## Web client delivery
 
 `web-client/` is a verbatim snapshot of the separate client repository selected
 by `web-client.source.json`. Maintain source, client tests and build tools in that

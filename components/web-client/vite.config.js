@@ -10,8 +10,8 @@ function packageFile(name,file){
  if(!directory)throw Error('Missing build dependency: '+name);
  return join(directory,name,file);
 }
-const source=fileURLToPath(new URL('./src/unified.css',import.meta.url));
-const destination=fileURLToPath(new URL('./dist/unified.amplifier.css',import.meta.url));
+const source=fileURLToPath(new URL('./src/reference.css',import.meta.url));
+const destination=fileURLToPath(new URL('./dist/reference.amplifier.css',import.meta.url));
 const buildIdentity=identifyBuild(fileURLToPath(new URL('./',import.meta.url)));
 export default defineConfig({
  define:{__AMPLIFIER_BUILD__:JSON.stringify(buildIdentity)},
