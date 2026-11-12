@@ -1,5 +1,11 @@
 # Component ownership
 
+`components/worktrees/` is temporarily authored here as an independently buildable
+Python project. Preserve `amplifier_worktrees` and `amplifier_worktrees.git` imports;
+Unified builds directly from its nested runtime sources. Its real-Git mechanism
+tests belong here; host permission, active-task, handoff and cleanup policy remain
+in Unified. It is not a generated delivery copy.
+
 `components/publishing/` is temporarily authored here as its independently
 buildable Python project. Preserve its `amplifier_publishing` imports and existing
 module entrypoint; Unified builds directly from the nested runtime sources.
