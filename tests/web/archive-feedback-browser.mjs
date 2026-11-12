@@ -106,13 +106,54 @@ async function installedPr36(){
   const workspace=(await state()).workspaces.find(row=>row.path);
   assert.ok(workspace,'Use only the fresh fixture workspace');
   const title='PR36 synthetic archived conversation with a long wrapping title '.repeat(3).trim();
-  await action('session.create',{title,workspace:workspace.path,location:{kind:'workspace'}});
-  const sid=(await state()).selectedSessionId;
-  await action('session.create',{title:'PR36 other synthetic chat',workspace:workspace.path,location:{kind:'workspace'}});
-  const other=(await state()).selectedSessionId,ids=[sid,other];
+  async function waitSelectedHistory(id){
+   await page.waitForFunction(id=>{
+    const value=window.amplifier.getState(),row=value.sessions.find(row=>row.id===id);
+    return value.selectedSessionId===id&&row&&Array.isArray(row.messages)&&
+     row.historyLoading!==true&&(!row.historyManaged||row.historyLoaded===true);
+   },id);
+   const value=await state(),row=value.sessions.find(row=>row.id===id);
+   assert.equal(value.selectedSessionId,id);
+   assert.ok(row,'Selected fixture history is resident: '+id);
+   assert.ok(Array.isArray(row.messages),'Selected fixture messages are loaded: '+id);
+   assert.ok(!row.historyError,'Selected fixture history has no read error: '+id);
+   return row;
+  }
+  async function createOwnedChat(title){
+   const receipt=await page.evaluate(args=>window.amplifier.dispatch('session.create',args),
+    {title,workspace:workspace.path,location:{kind:'workspace'}});
+   assert.equal(receipt.accepted,true,'Fixture chat creation accepted');
+   assert.equal(typeof receipt.sessionId,'string','Creation receipt binds its exact chat');
+   assert.ok(receipt.sessionId.length>0);
+   await waitSelectedHistory(receipt.sessionId);
+   return receipt.sessionId;
+  }
+  const sid=await createOwnedChat(title),other=await createOwnedChat('PR36 other synthetic chat');
+  assert.notEqual(sid,other,'Create two distinct owned fixture chats');
+  const ids=[sid,other];
+  evidence.historyReads=[];
   const history=async()=>{
-   const value=await state();
-   return ids.map(id=>{const row=value.sessions.find(row=>row.id===id);assert.ok(row,id);return {id,messages:row.messages||[]}});
+   // getState exposes a bounded resident working set, not every created chat.
+   // Select only these owned fixture IDs and read each actual loaded row.
+   const original=await state(),selected=original.selectedSessionId,draftBefore=original.view.draft;
+   assert.ok(ids.includes(selected),'Restore only an owned fixture selection');
+   const read={originalSelection:selected,selectedReads:[],restored:false};
+   evidence.historyReads.push(read);
+   const rows=[];
+   try{
+    for(const id of ids){
+     await action('session.select',{id});
+     const row=await waitSelectedHistory(id);
+     rows.push({id,messages:row.messages});
+     read.selectedReads.push(id);
+    }
+    return rows;
+   }finally{
+    await action('session.select',{id:selected});
+    await waitSelectedHistory(selected);
+    await expect.poll(async()=>(await state()).view.draft).toEqual(draftBefore);
+    read.restored=true;read.draftPreserved=true;
+   }
   };
   const historyBefore=await history();
   assert.ok(historyBefore.every(row=>row.messages.length===0),'No saved user history is imported or seeded');
