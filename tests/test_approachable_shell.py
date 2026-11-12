@@ -440,9 +440,9 @@ async def test_workspace_pin_shell_actions_are_passive_and_preserve_other_client
             raise AssertionError('Pin actions must not rewrite sessions, scan folders or flush pending progress')
         with monkeypatch.context() as patch:
             import amplifier_web.session_projection as session_projection
-            import amplifier_web.workspace_canvas as workspace_canvas
+            import amplifier_web.workspace_selection as workspace_selection
             patch.setattr(session_projection, 'persist', forbidden)
-            patch.setattr(workspace_canvas, 'refresh_workspace_availability', forbidden)
+            patch.setattr(workspace_selection, 'refresh_workspace_availability', forbidden)
             patch.setattr(app, '_commit_pending_progress', forbidden)
             await app.dispatch('shell.command', {'clientId': 'reader', 'instanceId': 'workspaces',
                                                 'action': 'workspace.pin', 'args': {'id': empty_id, 'pinned': True}})

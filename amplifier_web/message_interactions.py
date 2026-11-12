@@ -141,7 +141,7 @@ def command(service, action, args, *, origin="ui"):
     if 'selection' in args and not args.get('snapshotOnly'):
         raise AppError('A passage requires snapshotOnly; no whole-message fallback was used.')
     if action == 'message.reveal':
-        from .workspace_canvas import select_session_workspace
+        from .workspace_selection import select_session_workspace
         select_session_workspace(service.state, session)
         service.state['selectedSessionId'] = session['id']
         service.state['view']['workSurface'] = 'chat'

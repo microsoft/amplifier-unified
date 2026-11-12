@@ -38,7 +38,7 @@ async def test_visibility_retains_generation_dirty_edits_and_client_isolation(ap
         pytest.fail('Visibility must not discover workspaces or persist the shared catalog')
     with monkeypatch.context() as patch:
         patch.setattr(app, '_save', forbidden)
-        patch.setattr('amplifier_web.workspace_canvas.refresh_workspace_availability', forbidden)
+        patch.setattr('amplifier_web.workspace_selection.refresh_workspace_availability', forbidden)
         patch.setattr('amplifier_web.canvas_library.remember', forbidden)
         for open in (False, True, False):
             result = await command(app, 'canvas.visibility', visibility(app, open))
