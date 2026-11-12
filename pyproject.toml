@@ -120,7 +120,7 @@ dev = [
     # File-policy checks must execute the real patch engines, not skip at import.
     "amplifier-module-tool-apply-patch @ git+https://github.com/microsoft/amplifier-bundle-filesystem@515599f0d0763a946aa96ed1d0110db723f5c386#subdirectory=modules/tool-apply-patch",
     "amplifier-module-tool-image @ git+https://github.com/microsoft/amplifier-bundle-imagegen@8acd3773102b77378c0d46da53a901f8297a38fc#subdirectory=modules/tool-image",
-    "amplifier-module-hooks-candidate-guard @ git+https://github.com/microsoft/amplifier-bundle-converge@5d77bfb159869ec4a32077defe259550fa0a07d3#subdirectory=modules/hooks-candidate-guard",
+    "amplifier-module-hooks-candidate-guard @ git+https://github.com/microsoft/amplifier-bundle-converge@da7dd8878c9e7b672e86151b32d59c0cce68bcb6#subdirectory=modules/hooks-candidate-guard",
 ]
 artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "reportlab>=4,<5", "pypdf>=6,<7", "Pillow>=13,<14"]
 
