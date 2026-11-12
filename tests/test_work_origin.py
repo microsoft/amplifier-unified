@@ -30,7 +30,7 @@ async def test_real_nested_dispatch_and_final_guard_share_one_parent_execution(a
 
 def worker_scope(count=12):
     caps = {}
-    c = SimpleNamespace(session_id='root', get_capability=caps.get,
+    c = SimpleNamespace(session_id='root', session_state={}, get_capability=caps.get,
                         register_capability=caps.__setitem__,
                         cancellation=SimpleNamespace(is_cancelled=False))
     worker = Worker()

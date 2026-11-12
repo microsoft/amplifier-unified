@@ -27,7 +27,7 @@ async def controlled(app, *, sid=None, name='control_probe'):
         return HookResult()
     async def mount(kind, tool, name):
         tools[name] = tool
-    c = SimpleNamespace(session_id=sid, get=lambda kind: tools if kind == 'tools' else None,
+    c = SimpleNamespace(session_id=sid, session_state={}, get=lambda kind: tools if kind == 'tools' else None,
         get_capability=caps.get, register_capability=caps.__setitem__, mount=mount,
         cancellation=SimpleNamespace(is_cancelled=False),
         hooks=SimpleNamespace(emit=emit, register=lambda *a, **kw: None),
