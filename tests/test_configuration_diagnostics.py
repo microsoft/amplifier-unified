@@ -99,12 +99,14 @@ async def test_recovery_first_failure_and_saved_availability(terminal, monkeypat
 
 
 @pytest.mark.parametrize('fault,code', [
-    ('freshness', 'configuration-pending'), ('worker', 'mounted-worker'),
+    ('freshness', None), ('refresh', None), ('worker', 'mounted-worker'),
     ('unknown', None), ('binding', None), ('attempts', None)])
 async def test_update_quiescence_is_independent_canonical_observation(terminal, fault, code):
     f = terminal
     if fault == 'freshness':
         f.session['configurationPending'] = True
+    elif fault == 'refresh':
+        f.session['configurationRefresh'] = {'phase': 'applying'}
     elif fault == 'worker':
         f.app.runtime.workers[f.session['id']] = {'process': SimpleNamespace(returncode=0)}
     elif fault == 'unknown':
