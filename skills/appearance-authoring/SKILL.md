@@ -1,97 +1,84 @@
 ---
 name: appearance-authoring
-description: "Create, revise or package Amplifier Unified complete themes and CSS appearances with light/dark support and safe preview/revert. Load for appearance authoring, not merely choosing a look. Component/layout authoring belongs to amplifier-shell."
+description: "Create, revise or package Amplifier Unified Reference appearance deltas with light/dark support, scoped profiles and safe preview/cancel. Load for authoring, not merely choosing a look. Component/layout authoring belongs to amplifier-shell."
 ---
 
 # Author an appearance
 
-Work inline so the person can review and steer. Appearances change web
-presentation, never execution, permissions or the meaning of work.
-
-Resolve companions from the returned `skill_directory`:
-- [Appearance direction](../../docs/shell/appearances.md)
-- [Interaction contract](../../docs/shell/appearance-contract.md)
-- [Current API, tokens and package format](../../docs/shell/themes.md)
-- [Examples](examples.md), only when constructing an input or checking a result
+Work inline so the person can review and steer. Presentation never changes
+execution, permissions or work meaning. Resolve companions from this returned
+`skill_directory`: [direction](../../docs/shell/appearances.md),
+[contract](../../docs/shell/appearance-contract.md),
+[API/tokens/packages](../../docs/shell/themes.md), [examples](examples.md).
 
 ## Inspect scope and installed support
 
-Read app state and discover current schemas for `theme.*`; load `amplifier-shell`
-for supported layout/components. Identify the intended browser, starting saved
-entry/fingerprint, effective presentation and revert path. Read bounded CSS and
-actual DOM/computed styles before overriding; never reconstruct truncated CSS.
-Use supported actions, not filesystem settings or database edits.
+Discover `appearance.*`, `theme.*` and relevant `shell.*` schemas. Identify the
+intended browser, active complete Global / This browser profile, selected library
+ID/fingerprint and CAS dimensions. Client identity routes; it does not authenticate.
+Read bounded exact CSS and actual DOM/computed/platform fonts before overriding.
+Use admitted operations, never settings/database edits or private draft reads.
 
-The user-approved PR1916 rollback temporarily retires Reference and Global /
-This browser profiles after the `.078` visual regression. Read the linked
-contract's rollback boundary: preserve `shared-reference-v1`, browser-local
-profiles and format-2 saved libraries inert and undeleted. Do not convert them,
-seed legacy preferences from them, or claim automatic recovery of the theme
-removed by `.078`. An absent legacy theme uses the safe old built-in default.
-
-Inspect the committed theme, client presentation and current revision. Preview
-is client-scoped; apply changes the app-wide committed skin. Library save/import/
-update does not apply it. Preserve unrelated presentation, Canvas work, drafts,
-providers, bundles and the person's selected skill policy.
+The production generation uses new records and a new library. Legacy complete
+skins, `.078` profiles/libraries and 0.80.1 experiment browser records remain inert
+and undeleted, not automatic migration or recovery inputs. Missing Global reads as
+explicit complete defaults; malformed new data fails without overwrite/fallback.
+Do not claim preservation of an old personal look or recover a removed theme.
 
 ## Author intentional differences
 
-Choose exactly one input to `theme.preview` / `theme.apply`, with a name:
-- `definition`: a new version-1 theme with all ten colors in both palettes. It
-  starts from the built-in skin rather than inheriting prior artwork.
-- `tokens`: an intentional partial palette edit retaining the existing skin and
-  background; structured themes update both palettes.
-- `css`: a complete self-contained skin with light/dark styling.
+Reference owns geometry, focus, scrolling, native controls, responsive behavior and
+functional cues. Author small intentional deltas, not a copied complete base.
+Preview `{name, css, clientId}` through `appearance.preview`; cancel through
+`appearance.preview.cancel`. Preview is document-local and distinct from saved
+library/selected profile. `theme.save` wraps named delta CSS into format-2 ZIP;
+`theme.import` accepts only `packageBase64`, and export requires a saved/included
+library ID. The root manifest requires `type: appearance`, `formatVersion: 2`,
+`base: reference-v1`, name and stylesheet. Keep declared assets/notices and bounds.
+No external URLs/imports, executable content, SVG assets, raw CSS import or format-1
+promotion. An explicit valid format-2 import is a new copy, not automatic adoption.
 
-Do not apply a palette-only edit and claim to have replaced the previous artwork.
-Portable CSS and format-1 ZIP styling packages are re-enabled. Reference deltas
-and format-2 packages are not current authoring inputs. Common functional repairs
-still belong in shared components, not duplicated theme workarounds.
+For source changes, browser source/tests belong to canonical `amplifier-client-web`;
+follow the linked ownership/whole-snapshot assembly workflow. Generated static and
+disposable prepared source are not authoring owners. Common repairs belong in
+shared components, not repeated per appearance.
 
-For source changes, styles and browser modules belong to the selected
-`amplifier-client-web` repository. Follow the linked API's source-ownership section
-and Unified's `components/README.md`; delivery snapshots and disposable prepared
-source are not another client authoring owner.
+Use semantic tokens, contrasting on-accent ink and stable parts. Paint message
+bodies/inner composer surfaces, not structural rows/actions. Keep independent UI,
+heading, prose and code font roles. Prefer system stacks; additional fonts must earn
+their cost and preserve licenses. Both palettes, decorations off, reduced motion,
+forced colors, zoom/narrow and keyboard/touch must remain usable. Artwork cannot
+convey the sole meaning of activity, error or required recovery.
 
-Prefer semantic tokens, contrasting on-accent ink and stable parts over label,
-child-position or broad descendant selectors. Inspect actual font inheritance.
-Paint message bodies and inner composer surfaces, not structural rows or actions. Keep scrolling,
-responsive safety, control sizing, focus, overflow cues and lifecycle semantics
-with their shared owners; do not add masks, listeners or positioning workarounds.
+## Preview, select, verify and deliver
 
-Author both palettes deliberately. Keep artwork readable and separate from
-functional feedback. Honor decorations off, reduced motion and forced colors.
-Use authorized, self-contained assets and neutral names; preserve attribution
-and font licenses. Prefer system stacks; additional fonts must earn their cost
-in realistic comparisons. No external URLs/imports or executable package content.
-For format-1 ZIPs use a root `appearance.json`, complete local CSS and declared
-assets/notices. ZIP styling does not install components or shell composition.
+Use exact named preview bytes and inspect actual rendered outcomes. A package,
+thumbnail, successful save, storage ACK and render ACK are distinct facts.
+Select a library ID with `appearance.preferences.update` at the captured scope/CAS.
+Global and This browser are complete independent profiles, not field overlays.
+The first browser selection explicitly copies current Global at its revision;
+subsequent switches retain both. Browser writes require generation, mirror revision,
+fresh storage-version CAS and ACK; failure never writes Global as fallback.
 
-## Preview, verify and deliver
+The selected look owns its default accent. Different-ID edits drop the old override
+unless a new color is explicit in that patch; same-ID/unrelated edits retain it.
+`patch: {accent: null}` removes only the override, restoring the current look's own
+color without storing null. Ordinary UI choices apply directly without Saved/Undo
+rituals. Public Undo remains exact whole-profile CAS; stale Undo is not a reset and
+must never be retried at a newer revision. Preview Cancel and Archive Undo remain.
 
-Preview the exact proposal on the intended browser before committing within the
-requested scope. A preview, validated package or thumbnail is not visual proof.
-Check both schemes/system, narrow/zoom, decoration/accessibility preferences,
-keyboard focus, long chat/code, composer and actual busy/error/recovery states.
-Preserve unsent work without inspecting its private contents unless requested.
-Verify that applying a theme leaves scheme, decorations, Reveal and accessibility
-preferences unchanged. Preserve other clients' conversation selection and make
-the app-wide apply scope explicit. When changing persistence for this rollback,
-check retained valid legacy themes, safe absent-theme defaults and inert newer
-data separately; a default is not proof of personal-theme recovery.
+Preserve conversations, unsent/dirty work, Canvas identity, unrelated preferences,
+providers, bundles and selected skill policy. Private editors remain private.
+Library updates/deletion use `expectedFingerprint` and never rewrite selection;
+a missing selected package is visibly unavailable with Reference recovery.
+Save a copy of read-only included appearances. Keep editor ID/fingerprint/draft
+unchanged by background refresh. Export by exact library ID as ZIP and round-trip
+actual bytes before claiming portability. No-id/current/draft export is unsupported.
 
-Retain exact entry/revision/fingerprint identities. Keep library mutations,
-application and preview distinct; use stale/dirty guards and conditional recovery.
-`theme.revert` ends a preview first, otherwise reverses the client's last apply
-only if no newer theme replaced it. Saved-entry update/delete requires
-`expectedFingerprint` from `theme.read`; included themes are read-only, so copy
-them. Library updates/deletion leave committed CSS intact.
-Export by saved ID for that entry; omission means committed CSS, never the
-preview/editor draft. Default export is CSS; request `format: "zip"` for a
-format-1 package. Round-trip exported bytes through import before claiming
-portability. Discover action schemas rather than copying
-payloads from a different build. An uncertain effect needs its saved receipt and
-current state, not a new request identity.
-
-Report the deliverable, write scope, observed checks, limits and recovery path.
-Offline authoring is valid; label application and browser review unverified.
+Check realistic long chat/code, composer, pending/error/recovery, both schemes/system,
+narrow/zoom, focus, accessibility, preview/cancel, selection/reset, reload/cross-tab,
+source clone and byte preservation. Installed discovery, source/build identity,
+observed rendering and human acceptance remain separate. An uncertain effect needs
+its original receipt/current state, never a new request identity. Report exact
+scope, deliverable, observed checks, limits and recovery. Offline authoring is valid
+when application/browser review are explicitly unverified.
