@@ -49,7 +49,7 @@ async function menuRegression({page,scenario,readState,emit}){
  await expect(app.locator('.a-attention-badge')).toHaveText('3');
  await app.focus();await app.press('Enter');
  await expect(appItems.getByRole('button').first()).toBeFocused();
- assert.deepEqual(await labels(appItems.getByRole('button')),['Activity','Send feedback','Automations','What the agents see','Settings']);
+ assert.deepEqual(await labels(appItems.getByRole('button')),['Activity','Send feedback','Automations','What agents see','Settings']);
  await expect(appItems.locator('hr,[role="separator"]')).toHaveCount(0);
  await expect(appItems.getByRole('button',{name:/^Activity/}).locator('.a-attention-badge')).toHaveText('2');
  await expect(appItems.getByRole('button',{name:/^Settings/}).locator('.a-attention-badge')).toHaveText('3');

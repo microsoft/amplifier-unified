@@ -19,7 +19,7 @@ familiar work or inspect its status while keeping their current context.
 Home: Focus / Brief / Studio + current search and scope
 Sidebar: Browse / Status + New chat icon in one row
 Scrollable sidebar: Search chats / Last activity / navigation lists
-Footer: connection status + App options (Activity / Send feedback / Automations / What the agents see / Settings)
+Footer: connection status + App options (Activity / Send feedback / Automations / What agents see / Settings)
 Browse: Pinned / Workspaces / Recent
 Status: Needs you / Ready for you / Working / Pick up again
 Choose a chat -> existing conversation and its existing action controls
@@ -100,7 +100,7 @@ range with unlabeled, noninteractive ticks, retaining touch and keyboard access
 and regular spacing between later sections.
 Search and age scroll with navigation lists, below the fixed mode row and above
 the fixed footer. Footer App options opens above it with Activity, Send feedback,
-Automations, What the agents see and Settings, in that order without a divider.
+Automations, What agents see and Settings, in that order without a divider.
 Activity and Settings retain their notification badges. The header's Chat menu
 starts with Copy session ID, copying the effective native conversation identity
 without a host action. It reports pending, denied, unavailable and successful

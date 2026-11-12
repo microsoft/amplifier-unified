@@ -56,7 +56,7 @@ export function AppFooter({state,connected,open,act}){
    <button title="Activity and unread notifications" onClick={()=>open('activity')}><Bell/><span>Activity</span><AttentionBadge state={state}/></button>
    <button onClick={()=>open('feedback')}><Bug/>Send feedback</button>
    <button onClick={()=>open('automation')}><CalendarClock/><span>Automations</span></button>
-   <button onClick={()=>open('agent')}><ScanEye/>What the agents see</button>
+   <button onClick={()=>open('agent')}><ScanEye/>What agents see</button>
    <button onClick={()=>open('settings')}><Settings/><span>Settings</span><AttentionBadge state={state} settings/></button>
   </ActionMenu></ShellSlot></div>
  </div>;
