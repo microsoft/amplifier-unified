@@ -299,7 +299,7 @@ async def test_concurrent_create_retries_share_receipt_without_blocking_host(app
         retry_args = {**args, 'workspace': str(tmp_path / 'different')} if conflicting else args
         retry = asyncio.create_task(command(app, 'web', 'session.create', retry_args, command_id='racing-create'))
         # A slow filesystem must not hold the service lock or block other actions.
-        await asyncio.wait_for(command(app, 'agent', 'view.update', {'patch': {'scheme': 'dark'}}), 2)
+        await asyncio.wait_for(command(app, 'agent', 'workspace.rename', {'id': app.state['selectedWorkspaceId'], 'name': 'Renamed during preparation'}), 2)
         assert not folder.exists() and calls == [str(folder)]
     finally:
         release.set()
@@ -330,7 +330,7 @@ async def test_revision_change_during_mkdir_rejects_chat_without_removing_create
     pending = asyncio.create_task(command(app, 'web', 'session.create', {'workspace': str(folder), 'fromDraft': True}, command_id='changed-during-create', expected_revision=app.state['revision']))
     try:
         await asyncio.wait_for(started.wait(), 2)
-        await command(app, 'agent', 'view.update', {'patch': {'scheme': 'dark'}})
+        await command(app, 'agent', 'workspace.rename', {'id': app.state['selectedWorkspaceId'], 'name': 'Renamed during preparation'})
     finally:
         release.set()
         result = (await asyncio.gather(pending, return_exceptions=True))[0]
