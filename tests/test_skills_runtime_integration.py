@@ -20,6 +20,9 @@ resolution, lifecycle hooks, and child spawning are real. PreparedBundle uses
 already installed module paths: this does not qualify dependency activation,
 Unified's complete host bootstrap/native delegation, or paid-provider transport.
 The Git-shaped source is a seeded synthetic cache hit, NOT a fetched repository.
+Late personal installs use Unified's actual source-guarded writer with an already
+configured narrow file allowance. Their source-only refresh is session-local;
+fresh-session discovery uses the unchanged configured plan, not registration.
 """
 from __future__ import annotations
 
@@ -230,8 +233,15 @@ def test_installed_skills_root_child_and_companions(tmp_path, monkeypatch, caplo
         local = workspace / ".amplifier/skills"
         user = Path.home() / ".amplifier/skills"
         control = _skill(local, "fixture-control", "WORKSPACE-FIRST")
-        _skill(user, "fixture-control", "USER-SHADOWED")
+        shadowed = _skill(user, "fixture-control", "USER-SHADOWED")
         _skill(user, "fixture-user-only", "USER-ONLY")
+        # Pre-existing local edits are not installation outputs. Refresh must
+        # preserve both files and the workspace winner, not replace either.
+        for directory, marker in ((control, "LOCAL-WORKSPACE-EDIT"), (shadowed, "LOCAL-PERSONAL-EDIT")):
+            path = directory / "SKILL.md"
+            path.write_text(path.read_text(encoding="utf-8") + marker + "\n", encoding="utf-8")
+        unrelated = workspace / "unrelated.txt"
+        unrelated.write_text("Unrelated user work; must remain byte-identical.\n", encoding="utf-8")
         companion = control / "safe_companion.py"
         companion.write_text(COMPANION, encoding="utf-8")
         invalid = local / "fixture-invalid/SKILL.md"
@@ -318,6 +328,129 @@ def test_installed_skills_root_child_and_companions(tmp_path, monkeypatch, caplo
             assert "fixture-control" in result.context_injection
             assert ("coordinate-work" in result.context_injection) is includes_unified
             assert ("amplifier-shell" in result.context_injection) is includes_unified
+            return result.context_injection
+
+        async def late_personal_install():
+            from amplifier_web.file_source_guard import GuardedFileTool, install_file_source_guard
+
+            inline, fork = "fixture-late-personal", "fixture-late-fork"
+            body = "LATE-PERSONAL-CONTENT\n\nRead this guidance without executing a task."
+            fork_body = "FORK-BODY-MUST-NOT-LOAD\n\n!`printf FORK-MUST-NOT-EVALUATE`"
+            files = {
+                user / inline / "SKILL.md": (
+                    f"---\nname: {inline}\ndescription: Late personal content control.\n---\n\n{body}\n"),
+                user / fork / "SKILL.md": (
+                    f"---\nname: {fork}\ndescription: Late manual fork control.\n"
+                    "context: fork\ndisable-model-invocation: true\nuser-invocable: true\n"
+                    f"---\n\n{fork_body}\n"),
+            }
+            assert all(not path.exists() for path in files)
+            preserved = [unrelated, *(path for directory in (local, user, cache_root)
+                                      for path in directory.rglob("*") if path.is_file()),
+                         packaged / "skills/amplifier-shell/SKILL.md",
+                         packaged / "skills/coordinate-work/SKILL.md"]
+            hashes = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in preserved}
+            late = prepared({**base_config, "skills": list(sources)})
+            # Preapproved installation destinations only. Permission propagation
+            # is separately qualified; this follow-up owns discovery after write.
+            late.mount_plan = copy.deepcopy(late.mount_plan)
+            filesystem = next(row for row in late.mount_plan["tools"] if row["module"] == "tool-filesystem")
+            filesystem["config"]["allowed_write_paths"] = [str(workspace), *(str(path) for path in files)]
+            saved_plan = copy.deepcopy(late.mount_plan)
+            loaded_names, spawn_attempts = [], []
+            process_count = len(admitted_processes)
+
+            async def no_spawn(*args, **kwargs):
+                spawn_attempts.append(True)
+                raise AssertionError("Installation validation must not spawn a skill")
+
+            async def observe_late(session):
+                # A fail-loud observer, not an execution implementation. Keep
+                # it present before mount so absence cannot hide an eager fork.
+                session.coordinator.register_capability("session.spawn", no_spawn)
+                async def loaded(event, data):
+                    loaded_names.append(data["skill_name"])
+                    return HookResult()
+                session.coordinator.hooks.register("skill:loaded", loaded, name="late-skill-load-observer")
+
+            async def verify_discovered(coordinator):
+                listing = await _call(coordinator, "load_skill", list=True)
+                names = [row["name"] for row in listing["skills"]]
+                assert names.count(inline) == names.count(fork) == names.count("fixture-control") == 1
+                for name in (inline, fork):
+                    info = await _call(coordinator, "load_skill", info=name)
+                    assert info["name"] == name and Path(info["path"]).resolve() == user / name / "SKILL.md"
+                    assert "content" not in info and "response" not in info
+                # Catalog visibility must update BEFORE any content load.
+                catalog = await request_boundary(coordinator, includes_unified=True)
+                regular, separator, manual = catalog.partition("Manual skills (load by name; /name when user-invocable):")
+                assert separator and inline in regular and fork not in regular and fork in manual
+                assert body not in catalog and "FORK-BODY-MUST-NOT-LOAD" not in catalog
+                content = await _call(coordinator, "load_skill", skill_name=inline)
+                assert content["content"] == f"# {inline}\n\n{body}"
+                assert Path(content["skill_directory"]).resolve() == user / inline
+                assert Path(content["loaded_from"]).resolve() == user
+                assert "response" not in content  # Inline content, not execution.
+                winner = await _call(coordinator, "load_skill", info="fixture-control")
+                assert Path(winner["path"]).resolve() == control / "SKILL.md"
+                winner = await _call(coordinator, "load_skill", skill_name="fixture-control")
+                assert "LOCAL-WORKSPACE-EDIT" in winner["content"]
+                assert "USER-SHADOWED" not in winner["content"] and "LOCAL-PERSONAL-EDIT" not in winner["content"]
+                # Inspect fork metadata only; never pass skill_name=fork here.
+                discovery = coordinator.get_capability("skills_discovery")
+                assert discovery.find(fork).context == "fork"
+                assert discovery.find(fork).disable_model_invocation is True
+                assert fork not in loaded_names and not spawn_attempts
+                assert len(admitted_processes) == process_count and not forbidden
+                assert {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in hashes} == hashes
+                assert all(path.read_text(encoding="utf-8") == text for path, text in files.items())
+
+            session = await late.create_session(session_cwd=workspace, before_initialize=observe_late)
+            try:
+                coordinator = session.coordinator
+                assert coordinator.get_capability("session.spawn") is no_spawn
+                await install_file_source_guard(coordinator, tmp_path / "late-file-locks")
+                writer = coordinator.get("tools")["write_file"]
+                assert isinstance(writer, GuardedFileTool)
+                assert isinstance(writer.tool, modules["amplifier_module_tool_filesystem"].WriteTool)
+                loader = coordinator.get("tools")["load_skill"]
+                before = await request_boundary(coordinator, includes_unified=True)
+                assert inline not in before and fork not in before
+                for name in (inline, fork):
+                    missing = await loader.execute({"info": name})
+                    assert not missing.success and missing.error["message"].startswith(f"Skill '{name}' not found.")
+                for path, text in files.items():
+                    written = await _call(coordinator, "write_file", file_path=str(path), content=text)
+                    assert Path(written["file_path"]).resolve() == path
+                    assert written["bytes"] == len(text.encode("utf-8"))
+                # The explicit supported recovery rescans the EXISTING source,
+                # not a combined source+load that could execute a fork.
+                assert str(user) in saved_plan["tools"][0]["config"]["skills"]
+                summary = await _call(coordinator, "load_skill", source=str(user))
+                assert "2 new:" in summary and inline in summary and fork in summary
+                assert not loaded_names and not spawn_attempts
+                await verify_discovered(coordinator)
+                assert coordinator.get("tools")["write_file"] is writer
+                assert coordinator.get("tools")["load_skill"] is loader
+                assert late.mount_plan == saved_plan
+            finally:
+                await session.cleanup()
+
+            # A new real Core/Foundation session sees the installed files at
+            # mount. No source call or copied discovery object from the old one.
+            loaded_names.clear()
+            fresh = await late.create_session(session_cwd=workspace, before_initialize=observe_late)
+            try:
+                assert fresh.session_id != session.session_id
+                assert fresh.coordinator.get_capability("session.spawn") is no_spawn
+                assert not loaded_names and not spawn_attempts
+                assert fresh.coordinator.get("tools")["load_skill"] is not loader
+                await verify_discovered(fresh.coordinator)
+                assert late.mount_plan == saved_plan
+            finally:
+                await fresh.cleanup()
+            assert fork not in loaded_names and not spawn_attempts
+            assert {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in hashes} == hashes
 
         def observe_mount(label, child_check=None):
             async def before_initialize(session):
@@ -445,6 +578,8 @@ def test_installed_skills_root_child_and_companions(tmp_path, monkeypatch, caplo
             finally:
                 await session.cleanup()
 
+            await late_personal_install()
+
         asyncio.run(asyncio.wait_for(exercise(), timeout=60))
         by_case = {row["case"]: row for row in observations}
         assert len(observations) == len(by_case) == 3, observations
@@ -464,7 +599,9 @@ def test_installed_skills_root_child_and_companions(tmp_path, monkeypatch, caplo
         print("SKILLS_RUNTIME_PROBE " + json.dumps({
             "status": "passed", "installed": provenance, "mounts": observations,
             "cases": ["default-first-wins", "invalid-vs-nonexistent", "safe-companion-executed",
-                      "prepared-root", "prepared-child", "source-omitted", "deferred-namespace"],
+                      "prepared-root", "prepared-child", "source-omitted", "deferred-namespace",
+                      "late-guarded-personal-install", "configured-personal-source-refresh",
+                      "late-fork-metadata-only", "fresh-configured-session-discovery"],
             "cached_source": "synthetic cache hit; not fetched",
             "model_calls": 0, "forbidden_effects": forbidden,
             "limits": "No full Unified host bootstrap, native delegation, dependency activation, or provider call",
