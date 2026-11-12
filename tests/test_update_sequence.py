@@ -204,8 +204,17 @@ async def test_waiting_configuration_candidate_rechecks_selection_before_pointer
     if case == 'changed':
         assert (manager.directory / 'active.json').read_bytes() == before
         assert promoted == []
-        assert manager.service.state['updates']['phase'] == 'error'
-        assert manager.service.state['updates']['pendingRelease'] == target
+        assert manager.service.state['updates']['phase'] == 'checked'
+        assert manager.service.state['updates']['pendingRelease'] is None
+        assert (stage / 'validated.json').is_file()
+        manager.service.state['settings']['updates'].update(autoCheck=False, autoInstall=False)
+        await manager.tick()
+        assert promoted == []
+        async def inventory(**kwargs): return []
+        monkeypatch.setattr(manager, 'inventory_sources', inventory)
+        await manager.check()
+        assert manager.service.state['updates']['error'] is None
+        assert manager.service.state['updates']['sequence']['stage'] == 'complete'
     else:
         assert promoted == [target]
         assert updates.active_release(home)['current'] == target

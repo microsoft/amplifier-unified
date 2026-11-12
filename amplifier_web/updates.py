@@ -1515,9 +1515,23 @@ class UpdateManager:
                         # for activation. Bind new promotions to the selection
                         # actually checked; never reinterpret rollback or an
                         # already committed uncertain promotion as fresh intent.
-                        from .update_sequence import verify_app_selection
-                        verify_app_selection(self, [{'appSelection': marker['appSelection']}],
-                                             stage=self.directory / 'releases' / target)
+                        from .update_sequence import verify_app_selection, StaleAppSelection
+                        try:
+                            verify_app_selection(self, [{'appSelection': marker['appSelection']}],
+                                                 stage=self.directory / 'releases' / target)
+                        except StaleAppSelection:
+                            if active_release(self.home) != pointer:
+                                raise  # A raced/uncertain pointer is not safe retirement.
+                            await self.service.discard_runtime(candidate)
+                            candidate = None
+                            self.inventory = []
+                            write_private(self.directory / 'inventory.json', '[]')
+                            self.diagnostics.record('ecosystem-selection', 'failed', errorType='ValueError')
+                            await self.publish(pendingRelease=None, available=0, includedCanProceed=False,
+                                phase='checked', error=None, sequence={'stage': 'application', 'install': False},
+                                items=[row for row in state.get('items', []) if row.get('id') == 'application'],
+                                detail='Component choices changed while this candidate waited. Check for updates to qualify the current configuration; the unused candidate and its receipts are preserved.')
+                            return
                     write_private(self.directory/'active.json',json.dumps({'current':target,'previous':pointer.get('current'),'at':time.time()}))
                     if not rollback and 'pendingRollback' in self.service.state['updates']:
                         # The pointer is now the durable rollback authority for
