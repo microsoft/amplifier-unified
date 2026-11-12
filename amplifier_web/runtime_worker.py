@@ -93,6 +93,8 @@ class Worker:
         else:
             from response_completion import ResponseBlocks
         self.response_blocks = ResponseBlocks()
+        from amplifier_web.task_origin import TaskOrigin
+        self.task_origin = TaskOrigin()
         self.terminal_response_refs = None
         self.terminal_checkpointed = False
         self.preparation_report = {}
@@ -591,6 +593,9 @@ class Worker:
             # This is lifecycle evidence, not optimistic host send admission.
             event['observedAt'] = time.time()
         root_generation = event_session_id == root_session_id and event_root_id == root_session_id
+        loop = self.session.coordinator.get("orchestrator") if self.session else None
+        if root_generation and self.runtime:
+            self.task_origin.observe(event, self.runtime, loop)
         if root_generation and event.get('type') == 'generation.started':
             # Explicit inputs carry the host epoch captured at transport
             # admission. Native child/job follow-ups inherit this process's
@@ -651,6 +656,9 @@ class Worker:
                 refs = self.terminal_response_refs
                 if refs and refs.get("generationId") == event.get("generation_id"):
                     event["finalMessageRefs"] = refs
+                    proof = self.task_origin.completed(event, self.runtime, loop)
+                    if proof:
+                        event["taskOrigin"] = proof
         publish(event)
         if event.get("type") == "generation.finished" and loop:
             count = sum(not job["task"].done() for job in loop.jobs.values())
@@ -708,6 +716,10 @@ class Worker:
                         run_id=coordinator.get_capability("web.worker_run"))
             return
         coordinator.register_capability("web.activity", True)
+        if self.session is not None and coordinator is self.session.coordinator:
+            loop = coordinator.get("orchestrator")
+            if loop:
+                self.task_origin.install(loop)
         from amplifier_web.performance_diagnostics import install_preparation_timing
         install_preparation_timing(coordinator)
         if self.session is not None and coordinator is self.session.coordinator:
@@ -1012,6 +1024,8 @@ class Worker:
                 async def prepare_execution(self, loop, coordinator, providers):
                     result = await original_host.prepare_execution(loop, coordinator, providers)
                     if coordinator:
+                        if coordinator is host.session.coordinator:
+                            host.task_origin.install(loop)
                         host.install_activity(coordinator)
                         host.install_collaboration_checkpoint(coordinator)
                         await install_app_access(coordinator, host.app_access_bridge(coordinator))
