@@ -363,7 +363,8 @@ async def test_profile_qualification_is_coalesced_and_installed_outside_serving_
 
     monkeypatch.setattr(runtime_qualification, "prepare_overrides", overrides)
 
-    async def freeze(manager, selected, project):
+    async def freeze(manager, selected, project, *, baseline_manifest):
+        assert baseline_manifest == (parent / "pyproject.toml").read_bytes()
         final = home / "runtime" / ("q-" + selected)
         final.mkdir()
         target = runtime_environment.receipt_directory(home, selected)

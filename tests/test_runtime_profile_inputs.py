@@ -180,8 +180,9 @@ def profile_inputs(tmp_path, monkeypatch):
         target.write_text("fixture-installed==1\n")
         return target
 
-    async def freeze(manager, selected, project):
+    async def freeze(manager, selected, project, *, baseline_manifest):
         assert project != parent
+        assert baseline_manifest == (parent / "pyproject.toml").read_bytes()
         final = home / "runtime" / ("q-" + selected)
         final.mkdir()
         (final / "pyproject.toml").write_bytes((project / "pyproject.toml").read_bytes())
@@ -735,3 +736,198 @@ def test_empty_source_normalization_keeps_nonempty_and_unknown_declarations():
                     {'bundles': {'work': 'git+https://example.invalid/work'}},
                     {'unknown': {}}):
         assert key({'sources': sources}) != key({})
+
+
+@pytest.fixture
+async def profile_freeze(tmp_path, monkeypatch):
+    """Real offline uv preparation/freeze; only native bundle probes are synthetic."""
+    import hashlib
+    import shutil
+    import zipfile
+    from amplifier_web import runtime_environment as environments
+    from amplifier_web.host import bundle_paths, config as host_config
+    from test_runtime_updates import Diagnostics
+
+    uv = shutil.which('uv')
+    assert uv, 'The prepared Python test profile must include uv'
+    for key in ('UV_OVERRIDE', 'UV_CONSTRAINT', 'UV_PROJECT_ENVIRONMENT'):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv('UV_OFFLINE', 'true')
+    monkeypatch.setenv('UV_NO_INDEX', 'true')
+    monkeypatch.setenv('UV_CACHE_DIR', str(tmp_path / 'uv-cache'))
+    monkeypatch.setenv('UV_PYTHON_DOWNLOADS', 'never')
+    home, shared, workspace = (tmp_path / name for name in ('app', 'shared', 'workspace'))
+    shared.mkdir()
+    workspace.mkdir()
+    monkeypatch.setenv('AMPLIFIER_HOME', str(shared))
+
+    # Small importable wheels with no registry/build/backend dependencies.
+    def wheel(name):
+        path = tmp_path / f'{name}-1.0-py3-none-any.whl'
+        metadata = f'{name}-1.0.dist-info'
+        files = {
+            f'{name}/__init__.py': b'VALUE = 1\n',
+            f'{metadata}/METADATA': f'Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n'.encode(),
+            f'{metadata}/WHEEL': b'Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n',
+        }
+        files[f'{metadata}/RECORD'] = ''.join(f'{name},,\n' for name in files).encode()
+        with zipfile.ZipFile(path, 'w') as archive:
+            for name, value in files.items():
+                archive.writestr(name, value)
+        return path
+
+    wheels = {name: wheel(name) for name in ('fixture_old', 'fixture_new', 'fixture_lazy', 'fixture_unexpected')}
+    def manifest(names):
+        return ('[project]\nname="fixture-worker"\nversion="1"\nrequires-python=">=3.13"\n'
+                'dependencies=' + json.dumps([
+                    name.replace('_', '-') + ' @ ' + wheels[name].as_uri() for name in names
+                ]) + '\n[tool.uv]\npackage=false\n').encode()
+
+    baseline_a = manifest(['fixture_old'])
+    baseline_b = manifest(['fixture_old', 'fixture_new'])
+    monkeypatch.setattr(environments, 'declared_manifest', lambda **kwargs: baseline_a)
+    manager = SimpleNamespace(home=home, diagnostics=Diagnostics())
+    generation = 'a' * 32
+    receipt = receipt_directory(home, generation)
+    (receipt / 'foundation').mkdir(parents=True)
+    prepared = environments.prepare_project(home, generation, content=baseline_a)
+    process = updates.process
+    await process(uv, 'lock', '--project', str(prepared), '--python', '3.13')
+    await process(uv, 'sync', '--locked', '--project', str(prepared), '--python', '3.13')
+    parent = await runtime_qualification.freeze(manager, generation, prepared)
+    (receipt / 'profiles-qualified.json').write_text(json.dumps({
+        'profiles': ['offered'], 'configuration': runtime_profiles.configuration_key({}),
+    }))
+    (home / 'updates/active.json').write_text(json.dumps({'current': generation}))
+    monkeypatch.setattr(environments, 'declared_manifest', lambda **kwargs: baseline_b)
+    config = SimpleNamespace(settings={}, config_home=shared, workspace=workspace,
+                             active_bundle='work', module_sources={}, bundle_sources={}, home=home)
+    monkeypatch.setattr(host_config, 'read_config', lambda *args, **kwargs: config)
+    monkeypatch.setattr(bundle_paths, 'canonical_bundle_reference', lambda config, bundle: bundle)
+    monkeypatch.setattr(bundle_paths, 'local_bundle_path', lambda *args: None)
+    h = SimpleNamespace(home=home, generation=generation, receipt=receipt, parent=parent,
+                        manager=manager, a=baseline_a, b=baseline_b, uv=uv, process=process,
+                        session={'id': 'fixture', 'workspace': str(workspace), 'bundle': 'work'},
+                        prepared_graphs=[], origins=[], commands=[], corruption=None, wheels=wheels)
+
+    async def controlled_process(*args, **kwargs):
+        h.commands.append(args)
+        if any(str(arg).endswith('/update_probe.py') for arg in args):
+            project = Path(args[args.index('--project') + 1])
+            if '--read-only' not in args:
+                # A profile-only package makes the newly frozen project
+                # distinct from the reusable immutable parent qualification.
+                await process(uv, 'pip', 'install', '--python', str(project / '.venv/bin/python'),
+                              '--no-deps', str(wheels['fixture_lazy']))
+            graph = runtime_qualification.installed_graph(project)
+            h.prepared_graphs.append(graph)
+            # Run the selected worker's actual Python, without Foundation/provider
+            # composition. Assert the installed import origin, not just metadata.
+            result = await process(
+                str(project / '.venv/bin/python'), '-I', '-B', '-c',
+                'import fixture_old, json, pathlib, sys; '
+                'assert pathlib.Path(fixture_old.__file__).is_relative_to(sys.prefix); '
+                'print(json.dumps({"python":sys.executable,"origin":fixture_old.__file__}))')
+            h.origins.append(json.loads(result))
+            return ''
+        result = await process(*args, **kwargs)
+        if '--project' in args and args[1] == 'sync':
+            project = Path(args[args.index('--project') + 1])
+            if project.name.startswith('q-'):
+                if h.corruption == 'addition':
+                    await process(uv, 'pip', 'install', '--python', str(project / '.venv/bin/python'),
+                                  '--no-deps', str(wheels['fixture_unexpected']))
+                elif h.corruption == 'payload':
+                    next(project.glob('.venv/lib/python*/site-packages/fixture_old/__init__.py')).write_text('VALUE = 2\n')
+        return result
+
+    monkeypatch.setattr(updates, 'process', controlled_process)
+    def snapshot():
+        return {str(path.relative_to(home)): hashlib.sha256(path.read_bytes()).hexdigest()
+                for root in (parent, receipt) for path in root.rglob('*') if path.is_file()}
+    h.snapshot = snapshot
+    h.before = snapshot()
+    return h
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+async def test_lazy_profile_freezes_exact_prepared_baseline_not_current_app(profile_freeze, legacy):
+    from amplifier_web import runtime_environment as environments
+    h = profile_freeze
+    if legacy:
+        (h.receipt / 'runtime-base.toml').unlink()
+        h.before = h.snapshot()
+    selected = await runtime_profiles.ensure(h.home, h.generation, h.session)
+    final = environments.project_path(h.home, selected)
+    receipt = receipt_directory(h.home, selected)
+    assert selected != h.generation and final != h.parent
+    assert [row['name'] for row in runtime_qualification.installed_graph(final)] == ['fixture-lazy', 'fixture-old']
+    assert h.prepared_graphs[0] == h.prepared_graphs[1]
+    baseline = (h.parent / 'pyproject.toml').read_bytes() if legacy else h.a
+    assert (receipt / 'runtime-base.toml').read_bytes() == baseline
+    assert (receipt / 'runtime-base.toml').read_bytes() != h.b
+    assert environments.project_path(h.home, h.generation) == h.parent
+    assert h.origins[0]['origin'].startswith(str(h.home / 'runtime/prepare-'))
+    assert h.origins[1]['origin'].startswith(str(final / '.venv'))
+    assert h.origins[1]['python'] == str(final / '.venv/bin/python')
+    assert sum(args[1] == 'sync' for args in h.commands) == 2
+    assert sum(args[1] == 'lock' for args in h.commands) == 1
+    assert h.snapshot() == h.before
+    # Warm reuse must not repeat preparation, freeze, probes or receipt writes.
+    commands = list(h.commands)
+    assert await runtime_profiles.ensure(h.home, h.generation, h.session) == selected
+    assert h.commands == commands
+    assert h.snapshot() == h.before
+
+    # Real predecessor discriminator: preparing A but freezing from B adds one
+    # distribution. This is deliberately not an admitted generation.
+    wrong = h.home / 'wrong-freeze'
+    wrong.mkdir()
+    (wrong / 'pyproject.toml').write_bytes(runtime_qualification.frozen_manifest(h.b, h.prepared_graphs[0]))
+    await h.process(h.uv, 'lock', '--project', str(wrong), '--python', '3.13')
+    await h.process(h.uv, 'sync', '--locked', '--project', str(wrong), '--python', '3.13')
+    assert [row['name'] for row in runtime_qualification.installed_graph(wrong)] == ['fixture-lazy', 'fixture-new', 'fixture-old']
+
+
+async def test_fresh_component_generation_adopts_b_before_freeze(profile_freeze):
+    from amplifier_web import runtime_environment as environments
+    h = profile_freeze
+    generation = 'b' * 32
+    receipt = receipt_directory(h.home, generation)
+    receipt.mkdir(parents=True)
+    update = next(row for row in environments.inventory(h.home) if row['id'] == 'runtime:environment')
+    project = await environments.stage(h.manager, generation, [update], finalize=False)
+    await h.process(h.uv, 'sync', '--locked', '--project', str(project), '--python', '3.13')
+    graph = runtime_qualification.installed_graph(project)
+    assert [row['name'] for row in graph] == ['fixture-new', 'fixture-old']
+    final = await runtime_qualification.freeze(h.manager, generation, project)
+    assert runtime_qualification.installed_graph(final) == graph
+    assert (receipt / 'runtime-base.toml').read_bytes() == h.b
+    assert h.snapshot() == h.before
+
+
+@pytest.mark.parametrize('corruption', ['addition', 'payload'])
+async def test_profile_freeze_keeps_strict_graph_and_payload_refusal(profile_freeze, corruption):
+    h = profile_freeze
+    h.corruption = corruption
+    with pytest.raises(ValueError, match='differs from its prepared source graph'):
+        await runtime_profiles.ensure(h.home, h.generation, h.session)
+    stages = [path for path in (h.home / 'updates/releases').iterdir() if path != h.receipt]
+    assert len(stages) == 1
+    stage = stages[0]
+    attempt = json.loads((stage / 'profile-attempt.json').read_text())
+    assert attempt['status'] == 'failed'
+    final = Path(attempt['paths']['qualifiedProject'])
+    prepared = Path(attempt['paths']['preparationProject'])
+    assert final.exists() and prepared.exists()
+    graph = runtime_qualification.installed_graph(final)
+    if corruption == 'addition':
+        assert [row['name'] for row in graph] == ['fixture-lazy', 'fixture-old', 'fixture-unexpected']
+    else:
+        assert graph == h.prepared_graphs[0]  # Payload guard, not graph mismatch.
+        assert runtime_qualification.package_content(final) != runtime_qualification.package_content(prepared)
+    assert not (stage / 'validated.json').exists()
+    assert not (stage / 'runtime-installed.json').exists()
+    assert not (stage / 'runtime.lock').exists()
+    assert not list((h.home / 'updates/profiles').glob('*.json'))
+    assert h.snapshot() == h.before

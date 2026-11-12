@@ -405,6 +405,10 @@ async def ensure(home, generation, session, *, progress=None):
         current = project_path(home, generation)
         shutil.copy2(current / "pyproject.toml", project / "pyproject.toml")
         shutil.copy2(current / "uv.lock", project / "uv.lock")
+        # Baseline policy is distinct from the parent's exact frozen manifest.
+        # Never label this older prepared graph as adopting current app policy.
+        baseline = receipt / "runtime-base.toml"
+        baseline_manifest = (baseline if baseline.exists() else project / "pyproject.toml").read_bytes()
         from .runtime_qualification import freeze, prepare_overrides, verify_recorded
         from .update_sources import store_environment
 
@@ -471,7 +475,8 @@ async def ensure(home, generation, session, *, progress=None):
 
         manager = SimpleNamespace(home=home, diagnostics=Diagnostics())
         await report("Saving this chat’s prepared setup…")
-        final = await _run_phase(stage, attempt, "runtime-freeze", freeze, manager, selected, project)
+        final = await _run_phase(stage, attempt, "runtime-freeze", freeze, manager, selected, project,
+                                 baseline_manifest=baseline_manifest)
         attempt["paths"]["qualifiedProject"] = str(final)
         _write_attempt(stage, attempt)
         overrides = stage / "runtime-install-overrides.txt"
