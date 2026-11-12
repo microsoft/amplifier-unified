@@ -26,6 +26,16 @@ try{
  const launch={headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})};
  const options={viewport:{width:1300,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}};
  browser=await chromium.launch(launch);page=await browser.newPage(options);
+ // Delay actual host frames, never synthesize receipt state. This distinguishes
+ // an exact read result from an older stream projection of the same operation.
+ let delayedFrames=null;
+ await page.routeWebSocket(/\/api\/events\/ws(?:\?|$)/,socket=>{
+  const server=socket.connectToServer();
+  server.onMessage(message=>{
+   if(delayedFrames)delayedFrames.push({frame:JSON.parse(message),deliver:()=>socket.send(message)});
+   else socket.send(message);
+  });
+ });
  // Independent browser processes also work with the DTU ARM single-process workaround.
  otherBrowser=await chromium.launch(launch);const other=await otherBrowser.newPage(options);
  for(const current of [page,other])current.on('pageerror',error=>errors.push(error.message));
@@ -42,6 +52,28 @@ try{
  };
  const card=id=>page.locator(`[data-handoff-id="${id}"]`);
  const row=id=>state(page).then(value=>value.handoffs.find(row=>row.requestId===id));
+ const history=(current=page)=>current.locator('details.a-handoffs-past');
+ const summary=(current=page)=>history(current).locator(':scope > summary');
+ const collapsed=async(count,current=page)=>{
+  await expect(history(current)).toHaveCount(1);
+  await expect(summary(current)).toHaveText(`Past handoffs (${count})`);
+  await expect(history(current)).not.toHaveAttribute('open','');
+  await expect(history(current).locator('[data-handoff-id]')).toHaveCount(count);
+  await expect(history(current).locator('[data-handoff-id]:visible')).toHaveCount(0);
+ };
+ const expand=async(current=page)=>{
+  await summary(current).focus();await summary(current).press('Enter');
+  await expect(history(current)).toHaveAttribute('open','');
+ };
+ const details=async(receiptCard)=>{
+  await receiptCard.locator(':scope > details > summary').focus();
+  await receiptCard.locator(':scope > details > summary').press('Enter');
+  await expect(receiptCard.locator('pre')).toBeVisible();
+ };
+ const prominent=async(id)=>{
+  await expect(page.locator(`.a-handoffs > [data-handoff-id="${id}"]`)).toBeVisible();
+  await expect(history().locator(`[data-handoff-id="${id}"]`)).toHaveCount(0);
+ };
  const draft='Keep this source-only draft. Do not send it.';
  await composer.fill(draft);await expect(composer).toHaveDraft(draft);
  observations.before=await inspect();assert.equal(observations.before.sessions.length,2);assert.equal(observations.before.sent.length,0);
@@ -54,6 +86,9 @@ try{
  await expect(review).toContainText(info.target);await expect(review).toContainText('fixture-model');await expect(review).toContainText('anchors');
  phase='other-client-isolation';await other.reload();await expect(otherComposer).toBeVisible();assert.equal((await state(other)).selectedSessionId,info.sourceId);
  await expect(other.getByRole('region',{name:'New chat requests',exact:true})).toHaveCount(0);assert.deepEqual((await state(other)).handoffs,[],'fresh owner projection excludes another client’s review');
+ const deniedRead=await action(other,'session.handoff.read',{requestId:proposal.requestId}).then(value=>({value}),error=>({error:error.message}));
+ assert.ok(deniedRead.error||deniedRead.value?.accepted===false,'another client cannot inspect the private review by exact ID');
+ assert.deepEqual(await inspect(),observations.before,'refused private review read must not create or send work');
  await action(other,'session.select',{id:info.otherSourceId});await otherComposer.fill('Other browser private draft');await expect(otherComposer).toHaveDraft('Other browser private draft');
  assert.deepEqual(await inspect(),observations.before,'a proposal does not create or start work');
  phase='pending-review-reload';const reloadStarted=Date.now();await page.reload();await expect(review).toBeVisible();await expect(composer).toHaveDraft(draft);assert.equal((await row(proposal.requestId)).reviewHash,proposal.reviewHash);timings.reloadReviewMs=Date.now()-reloadStarted;
@@ -70,9 +105,10 @@ try{
  phase='cancel';const cancelled=await propose('review-cancel','Not needed','This brief must never be sent.');
  await card(cancelled.requestId).getByRole('button',{name:'Not now',exact:true}).click();
  await expect.poll(async()=>(await row(cancelled.requestId))?.status).toBe('cancelled');
+ await collapsed(1);await prominent(proposal.requestId);
  assert.deepEqual(await inspect(),observations.before,'cancel creates no target and starts no runtime');
- // Delay the real confirmation to check the local click fence. Then let the
- // real host finish but lose the HTTP reply; backend receipts remain authoritative.
+ // Delay the real confirmation to check the local click fence. Lose the HTTP
+ // reply while the synthetic recipient holds its initial-input acknowledgement.
  phase='confirm-lost-ack';let release,enteredResolve;const hold=new Promise(resolve=>release=resolve),entered=new Promise(resolve=>enteredResolve=resolve);
  let confirmRequests=0,replyLost=false;
  const intercept=async route=>{
@@ -89,10 +125,38 @@ try{
  if(await confirmButton.count())await expect(confirmButton).toBeDisabled();
  await review.evaluate(element=>element.querySelector('[data-action="session.handoff.confirm"]')?.click());assert.equal(confirmRequests,1);
  const confirmReleased=Date.now();release();await expect.poll(()=>replyLost).toBe(true);
- await expect(review.getByRole('button',{name:'Check status',exact:true})).toBeEnabled();
+ await expect(review.getByRole('button',{name:'Check delivery',exact:true})).toBeEnabled();
  await expect.poll(async()=>(await inspect()).sent.length).toBe(1);
- await review.getByRole('button',{name:'Check status',exact:true}).click();
+ await expect.poll(async()=>(await row(proposal.requestId))?.status).toBe('delivering');
+ await prominent(proposal.requestId);await collapsed(1);
+ await post('/fixture/delivery',{requestId:proposal.requestId,stage:'unknown'});
+ await expect.poll(async()=>(await row(proposal.requestId))?.status).toBe('unknown');
+ await review.getByRole('button',{name:'Check delivery',exact:true}).click();
+ await expect(review.getByRole('button',{name:'Check delivery',exact:true})).toBeEnabled();
+ await expect(review.getByRole('alert')).toHaveCount(0);
+ await prominent(proposal.requestId);await collapsed(1);
+ assert.equal((await row(proposal.requestId)).delivery,'unknown');
+ const unknown=await row(proposal.requestId);
+ // Keep an older real projection pending while the canonical late runtime
+ // receipt arrives. The next manual read must settle the UI before that stream.
+ delayedFrames=[];
+ const retainedReview=await propose('review-retained','Still needs review','Keep this private review visible while delivery settles.');
+ await expect.poll(()=>delayedFrames.some(({frame})=>JSON.stringify(frame).includes(retainedReview.requestId))).toBe(true);
+ const olderFrames=delayedFrames.splice(0);
+ await post('/fixture/delivery',{requestId:proposal.requestId,stage:'accepted'});
+ await expect.poll(()=>delayedFrames.length).toBeGreaterThan(0);
+ await review.getByRole('button',{name:'Check delivery',exact:true}).click();
+ await collapsed(2);await expect(summary()).toBeFocused();
+ assert.equal((await row(proposal.requestId)).status,'unknown','held stream must lag the exact read');
+ for(const frame of olderFrames)frame.deliver();
+ await prominent(retainedReview.requestId);
+ await collapsed(2);
+ assert.equal((await row(proposal.requestId)).status,'unknown','late older projection must exercise retained read result');
+ const lateFrames=delayedFrames;delayedFrames=null;for(const frame of lateFrames)frame.deliver();
  await expect.poll(async()=>(await row(proposal.requestId))?.status).toBe('accepted');
+ await collapsed(2);
+ assert.ok((await row(proposal.requestId)).revision>unknown.revision);
+ observations.delayedStream={olderFrames:olderFrames.length,lateFrames:lateFrames.length};
  timings.confirmReleasedToReconciledMs=Date.now()-confirmReleased;
  await page.unroute('**/api/actions',intercept);
  observations.accepted=await inspect();const accepted=await row(proposal.requestId);
@@ -101,9 +165,15 @@ try{
  assert.equal(observations.accepted.sent[0].text,brief);assert.equal(observations.accepted.sent[0].workspace,info.target);
  assert.equal((await state(page)).selectedSessionId,info.sourceId);await expect(composer).toHaveDraft(draft);
  assert.equal((await state(other)).selectedSessionId,info.otherSourceId);await expect(otherComposer).toHaveDraft('Other browser private draft');
- phase='accepted-review-reload';await page.reload();await expect(review.getByRole('button',{name:'Open chat',exact:true})).toBeVisible();await expect(composer).toHaveDraft(draft);
+ phase='accepted-review-reload';await page.reload();await collapsed(2);await prominent(retainedReview.requestId);await expect(composer).toHaveDraft(draft);
+ const beforeHistory=actions.length;
+ await expand();await expect(review.getByRole('button',{name:'Open chat',exact:true})).toBeVisible();
+ await details(review);await expect(review.locator('pre')).toHaveText(brief);
+ await expect(review).toContainText('does not mean its requested work has completed');
+ assert.equal(actions.length,beforeHistory,'keyboard disclosure must not dispatch an app action');
  await review.scrollIntoViewIfNeeded();await page.screenshot({path:join(output,'accepted-desktop.png'),animations:'disabled'});
- await review.getByRole('button',{name:'Check status',exact:true}).click();
+ await review.getByRole('button',{name:'Check delivery',exact:true}).click();
+ await expect(review.getByRole('button',{name:'Check delivery',exact:true})).toBeEnabled();
  await expect.poll(async()=>(await row(proposal.requestId))?.status).toBe('accepted');assert.deepEqual(await inspect(),observations.accepted,'reload and status read must not repeat creation or delivery');
  const reads=actions.filter(value=>value.action==='session.handoff.read').length;
  await page.waitForTimeout(1700);assert.equal(actions.filter(value=>value.action==='session.handoff.read').length,reads,'idle UI must not poll handoff receipts');
@@ -115,11 +185,12 @@ try{
  await expect(card(stale.requestId)).toBeVisible();await post('/fixture/remove-target',{});
  await card(stale.requestId).getByRole('button',{name:'Create and start',exact:true}).click();
  await expect(card(stale.requestId).getByRole('alert')).toBeVisible();
- await expect(card(stale.requestId).getByRole('button',{name:'Check status',exact:true})).toBeVisible();
+ await expect(card(stale.requestId).getByRole('button',{name:'Check delivery',exact:true})).toBeVisible();
+ await prominent(stale.requestId);await prominent(retainedReview.requestId);
  assert.deepEqual(await inspect(),observations.accepted,'stale target refusal creates and sends nothing');
- observations.final=await inspect();observations.acceptedReceipt=accepted;
+ observations.afterStale=await inspect();observations.acceptedReceipt=accepted;
  assert.equal(confirmRequests,1);assert.equal(actions.filter(value=>value.action==='session.handoff.confirm'&&value.args.requestId===proposal.requestId).length,1);
- await page.screenshot({path:join(output,'completed-and-stale.png'),animations:'disabled'});
+ await page.screenshot({path:join(output,'accepted-and-stale.png'),animations:'disabled'});
  // An explicit requested start uses the agent bridge directly, without a second
  // human approval. Lose only the transport reply after the real host accepts it.
  phase='direct-start-lost-ack';
@@ -145,9 +216,9 @@ try{
  assert.notEqual(observations.directStartResponse.result.status,'pending','explicit start is not a review proposal');
  await page.unroute('**/fixture/start',interceptStart);
  const directCard=card(direct.requestId);
- await expect(directCard).toBeVisible();
- await expect(directCard.getByRole('button',{name:'Create and start',exact:true})).toHaveCount(0);
  await expect.poll(async()=>(await row(direct.requestId))?.status).toBe('accepted');
+ await collapsed(3);await expand();await expect(directCard).toBeVisible();
+ await expect(directCard.getByRole('button',{name:'Create and start',exact:true})).toHaveCount(0);
  timings.directStartToAcceptedMs=Date.now()-directStarted;
  const directReceipt=await row(direct.requestId);observations.directAcceptedReceipt=directReceipt;
  observations.directAccepted=await inspect();
@@ -169,25 +240,89 @@ try{
  const retry=await post('/fixture/start',direct);assert.equal(retry.accepted,true,JSON.stringify(retry));
  assert.equal(retry.result.targetSessionId,directReceipt.targetSessionId);assert.equal(retry.result.inputId,directReceipt.inputId);
  assert.deepEqual(await inspect(),observations.directAccepted,'identical explicit start retry must not replay work');
- await page.reload();await expect(directCard.getByRole('button',{name:'Open chat',exact:true})).toBeVisible();
+ await page.reload();await collapsed(3);await expand();await expect(directCard.getByRole('button',{name:'Open chat',exact:true})).toBeVisible();
  await expect(composer).toHaveDraft(draft);assert.equal((await state(page)).selectedSessionId,info.sourceId);
- await directCard.getByRole('button',{name:'Check status',exact:true}).click();
+ await details(directCard);await expect(directCard.locator('pre')).toHaveText(direct.text);
+ await directCard.getByRole('button',{name:'Check delivery',exact:true}).click();
+ await expect(directCard.getByRole('button',{name:'Check delivery',exact:true})).toBeEnabled();
  await expect.poll(async()=>(await row(direct.requestId))?.status).toBe('accepted');
  assert.equal((await row(direct.requestId)).targetSessionId,directReceipt.targetSessionId);
  assert.equal((await row(direct.requestId)).inputId,directReceipt.inputId);
  assert.deepEqual(await inspect(),observations.directAccepted,'direct-start reload and status read must not replay work');
  // Deliberately visit the same source in the other client only after asserting
- // that creation preserved its original selection/draft. Receipt ownership holds.
+ // that creation preserved its original selection/draft. NewChatHandoffs.project
+ // includes conversation-owned starts for that source; private reviews are not
+ // shared (authorize still requires the original/restored client for reviews).
  phase='direct-start-other-client';
  await action(other,'session.select',{id:info.sourceId});await other.reload();await expect(otherComposer).toBeVisible();
- await expect(other.locator(`[data-handoff-id="${direct.requestId}"]`)).toHaveCount(0);
- assert.equal((await state(other)).handoffs.some(value=>value.requestId===direct.requestId),false);
+ await collapsed(1,other);await expand(other);
+ await expect(other.locator(`[data-handoff-id="${direct.requestId}"]`)).toBeVisible();
+ assert.equal((await state(other)).handoffs.find(value=>value.requestId===direct.requestId).inputId,directReceipt.inputId);
+ for(const id of [proposal.requestId,cancelled.requestId,retainedReview.requestId,stale.requestId]){
+  await expect(other.locator(`[data-handoff-id="${id}"]`)).toHaveCount(0);
+  assert.equal((await state(other)).handoffs.some(value=>value.requestId===id),false,'private reviews must not leak with shared direct receipts');
+ }
+ await other.locator(`[data-handoff-id="${direct.requestId}"] > details > summary`).press('Enter');
+ await other.locator(`[data-handoff-id="${direct.requestId}"]`).getByRole('button',{name:'Check delivery',exact:true}).click();
+ await expect(other.locator(`[data-handoff-id="${direct.requestId}"]`).getByRole('button',{name:'Check delivery',exact:true})).toBeEnabled();
  await action(other,'session.select',{id:info.otherSourceId});await expect(otherComposer).toHaveDraft('Other browser private draft');
  observations.directFinal=await inspect();assert.deepEqual(observations.directFinal,observations.directAccepted);
+ // Eight genuine settled receipts share one small default disclosure. Keep an
+ // unfinished private review alongside them; do not lower counts to fit history.
+ phase='eight-settled-history';
+ const extra=[];
+ for(let index=0;index<5;index++){
+  const request={...direct,requestId:`history-start-${index}`,title:`History chat ${index+1}`,text:`Exact history brief ${index+1}.`,clientId:(await state(page)).client.id};
+  const response=await post('/fixture/start',request);assert.equal(response.accepted,true,JSON.stringify(response));
+  await expect.poll(async()=>(await row(request.requestId))?.status).toBe('accepted');
+  extra.push(await row(request.requestId));
+ }
+ const failedRequest={...direct,requestId:'history-failed',title:'Undelivered initial brief',
+  text:'Fixture: reject this initial brief before recipient admission.',clientId:(await state(page)).client.id};
+ const failedStart=await post('/fixture/start',failedRequest);assert.equal(failedStart.accepted,true,JSON.stringify(failedStart));
+ await expect.poll(async()=>(await row(failedRequest.requestId))?.status).toBe('failed');
+ const failed=await row(failedRequest.requestId);assert.equal(failed.creation,'created');assert.equal(failed.delivery,'failed');
+ await prominent(failedRequest.requestId);
+ observations.historyBefore=await inspect();
+ assert.equal(observations.historyBefore.sessions.length,10);assert.equal(observations.historyBefore.sent.length,8);
+ for(const receipt of [accepted,directReceipt,...extra,failed]){
+  assert.equal(observations.historyBefore.sent.filter(value=>value.inputId===receipt.inputId).length,1,'each exact opening input has one send attempt, including the refused input');
+ }
+ observations.historyFootprints=[];
+ for(const width of [1300,320]){
+  await page.setViewportSize({width,height:width===320?844:1000});
+  await page.reload();await collapsed(8);await prominent(retainedReview.requestId);await prominent(failed.requestId);
+  await expect(card(failed.requestId).getByRole('button',{name:'Check delivery',exact:true})).toBeVisible();
+  await expect(card(retainedReview.requestId).locator('pre')).toHaveText(retainedReview.text);
+  await expect(card(retainedReview.requestId).getByRole('button',{name:'Create and start',exact:true})).toBeEnabled();
+  await expect(composer).toHaveDraft(draft);assert.equal((await state(page)).selectedSessionId,info.sourceId);
+  await summary().scrollIntoViewIfNeeded();
+  const box=await history().boundingBox();assert.ok(box&&box.height<=64,`collapsed history at ${width}px must fit one compact disclosure (<=64px), got ${JSON.stringify(box)}`);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'history must not overflow the viewport');
+  observations.historyFootprints.push({width,height:box.height});
+  await page.screenshot({path:join(output,`history-collapsed-${width}.png`),animations:'disabled'});
+  const before=actions.length;await expand();
+  await expect(history().locator('[data-handoff-id]:visible')).toHaveCount(8);
+  await expect(history().locator('pre:visible')).toHaveCount(0);
+  await expect(history().getByText('Opening brief acceptance is not work completion.',{exact:true})).toBeVisible();
+  await details(directCard);await expect(directCard.locator('pre')).toHaveText(direct.text);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'expanded history details must not overflow the viewport');
+  await expect(directCard.getByRole('button',{name:'Open chat',exact:true})).toBeVisible();
+  await summary().focus();await summary().press('Space');await collapsed(8);
+  assert.equal(actions.length,before,'history expansion/details/collapse must not change app state or send input');
+  await expect(composer).toHaveDraft(draft);
+ }
+ const historyReads=actions.filter(value=>value.action==='session.handoff.read').length;
+ await page.waitForTimeout(1700);
+ assert.equal(actions.filter(value=>value.action==='session.handoff.read').length,historyReads,'collapsed history must not poll delivery');
+ assert.deepEqual(await inspect(),observations.historyBefore,'history interaction/reload must not create chats or resend briefs');
+ await expect(otherComposer).toHaveDraft('Other browser private draft');
+ assert.equal((await state(other)).selectedSessionId,info.otherSourceId);
+ observations.final=await inspect();
  observations.directStartTransport={initialRequests:startRequests,replyLost:startReplyLost,identicalRequestRetry:true,confirmationRequests:0};
  assert.equal(startRequests,1);assert.deepEqual(errors,[]);
  await writeFile(join(output,'result.json'),JSON.stringify({passed:true,elapsedMs:Date.now()-started,timings,source:'real host + packaged UI; synthetic recipient',clientId,otherClientId,confirmRequests,idleReceiptObservationMs:1700,observations,errors,limits:['No model, provider, file-reading, host-restart, or native-device acceptance.','The brief is accepted once; its requested work is not claimed complete.']},null,2)+'\n');
- console.log('Cross-workspace handoff passed: explicit start without confirmation, replay-safe retry/reload, exact review, cancel, owner isolation, lost acknowledgement, durable target/input counts, preserved drafts, explicit navigation, stale refusal, narrow layout.');
+ console.log('Cross-workspace handoff passed: exact host confirmation/read, unknown and late acceptance, retained read result, eight collapsed receipts, keyboard details, private review/shared direct ownership, replay-safe retry, preserved drafts, explicit navigation, narrow layout.');
 }catch(error){
  const current=page?await state(page).catch(()=>null):null;
  await writeFile(join(output,'failure.json'),JSON.stringify({phase,message:error.message,elapsedMs:Date.now()-started,observations,actions,errors,state:current?{selectedSessionId:current.selectedSessionId,client:current.client,handoffs:current.handoffs,draft:current.view?.draft}:null},null,2)+'\n');

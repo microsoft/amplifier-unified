@@ -84,12 +84,25 @@ state. Stop and ordinary runtime permissions apply once work is accepted.
 
 ## Interaction
 
-Direct requests show a compact receipt without a confirmation prompt.
-Suggestions show a compact review. **Not now** cancels
+Direct requests show a receipt without a confirmation prompt.
+Suggestions show a review. **Not now** cancels
 the pending proposal without starting work. Both direct execution and **Create and start** leave the
 current selection and unsent text unchanged. **Open chat** is a separate explicit
 navigation action after creation is confirmed, using ordinary navigation guards.
 Other clients keep their own selection, draft and attachments throughout.
+
+Known accepted and cancelled receipts share one **Past handoffs (N)** disclosure,
+collapsed by default, rather than a stack of full cards in the conversation.
+Expanding it shows compact entries with **Open chat** when creation is confirmed
+and **Details** for the exact opening brief, destination and configuration.
+Both disclosures are keyboard-operable. Pending reviews, in-progress delivery,
+unknown or failed outcomes, and unconfirmed interactions remain outside this
+history, visibly actionable. An accepted receipt means only that the opening
+brief was accepted, not that the requested work finished.
+
+Collapsing history is presentation only. It does not delete the journal, change
+receipt identities, submit input, change a draft or select another chat. Reload
+or a visit to another source chat restores the default collapsed presentation.
 
 Direct receipts are read by their calling conversation using the stable request ID,
 and shown to clients viewing that source chat. An optional client ID does not own
@@ -98,9 +111,14 @@ keep their original mode and ownership, including after enabling Full.
 A request cannot upgrade a review, replace another owner's operation or change
 its brief. Exact retries preserve the original actor and never replay uncertainty.
 
-For client-owned handoffs, status is delivered through the existing state stream, with a manual **Check
-status** action for an uncertain response. Rendering, reopening or reconnecting
-does not poll a creation action or replay it. The host returns only a bounded set
+Receipt updates use the existing state stream. **Check delivery** reads the exact
+saved handoff and reconciles known creation and initial-input receipts; it does
+not check whether the recipient completed its work or resend the brief. The
+control remains available with receipt details after acceptance. A newer exact
+read result is retained while an older stream update catches up; uncertainty or
+an unconfirmed interaction is not silently presented as settled history.
+Rendering, expanding history, reopening or reconnecting does not poll receipts,
+create a chat or replay input. The host returns only a bounded set
 of reviews for the originating client and selected source conversation. Reload
 restores references to exact existing reviews across chats, preserving their
 immutable identities. A duplicated presentation can inspect the same saved
