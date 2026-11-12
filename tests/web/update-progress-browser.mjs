@@ -64,7 +64,7 @@ try{
  const readObservations=async()=>{const response=await page.request.get(base+'/fixture/update-observations');assert.ok(response.ok());return response.json()};
  const beforeControlError=await readObservations();
  await stage('unrelated-control');
- await expect(overview).toContainText('Waiting for 3 chats to finish');
+ await expect(overview).toContainText('Waiting for work to finish');
  await expect(page.locator('[data-part="settings-experience"]')).not.toContainText('Unsupported runtime control');
  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().management?.error)).toBe('ValueError: Unsupported runtime control: goal.get');
  await updates.locator('[data-part="update-blockers"]>summary').click();
@@ -82,7 +82,7 @@ try{
  await stage('initial');await expect(overview).toContainText('Getting Amplifier ready');await expect(overview).not.toContainText('Finishing your update');
  await stage('regular');await expect(overview).toContainText('Finishing your update');
  await stage('compatibility');await expect(updates).toContainText('12 of 37 completed');
- await stage('waiting');await expect(overview).toContainText('Waiting for your work to finish');
+ await stage('waiting');await expect(overview).toContainText('Waiting for work to finish');
  await expect(updates).not.toContainText('12 of 37 completed');
  await expect(overview.locator('.a-progress-spinner')).toHaveCount(0);
  await updates.locator('[data-part="update-blockers"]>summary').click();
@@ -261,7 +261,7 @@ try{
  await page.getByLabel('Color mode',{exact:true}).selectOption('dark');
  await openSettingsPage(page,'updates');
  await stage('waiting');
- await expect(overview).toContainText('Waiting for your work to finish');
+ await expect(overview).toContainText('Waiting for work to finish');
  // Earlier failures opened details deliberately. A working transition does not
  // discard that disclosure state; close it explicitly to test progressive access.
  if(await advanced.evaluate(element=>element.open))await advanced.locator('summary').first().click();
