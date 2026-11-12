@@ -741,6 +741,59 @@ async def test_export(mounted):
     expected = check_routing(mounted)
     resources = mounted.controls.export_resources()
     before = copy.deepcopy(resources)
+    if capture := os.environ.get("UNIFIED_EXPORT_CAPTURE"):
+        # Opt-in causal snapshot immediately before the unchanged serializer.
+        # Never embed complete instructions, context bodies or provider settings.
+        bundle = mounted.prepared.bundle
+        registry = mounted.session.coordinator.get_capability("web.registry")
+        states = registry.get_state() if registry else {}
+        roots = getattr(bundle, "source_base_paths", {}) or {}
+        foundation = mounted.inputs.env.roots["foundation"]
+        common = foundation / "context/shared/common-agent-base.md"
+        reference = re.compile(r"@foundation:([\w./-]+)")
+        instructions = []
+        for name, row in mounted.prepared.mount_plan.get("agents", {}).items():
+            refs = sorted(set(reference.findall(json.dumps(row, default=str))))
+            if refs:
+                instructions.append({
+                    "agent": name, "references": refs,
+                    "source_candidates": [str(path) for path in
+                        mounted.inputs.state.repositories.glob("*/agents/*.md")
+                        if path.stem == name.split(":")[-1]],
+                })
+        snapshot = {
+            "bundle": {"name": bundle.name, "base_path": str(getattr(bundle, "base_path", None)),
+                       "source_base_paths": {key: str(value) for key, value in roots.items()}},
+            "registry": {name: {key: getattr(state, key, None) for key in
+                         ("uri", "local_path", "is_root", "root_name", "loaded_at")}
+                         for name, state in states.items()},
+            "selected_bundle": mounted.inputs.config.active_bundle,
+            "configured_sources": mounted.inputs.config.settings.get("sources", {}).get("bundles", {}),
+            "collector": {
+                "namespaces": resources["namespaces"], "warnings": resources["warnings"],
+                "routingMatrix_present": "routingMatrix" in resources,
+                "context": [{key: row.get(key) for key in ("name", "uri", "relativePath")} |
+                            {"sha256": hashlib.sha256(row["text"].encode()).hexdigest()}
+                            for row in resources["context"]],
+            },
+            "foundation_common": {"path": str(common), "exists": common.is_file(),
+                                  "sha256": hashlib.sha256(common.read_bytes()).hexdigest()
+                                  if common.is_file() else None},
+            "foundation_mappings": [
+                {"namespace": name, "path": str(value), "resolved": str(Path(value).resolve()),
+                 "common_candidate": str(Path(value) / "context/shared/common-agent-base.md"),
+                 "inside_prepared_foundation": Path(value).resolve().is_relative_to(foundation.resolve())}
+                for name, value in roots.items() if name == "foundation"
+            ],
+            "agent_foundation_references": instructions,
+            "product": public_provenance(mounted.inputs.unified),
+            "foundation": public_provenance(mounted.inputs.foundation),
+            "fixture_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        }
+        with Path(capture).open("x") as stream:
+            json.dump(snapshot, stream, indent=2, sort_keys=True, default=str)
+        emit({"status": "export_snapshot", "path": capture,
+              "sha256": hashlib.sha256(Path(capture).read_bytes()).hexdigest()})
     manager = BundleManager(mounted.inputs.config.home)
     exported = manager.export_document(
         mounted.inputs.config.settings, effective_plan=mounted.session.coordinator.config,
