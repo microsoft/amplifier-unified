@@ -1354,7 +1354,7 @@ def test_destination_history_manual_route_is_fixed_and_preserves_default_coverag
                    'test_approachable_shell.py', 'test_automation_overview.py', 'test_schedules.py',
                    'test_schedule_new_tasks.py'):
         assert f'tests/{target}' in run
-    assert 'amplifier_scheduling/tests/test_policy_store.py' in run
+    assert 'components/scheduling/tests/test_policy_store.py' in run
     assert 'tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage' in run
     assert 'tests/test_release_qualification.py' not in run
     for target in ('destination-history', 'destination-history-ui', 'api',
