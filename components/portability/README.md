@@ -4,7 +4,7 @@ This package owns signed transfer journals (`TransferNode`) and bounded Git
 capsules. It does not run an agent, contact a provider, transport files over the
 network or convert native session histories. The embedding host supplies task
 authorization, checkpointing, native writer fencing, destination readiness and
-execution admission. Unified's [task portability guide](../../docs/TASK-PORTABILITY.md)
+execution admission. Unified's [task portability guide](https://github.com/microsoft/amplifier-unified/blob/main/docs/TASK-PORTABILITY.md)
 describes that host workflow and its existing contract.
 
 `TransferNode` retains private signing identities, configured peer keys, exact
@@ -40,8 +40,13 @@ uv pip install /path/to/amplifier_worktrees-0.1.0-py3-none-any.whl '.[test]'
 ```
 
 Within this temporary Unified authoring tree, the sibling `../worktrees` project
-can build that prerequisite with `uv build --wheel --out-dir /your/owned/wheelhouse
-../worktrees`. Retain the selected source revision and wheel hash; a matching
+can build that prerequisite:
+
+```sh
+uv build --wheel --out-dir /your/owned/wheelhouse ../worktrees
+```
+
+Retain the selected source revision and wheel hash; a matching
 preparation version alone does not identify the exact qualified bytes. Do not
 copy its helper implementations into this package.
 
