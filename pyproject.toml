@@ -8,8 +8,8 @@ requires-python = ">=3.13"
 dependencies = [
     "amplifier-memory @ git+https://github.com/microsoft/amplifier-bundle-memory@main",
     "amplifier-core>=2.0.2",
-    "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
-    "amplifier-module-hooks-session-naming @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/hooks-session-naming",
+    "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@05082c89a171758f8d0fb9d8df630ea581e5bdb5",
+    "amplifier-module-hooks-session-naming @ git+https://github.com/microsoft/amplifier-foundation@05082c89a171758f8d0fb9d8df630ea581e5bdb5#subdirectory=modules/hooks-session-naming",
     "aiohttp>=3.12,<4",
     "packaging>=24",
     "cryptography>=44,<51",

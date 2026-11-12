@@ -329,8 +329,9 @@ async def test_packaged_worker_preparation_and_included_foundation_update(
         tmp_path, monkeypatch, record_property):
     """Real full worker graph and UpdateManager.validate, no model generation.
 
-    The DTU serves the exact candidate repository as its isolated main; this is
-    candidate transport evidence, never proof of upstream main acceptance.
+    Candidate DTUs may serve a snapshot as main; record that revision separately.
+    Accepted-source runs use the canonical HTTPS repository without rewriting it.
+    Explicit predecessor inputs are copied from a previously shipped revision.
     """
     from amplifier_web.service import AppService
     from amplifier_web.bundles import SNAPSHOT_VERSION
@@ -343,7 +344,8 @@ async def test_packaged_worker_preparation_and_included_foundation_update(
     url = 'https://github.com/microsoft/amplifier-foundation'
     names = {'amplifier-foundation': '',
              'amplifier-module-hooks-session-naming': 'modules/hooks-session-naming'}
-    root = Path(__file__).resolve().parents[1]
+    root = Path(os.environ.get('FOUNDATION_INTEGRATION_SOURCE_ROOT',
+                               Path(__file__).resolve().parents[1]))
     home, shared = tmp_path / 'app', tmp_path / 'shared'
     home.mkdir(); shared.mkdir()
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(home))
@@ -355,9 +357,14 @@ async def test_packaged_worker_preparation_and_included_foundation_update(
         monkeypatch.delenv(key, raising=False)
     uv = shutil.which('uv')
     assert uv and sys.version_info[:2] == (3, 13)
-    baseline = environments.prepare_project(home)
     packaged = environments.manifest_path().read_bytes()
-    assert (baseline / 'pyproject.toml').read_bytes() == packaged
+    predecessor_manifest = os.environ.get('FOUNDATION_INTEGRATION_BASELINE_MANIFEST')
+    baseline_content = Path(predecessor_manifest).read_bytes() if predecessor_manifest else packaged
+    receipt = environments.receipt_directory(home)
+    receipt.mkdir(parents=True, exist_ok=True)
+    (receipt / 'runtime.toml').write_bytes(baseline_content)
+    baseline = environments.prepare_project(home)
+    assert (baseline / 'pyproject.toml').read_bytes() == baseline_content
     predecessor_lock = Path(os.environ.get('FOUNDATION_INTEGRATION_BASELINE_LOCK', root / 'uv.lock'))
     shutil.copyfile(predecessor_lock, baseline / 'uv.lock')
     # The full packaged graph preserves the host's old Foundation resolution.
@@ -371,10 +378,14 @@ async def test_packaged_worker_preparation_and_included_foundation_update(
     # Prove the exact input commit separately rather than relabel that snapshot.
     fresh_home = tmp_path / 'fresh-candidate'
     fresh_data = tomllib.loads(packaged.decode())
-    for name in names:
-        fresh_data['tool']['uv']['sources'][name]['rev'] = revision
-    fresh_content = ('\n'.join(json.dumps(key) + ' = ' + environments.toml_value(value)
-                              for key, value in fresh_data.items()) + '\n').encode()
+    if os.environ.get('FOUNDATION_INTEGRATION_SHIPPED_POLICY'):
+        assert all(fresh_data['tool']['uv']['sources'][name]['rev'] == revision for name in names)
+        fresh_content = packaged  # Qualify the actual packaged bytes, not a fixture override.
+    else:
+        for name in names:
+            fresh_data['tool']['uv']['sources'][name]['rev'] = revision
+        fresh_content = ('\n'.join(json.dumps(key) + ' = ' + environments.toml_value(value)
+                                  for key, value in fresh_data.items()) + '\n').encode()
     fresh = environments.prepare_project(fresh_home, content=fresh_content)
     shutil.copyfile(baseline / 'uv.lock', fresh / 'uv.lock')
     await updates.process(uv, 'sync', '--project', str(fresh), '--python', '3.13', timeout=900)
@@ -390,8 +401,6 @@ async def test_packaged_worker_preparation_and_included_foundation_update(
         '"sha256":hashlib.sha256(Path(s.__file__).read_bytes()).hexdigest()}))'))
     assert Path(fresh_identity['source']).resolve().is_relative_to((fresh / '.venv').resolve())
     assert fresh_identity['sha256'] == expected_hash
-    receipt = environments.receipt_directory(home)
-    receipt.mkdir(parents=True, exist_ok=True)
     for source, target in [('pyproject.toml', 'runtime.toml'), ('uv.lock', 'runtime.lock')]:
         shutil.copyfile(baseline / source, receipt / target)
     def predecessor_receipts():
@@ -467,6 +476,7 @@ async def mount(coordinator, config=None):
               'freshCandidateIdentity': fresh_identity,
               'freshCandidateManifestSha256': hashlib.sha256(fresh_content).hexdigest(),
               'packagedManifestSha256': hashlib.sha256(packaged).hexdigest(),
+              'predecessorManifestSha256': hashlib.sha256(baseline_content).hexdigest(),
               'selected': manager.inventory}
     try:
         await manager.validate(stage, generation)
@@ -518,7 +528,17 @@ async def mount(coordinator, config=None):
         record_property('fullWorkerIntegration', json.dumps(report))
         output = os.environ.get('FOUNDATION_INTEGRATION_OUTPUT')
         if output:
-            Path(output).write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+            target = Path(output)
+            target.write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+            # Retain the actual per-generation truth before pytest retention
+            # removes its temporary home; never substitute the root lock.
+            evidence = target.with_suffix('.receipts')
+            evidence.mkdir()
+            for path in stage.iterdir():
+                if path.is_file():
+                    shutil.copy2(path, evidence / path.name)
+            (evidence / 'predecessor-receipt-hashes.json').write_text(
+                json.dumps(report['predecessorReceipts'], sort_keys=True) + '\n')
     finally:
         await app.close()
         assert not calls.exists()
