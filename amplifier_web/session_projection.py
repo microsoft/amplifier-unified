@@ -42,7 +42,7 @@ def hydrate(home, state, db):
             from .cold_display import load
             value = load(db, session['$viewPayload'])
         else:
-            value = json.loads(path.read_text())
+            value = json.loads(path.read_text(encoding='utf-8'))
         if value.get('id') != session['id'] or not (isinstance(value.get('messages'), list)
                 or isinstance(value.get(MARKER, {}).get('messages'), dict)):
             raise ValueError('A saved conversation view is invalid; its files were preserved.')
@@ -59,7 +59,7 @@ def migrate(home, state):
     """Migrate legacy roots and children once, without overwriting shared files."""
     workspaces = {s.get('runtimeSessionId') or s['id']: s['workspace'] for s in state.get('sessions', [])}
     for path in (Path(home) / 'sessions').glob('*/checkpoint.json'):
-        payload = json.loads(path.read_text())
+        payload = json.loads(path.read_text(encoding='utf-8'))
         meta = payload.get('metadata', {})
         workspace = meta.get('working_dir') or meta.get('workspace') or workspaces.get(path.parent.name) or workspaces.get(meta.get('parent_id'))
         if workspace:
@@ -360,7 +360,7 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
                 # Restore the pre-transaction presentation if SQLite rejects its
                 # matching manifest. Canonical transcript/event files are never
                 # part of this rollback list.
-                undo.append((path, path.read_text() if path.exists() else None))
+                undo.append((path, path.read_text(encoding='utf-8') if path.exists() else None))
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             # This replaceable compatibility view is not a history authority.
             # Its mutable readers may retain the old object during publication.
