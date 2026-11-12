@@ -218,7 +218,7 @@ def _openai_legacy_visibility(config):
         values.append(value)
     # Materialization visits every field before the provider resolves aliases.
     # A shadowed but unresolved alias is not a successful construction input.
-    if unresolved:return ['unresolved', unresolved]
+    if unresolved:return ['unresolved', unresolved, values]
     value = values[0] if values[0] not in (None, '') else values[1]
     if value is None or value == '':return True
     if isinstance(value, bool):return value

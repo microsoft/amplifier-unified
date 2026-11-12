@@ -102,6 +102,10 @@ def test_unresolved_legacy_field_keeps_discovery_witness_even_when_shadowed(tmp_
     indirect = {**base, field: '${UNSET_LEGACY_VISIBILITY}'}
     unresolved = configuration_key(tmp_path, 'provider-openai', indirect)
     assert unresolved != configuration_key(tmp_path, 'provider-openai', base)
+    other_field = 'filtered' if field == 'hide_dated_models' else 'hide_dated_models'
+    # Schema-optional materialization may blank a missing field. Preserve the
+    # other input too, rather than collapsing distinct constructor outcomes.
+    assert unresolved != configuration_key(tmp_path, 'provider-openai', {**indirect, other_field: False})
     monkeypatch.setenv('UNSET_LEGACY_VISIBILITY', 'true')
     assert configuration_key(tmp_path, 'provider-openai', indirect) == configuration_key(
         tmp_path, 'provider-openai', base)
