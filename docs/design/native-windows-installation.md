@@ -71,11 +71,15 @@ not silently rewritten. Unknown effects and saved work are not replayed.
 
 The supervised update admission is enabled for the exact owned listening host,
 not for foreground launches or merely registered tasks. Bounded native evidence
-now covers successor acceptance, early-failed successor recovery, the real
-readiness deadline followed by normal shutdown/rollback, explicit owner Stop,
-late Stop during replacement/recovery, unknown-shutdown refusal, stable-bootstrap
-fresh start and changed expected identity refusal. Those results do not establish
-every failure interleaving, actual PID reuse, browser trust or sign-in/out.
+covers successor acceptance, early-failed successor recovery, the real readiness
+deadline followed by normal shutdown/rollback, explicit owner Stop and
+stable-bootstrap fresh start. Source review and deterministic portable
+interleaving controls cover late Stop during replacement/recovery. A separate
+native caller-level one-second Stop observation timed out while the same host
+retained custody and later exited naturally; it is not every supervisor
+unconfirmed-Stop path. Changed expected birth is an argument-refusal control,
+not actual PID reuse. These results do not establish every failure interleaving,
+browser trust or sign-in/out.
 
 The human waived the clean-machine check for the current delivery and selected
 the existing Windows test host only. That coverage is **waived / not executed**,
