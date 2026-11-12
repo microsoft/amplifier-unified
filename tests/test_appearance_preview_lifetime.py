@@ -1,10 +1,12 @@
 """New documents restore confirmed profiles and drafts, never temporary previews."""
 from copy import deepcopy
 
-from test_appearance_preferences import app, call, report, update, ack
+from test_appearance_preferences import app, call, report, update, ack, select
 
 
 async def test_resumed_client_ends_preview_without_changing_source_or_drafts(app):
+    await select(app)
+    await ack(app)
     await update(app, {'scheme': 'dark'}, scope='client')
     await ack(app)
     confirmed = deepcopy(app.appearance.read('one'))

@@ -148,7 +148,7 @@ async def test_reviewed_theme_actions_preview_apply_revert_and_no_replay(app):
         'scope': 'shared', 'expectedRevision': before['revision'], 'patch': {'accent': '#287358'}})
     row = await edit(app, row, 'resolve', requestId=row['app']['requests'][-1]['id'], approve=True)
     assert app.appearance.shared()['values']['accent'] == '#287358'
-    assert app.appearance.read('one')['preview'] is None
+    assert app.appearance.read('one')['preview']['theme']['css'] == theme['css']
     with pytest.raises(AppError, match='already resolved'):
         await edit(app, row, 'resolve', requestId=pending['id'], approve=True)
     row = await edit(app, row, 'request', name='revert', input={})

@@ -33,9 +33,11 @@ async def test_bundled_library_preview_select_cancel_does_not_change_chat(app):
         validate_theme(value['css'])
         before = deepcopy(app.appearance.shared())
         preview = await call(app, 'appearance.preview', {'name': value['name'], 'css': value['css']})
+        assert app.appearance.read('one')['preview']['theme']['css'] == value['css']
         assert app.appearance.shared() == before
         assert app.appearance.read('two')['preview'] is None
         await call(app, 'appearance.preview.cancel')
+        assert app.appearance.read('one')['preview'] is None
         await update(app, {'appearanceId': row['id']})
         assert app.appearance.read('one')['effective']['appearanceId'] == row['id']
     assert app.clients.records['one']['selectedSessionId'] == sid
@@ -63,6 +65,7 @@ async def test_name_roundtrip_and_preview_cancel(app):
     assert value['name'] == 'Look */ unusual é'
     validate_theme(value['css'])
     preview = await call(app, 'appearance.preview', {'name': value['name'], 'css': value['css']})
+    assert app.appearance.read('one')['preview']['theme']['css'] == value['css']
     await call(app, 'appearance.preview.cancel')
     assert app.appearance.read('one')['preview'] is None
 

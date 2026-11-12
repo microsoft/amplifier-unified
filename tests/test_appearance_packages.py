@@ -551,14 +551,17 @@ def test_repeated_reference_amplification_and_license_metadata_are_bounded():
         packages.load(raw_zip(files))
     files = contents('#amp-one{color:red}')
     files['licenses/OFL.txt'] = b'L' * (packages.CSS_LIMIT + 1)
-    with pytest.raises(AppError, match='1 MB'):
+    assert packages.load(raw_zip(files)).files['licenses/OFL.txt'] == files['licenses/OFL.txt']
+    files['licenses/OFL.txt'] = b'L' * (packages.MEMBER_LIMIT + 1)
+    with pytest.raises(AppError):
         packages.load(raw_zip(files))
 
 
 async def test_import_export_result_and_download_effect_never_apply(app):
-    before, sid = deepcopy(app.state.get('theme')), app.state['selectedSessionId']
+    before, sid = deepcopy(app.appearance.shared()), app.state['selectedSessionId']
+    local_before = deepcopy(app.appearance.read('one'))
     saved = await imported(app)
-    assert saved['format'] == 'zip' and saved['packageVersion'] == 1
+    assert saved['format'] == 'zip' and saved['packageVersion'] == 2 and saved['base'] == 'reference-v1'
     assert 'css' not in saved and 'base64' not in saved
     path = Path(saved['directory']) / saved['id'][6:]
     assert path.suffix == '.zip' and saved['fingerprint'] == hashlib.sha256(path.read_bytes()).hexdigest()
@@ -574,7 +577,8 @@ async def test_import_export_result_and_download_effect_never_apply(app):
     assert effect['content'] == {'base64': value['base64']}
     assert base64.b64decode(value['base64'], validate=True) == path.read_bytes()
     assert value['fingerprint'] == saved['fingerprint']
-    assert app.state.get('theme') == before and app.state['selectedSessionId'] == sid
+    assert app.appearance.shared() == before and app.state['selectedSessionId'] == sid
+    assert app.appearance.read('one') == local_before
     assert {item.name for item in path.parent.iterdir()} == {path.name}, 'No extracted assets or sidecars'
 
 
@@ -600,10 +604,10 @@ async def test_import_exactly_one_input_schema_and_runtime_guard(app, args):
 
 
 async def test_bad_package_never_allocates_storage_or_changes_css(app):
-    before = deepcopy(app.state.get('theme'))
+    before = deepcopy(app.appearance.shared())
     with pytest.raises(AppError):
         await imported(app, packageBase64=encoded(raw_zip({'notes.txt': b'not an appearance'})))
-    assert not theme_library.folder(app).exists() and app.state.get('theme') == before
+    assert not theme_library.folder(app).exists() and app.appearance.shared() == before
 
 
 @pytest.mark.parametrize('manifest_author', [True, False])
@@ -641,6 +645,11 @@ async def test_zip_update_and_import_copy_preserve_all_declared_attribution(app,
     [f'licenses/Notice-{i}.txt' for i in range(129)],
 ])
 async def test_invalid_declared_license_sets_are_rejected_before_publication(app, licenses):
+    # Validate the manifest itself first, without archive-path/count admission
+    # masking the specific field boundary under test.
+    manifest = {**MANIFEST, 'licenses': licenses}
+    with pytest.raises(AppError, match='unique' if len(licenses) == 2 else '128 archive members'):
+        packages.manifest_value(json.dumps(manifest).encode())
     files = contents(manifest={**MANIFEST, 'licenses': licenses})
     for path in licenses:
         files[path] = LICENSE.encode()
@@ -871,7 +880,7 @@ async def test_zip_symlink_and_special_file_library_protection(app, tmp_path):
     path.symlink_to(outside)
     for action, args in (
         ('theme.read', {'id': saved['id']}),
-        ('theme.export', {'id': saved['id'], 'format': 'zip'}),
+        ('theme.export', {'id': saved['id']}),
         ('theme.delete', {'id': saved['id'], 'expectedFingerprint': saved['fingerprint']}),
         ('theme.update', {'id': saved['id'], 'expectedFingerprint': saved['fingerprint'],
                           'name': 'No', 'css': '#amp-one{color:red}'}),
@@ -922,11 +931,11 @@ async def test_zip_collision_lookup_only_opens_existing_bounded_family_members(a
     far_name = name[:-4] + '-1000.zip'
     (root / name).rename(root / far_name)
     (root / 'unrelated.zip').write_bytes(b'not an appearance')
-    opened, original = [], theme_library.read_package
+    opened, original = [], theme_library.read_package_bytes
     def inspect(path, descriptor):
         opened.append(path.name)
         return original(path, descriptor)
-    monkeypatch.setattr(theme_library, 'read_package', inspect)
+    monkeypatch.setattr(theme_library, 'read_package_bytes', inspect)
     with theme_library.directory(app, writing=True) as descriptor:
         assert theme_library.import_name(descriptor, name, content) == far_name
     assert opened == [far_name]
