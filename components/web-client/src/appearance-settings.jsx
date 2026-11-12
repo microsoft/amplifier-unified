@@ -17,10 +17,24 @@ const METRIC_CHOICES=[
  ['reasoningTokens','Reasoning tokens'],['voiceSeconds','Voice seconds'],['costUsd','Cost'],['calls','Calls'],
 ];
 const PREFERENCE_GROUPS=[
- {id:'visual-basics',title:'Visual basics',fields:[['appearanceId','Appearance'],['scheme','Color mode'],['layout','Layout'],['decorations','Background decorations'],['density','Density'],['accent','Accent color']]},
+ {id:'visual-basics',title:'Visual basics',fields:[['appearanceId','Appearance'],['scheme','Color mode'],['density','Density'],['accent','Accent color']]},
+ {id:'layout-presentation',title:'Layout and decorations',fields:[['layout','Layout'],['decorations','Background decorations']]},
  {id:'conversation-display',title:'Conversation display',fields:[['interfaceDetail','Interface detail'],['conversationStatus','Conversation status'],['collapseInterimReplies','Interim updates'],['workStartView','Starting view'],['planPlacement','Plan location']]},
  {id:'work-visibility',title:'Work visibility and metrics',fields:[['executionDetail','Work detail'],['executionVisibility','Work visibility'],['executionMetrics','Work metrics']]},
 ];
+export function MotionStatus(){
+ const [reduced,setReduced]=useState(null);
+ useEffect(()=>{
+  if(typeof matchMedia!=='function')return;
+  const query=matchMedia('(prefers-reduced-motion: reduce)'),changed=()=>setReduced(query.matches);
+  changed();query.addEventListener('change',changed);
+  return()=>query.removeEventListener('change',changed);
+ },[]);
+ return <div className="a-appearance-option" data-appearance-motion>
+  <div className="a-appearance-option-description"><h3>Motion</h3><p>Follows your device’s accessibility setting. To change it, use Reduce motion in your device settings.</p></div>
+  <div className="a-appearance-control" role="status">{reduced===null?'Device setting unavailable':reduced?'Reduced motion is on':'Standard motion is on'}</div>
+ </div>;
+}
 const cloneValue=value=>value===undefined||value===null||typeof value!=='object'?value:JSON.parse(JSON.stringify(value));
 function stableValue(value){
  if(Array.isArray(value))return '['+value.map(stableValue).join(',')+']';
@@ -73,7 +87,7 @@ export function AppearanceSettings({
  const operationOwners=useRef(new Map()),operationFeedbackOwner=useRef(null),fieldOwners=useRef(new Map()),profileOwner=useRef(null),profileRetry=useRef(null);
  const ownPreviewOwner=useRef({});
  const previewOwner=clientPreviewOwner||ownPreviewOwner;
- const api=useRef(act),alive=useRef(false),activeRef=useRef(active),editor=useRef(null);
+ const api=useRef(act),alive=useRef(false),activeRef=useRef(active),editor=useRef(null),advanced=useRef(null);
  api.current=act;activeRef.current=active;
  const activeScope=appearance.activeScope==='client'||appearance.writeScope==='client'?'client':'shared';
  const preferences=appearance.effective||appearance.renderedPreferences||{};
@@ -145,6 +159,15 @@ export function AppearanceSettings({
  const relatedPending=(field,scope)=>['appearanceId','accent'].includes(field)&&
   ['appearanceId','accent'].some(related=>fieldOwners.current.has(fieldKey(scope,related)));
  const displayCurrentId=displayedValue('appearanceId',activeScope);
+ const advancedFields=PREFERENCE_GROUPS.filter(group=>group.id!=='visual-basics').flatMap(group=>group.fields.map(([field])=>field));
+ const advancedFeedback=advancedFields.map(field=>fieldFeedback[fieldKey(activeScope,field)]).filter(Boolean);
+ const advancedPending=mutationBusy||advancedFeedback.some(item=>item.status==='pending');
+ const advancedFailed=advancedFeedback.some(item=>item.status==='failed')||!!visibleError||!!libraryError||library.errors.length>0;
+ useEffect(()=>{
+  // Hidden controls must be revealed when they need attention; opening is purely
+  // local disclosure and never commits a preference or discards an editor draft.
+  if(advanced.current&&(advancedPending||advancedFailed||deleteTarget))advanced.current.open=true;
+ },[advancedPending,advancedFailed,deleteTarget]);
 
  useEffect(()=>{
   alive.current=true;
@@ -408,11 +431,13 @@ export function AppearanceSettings({
   <h2 id={`appearance-group-${group.id}`}>{group.title}</h2>
   {group.id==='visual-basics'&&<>
    {row('appearanceId','Appearance','Choose an included or saved look, or restore the neutral appearance.',renderAppearanceCards())}
-   {row('scheme','Color mode','Choose the color mode for this browser or workspace.',<div className="a-appearance-modes" role="radiogroup" aria-label="Color mode">{[['system','System'],['light','Light'],['dark','Dark']].map(([value,label])=><label key={value}><input type="radio" name="appearance-scheme" value={value} checked={valueFor('scheme')===value} disabled={controlDisabled('scheme')} data-action="appearance.preferences.update" onChange={()=>change('scheme',value)}/>{label}</label>)}</div>)}
-   {row('layout','Layout',null,<select aria-label="Layout" value={valueFor('layout')} disabled={controlDisabled('layout')} data-action="appearance.preferences.update" onChange={event=>change('layout',event.target.value)}><option value="balanced">Canvas on the right</option><option value="conversation">More room for conversation</option><option value="work">Canvas on the left</option></select>)}
-   {row('decorations','Background decorations','Decorative artwork stays behind your content.',<label className="a-appearance-toggle"><input type="checkbox" checked={valueFor('decorations')!==false} disabled={controlDisabled('decorations')} data-action="appearance.preferences.update" onChange={event=>change('decorations',event.target.checked)}/>Show background decorations</label>)}
+   {row('scheme','Color mode','Choose the color mode for the selected Global or This browser profile.',<div className="a-appearance-modes" role="radiogroup" aria-label="Color mode">{[['system','System'],['light','Light'],['dark','Dark']].map(([value,label])=><label key={value}><input type="radio" name="appearance-scheme" value={value} checked={valueFor('scheme')===value} disabled={controlDisabled('scheme')} data-action="appearance.preferences.update" onChange={()=>change('scheme',value)}/>{label}</label>)}</div>)}
    {row('density','Density',null,<select aria-label="Density" value={valueFor('density')} disabled={controlDisabled('density')} data-action="appearance.preferences.update" onChange={event=>change('density',event.target.value)}><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select>)}
    {row('accent','Accent color','An optional override until you choose a different appearance.',<div className="a-detail-choices"><input type="color" aria-label="Accent color" value={valueFor('accent')??accentPickerValue()} disabled={controlDisabled('accent')} data-action="appearance.preferences.update" onChange={event=>change('accent',event.target.value)}/><button type="button" className="a-soft" disabled={controlDisabled('accent')} data-action="appearance.preferences.update" onClick={()=>change('accent',null)}>Use appearance accent</button></div>)}
+  </>}
+  {group.id==='layout-presentation'&&<>
+   {row('layout','Layout',null,<select aria-label="Layout" value={valueFor('layout')} disabled={controlDisabled('layout')} data-action="appearance.preferences.update" onChange={event=>change('layout',event.target.value)}><option value="balanced">Canvas on the right</option><option value="conversation">More room for conversation</option><option value="work">Canvas on the left</option></select>)}
+   {row('decorations','Background decorations','Decorative artwork stays behind your content.',<label className="a-appearance-toggle"><input type="checkbox" checked={valueFor('decorations')!==false} disabled={controlDisabled('decorations')} data-action="appearance.preferences.update" onChange={event=>change('decorations',event.target.checked)}/>Show background decorations</label>)}
   </>}
   {group.id==='conversation-display'&&<>
    {row('interfaceDetail','Interface detail',null,<select aria-label="Interface detail" value={valueFor('interfaceDetail')} disabled={controlDisabled('interfaceDetail')} data-action="appearance.preferences.update" onChange={event=>change('interfaceDetail',event.target.value)}><option value="minimal">Focused</option><option value="standard">Balanced</option><option value="detailed">Everything</option></select>)}
@@ -450,7 +475,11 @@ export function AppearanceSettings({
   {visibleError&&<p role="alert" className="a-danger">{visibleError}</p>}{libraryError&&<p role="alert" className="a-danger">{libraryError}</p>}
   {notice&&<p role="status" className="a-appearance-notice"><Check size={15}/>{notice}</p>}
   {confirmedPreview&&<div className="a-appearance-preview" role="status"><span>Previewing {confirmedPreview.name}. Appearance preferences are unchanged.</span><button type="button" className="a-soft" aria-disabled={busyFor('cancel-preview')} data-action="appearance.preview.cancel" onClick={()=>{if(!busyFor('cancel-preview'))void cancelPreview()}}>Cancel preview</button></div>}
-  <div className="a-appearance-groups">{PREFERENCE_GROUPS.map(renderPreferenceGroup)}</div>
+  <div className="a-appearance-groups">{renderPreferenceGroup(PREFERENCE_GROUPS[0])}<MotionStatus/></div>
+  <details ref={advanced} className="a-appearance-more">
+   <summary>Advanced <span className="a-appearance-disclosure-status" role="status">{advancedPending?'Saving…':advancedFailed?'Needs attention':dirty?'Unsaved editor changes':''}</span></summary>
+   <p>Layout, conversation details, work metrics and appearance library tools.</p>
+   <div className="a-appearance-groups">{PREFERENCE_GROUPS.slice(1).map(renderPreferenceGroup)}</div>
   {<section className="a-appearance-saved"><h2>Saved appearances</h2>
    {savedItems.map(item=><div className="a-appearance-saved-row" key={item.id}>
     <div><strong>{item.name}</strong>{item.description&&<p>{item.description}</p>}</div>
@@ -486,5 +515,6 @@ export function AppearanceSettings({
     {editing?.id&&<button type="button" className="a-soft" disabled={mutationBusy} data-action="theme.export" onClick={()=>void exportItem(editing)}><Download/>Export ZIP</button>}
    </div>
   </details>}
+  </details>
  </div>;
 }
