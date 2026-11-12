@@ -34,18 +34,18 @@
         "tests/test_session_handoff.py::test_unified_failed_save_retains_lock_and_blocks_more_input",
         "tests/test_worktrees.py::test_runtime_cooperative_release_is_confirmed_without_replay",
         "tests/test_integration_validation.py::test_real_native_shell_command_and_postapproval_stop",
-        "tests/test_kernels.py::test_real_state_cells_error_reset_and_runtime_identity",
-        "tests/test_kernels.py::test_interrupt_serialization_and_explicit_fresh_reset",
-        "tests/test_kernels.py::test_unknown_termination_never_claims_clean_reset",
-        "tests/test_kernels.py::test_output_budget_and_protocol_damage_remain_honest",
-        "tests/test_kernels.py::test_restart_keeps_cells_but_cannot_replay_or_resume_variables",
+        "amplifier_kernels/tests/test_kernel_mechanism.py::test_real_state_cells_error_reset_and_runtime_identity",
+        "amplifier_kernels/tests/test_kernel_mechanism.py::test_interrupt_serialization_and_explicit_fresh_reset",
+        "amplifier_kernels/tests/test_kernel_mechanism.py::test_unknown_termination_never_claims_clean_reset",
+        "amplifier_kernels/tests/test_kernel_mechanism.py::test_output_budget_and_protocol_damage_remain_honest",
+        "amplifier_kernels/tests/test_kernel_mechanism.py::test_restart_keeps_cells_but_cannot_replay_or_resume_variables",
         "tests/test_kernels.py::test_host_agent_and_ui_share_code_approval_state_and_journal",
         "tests/test_kernels.py::test_exact_cell_and_generation_cannot_be_rewritten_after_approval",
         "tests/test_kernels.py::test_required_question_blocks_only_exact_dependent_cell",
         "tests/test_kernels.py::test_saved_kernel_restart_reads_are_passive_and_never_control_unknown",
         "tests/test_kernels.py::test_completed_cell_cancel_cannot_interrupt_a_new_cell",
         "tests/test_kernels.py::test_question_dependency_rechecked_after_code_approval",
-        "tests/test_kernels.py::test_reader_cancellation_cannot_lose_a_started_final_receipt",
+        "amplifier_kernels/tests/test_kernel_mechanism.py::test_reader_cancellation_cannot_lose_a_started_final_receipt",
         "tests/test_kernels.py::test_only_explicit_create_prepares_owner_never_passive_reads_or_old_cells",
         "tests/test_live_terminal_runtime.py::test_terminal_clients_follow_detach_reconnect_and_stop_real_worker",
         "tests/test_native_provider.py::test_supported_instance_wrap_is_opt_in_and_preserves_root_selection",
@@ -615,43 +615,43 @@
       "prerequisite": "amplifier_module_tool_bash"
     },
     {
-      "node": "tests/test_kernels.py::test_real_state_cells_error_reset_and_runtime_identity[python]",
+      "node": "amplifier_kernels/tests/test_kernel_mechanism.py::test_real_state_cells_error_reset_and_runtime_identity[python]",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "amplifier_module_tool_bash"
     },
     {
-      "node": "tests/test_kernels.py::test_real_state_cells_error_reset_and_runtime_identity[node]",
+      "node": "amplifier_kernels/tests/test_kernel_mechanism.py::test_real_state_cells_error_reset_and_runtime_identity[node]",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "amplifier_module_tool_bash"
     },
     {
-      "node": "tests/test_kernels.py::test_interrupt_serialization_and_explicit_fresh_reset[python]",
+      "node": "amplifier_kernels/tests/test_kernel_mechanism.py::test_interrupt_serialization_and_explicit_fresh_reset[python]",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "amplifier_module_tool_bash"
     },
     {
-      "node": "tests/test_kernels.py::test_interrupt_serialization_and_explicit_fresh_reset[node]",
+      "node": "amplifier_kernels/tests/test_kernel_mechanism.py::test_interrupt_serialization_and_explicit_fresh_reset[node]",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "amplifier_module_tool_bash"
     },
     {
-      "node": "tests/test_kernels.py::test_unknown_termination_never_claims_clean_reset",
+      "node": "amplifier_kernels/tests/test_kernel_mechanism.py::test_unknown_termination_never_claims_clean_reset",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "amplifier_module_tool_bash"
     },
     {
-      "node": "tests/test_kernels.py::test_output_budget_and_protocol_damage_remain_honest",
+      "node": "amplifier_kernels/tests/test_kernel_mechanism.py::test_output_budget_and_protocol_damage_remain_honest",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "amplifier_module_tool_bash"
     },
     {
-      "node": "tests/test_kernels.py::test_restart_keeps_cells_but_cannot_replay_or_resume_variables",
+      "node": "amplifier_kernels/tests/test_kernel_mechanism.py::test_restart_keeps_cells_but_cannot_replay_or_resume_variables",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "amplifier_module_tool_bash"
@@ -693,7 +693,7 @@
       "prerequisite": "amplifier_module_tool_bash"
     },
     {
-      "node": "tests/test_kernels.py::test_reader_cancellation_cannot_lose_a_started_final_receipt",
+      "node": "amplifier_kernels/tests/test_kernel_mechanism.py::test_reader_cancellation_cannot_lose_a_started_final_receipt",
       "kind": "test_case",
       "owner": "native",
       "prerequisite": "amplifier_module_tool_bash"

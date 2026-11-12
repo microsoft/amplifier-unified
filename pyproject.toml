@@ -55,6 +55,11 @@ artifacts = ["/amplifier_web/release-source.json"]
 packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "components/scheduling/amplifier_scheduling", "amplifier_recall", "components/outputs/amplifier_outputs", "components/worktrees/amplifier_worktrees", "components/publishing/amplifier_publishing", "components/portability/amplifier_portability"]
 # Standalone projects share these same runtime sources; test/build inputs do not ship.
 exclude = [
+    "/amplifier_kernels/tests/**", "/amplifier_kernels/build/**",
+    "/amplifier_kernels/dist/**", "/amplifier_kernels/.venv/**",
+    "/amplifier_kernels/*.egg-info/**", "/amplifier_kernels/pyproject.toml",
+    "/amplifier_kernels/MANIFEST.in", "/amplifier_kernels/LICENSE",
+    "/amplifier_kernels/.gitignore", "/amplifier_kernels/README.md",
     "/amplifier_operations/tests/**", "/amplifier_operations/build/**",
     "/amplifier_operations/dist/**", "/amplifier_operations/.venv/**",
     "/amplifier_operations/*.egg-info/**", "/amplifier_operations/pyproject.toml",
@@ -64,6 +69,8 @@ exclude = [
 
 [tool.hatch.build.targets.sdist]
 exclude = [
+    "/amplifier_kernels/build/**", "/amplifier_kernels/dist/**",
+    "/amplifier_kernels/.venv/**", "/amplifier_kernels/*.egg-info/**",
     "/.ci/**", "/components/web-client/**",
     "/amplifier_operations/build/**", "/amplifier_operations/dist/**",
     "/amplifier_operations/.venv/**", "/amplifier_operations/*.egg-info/**",
@@ -136,4 +143,4 @@ artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "re
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "components/scheduling/tests", "amplifier_operations/tests", "components/publishing/tests", "components/worktrees/tests", "components/portability/tests", "components/outputs/tests"]
+testpaths = ["tests", "amplifier_kernels/tests", "components/scheduling/tests", "amplifier_operations/tests", "components/publishing/tests", "components/worktrees/tests", "components/portability/tests", "components/outputs/tests"]
