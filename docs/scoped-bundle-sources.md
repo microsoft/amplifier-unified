@@ -21,6 +21,23 @@ This requires Foundation's `BundleRegistry(..., persist=False)` capability. Depl
 the Foundation companion before or with this host change. Do not substitute a
 persistent registry when the capability is absent.
 
+## Referenced resource namespaces
+
+An effective instruction can reference a resource in a registered namespace
+without composing that bundle's tools or includes. Ordinary preparation resolves
+only such missing prose namespaces through the same selected source overrides
+and admission observer. It reads the selected manifest's resource-root metadata,
+not its capability graph. Existing composed namespace roots win; unknown
+namespaces and missing or escaping files remain unresolved and block portable
+export. A disabled capability is not restored merely to supply its resource.
+
+This work runs once per ordinary composition, not per provider request or export.
+The transitive context walk retains the portable limits of 500 files, 1 MB per
+file and 8 MB total, plus a 500-namespace bound. It does not scan unrelated cached
+repositories. Snapshots do not resolve current registrations or fetch new inputs.
+Export reads these preparation-owned bindings locally and keeps its strict
+missing-resource refusal; it never downloads a namespace behind a selected plan.
+
 ## Validation
 
 Offline tests use actual Foundation composition with local fixtures and no model

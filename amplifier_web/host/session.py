@@ -702,6 +702,112 @@ def _apply_host_policy(bundle, config, *, execution_workspace=None):
     return full_file_policy(bundle) if getattr(config, "access_mode", "ask") == "full" else bundle
 
 
+async def _bind_resource_namespaces(bundle, registry, config, components):
+    """Bind referenced, registered resources without composing their capabilities.
+
+    This runs once per ordinary composition, never during provider requests or
+    synchronous export. Only missing namespaces in effective prose are resolved.
+    Source selection/admission remains the same as other preparation inputs.
+    """
+    from collections import deque
+    import re
+    import yaml
+    from amplifier_foundation import SimpleSourceResolver
+    from amplifier_foundation.io.frontmatter import parse_frontmatter
+    from .bundle_paths import configured_bundle_reference, local_bundle_path
+    from ..bundles import _expand_prose_mentions
+
+    if registry is None:
+        return
+    reference = re.compile(r"@([A-Za-z0-9_-]+):([A-Za-z0-9_./-]+)")
+    pending = deque()
+    def references(text):
+        def enqueue(match):
+            pending.append((match[1], match[2]))
+            return match[0]
+        _expand_prose_mentions(text or "", reference, enqueue)
+    def agents(rows):
+        from .components import agent_roster
+        for row in agent_roster(rows).values():
+            for key in ("instruction", "instructions", "system_prompt"):
+                if isinstance(row.get(key), str):
+                    references(row[key])
+            agents(row.get("agents", {}))
+    references(bundle.instruction)
+    agents(bundle.agents)
+    # Read only the admitted context closure, not all registered bundles.
+    context = deque(Path(path) for path in bundle.context.values())
+    seen, attempted, total = set(), set(), 0
+    bindings = dict(getattr(bundle, "_host_resource_namespaces", {}))
+    resolver = SimpleSourceResolver(cache_dir=config.registry_home / "cache", base_path=config.workspace)
+    while context or pending:
+        if context:
+            path = context.popleft().resolve()
+            if path in seen or not path.is_file():
+                continue
+            if len(seen) >= 500 or path.stat().st_size > 1_000_000:
+                raise ValueError("Bundle resource preparation exceeds portable file limits")
+            seen.add(path)
+            text = path.read_text(encoding="utf-8")
+            total += len(text.encode("utf-8"))
+            if total > 8_000_000:
+                raise ValueError("Bundle resources exceed the 8 MB portable export limit")
+            references(text)
+            continue
+        namespace, relative = pending.popleft()
+        if ".." in Path(relative).parts or Path(relative).is_absolute():
+            continue
+        if namespace not in bundle.source_base_paths and namespace not in attempted:
+            if len(attempted) >= 500:
+                raise ValueError("Bundle resource preparation exceeds the 500 namespace limit")
+            attempted.add(namespace)
+            # A namespace in prose is not permission to invent a repository.
+            if registry.find(namespace) is not None:
+                selected = configured_bundle_reference(config, namespace, registry.find)
+                selected = registry.find(selected) or selected
+                explicit = (config.resolve_source(namespace) is not None
+                            or config.resolve_source(registry.find(namespace)) is not None
+                            or namespace in config.settings.get("bundle", {}).get("added", {}))
+                if not explicit:
+                    selected = components.source(namespace, selected)
+                observer = getattr(config, "_source_policy_observer", None)
+                if observer:
+                    observer.observe(selected, config, registry,
+                        explicit_local=local_bundle_path(config, selected) is not None)
+                resolved = await resolver.resolve(selected)
+                boundary = resolved.source_root.resolve()
+                active = resolved.active_path.resolve()
+                if not active.is_relative_to(boundary):
+                    raise ValueError("Bundle resource source escapes its admitted root")
+                manifest = active if active.is_file() else next(
+                    (active / name for name in ("bundle.md", "bundle.yaml", "bundle.yml")
+                     if (active / name).is_file()), None)
+                if manifest is None or not manifest.resolve().is_relative_to(boundary):
+                    raise ValueError("Registered resource namespace has no contained manifest")
+                if manifest.stat().st_size > 1_000_000:
+                    raise ValueError("Bundle resource manifest exceeds portable file limit")
+                raw = manifest.read_text(encoding="utf-8")
+                data = parse_frontmatter(raw)[0] if manifest.suffix == ".md" else yaml.safe_load(raw)
+                metadata = (data or {}).get("bundle", {})
+                if not isinstance(metadata, dict):
+                    raise ValueError("Registered resource namespace has invalid metadata")
+                relative_root = metadata.get("namespace_root") or "."
+                if not isinstance(relative_root, str):
+                    raise ValueError("Registered resource namespace has invalid root")
+                root = (manifest.parent / relative_root).resolve()
+                if not root.is_dir() or not root.is_relative_to(boundary):
+                    raise ValueError("Bundle resource namespace escapes its admitted root")
+                bundle.source_base_paths[namespace] = root
+                bindings[namespace] = {"root": root, "source_root": boundary, "uri": selected}
+        root = bundle.source_base_paths.get(namespace)
+        if root is not None:
+            root = Path(root).resolve()
+            path = (root / relative.rstrip(".")).resolve()
+            if path.is_relative_to(root):
+                context.append(path)
+    bundle._host_resource_namespaces = bindings
+
+
 async def compose_configured_bundle(registry, loaded, config, *, execution_workspace=None):
     """Snapshots are complete plans; ordinary roots inherit host composition."""
     from .model_selection import explicit_routing_settings, routing_hooks
@@ -817,6 +923,8 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
     loaded = _apply_host_policy(loaded, config, execution_workspace=execution_workspace)
     for key in (("providers", "tools", "hooks", "session", "agents") if snapshot else ("session", "agents")):
         setattr(loaded, key, _expand_module_configuration(getattr(loaded, key)))
+    if not snapshot:
+        await _bind_resource_namespaces(loaded, registry, config, components)
     # This Python attribute is host provenance, not bundle/configuration data.
     # Recomputed from raw intent on root resume; never imported from snapshots.
     hooks = routing_hooks(loaded.to_mount_plan())
