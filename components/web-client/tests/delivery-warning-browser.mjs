@@ -153,14 +153,16 @@ try{
  // is qualified directly by questions-status.test.mjs, not an invented control.
  await expect(page.locator('[data-part="questions"]')).not.toContainText('Saved choice unknown');
  await expect(page.locator('.a-question-notice')).toContainText('An answer was saved but not delivered');
- // Multiple reasons for one chat stay visible, without becoming multiple chats.
+ // Routine Updates shows only the current host-owned work list. Historical
+ // stopped chats are not inferred from diagnostics or restored as user chores.
  const target={hostInstanceId:'fixture-shell-host',revision:'a'.repeat(40),generation:'b'.repeat(32),attemptId:'fixture-update'};
  state.updates={phase:'app-staged',forceRestartTarget:target,pendingApp:{...target,latest:'v99.0.0'},
   application:{id:'application',kind:'app',label:'Amplifier Unified',current:'98.0.0',latest:'v99.0.1',status:'update'},
   blockers:[{kind:'conversation',label:'Fixture running conversation',sessionId:'chat',title:'chat'},
    {kind:'worker',label:'Fixture background worker',sessionId:'chat',title:'chat'},
-   {kind:'configuration',label:'Fixture recovery hold',reasonCode:'operation-bound-recovery',sessionId:'other',title:'other'},
-   {kind:'future-kind',label:'Fixture unknown blocker'}]};
+   {kind:'configuration',label:'Conversation configuration task has not settled',reasonCode:'configuration-task-pending',sessionId:'other',title:'other'},
+   {kind:'future-kind',label:'Fixture unknown blocker'}],
+  blockerObservation:{configurationHoldCount:4,configurationHolds:[{sessionRef:'old-stopped-appearance',quiescent:true}]}};
  state.view={...state.view,panel:'settings',settingsSection:'maintenance',settingsExpanded:['updates']};await emit();
  const blockers=page.locator('[data-part="update-blockers"]'),summary=blockers.locator(':scope > summary');
   const restart=page.getByRole('button',{name:'Interrupt work and restart',exact:true});
@@ -169,12 +171,17 @@ try{
   await page.locator('.a-update-force-restart').screenshot({path:artifact+'/restart-action-mobile.png'});
   await expect(page.getByRole('alertdialog',{name:'Confirm update restart'})).toHaveCount(0);
   assert.equal(calls.filter(c=>c.action==='updates.forceRestart').length,0);
- await expect(summary).toHaveText('View update blockers (4 reasons · 2 distinct chats)');
+ await expect(page.locator('[data-part="application-update"]')).toContainText('Waiting for work to finish');
+ await expect(summary).toHaveText('View work delaying the update');
  await summary.focus();await summary.press('Enter');
- await expect(blockers.getByRole('region',{name:'Running, preparing, and background work'}).locator('li')).toHaveCount(2);
- await expect(blockers.getByRole('region',{name:'Configuration recovery holds'})).toContainText('Fixture recovery hold');
- await expect(blockers.getByRole('region',{name:'Other update blockers'})).toContainText('Fixture unknown blocker');
+ await expect(blockers.locator('li')).toHaveText([
+  'Fixture running conversation — chat','Fixture background worker — chat',
+  'Conversation configuration task has not settled — other','Fixture unknown blocker',
+ ]);
+ await expect(blockers).not.toContainText(/Configuration recovery holds|distinct chats|old-stopped-appearance|held settings/);
+ await expect(blockers.locator('h4')).toHaveCount(0);
  await expect(blockers.locator('[data-action="session.select"]')).toHaveCount(3);
+ await page.screenshot({path:artifact+'/update-work-mobile.png'});
   await summary.press('Enter'); // Inspect-only disclosure closes without an effect.
   await expect(restart).toBeVisible();
   assert.equal(calls.filter(c=>c.action==='updates.forceRestart').length,0);
@@ -201,7 +208,7 @@ try{
   await expect(restart).toBeEnabled();
   await expect(page.getByRole('alert')).toContainText('Fixture work changed');
   await summary.focus();await summary.press('Enter');
- await page.screenshot({path:artifact+'/update-blocker-groups-mobile.png'});
+ await page.screenshot({path:artifact+'/update-work-after-refusal-mobile.png'});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   assert.equal(calls.filter(c=>c.action==='updates.forceRestart').length,2);
   state.updates.forceRestartTarget=null;await emit();
@@ -210,6 +217,6 @@ try{
  assert.equal(calls.filter(c=>c.action==='conversation.delivery'&&c.args.inputId.startsWith('input-')).length,1);
  assert.deepEqual(effects(),[]);
  assert.deepEqual(errors,[]);
-  await writeFile(artifact+'/browser-result.json',JSON.stringify({passed:true,calls:calls.filter(c=>c.action.startsWith('conversation.')||c.action==='updates.forceRestart'||c.action==='question.dismiss'),effects:effects(),errors,attachmentPreserved:true,exactWindowIndependentReceipt:true,savedQuestionStates:['rejected','unknown','accepted'],explicitQuestionChecks:1,durableReminderCleared:true,reminderRefusalPreserved:true,blockerReasons:4,distinctBlockerChats:2,oneExplicitRestartAction:true,preparedTargetAccessible:true,pendingBusy:true,matchingRejectionOnly:true,noAutomaticRestartOrResend:true},null,2));
-  console.log('Delivery warning browser passed: saved question states, explicit check/no resend, grouped blockers, one keyboard restart action with exact prepared target, pending busy/refusal and no automatic restart.');
+  await writeFile(artifact+'/browser-result.json',JSON.stringify({passed:true,calls:calls.filter(c=>c.action.startsWith('conversation.')||c.action==='updates.forceRestart'||c.action==='question.dismiss'),effects:effects(),errors,attachmentPreserved:true,exactWindowIndependentReceipt:true,savedQuestionStates:['rejected','unknown','accepted'],explicitQuestionChecks:1,durableReminderCleared:true,reminderRefusalPreserved:true,flatHostWorkList:true,historicalDiagnosticsNotWork:true,oneExplicitRestartAction:true,preparedTargetAccessible:true,pendingBusy:true,matchingRejectionOnly:true,noAutomaticRestartOrResend:true},null,2));
+  console.log('Delivery warning browser passed: saved question states, explicit check/no resend, flat current-work details without recovery accounting, one keyboard restart action with exact prepared target, pending busy/refusal and no automatic restart.');
 }finally{if(browser)await browser.close();if(vite)await vite.close()}

@@ -9,4 +9,12 @@
 #amp-one .a-handoff .a-dialog-actions{flex-wrap:wrap;gap:10px}
 #amp-one .a-handoff summary{cursor:pointer;font-weight:600}
 #amp-one .a-handoff details[open] .a-handoff-review{margin-top:12px}
+#amp-one .a-handoffs-past{min-width:0;overflow-wrap:anywhere}
+#amp-one .a-handoffs-past>summary{cursor:pointer;padding:8px 0;color:var(--a-muted)}
+#amp-one .a-handoffs-history{display:grid;gap:0;min-width:0}
+#amp-one .a-handoff.a-handoff--settled{padding:10px 0;border:0;border-top:1px solid var(--a-line);border-radius:0;background:transparent}
+#amp-one .a-handoff-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;min-width:0}
+#amp-one .a-handoff-line>strong{flex:1 1 180px;min-width:0}
+#amp-one .a-handoff--settled>details{margin-top:4px}
+#amp-one .a-handoff--settled>details>summary{font-weight:400}
 @media(max-width:480px){#amp-one .a-handoff{padding:12px}#amp-one .a-handoff dl{grid-template-columns:1fr;gap:2px}#amp-one .a-handoff dd{margin-bottom:6px}}
