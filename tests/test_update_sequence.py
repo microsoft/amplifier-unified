@@ -124,7 +124,9 @@ async def test_public_check_does_not_offer_retained_preparation_as_retry(manager
     monkeypatch.setattr(updates,'process',remote)
     monkeypatch.setattr(update_partial,'retained_after_check',retained)
     await manager.check(fresh=fresh)
-    assert calls==[False]
+    # Availability projection and the health owner's retry-action read both
+    # inspect retention. Neither read grants deliberate preparation retry.
+    assert calls==[False,False]
 
 
 @pytest.mark.parametrize('action', ['app', 'install'])
