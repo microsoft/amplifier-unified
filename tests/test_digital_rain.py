@@ -8,6 +8,7 @@ import pytest
 import tinycss2
 
 from amplifier_web.service import validate_theme
+from amplifier_web import appearance_packages
 from test_appearance_preferences import app, call, update
 
 
@@ -98,9 +99,18 @@ async def test_digital_rain_passive_copy_preview_and_profile_selection(app):
     assert theme['css'] == source()
     saved = await call(app, 'theme.save', {'name': 'My rain', 'css': theme['css']})
     assert saved['id'].startswith('saved:') and saved['id'].endswith('.zip')
+    assert (await call(app, 'theme.read', {'id': saved['id']}))['css'] == theme['css']
+    exported = await call(app, 'theme.export', {'id': saved['id']})
+    package = appearance_packages.load(base64.b64decode(exported['base64']))
+    assert package.manifest['formatVersion'] == 2 and package.manifest['base'] == 'reference-v1'
+    assert package.css == theme['css']
+    assert re.findall(r'data:image/png;base64,[A-Za-z0-9+/=]+', package.css) == re.findall(
+        r'data:image/png;base64,[A-Za-z0-9+/=]+', source())
     await call(app, 'appearance.preview', {'name': theme['name'], 'css': theme['css']})
+    assert app.appearance.read('one')['preview']['theme']['css'] == theme['css']
     assert app.appearance.shared() == before
     await call(app, 'appearance.preview.cancel')
+    assert app.appearance.read('one')['preview'] is None
     await update(app, {'appearanceId': row['id']})
     assert app.appearance.read('one')['effective']['appearanceId'] == row['id']
     assert app.appearance.read('one')['theme']['css'] == theme['css']

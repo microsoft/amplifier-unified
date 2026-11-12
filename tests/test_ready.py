@@ -77,7 +77,7 @@ def assert_delta_contract(name):
     for mode in (0, 1):
         def color(token):
             return re.fullmatch(r'light-dark\((#[0-9a-f]{6}), (#[0-9a-f]{6})\)', root['--a-' + token])[mode + 1]
-        for ink in ('ink', 'muted'):
+        for ink in ('ink', 'muted', 'green', 'danger', 'accent'):
             for surface in ('bg', 'surface', 'soft', 'tint'):
                 assert contrast(color(ink), color(surface)) >= 4.5, (mode, ink, surface)
         assert contrast(color('on-accent'), color('accent')) >= 4.5
@@ -127,6 +127,13 @@ def test_breadbin_continuous_violet_screen_and_control_paint_not_layout():
         fg = re.findall(r'#[0-9a-f]{6}', user['color'])[mode]
         bg = re.findall(r'#[0-9a-f]{6}', user['background-color'])[mode]
         assert contrast(fg, bg) >= 4.5
+        root = declarations('#amp-one')
+        code_bg = re.findall(r'#[0-9a-f]{6}', declarations('#amp-one .a-markdown pre')['background-color'])[mode]
+        for token in ('ink', 'muted', 'green', 'danger', 'accent'):
+            paint = re.findall(r'#[0-9a-f]{6}', root['--a-' + token])[mode]
+            assert contrast(paint, code_bg) >= (3 if token == 'accent' else 4.5)
+        accent = re.findall(r'#[0-9a-f]{6}', root['--a-accent'])[mode]
+        assert contrast(accent, bg) >= 3
 
 
 async def test_breadbin_passive_builtin_immutable_zip_roundtrip(app):
