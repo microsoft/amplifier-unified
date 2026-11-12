@@ -292,3 +292,50 @@ async def test_old_fenced_sender_cannot_settle_a_newer_explicit_turn(app_factory
         await asyncio.gather(older, return_exceptions=True)
         await app.dispatch('conversation.stop', {'sessionId': session['id']})
         await until(lambda: session['id'] not in app.external_conversations.turns)
+
+
+async def test_forced_cancel_keeps_admission_until_connection_retired(app_factory, tmp_path, monkeypatch):
+    app = app_factory()
+    session = await create(app, tmp_path)
+    sid = session['id']
+    await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'wait-for-stop'}, command_id='retiring-old-input')
+    await until(lambda: bool(session.get('streaming')))
+    remote = session['externalAgent']['sessionId']
+    turn = app.external_conversations.turns[sid]
+    participant = turn.participant
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_close, original_cancel = participant.close, participant.cancel
+    closed_connections = []
+
+    async def failed_cancel():
+        raise TimeoutError('Synthetic unconfirmed cancellation')
+
+    async def held_close():
+        if participant.context is not None:
+            closed_connections.append(participant.session_id)
+            entered.set()
+            await release.wait()
+        await original_close()
+
+    monkeypatch.setattr(participant, 'cancel', failed_cancel)
+    monkeypatch.setattr(participant, 'close', held_close)
+    try:
+        await app.dispatch('conversation.stop', {'sessionId': sid})
+        await asyncio.wait_for(entered.wait(), 5)
+        assert session['messages'][0]['delivery']['status'] == 'unknown'
+        with pytest.raises(AppError, match='still working'):
+            await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'too early'}, command_id='retirement-refused')
+        assert app.external_conversations.turns[sid] is turn
+        assert [row['text'] for row in operations(tmp_path) if row['kind'] == 'prompt'] == ['wait-for-stop']
+        release.set()
+        await until(lambda: sid not in app.external_conversations.turns)
+        assert closed_connections == [remote]
+        monkeypatch.setattr(participant, 'cancel', original_cancel)
+        await send(app, session, 'explicit continuation', 'after-retirement')
+        assert session['externalAgent']['sessionId'] == remote
+        assert session['messages'][0]['delivery']['status'] == 'unknown'
+        assert [row['kind'] for row in operations(tmp_path)] == ['new', 'prompt', 'resume', 'prompt']
+        assert [row['text'] for row in operations(tmp_path) if row['kind'] == 'prompt'] == ['wait-for-stop', 'explicit continuation']
+    finally:
+        release.set()
+        await until(lambda: sid not in app.external_conversations.turns)

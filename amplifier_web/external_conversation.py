@@ -140,6 +140,9 @@ class ExternalConversations:
         except asyncio.CancelledError:
             await self._settle(sid, turn, 'unknown' if turn.dispatched else 'failed',
                                'unknown' if turn.dispatched else 'stopped')
+            # Keep admission owned until the SDK retires this connection. A
+            # settled receipt alone does not make its attach safe to reuse.
+            await turn.participant.close()
             raise
         except Exception:
             await self._settle(sid, turn, 'unknown' if turn.dispatched else 'failed',
@@ -230,7 +233,6 @@ class ExternalConversations:
         except Exception:
             turn.task.cancel()
             await asyncio.gather(turn.task, return_exceptions=True)
-            await turn.participant.close()
 
     def delivery(self, session, input_id):
         message = next((row for row in session['messages'] if row.get('inputId') == input_id and row['role'] == 'user'), None)
