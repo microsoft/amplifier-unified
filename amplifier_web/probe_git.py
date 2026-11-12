@@ -39,14 +39,19 @@ def run_git(args, cwd, timeout_s):
                           'timeout': timeout_s, 'env': dict(os.environ)}).encode() + b'\n'
     if len(request) > _REQUEST_LIMIT:
         raise ValueError('Probe Git request exceeded its byte limit.')
-    with socket.socket(socket.AF_UNIX) as connection:
-        # The host enforces the command deadline and cleanup. A broken control
-        # connection is an error, never permission to fall back to local Popen.
-        connection.connect(os.environ['AMPLIFIER_PROBE_GIT_SOCKET'])
-        connection.sendall(request)
-        with connection.makefile('rb') as stream:
-            response = stream.readline(8 * _OUTPUT_LIMIT + 4096)
-    result = json.loads(response)
+    try:
+        with socket.socket(socket.AF_UNIX) as connection:
+            connection.settimeout(timeout_s + 4 * _CLEANUP_SECONDS)
+            connection.connect(os.environ['AMPLIFIER_PROBE_GIT_SOCKET'])
+            connection.sendall(request)
+            with connection.makefile('rb') as stream:
+                response = stream.readline(8 * _OUTPUT_LIMIT + 4096)
+        result = terminal(json.loads(response))
+    except BaseException:
+        # No Python unwind is safe here: Foundation stage cleanup is allowed
+        # only after positive settlement, not EOF, malformed IPC or host death.
+        # Exit ONLY this disposable caller, never a guessed PID/group.
+        os._exit(74)
     if result['kind'] == 'timeout':
         raise GitCloneTimeoutError(args, timeout_s)
     if result['kind'] == 'spawn_error':
@@ -57,6 +62,26 @@ def run_git(args, cwd, timeout_s):
         raise subprocess.CalledProcessError(result['code'], args,
                                             result['stdout'], result['stderr'])
     return subprocess.CompletedProcess(args, result['code'], result['stdout'], result['stderr'])
+
+
+def terminal(result):
+    """Validate positive, closed terminal evidence before any caller unwind."""
+    if not isinstance(result, dict) or result.get('settled') is not True:
+        raise ValueError('Git guard did not confirm settlement')
+    kind = result.get('kind')
+    if kind == 'result':
+        if (type(result.get('code')) is not int or
+                not isinstance(result.get('stdout'), str) or
+                not isinstance(result.get('stderr'), str)):
+            raise ValueError('Invalid Git guard result')
+    elif kind == 'spawn_error':
+        if (type(result.get('errno')) is not int or
+                not isinstance(result.get('message'), str) or
+                result.get('filename') is not None and not isinstance(result['filename'], str)):
+            raise ValueError('Invalid Git guard spawn error')
+    elif kind not in {'timeout', 'overflow', 'error'}:
+        raise ValueError('Invalid Git guard terminal outcome')
+    return result
 
 
 async def query(operation):
@@ -89,6 +114,7 @@ class GitProbeOwner:
         self.pending_starts = set()
         self.finalizers = set()
         self.retained_connections = set()
+        self.failures = []  # Private command/spawn outcome plus cleanup cause.
 
     async def start(self):
         self.server = await asyncio.start_unix_server(self._accept, path=self.path,
@@ -141,8 +167,11 @@ class GitProbeOwner:
             process.stdin.close()
             async with asyncio.timeout(_CLEANUP_SECONDS):
                 result = await asyncio.shield(response)
+                if result.get('kind') == 'cleanup_error':
+                    self.failures.append(result)
+                    raise RuntimeError('Git guard did not confirm writer settlement')
                 await process.wait()
-            if result.get('kind') == 'cleanup_error' or process.returncode:
+            if process.returncode:
                 raise RuntimeError('Git guard did not confirm writer settlement')
             self.processes.discard(process)
         except BaseException as exc:
@@ -206,23 +235,9 @@ class GitProbeOwner:
             self.processes.add(process)
             async def read_response():
                 result = json.loads(await process.stdout.readline())
-                if not isinstance(result, dict) or result.get('settled') is not True:
-                    raise ValueError('Git guard did not confirm settlement')
-                kind = result.get('kind')
-                if kind == 'result':
-                    if (type(result.get('code')) is not int or
-                            not isinstance(result.get('stdout'), str) or
-                            not isinstance(result.get('stderr'), str)):
-                        raise ValueError('Invalid Git guard result')
-                elif kind == 'spawn_error':
-                    if (type(result.get('errno')) is not int or
-                            not isinstance(result.get('message'), str) or
-                            result.get('filename') is not None and
-                            not isinstance(result['filename'], str)):
-                        raise ValueError('Invalid Git guard spawn error')
-                elif kind not in {'timeout', 'overflow', 'error'}:
-                    raise ValueError('Invalid Git guard terminal outcome')
-                return result
+                if isinstance(result, dict) and result.get('kind') == 'cleanup_error':
+                    return result  # Keep original outcome and cleanup cause.
+                return terminal(result)
             response = asyncio.create_task(read_response())
             try:
                 # Execution and cleanup have separate budgets. Only the guard
@@ -236,11 +251,11 @@ class GitProbeOwner:
                 raise RuntimeError('Git guard control deadline expired')
         except OSError as exc:
             result = {'kind': 'spawn_error', 'errno': exc.errno,
-                      'filename': exc.filename, 'message': exc.strerror or str(exc)}
+                      'filename': exc.filename, 'message': exc.strerror or str(exc), 'settled': True}
         except asyncio.CancelledError:
             raise
         except Exception:
-            result = {'kind': 'error'}
+            result = {'kind': 'error', 'settled': True}
         finally:
             if process is not None:
                 await _settle(asyncio.create_task(self._cleanup(process, response)))

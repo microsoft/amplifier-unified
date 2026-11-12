@@ -21,9 +21,9 @@ def reap_adopted():
     while True:
         try:
             if os.waitpid(-1, os.WNOHANG)[0] == 0:
-                return
+                return False  # An adopted child is still alive, possibly setsid.
         except ChildProcessError:
-            return
+            return True
 
 
 def group_exists(group):
@@ -109,17 +109,26 @@ def main():
             # Reap adopted Linux helpers too; on other POSIX systems wait for
             # the OS reaper. This is observation only, never a second stale kill.
             while True:
-                reap_adopted()
-                if not group_exists(anchor.pid):
+                children_empty = reap_adopted()
+                if children_empty and not group_exists(anchor.pid):
                     break
                 if time.monotonic() >= deadline:
-                    raise TimeoutError('Git process group is not confirmed empty')
+                    raise TimeoutError('Git descendants are not confirmed empty')
                 time.sleep(.01)
-        except BaseException:
-            result = {'kind': 'cleanup_error'}
+        except BaseException as exc:
+            result = {'kind': 'cleanup_error', 'settled': False,
+                      'primary': result,
+                      'cleanup': {'type': type(exc).__name__, 'message': str(exc)[:500]}}
         else:
             result['settled'] = True
     print(json.dumps(result, ensure_ascii=False), flush=True)
+    if result['kind'] == 'cleanup_error' and sys.platform == 'linux':
+        # Retain subreaper custody on failure. Do not reparent a still-live
+        # escaped writer and do not signal numeric PIDs inferred from a scan.
+        # The host retains this guard and the original failure; naturally
+        # exiting children can still be reaped without rewriting that result.
+        while not reap_adopted():
+            time.sleep(.02)
 
 
 if __name__ == '__main__':

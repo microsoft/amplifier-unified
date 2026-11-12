@@ -6,12 +6,24 @@ from pathlib import Path
 import shutil
 import sys
 import subprocess
+import hashlib
+import signal
+import tempfile
+from types import SimpleNamespace
 
 import pytest
 
 from amplifier_web import probe_git
 
 pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='Linux process identity observation')
+
+
+@pytest.fixture
+def executable_directory():
+    # Managed runner's /tmp is intentionally noexec; executable stand-ins belong
+    # in the owned source workspace, never a host mount or changed mount option.
+    with tempfile.TemporaryDirectory(prefix='.probe-git-exec-', dir=Path.cwd()) as value:
+        yield Path(value)
 
 
 def identity(pid):
@@ -161,9 +173,169 @@ async def test_git_cleanup_failure_retains_owner_and_original_error(monkeypatch)
         probe_git._failed_owners.discard(owner)
 
 
+async def test_daemonized_helper_never_counts_as_settled_and_preserves_primary(tmp_path):
+    owner = await probe_git.GitProbeOwner().start()
+    ready = tmp_path / 'escaped'
+    code = f'''import subprocess,sys
+subprocess.Popen([sys.executable,'-c', "import os,pathlib,time; pathlib.Path({str(ready)!r}).write_text(str(os.getpid())); time.sleep(60)"], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+sys.exit(17)
+'''
+    client = asyncio.create_task(request(owner, [sys.executable, '-c', code]))
+    escaped = None
+    try:
+        async with asyncio.timeout(8):
+            while not ready.exists() or not owner.failures:
+                await asyncio.sleep(.01)
+        escaped = os.pidfd_open(int(ready.read_text()))
+        assert owner.failures[0]['primary']['code'] == 17
+        assert owner.failures[0]['cleanup']['type'] == 'TimeoutError'
+        assert not owner.cleanup_complete and not client.done()
+        with pytest.raises(probe_git.GitProbeCleanupError):
+            await owner.close()
+    finally:
+        if escaped is not None:
+            signal.pidfd_send_signal(escaped, signal.SIGKILL)
+            os.close(escaped)
+        for process in owner.processes:
+            await asyncio.wait_for(process.wait(), 5)
+        for writer in owner.retained_connections:
+            writer.close()
+        await asyncio.gather(client, return_exceptions=True)
+        owner.directory.cleanup()
+        probe_git._failed_owners.discard(owner)
+
+
+@pytest.mark.parametrize('mode', ['eof', 'malformed', 'cleanup_error'])
+async def test_ambiguous_control_does_not_unwind_actual_shared_stage(tmp_path, monkeypatch, mode):
+    """A real Foundation ensure stage must survive ambiguous broker delivery."""
+    from amplifier_web.probe_process import spawn, stop
+    # The shared-store mechanism executes its actual finally/_remove_owned_stage
+    # path; only Git command transport is deliberately broken.
+    marker_file = tmp_path / 'stage'
+    source = tmp_path / 'sources'
+    socket_path = str(tmp_path / 'control')
+    async def broken(reader, writer):
+        await reader.readline()
+        if mode == 'malformed':
+            writer.write(b'{"kind":"result","settled":true}\n')
+        elif mode == 'cleanup_error':
+            writer.write(b'{"kind":"cleanup_error","settled":false}\n')
+        await writer.drain()
+        writer.close()
+    server = await asyncio.start_unix_server(broken, path=socket_path)
+    code = f'''import asyncio, pathlib, os
+from amplifier_foundation.sources.shared import SharedSourceStore
+from amplifier_foundation.sources.git import git_subprocess_runner
+from amplifier_web.probe_git import run_git
+# Real ensure creates and owns the stage; observe it immediately before the
+# transport call, without replacing ensure or its cleanup.
+def observed(args, cwd, timeout):
+    pathlib.Path({str(marker_file)!r}).write_text(str(cwd))
+    return run_git(args,cwd,timeout)
+async def main():
+    with git_subprocess_runner(observed):
+        await SharedSourceStore({str(source)!r}).ensure('file:///synthetic/repo', 'a'*40)
+asyncio.run(main())
+'''
+    process = await spawn(sys.executable, '-c', code,
+        env={**os.environ, 'AMPLIFIER_PROBE_GIT_SOCKET': socket_path},
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        output, error = await asyncio.wait_for(process.communicate(), 8)
+        assert process.returncode == 74, error.decode()
+        stage = Path(marker_file.read_text())
+        assert stage.exists(), 'Ambiguous transport unwound Foundation stage deletion'
+    finally:
+        await stop(process)
+        server.close()
+        await server.wait_closed()
+
+
+async def test_output_overflow_settles_guard_and_writer_before_error(tmp_path):
+    owner = await probe_git.GitProbeOwner().start()
+    try:
+        result = await request(owner, [sys.executable, '-c',
+            'import sys,time; sys.stdout.write("x"*(5*1024*1024)); sys.stdout.flush(); time.sleep(60)'])
+        assert result == {'kind': 'overflow', 'settled': True}
+        assert not owner.processes
+    finally:
+        await owner.close()
+
+
+async def test_guard_pipe_creation_cancellation_retains_launch_until_adopted(monkeypatch):
+    owner = await probe_git.GitProbeOwner().start()
+    loop = asyncio.get_running_loop()
+    connect = loop.connect_write_pipe
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def delayed(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await connect(*args, **kwargs)
+    monkeypatch.setattr(loop, 'connect_write_pipe', delayed)
+    client = asyncio.create_task(request(owner, [sys.executable, '-c', 'raise AssertionError("not admitted")']))
+    await entered.wait()
+    closing = asyncio.create_task(owner.close())
+    try:
+        await asyncio.sleep(0)
+        assert owner.pending_starts
+        for _ in range(3):
+            closing.cancel()
+            await asyncio.sleep(0)
+            assert not closing.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+        assert owner.cleanup_complete and not owner.pending_starts and not owner.processes
+    finally:
+        release.set()
+        await asyncio.gather(client, closing, return_exceptions=True)
+        await owner.close()
+
+
+@pytest.mark.parametrize('lost', ['guard', 'anchor'])
+async def test_lost_identity_never_authorizes_numeric_group_rekill(tmp_path, lost):
+    owner = await probe_git.GitProbeOwner().start()
+    ready = tmp_path / 'ready'
+    code = f'''import os,pathlib,time,json
+pathlib.Path({str(ready)!r}).write_text(json.dumps({{'pid':os.getpid(),'guard':os.getppid(),'group':os.getpgrp()}}))
+time.sleep(60)
+'''
+    client = asyncio.create_task(request(owner, [sys.executable, '-c', code], seconds=.3))
+    descriptors = {}
+    recorded = await marker(ready)
+    for key in ('pid', 'guard', 'group'):
+        descriptors[key] = os.pidfd_open(recorded[key])
+    try:
+        signal.pidfd_send_signal(descriptors['guard' if lost == 'guard' else 'group'], signal.SIGKILL)
+        async with asyncio.timeout(8):
+            while not owner.retained_connections:
+                await asyncio.sleep(.01)
+        assert not client.done() and owner.errors and owner.processes
+        with pytest.raises(probe_git.GitProbeCleanupError):
+            await owner.close()
+    finally:
+        # Test-only identity-bound recovery of the intentionally broken owner.
+        for descriptor in descriptors.values():
+            try:
+                signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            os.close(descriptor)
+        for process in owner.processes:
+            await asyncio.wait_for(process.wait(), 5)
+        for writer in owner.retained_connections:
+            writer.close()
+        await asyncio.gather(client, return_exceptions=True)
+        owner.directory.cleanup()
+        probe_git._failed_owners.discard(owner)
+
+
 @pytest.mark.parametrize('cancellations', [1, 3])
-@pytest.mark.parametrize('end', ['cancel', 'timeout', 'normal', 'startup_error'])
-async def test_defaults_acquisition_owns_real_foundation_git_before_home_removal(tmp_path, monkeypatch, cancellations, end):
+@pytest.mark.parametrize('owner,end', [
+    ('defaults', 'cancel'), ('defaults', 'timeout'), ('defaults', 'normal'), ('defaults', 'startup_error'),
+    ('provider', 'cancel'), ('validator', 'cancel')])
+@pytest.mark.parametrize('shared', [False, True])
+async def test_defaults_acquisition_owns_real_foundation_git_before_home_removal(tmp_path, monkeypatch, cancellations, owner, end, shared, executable_directory):
     """Actual defaults entrypoint -> load_root_bundle -> Foundation Git acquisition."""
     from amplifier_web import draft_defaults
     from amplifier_web.runtime import RuntimeManager
@@ -171,9 +343,8 @@ async def test_defaults_acquisition_owns_real_foundation_git_before_home_removal
     from amplifier_web.bundles import SNAPSHOT_VERSION
     home = tmp_path / 'app'
     home.mkdir()
-    ready, origin, gate, late = (tmp_path / name for name in ('ready', 'origin', 'gate', 'late'))
-    binary = tmp_path / 'bin'
-    binary.mkdir()
+    ready, origin, gate, late, diagnostic = (tmp_path / name for name in ('ready', 'origin', 'gate', 'late', 'diagnostic'))
+    binary = executable_directory
     git = binary / 'git'
     repository = tmp_path / 'repository'
     repository.mkdir()
@@ -182,10 +353,11 @@ async def test_defaults_acquisition_owns_real_foundation_git_before_home_removal
         'session:\n  orchestrator:\n    module: loop-live\n  context:\n    module: context-simple\n---\n')
     real_git = shutil.which('git')
     assert real_git
-    subprocess.run([real_git, 'init', '-q', str(repository)], check=True)
+    subprocess.run([real_git, 'init', '-q', '--initial-branch=main', str(repository)], check=True)
     subprocess.run([real_git, '-C', str(repository), 'add', 'bundle.md'], check=True)
     subprocess.run([real_git, '-C', str(repository), '-c', 'user.name=Synthetic',
                     '-c', 'user.email=synthetic@example.invalid', 'commit', '-qm', 'fixture'], check=True)
+    revision = subprocess.check_output([real_git, '-C', str(repository), 'rev-parse', 'HEAD'], text=True).strip()
     helper = f"""import pathlib,time
 while not pathlib.Path({str(gate)!r}).exists(): time.sleep(.01)
 pathlib.Path({str(late)!r}).write_text('helper survived cleanup')
@@ -194,6 +366,8 @@ pathlib.Path({str(late)!r}).write_text('helper survived cleanup')
 import json,os,pathlib,subprocess,sys,time
 # Git invocation is not mocked: Foundation resolves a real git+file URI and
 # launches this executable through its production runner.
+if not any(arg in {{'fetch', 'clone'}} for arg in sys.argv[1:]):
+    os.execv({real_git!r}, [{real_git!r}, *sys.argv[1:]])
 child = None if {end!r} == 'normal' else subprocess.Popen([sys.executable, '-c', {helper!r}])
 pathlib.Path({str(ready)!r}).write_text(json.dumps({{'pid':os.getpid(),'helper':None if child is None else child.pid,'guard':os.getppid(),'group':os.getpgrp(),'session':os.getsid(0),'args':sys.argv[1:]}}))
 while not pathlib.Path({str(gate)!r}).exists(): time.sleep(.01)
@@ -201,25 +375,48 @@ if {end!r} != 'normal': pathlib.Path({str(late)!r}).write_text('survived cleanup
 os.execv({real_git!r}, [{real_git!r}, *sys.argv[1:]])
 ''')
     git.chmod(0o700)
-    wrapper = f'''import hashlib,json,os,pathlib,runpy,sys
+    wrapper = f'''import asyncio,hashlib,json,os,pathlib,sys,traceback
 import amplifier_foundation.sources.git as git
 pathlib.Path({str(origin)!r}).write_text(json.dumps({{'pid':os.getpid(),'group':os.getpgrp(),'session':os.getsid(0),'foundationGit':git.__file__,'sha256':hashlib.sha256(pathlib.Path(git.__file__).read_bytes()).hexdigest()}}))
 sys.path.insert(0, str(pathlib.Path(sys.argv[1]).parent))
-runpy.run_path(sys.argv[1],run_name='__main__')
+from amplifier_web import {dict(defaults='draft_defaults_probe',provider='provider_probe',validator='module_validate')[owner]} as entry
+original = entry.{'main' if owner == 'validator' else 'query'}
+async def observed(request):
+    try: return await original(request)
+    except BaseException:
+        pathlib.Path({str(diagnostic)!r}).write_text(traceback.format_exc())
+        raise
+{'asyncio.run(__import__(\"amplifier_web.probe_git\",fromlist=[\"query\"]).query(entry.main()))' if owner == 'validator' else 'entry.query = observed; entry.main()'}
 '''
     monkeypatch.setattr(RuntimeManager, '_command', lambda *a, **k: [sys.executable, '-c', wrapper, 'unused'])
-    monkeypatch.setattr(config, 'worker_environment', lambda: {
+    environment = {
         **os.environ, 'PATH': str(binary),
-        'AMPLIFIER_HOME': str(tmp_path / 'community'), 'AMPLIFIER_SOURCE_STORE': '',
+        'AMPLIFIER_HOME': str(tmp_path / 'community'),
+        'AMPLIFIER_SOURCE_STORE': str(tmp_path / 'sources') if shared else '',
         'HOME': str(tmp_path), 'GIT_CONFIG_NOSYSTEM': '1',
         'GIT_CONFIG_GLOBAL': os.devnull, 'PYTHONDONTWRITEBYTECODE': '1',
-        'AMPLIFIER_GIT_CLONE_TIMEOUT_S': '.5' if end == 'timeout' else '30'})
+        'AMPLIFIER_GIT_CLONE_TIMEOUT_S': '.5' if end == 'timeout' else '30'}
+    monkeypatch.setattr(config, 'worker_environment', lambda: environment)
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
     if end == 'startup_error':
         # Missing Git executable is exercised after the real entrypoint records
         # its actual Foundation origin; no runtime/provider shim.
         git.unlink()
-    task = asyncio.create_task(draft_defaults.resolve_defaults(home, str(tmp_path),
-                             bundle='git+' + repository.as_uri()))
+    uri = 'git+' + repository.as_uri() + ('@' + revision if shared else '')
+    if owner == 'defaults':
+        operation = draft_defaults.resolve_defaults(home, str(tmp_path), bundle=uri)
+    elif owner == 'provider':
+        from amplifier_web.setup import SetupManager
+        manager = SetupManager(home)
+        monkeypatch.setattr(manager, 'config', lambda _: SimpleNamespace(
+            configured_connections=[], module_sources={'provider-fixture': uri}))
+        operation = manager.probe('providers.schema', {'module': 'provider-fixture'}, str(tmp_path))
+    else:
+        from amplifier_web.registry import RegistryManager
+        operation = RegistryManager(home)._validate_row(
+            {'id': 'tool-fixture', 'module': 'tool-fixture', 'section': 'tools', 'source': uri}, {})
+    task = asyncio.create_task(operation)
     recorded = None
     try:
         loaded = await marker(origin)
@@ -227,8 +424,13 @@ runpy.run_path(sys.argv[1],run_name='__main__')
             with pytest.raises(ValueError, match='Draft default resolution failed'):
                 await asyncio.wait_for(task, 10)
             return
+        async with asyncio.timeout(10):
+            while not ready.exists():
+                if task.done():
+                    pytest.fail(diagnostic.read_text()[-2600:] if diagnostic.exists() else repr(task.exception()))
+                await asyncio.sleep(.01)
         recorded = await marker(ready)
-        assert 'clone' in recorded['args']
+        assert any(arg in {'clone', 'fetch'} for arg in recorded['args'])
         assert recorded['session'] != loaded['session']
         assert recorded['session'] == recorded['guard']
         assert recorded['group'] != recorded['guard']
@@ -243,7 +445,10 @@ runpy.run_path(sys.argv[1],run_name='__main__')
                 await asyncio.wait_for(task, 6)
         else:
             gate.touch()
-            result = await asyncio.wait_for(task, 10)
+            try:
+                result = await asyncio.wait_for(task, 10)
+            except ValueError:
+                pytest.fail(diagnostic.read_text()[-2600:] if diagnostic.exists() else 'missing diagnostic')
             assert result['providers'] == []
         assert identity(recorded['guard']) is None
         assert identity(recorded['pid']) is None
@@ -253,7 +458,8 @@ runpy.run_path(sys.argv[1],run_name='__main__')
         shutil.rmtree(home)  # No sleep/retry/ignore_errors; cleanup must be safe now.
         gate.touch()
         assert not late.exists()
-        assert loaded['foundationGit'] and len(loaded['sha256']) == 64
+        import amplifier_foundation.sources.git as loaded_git
+        assert loaded['sha256'] == hashlib.sha256(Path(loaded_git.__file__).read_bytes()).hexdigest()
     finally:
         if not task.done():
             task.cancel()

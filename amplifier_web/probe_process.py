@@ -234,6 +234,10 @@ async def spawn(*command, owned_git=False, **kwargs):
         # is still connecting its pipes.
         async def abort_probe():
             process = await asyncio.shield(start)
+            if process.returncode is not None:
+                # A launcher exit is not proof its Python caller is dead; keep
+                # the failed connection held rather than signal a stale group.
+                raise RuntimeError('Cannot confirm disposable Git caller shutdown')
             await _stop(process)
         git_owner.abort_probe = abort_probe
     try:
