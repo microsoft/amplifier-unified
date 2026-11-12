@@ -417,9 +417,10 @@ async def test_saved_skin_survives_changed_defaults_until_explicit_reset(tmp_pat
     from copy import deepcopy
     from amplifier_web import appearance_preferences
     saved = {"name": "Saved studio skin", "css": "/* Private palette */ #amp-one {--a-accent: #765432;}"}
+    retired = {"name": "Retired inert skin", "css": "#amp-one {--a-accent: #abcdef;}"}
     app = AppService(tmp_path, Runtime(), workspace=tmp_path)
     # Retired bytes stay inert; only explicit new-generation edits select.
-    app._state["theme"] = deepcopy(saved)
+    app._state["theme"] = deepcopy(retired)
     app._save()
     row = (await app.dispatch("theme.save", saved, origin="agent"))["result"]
     await app.dispatch("appearance.preferences.update", {"scope": "shared", "expectedRevision": 0,
@@ -434,7 +435,7 @@ async def test_saved_skin_survives_changed_defaults_until_explicit_reset(tmp_pat
     monkeypatch.setattr(appearance_preferences, "DEFAULTS", replacement)
     restored = AppService(tmp_path, Runtime(), workspace=tmp_path)
     try:
-        assert restored.get_state()["theme"] == saved
+        assert restored.get_state()["theme"] == retired
         assert restored.appearance.shared() == before and restored.appearance.owner == owner
         assert restored.db.execute("SELECT value FROM shell_records WHERE kind='preferences' AND id='shared-reference-v2'").fetchone()[0] == old_bytes
         assert restored.appearance.read()["effective"]["appearanceId"] == row["id"]
@@ -444,7 +445,7 @@ async def test_saved_skin_survives_changed_defaults_until_explicit_reset(tmp_pat
         expected = {key: value for key, value in before["values"].items() if key != "accent"}
         assert restored.appearance.shared()["values"] == expected
         assert restored.appearance.read()["theme"]["css"] == saved["css"]
-        assert restored.get_state()["theme"] == saved, "Reset never rewrites retired state"
+        assert restored.get_state()["theme"] == retired, "Reset never rewrites retired state"
     finally:
         await restored.close()
 
