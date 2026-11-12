@@ -171,9 +171,12 @@ async def test_completion_before_message_reload_and_older_than_event_caps(tmp_pa
 async def test_folding_preference_is_boolean_and_not_a_new_browser_default(tmp_path):
     from test_appearance_preferences import report, select, ack
     app = AppService(tmp_path, workspace=tmp_path)
+    queue = None
     try:
         shell = app.shell
         app.clients.attach("first")
+        with app.clients.bind("first"):
+            queue = app.subscribe()
         await report(app, client="first")
         await select(app, client="first")
         await ack(app, client="first")
@@ -195,4 +198,6 @@ async def test_folding_preference_is_boolean_and_not_a_new_browser_default(tmp_p
             await app.dispatch("shell.changes.prepare", {"clientId": "first",
                 "expectedRevision": shell.client("first")["revision"], "composition": composition})
     finally:
+        if queue is not None:
+            app.unsubscribe(queue)
         await app.close()
