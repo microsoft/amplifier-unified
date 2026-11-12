@@ -3,6 +3,42 @@
 Read only the section relevant to the task. Discover current action schemas before
 using examples; host receipts and current permissions determine supported behavior.
 
+## Provider metadata for reviewer resolution
+
+When `second-opinion` needs Unified's configured reviewers, use the canonical
+skill and its returned companion path, not a copied helper or an `amplifier` CLI
+found on PATH. Discover `runtime.control` and `providers.list` schemas.
+`configuration.providers` is an operation of `runtime.control`, with the exact
+intended `sessionId`, not a standalone action. Read its completed payload at
+`/runtimeControl/<sessionId>/configuration.providers`; acceptance is not the roster.
+`providers.list` with that session ID publishes saved connections under `/setup`;
+verify `providersWorkspace`, `providersLocation` and `configurationTarget` before
+using them. The registered configuration workspace can differ from the execution
+checkout. Do not substitute browser selection or an unrelated global target.
+
+Pass only the canonical resolver's `--providers-json` allowlist: exact `id`,
+`provider_type` from the declared module/type, `enabled`, a concrete configured
+`default_model` or null, and required `priority` from actual host metadata. Saved connection
+rows expose `module`, `enabled`, and `config.default_model`/`config.model` and
+`config.priority` when configured. Never pass whole rows, raw `config`, schema,
+credentials, account details or source URLs. Mounted metadata's
+`providers[].info.defaults` and `effective` describe runtime choices, not proof
+of saved defaults. A session model pin is not a configured reviewer default;
+`effective.instance` is not an `active` default tie-breaker. Do not invent
+priority, scope or active status, or rank endpoints by list order. If a required
+field is unavailable, report unavailable discovery rather than fabricate a roster.
+Missing selection metadata must preserve ambiguity or unavailable discovery.
+
+For strict no-network/no-start inspection, read already-published, correctly
+targeted state. `providers.list` can warm model catalogs even with `refresh:false`;
+`runtime.control` can start a worker. Missing metadata is not permission to do
+either. Model-list support is not inventory or execution proof. Supply
+`--models-json` only from the same host's qualified inventory; otherwise leave
+inventory unavailable. Supplied host metadata must never fall back to CLI
+settings, installation, credentials or another inventory adapter.
+
+## Shared settings controls
+
 Use complete app_control envelopes: {"operation":"list_actions","args":{"prefix":"theme."}} discovers theme controls; {"operation":"dispatch","args":{"action":"theme.list","args":{}}} lists available appearances without applying one. Read each action's exact schema before previewing or applying. Use these supported actions for app appearance, not direct edits of settings files or databases. Operation arguments belong in args, never parameters. An invalid_app_control_input result with effect:none means nothing was dispatched: correct the envelope and continue the same request. A timeout or unknown outcome is different; inspect current state before retrying a mutation.
 Use theme.read for exact CSS and fingerprint before editing. theme.save creates a copy; theme.import retains portable metadata without applying or silently replacing another entry. theme.update and theme.delete require a saved id and expectedFingerprint; bundled entries are read-only. Library updates and deletion never change the applied CSS. theme.export with id exports that library entry; without id it exports the committed appearance, not a preview or editor draft. CSS must be self-contained with embedded assets. Verify both color modes, reduced motion, decoration-off, narrow layout and actual host controls before claiming visual acceptance.
 For ordinary Settings navigation, discover list_actions {prefix:"settings."} once and use settings.open/close and settings.connection.services/start/select. These share the visible client's normal connection workflow; do not inspect frontend source or guess internal view patches to open the chooser. Available services, saved connections and the active model are different facts: an empty saved connection list does not mean no services are supported. Selecting a service opens its setup draft; it does not save a connection or prove credentials work. Use the action's receipt and relevant state readback to verify the requested outcome. The bundled app_control returns compact dispatch receipts; accepted/pending is not completion, and browser rendering is separate. Avoid rereading the whole app overview after each action.

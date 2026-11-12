@@ -223,6 +223,7 @@ def test_installed_skills_root_child_and_companions(tmp_path, monkeypatch, caplo
         for relative in (
             "skills/amplifier-shell/SKILL.md", "skills/amplifier-shell/presentation.md",
             "skills/coordinate-work/SKILL.md", "skills/coordinate-work/references/protocol.md",
+            "skills/unified-app/SKILL.md", "skills/unified-app/settings.md",
         ):
             assert (packaged / relative).is_file(), f"Missing installed Unified resource: {relative}"
             assert "amplifier_web/bundle_data/" + relative in unified_records, relative
@@ -309,6 +310,13 @@ def test_installed_skills_root_child_and_companions(tmp_path, monkeypatch, caplo
             loaded = await _call(coordinator, "load_skill", skill_name="fixture-cached")
             assert loaded["loaded_from"] == remote and "CACHED-NOT-FETCHED" in loaded["content"]
             assert Path(loaded["skill_directory"]) == cached
+            loaded = await _call(coordinator, "load_skill", skill_name="unified-app")
+            assert "--providers-json" not in loaded["content"]
+            directory = Path(loaded["skill_directory"]).resolve()
+            assert directory == packaged / "skills/unified-app"
+            settings = await _read_exact(coordinator, directory / "settings.md")
+            assert "--providers-json" in settings["content"]
+            assert "configuration.providers" in settings["content"]
 
         async def request_boundary(coordinator, *, includes_unified):
             # Exercise real registered hooks, NOT a provider completion. Request

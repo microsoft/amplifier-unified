@@ -479,7 +479,7 @@ def observe_mount(monkeypatch, module, module_id, target, mounted, validation):
 
 
 @pytest_asyncio.fixture
-async def mounted(inputs, monkeypatch):
+async def mounted(inputs, monkeypatch, request):
     data = inputs
     from amplifier_core import HookResult
     from amplifier_core.events import MODULE_LOAD_FAILED, MODULE_ON_SESSION_READY_FAILED
@@ -527,6 +527,7 @@ async def mounted(inputs, monkeypatch):
     monkeypatch.setattr(ci_api.HookConfigResolver, "__init__", observe_ci)
     controls = None
     report = {}
+    catalog_request = request.node.name == "test_skills"
 
     async def before_initialize(session):
         created.append(session)  # Cleanup remains owned if initialization raises.
@@ -540,7 +541,8 @@ async def mounted(inputs, monkeypatch):
 
         async def no_provider_request(event, value):
             provider_requests.append(event)
-            pytest.fail("The mount/export probe must not request a provider")
+            if not catalog_request:
+                pytest.fail("The mount/export probe must not request a provider")
 
         for event in (MODULE_LOAD_FAILED, MODULE_ON_SESSION_READY_FAILED):
             session.coordinator.hooks.register(event, failure, priority=-1000,
@@ -595,7 +597,8 @@ async def mounted(inputs, monkeypatch):
         finally:
             for session in reversed(created):
                 await asyncio.wait_for(session.cleanup(), timeout=10)
-        assert not failures and not provider_requests, (failures, provider_requests)
+        assert not failures, failures
+        assert provider_requests == (["provider:request"] if catalog_request else [])
         assert not data.state.attempts, data.state.attempts
         for module_id, row in data.packages.items():
             assert wheel_bytes(row["package"], row["distribution"], Path(row["source"])) == row
@@ -637,6 +640,33 @@ def check_routing(mounted):
 async def test_mount(mounted):
     expected = check_routing(mounted)
     mounted.report.update(case="mount", routing="balanced", base_roles=sorted(expected))
+
+
+@pytest.mark.asyncio
+async def test_skills(mounted):
+    """Real default composition/loader/request catalog; no provider completion."""
+    coordinator = mounted.session.coordinator
+    loader = coordinator.get("tools")["load_skill"]
+    curated = mounted.inputs.env.roots["skills"] / "skills"
+    info = await loader.execute({"info": "second-opinion"})
+    assert info.success, info.error
+    directory = Path(info.output["path"]).resolve().parent
+    assert directory == curated / "second-opinion"
+    assert (directory / "scripts/resolve_provider.py").is_file()
+    assert not loader.loaded_skills, "Default discovery must not load specialist bodies"
+
+    # Exercise the same visibility hook and context producer that build a request,
+    # without constructing a provider, asking for completion or executing a helper.
+    result = await coordinator.hooks.emit("provider:request", {"messages": []})
+    context = coordinator.get("context")
+    messages = await context.get_messages_for_request()
+    catalog = (result.context_injection or "") + json.dumps(messages, default=str)
+    assert "second-opinion" in catalog and "image-vision" in catalog
+    assert "coordinate-work" in catalog and "amplifier-shell" in catalog
+    assert not loader.loaded_skills
+    mounted.report.update(case="skills", curated_source=str(curated),
+                          helper=str(directory / "scripts/resolve_provider.py"),
+                          catalog_observed=True, provider_completions=0)
 
 
 @pytest.mark.asyncio

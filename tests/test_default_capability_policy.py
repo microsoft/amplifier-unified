@@ -7,7 +7,7 @@ from amplifier_foundation import Bundle
 
 from amplifier_web.builtin_behaviors import (
     DEFAULT_BEHAVIORS, COMPUTER_USE_BEHAVIOR_URI, CONTEXT_INTELLIGENCE_BEHAVIOR_URI,
-    ROUTING_BEHAVIOR_URI,
+    ROUTING_BEHAVIOR_URI, SKILLS_BEHAVIOR_URI,
 )
 from amplifier_web.bundles import SNAPSHOT_VERSION
 from amplifier_web.host.components import capability_defaults, compose_bundles
@@ -16,6 +16,9 @@ from amplifier_web.host.session import LOOP_SOURCE, compose_configured_bundle
 
 
 def addition(uri):
+    if uri == SKILLS_BEHAVIOR_URI:
+        return Bundle(name='skills', tools=[{'module': 'tool-skills', 'source': 'default-loader',
+            'config': {'skills': ['curated'], 'visibility': {'enabled': True, 'visibility_token_budget': 2500}}}])
     if uri == COMPUTER_USE_BEHAVIOR_URI:
         return Bundle(name='computer-use', tools=[{'module': 'tool-computer-use', 'config': {'max_edge': 1280}}])
     if uri == ROUTING_BEHAVIOR_URI:
@@ -123,6 +126,22 @@ def test_discovery_paths_accumulate_without_replacing_module_policy():
     assert result.hooks[0]['config'] == {'search_paths': ['existing-modes', 'new-modes'], 'gate_policy': 'confirm'}
     assert base.to_mount_plan() == original
     assert compose_bundles(*capability_defaults(result, extra, {})).to_mount_plan() == result.to_mount_plan()
+
+
+async def test_curated_default_preserves_selected_loader_and_scoped_source_opt_out(tmp_path, monkeypatch):
+    selected = {'module': 'tool-skills', 'instance_id': 'chosen-loader', 'source': 'chosen-source',
+                'config': {'skills': ['workspace', 'user', 'chosen'], 'skills_dirs': ['legacy'],
+                           'visibility': {'enabled': False, 'visibility_token_budget': 700}}}
+    root = Bundle(name='chosen', tools=[selected])
+    before = copy.deepcopy(root.to_mount_plan())
+    result = await composed(tmp_path, monkeypatch, SKILLS_BEHAVIOR_URI, root)
+    tool, = [row for row in result.tools if row['module'] == 'tool-skills']
+    assert tool == {**selected, 'config': {**selected['config'], 'skills': ['workspace', 'user', 'chosen', 'curated']}}
+    assert root.to_mount_plan() == before
+    result = await composed(tmp_path, monkeypatch, SKILLS_BEHAVIOR_URI, root,
+        settings={'overrides': {'tool-skills': {'config': {'skills': ['only-chosen']}}}})
+    tool, = [row for row in result.tools if row['module'] == 'tool-skills']
+    assert tool['config'] == {**selected['config'], 'skills': ['only-chosen']}
 
 
 async def test_role_resolution_only_fills_unspecified_preferences():

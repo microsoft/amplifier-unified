@@ -90,8 +90,20 @@ def test_recurring_guidance_is_orientation_and_manual_stays_discoverable():
         ('smartTools.open', 'smart-tools.md'),
         ('coordination.artifact.save', 'collaboration.md'),
         ('outputs.attachMedia', 'outputs.md'),
+        ('--providers-json', 'settings.md'),
     ):
         assert marker not in CANVAS_GUIDANCE
         assert marker in (skill / reference).read_text()
     assert 'unknown' in CANVAS_GUIDANCE and 'Stop' in CANVAS_GUIDANCE
     assert 'A missing skill is not a coordination failure' in CANVAS_GUIDANCE
+
+
+def test_reviewer_guidance_preserves_host_target_and_unavailable_metadata():
+    from amplifier_web.builtin_behaviors import resource_root
+
+    settings = (resource_root() / 'skills/unified-app/settings.md').read_text()
+    for marker in ('configuration.providers', '/runtimeControl/<sessionId>/configuration.providers',
+                   'providersWorkspace', 'providersLocation', 'configurationTarget',
+                   'refresh:false', 'can start a worker', '--models-json',
+                   'Do not invent', 'must never fall back to CLI', 'Never pass whole rows'):
+        assert marker in settings

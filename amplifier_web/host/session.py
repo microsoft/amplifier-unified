@@ -712,7 +712,7 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
     if not snapshot:
         from ..builtin_behaviors import (
             SHELL_BEHAVIOR_URI, IMAGEGEN_BEHAVIOR_URI, COMPUTER_USE_BEHAVIOR_URI,
-            CONTEXT_INTELLIGENCE_BEHAVIOR_URI, ROUTING_BEHAVIOR_URI,
+            CONTEXT_INTELLIGENCE_BEHAVIOR_URI, ROUTING_BEHAVIOR_URI, SKILLS_BEHAVIOR_URI,
             default_behavior_uri, resolve_builtin_behavior,
         )
         from ..session_files import capture_dir, project_slug
@@ -743,7 +743,7 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
                     automatic_routing = False
             if canonical == IMAGEGEN_BEHAVIOR_URI:
                 loaded, selected = imagegen_defaults(loaded, selected)
-            elif canonical == SHELL_BEHAVIOR_URI:
+            elif canonical in {SHELL_BEHAVIOR_URI, SKILLS_BEHAVIOR_URI}:
                 # Shipped skills are additive discovery, not permission to
                 # replace the selected loader, visibility or context budget.
                 loaded, selected = capability_defaults(loaded, selected, {})
@@ -764,7 +764,7 @@ async def compose_configured_bundle(registry, loaded, config, *, execution_works
                         'project_slug': project_slug(config.workspace),
                     },
                 })
-            if canonical in {SHELL_BEHAVIOR_URI, COMPUTER_USE_BEHAVIOR_URI, CONTEXT_INTELLIGENCE_BEHAVIOR_URI, ROUTING_BEHAVIOR_URI}:
+            if canonical in {SHELL_BEHAVIOR_URI, SKILLS_BEHAVIOR_URI, COMPUTER_USE_BEHAVIOR_URI, CONTEXT_INTELLIGENCE_BEHAVIOR_URI, ROUTING_BEHAVIOR_URI}:
                 components.select_defaults(selected, loaded, config.module_sources)
             else:
                 components.select_bundle(selected, config.module_sources)

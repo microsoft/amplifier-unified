@@ -219,7 +219,7 @@ def offline_defaults(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_real_five_behaviors_keep_modules_agents_context_and_namespace_anchors(
+async def test_real_default_behaviors_keep_modules_agents_context_and_namespace_anchors(
     offline_defaults,
 ):
     env = offline_defaults
@@ -231,6 +231,7 @@ async def test_real_five_behaviors_keep_modules_agents_context_and_namespace_anc
         defaults.COMPUTER_USE_BEHAVIOR_URI,
         defaults.CONTEXT_INTELLIGENCE_BEHAVIOR_URI,
         defaults.ROUTING_BEHAVIOR_URI,
+        defaults.SKILLS_BEHAVIOR_URI,
     }
     assert set(config.app_bundles) == expected
     tools = {row["module"] for row in bundle.tools}
@@ -258,13 +259,16 @@ async def test_real_five_behaviors_keep_modules_agents_context_and_namespace_anc
         assert {Path(path).resolve() for path in behavior.context.values()} <= contexts, uri
 
     for namespace in ("unified", "imagegen", "computer-use",
-                      "context-intelligence", "routing-matrix"):
+                      "context-intelligence", "routing-matrix", "skills"):
         assert Path(bundle.source_base_paths[namespace]).resolve() == env.roots[namespace]
     # Full CI carries its instructions in agent/tool definitions, not a root
     # context file. The per-behavior comparison above checks every actual
     # context declaration; requiring one per namespace invents an upstream API.
     skills = _row(bundle.tools, "tool-skills")["config"]["skills"]
     assert {"@unified:skills", "@imagegen:skills", "@routing-matrix:skills"} <= set(skills)
+    curated = "git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=skills"
+    assert skills.count(curated) == 1
+    assert skills.index(".amplifier/skills") < skills.index("~/.amplifier/skills") < skills.index(curated)
     assert (env.roots["unified"] / "skills/amplifier-shell/SKILL.md").is_file()
 
     # Exercise the guard itself: a changed ref must not silently use main.
@@ -292,6 +296,35 @@ async def test_real_defaults_are_local_only_and_desktop_is_read_only(offline_def
     image = _row(bundle.tools, "tool-image")["config"]
     assert image["backend"] == "images"
     assert image["allow_paid"] is True
+
+
+@pytest.mark.asyncio
+async def test_real_curated_default_preserves_chosen_loader_and_exclusions(offline_defaults):
+    env = offline_defaults
+    selected = {"module": "tool-skills", "instance_id": "chosen-loader", "source": "chosen-source",
+                "config": {"skills": ["chosen-skills"], "skills_dirs": ["legacy-skills"],
+                           "visibility": {"enabled": False, "visibility_token_budget": 700}}}
+    root_patch = {"tools": [selected]}
+    _, bundle, _ = await env.compose(root_patch=root_patch)
+    tool = _row(bundle.tools, "tool-skills")
+    assert {key: value for key, value in tool.items() if key != "config"} == {
+        key: value for key, value in selected.items() if key != "config"}
+    assert tool["config"]["visibility"] == selected["config"]["visibility"]
+    assert tool["config"]["skills_dirs"] == ["legacy-skills"]
+    curated = "git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=skills"
+    assert tool["config"]["skills"][0] == "chosen-skills"
+    assert tool["config"]["skills"].count(curated) == 1
+
+    _, scoped, _ = await env.compose(root_patch=root_patch, settings={
+        "overrides": {"tool-skills": {"config": {"skills": ["only-chosen"]}}}})
+    assert _row(scoped.tools, "tool-skills")["config"] == {
+        **selected["config"], "skills": ["only-chosen"]}
+
+    _, excluded, _ = await env.compose(settings={
+        "web_bundles": {"excluded": [env.defaults.SKILLS_BEHAVIOR_URI]}})
+    paths = _row(excluded.tools, "tool-skills")["config"]["skills"]
+    assert curated not in paths
+    assert {"@unified:skills", "@imagegen:skills", "@routing-matrix:skills"} <= set(paths)
 
 
 @pytest.mark.asyncio
