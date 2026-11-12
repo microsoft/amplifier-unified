@@ -43,9 +43,10 @@ def coverage_plan():
     retained_ids = retained_update_recovery_browser_addition(plan['scenarios'])
     appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
     responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
+    notices_ids = shared_notices_motion_browser_addition(plan['scenarios'])
     rows = []
     for row in plan['scenarios']:
-        if row['id'] in retained_ids | appearance_ids | responsive_ids:
+        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids:
             continue
         row = {**row, 'command': [coverage_paths(part) for part in row['command']]}
         row.pop('cwd', None)
@@ -1031,6 +1032,74 @@ def action_spacing_browser_addition(rows, readiness_scripts, *, current=False):
     return selected_client_browser_addition(rows, readiness_scripts, 'action-spacing', current=current)
 
 
+def shared_notices_motion_browser_addition(rows, readiness_scripts=()):
+    return selected_client_browser_addition(rows, readiness_scripts, 'shared-notices-motion', current=True)
+
+
+def test_shared_notices_motion_is_composed_once_from_selected_client_owner():
+    name = 'shared-notices-motion'
+    script = f'tests/{name}-browser.mjs'
+    expected = {'id': name, 'command': ['node', script],
+                'env': {'AMPLIFIER_TEST_ARTIFACTS': f'{{root}}/output/browser-checks/{name}'}}
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    client_path = source_test(script).with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    def owns(row):
+        return row['id'] == name or any(Path(part).name == Path(script).name for part in row['command'])
+    # Unified selects order only; command and environment remain client-owned.
+    assert [row for row in host['scenarios'] if owns(row)] == []
+    assert [row for row in client['scenarios'] if owns(row)] == [expected]
+    assert host['scenarioOrder'].count(name) == 1
+    index = host['scenarioOrder'].index(name)
+    assert host['scenarioOrder'][index - 1:index + 2] == [
+        'message-delivery', name, 'input-status']
+    plan, proof = runner.load_plan(ROOT, host_path)
+    assert shared_notices_motion_browser_addition(plan['scenarios']) == {name}
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    assert [row for row in plan['scenarios'] if owns(row)] == [{**expected, 'cwd': '.build/web-client'}]
+    assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+
+
+@pytest.mark.parametrize('fault', [
+    'missing', 'duplicate', 'identical-duplicate', 'renamed', 'command',
+    'extra-argument', 'environment', 'wrong-artifacts', 'extra-environment',
+    'cwd', 'missing-cwd', 'readiness',
+])
+def test_shared_notices_motion_rejects_changed_or_duplicate_owner(fault):
+    rows = current_plan()['scenarios']
+    # Prove the guard accepts the unmodified owner before each negative case.
+    assert shared_notices_motion_browser_addition(rows) == {'shared-notices-motion'}
+    owner = next(row for row in rows if row['id'] == 'shared-notices-motion')
+    readiness = set()
+    if fault == 'missing':
+        rows.remove(owner)
+    elif fault == 'duplicate':
+        rows.append({**owner, 'id': owner['id'] + '-duplicate'})
+    elif fault == 'identical-duplicate':
+        rows.append(json.loads(json.dumps(owner)))
+    elif fault == 'renamed':
+        owner['id'] += '-renamed'
+    elif fault == 'command':
+        owner['command'][1] = 'tests/home-sidebar-browser.mjs'
+    elif fault == 'extra-argument':
+        owner['command'].append('--extra')
+    elif fault == 'environment':
+        owner.pop('env')
+    elif fault == 'wrong-artifacts':
+        owner['env']['AMPLIFIER_TEST_ARTIFACTS'] = '{root}/output/browser-checks/home-sidebar'
+    elif fault == 'extra-environment':
+        owner['env']['UNEXPECTED'] = 'extra'
+    elif fault == 'cwd':
+        owner['cwd'] = 'tests/web'
+    elif fault == 'missing-cwd':
+        owner.pop('cwd')
+    else:
+        readiness.add(owner['command'][1])
+    with pytest.raises(AssertionError, match='shared-notices-motion'):
+        shared_notices_motion_browser_addition(rows, readiness)
+
+
 @pytest.mark.parametrize('identity', ['sidebar-controls', 'action-spacing'])
 @pytest.mark.parametrize('current', [False, True])
 @pytest.mark.parametrize('fault', [
@@ -1107,6 +1176,8 @@ def test_input_status_and_action_spacing_guard_checks_both_owners_before_exclusi
 ])
 def test_input_status_and_action_spacing_browser_owners_are_exact_and_additive(name, current, fault):
     rows = (current_plan() if current else coverage_plan())['scenarios']
+    assert input_status_and_action_spacing_browser_additions(
+        rows, set(), current=current) == {'input-status', 'action-spacing'}
     owner = next(row for row in rows if row['id'] == name)
     readiness = set()
     if fault == 'missing':
@@ -1236,6 +1307,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
                          if (match := re.search(r'node (tests/[^ ]+-browser\.mjs)', line))}
     appearance_lifecycle_browser_addition(current_plan()['scenarios'], readiness_scripts)
     sidebar_responsive_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    shared_notices_motion_browser_addition(current_plan()['scenarios'], readiness_scripts)
     plan = coverage_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], readiness_scripts)
     sidebar_ids = sidebar_controls_browser_addition(plan['scenarios'], readiness_scripts)
@@ -3631,12 +3703,13 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     retained_ids = retained_update_recovery_browser_addition(plan['scenarios'])
     appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
     responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids]
+    notices_ids = shared_notices_motion_browser_addition(plan['scenarios'])
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids)
-    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids)
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
+    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
-    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids) + len(responsive_ids)
+    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
