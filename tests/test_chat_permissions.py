@@ -563,7 +563,7 @@ async def test_approved_session_save_updates_active_mounted_tools_without_turn_o
     epoch = source.get('configurationPendingRevision', 0)
     async def refresh(sid, revision):
         assert sid == source['id'] and source['fileAccessPending']
-        return policy.refresh(expected=revision) == {
+        return policy.confirm(revision) == {
             'settingsRevision': revision, 'boundary': 'next-tool-call'}
     app.runtime.refresh_file_access = AsyncMock(side_effect=refresh)
     await grant(app, ['file_access'], ['session'])
@@ -580,6 +580,209 @@ async def test_approved_session_save_updates_active_mounted_tools_without_turn_o
     assert (await tools['apply_patch'].execute(create(external / 'next'))).success
     assert (await agent(app, source, 'permissions.save', values, 'live-save'))['duplicate']
     assert app.runtime.refresh_file_access.await_count == 1
+
+
+@pytest.mark.parametrize('engine', ['native', 'function'])
+@pytest.mark.parametrize('candidate_guard', [False, True], ids=['reference', 'candidate-captured-execute'])
+async def test_public_save_confirm_actual_writer_managed_native_scope(app, tmp_path, monkeypatch,
+                                                                     engine, candidate_guard):
+    """Composed boundary, plus an explicit diagnostic of the captured-execute gap.
+
+    The candidate variant characterizes an UNFIXED failure, not successful live
+    adoption. It requires the real selected hook (no importorskip); see
+    amplifier-bundle-converge@5d77bfb/modules/hooks-candidate-guard. Do not turn
+    its unknown receipt into no-effect or remove that guard to make writes work.
+    Only transport and Work admission are controlled; save, Worker confirmation,
+    Core/Live/QuickJS, wrappers and both patch validators are production code.
+    """
+    from pathlib import Path
+    from amplifier_core import AmplifierSession, HookResult
+    from amplifier_core.message_models import ToolCall
+    from amplifier_foundation.session.activation import ActivationGate
+    import amplifier_module_tool_filesystem as filesystem
+    import amplifier_module_tool_apply_patch as patch
+    from amplifier_module_tool_exec import ProgrammaticTool
+    from amplifier_web.app_guidance import install_app_access
+    from amplifier_web.configuration_authority import fingerprint
+    from amplifier_web.host.config import read_config
+    from amplifier_web.runtime_worker import Worker
+    from amplifier_web.write_policy_refresh import WritePolicySource, install
+    from test_write_policy_refresh import create
+
+    source, peer = app.state['sessions']
+    workspace = Path(source['workspace'])
+    managed = tmp_path.parent / (tmp_path.name + '-managed')
+    execution, external = managed / 'root', managed / 'worker'
+    execution.mkdir(parents=True)
+    external.mkdir()
+    source.update(nativeIdentity='native-live-write-owner', workingDirectory=str(execution), status='working')
+    before = copy.deepcopy(source['collaborationGeneration'])
+    epoch = source.get('configurationPendingRevision', 0)
+    native = AmplifierSession({'session': {
+        'orchestrator': {'module': 'loop-live', 'config': {'programmatic_dispatch': True}},
+        'context': {'module': 'context-simple'}}, 'providers': []}, session_id=native_id(source))
+    cleanup = None
+    await native.initialize()
+    try:
+        config = read_config(workspace, home=app.data_dir, shared_home=app.management.settings.shared_home,
+                             session_id=native_id(source))
+        declarations = SimpleNamespace(tools=[
+            {'module': 'tool-filesystem', 'id': 'root-files'},
+            {'module': 'tool-apply-patch', 'id': 'root-patch', 'config': {'engine': engine}}],
+            agents={})
+        policy_source = WritePolicySource(declarations, config, execution_workspace=execution)
+        bundle = policy_source.build(config.settings)
+        c = native.coordinator
+        c.config.update(tools=bundle.tools)
+        c.register_capability('session.working_dir', str(execution))
+        await filesystem.mount(c, bundle.tools[0]['config'])
+        await patch.mount(c, bundle.tools[1]['config'])
+        raw = c.get('tools')['apply_patch']
+        if candidate_guard:
+            import amplifier_module_hooks_candidate_guard as candidate
+            cleanup = await candidate.mount(c)
+            # This is the selected hook's actual closed-over bound method.
+            assert raw.execute.__converge_candidate_guard_original__.__self__ is raw
+        worker = Worker()
+        worker.session, worker.shared_handle = native, object()
+        worker.activation_gate = ActivationGate()
+        worker.activation = worker.activation_gate.activate()
+        worker.ownership = SimpleNamespace(yielding=False)
+        policy = install(c, policy_source, native_id(source),
+                         current=lambda: worker.activation_gate.current_valid)
+        loop = c.get('orchestrator')
+        c.register_capability('tools.dispatch', loop.approved_dispatch)
+        await c.mount('tools', ProgrammaticTool(c), name='tool_exec')
+        work_check = AsyncMock(return_value={'allowed': True})
+        c.register_capability('web.work_effect_check', work_check)
+        await install_app_access(c, AsyncMock(side_effect=AssertionError('No provider/bridge input expected')))
+        tools = c.get('tools')
+        wrapped = tools['apply_patch']
+        inspect_tool = c.get_capability('web.work_inspect_tool')
+        guarded = inspect_tool('apply_patch', wrapped)
+        assert wrapped is not guarded and guarded.tool is raw
+        assert c.get_capability('web.write_policy.tool_identity')(raw) == 'root-patch'
+
+        replies, confirmations, tool_results = [], [], []
+        async def observe_result(event, data):
+            tool_results.append((data['tool_name'], copy.deepcopy(data['result'])))
+            return HookResult()
+        c.hooks.register('tool:post', observe_result, name='test-live-write-result')
+        monkeypatch.setattr('amplifier_web.runtime_worker.publish', replies.append)
+        async def refresh(sid, revision):
+            assert sid == source['id'] and source['fileAccessPending']
+            assert revision == fingerprint(read_settings(workspace,
+                shared_home=app.management.settings.shared_home, session_id=native_id(source)))
+            start = len(replies)
+            # This executes Worker.command -> write_policy_boundary -> confirm,
+            # not a shortcut to refresh or a fabricated mounted acknowledgment.
+            await worker.command({'id': 'confirm-' + str(start), 'op': 'file_access.refresh',
+                                  'settingsRevision': revision})
+            assert len(replies) == start + 1
+            assert replies[-1].get('result') == {
+                'settingsRevision': revision, 'boundary': 'next-tool-call'}, replies[-1]
+            confirmations.append(revision)
+            return True
+        app.runtime.refresh_file_access = AsyncMock(side_effect=refresh)
+        calls = 0
+        async def invoke(path, *, nested=False):
+            nonlocal calls
+            calls += 1
+            arguments = create(path, engine)
+            name = 'apply_patch'
+            if nested:
+                name, arguments = 'tool_exec', {'code': 'text(await tools.apply_patch(' +
+                                               json.dumps(arguments) + '));'}
+            with loop.approved_dispatch.run_scope(c):
+                await loop._execute_tool_only(
+                    ToolCall(id=f'public-write-{calls}', name=name, arguments=arguments),
+                    tools, c.hooks, None, c)
+            assert tool_results[-1][0] == name
+            result = tool_results[-1][1]
+            if nested:
+                receipts = result['output']['calls']
+                assert len(receipts) == 1 and receipts[0]['success'] is result['success']
+                printed = json.loads(result['output']['output'][0])
+                assert printed['success'] is result['success']
+                # Nested output may contain only the module output rather than
+                # its error envelope. Inspect the actual native post receipt.
+                assert tool_results[-2][0] == 'apply_patch'
+                result = tool_results[-2][1]
+                assert result['success'] is receipts[0]['success']
+            return result
+
+        denied = await invoke(external / 'before')
+        assert not denied['success'] and denied['error']['code'] == 'file_source_access'
+        assert denied['error']['effect'] == 'none' and not (external / 'before').exists()
+        await grant(app, ['file_access'], ['session'], 'composed-file-grant')
+        await agent(app, source, 'permissions.save',
+            args(app, allowed=[str(external)], denied=[]), 'composed-live-save',
+            _runtimeSessionId=native.session_id)
+        done = await finished(app, 'composed-live-save')
+        assert done['phase'] == 'ready' and len(confirmations) == 1
+        assert not source.get('fileAccessPending') and not source['configurationPending']
+        assert source['collaborationGeneration'] == before
+        assert source.get('configurationPendingRevision', 0) == epoch
+        assert read(app)['current']['allowed'] == [str(execution), str(external)]
+        assert app.management.settings.path(workspace, 'session', session_id=native_id(source)).exists()
+        assert not app.management.settings.path(workspace, 'session', session_id=source['id']).exists()
+        assert not app.management.settings.path(peer['workspace'], 'session', session_id=native_id(peer)).exists()
+        if candidate_guard:
+            from test_file_source_guard import change
+            locked = execution / 'VISION.md'
+            contents = '# Vision (FROZEN 2026-11-11)\nold\n'
+            locked.write_text(contents)
+            assert (await tools['read_file'].execute({'file_path': str(locked)})).success
+            _, update = change(engine, locked, old='old', new='new')
+            # No tool:pre here: the instance guard must remain effective even
+            # on direct host invocation, not only through the normal loop.
+            refused = await guarded.execute(update)
+            assert not refused.success and 'candidate-guard' in refused.error['message']
+            assert locked.read_text() == contents
+
+        checks = []
+        validate = type(raw._engine)._validate_path
+        def observed_check(self, path):
+            try:
+                result = validate(self, path)
+            except Exception:
+                checks.append((self is raw._engine, False))
+                raise
+            checks.append((self is raw._engine, result is None or result[0]))
+            return result
+        monkeypatch.setattr(type(raw._engine), '_validate_path', observed_check)
+        for nested in (False, True):
+            checks.clear()
+            target = external / ('nested' if nested else 'direct')
+            result = await invoke(target, nested=nested)
+            assert checks[:2] == [(False, True), (False, True)]  # Both outer preflights passed.
+            if candidate_guard:
+                # Confirm accepted fresh copied attributes, but the hook's
+                # closure still executes the original denied engine. Preserve
+                # this actual inner-failure receipt; this is NOT a fixed claim.
+                assert checks[2:] == [(True, False)]
+                assert not result['success'] and result['error']['effect'] == 'unknown'
+                assert 'code' not in result['error'] and 'Access denied' in result['error']['message']
+                assert not target.exists()  # Fixture-only observation, not a reclassification.
+            else:
+                assert checks[2:] == [(False, True)]
+                assert result['success'] and target.read_text().strip() == 'new'
+        await agent(app, source, 'permissions.save',
+            args(app, allowed=[], denied=[str(external)]), 'composed-revoke',
+            _runtimeSessionId=native.session_id)
+        done = await finished(app, 'composed-revoke')
+        assert done['phase'] == 'ready' and len(confirmations) == 2
+        revoked = await invoke(external / 'revoked', nested=True)
+        assert not revoked['success'] and revoked['error']['effect'] == 'none'
+        assert revoked['error']['code'] == 'file_source_access'
+        assert not (external / 'revoked').exists()
+        assert tools['apply_patch'] is wrapped and guarded.tool is raw
+        assert work_check.await_count >= calls and not app.runtime.calls
+        assert worker.runtime is None and worker.execution is None and not worker.start_task
+    finally:
+        if cleanup:
+            cleanup()
+        await native.cleanup()
 
 
 @pytest.mark.parametrize('race', ['changed-settings', 'new-revision', 'lost-reply', 'other-pending'])
