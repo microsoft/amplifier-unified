@@ -11,7 +11,7 @@ import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 const pair=process.env.AMPLIFIER_TEST_UPDATE_RESTART_PAIR==='1';
 const fixturePath=fileURLToPath(new URL('../../tests/fixtures/update_restart_server.py',import.meta.url));
 const hostEnv={...process.env},fixtureHash=createHash('sha256').update(await readFile(fixturePath)).digest('hex');
-let assembly;
+let assembly,wheelIdentity;
 if(pair){
  for(const name of ['AMPLIFIER_TEST_PYTHON','AMPLIFIER_TEST_INSTALLED_PACKAGE','AMPLIFIER_TEST_HOST_PATH',
   'AMPLIFIER_TEST_ASSEMBLY_RECORD','AMPLIFIER_TEST_INSTALLED_IDENTITY','AMPLIFIER_TEST_SOURCE_ROOT','AMPLIFIER_TEST_PAIR_CWD'])
@@ -22,6 +22,7 @@ if(pair){
  const cwd=await realpath(process.env.AMPLIFIER_TEST_PAIR_CWD),rel=relative(checkout,cwd);
  assert.ok(rel.startsWith('..'+sep)||isAbsolute(rel),'Installed fixture CWD must be outside checkout');
  assembly=JSON.parse(await readFile(process.env.AMPLIFIER_TEST_ASSEMBLY_RECORD,'utf8'));
+ wheelIdentity=JSON.parse(await readFile(process.env.AMPLIFIER_TEST_INSTALLED_IDENTITY,'utf8'));
  assert.equal(assembly.server.revision,process.env.AMPLIFIER_TEST_SERVER_REVISION);
  for(const key of Object.keys(hostEnv))if(['PATH','PYTHONPATH','PYTHONHOME'].includes(key.toUpperCase()))delete hostEnv[key];
  hostEnv.PATH=process.env.AMPLIFIER_TEST_HOST_PATH;hostEnv.PYTHONDONTWRITEBYTECODE='1';
@@ -53,8 +54,16 @@ try{
  });
  assert.equal(boot.pid,fixture.pid);assert.match(boot.url,/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/);
  assert.equal(boot.package,pair?resolve(process.env.AMPLIFIER_TEST_INSTALLED_PACKAGE,'__init__.py'):fileURLToPath(new URL('../../amplifier_web/__init__.py',import.meta.url)));
+ const checkProvenance=value=>{
+  assert.equal(value.selectedServerRevision,assembly.server.revision);
+  const stamped=Object.hasOwn(wheelIdentity.files,'amplifier_web/release-source.json');
+  assert.equal(value.sourceStampPresent,stamped);
+  if(stamped)assert.deepEqual(value.sourceStamp,{schema:1,repository:'microsoft/amplifier-unified',
+   revision:assembly.server.revision,version:assembly.server.version});
+  else assert.equal(value.sourceStamp,null,'Ordinary local wheel absence must be explicit, never fabricated');
+ };
  if(pair){
-  assert.equal(boot.pair.sourceStamp.revision,assembly.server.revision);
+  checkProvenance(boot.pair);
   assert.equal(boot.pair.fixtureSha256,fixtureHash);result.provenance=boot.pair;
  }
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]});
@@ -134,7 +143,7 @@ try{
    assert.equal(value.committedOwnerSha256,initialOwnerHash);
    assert.deepEqual(value.runtimeCalls,[]);assert.equal(value.componentBusy,true);
    assert.equal(observed.calls.length,0);assert.equal(value.provenance.wheelIdentitySha256,boot.pair.wheelIdentitySha256);
-   assert.equal(value.provenance.sourceStamp.revision,assembly.server.revision);
+   checkProvenance(value.provenance);
    checkpoints.push(value);
   };
   const initial=await evidence();initialOwnerHash=initial.pair.committedOwnerSha256;unchanged(initial);

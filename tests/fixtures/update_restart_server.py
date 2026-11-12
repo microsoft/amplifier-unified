@@ -78,11 +78,16 @@ def installed_identity():
                 if (path.is_symlink() or not path.resolve().is_relative_to(install_root)
                         or path.relative_to(install_root).as_posix() not in files):
                     raise ValueError('Unmanifested application payload: ' + str(path))
-    stamp = json.loads((package / 'release-source.json').read_bytes())
-    expected_stamp = {'schema': 1, 'repository': 'microsoft/amplifier-unified',
-                      'revision': record['server']['revision'], 'version': record['server']['version']}
-    if stamp != expected_stamp:
-        raise ValueError('Installed release-source stamp differs from the selected server')
+    stamp_path = package / 'release-source.json'
+    stamp_present = 'amplifier_web/release-source.json' in files
+    if stamp_path.exists() != stamp_present:
+        raise ValueError('Release-source stamp presence differs from the external wheel identity')
+    stamp = json.loads(stamp_path.read_bytes()) if stamp_present else None
+    if stamp_present:
+        expected_stamp = {'schema': 1, 'repository': 'microsoft/amplifier-unified',
+                          'revision': record['server']['revision'], 'version': record['server']['version']}
+        if stamp != expected_stamp or type(stamp.get('schema')) is not int:
+            raise ValueError('Installed release-source stamp differs from the selected server')
     source = record['client']['manifest']['source']
     if (source != {'repository': 'https://github.com/microsoft/amplifier-client-web',
                    'revision': CLIENT_REVISION}
@@ -109,7 +114,8 @@ def installed_identity():
             if relative not in files or hashlib.sha256(path.read_bytes()).hexdigest() != files[relative]:
                 raise ValueError('Unmanifested installed module: ' + name)
             loaded[name] = {'path': str(path), 'sha256': files[relative]}
-    return {'installedPackage': str(package), 'sourceStamp': stamp, 'clientSource': source,
+    return {'installedPackage': str(package), 'sourceStamp': stamp, 'sourceStampPresent': stamp_present,
+            'selectedServerRevision': record['server']['revision'], 'clientSource': source,
             'fixtureSha256': fixture_digest,
             'clientInputsSha256': CLIENT_DIGEST, 'wheelPayloadFiles': len(payload),
             'wheelIdentitySha256': hashlib.sha256(identity_path.read_bytes()).hexdigest(),
