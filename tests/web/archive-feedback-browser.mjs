@@ -201,9 +201,50 @@ async function installedPr36(){
    evidence.timing.push({label,advancedMs:ms,browserNow:await page.evaluate(()=>performance.now()),
     present,archiveCalls:archiveActions().length,restoreCalls:restoreActions().length});
   }
+  const clockNow=()=>page.evaluate(()=>performance.now());
+  async function freezeClock(){
+   await page.clock.pauseAt(new Date(await page.evaluate(()=>Date.now())+100));
+  }
+  async function expiryBoundaries(label,{earliestStart,latestStart,pausedMs=0}){
+   // Timer eligibility is bracketed by the real gesture and its settled DOM,
+   // never by replacing/intercepting the product timer. While frozen, UI/HTTP
+   // processing costs no browser-clock time; only runFor advances this counter.
+   const uncertainty=latestStart-earliestStart;
+   assert.ok(uncertainty>=0&&uncertainty<=250,label+' eligibility bracket must be at most 250ms');
+   const readable=async()=>{
+    const now=await clockNow();
+    return {now,minMs:now-latestStart-pausedMs,maxMs:now-earliestStart-pausedMs};
+   };
+   const elapsed=await readable();
+   const beforeAdvance=14999-elapsed.maxMs;
+   assert.ok(beforeAdvance>=0,label+' must reach the pre-deadline checkpoint without overshooting');
+   await advance(label+'-visible-just-before-15s',beforeAdvance);
+   const before=await readable();
+   assert.equal(before.maxMs,14999);
+   assert.ok(before.minMs>=14749,label+' even the latest possible timer start is beyond a wrong 12s lifetime');
+   const afterAdvance=15001-before.minMs;
+   await advance(label+'-absent-just-after-15s',afterAdvance,false);
+   const after=await readable();
+   assert.equal(after.minMs,15001);
+   evidence.timing.push({label:label+'-readable-boundaries',earliestStart,latestStart,uncertaintyMs:uncertainty,pausedMs,
+    before:{...before,present:true},after:{...after,present:false}});
+  }
   // Pauses count only the readable part of the one 15-second confirmation.
-  await archive();await page.waitForFunction(()=>document.activeElement?.matches('[data-part="work-browser"] h1'));
+  await freezeClock();
+  const archiveEarliestStart=await clockNow();
+  await archive();
+  // HTTP/SSE and React continue while paused. Deliver the actual navigation's
+  // animation frames explicitly, with a bounded clock span, before timing it.
+  await expect.poll(async()=>{
+   const settled=await page.evaluate(()=>document.activeElement?.matches('[data-part="work-browser"] h1')===true);
+   if(!settled){
+    assert.ok((await clockNow())-archiveEarliestStart<250,'Archive navigation must settle within the eligibility bracket');
+    await page.clock.runFor(16);
+   }
+   return settled;
+  }).toBe(true);
   await leaveNotice();
+  const archiveLatestStart=await clockNow();
   const beforeExpiryRestores=restoreActions().length;
   await advance('routine-visible-before-deadline',3000);
   await notice().getByRole('button',{name:'Undo',exact:true}).hover();
@@ -218,8 +259,9 @@ async function installedPr36(){
   await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'))});
   assert.equal(await page.evaluate(()=>document.hidden),false);
   await advance('remaining-visible-budget-not-reset',6000);
-  await advance('fifteen-readable-seconds-expire',7000,false);
+  await expiryBoundaries('archive',{earliestStart:archiveEarliestStart,latestStart:archiveLatestStart,pausedMs:60000});
   assert.equal(restoreActions().length,beforeExpiryRestores,'Expiry never restores or retries');
+  await page.clock.resume();
   await selectRestored();
   // Keep open belongs to this operation and survives the real top/dialog remount.
   await archive();
@@ -236,11 +278,18 @@ async function installedPr36(){
   await expect(page.locator('#amp-one > [data-archive-notice]')).toBeVisible();
   await leaveNotice();await advance('keep-open-survives-top-remount',30000);
   const beforeKeptUndo=restoreActions().length;
+  await freezeClock();
+  const restoreEarliestStart=await clockNow();
   await notice().getByRole('button',{name:'Undo',exact:true}).click();
   await expect(notice()).toContainText('Chat restored');
   assert.deepEqual(restoreActions().slice(beforeKeptUndo),[{action:'session.restore',args:{id:sid}}]);
   await expect(notice().getByRole('button',{name:'Keep open',exact:true})).toHaveAttribute('aria-pressed','false');
-  await leaveNotice();await advance('keep-open-not-inherited-by-restore',15001,false);
+  await leaveNotice();
+  const restoreLatestStart=await clockNow();
+  assert.equal(restoreLatestStart,restoreEarliestStart,'Restore settles without advancing the frozen browser clock');
+  await expiryBoundaries('restore-keep-open-not-inherited',{earliestStart:restoreEarliestStart,latestStart:restoreLatestStart});
+  assert.deepEqual(restoreActions().slice(beforeKeptUndo),[{action:'session.restore',args:{id:sid}}],'Restore expiry never replays Undo');
+  await page.clock.resume();
   await action('session.select',{id:sid});await showFixtureConversation(page);
   // Hold only the navigation transport. Archive remains real and already saved.
   await page.route('**/api/actions',async route=>{
