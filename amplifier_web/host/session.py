@@ -777,6 +777,10 @@ async def _bind_resource_namespaces(bundle, registry, config, components):
                             or config.resolve_source(registry.find(namespace)) is not None
                             or namespace in config.settings.get("bundle", {}).get("added", {}))
                 if not explicit:
+                    repository = git_source(selected)
+                    if repository and repository[0] in getattr(
+                            components, "_resource_ambiguous_repositories", set()):
+                        raise ValueError("Resource namespace has ambiguous effective repository pins; select an explicit bundle source")
                     selected = components.source(namespace, selected)
                 observer = getattr(config, "_source_policy_observer", None)
                 if observer:

@@ -475,3 +475,70 @@ async def test_context_discovery_bounds_do_not_become_startup_admission_limits(t
             controls.export_resources()
     else:
         assert controls.export_resources()["warnings"], "Discovery limits remain visible, not silent acceptance"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("edit", ["unchanged", "repinned", "removed", "explicit-resource",
+                                 "ambiguous", "explicit-ambiguous", "equivalent-git"])
+async def test_runtime_plan_resource_binding_uses_only_surviving_effective_module_pins(tmp_path, monkeypatch, edit):
+    from amplifier_foundation import Bundle
+    from amplifier_foundation.paths.resolution import ResolvedSource
+    from amplifier_foundation.sources import SimpleSourceResolver
+    from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
+    from amplifier_web.host.components import HostComponents, prepare_bundle
+    from amplifier_web.host.session import apply_runtime_plan, compose_configured_bundle
+
+    controls, plan, registry, root, config, calls = collected_export(tmp_path, monkeypatch)
+    bundle = controls.prepared.bundle
+    repository = "git+https://example.invalid/foundation"
+    module_pin = repository + "@component-pin"
+    bundle.tools = [{"module": "tool-delegate", "source": module_pin + "#subdirectory=modules/tool-delegate"}]
+    bundle.session = {"orchestrator": {"module": "loop-live"}, "context": {"module": "context-simple"}}
+    bundle.providers = [{"module": "provider-fixture"}]
+    config.settings.update(bundle={"app": []}, web_bundles={"excluded": list(DEFAULT_BEHAVIORS)})
+    bundle = await compose_configured_bundle(registry, bundle, config)
+    # Reproduce an ordinary selected module pin without an already-composed
+    # Foundation resource root, then lose the selector at apply_runtime_plan.
+    components = HostComponents()
+    components.select_bundle(bundle, {})
+    bundle._host_components = components
+    assert components.source("foundation", registry.find("foundation")) == module_pin
+    edited = copy.deepcopy(bundle.to_mount_plan())
+    expected = module_pin
+    if edit == "repinned":
+        expected = repository + "@edited-pin"
+        edited["tools"][0]["source"] = expected + "#subdirectory=modules/tool-delegate"
+    elif edit == "removed":
+        edited["tools"] = []
+        expected = registry.find("foundation")
+    elif edit in {"explicit-resource", "explicit-ambiguous"}:
+        expected = repository + "@resource-pin"
+        config.settings["sources"] = {"bundles": {"foundation": expected}}
+    if edit in {"ambiguous", "explicit-ambiguous"}:
+        edited["tools"].append({"module": "tool-other",
+            "source": repository + "@different-pin#subdirectory=modules/tool-other"})
+    elif edit == "equivalent-git":
+        edited["tools"].append({"module": "tool-other",
+            "source": repository + ".git@component-pin#subdirectory=modules/tool-other"})
+        # Preserve the canonical selector's equivalent chosen URL spelling.
+        expected = repository + ".git@component-pin"
+    bundle = apply_runtime_plan(bundle, edited, config, config.workspace)
+    before = copy.deepcopy(bundle.to_mount_plan())
+    async def resolve(self, uri):
+        calls.append(uri)
+        return ResolvedSource(active_path=root, source_root=root)
+    monkeypatch.setattr(SimpleSourceResolver, "resolve", resolve)
+    async def activate(self, **kwargs):
+        assert self.to_mount_plan() == before
+        return SimpleNamespace(bundle=self)
+    monkeypatch.setattr(Bundle, "prepare", activate)
+    if edit == "ambiguous":
+        with pytest.raises(ValueError, match="ambiguous effective repository pins"):
+            await prepare_bundle(bundle)
+        assert not calls and bundle.source_base_paths == {}
+        assert bundle.to_mount_plan() == before
+        return
+    await prepare_bundle(bundle)
+    assert calls == [expected]
+    assert bundle._host_resource_namespaces["foundation"]["uri"] == expected
+    assert bundle.to_mount_plan() == before, "Resource pin selection must not rewrite effective activation rows"

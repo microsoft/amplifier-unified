@@ -82,8 +82,21 @@ async def prepare_bundle(bundle, *, source_home=None, **kwargs):
         from .session import _bind_resource_namespaces, is_snapshot
         if not is_snapshot(bundle):
             registry, config = resource_context
-            await _bind_resource_namespaces(bundle, registry, config,
-                getattr(bundle, "_host_components", None) or HostComponents())
+            # Runtime edits deliberately discard the composition selector, so
+            # derive resource-only repository choices from surviving effective
+            # declarations. Never restore stale pre-edit pins or normalize
+            # activation rows with this projection.
+            resource_components = HostComponents()
+            resource_components.select_bundle(bundle, {})
+            repository_pins = {}
+            for row in declarations(bundle.to_mount_plan()):
+                if selected := git_source(row.get("source")):
+                    path = urlsplit(selected[1][4:]).path
+                    _, separator, revision = path.rpartition("@")
+                    repository_pins.setdefault(selected[0], set()).add(revision if separator else None)
+            resource_components._resource_ambiguous_repositories = {
+                repository for repository, pins in repository_pins.items() if len(pins) > 1}
+            await _bind_resource_namespaces(bundle, registry, config, resource_components)
     if source_home is not None:
         # Canonicalize before Foundation records source-qualified provider
         # paths and before Core/modes capture the plan. Never relabel those

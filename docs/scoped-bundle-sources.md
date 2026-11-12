@@ -30,6 +30,10 @@ and admission observer. It reads the selected manifest's resource-root metadata,
 not its capability graph. Existing composed namespace roots win; unknown
 namespaces and missing or escaping files remain unresolved and block portable
 export. A disabled capability is not restored merely to supply its resource.
+After runtime edits, resource repository pins come only from surviving effective
+module declarations, without rewriting activation rows or restoring stale pins.
+Conflicting effective pins for one resource repository require an explicit bundle
+source; declaration order does not choose an arbitrary resource origin.
 
 This work runs at ordinary preparation after runtime edits and instruction-file
 inclusion, not at initial composition, per provider request or export. Its
