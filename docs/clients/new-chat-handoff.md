@@ -5,6 +5,8 @@ an independent chat authorizes creation and initial delivery directly, without a
 second confirmation. This supersedes the mandatory review shipped in 0.20.173.
 Suggestions outside the user's authorized scope still use review.
 Full access extends this direction to authorized unattended work, October 31, 2026.
+The commissioning simplification makes direct starts conversation-owned in both
+Ask and Full. Client presence is required for review and navigation, not execution.
 
 ## Meaning
 
@@ -18,14 +20,15 @@ tool results or peer messages is not user authorization. No model-supplied
 consent flag bypasses ordinary runtime or file-permission checks.
 
 In Ask mode, new agent starts require the actual root coordinator, current
-nonterminal transport generation and a connected target client. Full starts can
-instead come from a current root, qualified native descendant or authenticated
-system with an explicit calling conversation. They require no browser or fresh
-human message. Descendants retain their actual principal and assigned inputs;
+nonterminal transport generation and an explicit user request, not a connected
+client. Full starts can instead come from a current root, qualified native
+descendant or authenticated
+system with an explicit calling conversation, without a fresh human message.
+Descendants retain their actual principal and assigned inputs;
 systems retain system origin without inventing a native or human input.
 
-Full requests belong to the calling conversation in the existing handoff journal.
-They capture its standing-access revision, canonical execution owner and Stop
+Direct requests belong to the calling conversation in the existing handoff journal.
+They capture its access mode/revision, canonical execution owner and Stop
 revision. Creation and initial native-input admission recheck that capture,
 including after lock and runtime-preparation waits. Revocation, off/on, Stop,
 changed ownership or changed destination prevent the next effect. The new target's
@@ -52,7 +55,7 @@ A Full start records its exact handoff/source relationship during canonical
 creation. Standing access follows that relationship using the existing resolver;
 it is not a copied flag or commissioned-task membership. Explicit target chat or
 cross-workspace destination choices win. Source changes affect inherited access,
-and source Stop invalidates captured derived work. Ask/client reviews never
+and source Stop invalidates captured derived work. Ask starts and client reviews never
 supply this relationship. Missing or invalid handoff evidence cannot supply
 inherited Full. The relationship remains available after restart and native alias
 resolution without loading conversation history.
@@ -68,8 +71,8 @@ Both paths fix the destination chat and initial input identities in a durable
 receipt before effects begin. A repeated start or confirmation inspects the original
 result; it cannot create another chat or submit the brief a second time.
 Acceptance of an opening message is not completion of its requested work.
-The Full branch uses a private exact-operation seam through those same owners;
-raw agent creation and unrelated peer mutations remain unavailable. Its first
+Direct starts share a private exact-operation seam through those same owners;
+raw agent creation and unrelated peer mutations remain unavailable. An agent's first
 message uses the runtime's user-role input channel but retains agent/system
 origin and actual actor in its saved message and command. It is never a human
 post, answer, navigation action or authorization for a human-only workflow.
@@ -88,9 +91,10 @@ current selection and unsent text unchanged. **Open chat** is a separate explici
 navigation action after creation is confirmed, using ordinary navigation guards.
 Other clients keep their own selection, draft and attachments throughout.
 
-Full receipts are read by their calling conversation using the stable request ID;
-an optional client ID does not own or authorize their execution. Existing private
-client reviews keep their original mode and ownership even after enabling Full.
+Direct receipts are read by their calling conversation using the stable request ID,
+and shown to clients viewing that source chat. An optional client ID does not own
+or authorize their execution. Existing client-owned direct receipts and reviews
+keep their original mode and ownership, including after enabling Full.
 A request cannot upgrade a review, replace another owner's operation or change
 its brief. Exact retries preserve the original actor and never replay uncertainty.
 
@@ -106,12 +110,20 @@ history or copies another client’s writable view. Up to eight unfinished revie
 remain visible per source chat; up to 64 unfinished owned/restored reviews are
 retained across chats. New proposals are refused at those limits until existing
 reviews are resolved. A bounded recent completed tail fills unused display slots.
+Conversation-owned starts have a separate bounded eight-receipt display window,
+not an execution-count ceiling. Older receipts remain readable by exact request ID.
+Uncertain direct work is retained without blocking unrelated new starts or being
+replayed. Ordinary runtime capacity and deliberately configured limits still apply.
 
 ## Boundaries
 
 - `session.draft` still opens editable setup without creating or sending work.
 - Raw agent `session.create` remains refused.
-- `coordination.create` still commissions an inherited-workspace task chat.
+- `coordination.create` commissions a manager-owned worker in its inherited
+  workspace/configuration with a saved result return. It already runs without a
+  browser. An independent handoff does not establish assignment membership or an
+  automatic return; it is not a fallback for refused commissioning. When another
+  existing manager owns the work, that manager commissions from its own workspace.
 - Independent clients may use the public handoff actions with their authenticated
   client identity; the bundled browser supplies receipts and optional review.
 - This is not a new session store, automatic task continuation, a hidden worker,

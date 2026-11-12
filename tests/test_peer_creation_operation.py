@@ -2,6 +2,7 @@
 from amplifier_web import test_execution_settings as execution_settings
 
 import asyncio
+import copy
 import json
 import sqlite3
 
@@ -95,6 +96,46 @@ async def test_creation_handle_resolves_exact_outcome_and_returns_once(app, outc
     assert app.collaboration.pending_continuation(source['id'])['requestId'] == continuation
     assert app.collaboration.receipt(continuation)['dependencySatisfied'] is (outcome == 'success')
     assert len([row for row in source['messages'] if row.get('inputId') == continuation]) == 1
+
+
+async def test_peer_woken_manager_commissions_headless_once_with_durable_return(app):
+    source = app.state['sessions'][0]
+    expected_plan = plan(app, source)
+    # The shared fixture's current root generation is peer-woken, not human.
+    assert source['collaborationGeneration']['inputIds'] == ['incoming-peer']
+    assert app.collaboration.current_human_input(source) is None
+    app.queues.clear(); app.queue_clients.clear(); app.queue_sessions.clear()
+    app.clients.records.clear(); app.clients.dirty.clear()
+    selected, view = app.state['selectedSessionId'], copy.deepcopy(app.state['view'])
+    roots = len(app.state['sessions'])
+    created = await commission(app, source, 'background-manager')
+    assert (await commission(app, source, 'background-manager'))['duplicate']
+    request = created['initialInputId']
+    await initial_accepted(app, request)
+    target = app._session(created['sessionId'])
+    assert target['workspace'] == source['workspace']
+    assert target['workingDirectory'] == (source.get('workingDirectory') or source['workspace'])
+    assert target['collaboration']['creatorSessionId'] == source['id']
+    assert target['collaboration']['assignmentId'] == created['assignmentId']
+    assert json.loads((app.data_dir / 'sessions' / target['id'] / 'configuration.json').read_text()) == expected_plan
+    assert len(app.state['sessions']) == roots + 1
+    assert len([row for row in app.runtime.inputs if row[0] == target['id']]) == 1
+    assert len([row for row in target['messages'] if row.get('inputId') == request]) == 1
+    assert app.collaboration.receipt(request)['subscription']['continuationId'] == created['subscription']['continuationId']
+    await generation(app, target, 'recipient-' + request, [request])
+    await agent_action(app, target, 'coordination.reply', {
+        'requestId': request, 'kind': 'result', 'outcome': 'success',
+        'text': 'The assigned result is ready.'}, 'background-reply')
+    await finish(app, target, request)
+    await finish(app, target, request)
+    continuation = created['subscription']['continuationId']
+    assert app.collaboration.receipt(continuation)['dependencySatisfied'] is True
+    assert len([row for row in source['messages'] if row.get('inputId') == continuation]) == 1
+    result = await agent_action(app, source, 'coordination.result',
+        {'requestId': created['requestId']}, 'background-read')
+    assert result['result']['initialRequest']['response']['outcome'] == 'success'
+    assert app.state['selectedSessionId'] == selected and app.state['view'] == view
+    assert not app.clients.records
 
 
 async def test_independent_creation_can_explicitly_omit_automatic_return(app):
