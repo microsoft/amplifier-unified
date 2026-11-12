@@ -211,7 +211,7 @@ async def test_invalid_new_candidate_can_be_explicitly_restaged_without_replayin
         with pytest.raises(ValueError,match='resolution changed'):await manager.install()
         assert service.state['updates']['pendingApp'] is None
         assert service.state['updates']['appAvailable']
-        monkeypatch.setattr(manager,'busy',lambda:True)
+        monkeypatch.setattr(manager,'app_busy',lambda:True)
         await manager.install()
         assert service.state['updates']['pendingApp']['generation']!=folder.name
         assert len([call for call in calls if 'install' in call])==2  # Both isolated candidates.
