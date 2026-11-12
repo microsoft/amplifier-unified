@@ -209,7 +209,14 @@ async def test_real_probe_installs_checked_shared_hook_after_adoption_and_freeze
     # venv. Reuse those explicit dependency paths in this disposable interpreter.
     import site
     candidate_site = next((project / '.venv/lib').glob('python*/site-packages'))
-    (candidate_site / 'prepared-dependencies.pth').write_text('\n'.join(site.getsitepackages()) + '\n')
+    prepared_sites = list(dict.fromkeys([
+        *site.getsitepackages(),
+        # An installed host may itself reuse the prepared dependency closure
+        # through a .pth. Preserve those effective package roots, not checkout
+        # or test-support paths, in this disposable interpreter.
+        *(path for path in sys.path if Path(path).name == 'site-packages'),
+    ]))
+    (candidate_site / 'prepared-dependencies.pth').write_text('\n'.join(prepared_sites) + '\n')
     workspace = c.stage / 'qualification-workspace'
     workspace.mkdir()
     shared = c.stage / 'shared-config'
@@ -400,6 +407,7 @@ async def test_packaged_worker_preparation_and_included_foundation_update(
         'print(json.dumps({"prefix":sys.prefix,"source":s.__file__,'
         '"sha256":hashlib.sha256(Path(s.__file__).read_bytes()).hexdigest()}))'))
     assert Path(fresh_identity['source']).resolve().is_relative_to((fresh / '.venv').resolve())
+    assert Path(fresh_identity['prefix']).resolve() == (fresh / '.venv').resolve()
     assert fresh_identity['sha256'] == expected_hash
     for source, target in [('pyproject.toml', 'runtime.toml'), ('uv.lock', 'runtime.lock')]:
         shutil.copyfile(baseline / source, receipt / target)
@@ -537,6 +545,25 @@ async def mount(coordinator, config=None):
             for path in stage.iterdir():
                 if path.is_file():
                     shutil.copy2(path, evidence / path.name)
+            predecessor = evidence / 'predecessor'
+            predecessor.mkdir()
+            for name, content in before.items():
+                path = predecessor / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            fresh_evidence = evidence / 'fresh'
+            fresh_evidence.mkdir()
+            for name in ('pyproject.toml', 'uv.lock'):
+                shutil.copy2(fresh / name, fresh_evidence / name)
+            (evidence / 'installed-graphs.json').write_text(json.dumps({
+                'predecessor': baseline_graph, 'fresh': qualification.installed_graph(fresh),
+                'qualified': graph}, sort_keys=True) + '\n')
+            (evidence / 'payload-inventories.json').write_text(json.dumps({
+                'predecessor': baseline_payload, 'qualified': qualification.package_content(final)},
+                sort_keys=True) + '\n')
+            diagnostics = home / 'updates/diagnostics.jsonl'
+            if diagnostics.exists():
+                shutil.copy2(diagnostics, evidence / diagnostics.name)
             (evidence / 'predecessor-receipt-hashes.json').write_text(
                 json.dumps(report['predecessorReceipts'], sort_keys=True) + '\n')
     finally:
