@@ -128,7 +128,8 @@ def sources(script_dir: Path, *, consumer=None) -> dict[str, bytes]:
     return {
         "InstallStorage.cs": (matches[0] + "\n").encode(),
         "NativePins.cs": ("\n".join(pins) + "\n").encode(),
-        "NativeInstaller.cs": (script_dir / "windows_bootstrap_native.cs").read_bytes(),
+        # One compiler byte identity on Windows CRLF and POSIX LF checkouts.
+        "NativeInstaller.cs": (script_dir / "windows_bootstrap_native.cs").read_text(encoding="utf-8").encode("utf-8"),
     }
 
 

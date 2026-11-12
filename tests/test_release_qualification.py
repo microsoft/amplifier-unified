@@ -195,10 +195,12 @@ def test_runtime_project_constrains_the_recorded_build_backend(tmp_path, monkeyp
 def test_workflow_consolidates_checks_without_sharing_publication_credentials():
     workflow = yaml.load((ROOT / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)
     jobs = workflow['jobs']
-    assert set(jobs) == {'prepare', 'release'}
+    assert set(jobs) == {'prepare', 'windows-consumer', 'release'}
     assert workflow['permissions'] == {'contents': 'read'}
     assert jobs['prepare']['permissions'] == {'contents': 'read', 'actions': 'read'}
-    assert jobs['release']['needs'] == 'prepare'
+    assert jobs['windows-consumer']['needs'] == 'prepare'
+    assert jobs['windows-consumer']['permissions'] == {'contents': 'read'}
+    assert jobs['release']['needs'] == ['prepare', 'windows-consumer']
     assert jobs['release']['permissions'] == {'contents': 'write'}
     steps = jobs['prepare']['steps']
     commands = '\n'.join(step.get('run', '') for step in steps)

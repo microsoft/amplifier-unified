@@ -321,12 +321,6 @@ jobs:
         with:
           name: release-distributions
           path: dist
-      - name: Retrieve original consumer build when selected source supports it
-        if: hashFiles('scripts/windows_consumer_release.py') != ''
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: windows-consumer
-          path: dist
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: '*-qualification'
@@ -334,6 +328,14 @@ jobs:
           merge-multiple: true
       - name: Require all matching qualification receipts and original artifact bytes
         run: python "$RUNNER_TEMP/release-tools/release_qualification.py" verify-receipts --evidence "$RUNNER_TEMP/host-resolution" --candidate "$RELEASE_CANDIDATE" --receipts "$RUNNER_TEMP/qualification" --dist dist
+      # The package receipt owns exactly wheel/sdist/SHA256SUMS. Preserve that
+      # exact-file check before adding separately verified Windows assets.
+      - name: Retrieve original consumer build when selected source supports it
+        if: hashFiles('scripts/windows_consumer_release.py') != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: windows-consumer
+          path: dist
       - name: Publish immutable tag and release
         env:
           GH_TOKEN: ${{ github.token }}

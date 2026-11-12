@@ -113,3 +113,54 @@ def test_workflow_builds_original_wheel_before_normal_publisher():
     assert "uv pip install" in body and "uv pip check" in body
     assert "windows_consumer_release.py build" in body and "uv build" not in body
     assert workflow["jobs"]["release"]["needs"] == ["prepare", "windows-consumer"]
+    steps = workflow["jobs"]["release"]["steps"]
+    check = next(i for i, step in enumerate(steps) if "verify-receipts" in step.get("run", ""))
+    download = next(i for i, step in enumerate(steps) if step.get("with", {}).get("name") == "windows-consumer")
+    publish = next(i for i, step in enumerate(steps) if "publish --tag" in step.get("run", ""))
+    assert check < download < publish
+
+
+def test_real_compiler_inputs_are_identical_across_checkout_line_endings(tmp_path, built, monkeypatch):
+    from windows_bootstrap_native import sources
+    lf, crlf = tmp_path / "lf", tmp_path / "crlf"
+    lf.mkdir()
+    crlf.mkdir()
+    for name in ("install.ps1", "windows_bootstrap_native.cs", "windows_bootstrap_capsule.py"):
+        raw = (SCRIPTS / name).read_text(encoding="utf-8").encode("utf-8")
+        (lf / name).write_bytes(raw)
+        (crlf / name).write_bytes(raw.replace(b"\n", b"\r\n"))
+    directory, wheel, revision, plan, report, save = built
+    assert sources(lf, consumer=plan) == sources(crlf, consumer=plan)
+    report["buildInputs"] = {name: {"bytes": len(raw), "sha256": sha(raw)}
+                            for name, raw in sources(lf, consumer=plan).items()}
+    save()
+    # The verifier really reconstructs CRLF checkout inputs; no synthetic source
+    # stub hides a platform-dependent compiler digest.
+    monkeypatch.setattr(release, "sources", sources)
+    assert release.verify(directory, wheel, revision, "1.2.3", script_dir=crlf)
+
+
+def test_real_receipt_verifier_preserves_package_layout_before_consumer_download(tmp_path, monkeypatch):
+    import release_qualification as qualification
+    dist, receipts = tmp_path / "dist", tmp_path / "receipts"
+    dist.mkdir()
+    receipts.mkdir()
+    revision, candidate = "a" * 40, "b" * 64
+    monkeypatch.setattr(qualification, "verify_candidate",
+                        lambda *args: {"revision": revision})
+    for name in ("fixture.whl", "fixture.tar.gz", "SHA256SUMS"):
+        (dist / name).write_bytes(name.encode())
+    graph = {"fixture": "runtime"}
+    (receipts / "qualified-runtime.json").write_text(json.dumps(graph))
+    for lane in qualification.LANES:
+        row = {"schema": 1, "candidate": candidate, "revision": revision, "lane": lane}
+        if lane == "package":
+            row["distributions"] = qualification.files(dist, sorted(p.name for p in dist.iterdir()))
+        if lane == "runtime":
+            row["runtime"] = qualification.digest(graph)
+        (receipts / (lane + ".json")).write_text(json.dumps(row))
+    qualification.verify_receipts(tmp_path, tmp_path, candidate, receipts, dist)
+    # Actual producer bytes arrive only after that exact original receipt check.
+    (dist / release.names("1.2.3")).write_bytes(b"MZconsumer")
+    with pytest.raises(ValueError, match="Distributions changed"):
+        qualification.verify_receipts(tmp_path, tmp_path, candidate, receipts, dist)
