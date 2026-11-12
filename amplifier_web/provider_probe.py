@@ -173,7 +173,8 @@ def main():
     os.dup2(sys.stderr.fileno(),sys.stdout.fileno());sys.stdout=sys.stderr
     try:
         request=json.loads(sys.stdin.read())
-        result=asyncio.run(query(request))
+        from amplifier_web.probe_git import query as owned_query
+        result=asyncio.run(owned_query(query(request)))
     except Exception as exc:
         from amplifier_web.probe_diagnostics import HostProbeFailure
         if isinstance(exc, HostProbeFailure):

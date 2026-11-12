@@ -38,7 +38,7 @@ async def test_cancel_during_pipe_connection_closes_discovery_descendants(monkey
         f'pathlib.Path({str(marker)!r}).write_text(json.dumps([os.getpid(),child.pid]))\n'
         'time.sleep(60)\n')
     monkeypatch.setattr('amplifier_web.runtime.RuntimeManager._command',
-        lambda self, **kwargs: [sys.executable, '-c', code, 'unused'])
+        lambda self, *args, **kwargs: [sys.executable, '-c', code, 'unused'])
     loop = asyncio.get_running_loop()
     connect = loop.connect_write_pipe
     release = asyncio.Event()
@@ -151,7 +151,7 @@ async def test_defaults_payload_environment_output_and_error_contract(monkeypatc
         'assert os.getcwd() == request["workspace"]\n'
         'print(json.dumps({"request":request}))\n')
     monkeypatch.setattr('amplifier_web.runtime.RuntimeManager._command',
-        lambda self, **kwargs: [sys.executable, '-c', code, 'unused'])
+        lambda self, *args, **kwargs: [sys.executable, '-c', code, 'unused'])
     result = await draft_defaults.resolve_defaults(tmp_path, str(tmp_path), bundle='synthetic',
         global_only=True, session_id='exact', refresh=True, replacement={'model': 'example'})
     assert result == {'bundle': 'synthetic', 'globalOnly': True, 'request': {
@@ -159,6 +159,6 @@ async def test_defaults_payload_environment_output_and_error_contract(monkeypatc
         'globalOnly': True, 'sessionId': 'exact', 'catalog': False, 'refresh': True,
         'replacement': {'model': 'example'}, 'desiredBundle': False}}
     monkeypatch.setattr('amplifier_web.runtime.RuntimeManager._command',
-        lambda self, **kwargs: [sys.executable, '-c', 'print(\'{"error":"synthetic"}\')', 'unused'])
+        lambda self, *args, **kwargs: [sys.executable, '-c', 'print(\'{"error":"synthetic"}\')', 'unused'])
     with pytest.raises(ValueError, match='Draft default resolution failed'):
         await draft_defaults.resolve_defaults(tmp_path, str(tmp_path), bundle='synthetic')
