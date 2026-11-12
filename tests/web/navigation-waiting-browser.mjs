@@ -166,7 +166,7 @@ try{
     await expect(waiting).not.toContainText('Dependency deferred');
     await expect(waiting).not.toContainText('Waiting for');
     const link=waiting.getByRole('button',{name:ready.longTitle,exact:true});
-    await expect(link).toBeVisible();await expect(link).toHaveAttribute('title',ready.longTitle);
+    await expect(link).toBeVisible();await expect(link).toHaveAttribute('aria-label',ready.longTitle);
     await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
     const dependency=await geometry('waiting');
     observations.push({id:'host-layout-'+scheme+'-'+width+'-'+value,
@@ -192,6 +192,8 @@ try{
     assert.equal(name.whiteSpace,'nowrap');
     const receipt=(await inspect()).receiptSha256,before=actions.length;
     await link.hover();await page.keyboard.press('Tab');await link.focus();await expect(link).toBeFocused();
+    await expect(page.getByRole('tooltip')).toHaveText(ready.longTitle);
+    await expect(link).toHaveAttribute('aria-describedby',await page.getByRole('tooltip').getAttribute('id'));
     const focus=await link.evaluate(node=>({style:getComputedStyle(node).outlineStyle,width:getComputedStyle(node).outlineWidth}));
     assert.notEqual(focus.style,'none');assert.ok(parseFloat(focus.width)>0);
     await passive(before,receipt);
@@ -204,8 +206,12 @@ try{
      const flyoutContent=flyout.locator('.a-dependency-content');
      await expect(flyoutContent).toContainText('Waiting on');await expect(flyoutContent).not.toContainText('Dependency deferred');
      const flyoutLink=flyoutContent.getByRole('button',{name:ready.longTitle,exact:true});
-     await expect(flyoutLink).toHaveAttribute('title',ready.longTitle);
+     // Flyout focus activates the shared tooltip, which consumes native title.
+     // Its full accessible name and associated tooltip remain the real promise.
+     await expect(flyoutLink).toHaveAttribute('aria-label',ready.longTitle);
      await flyoutLink.focus();await expect(flyoutLink).toBeFocused();
+     await expect(page.getByRole('tooltip')).toHaveText(ready.longTitle);
+     await expect(flyoutLink).toHaveAttribute('aria-describedby',await page.getByRole('tooltip').getAttribute('id'));
      assert.ok(await flyoutLink.evaluate(node=>node.scrollWidth>node.clientWidth),'Flyout retains ellipsis');
      await page.keyboard.press('Escape');await expect(flyout).toHaveCount(0);await expect(more).toBeFocused();
      await passive(before,receipt);
