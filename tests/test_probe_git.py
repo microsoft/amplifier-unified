@@ -141,6 +141,34 @@ async def test_repeated_cancellation_waits_for_git_owner_finalizer(monkeypatch):
         await owner.close()
 
 
+async def test_isolated_probe_loop_shutdown_settles_nested_git_before_return(tmp_path):
+    from amplifier_web.probe_process import isolated
+    ready = tmp_path / 'ready'
+    code = f'''import os,pathlib,json,time
+pathlib.Path({str(ready)!r}).write_text(json.dumps({{'pid':os.getpid(),'guard':os.getppid(),'group':os.getpgrp()}}))
+time.sleep(60)
+'''
+    async def operation():
+        owner = await probe_git.GitProbeOwner().start()
+        try:
+            return await request(owner, [sys.executable, '-c', code])
+        finally:
+            await owner.close()
+    task = asyncio.create_task(isolated(operation))
+    try:
+        recorded = await marker(ready)
+        for _ in range(3):
+            task.cancel()
+            await asyncio.sleep(0)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 8)
+        assert all(identity(recorded[key]) is None for key in ('pid', 'guard', 'group'))
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 async def test_git_cleanup_failure_retains_owner_and_original_error(monkeypatch):
     owner = await probe_git.GitProbeOwner().start()
     failure = OSError('synthetic cleanup refusal')
