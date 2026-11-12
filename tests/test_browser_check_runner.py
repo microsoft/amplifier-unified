@@ -647,8 +647,8 @@ def sidebar_responsive_browser_addition(rows, readiness_scripts=()):
               or script in row['command']
               or 'AMPLIFIER_SIDEBAR_RESPONSIVE' in row.get('env', {})]
     assert sorted(owners, key=lambda row: row['id']) == [ordinary, responsive], \
-        'sidebar-responsive: expected exact ordinary and responsive selected-client owners'
-    assert script not in readiness_scripts, 'sidebar-responsive: duplicate readiness owner'
+        'sidebar-controls/sidebar-responsive: expected exact ordinary and responsive selected-client owners'
+    assert script not in readiness_scripts, 'sidebar-controls/sidebar-responsive: duplicate readiness owner'
     return {responsive['id']}
 
 
