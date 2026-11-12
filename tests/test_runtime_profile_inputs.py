@@ -756,6 +756,9 @@ async def profile_freeze(tmp_path, monkeypatch):
     monkeypatch.setenv('UV_NO_INDEX', 'true')
     monkeypatch.setenv('UV_CACHE_DIR', str(tmp_path / 'uv-cache'))
     monkeypatch.setenv('UV_PYTHON_DOWNLOADS', 'never')
+    # Corruption controls edit one installation, not uv's hardlinked wheel
+    # cache (which would also alter the prepared/parent fixture payload).
+    monkeypatch.setenv('UV_LINK_MODE', 'copy')
     home, shared, workspace = (tmp_path / name for name in ('app', 'shared', 'workspace'))
     shared.mkdir()
     workspace.mkdir()
