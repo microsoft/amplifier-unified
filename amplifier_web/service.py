@@ -3051,7 +3051,9 @@ class AppService:
                                                 new_root=True)
                     if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
                     handoff = self.handoffs.execution(action, args, origin, command_id, caller_session_id)
-                    if handoff is not None:
+                    if handoff is not None and handoff['mode'] == 'full':
+                        # Input attribution applies to every direct handoff;
+                        # standing-access inheritance belongs only to Full.
                         session['handoffOrigin'] = self.handoffs.lineage(handoff)
                     if origin == 'scheduler' and args.get('inheritConfiguration', {}).get('scheduledRunId'):
                         source = self._session(args['inheritConfiguration']['sessionId'])

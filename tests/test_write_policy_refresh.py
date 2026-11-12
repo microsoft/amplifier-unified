@@ -1,7 +1,8 @@
 """Real reference tools across live write defaults; no provider or paid calls."""
 import asyncio
 import copy
-from types import SimpleNamespace
+import json
+from types import MethodType, SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -24,14 +25,19 @@ def save(workspace, session_id, allowed, denied=()):
     update_settings(path, edit)
 
 
-async def mount(workspace, plan, *, policy=None, session_id='root'):
-    tools, caps = {}, {'session.working_dir': str(workspace)}
-    async def mounted(kind, tool, name):
-        tools[name] = tool
-    coordinator = SimpleNamespace(config=copy.deepcopy(plan), session_id=session_id,
-        get=lambda kind: tools if kind == 'tools' else None, mount=mounted,
-        get_capability=caps.get, register_capability=caps.__setitem__,
-        hooks=SimpleNamespace(emit=AsyncMock()))
+async def mount(workspace, plan, *, policy=None, session_id='root', coordinator=None):
+    if coordinator is None:
+        tools, caps = {}, {'session.working_dir': str(workspace)}
+        async def mounted(kind, tool, name):
+            tools[name] = tool
+        coordinator = SimpleNamespace(config=copy.deepcopy(plan), session_id=session_id,
+            get=lambda kind: tools if kind == 'tools' else None, mount=mounted,
+            get_capability=caps.get, register_capability=caps.__setitem__,
+            hooks=SimpleNamespace(emit=AsyncMock()))
+    else:
+        coordinator.config.update(copy.deepcopy(plan))
+        coordinator.register_capability('session.working_dir', str(workspace))
+        tools = coordinator.get('tools')
     for row in plan['tools']:
         if row['module'] == 'tool-filesystem':
             await filesystem.mount(coordinator, copy.deepcopy(row.get('config', {})))
@@ -42,15 +48,17 @@ async def mount(workspace, plan, *, policy=None, session_id='root'):
     return coordinator, tools
 
 
-async def root(workspace, *, engine='function', file_config=None, patch_config=None, session_id='root'):
+async def root(workspace, *, engine='function', file_config=None, patch_config=None,
+               session_id='root', coordinator=None, agents=None):
     config = read_config(workspace, session_id=session_id)
     declarations = SimpleNamespace(tools=[
         {'module': 'tool-filesystem', 'config': file_config or {}},
         {'module': 'tool-apply-patch', 'config': {'engine': engine, **(patch_config or {})}}],
-        agents={})
+        agents=agents or {})
     source = WritePolicySource(declarations, config)
     bundle = source.build(config.settings)
-    coordinator, tools = await mount(workspace, {'tools': bundle.tools, 'agents': bundle.agents}, session_id=session_id)
+    coordinator, tools = await mount(workspace, {'tools': bundle.tools, 'agents': bundle.agents},
+                                     session_id=session_id, coordinator=coordinator)
     policy = install(coordinator, source, session_id, current=lambda: True)
     await install_file_source_guard(coordinator, workspace / 'locks')
     return coordinator, tools, policy
@@ -74,6 +82,8 @@ async def test_next_writer_uses_saved_policy_without_remount_replay_or_new_input
     assert not (await tools['apply_patch'].execute(create(path, engine))).success
     assert not path.exists()
     save(workspace, 'root', [extra])
+    revision = fingerprint(read_settings(workspace, session_id='root'))
+    assert policy.confirm(revision) == {'settingsRevision': revision, 'boundary': 'next-tool-call'}
     assert (await tools['apply_patch'].execute(create(path, engine))).success
     assert path.read_text().strip() == 'new'
     assert original.config == old_config
@@ -166,7 +176,7 @@ async def test_narrowing_rechecked_after_file_lock_wait_and_inflight_snapshot_is
     assert not policy.invocation(raw, 'tool-filesystem', coordinator)._check_write_access(path)[0]
 
 
-async def test_unrelated_read_change_or_stopped_owner_fails_closed(tmp_path):
+async def test_writer_read_change_or_stopped_owner_fails_closed(tmp_path):
     coordinator, tools, policy = await root(tmp_path)
     save(tmp_path, 'root', [tmp_path.parent])
     path = settings_paths(tmp_path, session_id='root')['session']
@@ -175,10 +185,323 @@ async def test_unrelated_read_change_or_stopped_owner_fails_closed(tmp_path):
     update_settings(path, change_read)
     result = await tools['apply_patch'].execute(create(tmp_path / 'new'))
     assert not result.success and result.error['effect'] == 'none'
-    assert 'Other configuration changed' in result.error['message']
+    assert result.error['code'] == 'file_policy_refresh_required'
+    assert 'Writer configuration changed' in result.error['message']
     policy.current = lambda: False
     with pytest.raises(ValueError, match='no longer current'):
         policy.refresh()
+
+
+@pytest.mark.parametrize('writer', ['write_file', 'apply_patch'])
+async def test_unrelated_settings_and_new_session_decisions_do_not_poison_live_writers(tmp_path, writer):
+    workspace, extra = tmp_path / 'project', tmp_path / 'approved'
+    workspace.mkdir()
+    coordinator, tools, policy = await root(workspace)
+    raw = tools[writer].tool
+    mounted_config = copy.deepcopy(raw.config)
+    def arguments(path):
+        return create(path) if writer == 'apply_patch' else {'file_path': str(path), 'content': 'new'}
+    assert (await tools[writer].execute(arguments(workspace / 'before'))).success
+    bundle = policy.bundle
+    path = settings_paths(workspace, session_id='root')['session']
+    unrelated = {
+        # Shape saved by providers.configureDecisions (takesEffect=new_sessions).
+        'decision_models': {'selection': {'browser': {'connection': 'chosen', 'backend': 'fast'}}},
+        'config': {'providers': [{'module': 'provider-chosen', 'id': 'chosen', 'config': {
+            'model': 'retained', 'decisions': {'enabled': True, 'backends': {'fast': {'model': 'fast'}}}}}],
+                   'tools': [{'module': 'tool-unrelated', 'source': 'file:///chosen/tool',
+                              'config': {'arbitrary_future_setting': True}}]},
+        'overrides': {'unrelated-named-tool': {'config': {'future_choice': 'saved'}}},
+        'sources': {'modules': {'tool-unrelated': 'file:///new/tool',
+                                'provider-chosen': 'file:///new/provider'}},
+        'future_app_setting': {'anything': ['not', 'a', 'writer', 'dependency']},
+    }
+    update_settings(path, lambda value: {**value, **unrelated})
+    for index in range(3):
+        assert (await tools[writer].execute(arguments(workspace / f'after-{index}'))).success
+    assert policy.bundle is bundle  # No writer recomposition for unrelated changes.
+    save(workspace, 'root', [extra])
+    revision = fingerprint(read_settings(workspace, session_id='root'))
+    assert policy.confirm(revision)['settingsRevision'] == revision
+    assert (await tools[writer].execute(arguments(extra / 'granted'))).success
+    assert not (await tools[writer].execute(arguments(tmp_path / 'still-denied'))).success
+    save(workspace, 'root', [], [extra])
+    denied = await tools[writer].execute(arguments(extra / 'revoked'))
+    assert not denied.success and denied.error['effect'] == 'none'
+    saved = read_settings(workspace, session_id='root')
+    assert saved['decision_models'] == unrelated['decision_models']
+    assert saved['config'] == unrelated['config']
+    assert saved['sources'] == unrelated['sources']
+    assert saved['overrides']['unrelated-named-tool'] == unrelated['overrides']['unrelated-named-tool']
+    assert tools[writer].tool is raw and raw.config == mounted_config
+
+
+@pytest.mark.parametrize('change', [
+    {'config': {'tools': [{'module': 'tool-apply-patch', 'config': {'engine': 'native'}}]}},
+    {'modules': {'tools': [{'module': 'tool-filesystem', 'id': 'new-instance'}]}},
+    {'overrides': {'tool-apply-patch': {'source': 'file:///different-source'}}},
+    {'overrides': {'tool-filesystem': {'enabled': False}}},
+    {'overrides': {'tool-image': {'config': {'allow_paid': True}}}},
+    {'overrides': {'child-files': {'config': {'denied_write_paths': ['private']}}}},
+])
+async def test_actual_writer_composition_dependencies_require_lifecycle(tmp_path, change):
+    coordinator, tools, policy = await root(tmp_path, agents={'child': {
+        'tools': [{'module': 'tool-filesystem', 'id': 'child-files'}]}})
+    policy.refresh()
+    prior_revision, prior_bundle = policy.revision, policy.bundle
+    update_settings(settings_paths(tmp_path, session_id='root')['session'], lambda _: change)
+    result = await tools['apply_patch'].execute(create(tmp_path / 'new'))
+    assert not result.success and result.error['effect'] == 'none'
+    assert result.error['code'] == 'file_policy_refresh_required'
+    assert policy.revision == prior_revision and policy.bundle is prior_bundle
+    assert not (tmp_path / 'new').exists()
+
+
+@pytest.mark.parametrize('module,shadowed', [
+    (module, shadowed) for module in ('tool-filesystem', 'tool-apply-patch', 'tool-image')
+    for shadowed in (False, True)
+])
+async def test_writer_module_source_selection_fences_confirmation_with_host_precedence(tmp_path, module, shadowed):
+    path = settings_paths(tmp_path, session_id='root')['session']
+    initial = {'sources': {'modules': {module: 'file:///old-writer'}}}
+    if shadowed:
+        initial['overrides'] = {module: {'source': 'file:///selected-writer'}}
+    update_settings(path, lambda _: initial)
+    coordinator, tools, policy = await root(tmp_path, agents={'image-child': {
+        'tools': [{'module': 'tool-image'}]}})
+    assert (await tools['apply_patch'].execute(create(tmp_path / 'before'))).success
+    prior_revision, prior_bundle = policy.revision, policy.bundle
+    def change(value):
+        value['sources']['modules'][module] = 'file:///changed-writer'
+    update_settings(path, change)
+    settings = read_settings(tmp_path, session_id='root')
+    revision = fingerprint(settings)
+    # Assert the actual mount owner's winner, not a second precedence model.
+    winner = read_config(tmp_path, session_id='root').module_sources[module]
+    assert policy.source.select(settings)['sources']['modules'][module] == winner
+    if shadowed:
+        assert winner == 'file:///selected-writer'
+        assert policy.confirm(revision)['settingsRevision'] == revision
+        assert policy.bundle is prior_bundle
+        assert (await tools['apply_patch'].execute(create(tmp_path / 'after'))).success
+    else:
+        assert winner == 'file:///changed-writer'
+        with pytest.raises(ValueError, match='Writer configuration changed'):
+            policy.confirm(revision)
+        refused = await tools['apply_patch'].execute(create(tmp_path / 'after'))
+        assert not refused.success and refused.error['code'] == 'file_policy_refresh_required'
+        assert refused.error['effect'] == 'none' and not (tmp_path / 'after').exists()
+        assert policy.revision == prior_revision and policy.bundle is prior_bundle
+
+
+async def test_captured_child_declarations_are_not_mutated_by_parent_grant(tmp_path):
+    workspace, extra = tmp_path / 'project', tmp_path / 'approved'
+    workspace.mkdir()
+    parent, _, policy = await root(workspace, agents={'child': {
+        'tools': [{'module': 'tool-filesystem'}], 'agents': {'nested': {
+            'tools': [{'module': 'tool-apply-patch'}]}}}})
+    policy.refresh()
+    captured = {'tools': parent.config['tools'], 'agents': parent.config['agents']}
+    before = copy.deepcopy(captured)
+    save(workspace, 'root', [extra])
+    policy.refresh()
+    assert captured == before
+    assert parent.config['agents'] is not captured['agents']
+    child, tools = await mount(workspace, captured, policy=policy, session_id='preparing')
+    await install_file_source_guard(child, workspace / 'locks')
+    assert not (await tools['apply_patch'].execute(create(extra / 'old-child'))).success
+    fresh, tools = await mount(workspace, parent.config, policy=policy, session_id='fresh')
+    await install_file_source_guard(fresh, workspace / 'locks')
+    assert (await tools['apply_patch'].execute(create(extra / 'new-child'))).success
+
+
+@pytest.mark.parametrize('writer', ['write_file', 'edit_file', 'native', 'function'])
+async def test_invocation_binds_mount_cached_validator_to_one_policy(tmp_path, writer):
+    workspace, extra = tmp_path / 'project', tmp_path / 'worker-managed-checkout'
+    workspace.mkdir()
+    extra.mkdir()
+    engine = writer if writer in {'native', 'function'} else 'function'
+    coordinator, tools, policy = await root(workspace, engine=engine)
+    name = writer if writer in {'write_file', 'edit_file'} else 'apply_patch'
+    module = 'tool-filesystem' if name != 'apply_patch' else 'tool-apply-patch'
+    raw = tools[name].tool
+    target = extra / 'file'
+    if name == 'edit_file':
+        target.write_text('old')
+        args = {'file_path': str(target), 'old_string': 'old', 'new_string': 'new'}
+    else:
+        args = create(target, engine) if name == 'apply_patch' else {'file_path': str(target), 'content': 'new'}
+    # This is the actual imported inner check, not a mock validator: changing
+    # config alone leaves the mount-cached attributes denied in all four writers.
+    config_only = copy.copy(raw)
+    config_only.config = {**raw.config, 'allowed_write_paths': [str(extra)]}
+    if name == 'apply_patch':
+        config_only._engine = copy.copy(raw._engine)
+        config_only._engine.config = config_only.config
+    failed = await config_only.execute(args)
+    assert not failed.success and 'Access denied' in str(failed.error)
+    save(workspace, 'root', [extra])
+    invocation = policy.invocation(raw, module, coordinator)
+    validator = invocation._engine if name == 'apply_patch' else invocation
+    for key in ('allowed_write_paths', 'denied_write_paths'):
+        assert getattr(validator, key) is invocation.config[key]
+        assert validator.config is invocation.config
+    # Exercise both guard preflight and the tool's own inner check.
+    if name == 'edit_file':
+        assert (await tools['read_file'].execute({'file_path': str(target)})).success
+    assert (await tools[name].execute(args)).success
+    assert target.read_text().strip() == 'new'
+    save(workspace, 'root', [], [extra])
+    revoked = policy.invocation(raw, module, coordinator)
+    assert not (await revoked.execute(args)).success
+    assert not (await tools[name].execute(args)).success
+    # Neither a refresh nor a later call can mutate the admitted snapshot.
+    assert str(extra) in invocation.config['allowed_write_paths']
+    assert str(extra) not in raw.config.get('allowed_write_paths', [])
+
+
+@pytest.mark.parametrize('writer', ['write_file', 'native', 'function'])
+@pytest.mark.parametrize('layers', [1, 2])
+async def test_receiver_aware_instance_interceptors_keep_snapshot_and_denial(tmp_path, writer, layers):
+    from amplifier_core import ToolResult
+    workspace, extra = tmp_path / 'project', tmp_path / 'approved'
+    workspace.mkdir()
+    coordinator, tools, policy = await root(workspace, engine=writer if writer != 'write_file' else 'function')
+    name = 'write_file' if writer == 'write_file' else 'apply_patch'
+    module = 'tool-filesystem' if writer == 'write_file' else 'tool-apply-patch'
+    raw = tools[name].tool
+    raw_config = copy.deepcopy(raw.config)
+    entered, release = asyncio.Event(), asyncio.Event()
+    held, protected = workspace / 'held', extra / 'protected'
+    seen = []
+    def arguments(path):
+        return ({'file_path': str(path), 'content': 'new'} if writer == 'write_file'
+                else create(path, writer))
+    def intercept(inner, layer):
+        async def execute(self, args):
+            seen.append((layer, self))
+            if layer == 0 and args == arguments(protected):
+                return ToolResult(success=False, error={'code': 'instance_guard_denied', 'effect': 'none'})
+            if layer == 0 and args == arguments(held):
+                entered.set()
+                await release.wait()
+            # Receiver-aware stacking retains the intercepted function, not
+            # the earlier bound receiver or a lookup on the tool class.
+            return await inner(self, args)
+        return execute
+    for layer in range(layers):
+        raw.execute = MethodType(intercept(raw.execute.__func__, layer), raw)
+    intercepted = raw.execute.__func__
+    old = policy.invocation(raw, module, coordinator)
+    assert old.execute.__self__ is old and old.execute.__func__ is intercepted
+    pending = asyncio.create_task(old.execute(arguments(held)))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert seen == [(layer, old) for layer in reversed(range(layers))]
+        save(workspace, 'root', [extra])
+        fresh = policy.invocation(raw, module, coordinator)
+        assert fresh.execute.__self__ is fresh and fresh.execute.__func__ is intercepted
+        assert old.config is not fresh.config and fresh.config is not raw.config
+        assert str(extra) not in old.config['allowed_write_paths']
+        assert str(extra) in fresh.config['allowed_write_paths']
+        if name == 'apply_patch':
+            assert old._engine is not fresh._engine and fresh._engine is not raw._engine
+            assert old._engine.config is old.config and fresh._engine.config is fresh.config
+            assert fresh._engine.allowed_write_paths is fresh.config['allowed_write_paths']
+        seen.clear()
+        assert (await fresh.execute(arguments(extra / 'granted'))).success
+        assert seen == [(layer, fresh) for layer in reversed(range(layers))]
+        assert (extra / 'granted').read_text().strip() == 'new'
+        seen.clear()
+        denied = await fresh.execute(arguments(protected))
+        assert seen == [(layer, fresh) for layer in reversed(range(layers))]
+        assert not denied.success and denied.error == {'code': 'instance_guard_denied', 'effect': 'none'}
+        assert not protected.exists()
+        save(workspace, 'root', [], [extra])
+        revoked = policy.invocation(raw, module, coordinator)
+        denied = await revoked.execute(arguments(extra / 'revoked'))
+        assert not denied.success and 'Access denied' in denied.error['message']
+        assert not (extra / 'revoked').exists()
+        assert str(extra) in fresh.config['allowed_write_paths']  # Admitted snapshot is unchanged.
+        release.set()
+        assert (await pending).success and held.read_text().strip() == 'new'
+        assert raw.config == raw_config and raw.execute.__func__ is intercepted
+        assert raw.execute.__self__ is raw
+    finally:
+        release.set()
+        if not pending.done():
+            pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+async def test_plain_instance_execute_is_preserved_without_guessing_a_receiver(tmp_path):
+    from amplifier_core import ToolResult
+    coordinator, tools, policy = await root(tmp_path)
+    raw = tools['write_file'].tool
+    async def harmless(arguments):
+        return ToolResult(success=True, output=arguments)
+    raw.execute = harmless
+    snapshot = policy.invocation(raw, 'tool-filesystem', coordinator)
+    assert snapshot.execute is harmless
+    assert (await snapshot.execute({'probe': 'no effect'})).output == {'probe': 'no effect'}
+
+
+@pytest.mark.parametrize('writer', ['write_file', 'native', 'function'])
+async def test_real_tool_exec_uses_same_live_writer_and_inner_receipts(tmp_path, writer):
+    from amplifier_core import AmplifierSession
+    from amplifier_core.message_models import ToolCall
+    from amplifier_module_tool_exec import ProgrammaticTool
+    workspace, extra = tmp_path / 'project', tmp_path / 'worker-managed-checkout'
+    workspace.mkdir()
+    session = AmplifierSession({'session': {
+        'orchestrator': {'module': 'loop-live', 'config': {'programmatic_dispatch': True}},
+        'context': {'module': 'context-simple'}}, 'providers': []})
+    await session.initialize()
+    try:
+        coordinator, tools, policy = await root(workspace, coordinator=session.coordinator,
+            engine=writer if writer != 'write_file' else 'function')
+        loop = coordinator.get('orchestrator')
+        coordinator.register_capability('tools.dispatch', loop.approved_dispatch)
+        await coordinator.mount('tools', ProgrammaticTool(coordinator), name='tool_exec')
+        name = 'write_file' if writer == 'write_file' else 'apply_patch'
+        raw = tools[name].tool
+        calls = 0
+        async def invoke(path, *, success=False):
+            nonlocal calls
+            calls += 1
+            args = ({'file_path': str(path), 'content': 'new'} if writer == 'write_file'
+                    else create(path, writer))
+            code = f'text(await tools.{name}({json.dumps(args)}));'
+            with loop.approved_dispatch.run_scope(coordinator):
+                result = await loop._execute_tool_only(
+                    ToolCall(id=f'parent-{calls}', name='tool_exec', arguments={'code': code}),
+                    tools, coordinator.hooks, None, coordinator)
+            parent = json.loads(result[2])
+            assert parent['success'] is success, parent
+            nested = parent['output']['calls']
+            assert len(nested) == 1 and nested[0]['success'] is success, parent
+            assert nested[0]['status'] == ('completed' if success else 'failed'), parent
+            return parent
+        # Exact file effects discriminate success independently of JS printing.
+        await invoke(extra / 'before')
+        assert not (extra / 'before').exists()
+        update_settings(settings_paths(workspace, session_id='root')['session'], lambda _: {
+            'decision_models': {'selection': {'browser': {'connection': 'saved', 'backend': 'new-session'}}}})
+        save(workspace, 'root', [extra])
+        policy.confirm(fingerprint(read_settings(workspace, session_id='root')))
+        receipt = await invoke(extra / 'granted', success=True)
+        assert (extra / 'granted').read_text().strip() == 'new', receipt
+        await invoke(tmp_path / 'unrelated-denied')
+        assert not (tmp_path / 'unrelated-denied').exists()
+        save(workspace, 'root', [], [extra])
+        await invoke(extra / 'revoked')
+        assert not (extra / 'revoked').exists()
+        policy.current = lambda: False
+        await invoke(workspace / 'stopped')
+        assert not (workspace / 'stopped').exists()
+        assert tools[name].tool is raw
+    finally:
+        await session.cleanup()
 
 
 async def test_same_mounted_writer_running_during_grant_keeps_its_old_snapshot(tmp_path, monkeypatch):
@@ -328,24 +651,42 @@ async def test_unchanged_admission_does_not_reparse_copy_or_hash_settings(tmp_pa
     global_path = settings_paths(tmp_path)['global']
     update_settings(global_path, lambda _: {'unrelated': {'large': 'x' * settings_bytes}})
     coordinator, tools, policy = await root(tmp_path)
-    original_read, original_hash = refresh.read_settings, refresh.fingerprint
-    reads, hashes = [], []
+    original_read, original_hash, original_select = refresh.read_settings, refresh.fingerprint, policy.source.select
+    reads, hashes, selections = [], [], []
     def read(*args, **kwargs):
         reads.append(1)
         return original_read(*args, **kwargs)
     def digest(value):
         hashes.append(1)
         return original_hash(value)
+    def select(value):
+        selections.append(1)
+        return original_select(value)
     monkeypatch.setattr(refresh, 'read_settings', read)
     monkeypatch.setattr(refresh, 'fingerprint', digest)
+    monkeypatch.setattr(policy.source, 'select', select)
     for index in range(10):
         assert (await tools['write_file'].execute({
             'file_path': str(tmp_path / str(index)), 'content': 'new'})).success
-    assert len(reads) == len(hashes) == 1
+    assert len(reads) == len(hashes) == len(selections) == 1
+    # The warm refresh is metadata-only even with a large unrelated payload.
+    # Fail on any copy, projection, parse or digest, rather than just counting
+    # YAML reads while overlooking repeated traversal of the retained settings.
+    def unexpected(*args, **kwargs):
+        pytest.fail('unchanged policy refresh traversed settings')
+    with monkeypatch.context() as warm:
+        warm.setattr(refresh, 'read_settings', unexpected)
+        warm.setattr(refresh, 'fingerprint', unexpected)
+        warm.setattr(refresh, 'copy', SimpleNamespace(deepcopy=unexpected, copy=unexpected))
+        warm.setattr(policy.source, 'select', unexpected)
+        warm.setattr(policy.source, 'build', unexpected)
+        warm.setattr(policy.source, 'build_selected', unexpected)
+        for _ in range(10):
+            assert policy.refresh(expected=policy.revision)['settingsRevision'] == policy.revision
     save(tmp_path, 'root', [], [tmp_path / 'denied'])
     denied = await tools['write_file'].execute({'file_path': str(tmp_path / 'denied'), 'content': 'bad'})
     assert not denied.success
-    assert len(reads) == len(hashes) == 2
+    assert len(reads) == len(hashes) == len(selections) == 2
 
 
 async def test_actual_read_config_runtime_relocation_preserves_denied_subtree(tmp_path):
@@ -406,6 +747,9 @@ async def test_multiple_named_declarations_preserve_unchanged_mount_but_refuse_u
     await install_file_source_guard(coordinator, tmp_path / 'locks')
     assert (await tools['write_file'].execute({'file_path': str(tmp_path / 'ordinary'), 'content': 'ok'})).success
     assert not (await tools['write_file'].execute({'file_path': str(tmp_path / 'private/secret'), 'content': 'bad'})).success
+    update_settings(settings_paths(tmp_path, session_id='root')['session'], lambda _: {
+        'decision_models': {'selection': {'browser': {'connection': 'saved', 'backend': 'new'}}}})
+    assert (await tools['write_file'].execute({'file_path': str(tmp_path / 'unrelated'), 'content': 'ok'})).success
     save(tmp_path, 'root', [tmp_path.parent])
     assert not (await tools['write_file'].execute({'file_path': str(tmp_path / 'changed'), 'content': 'bad'})).success
     with pytest.raises(ValueError, match='complete live refresh|binding'):

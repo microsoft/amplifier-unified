@@ -13,17 +13,11 @@ from test_access_mode import save
 from test_new_chat_handoffs import handoff, start, finish, private_view, propose
 
 
-async def headless(handoff):
+async def headless(handoff, *, access='full'):
     app, runtime, source, peer, args = handoff
-    await save(app, app._session(source))
+    await save(app, app._session(source), mode=access)
     app.queues.clear(); app.queue_clients.clear(); app.queue_sessions.clear()
     app.clients.records.clear(); app.clients.dirty.clear()
-    send = runtime.send
-    async def guarded_send(session, text, input_id, emit, *, admission_check=None):
-        if admission_check:
-            admission_check()
-        return await send(session, text, input_id, emit)
-    runtime.send = guarded_send
     args = {key: value for key, value in args.items() if key != 'clientId'}
     return app, runtime, source, peer, args
 
@@ -74,11 +68,6 @@ async def test_full_preserves_client_drafts_and_cannot_upgrade_review(handoff):
     await save(app, app._session(source))
     with pytest.raises(AppError, match='different handoff'):
         await start(app, source, args)
-    send = runtime.send
-    async def guarded_send(session, text, input_id, emit, *, admission_check=None):
-        admission_check()
-        return await send(session, text, input_id, emit)
-    runtime.send = guarded_send
     row = await start(app, source, {**args, 'requestId': 'autonomous'})
     assert (await finish(app, row))['status'] == 'accepted'
     assert app.handoffs.load(reviewed['requestId'])['status'] == 'pending'
@@ -88,8 +77,9 @@ async def test_full_preserves_client_drafts_and_cannot_upgrade_review(handoff):
 
 @pytest.mark.parametrize('phase', ['session.create', 'conversation.send'])
 @pytest.mark.parametrize('change', ['stop', 'revoke', 'off-on', 'owner', 'complete', 'placement'])
-async def test_full_delayed_effect_guard(handoff, monkeypatch, phase, change):
-    app, runtime, source, _, args = await headless(handoff)
+@pytest.mark.parametrize('access', ['ask', 'full'])
+async def test_full_delayed_effect_guard(handoff, monkeypatch, phase, change, access):
+    app, runtime, source, _, args = await headless(handoff, access=access)
     entered, release = asyncio.Event(), asyncio.Event()
     original = app.handoffs.perform
     async def delayed(row, action):
@@ -104,9 +94,9 @@ async def test_full_delayed_effect_guard(handoff, monkeypatch, phase, change):
     if change == 'stop':
         await app.dispatch('conversation.stop', {'sessionId': source})
     elif change in {'revoke', 'off-on'}:
-        await save(app, source_row, mode='ask')
+        await save(app, source_row, mode='ask' if access == 'full' else 'full')
         if change == 'off-on':
-            await save(app, source_row)
+            await save(app, source_row, mode=access)
     elif change == 'owner':
         source_row['runtimeSessionId'] = 'replacement-root'
     elif change == 'placement':
@@ -199,10 +189,11 @@ async def test_full_raw_create_and_peer_send_are_not_handoff_authority(handoff):
 
 
 @pytest.mark.parametrize('change', ['unchanged', 'complete', 'stop', 'revoke', 'off-on', 'target-stop', 'target-access', 'target-placement'])
-async def test_full_final_native_write_rechecks_after_preparation(handoff, monkeypatch, change):
+@pytest.mark.parametrize('access', ['ask', 'full'])
+async def test_full_final_native_write_rechecks_after_preparation(handoff, monkeypatch, change, access):
     from unittest.mock import AsyncMock
     from amplifier_web.runtime import RuntimeManager
-    app, runtime, source, _, args = await headless(handoff)
+    app, runtime, source, _, args = await headless(handoff, access=access)
     manager = RuntimeManager()
     entered, release = asyncio.Event(), asyncio.Event()
     prepared = []
@@ -222,13 +213,13 @@ async def test_full_final_native_write_rechecks_after_preparation(handoff, monke
     if change in {'stop', 'target-stop'}:
         await app.dispatch('conversation.stop', {'sessionId': source if change == 'stop' else row['targetSessionId']})
     elif change in {'revoke', 'off-on'}:
-        await save(app, app._session(source), mode='ask')
+        await save(app, app._session(source), mode='ask' if access == 'full' else 'full')
         if change == 'off-on':
-            await save(app, app._session(source))
+            await save(app, app._session(source), mode=access)
     elif change == 'complete':
         app._session(source)['collaborationGeneration']['terminal'] = True
     elif change == 'target-access':
-        await save(app, app._session(row['targetSessionId']), mode='ask')
+        await save(app, app._session(row['targetSessionId']), mode='ask' if access == 'full' else 'full')
     elif change == 'target-placement':
         app._session(row['targetSessionId']).update(workingDirectory=args['workspace'] + '/moved', executionRevision=1)
     release.set()
@@ -395,6 +386,7 @@ async def test_full_creation_respects_existing_destination_ask(handoff):
 
 @pytest.mark.parametrize('change', ['complete', 'revoke', 'off-on', 'stop', 'target-ask', 'target-full'])
 async def test_full_handoff_schedule_keeps_original_lineage_at_final_admission(handoff, monkeypatch, change):
+    from unittest.mock import AsyncMock
     from test_full_schedules import preview, invoke
     from test_schedules import Runtime, attach
 
@@ -409,6 +401,10 @@ async def test_full_handoff_schedule_keeps_original_lineage_at_final_admission(h
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(app.data_dir))
     runtime, now = Runtime(), [1800000000.0]
     attach(app, runtime, now)
+    # Stop's pending-action dispatcher compares against management.command.
+    # The schedule-only fixture omits that interface; its AttributeError would
+    # be caught as unknown before scheduled_input can observe the actual Stop.
+    app.management.command = AsyncMock(side_effect=AssertionError('Unexpected management command'))
     await app.dispatch('task.create', {'sessionId': target['id'], 'expectedRevision': 0,
         'objective': 'Continue the independently handed-off report'}, command_id='target-task')
     request = await preview(app, target, now[0])
@@ -420,6 +416,7 @@ async def test_full_handoff_schedule_keeps_original_lineage_at_final_admission(h
     source['collaborationGeneration']['terminal'] = True
     target.pop('collaborationGeneration', None)
     original = runtime.scheduled_input
+    admissions = []
 
     async def held(sid, values, guard):
         if change in {'revoke', 'off-on', 'target-full'}:
@@ -427,10 +424,14 @@ async def test_full_handoff_schedule_keeps_original_lineage_at_final_admission(h
             if change == 'off-on':
                 await save(app, source)
         elif change == 'stop':
-            await app.dispatch('conversation.stop', {'sessionId': source_id})
+            before = source.get('interruptionRevision', 0)
+            stopped = await app.dispatch('conversation.stop', {'sessionId': source_id})
+            assert stopped['accepted'] and source['interruptionRevision'] == before + 1
         elif change == 'target-ask':
             await save(app, target, mode='ask')
-        return await original(sid, values, guard)
+        result = await original(sid, values, guard)
+        admissions.append(result)
+        return result
 
     runtime.scheduled_input = held
     now[0] += 61
@@ -438,12 +439,18 @@ async def test_full_handoff_schedule_keeps_original_lineage_at_final_admission(h
     run = app.schedules.store.runs(target['id'])[0]
     assert run['authorizationCommandId'] == record['authorization']['commandId'] == 'target-schedule'
     assert len(handoff_runtime.sent) == 1
+    assert len(admissions) == 1, run.get('detail')
+    app.management.command.assert_not_awaited()
     if change in {'complete', 'target-full'}:
         assert run['phase'] == 'accepted', run
         assert len(runtime.inputs) == 1
         assert app.access_mode.full(target)
     else:
-        assert run['phase'] == 'skipped', run
+        assert admissions[0]['accepted'] is False
+        assert run['phase'] == 'skipped', run.get('detail')
         assert not runtime.inputs
         assert app.schedules.store.get(target['id'], record['id'])['status'] == 'needs_review'
+        if change == 'stop':
+            assert 'Full schedule authority changed' in admissions[0]['reason']
+            assert run['detail'] == admissions[0]['reason']
     assert app.schedules.store.get(target['id'], record['id'])['authorization']['authority'] == authority

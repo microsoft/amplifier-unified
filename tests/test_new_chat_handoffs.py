@@ -1,4 +1,4 @@
-"""Human-reviewed independent creation, exact receipts and no-replay boundaries."""
+"""Conversation-owned starts, private reviews and exact no-replay receipts."""
 import asyncio
 import copy
 import json
@@ -24,14 +24,24 @@ def test_action_descriptions_distinguish_independent_handoffs_from_commissioned_
     read = actions[PREFIX + 'read'][0]
     assert 'does not commission a worker' in start
     assert 'use coordination.create for subordinate work' in start
+    assert 'without a browser' in start
+    assert 'Ask requires an explicit user request through the current root' in start
+    assert 'only Full starts establish inherited source access' in start
     assert 'does not commission a worker or establish a completion return' in propose
     assert 'not that its work completed' in read
     assert 'not that its work completed or that its result will return to the source manager' in read
 
 
+class HandoffRuntime(Runtime):
+    async def send(self, session, text, input_id, emit, *, admission_check=None):
+        if admission_check:
+            admission_check()
+        return await super().send(session, text, input_id, emit)
+
+
 @pytest.fixture
 async def handoff(tmp_path):
-    runtime = Runtime()
+    runtime = HandoffRuntime()
     app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
     await app.dispatch('session.create', {'title': 'Source'})
     source = app.state['selectedSessionId']
@@ -91,6 +101,7 @@ async def test_direct_request_creates_and_starts_once_without_confirmation(hando
     before = {client: private_view(app, client) for client in ('owner', 'other')}
     row = await start(app, source, args)
     assert row['mode'] == 'direct' and row['status'] == 'creating'
+    assert app.handoffs.load(row['requestId'])['owner'] == 'conversation:' + source
     assert (await start(app, source, args))['targetSessionId'] == row['targetSessionId']
     result = await finish(app, row)
     assert result['status'] == result['delivery'] == 'accepted'
@@ -108,6 +119,165 @@ async def test_direct_request_creates_and_starts_once_without_confirmation(hando
         assert private_view(app, client) == before[client]
     with pytest.raises(AppError, match='different handoff'):
         await start(app, source, {**args, 'text': 'Changed task'})
+
+
+async def test_ask_headless_start_retains_actor_without_inherited_full(handoff):
+    from amplifier_web.access_mode import read_mode
+    from amplifier_web.schedule_handoff import latest_human
+    from test_access_mode import save
+
+    app, runtime, source, peer, args = handoff
+    app.queues.clear(); app.queue_clients.clear(); app.queue_sessions.clear()
+    app.clients.records.clear(); app.clients.dirty.clear()
+    selected, view = app.state['selectedSessionId'], copy.deepcopy(app.state['view'])
+    args = {key: value for key, value in args.items() if key != 'clientId'}
+    row = await start(app, source, args)
+    result = await finish(app, row)
+    assert result['status'] == 'accepted' and result['mode'] == 'direct'
+    target = app._session(result['targetSessionId'])
+    assert not target.get('handoffOrigin') and not target.get('collaboration')
+    assert not target.get('assignmentId')
+    message = next(m for m in target['messages'] if m.get('inputId') == result['inputId'])
+    assert message['inputOrigin'] == 'agent'
+    assert message['inputActor'] == {
+        'origin': 'agent', 'sessionId': source, 'runtimeSessionId': source,
+        'generationId': 'human-turn', 'inputIds': ['user-request'], 'inputCoverage': 'complete'}
+    assert message['handoffOrigin'] == app.handoffs.lineage(result)
+    assert not message.get('navigationPost') and latest_human(target) is None
+    assert not app.clients.records
+    assert app.state['selectedSessionId'] == selected and app.state['view'] == view
+    # The saved Ask relationship must not become inherited Full after a later
+    # source change. Retried receipt reads do not recapture that new authority.
+    app._session(source)['collaborationGeneration']['terminal'] = True
+    await save(app, app._session(source))
+    assert app.access_mode.snapshot(target)['mode'] == read_mode(app.data_dir, target['workspace'], target['id']) == 'ask'
+    duplicate = await start(app, source, {**args, 'clientId': 'not-an-execution-owner'})
+    assert duplicate['status'] == 'accepted' and duplicate['mode'] == 'direct'
+    assert len(runtime.sent) == 1 and len(app.state['sessions']) == 3
+    with pytest.raises(AppError, match='calling conversation'):
+        await app.app_bridge('dispatch', {'action': PREFIX + 'read',
+            'args': {'requestId': row['requestId']}}, peer)
+
+
+@pytest.mark.parametrize('access', ['ask', 'full'])
+async def test_human_direct_start_keeps_actual_origin_without_a_native_actor(handoff, access):
+    from test_access_mode import save
+
+    app, runtime, source, _, args = handoff
+    await save(app, app._session(source), mode=access)
+    row = (await command(app, 'owner', PREFIX + 'start', args))['result']
+    result = await finish(app, row)
+    assert result['status'] == 'accepted'
+    assert result['owner'] == 'conversation:' + source
+    target = app._session(result['targetSessionId'])
+    message = next(m for m in target['messages'] if m.get('inputId') == result['inputId'])
+    assert message['inputOrigin'] == 'ui'
+    assert message['inputActor'] == {'origin': 'ui', 'sessionId': source}
+    assert bool(target.get('handoffOrigin')) is (access == 'full')
+    assert (await command(app, 'owner', PREFIX + 'start', args))['duplicate']
+    assert len(runtime.sent) == 1
+
+
+@pytest.mark.parametrize('access', ['ask', 'full'])
+async def test_direct_work_is_not_limited_by_reviews_or_unrelated_unknowns(handoff, monkeypatch, access):
+    import amplifier_web.new_chat_handoffs as module
+    from test_access_mode import save
+
+    app, runtime, source, _, args = handoff
+    if access == 'full':
+        await save(app, app._session(source))
+    monkeypatch.setattr(module, 'MAX_REVIEW_REFERENCES', 2)
+    reviews = [await propose(app, source, {**args, 'requestId': f'review-{i}'}) for i in range(2)]
+    with pytest.raises(AppError, match='too many unfinished'):
+        await propose(app, source, {**args, 'requestId': 'overflow-review'})
+    before = {client: private_view(app, client) for client in ('owner', 'other')}
+    original = runtime.send
+    async def uncertain(session, text, identity, emit, *, admission_check=None):
+        admission_check()
+        runtime.sent.append((session['id'], text, identity))
+        raise TimeoutError('Lost acknowledgement')
+    monkeypatch.setattr(runtime, 'send', uncertain)
+    unknowns = []
+    for index in range(9):
+        row = await start(app, source, {**args, 'requestId': f'direct-{index}'})
+        unknowns.append(await finish(app, row))
+    assert all(row['status'] == 'unknown' for row in unknowns)
+    assert len(runtime.sent) == 9
+    # A fresh unrelated start still succeeds; no old input is rearmed.
+    monkeypatch.setattr(runtime, 'send', original)
+    fresh = await finish(app, await start(app, source, {**args, 'requestId': 'fresh'}))
+    assert fresh['status'] == 'accepted' and len(runtime.sent) == 10
+    assert (await start(app, source, {**args, 'requestId': 'direct-0'}))['status'] == 'unknown'
+    read = (await command(app, 'owner', PREFIX + 'read', {'requestId': 'direct-0'}))['result']
+    assert read['status'] == 'unknown' and len(runtime.sent) == 10
+    visible = snapshot(app, 'owner')['handoffs']
+    assert {row['requestId'] for row in reviews} <= {row['requestId'] for row in visible}
+    assert fresh['requestId'] in {row['requestId'] for row in visible}
+    assert len(visible) <= 10  # Two private reviews plus an independent bounded window.
+    for client in before:
+        assert private_view(app, client) == before[client]
+    assert snapshot(app, 'other')['handoffs'] == []
+
+
+@pytest.mark.parametrize('access', ['ask', 'full'])
+async def test_direct_receipt_follows_source_view_without_granting_review_authority(handoff, access):
+    from test_access_mode import save
+
+    app, runtime, source, _, args = handoff
+    if access == 'full':
+        await save(app, app._session(source))
+    row = await finish(app, await start(app, source, args))
+    app.clients.attach('new-viewer')
+    await command(app, 'new-viewer', 'session.select', {'id': source})
+    assert snapshot(app, 'new-viewer')['handoffs'][0]['requestId'] == row['requestId']
+    read = (await command(app, 'new-viewer', PREFIX + 'read', {'requestId': row['requestId']}))['result']
+    assert read['status'] == 'accepted'
+    for action in ('confirm', 'cancel'):
+        with pytest.raises(AppError, match='Only client-owned proposals'):
+            await command(app, 'new-viewer', PREFIX + action, {
+                'requestId': row['requestId'],
+                **({'reviewHash': row['reviewHash']} if action == 'confirm' else {})})
+    with pytest.raises(AppError, match='Open the source chat'):
+        await command(app, 'other', PREFIX + 'read', {'requestId': row['requestId']})
+    assert len(runtime.sent) == 1
+
+
+async def test_historical_client_owned_direct_unknown_is_not_upgraded_or_replayed(handoff):
+    from amplifier_web.new_chat_handoffs import NewChatHandoffs
+    from test_access_mode import save
+
+    app, runtime, source, _, args = handoff
+    await propose(app, source, args)
+    legacy = app.handoffs.load(args['requestId'])
+    legacy.update(mode='direct', status='unknown', creation='unknown', delivery='not_started')
+    app.handoffs.save(legacy)
+    await save(app, app._session(source))
+    app.handoffs = NewChatHandoffs(app)
+    assert (await start(app, source, args))['status'] == 'unknown'
+    retained = app.handoffs.load(args['requestId'])
+    assert retained == legacy and retained['owner'] == 'owner' and 'authority' not in retained
+    assert (await command(app, 'owner', PREFIX + 'read', {'requestId': args['requestId']}))['result']['mode'] == 'direct'
+    with pytest.raises(AppError, match='another client'):
+        await command(app, 'other', PREFIX + 'read', {'requestId': args['requestId']})
+    assert not runtime.sent and len(app.state['sessions']) == 2
+
+
+async def test_headless_review_still_requires_a_client_without_saving_or_starting(handoff):
+    app, runtime, source, _, args = handoff
+    app.queues.clear(); app.queue_clients.clear(); app.queue_sessions.clear()
+    with pytest.raises(AppError) as error:
+        await propose(app, source, {key: value for key, value in args.items() if key != 'clientId'})
+    assert error.value.code == 'ui_client_required'
+    assert app.handoffs.load(args['requestId']) is None and not runtime.sent
+
+
+@pytest.mark.parametrize('origin', ['system', 'scheduler'])
+async def test_ask_start_without_current_root_has_no_effects(handoff, origin):
+    app, runtime, source, _, args = handoff
+    with pytest.raises(AppError):
+        await app.dispatch(PREFIX + 'start', args, origin=origin, caller_session_id=source)
+    assert app.handoffs.load(args['requestId']) is None
+    assert len(app.state['sessions']) == 2 and not runtime.sent
 
 
 async def test_direct_start_cannot_upgrade_pending_review_or_change_source(handoff):
@@ -165,7 +335,24 @@ async def test_direct_start_queued_before_source_stop_has_no_effects(handoff):
         source_row = app._session(source)
         source_row['interruptionRevision'] = source_row.get('interruptionRevision', 0) + 1
         source_row['status'] = 'stopping'
-    with pytest.raises(AppError, match='source conversation was stopped'):
+    with pytest.raises(AppError, match='source.*stopped'):
+        await task
+    assert app.handoffs.load(args['requestId']) is None
+    assert not runtime.sent and len(app.state['sessions']) == 2
+
+
+@pytest.mark.parametrize('change', ['terminal', 'replaced'])
+async def test_ask_start_rechecks_current_root_after_lock_wait(handoff, change):
+    app, runtime, source, _, args = handoff
+    async with app.lock:
+        task = asyncio.create_task(start(app, source, args))
+        await asyncio.sleep(0)
+        active = app._session(source)['collaborationGeneration']
+        if change == 'terminal':
+            active['terminal'] = True
+        else:
+            active['id'] = 'replacement-generation'
+    with pytest.raises(AppError, match='current transport-bound root'):
         await task
     assert app.handoffs.load(args['requestId']) is None
     assert not runtime.sent and len(app.state['sessions']) == 2
@@ -298,7 +485,7 @@ async def test_changed_target_or_configuration_rejects_before_creation(handoff, 
         (target / '.amplifier').mkdir(); (target / '.amplifier' / 'settings.yaml').write_text('overrides:\n  tool-filesystem:\n    config:\n      denied_write_paths: [\"**\"]\n')
     else:
         link = target / '.amplifier' / 'settings.yaml'; link.unlink(); link.symlink_to(replacement)
-    with pytest.raises(AppError, match='reviewed workspace or configuration'):
+    with pytest.raises(AppError, match='requested workspace or configuration'):
         await confirm(app, row)
     assert app.handoffs.load(row['requestId'])['status'] == 'pending'
     assert not runtime.sent and len(app.state['sessions']) == 2
@@ -355,7 +542,9 @@ async def test_revoked_confirmation_waiting_for_service_lock_has_no_effects(hand
 @pytest.mark.parametrize('direct', [False, True])
 async def test_unknown_delivery_never_replays_and_exact_late_receipt_reconciles(handoff, monkeypatch, direct):
     app, runtime, source, _, args = handoff
-    async def uncertain(session, text, identity, emit):
+    async def uncertain(session, text, identity, emit, *, admission_check=None):
+        if admission_check:
+            admission_check()
         runtime.sent.append((session['id'], text, identity))
         raise TimeoutError('Lost acknowledgement')
     monkeypatch.setattr(runtime, 'send', uncertain)
@@ -446,7 +635,7 @@ async def test_local_root_bundle_is_bound_without_preparation(handoff, tmp_path,
         bundle.unlink(); bundle.symlink_to(replacement)
     else:
         bundle.unlink()
-    with pytest.raises(AppError, match='reviewed workspace or configuration|chosen local bundle'):
+    with pytest.raises(AppError, match='requested workspace or configuration|chosen local bundle'):
         await confirm(app, row)
     assert not runtime.sent and len(app.state['sessions']) == 2
 
@@ -474,7 +663,8 @@ async def test_unreviewed_session_configuration_before_send_refuses_delivery(han
     assert not app._session(result['targetSessionId'])['messages']
 
 
-async def test_detached_handoff_preserves_dirty_canvas_but_open_keeps_navigation_guard(handoff):
+@pytest.mark.parametrize('direct', [False, True])
+async def test_detached_handoff_preserves_dirty_canvas_but_open_keeps_navigation_guard(handoff, direct):
     app, runtime, source, _, args = handoff
     await command(app, 'owner', 'canvas.show', {'kind': 'text', 'content': 'Unfinished visible edit'})
     with app.clients.bind('owner'):
@@ -482,7 +672,10 @@ async def test_detached_handoff_preserves_dirty_canvas_but_open_keeps_navigation
     target = {key: current[key] for key in ('viewId', 'resourceId', 'resourceRevision', 'generation')}
     await command(app, 'owner', 'canvas.views.dirty', {**target, 'dirty': True})
     before = copy.deepcopy(snapshot(app, 'owner')['canvasWorkspace'])
-    row = await propose(app, source, args); await confirm(app, row)
+    if direct:
+        row = await start(app, source, args)
+    else:
+        row = await propose(app, source, args); await confirm(app, row)
     result = await finish(app, row)
     assert result['status'] == 'accepted' and len(runtime.sent) == 1
     assert snapshot(app, 'owner')['canvasWorkspace'] == before
@@ -491,30 +684,62 @@ async def test_detached_handoff_preserves_dirty_canvas_but_open_keeps_navigation
     assert snapshot(app, 'owner')['selectedSessionId'] == source
 
 
-async def test_main_and_source_streams_receive_private_review_and_late_receipt(handoff, monkeypatch):
+@pytest.mark.parametrize('mode', ['review', 'ask', 'full'])
+async def test_main_and_source_streams_receive_private_review_and_late_receipt(handoff, monkeypatch, mode):
+    from test_access_mode import save
+
     app, runtime, source, _, args = handoff
-    owner = asyncio.Queue(maxsize=1); other = asyncio.Queue(maxsize=1)
-    for client, queue in [('owner', owner), ('other', other)]:
+    if mode == 'full':
+        await save(app, app._session(source))
+    app.clients.attach('observer')
+    await command(app, 'observer', 'session.select', {'id': source})
+    await command(app, 'observer', 'view.update', {'patch': {'draft': 'Unsent observer'}})
+    before = {client: private_view(app, client) for client in ('owner', 'other', 'observer')}
+    queues = {client: asyncio.Queue(maxsize=1) for client in before}
+    for client, queue in queues.items():
         app.queues.add(queue); app.queue_clients[queue] = client; app.queue_sessions[queue] = None
         snapshot(app, client)  # Warm the retained frame before the new DB row.
-    row = await propose(app, source, args)
-    assert owner.get_nowait()['handoffs'][0]['requestId'] == row['requestId']
-    detail = next(q for q in app.queues if app.queue_sessions[q] == source)
-    detail_frame = detail.get_nowait()
-    assert detail_frame['sessions'][0]['id'] == source
-    assert 'handoffs' not in detail_frame  # Session-detail readers do not inherit private client reviews.
-    assert snapshot(app, 'other')['handoffs'] == []
-    if not other.empty():
-        assert other.get_nowait()['handoffs'] == []
-    async def uncertain(session, text, identity, emit):
+    async def uncertain(session, text, identity, emit, *, admission_check=None):
+        if admission_check:
+            admission_check()
         runtime.sent.append((session['id'], text, identity))
         raise TimeoutError('Lost acknowledgement')
     monkeypatch.setattr(runtime, 'send', uncertain)
-    await confirm(app, row); result = await finish(app, row)
-    while not owner.empty():
-        owner.get_nowait()
+    row = await (propose(app, source, args) if mode == 'review' else start(app, source, args))
+    assert queues['owner'].get_nowait()['handoffs'][0]['requestId'] == row['requestId']
+    detail = next(q for q in app.queues if app.queue_sessions[q] == source)
+    detail_frame = detail.get_nowait()
+    assert detail_frame['sessions'][0]['id'] == source
+    assert 'handoffs' not in detail_frame  # Handoffs are projected on each main client stream.
+    visible = ['owner'] if mode == 'review' else ['owner', 'observer']
+    hidden = ['other', 'observer'] if mode == 'review' else ['other']
+    for client in hidden:
+        assert snapshot(app, client)['handoffs'] == []
+        if not queues[client].empty():
+            assert queues[client].get_nowait()['handoffs'] == []
+    if mode != 'review':
+        assert queues['observer'].get_nowait()['handoffs'][0]['requestId'] == row['requestId']
+    else:
+        await confirm(app, row)
+    result = await finish(app, row)
+    assert result['status'] == result['delivery'] == 'unknown'
+    for queue in queues.values():
+        while not queue.empty():
+            queue.get_nowait()
     await app.on_runtime_event('runtime.delivery', {'sessionId': result['targetSessionId'], 'inputId': result['inputId'], 'delivery': 'accepted'})
-    assert owner.get_nowait()['handoffs'][0]['status'] == 'accepted'
+    for client in visible:
+        received = queues[client].get_nowait()['handoffs'][0]
+        assert received['requestId'] == row['requestId']
+        assert received['status'] == received['delivery'] == 'accepted'
+        assert received['revision'] > result['revision']
+        read = (await command(app, client, PREFIX + 'read', {'requestId': row['requestId']}))['result']
+        assert read['status'] == 'accepted'
+    for client in hidden:
+        assert snapshot(app, client)['handoffs'] == []
+        if not queues[client].empty():
+            assert queues[client].get_nowait()['handoffs'] == []
+    for client in before:
+        assert private_view(app, client) == before[client]
     assert len(runtime.sent) == 1
 
 
