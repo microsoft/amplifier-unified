@@ -555,10 +555,22 @@ async def test_real_git_pack_transfer_settles_before_probe_cleanup(
         '  context:\n    module: context-simple\n---\n')
     # Incompressible, finite payload exceeds the explicitly reduced server pipe.
     (repository / 'payload').write_bytes(hashlib.shake_256(b'1852-local-pack').digest(1024 * 1024))
-    environment = {**os.environ, 'HOME': str(tmp_path), 'GIT_CONFIG_NOSYSTEM': '1',
+    import shlex
+    hostile_ssh = tmp_path / 'inherited-ssh-was-invoked'
+    hostile_command = (
+        f'{shlex.quote(sys.executable)} -c ' +
+        shlex.quote(f'import pathlib; pathlib.Path({str(hostile_ssh)!r}).touch(); raise SystemExit(97)'))
+    monkeypatch.setenv('GIT_SSH_COMMAND', hostile_command)
+    monkeypatch.setenv('GIT_EXEC_PATH', str(tmp_path / 'inherited-invalid-exec-path'))
+    # GIT_SSH_COMMAND beats GIT_SSH; GIT_CONFIG_PARAMETERS/core.sshCommand and
+    # GIT_EXEC_PATH can also redirect transport/helpers. This finite fixture
+    # inherits ordinary process state, but no caller-supplied Git overrides.
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith('GIT_')}
+    environment.update({'HOME': str(tmp_path), 'GIT_CONFIG_NOSYSTEM': '1',
                    'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_COUNT': '1',
                    'GIT_CONFIG_KEY_0': 'protocol.version', 'GIT_CONFIG_VALUE_0': '0',
-                   'GIT_TERMINAL_PROMPT': '0', 'GIT_SSH_VARIANT': 'ssh'}
+                   'GIT_TERMINAL_PROMPT': '0', 'GIT_SSH_VARIANT': 'ssh'})
     def git(*args):
         return subprocess.check_output([real_git, *args], env=environment, text=True)
     pack_objects = Path(git('--exec-path').strip()) / 'git-pack-objects'
@@ -658,7 +670,8 @@ entry.main()
 '''
     monkeypatch.setattr(RuntimeManager, '_command', lambda *a, **k: [sys.executable, '-c', wrapper, 'unused'])
     environment.update({
-        'GIT_SSH': str(transport), 'AMPLIFIER_HOME': str(tmp_path / 'community'),
+        'GIT_SSH_COMMAND': shlex.quote(str(transport)),
+        'AMPLIFIER_HOME': str(tmp_path / 'community'),
         'AMPLIFIER_SOURCE_STORE': str(tmp_path / 'sources'), 'PYTHONDONTWRITEBYTECODE': '1',
         'AMPLIFIER_GIT_CLONE_TIMEOUT_S': '5' if mode == 'timeout' else '30'})
     monkeypatch.setattr(config, 'worker_environment', lambda: environment)
@@ -708,6 +721,7 @@ entry.main()
         assert any('pack-objects' in row['argv'] for row in recorded['helpers'])
         assert recorded['packPayloadBytes'] >= 64 and recorded['pipeBytes'] == 4096
         assert loaded['broker'], 'Actual entrypoint must install the broker scope'
+        assert not hostile_ssh.exists(), 'Inherited SSH override escaped the fixed local transport'
         assert loaded['sha256'] == hashlib.sha256(Path(foundation_git.__file__).read_bytes()).hexdigest()
         for row in processes:
             current = identity(row['pid'])
@@ -728,6 +742,7 @@ entry.main()
         stage = Path(f"/proc/{recorded['client']['pid']}/cwd").resolve()
         assert '.source-' in str(stage) and stage.is_relative_to(tmp_path / 'sources')
         record_property('shared_stage', str(stage))
+        record_property('hostile_ssh_override_invoked', hostile_ssh.exists())
         if mode in {'cancel', 'default_negative'}:
             for _ in range(3):
                 task.cancel()
@@ -755,6 +770,7 @@ entry.main()
                 assert not late.exists()
         if mode in {'cancel', 'default_negative'}:
             assert stage.exists(), 'Abrupt probe death must not unwind shared-stage removal'
+        assert not hostile_ssh.exists()
     finally:
         try:
             if not task.done():
