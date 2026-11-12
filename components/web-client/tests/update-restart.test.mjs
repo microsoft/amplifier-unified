@@ -39,12 +39,12 @@ test('restart is visible outside inspect-only blocker disclosure and absent with
  assert.doesNotMatch(withoutRows,/data-part="update-blockers"/);
 });
 
-test('observed reasons are grouped without deduplication or inflating distinct chat counts',()=>{
+test('current work is a flat host-owned list without classification, accounting, or row loss',()=>{
  const blockers=[
   {kind:'conversation',label:'Running conversation',sessionId:'one',title:'One'},
   {kind:'worker',label:'Queued worker',sessionId:'one',title:'One'},
   {kind:'runtime',label:'Preparing conversation',sessionId:'two',title:'Two'},
-  {kind:'configuration',label:'Held operation',reasonCode:'operation-bound-recovery',sessionId:'three'},
+  {kind:'configuration',label:'Conversation configuration task has not settled',reasonCode:'configuration-task-pending',sessionId:'three'},
   {kind:'configuration',label:'Global configuration lock',reasonCode:'management-lock-held',scope:'global'},
   {kind:'configuration',label:'New configuration reason',reasonCode:'future-reason',sessionId:'three'},
   {kind:'future-kind',label:'New host reason',sessionId:'four'},
@@ -53,27 +53,27 @@ test('observed reasons are grouped without deduplication or inflating distinct c
  ];
  const before=structuredClone(blockers);
  const html=renderToStaticMarkup(React.createElement(UpdateBlockers,{updates:{...updates,blockers},act:()=>{}}));
- assert.match(html,/View update blockers \(9 reasons · 4 distinct chats\)/);
- assert.match(html,/Running, preparing, and background work \(4 reasons · 2 distinct chats\)/);
- assert.match(html,/Configuration recovery holds \(3 reasons · 1 distinct chat\)/);
- assert.match(html,/Other update blockers \(2 reasons · 1 distinct chat\)/);
+ assert.match(html,/<summary>View work delaying the update<\/summary>/);
  assert.equal((html.match(/<li>/g)||[]).length,9);
  for(const row of blockers)assert.ok(html.includes(row.label));
- assert.match(html,/can remain unresolved even when they no longer block an update/);
- assert.doesNotMatch(html,/View active work/);
+ assert.deepEqual([...html.matchAll(/<li>([^<]+)/g)].map(match=>match[1].split(' — ')[0]),blockers.map(row=>row.label));
+ assert.doesNotMatch(html,/Configuration recovery holds|distinct chats|View update blockers|<h4>|can remain unresolved/);
  assert.deepEqual(blockers,before);
 });
 
-test('configuration-only blockers are not called running work and omitted holds are not invented',()=>{
- const blockers=[{kind:'configuration',label:'Operation remains held',sessionId:'held'}];
+test('historical diagnostics are not routine work and genuine configuration activity is never hidden',()=>{
+ const blockers=[{kind:'configuration',label:'Conversation configuration refresh is being applied',sessionId:'active'}];
  const html=renderToStaticMarkup(React.createElement(UpdateSettings,{state:{updates:{...updates,blockers,
   blockerObservation:{configurationHoldCount:4,configurationHolds:[{sessionRef:'not-a-chat-id',quiescent:true}]}
  },settings:{updates:{}},view:{}},act:()=>{}}));
- assert.match(html,/View update blockers \(1 reason · 1 distinct chat\)/);
- assert.match(html,/Configuration recovery holds/);
- assert.doesNotMatch(html,/Running, preparing, and background work|Other update blockers|not-a-chat-id|4 reasons/);
+ assert.match(html,/View work delaying the update/);
+ assert.match(html,/Conversation configuration refresh is being applied/);
+ assert.doesNotMatch(html,/Configuration recovery holds|distinct chat|not-a-chat-id|held settings|checkout handoffs/);
  assert.match(html,/Interrupt work and restart/);
  assert.equal(renderToStaticMarkup(React.createElement(UpdateBlockers,{updates:{blockers:[]},act:()=>{}})),'');
+ assert.equal(renderToStaticMarkup(React.createElement(UpdateBlockers,{updates:{
+  blockerObservation:{configurationHoldCount:4,configurationHolds:[{sessionRef:'old-stopped-appearance'}]},
+ },act:()=>{}})),'');
 });
 
 test('each reason keeps its original chat link and selection rejection does not navigate',async()=>{
@@ -103,7 +103,7 @@ test('same-tick repeated activation submits exactly the displayed target once',a
  const dispatch=async(action,args)=>{calls.push({action,args});return{accepted:true,requestId:'request-one'}};
  await act(async()=>{root=create(React.createElement(UpdateRestart,{updates,act:dispatch}))});
  const text=JSON.stringify(root.toJSON());
- assert.match(text,/will be interrupted/);assert.match(text,/will not be replayed automatically/);assert.match(text,/Saved history and drafts/);assert.match(text,/checkout handoffs/);
+ assert.match(text,/will be interrupted/);assert.match(text,/will not be replayed automatically/);assert.match(text,/Saved history and drafts/);assert.match(text,/You can wait for work to finish instead/);
  const click=button(root,'Interrupt work and restart').props.onClick;
  await act(async()=>{await Promise.all([click(),click()])});
  assert.deepEqual(calls,[{action:'updates.forceRestart',args:{...target,confirm:true}}]);

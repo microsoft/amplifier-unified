@@ -8,24 +8,21 @@ test('only a completed whole sequence is described as up to date',()=>{
  assert.equal(updateOverview({application:{status:'current'},sequence:{stage:'complete'}}).tone,'ready');
 });
 
-test('observed configuration holds do not masquerade as running chats in the waiting title',()=>{
- const hold={kind:'configuration',label:'Configuration operation held',sessionId:'held'};
- for(const pending of [{pendingApp:{}},{pendingRelease:'candidate'}]){
-  const updates={...pending,phase:'app-staged',blockers:[hold]},before=structuredClone(updates);
-  const result=updateOverview(updates);
-  assert.equal(result.title,'Waiting on configuration recovery holds');
-  assert.match(result.detail,/reported update blockers clear/);
-  assert.match(result.detail,/restarting does not recover held settings/);
-  assert.equal(result.waiting,true);assert.equal(result.busy,true);assert.equal(result.processing,false);
-  assert.deepEqual(updates,before);
-  const mixed=updateOverview({...updates,blockers:[hold,{kind:'conversation',sessionId:'running'},{kind:'worker',sessionId:'running'}]});
-  assert.equal(mixed.title,'Waiting for update blockers');
-  // An omitted hold is not an observed blocker or evidence of recovery.
-  const omitted=updateOverview({...updates,blockers:[{kind:'conversation',sessionId:'running'}],
-   blockerObservation:{configurationHoldCount:3}});
-  assert.equal(omitted.title,'Waiting for 1 chat to finish');
-  assert.doesNotMatch(omitted.detail,/recovered|resolved/);
- }
+test('a pending update preserves host-owned attention instead of promising automatic progress',()=>{
+ const currentStatus={status:'action-required',actionRequired:true,title:'Update needs attention',
+  detail:'The app cannot confirm that earlier work has stopped. Review update diagnostics before continuing.',action:'diagnostics'};
+ const updates={phase:'app-staged',pendingApp:{},blockers:[{kind:'checkout-handoff',label:'Checkout handoff needs inspection; restarting will not resolve it',sessionId:'one'}],currentStatus};
+ const before=structuredClone(updates),result=updateOverview(updates);
+ assert.equal(result.title,currentStatus.title);
+ assert.equal(result.detail,currentStatus.detail);
+ assert.equal(result.current.action,'diagnostics');
+ assert.equal(result.failed,true);assert.equal(result.processing,false);
+ assert.equal(result.waiting,true);assert.equal(result.busy,true);
+ assert.doesNotMatch(result.detail,/automatically/);
+ assert.deepEqual(updates,before);
+ const detail='Automatic restart is paused because Amplifier cannot confirm earlier work has finished. The current app is kept.';
+ assert.equal(updateOverview({...updates,currentStatus:undefined,detail}).detail,detail);
+ assert.equal(updateOverview({...updates,detail:'Older wait detail'}).detail,currentStatus.detail);
 });
 
 const confirmedApp={attemptId:'a'.repeat(32),phase:'restart-ack',version:'0.20.199',revision:'b'.repeat(40),verifiedAt:10};
@@ -123,7 +120,7 @@ test('failed application check keeps waiting and per-worker adoption busy',()=>{
   assert.equal(result.pending,true);assert.equal(result.busy,true);assert.equal(result.failed,false);
   assert.equal(result.waiting,activation!=='per-worker');
   assert.equal(result.processing,activation==='per-worker');
-  assert.equal(result.title,activation==='per-worker'?'Finishing your update':'Waiting for 1 chat to finish');
+  assert.equal(result.title,activation==='per-worker'?'Finishing your update':'Waiting for work to finish');
   assert.equal(result.application.state,'failed');assert.equal(result.application.detail,unavailableApp.detail);
  }
 });
@@ -286,7 +283,7 @@ test('stale, invalid and terminal progress never masquerades as current preparat
   assert.equal(updateOverview({phase:'validating',diagnostics:{attemptId:'new',batch:{attemptId:'new'}},probeProgress}).currentProgress,null);
  }
  const result=updateOverview({phase:'staged',pendingRelease:'candidate',diagnostics:{attemptId:'new',batch:{attemptId:'new'}},probeProgress:{attemptId:'new',phase:'prepare',completed:37,total:37}});
- assert.equal(result.currentProgress,null);assert.equal(result.title,'Waiting for your work to finish');
+ assert.equal(result.currentProgress,null);assert.equal(result.title,'Waiting for work to finish');
 });
 test('app preparation is never mislabeled as other components',()=>{
  assert.equal(updateOverview({phase:'staging',sequence:{stage:'application'}}).title,'Updating Amplifier');
@@ -299,11 +296,11 @@ test('pending activation locks duplicate updates, but a failed candidate can be 
   assert.equal(updateOverview({...pending,phase:'error',error:'Failed'}).busy,false);
  }
 });
-test('restart waiting wins over a previous component plan and counts distinct chats only',()=>{
+test('restart waiting wins over a previous component plan without counting or classifying work',()=>{
  const result=updateOverview({phase:'staged',pendingApp:{},pendingRelease:'candidate',plan:{activation:'per-worker'},blockers:[{kind:'conversation',sessionId:'one'},{kind:'conversation',sessionId:'one'}]});
- assert.equal(result.waiting,true);assert.equal(result.processing,false);assert.match(result.title,/1 chat to finish/);assert.match(result.detail,/restart automatically/);
+ assert.equal(result.waiting,true);assert.equal(result.processing,false);assert.equal(result.title,'Waiting for work to finish');assert.match(result.detail,/restart automatically/);
  const mixed=updateOverview({pendingApp:{},blockers:[{kind:'voice',sessionId:'one'},{kind:'conversation',sessionId:'one'}]});
- assert.equal(mixed.title,'Waiting for your work to finish');
+ assert.equal(mixed.title,'Waiting for work to finish');
 });
 test('component adoption is ready only after activation and all update stages finish',()=>{
  const state={adoption:{pendingWorkers:2},sequence:{stage:'complete'}};
@@ -321,8 +318,8 @@ test('runner-only qualification is independent of chat idleness and keeps unknow
  assert.match(result.detail,/machine capacity/);assert.match(result.detail,/Existing chats and checks can continue/);
  assert.equal(result.runnerOnlyPending,true);assert.equal(result.busy,true);
  assert.match(updateOverview({...base,pendingSmartTools:[{...runner,runnerWaiting:'unknown'}]}).detail,/confirming the isolated check/);
- assert.match(updateOverview({...base,pendingApp:{}}).title,/chat to finish/);
- assert.match(updateOverview({...base,pendingSmartTools:[runner,{previous:'ordinary-tool'}]}).title,/chat to finish/);
+ assert.equal(updateOverview({...base,pendingApp:{}}).title,'Waiting for work to finish');
+ assert.equal(updateOverview({...base,pendingSmartTools:[runner,{previous:'ordinary-tool'}]}).title,'Waiting for work to finish');
  assert.equal(updateOverview({...base,phase:'error',error:'Qualification failed'}).tone,'error');
 });
 
