@@ -29,6 +29,11 @@ containment and full background lifetime remain affected qualification boundarie
 
 The supervised candidate keeps the owner-logon task's `pythonw.exe` as a stable
 launcher. Each app generation runs as a contained child, not a detached helper.
+An ordinary service installation command may itself be delegated to the active
+app interpreter. Registration must still select the exact original bootstrap's
+windowless sibling after rechecking both candidate and bootstrap identity; it
+must not make that disposable app generation the new stable launcher. A changed
+bootstrap or candidate refuses registration rather than relaxing launch identity.
 A non-inheritable lifetime job belongs to the launcher; closing its lifetime
 closes descendants. The actual app publishes its private run/PID/FILETIME/image
 receipt. A venv redirector's PID and Scheduler EnginePID are not accepted as the

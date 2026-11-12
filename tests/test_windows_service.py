@@ -266,7 +266,7 @@ def test_scheduler_expansion_new_install_refused_before_scheduler_mutation(monke
     monkeypatch.setattr(service.sys, "executable",
                         r"C:\Tools\%USERNAME%\Scripts\python.exe" if field == "python" else spec().python)
     monkeypatch.setattr(service, "_background_python",
-                        lambda: str(PureWindowsPath(service.sys.executable).with_name("pythonw.exe")))
+                        lambda home: str(PureWindowsPath(service.sys.executable).with_name("pythonw.exe")))
     workspace = r"C:\Work\%USERNAME%" if field == "workspace" else spec().workspace
     with pytest.raises(ValueError, match="percent"):
         service.install(spec().data_dir, workspace)
@@ -579,7 +579,7 @@ def test_private_backup_uses_existing_pinned_no_replace_api(monkeypatch):
 def test_new_spec_freezes_lexical_paths_and_keeps_anonymous_choice(monkeypatch):
     from amplifier_web import host_dependencies, shared_state, windows_files
     monkeypatch.setattr(service.sys, "executable", spec().python)
-    monkeypatch.setattr(service, "_background_python", lambda: spec().python)
+    monkeypatch.setattr(service, "_background_python", lambda home: spec().python)
     monkeypatch.setattr(service.sys, "version_info", (3, 13))
     monkeypatch.setattr(service.sysconfig, "get_config_var", lambda key: None)
     monkeypatch.setattr(windows_files, "address", lambda path: PureWindowsPath(path))
@@ -613,6 +613,45 @@ def test_new_background_host_uses_installed_windowless_sibling(tmp_path, monkeyp
     assert service.owned_spec(service.task_xml(value), SID) == value
     # Older console definitions remain inspectable, not silently rewritten.
     assert service.owned_spec(service.task_xml(spec()), SID) == spec()
+
+
+@pytest.mark.parametrize("mode", ["delegated", "manual-bootstrap", "no-generation",
+                                 "changed-bootstrap", "changed-candidate", "missing-windowless"])
+def test_service_registration_keeps_verified_stable_bootstrap_after_cli_delegation(tmp_path, monkeypatch, mode):
+    from amplifier_web import application_generations as generations
+    bootstrap, candidate = tmp_path / "bootstrap", tmp_path / "app"
+    for prefix in (bootstrap, candidate):
+        (prefix / "Scripts").mkdir(parents=True)
+        (prefix / "Scripts/python.exe").touch()
+        (prefix / "Scripts/pythonw.exe").touch()
+    owner = {"prefix": str(bootstrap), "digest": "a" * 64}
+    target = {"prefix": candidate, "bootstrap": owner}
+    current = bootstrap if mode == "manual-bootstrap" else candidate
+    monkeypatch.setattr(service.sys, "prefix", str(current))
+    monkeypatch.setattr(service.sys, "executable", str(current / "Scripts/python.exe"))
+    monkeypatch.setattr(generations, "active", lambda home: None if mode == "no-generation" else target)
+    checks = []
+    def verify(value):
+        assert value is target
+        checks.append("candidate")
+        if mode == "changed-candidate":
+            raise ValueError("changed candidate")
+    monkeypatch.setattr(generations, "verify_candidate", verify)
+    def identity(prefix):
+        assert prefix == bootstrap
+        checks.append("bootstrap")
+        return {**owner, "digest": "b" * 64} if mode == "changed-bootstrap" else owner
+    monkeypatch.setattr(generations, "bootstrap_identity", identity)
+    if mode == "missing-windowless":
+        (bootstrap / "Scripts/pythonw.exe").unlink()
+    if mode in {"changed-bootstrap", "changed-candidate", "missing-windowless"}:
+        with pytest.raises((ValueError, service.WindowsServiceError)):
+            service._background_python(tmp_path / "data")
+    else:
+        expected = candidate if mode == "no-generation" else bootstrap
+        assert service._background_python(tmp_path / "data") == str(expected / "Scripts/pythonw.exe")
+    assert checks == ([] if mode in {"manual-bootstrap", "no-generation"} else
+                      ["candidate"] if mode == "changed-candidate" else ["candidate", "bootstrap"])
 
 
 @pytest.mark.parametrize("supervised", [False, True])

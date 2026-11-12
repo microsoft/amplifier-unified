@@ -429,7 +429,7 @@ def _new_spec(data_dir, workspace, sid, previous):
     roots = dict(previous.launch_roots) if previous else {}
     roots.update({name: _path(value) for name in LAUNCH_ROOTS
                   if (value := os.environ.get(name))})
-    return TaskSpec(sid=sid, python=_path(_background_python()),
+    return TaskSpec(sid=sid, python=_path(_background_python(data_dir)),
                     data_dir=str(address(data_dir)), workspace=str(address(workspace or Path.cwd())),
                     state_home=str(address(shared_state_home())), tool_path=tool_path(),
                     registration_id=previous.registration_id if previous else uuid.uuid4().hex,
@@ -438,13 +438,26 @@ def _new_spec(data_dir, workspace, sid, previous):
                     launch_roots=roots, supervised=True)
 
 
-def _background_python():
+def _background_python(data_dir=None):
     """Use the installed CPython windowless sibling, not a hidden shell.
 
     The actual task host still publishes its own PID/birth/image. Existing
     python.exe definitions remain readable for explicit replacement/rollback.
     """
     path = Path(sys.executable)
+    if data_dir is not None:
+        from .application_generations import active, bootstrap_identity, verify_candidate
+        target = active(data_dir)
+        if target and Path(sys.prefix).resolve() == target["prefix"].resolve():
+            # The public bootstrap CLI delegates ordinary commands to its app
+            # generation. That interpreter is disposable, not a new stable task
+            # owner. Recover ONLY the original verified bootstrap binding.
+            verify_candidate(target)
+            bootstrap = target["bootstrap"]
+            prefix = Path(bootstrap["prefix"])
+            if bootstrap_identity(prefix) != bootstrap:
+                raise WindowsServiceError("The stable task bootstrap changed; registration refused.")
+            path = prefix / "Scripts/python.exe"
     if path.name.lower() not in {"python.exe", "pythonw.exe"}:
         raise WindowsServiceError("The background host requires an installed CPython interpreter.")
     windowless = path.with_name("pythonw.exe")
