@@ -50,6 +50,9 @@
 #amp-one.a-approachable-shell .a-work-heading svg{width:16px;flex-shrink:0}
 #amp-one.a-approachable-shell .a-work-header-actions{display:flex;align-items:center;margin-left:auto;flex:none;gap:4px}
 #amp-one.a-approachable-shell .a-work-menu{position:relative}
+#amp-one.a-approachable-shell .a-session-action-menu{position:relative}
+#amp-one.a-approachable-shell .a-session-copy-notice{position:fixed;right:12px;top:calc(var(--a-navigation-top,52px) + 8px);z-index:84;width:max-content;max-width:min(280px,calc(100vw - 64px));box-sizing:border-box;white-space:normal;overflow-wrap:anywhere;font-size:var(--a-text-sm,13px);line-height:1.5}
+#amp-one.a-approachable-shell .a-session-copy-notice:not(:empty){padding:10px 12px;border:1px solid var(--a-line);border-radius:12px;background:var(--a-surface);color:var(--a-ink);box-shadow:0 12px 36px #0003}
 #amp-one.a-approachable-shell .a-destination-history{position:relative;display:flex;align-items:center;flex:none;gap:0}
 #amp-one.a-approachable-shell .a-destination-history>.a-icon{width:32px;min-width:32px;height:36px;padding:6px}
 #amp-one.a-approachable-shell .a-destination-history>.a-icon:disabled{opacity:.4}

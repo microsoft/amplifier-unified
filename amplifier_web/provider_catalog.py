@@ -277,7 +277,7 @@ def conversation_bindings(home, workspace, session_id, providers, *, global_only
         if row is None or row.get('enabled') is False:
             result[provider['id']] = {'eligible':False,'reason':'This conversation does not include this configured connection.'}
             continue
-        key = connection_key(workspace,row['module'],row.get('config',{}),
+        key = connection_key(workspace,row['module'],mounted_provider_config(row),
             sources.get(provider['id']),home=home)
         if key != provider.get('connectionKey'):
             result[provider['id']] = {'eligible':False,

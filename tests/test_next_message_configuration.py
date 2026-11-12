@@ -8,6 +8,8 @@ import pytest
 from amplifier_web.management import Management
 from amplifier_web.service import AppError, AppService
 
+from test_runtime_controls import managed_module_source
+
 
 @pytest.fixture
 async def app(tmp_path):
@@ -416,6 +418,135 @@ async def test_genuine_input_consumes_latest_revision_and_no_older_ack(app, monk
     assert 'pendingModelSelection' not in current and 'pendingBundleSelection' not in current
 
 
+async def test_saved_portable_plan_reaches_next_input_and_refuses_changed_connection_source(
+        app, managed_module_source, monkeypatch):
+    """Real persistence/rendering and input binding; synthetic catalog/transport.
+
+    Model-only deferred intent retains the saved plan. A bundle replacement
+    deliberately resets that override, so this is not a bundle-switch/mount test.
+    """
+    import json
+    from pathlib import Path
+    from amplifier_foundation import Bundle
+    from amplifier_web import draft_defaults
+    from amplifier_web.host.config import read_config, write_private
+    from amplifier_web.host.session import apply_runtime_plan
+    from amplifier_web.next_message_configuration import bind
+    from amplifier_web.provider_catalog import configured_binding, connection_key
+    from amplifier_web.runtime import RuntimeManager, RuntimeStartupError
+    from amplifier_web.session_files import amplifier_home
+    from test_task_continuity import controls
+
+    c = managed_module_source
+    current = app._session()
+    assert app.data_dir == c.home
+    provider = {'module': 'provider-fixture', 'id': 'one', 'source': c.portable,
+                'config': {'api_key': 'SYNTHETIC_EXACT_ACCOUNT'}}
+    settings = amplifier_home() / 'settings.yaml'
+    write_private(settings, json.dumps({'config': {'providers': [provider]}}))
+    plan = {'session': {'orchestrator': {'module': 'loop-live'},
+                        'context': {'module': 'context-simple'}},
+            'providers': [{**deepcopy(provider), 'source': str(c.module)}],
+            'hooks': [{'module': 'hook-source-lifetime-fixture', 'source': str(c.module)}]}
+    original = deepcopy(plan)
+    controller = controls(current['id'])
+    # The published persistence producer, NOT an arbitrary test-side conversion.
+    controller.save_configuration(plan)
+    saved_path = controller.state_path().with_name('configuration.json')
+    saved_bytes = saved_path.read_bytes()
+    saved = json.loads(saved_bytes)
+    assert saved_path == app.data_dir / 'sessions' / current['id'] / 'configuration.json'
+    assert saved['providers'] == [provider]
+    assert saved['hooks'][0]['source'] == c.portable and plan == original
+    assert str(c.root) not in saved_bytes.decode()
+
+    runtime = RuntimeManager()
+    app.runtime = runtime
+    bind(app, runtime)
+    starts, commands, inputs, resolutions = [], [], [], []
+
+    async def resolve(home, workspace, bundle, app_bundle=None, **kwargs):
+        # Explicit synthetic catalog boundary: real saved/configured identity in,
+        # finite capability metadata out. No provider import or discovery claim.
+        assert home == c.home and workspace == current['workspace']
+        assert bundle == 'anchors' and app_bundle == app.state['settings'].get('appBundle')
+        assert kwargs['catalog'] and kwargs['selected_only'] and not kwargs['desired_bundle']
+        assert kwargs['instance'] == 'one' and kwargs['session_id'] == current['id']
+        assert json.loads(saved_path.read_bytes()) == saved
+        result = valid_catalog()
+        result['providers'][0]['connectionKey'] = configured_binding(home, workspace, 'one')
+        resolutions.append(result['providers'][0]['connectionKey'])
+        return result
+
+    async def start(snapshot, emit, **kwargs):
+        kwargs['guard']()
+        assert snapshot['replaceSavedSelection'] is True
+        assert 'bundleReplacement' not in snapshot  # Must not discard the saved override.
+        workspace = Path(snapshot.get('workingDirectory') or snapshot['workspace'])
+        config = read_config(snapshot['workspace'], home=c.home, session_id=snapshot['id'])
+        # Same saved-file read and host renderer as ordinary cold session startup;
+        # native preparation/mount/spawn remain outside this synthetic boundary.
+        rendered = apply_runtime_plan(Bundle(name='retained-plan'), json.loads(saved_path.read_bytes()),
+                                      config, workspace).to_mount_plan()
+        assert rendered['providers'] == [{**provider, 'instance_id': 'one'}]
+        hook = next(row for row in rendered['hooks'] if row['module'] == 'hook-source-lifetime-fixture')
+        assert hook['source'] == c.portable
+        row = rendered['providers'][0]
+        assert connection_key(workspace, row['module'], row['config'], row['source'],
+                              home=c.home) == snapshot['modelConnectionKey']
+        starts.append(deepcopy(snapshot))
+
+    async def control(sid, operation, value, **kwargs):
+        kwargs['guard']()
+        assert sid == current['id']
+        commands.append((operation, deepcopy(value)))
+
+    async def request(sid, operation, **kwargs):
+        kwargs['guard']()
+        assert sid == current['id'] and operation == 'send'
+        inputs.append(kwargs['input_id'])
+        return {'accepted': True}
+
+    monkeypatch.setattr(draft_defaults, 'resolve_defaults', resolve)
+    monkeypatch.setattr(runtime, 'start', start)
+    monkeypatch.setattr(runtime, 'control', control)
+    monkeypatch.setattr(runtime, '_request', request)
+    selected = {'instance': 'one', 'model': 'chosen', 'effort': 'high'}
+    receipt = await app.dispatch('conversation.configure', choices(app, selection=selected))
+    expected_key = configured_binding(c.home, current['workspace'], 'one')
+    assert expected_key and current['modelConnectionKey'] == expected_key
+    assert receipt['result']['revision'] == 1 and not starts and not inputs
+
+    await runtime.send(deepcopy(current), 'Use the retained portable plan', 'portable-input',
+                       app.on_runtime_event)
+    assert len(starts) == 1
+    assert starts[0]['nextMessageRevision'] == 1 and starts[0]['selection'] == selected
+    assert starts[0]['modelConnectionKey'] == expected_key
+    assert commands == [
+        ('provider.verifyConnection', {'instance': 'one', 'expectedConnectionKey': expected_key}),
+        ('provider.select', {**selected, 'expectedConnectionKey': expected_key})]
+    assert inputs == ['portable-input'] and resolutions == [expected_key]
+    assert current['appliedConfigurationRevision'] == 1 and current['nextMessageStatus'] == 'applied'
+    assert 'pendingModelSelection' not in current and saved_path.read_bytes() == saved_bytes
+
+    # ONE negative: same account/model/credentials, different implementation pin.
+    # No configurationRevision bump: exercise the actual saved connection-key
+    # comparison, not an unrelated revision fence or an invented resolver error.
+    await app.dispatch('conversation.configure', choices(app, 1, selection=selected))
+    changed = {**deepcopy(provider), 'source': c.portable.replace(c.commit, 'f' * 40)}
+    write_private(settings, json.dumps({'config': {'providers': [changed]}}))
+    with pytest.raises(RuntimeStartupError, match='No input was sent') as refused:
+        await runtime.send(deepcopy(current), 'Do not use changed source', 'refused-input',
+                           app.on_runtime_event)
+    assert isinstance(refused.value.__cause__, ValueError)
+    assert 'configured connection changed' in str(refused.value.__cause__)
+    assert resolutions[-1] != expected_key
+    assert len(starts) == 1 and len(commands) == 2 and inputs == ['portable-input']
+    assert current['nextMessageRevision'] == 2 and current['appliedConfigurationRevision'] == 1
+    assert current['pendingModelSelection'] == selected and current['modelConnectionKey'] == expected_key
+    assert current['nextMessageStatus'] == 'not-applied' and saved_path.read_bytes() == saved_bytes
+
+
 @pytest.mark.parametrize('interrupt', [False, True])
 async def test_active_input_keeps_its_snapshot_and_later_choices_wait_for_next_input(app, monkeypatch, interrupt):
     from amplifier_web import draft_defaults
@@ -525,6 +656,35 @@ async def test_delayed_validation_refuses_before_start_and_keeps_intent(app, mon
     assert app.runtime is None
     assert app._session()['pendingBundleSelection']['bundle'] == ('other' if fault == 'newer' else 'work')
     assert app._session()['bundle'] == 'anchors'
+
+
+@pytest.mark.parametrize('change', ['defaults-only', 'directory', 'revision', 'stop'])
+async def test_legacy_native_target_defaults_do_not_invent_a_move(app, change):
+    from amplifier_web.next_message_configuration import guard_for
+    from amplifier_web.runtime import RuntimeStartupError
+    current = app._session()
+    current.pop('workingDirectory', None)
+    current.pop('executionRevision', None)
+    await app.dispatch('conversation.configure', choices(app, bundle='work'))
+    # Intent already saved by older versions must work too, without rewriting
+    # or recapturing its target/authority from the current owner.
+    legacy = {'workspace': current['workspace'], 'workingDirectory': None, 'executionRevision': None}
+    current['pendingBundleSelection']['target'] = deepcopy(legacy)
+    current.update(workingDirectory=current['workspace'], executionRevision=0)
+    captured = deepcopy(current)
+    if change == 'directory':
+        current['workingDirectory'] += '/another'
+    elif change == 'revision':
+        current['executionRevision'] = 2  # moved away and back is still a move
+    elif change == 'stop':
+        current['interruptionRevision'] = 1
+    check = guard_for(app, captured)
+    if change == 'defaults-only':
+        check()
+    else:
+        with pytest.raises(RuntimeStartupError):
+            check()
+    assert current['pendingBundleSelection']['target'] == legacy
 
 
 async def test_reset_then_explicit_pin_does_not_silently_discard_pin(app):
