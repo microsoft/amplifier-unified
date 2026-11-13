@@ -136,9 +136,13 @@ async def test_known_unsubmitted_source_resumes_once_without_history_replay(app_
     assert session['externalAgent']['pendingCount'] == 2
     assert not app.external_conversations.shared.turns
     assert not (tmp_path / 'alpha/peer').exists() and not (tmp_path / 'beta/peer').exists()
+    await app.dispatch('session.create', {'workspace': app.default_workspace,
+        'externalAgentId': 'alpha'}, command_id='selected-other-room')
     await app.close()
     restored = app_factory()
     configure(restored, tmp_path)
+    assert sid not in {row['id'] for row in restored.state['sessions']}
+    assert restored.directory.resolve(sid)['externalAgent']['pendingCount'] == 2
     await restored.external_conversations.resume_pending()
     await idle(restored, sid)
     await restored.external_conversations.resume_pending()

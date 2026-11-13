@@ -157,9 +157,12 @@ class SharedConversations:
 
     async def resume_pending(self):
         async with self.service.lock:
-            for row in list(self.service.state['sessions']):
-                if not is_shared(row) or not row['externalAgent'].get('pendingCount'):
-                    continue
+            # A saved pending room need not be selected or resident after restart.
+            # Filter compact directory facts before admitting its private body.
+            rows = self.service.directory.select(
+                "source='local' AND json_extract(summary,'$.externalAgent.participation')='shared' "
+                "AND json_extract(summary,'$.externalAgent.pendingCount')>0", limit=-1)
+            for row in rows:
                 session = self.service._session(row['id'])
                 self._schedule(session)
                 self.service._publish_changes(sessions={session['id']})
