@@ -528,6 +528,8 @@ class Children:
         install_access = capture_access() if capture_access else None
         from amplifier_foundation import Bundle, ProviderPreference, apply_provider_preferences_with_resolution
         from amplifier_core import HookResult
+        if identity in self.rows and self.rows[identity].get("_computerCleanup") is not None:
+            raise ValueError("The child's computer cleanup is unconfirmed; this identity cannot resume")
         if identity in self.rows and self.rows[identity].get("status") in {"starting", "running", "idle", "stopping"} and self.rows[identity].get("task") and not self.rows[identity]["task"].done():
             raise ValueError("A child with this identity is already active")
         prepared = self.prepared.get(parent.session_id)
@@ -820,19 +822,44 @@ class Children:
         finally:
             if unregister:
                 unregister()
+            async def release_child():
+                if child:
+                    await child.cleanup()
+                if ledger:
+                    ledger.close()
+                if self.sessions.get(identity) is child:
+                    self.sessions.pop(identity, None)
+                    self.prepared.pop(identity, None)
+                row.pop("task", None)
+                row.pop("_owner", None)
+                row.pop("runtime", None)
+                row.pop('_input_sources', None)
+                row.pop("_computerCleanup", None)
             if child:
                 sponsor = child.coordinator.get_capability("web.computer_episodes")
                 if sponsor:
-                    await sponsor.close(interrupted=row["status"] != "completed")
-                await child.cleanup()
-            if ledger:
-                ledger.close()
-            self.sessions.pop(identity, None)
-            self.prepared.pop(identity, None)
-            row.pop("task", None)
-            row.pop("_owner", None)
-            row.pop("runtime", None)
-            row.pop('_input_sources', None)
+                    async def deferred():
+                        receipt = await sponsor.close(interrupted=row["status"] != "completed")
+                        if not receipt["settled"]:
+                            await sponsor.join()
+                        await release_child()
+                    # Own cleanup before any cancellable wait. A failed or
+                    # cancelled child awaiter cannot erase backend/ledger custody.
+                    cleanup = sponsor.registry.retain_cleanup(coordinator, row["runId"], deferred)
+                    row["_computerCleanup"] = cleanup
+                    from ..computer_episodes import wait_settlement
+                    await wait_settlement({cleanup})
+                    if not cleanup.done() or (id(coordinator), row["runId"]) in sponsor.registry.cleanups:
+                        from ..computer_episodes import SettlementPending
+                        raise SettlementPending(sponsor.registry.receipt())
+                    # The owned task already performed ordinary cleanup.
+                    return_cleanup = True
+                else:
+                    return_cleanup = False
+            else:
+                return_cleanup = False
+            if not return_cleanup:
+                await release_child()
 
     async def control(self, identity, action, text="", input_id=None, attachments=()):
         row = self.rows.get(identity)

@@ -365,3 +365,77 @@ async def test_real_bundle_metadata_exemption_does_not_bypass_read_only_input(bu
         assert not denied.success and "read_only" in denied.error["message"]
     finally:
         await registry.close()
+
+
+async def test_real_bundle_host_stop_resume_requires_fresh_explicit_generation(bundle):
+    """Run with the F1-repaired frozen bundle; never drive native input."""
+    from amplifier_web.runtime_worker import Worker
+    cu, tool, _ = bundle
+    controller = cu.EpisodeController(tool)
+    coordinator = Coordinator(controller)
+    registry = ComputerEpisodes()
+    sponsor = registry.install(coordinator, lambda: ("generation", lambda: True))
+    desktop = cu.DesktopTool(tool)
+    worker = Worker()
+    worker.computer_episodes = registry
+    try:
+        await sponsor.invoke("desktop", {"action": "get_clipboard"}, desktop.execute)
+        old = tool.episode_status()["identity"]["generation"]
+        captured = sponsor.capture_invocation(sponsor.capture())
+        await worker.command({"op": "computer.stop"})
+        await registry.join()
+        prior = tool.episode_status()
+        assert prior["state"] == "interrupted" and prior["workers"] == 0
+        assert prior["release_confirmed"] and prior["indicator_settled"]
+        implicit = await desktop.execute({"action": "get_clipboard"})
+        assert not implicit.success  # Native implicit calls cannot restart.
+        await worker.command({"op": "computer.resume"})
+        assert not captured[1]()  # UI Resume cannot revive the old invocation.
+        opened = await sponsor.invoke("desktop", {"action": "begin_episode"}, desktop.execute)
+        assert opened.success and opened.output["identity"]["generation"] != old
+        assert tool.episode_status()["admission_open"]
+        with pytest.raises(cu.BackendError, match="stale"):
+            controller.fence(old)
+        assert tool.episode_status()["admission_open"]
+    finally:
+        await registry.close()
+
+
+async def test_real_native_thread_survives_bounded_close_without_false_handback(bundle, monkeypatch):
+    from amplifier_web import computer_episodes
+    monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .02)
+    cu, tool, indicator = bundle
+    entered, proceed = threading.Event(), threading.Event()
+    def blocked_read():
+        entered.set()
+        assert proceed.wait(10)
+        return "inert native thread"
+    tool._backend.get_clipboard = blocked_read
+    controller = cu.EpisodeController(tool)
+    coordinator = Coordinator(controller)
+    registry = ComputerEpisodes()
+    sponsor = registry.install(coordinator, lambda: ("generation", lambda: True))
+    desktop = cu.DesktopTool(tool)
+    task = asyncio.create_task(sponsor.invoke("ui_use", {"surface": "computer"},
+        lambda arguments: sponsor.invoke("desktop", {"action": "get_clipboard"}, desktop.execute)))
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        task.cancel()
+        done, _ = await asyncio.wait({task}, timeout=.15)
+        assert done and task.cancelled()  # Only the awaiter stopped.
+        receipt = await registry.close()
+        assert not receipt["settled"] and registry.pending and registry.unresolved
+        status = tool.episode_status()
+        assert status["workers"] == 1 and not status["release_confirmed"]
+        assert not status["admission_open"] and "released" not in indicator.states
+        registry.resume()
+        with pytest.raises(asyncio.CancelledError):
+            await sponsor.invoke("desktop", {"action": "retarget", "target": "local"}, desktop.execute)
+    finally:
+        proceed.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await registry.join()
+        assert (await registry.close())["settled"]
+    assert tool.episode_status()["workers"] == 0
+    assert tool.episode_status()["state"] == "interrupted"
+    assert "released" not in indicator.states

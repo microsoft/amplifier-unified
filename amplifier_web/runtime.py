@@ -1138,6 +1138,27 @@ class RuntimeManager:
                 elif data.get("type") == "runtime.reactivated":
                     row["parked"] = False
                     await row['emit']('runtime.warmth', {'sessionId': sid, 'status': 'active'})
+                elif data.get("type") == "computer.settlement":
+                    # This pipe belongs to the retained execution owner. Keep
+                    # opaque custody facts even if Stop later reaps that process;
+                    # process exit is not a desktop release acknowledgement.
+                    if (type(data.get("settled")) is bool and data.get("state") in {"settled", "stopping"}
+                            and isinstance(data.get("episodes"), list)
+                            and len(data["episodes"]) <= 64
+                            and (data["settled"] is False or not data["episodes"])):
+                        receipt = {key: data[key] for key in
+                                   ("state", "settled", "episodes", "omittedEpisodes") if key in data}
+                        row["computerSettlement"] = receipt
+                        from .host.config import app_home, write_private
+                        home = Path(self.home or app_home())
+                        destination = home / "runtime-reports" / row["runtime_id"] / "computer-settlement.json"
+                        try:
+                            write_private(destination, json.dumps(receipt))
+                        except (OSError, ValueError):
+                            _LOG.warning("Could not persist unresolved computer custody for %s", sid)
+                        if not receipt["settled"]:
+                            await row["emit"]("runtime.activity", {"sessionId": sid, "phase": "stopping",
+                                "detail": "Computer release is unconfirmed; its cleanup owner remains retained."})
                 elif data.get("type") == "runtime.progress":
                     if not row["ready"].done() and not row["closing"]:
                         row["phase"] = data.get("phase", row["phase"])

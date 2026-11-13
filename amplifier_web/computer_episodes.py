@@ -6,6 +6,7 @@ bundle supplies opaque episode identities, admission fences and worker drains.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -13,6 +14,21 @@ from weakref import WeakKeyDictionary
 
 
 _CURRENT = ContextVar("unified_computer_episode", default=None)
+SETTLEMENT_WAIT_SECONDS = 5.0
+
+
+class SettlementPending(RuntimeError):
+    """A bounded wait ended, not native custody or cleanup."""
+    def __init__(self, receipt):
+        self.receipt = receipt
+        super().__init__("Computer episode settlement is unconfirmed; admission remains fenced.")
+
+
+async def wait_settlement(tasks):
+    tasks = {task for task in tasks if task is not None and not task.done()}
+    if tasks:
+        # asyncio.wait never cancels the owned tasks on timeout/cancellation.
+        await asyncio.wait(tasks, timeout=SETTLEMENT_WAIT_SECONDS)
 
 # These routes observe metadata or release existing custody. They do not read
 # screen/clipboard contents or acquire input authority. The bundle still owns
@@ -52,8 +68,10 @@ class ComputerEpisodes:
         self.sponsors = {}
         self.pending = set()
         self.unresolved = {}
+        self.cleanups = {}
         self.emit = emit
         self.halted = False
+        self.terminated = False
 
     def install(self, coordinator, capture):
         existing = coordinator.get_capability("web.computer_episodes")
@@ -96,8 +114,83 @@ class ComputerEpisodes:
     def retain(self, awaitable):
         task = asyncio.create_task(awaitable)
         self.pending.add(task)
-        task.add_done_callback(self.pending.discard)
+        def finished(task):
+            self.pending.discard(task)
+            if not task.cancelled():
+                task.exception()  # Evidence/custody remains in the registry.
+        task.add_done_callback(finished)
         return task
+
+    def receipt(self, sponsor=None):
+        episodes = {episode for owner in self.sponsors.values() for episode in owner.episodes
+                    if sponsor is None or owner is sponsor}
+        episodes.update(episode for episode in self.unresolved.values()
+                        if sponsor is None or episode.sponsor is sponsor)
+        rows = [copy.deepcopy(episode.status) for episode in episodes]
+        cleanups = [value["status"] for value in self.cleanups.values()] if sponsor is None else []
+        tasks = self.pending if sponsor is None else {
+            task for episode in episodes for task in (episode.begin, episode.settlement)
+            if task is not None and not task.done()}
+        settled = not tasks and not rows and not cleanups
+        return {"state": "settled" if settled else "stopping", "settled": settled,
+                "episodes": (rows + copy.deepcopy(cleanups))[:64],
+                "omittedEpisodes": max(0, len(rows) + len(cleanups) - 64)}
+
+    def retain_cleanup(self, coordinator, run, cleanup):
+        key = (id(coordinator), run)
+        existing = self.cleanups.get(key)
+        if existing is not None:
+            return existing["task"]  # Never replay an uncertain cleanup.
+        record = {"coordinator": coordinator, "status": {
+            "state": "stopping", "release_confirmed": False, "workers": None,
+            "reason": "child_cleanup_pending"}}
+        self.cleanups[key] = record
+        async def owned():
+            try:
+                await cleanup()
+            except BaseException as exc:
+                record["status"] = {**record["status"], "state": "unknown",
+                    "reason": "child_cleanup_unconfirmed", "errorType": type(exc).__name__}
+                raise
+            else:
+                self.cleanups.pop(key, None)
+        record["task"] = self.retain(owned())
+        return record["task"]
+
+    async def join(self):
+        """Cleanup owner only: process host's existing Stop bound owns escalation."""
+        while self.pending or self.unresolved or self.cleanups:
+            if self.pending:
+                await asyncio.shield(asyncio.gather(*tuple(self.pending), return_exceptions=True))
+            elif self.unresolved:
+                # No acknowledged release is not a reason to discard custody
+                # on return into asyncio.run. Only passive owner reconciliation
+                # or the outer host's existing exact-process Stop can settle it.
+                for episode in set(self.unresolved.values()):
+                    if episode.generation:
+                        try:
+                            status = await episode.controller.status(episode.generation)
+                            self.reconcile(episode.controller, status)
+                        except Exception:
+                            pass
+                if self.unresolved or self.cleanups:
+                    await asyncio.sleep(1)
+            elif self.cleanups:
+                await asyncio.sleep(1)  # Failed cleanup needs explicit owner reconciliation.
+        return self.receipt()
+
+    def reconcile(self, controller, status):
+        """Passive confirmation only; never replay an uncertain end or input."""
+        identity = status.get("identity") or {}
+        for key, episode in tuple(self.unresolved.items()):
+            if episode.controller is controller and episode.generation == identity.get("generation"):
+                episode.status = copy.deepcopy(status)
+                episode.sponsor.publish(episode)
+                if (status.get("workers") == 0 and status.get("release_confirmed") is True
+                        and status.get("indicator_settled") is not False
+                        and (episode.settlement is None or episode.settlement.done())):
+                    episode.sponsor.unconfirmed.pop(episode.generation, None)
+                    self.unresolved.pop(key, None)
 
     def fence(self, coordinator=None, *, halt=False, terminate=False):
         if coordinator is None:
@@ -133,12 +226,15 @@ class ComputerEpisodes:
             self.resume()
 
     async def close(self):
+        self.terminated = True
         self.fence(terminate=True)
         # Never cancel these tasks with the model awaiter. Only the controller
         # can prove that its real workers drained and release was confirmed.
-        while self.pending:
-            await asyncio.shield(asyncio.gather(*tuple(self.pending), return_exceptions=True))
-        self.sponsors.clear()
+        await wait_settlement(self.pending)
+        receipt = self.receipt()
+        if receipt["settled"]:
+            self.sponsors.clear()
+        return receipt
 
 
 class Sponsor:
@@ -150,14 +246,18 @@ class Sponsor:
         self.last_status = {"state": "unavailable", "release_confirmed": False}
         self.unconfirmed = {}
         self.halted = registry.halted
-        self.terminated = False
+        self.terminated = registry.terminated
         self.invocations = WeakKeyDictionary()
         self.controls = WeakKeyDictionary()
         self.stop_epoch = 0
         self.lock = asyncio.Lock()
+        self.published = None
 
     def publish(self, episode):
         self.last_status = episode.status
+        if self.published == episode.status:
+            return
+        self.published = copy.deepcopy(episode.status)
         # No prompts, coordinates, screenshots or permission arguments.
         try:
             self.registry.emit({"type": "computer.episode", "sessionId": self.coordinator.session_id,
@@ -199,6 +299,8 @@ class Sponsor:
             # Explicit old pins and opt-outs retain their existing behavior.
             return None
         episode = Episode(self, key, valid, controller, bounded)
+        episode.status = {"state": "starting", "identity": None, "workers": None,
+                          "admission_open": False, "release_confirmed": False}
         self.episodes.add(episode)
 
         async def begin():
@@ -225,7 +327,11 @@ class Sponsor:
         # the exact acquired identity is fenced, even after its awaiter leaves.
         episode.begin = self.registry.retain(begin())
         try:
-            return await asyncio.shield(episode.begin)
+            await wait_settlement({episode.begin})
+            if not episode.begin.done():
+                self.settle(episode, interrupted=True)
+                raise SettlementPending(self.registry.receipt())
+            return episode.begin.result()
         except BaseException:
             self.settle(episode, interrupted=True)
             raise
@@ -244,6 +350,8 @@ class Sponsor:
             self.settle(episode, interrupted=True)
 
     def settle(self, episode, *, interrupted=False):
+        if episode.settlement is not None and episode.settlement.done():
+            return episode.settlement  # Late finalizers cannot re-fence a completed generation.
         episode.interrupted |= interrupted
         episode.closing = True
         if episode.heartbeat:
@@ -256,6 +364,7 @@ class Sponsor:
                 episode.status = {"state": "unknown", "release_confirmed": False,
                                   "reason": "episode_fence_unconfirmed"}
             self.publish(episode)
+        self.registry.unresolved[(id(self.coordinator), episode.generation or id(episode))] = episode
         if episode.settlement is None:
             episode.settlement = self.registry.retain(self.drain(episode))
         return episode.settlement
@@ -273,13 +382,21 @@ class Sponsor:
                 episode.status = episode.controller.fence(
                     episode.generation, interrupted=episode.interrupted)
                 self.publish(episode)
-                episode.status = await episode.controller.end(
-                    episode.generation, interrupted=episode.interrupted)
+                end_unknown = False
+                try:
+                    episode.status = await episode.controller.end(
+                        episode.generation, interrupted=episode.interrupted)
+                except Exception as exc:
+                    end_unknown = True
+                    episode.status = {**episode.status, "state": "unknown", "admission_open": False,
+                        "release_confirmed": False, "reason": "episode_release_unconfirmed",
+                        "errorType": type(exc).__name__}
                 self.publish(episode)
                 # A bounded controller drain may return pending actual native
                 # workers. Keep custody/settlement alive; model cancellation
                 # or a timed-out first drain is not a hand-back.
-                while isinstance(episode.status.get("workers"), int) and episode.status["workers"] > 0:
+                while (end_unknown or episode.status.get("workers") is None
+                       or episode.status.get("workers", 0) > 0):
                     await asyncio.sleep(.1)
                     try:
                         episode.status = await episode.controller.status(episode.generation)
@@ -295,18 +412,32 @@ class Sponsor:
                         continue
                     self.publish(episode)
                     if episode.status.get("workers") == 0:
-                        episode.status = await episode.controller.end(
-                            episode.generation, interrupted=episode.interrupted)
+                        if (not end_unknown and (not episode.status.get("release_confirmed")
+                                or episode.status.get("indicator_settled") is False)):
+                            try:
+                                episode.status = await episode.controller.end(
+                                    episode.generation, interrupted=episode.interrupted)
+                            except Exception:
+                                end_unknown = True
                         self.publish(episode)
+                        if (episode.status.get("release_confirmed") is True
+                                and episode.status.get("indicator_settled") is not False):
+                            end_unknown = False
         except BaseException as exc:
             episode.status = {"state": "unknown", "release_confirmed": False,
                               "reason": "episode_release_unconfirmed", "errorType": type(exc).__name__}
             self.publish(episode)
         finally:
-            if episode.generation and (not episode.status.get("release_confirmed")
-                    or episode.status.get("indicator_settled") is False):
-                self.unconfirmed[episode.generation] = dict(episode.status)
-                self.registry.unresolved[(id(self.coordinator), episode.generation)] = episode
+            if (episode.status.get("state") == "unknown"
+                    or episode.generation and (not episode.status.get("release_confirmed")
+                                               or episode.status.get("indicator_settled") is False)):
+                self.unconfirmed[episode.generation or id(episode)] = dict(episode.status)
+                self.registry.unresolved[(id(self.coordinator), episode.generation or id(episode))] = episode
+            else:
+                self.registry.unresolved.pop((id(self.coordinator), episode.generation or id(episode)), None)
+                self.unconfirmed.pop(episode.generation, None)
+            if episode.generation:
+                self.registry.unresolved.pop((id(self.coordinator), id(episode)), None)
             self.episodes.discard(episode)
             if self.lazy.get(episode.key) is episode:
                 self.lazy.pop(episode.key, None)
@@ -326,9 +457,27 @@ class Sponsor:
         self.terminated = True
         self.finish(interrupted=interrupted)
         settlements = [episode.settlement for episode in self.episodes if episode.settlement]
-        if settlements:
-            await asyncio.shield(asyncio.gather(*settlements, return_exceptions=True))
-        self.registry.sponsors.pop(self.coordinator, None)
+        await wait_settlement(settlements)
+        receipt = self.registry.receipt(self)
+        if not self.episodes and not self.unconfirmed:
+            self.registry.sponsors.pop(self.coordinator, None)
+        return receipt
+
+    async def join(self):
+        """Retained child cleanup only; never an ordinary model awaiter."""
+        tasks = [episode.settlement for episode in self.episodes if episode.settlement]
+        if tasks:
+            await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
+        while self.unconfirmed:
+            for episode in set(self.registry.unresolved.values()):
+                if episode.sponsor is self and episode.generation:
+                    try:
+                        status = await episode.controller.status(episode.generation)
+                        self.registry.reconcile(episode.controller, status)
+                    except Exception:
+                        pass
+            if self.unconfirmed:
+                await asyncio.sleep(1)
 
     async def invoke(self, name, arguments, execute):
         if non_acquiring_desktop(name, arguments):
@@ -355,7 +504,7 @@ class Sponsor:
                     # owner; raw DesktopTool.end must not race it or startup.
                     settlement = self.settle(episode)
                     try:
-                        await asyncio.shield(settlement)
+                        await wait_settlement({settlement})
                     except asyncio.CancelledError:
                         self.settle(episode, interrupted=True)
                         raise
@@ -365,7 +514,12 @@ class Sponsor:
                     return ToolResult(success=True, output=dict(cached))
                 return ToolResult(success=False, error={
                     "type": "BackendError", "message": "No matching host episode is available for settlement"})
-            return await execute(arguments)
+            result = await execute(arguments)
+            if arguments.get("action") == "episode_status" and getattr(result, "success", False):
+                output = getattr(result, "output", None)
+                if isinstance(output, dict):
+                    self.registry.reconcile(self.coordinator.get_capability("computer_use.episodes"), output)
+            return result
         bounded = name == "ui_use" and arguments.get("surface") == "computer"
         if name == "ui_use" and not bounded:
             return await execute(arguments)
@@ -373,6 +527,9 @@ class Sponsor:
             return await execute(arguments)
         if self.halted or self.terminated:
             raise asyncio.CancelledError("Computer use is stopped for this mounted sponsor.")
+        if (self.unconfirmed or any(episode.closing for episode in self.episodes)
+                or any(episode.sponsor is self for episode in self.registry.unresolved.values())):
+            raise SettlementPending(self.registry.receipt())
         epoch = self.stop_epoch
         inherited = _CURRENT.get()
         if inherited is not None and inherited.sponsor is self:
@@ -393,7 +550,7 @@ class Sponsor:
         if name == "desktop" and arguments.get("action") == "retarget":
             old = self.lazy.get(key)
             if old:
-                await asyncio.shield(self.settle(old))
+                await wait_settlement({self.settle(old)})
                 if not old.status.get("release_confirmed") or old.status.get("indicator_settled") is False:
                     raise RuntimeError("The previous computer target release is unconfirmed.")
             # Retarget owns no input. Never bind the old target's token to the
@@ -404,10 +561,15 @@ class Sponsor:
         async with self.lock:
             if self.halted or self.terminated or self.stop_epoch != epoch or not valid():
                 raise asyncio.CancelledError("Computer use stopped while waiting for its sponsor.")
+            if (self.unconfirmed or any(item.closing for item in self.episodes)
+                    or any(item.sponsor is self for item in self.registry.unresolved.values())):
+                raise SettlementPending(self.registry.receipt())
             episode = self.lazy.get(key)
             controller = self.coordinator.get_capability("computer_use.episodes")
             if episode is not None and episode.controller is not controller:
-                await asyncio.shield(self.settle(episode, interrupted=True))
+                await wait_settlement({self.settle(episode, interrupted=True)})
+                if not episode.status.get("release_confirmed") or episode.status.get("indicator_settled") is False:
+                    raise SettlementPending(self.registry.receipt())
                 episode = None
             if episode is None:
                 episode = await self.start(key, valid, bounded)
@@ -437,7 +599,7 @@ class Sponsor:
                 # Shield the actual drain, not the original tool operation.
                 # Repeated cancellation leaves the retained settlement running.
                 try:
-                    await asyncio.shield(settlement)
+                    await wait_settlement({settlement})
                 except asyncio.CancelledError:
                     self.settle(episode, interrupted=True)
                     if not interrupted:

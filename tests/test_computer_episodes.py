@@ -783,3 +783,447 @@ async def test_passive_route_still_runs_work_check_and_preserves_native_inspecti
         assert not sponsor.episodes
     finally:
         await registry.close()
+
+
+async def test_close_has_bounded_unconfirmed_receipt_and_keeps_recoverable_custody(monkeypatch):
+    from amplifier_web import computer_episodes
+    monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .02, raising=False)
+    controller, _, registry, sponsor, _, events = fixture()
+    recover = asyncio.Event()
+    async def end(generation, *, interrupted=False):
+        return controller.state(state="interrupted", workers=0 if recover.is_set() else 1,
+            admission_open=False, release_confirmed=recover.is_set(), indicator_settled=recover.is_set())
+    async def status(generation):
+        if not recover.is_set():
+            raise ConnectionError("inert dead transport")
+        return await end(generation, interrupted=True)
+    controller.end, controller.status = end, status
+    await sponsor.invoke("computer", {}, AsyncMock())
+    closing = asyncio.create_task(registry.close())
+    try:
+        done, _ = await asyncio.wait({closing}, timeout=.15)
+        assert done, "close waited indefinitely for a disconnected pending native worker"
+        receipt = closing.result()
+        assert receipt["settled"] is False and receipt["state"] == "stopping"
+        assert receipt["episodes"] and not receipt["episodes"][0]["release_confirmed"]
+        assert registry.pending and sponsor.episodes and registry.sponsors
+        assert registry.unresolved
+        registry.resume()
+        with pytest.raises(asyncio.CancelledError):
+            await sponsor.invoke("computer", {}, AsyncMock())
+        assert not any(event.get("release_confirmed") for event in events)
+    finally:
+        recover.set()
+        await asyncio.wait_for(asyncio.shield(closing), 2)
+        await asyncio.sleep(.7)
+        await registry.close()
+
+
+async def test_remount_refuses_with_bounded_unconfirmed_receipt_without_closing_backend(monkeypatch):
+    from amplifier_web import computer_episodes
+    monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .02, raising=False)
+    controller, _, registry, sponsor, _, _ = fixture()
+    controller.drained.clear()
+    await sponsor.invoke("computer", {}, AsyncMock())
+    worker = Worker()
+    worker.computer_episodes = registry
+    worker.session = SimpleNamespace(cleanup=AsyncMock())
+    worker.controls = SimpleNamespace(close=AsyncMock())
+    monkeypatch.setattr(worker, "start", AsyncMock())
+    remounting = asyncio.create_task(worker.remount())
+    try:
+        done, _ = await asyncio.wait({remounting}, timeout=.15)
+        assert done, "remount blocked forever instead of refusing unresolved desktop custody"
+        error = remounting.exception()
+        assert error is not None and error.receipt["settled"] is False
+        worker.session.cleanup.assert_not_awaited()
+        worker.controls.close.assert_not_awaited()
+        worker.start.assert_not_awaited()
+        assert registry.pending and registry.unresolved and not worker.remounting
+    finally:
+        controller.drained.set()
+        await asyncio.gather(remounting, return_exceptions=True)
+        await registry.close()
+
+
+async def test_unchanged_unconfirmed_status_is_not_republished():
+    _, _, registry, sponsor, _, events = fixture()
+    episode = SimpleNamespace(status={"identity": {"generation": "old"}, "state": "unknown",
+                                    "workers": 1, "release_confirmed": False})
+    for _ in range(10):
+        sponsor.publish(episode)
+    assert len(events) == 1, "unchanged unknown custody flooded lifecycle publication"
+    await registry.close()
+
+
+async def test_operation_returns_original_after_bounded_wait_but_native_drain_and_target_stay_fenced(monkeypatch):
+    from amplifier_web import computer_episodes
+    monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .02)
+    controller, _, registry, sponsor, _, events = fixture()
+    controller.drained.clear()
+    result = {"status": "unknown", "effects": "not_rolled_back"}
+    try:
+        assert await asyncio.wait_for(sponsor.invoke("ui_use", {"surface": "computer"},
+            AsyncMock(return_value=result)), .15) is result
+        assert registry.pending and registry.unresolved and sponsor.episodes
+        assert not sponsor.last_status["release_confirmed"]
+        change = AsyncMock()
+        with pytest.raises(computer_episodes.SettlementPending):
+            await sponsor.invoke("desktop", {"action": "retarget", "target": "local"}, change)
+        change.assert_not_awaited()
+        registry.resume()
+        with pytest.raises(computer_episodes.SettlementPending):
+            await sponsor.invoke("computer", {"action": "type", "text": "not sent"}, change)
+        assert not any(e.get("release_confirmed") for e in events)
+    finally:
+        controller.drained.set()
+        await registry.join()
+        assert not registry.unresolved
+        assert (await registry.close())["settled"]
+
+
+async def test_cancelled_close_waiter_does_not_erase_cleanup_obligation(monkeypatch):
+    from amplifier_web import computer_episodes
+    monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .1)
+    controller, _, registry, sponsor, _, _ = fixture()
+    controller.drained.clear()
+    await sponsor.invoke("computer", {}, AsyncMock())
+    close = asyncio.create_task(registry.close())
+    await tick()
+    close.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await close
+    assert registry.pending and registry.unresolved and sponsor.terminated
+    assert not any(task.cancelled() for task in registry.pending)
+    controller.drained.set()
+    await registry.join()
+    assert (await registry.close())["settled"]
+
+
+async def test_worker_shutdown_retains_backend_and_shared_owner_until_real_drain(monkeypatch):
+    from amplifier_web import computer_episodes, runtime_worker
+    monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .02)
+    controller, _, registry, sponsor, _, _ = fixture()
+    controller.drained.clear()
+    await sponsor.invoke("computer", {}, AsyncMock())
+    events = []
+    monkeypatch.setattr(runtime_worker, "publish", events.append)
+    worker = Worker()
+    worker.computer_episodes = registry
+    worker.controls = SimpleNamespace(close=AsyncMock())
+    worker.session = SimpleNamespace(cleanup=AsyncMock())
+    release = AsyncMock()
+    worker.shared_handle = SimpleNamespace(release=lambda: release())
+    worker.checkpoint_terminal_outcome = AsyncMock()
+    worker.read = AsyncMock(side_effect=lambda: asyncio.Event().wait())
+    async def read():
+        await asyncio.Event().wait()
+    worker.read = read
+    worker.shutdown.set()
+    running = asyncio.create_task(worker._run())
+    try:
+        await asyncio.sleep(.08)
+        assert not running.done()
+        assert any(e.get("type") == "computer.settlement" and not e["settled"] for e in events)
+        worker.session.cleanup.assert_not_awaited()
+        worker.controls.close.assert_not_awaited()
+        release.assert_not_called()
+        assert registry.pending and registry.unresolved
+    finally:
+        controller.drained.set()
+        # No runtime/session fixture state is needed beyond retained cleanup.
+        worker.controls = None
+        worker.shared_handle = None
+        await asyncio.wait_for(running, 2)
+        worker.session.cleanup.assert_awaited_once()
+
+
+async def test_remount_cancels_model_once_then_returns_pending_without_losing_native_task(monkeypatch):
+    from amplifier_web import computer_episodes
+    monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .02)
+    controller, _, registry, sponsor, _, _ = fixture()
+    controller.drained.clear()
+    entered = asyncio.Event()
+    async def body(arguments):
+        entered.set()
+        await asyncio.Event().wait()
+    operation = asyncio.create_task(sponsor.invoke("ui_use", {"surface": "computer"}, body))
+    await entered.wait()
+    worker = Worker()
+    worker.computer_episodes = registry
+    worker.execution = operation
+    worker.controls = SimpleNamespace(close=AsyncMock())
+    worker.session = SimpleNamespace(cleanup=AsyncMock())
+    try:
+        with pytest.raises(computer_episodes.SettlementPending):
+            await asyncio.wait_for(worker.remount(), .2)
+        assert registry.pending and registry.unresolved
+        worker.session.cleanup.assert_not_awaited()
+        assert operation.cancelling() == 1
+    finally:
+        controller.drained.set()
+        await asyncio.gather(operation, return_exceptions=True)
+        await registry.join()
+        await registry.close()
+
+
+async def test_close_bounds_hanging_status_without_cancelling_its_owner(monkeypatch):
+    from amplifier_web import computer_episodes
+    monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .02)
+    controller, _, registry, sponsor, _, _ = fixture()
+    entered, recover = asyncio.Event(), asyncio.Event()
+    status_cancelled = []
+    async def end(generation, *, interrupted=False):
+        return controller.state(state="stopping", workers=1 if not recover.is_set() else 0,
+                                admission_open=False, release_confirmed=recover.is_set())
+    async def status(generation):
+        entered.set()
+        try:
+            await recover.wait()
+        except asyncio.CancelledError:
+            status_cancelled.append(True)
+            raise
+        return await end(generation)
+    controller.end, controller.status = end, status
+    await sponsor.invoke("computer", {}, AsyncMock())
+    sponsor.finish(interrupted=True)
+    await entered.wait()
+    receipt = await registry.close()
+    assert not receipt["settled"] and registry.unresolved and registry.pending
+    assert not status_cancelled
+    recover.set()
+    await registry.join()
+    assert (await registry.close())["settled"]
+    assert not status_cancelled
+
+
+async def test_readiness_wait_is_bounded_but_late_acquired_identity_still_settles(monkeypatch):
+    from amplifier_web import computer_episodes
+    monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .02)
+    controller, _, registry, sponsor, _, _ = fixture()
+    controller.ready.clear()
+    body = AsyncMock()
+    with pytest.raises(computer_episodes.SettlementPending) as error:
+        await asyncio.wait_for(sponsor.invoke("computer", {}, body), .2)
+    assert error.value.receipt["episodes"][0]["release_confirmed"] is False
+    assert registry.pending and registry.unresolved and not controller.calls
+    body.assert_not_awaited()
+    controller.ready.set()
+    await registry.join()
+    assert ("end", "episode-0", True) in controller.calls
+    assert (await registry.close())["settled"]
+
+
+async def test_queued_call_cannot_acquire_over_timed_out_readiness(monkeypatch):
+    from amplifier_web import computer_episodes
+    monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .02)
+    controller, _, registry, sponsor, _, _ = fixture()
+    controller.ready.clear()
+    attempts = []
+    begin = controller.begin
+    async def counted_begin():
+        attempts.append(True)
+        return await begin()
+    controller.begin = counted_begin
+    execute = AsyncMock()
+    first = asyncio.create_task(sponsor.invoke("desktop", {}, execute))
+    while not sponsor.episodes:
+        await asyncio.sleep(0)
+    queued = asyncio.create_task(sponsor.invoke("desktop", {}, execute))
+    try:
+        results = await asyncio.gather(first, queued, return_exceptions=True)
+        assert all(isinstance(result, computer_episodes.SettlementPending) for result in results)
+        assert len(attempts) == 1  # A timed-out begin retains exclusive custody.
+        execute.assert_not_called()
+    finally:
+        controller.ready.set()
+        await asyncio.gather(*tuple(registry.pending), return_exceptions=True)
+        await registry.close()
+
+
+async def test_confirmed_remount_uses_fresh_registry_without_reviving_old_sponsor(monkeypatch):
+    from amplifier_web import runtime_worker
+    monkeypatch.setattr(runtime_worker, "publish", lambda event: None)
+    controller, _, registry, sponsor, _, _ = fixture()
+    await sponsor.invoke("computer", {}, AsyncMock())
+    worker = Worker()
+    worker.computer_episodes = registry
+    worker.session = SimpleNamespace(cleanup=AsyncMock())
+    worker.controls = SimpleNamespace(close=AsyncMock())
+    worker.start_config = {}
+    worker.start = AsyncMock()
+    await worker.remount()
+    assert worker.computer_episodes is not registry
+    assert not worker.computer_episodes.terminated
+    assert sponsor.terminated and not registry.sponsors and not registry.unresolved
+
+
+async def test_late_body_finalizer_cannot_resurrect_already_completed_settlement():
+    controller, _, registry, sponsor, _, _ = fixture()
+    entered, proceed = asyncio.Event(), asyncio.Event()
+    async def body(arguments):
+        entered.set()
+        await proceed.wait()
+    task = asyncio.create_task(sponsor.invoke("ui_use", {"surface": "computer"}, body))
+    await entered.wait()
+    registry.fence()
+    await registry.join()
+    count = len(controller.calls)
+    proceed.set()
+    await task
+    assert len(controller.calls) == count
+    assert not registry.unresolved and not registry.pending and not sponsor.unconfirmed
+    await registry.close()
+
+
+async def test_unknown_end_is_not_replayed_when_passive_status_reports_workers_zero(monkeypatch):
+    from amplifier_web import computer_episodes
+    monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .02)
+    controller, _, registry, sponsor, _, _ = fixture()
+    recovered = asyncio.Event()
+    ends = []
+    async def end(generation, *, interrupted=False):
+        ends.append(generation)
+        raise ConnectionError("end reply lost")
+    async def status(generation):
+        return controller.state(state="unknown", workers=0, admission_open=False,
+            release_confirmed=recovered.is_set(), indicator_settled=recovered.is_set())
+    controller.end, controller.status = end, status
+    await sponsor.invoke("computer", {}, AsyncMock())
+    sponsor.finish(interrupted=True)
+    await asyncio.sleep(.35)
+    assert ends == ["episode-0"] and registry.pending and registry.unresolved
+    recovered.set()
+    await registry.join()
+    assert ends == ["episode-0"]
+    await registry.close()
+
+
+async def test_scoped_child_close_does_not_wait_for_unrelated_sponsor():
+    _, _, registry, busy, _, _ = fixture()
+    await busy.invoke("computer", {}, AsyncMock())
+    child = registry.install(Coordinator(Controller()), lambda: ("child", lambda: True))
+    receipt = await child.close()
+    assert receipt["settled"] and not child.episodes
+    assert not registry.receipt()["settled"]  # The unrelated owner is still active.
+    await registry.close()
+
+
+@pytest.mark.parametrize("cancel_waiter", [False, True])
+async def test_retained_child_cleanup_failure_or_cancelled_waiter_never_means_settled(cancel_waiter):
+    from amplifier_web.computer_episodes import wait_settlement
+    registry = ComputerEpisodes()
+    coordinator = Coordinator()
+    entered, proceed = asyncio.Event(), asyncio.Event()
+    calls = []
+    async def cleanup():
+        calls.append(True)
+        entered.set()
+        await proceed.wait()
+        if not cancel_waiter:
+            raise OSError("inert cleanup failure")
+    task = registry.retain_cleanup(coordinator, "child-run", cleanup)
+    waiter = asyncio.create_task(wait_settlement({task}))
+    await entered.wait()
+    if cancel_waiter:
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        assert not task.cancelled() and registry.cleanups
+    proceed.set()
+    await asyncio.gather(task, return_exceptions=True)
+    await asyncio.gather(waiter, return_exceptions=True)
+    await tick()
+    if cancel_waiter:
+        assert registry.receipt()["settled"]
+    else:
+        receipt = await registry.close()
+        assert not receipt["settled"]
+        assert receipt["episodes"][0]["reason"] == "child_cleanup_unconfirmed"
+        assert registry.retain_cleanup(coordinator, "child-run", cleanup) is task
+        assert calls == [True]  # No uncertain cleanup replay.
+
+
+@pytest.mark.parametrize("fail_cleanup", [False, True])
+async def test_real_child_cleanup_is_owned_before_cancelled_wait_and_failed_cleanup_is_retained(
+        tmp_path, monkeypatch, fail_cleanup):
+    from dataclasses import dataclass
+    import importlib.util
+    from pathlib import Path
+    from amplifier_foundation.bundle import Bundle, PreparedBundle, BundleModuleResolver
+    from amplifier_module_loop_live.runtime import Runtime
+    from amplifier_web.host.children import install_children
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web import computer_episodes
+    monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .05)
+    registry = ComputerEpisodes()
+    controller = Controller()
+    controller.drained.clear()
+    installed = asyncio.Event()
+    calls = []
+    class Loop:
+        async def execute(self, prompt, context, providers, tools, hooks, coordinator):
+            await coordinator.get_capability("web.computer_episodes").invoke("computer", {}, AsyncMock())
+            return "body completed"
+    class Child:
+        def __init__(self, original):
+            self.original = original
+        def __getattr__(self, name):
+            return getattr(self.original, name)
+        async def cleanup(self):
+            calls.append("cleanup")
+            if fail_cleanup:
+                raise OSError("inert real child cleanup failure")
+            await self.original.cleanup()
+    @dataclass
+    class Prepared(PreparedBundle):
+        async def create_session(self, **kwargs):
+            session = await super().create_session(**kwargs)
+            await session.coordinator.mount("orchestrator", Loop())
+            return Child(session) if kwargs.get("parent_id") else session
+    plan = {"session": {"orchestrator": {"module": "loop-live"}, "context": {"module": "context-simple"}},
+            "agents": {"worker": {}}}
+    paths = {name: Path(importlib.util.find_spec("amplifier_module_" + name.replace("-", "_")).origin).parent
+             for name in ("loop-live", "context-simple")}
+    prepared = Prepared(plan, BundleModuleResolver(paths),
+                        Bundle(name="cleanup-fixture", session=plan["session"], agents=plan["agents"]))
+    parent = await prepared.create_session(session_id="cleanup-parent")
+    children = await install_children(parent, prepared, Runtime("cleanup-parent"),
+                                      SessionStore(tmp_path / "children"), None)
+    def capture():
+        async def install(coordinator):
+            coordinator.register_capability("computer_use.episodes", controller)
+            registry.install(coordinator, lambda: ("finite", lambda: True))
+            installed.set()
+        return install
+    parent.coordinator.register_capability("web.app_access.install", capture)
+    operation = asyncio.create_task(children.spawn("worker", "inert", parent, sub_session_id="cleanup-child"))
+    try:
+        await installed.wait()
+        async with asyncio.timeout(2):
+            while not registry.cleanups:
+                await asyncio.sleep(0)
+        operation.cancel()
+        await asyncio.gather(operation, return_exceptions=True)
+        assert registry.cleanups and registry.pending and not calls
+        with pytest.raises(ValueError, match="cleanup is unconfirmed"):
+            await children.resume("cleanup-child", "must not run", parent)
+        controller.drained.set()
+        async with asyncio.timeout(2):
+            while not calls or registry.pending:
+                await asyncio.sleep(.001)
+        if fail_cleanup:
+            assert not registry.receipt()["settled"] and registry.cleanups
+            assert children.sessions.get("cleanup-child") is not None
+            assert calls == ["cleanup"]
+        else:
+            assert registry.receipt()["settled"] and not children.sessions.get("cleanup-child")
+    finally:
+        controller.drained.set()
+        await asyncio.gather(operation, return_exceptions=True)
+        child = children.sessions.get("cleanup-child")
+        if child:
+            # Test-only deterministic teardown bypasses the intentionally failed
+            # wrapper, not a production uncertain-cleanup retry.
+            await child.original.cleanup()
+        await parent.cleanup()

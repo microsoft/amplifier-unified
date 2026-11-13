@@ -1199,6 +1199,8 @@ class Worker:
         async with self.command_lock:
             if self.ownership.yielding or self.parked or self.shared_handle is None:
                 return
+            if not self.computer_episodes.receipt()["settled"]:
+                return
             loop = self.session.coordinator.get("orchestrator")
             if (self.approvals or self.bridges or self.operation_ids or self.operation_controls or self.runtime.queued_inputs
                     or not self.runtime.inbox.empty() or self.runtime.generation
@@ -1306,13 +1308,26 @@ class Worker:
         try:
             if self.execution and not self.execution.done():
                 self.execution.cancel()
-                await asyncio.gather(self.execution, return_exceptions=True)
-            await self.computer_episodes.close()
+                from amplifier_web.computer_episodes import wait_settlement, SettlementPending
+                await wait_settlement({self.execution})
+                if not self.execution.done():
+                    raise SettlementPending(self.computer_episodes.receipt())
+            receipt = await self.computer_episodes.close()
+            if not receipt["settled"]:
+                # Do not remount/clean the native backend over unresolved
+                # workers. The retained registry remains passively recoverable.
+                from amplifier_web.computer_episodes import SettlementPending
+                raise SettlementPending(receipt)
+            publish({"type": "computer.settlement", **receipt})
             if self.controls:
                 await self.controls.close()
             if self.session:
                 await self.session.cleanup()
             self.session = self.controls = self.naming = self.execution = None
+            # All old sponsors are terminated/removed and custody is confirmed;
+            # the replacement mount is a fresh trusted registry, not a revival.
+            from amplifier_web.computer_episodes import ComputerEpisodes
+            self.computer_episodes = ComputerEpisodes(lambda event: publish(event))
             try:
                 await self.start(self.start_config, raise_errors=True)
             except Exception as exc:
@@ -1598,6 +1613,9 @@ class Worker:
             if type(exc).__name__ == "SessionBusyError":
                 reply["code"] = "session_busy"
                 reply["owner"] = getattr(exc, "owner", None)
+            if type(exc).__name__ == "SettlementPending":
+                reply["computerSettlement"] = exc.receipt
+                publish({"type": "computer.settlement", **exc.receipt})
             publish(reply)
             if preparation_failed:
                 self.shutdown.set()
@@ -1995,7 +2013,17 @@ class Worker:
                 if task and not task.done():
                     task.cancel()
             await asyncio.gather(*(t for t in [read, self.start_task, self.execution, *self.tasks] if t), return_exceptions=True)
-            await self.computer_episodes.close()
+            receipt = await self.computer_episodes.close()
+            if not receipt["settled"]:
+                publish({"type": "computer.settlement", **receipt})
+                # Keep actual cleanup ownership in this process. RuntimeManager
+                # already bounds Stop (15s, then exact process-group/job cleanup);
+                # process death is not a native release acknowledgement.
+                await self.computer_episodes.join()
+                if not self.computer_episodes.receipt()["settled"]:
+                    from amplifier_web.computer_episodes import SettlementPending
+                    raise SettlementPending(self.computer_episodes.receipt())
+                publish({"type": "computer.settlement", **self.computer_episodes.receipt()})
             try:
                 await self.checkpoint_terminal_outcome()
             finally:
