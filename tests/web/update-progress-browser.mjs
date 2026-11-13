@@ -258,7 +258,8 @@ try{
  await expect(updates).toContainText('Other components installed at');
  await page.setViewportSize({width:1280,height:950});
  await openSettingsPage(page,'appearance');
- await page.getByLabel('Color mode',{exact:true}).selectOption('dark');
+ const dark=page.getByRole('radiogroup',{name:'Color mode',exact:true}).getByRole('radio',{name:'Dark',exact:true});
+ await dark.check();await expect(dark).toBeChecked();
  await openSettingsPage(page,'updates');
  await stage('waiting');
  await expect(overview).toContainText('Waiting for work to finish');
