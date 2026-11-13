@@ -30,14 +30,28 @@ async def main(home):
     models = [{'id': 'first'}, {'id': 'second'}]
     providers = [{'id': 'one', 'module': 'provider-fixture', 'config': {'model': 'first'}, 'enabled': True},
                  {'id': 'two', 'module': 'provider-fixture', 'config': {'model': 'other-account'}, 'enabled': True}]
+    # Catalog browsing after a successful save checks the real configured
+    # roster. Advertise the same synthetic connections that this home contains.
+    (home/'native'/'settings.yaml').write_text(json.dumps({'config': {'providers': providers}}))
     SetupManager.provider_rows = lambda self, workspace: copy.deepcopy(providers)
-    SetupManager.catalog_key = lambda self, args, workspace: 'current-' + args['id']
+    # Discovery and saved connection bindings have separate identities. Match
+    # the real keyword contract, including validation of an already-saved choice.
+    original_catalog_key = SetupManager.catalog_key
+    def catalog_key(self, args, workspace, *, binding=False, _legacy_visibility=False, _binding_pair=False):
+        if binding:
+            return original_catalog_key(self, args, workspace, binding=True,
+                _legacy_visibility=_legacy_visibility, _binding_pair=_binding_pair)
+        return 'current-' + args['id']
+    SetupManager.catalog_key = catalog_key
     async def probe(self, action, args, workspace):
         return {'models': copy.deepcopy(models if args['id'] == 'one' else [{'id': 'other-account'}]),
                 'providerMetadata': copy.deepcopy(metadata), 'modelsSupported': True}
     SetupManager.probe = probe
     async def resolve(*args, **kwargs):
+        workspace = args[1] if len(args) > 1 else catalog['workspaces'][0]['path']
+        manager = SetupManager(home/'app')
         return {'providers': [{'id': p['id'], 'sharedCatalogKey': 'current-'+p['id'],
+                               'connectionKey': manager.catalog_key({'id': p['id']}, workspace, binding=True),
                                'info': {**metadata['info'], 'defaults': {'model': p['config']['model']}}} for p in providers],
                 'effective': {'instance': 'one', 'model': 'first', 'effort': 'high'},
                 'catalogs': {'current-'+p['id']: {'phase': 'ready', 'models': copy.deepcopy(models if p['id'] == 'one' else [{'id': 'other-account'}]), 'metadata': copy.deepcopy(metadata)} for p in providers}}
@@ -105,8 +119,8 @@ async def main(home):
     child = service._session(catalog['sessions'][5000]['id'])
     child['runtimeSessionId'] = 'child-0'
     service._state.update(selectedSessionId=ids[0], selectedWorkspaceId=service._session(ids[0])['workspaceId'], pinnedSessionIds=ids, configurationRevision=1)
-    result = await resolve()
     for sid in ids:
+        result = await resolve(home/'app', service._session(sid)['workspace'])
         service._state.setdefault('runtimeControl', {})[sid] = {'configuration.catalog': {k:v for k,v in result.items() if k != 'catalogs'} | {'phase':'ready', 'configurationRevision':1}}
     service._state['modelCatalogs'] = {f'historical-{i}': {'phase':'ready', 'models': [{'id':f'model-{j}', 'description':'retired model metadata '*30} for j in range(20)], 'metadata':metadata} for i in range(120)} | result['catalogs']
     for key, value in result['catalogs'].items():
@@ -124,10 +138,25 @@ async def main(home):
     service._publish = publish
     @web.middleware
     async def observe(request, handler):
+        row = None
         if request.path == '/api/actions' and request.method == 'POST':
             data = await request.json()
-            counts['actions'].append({'action':data.get('action'),'operation':data.get('args',{}).get('operation')})
-        return await handler(request)
+            row = {'action': data.get('action'), 'operation': data.get('args', {}).get('operation'),
+                   'request': copy.deepcopy(data), 'clientId': service.clients.current.get()}
+            counts['actions'].append(row)
+        try:
+            response = await handler(request)
+        except Exception as exc:
+            if row is not None:
+                row.update(status=500, error=f'{type(exc).__name__}: {exc}')
+            raise
+        if row is not None:
+            receipt = json.loads(response.body)
+            row.update(status=response.status, accepted=receipt.get('accepted'),
+                       effects=receipt.get('effects', []))
+            if row['action'] in {'appearance.preferences.read', 'appearance.client.report', 'conversation.configure'}:
+                row['result'] = receipt.get('result')
+        return response
     app.middlewares.append(observe)
     cpu_start = time.process_time_ns()
     async def metrics(request):
@@ -137,6 +166,11 @@ async def main(home):
             'historyRows':native.count(), 'residentOwners':len(service.state['sessions']),
             'pending':len([t for t in service.tasks if not t.done()]),
             'catalogPending':len(getattr(service.management,'conversation_catalog_requests',{})),
+            'selections': {sid: {key: copy.deepcopy(service._session(sid).get(key)) for key in (
+                'selection', 'pendingModelSelection', 'modelConnectionKey', 'nextMessageStatus', 'nextMessageRevision')}
+                for sid in ids},
+            'connectionKeys': {sid: {p['id']: SetupManager(home/'app').catalog_key(
+                {'id': p['id']}, service._session(sid)['workspace'], binding=True) for p in providers} for sid in ids},
             'runtimeCalls':runtime.calls,
             'workersUnchanged':receipts_before == hashlib.sha256(json.dumps(service._session(ids[1])['workers'],sort_keys=True).encode()).hexdigest()})
     async def reset(request):
