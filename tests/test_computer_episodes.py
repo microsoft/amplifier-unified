@@ -938,6 +938,239 @@ async def test_worker_shutdown_retains_backend_and_shared_owner_until_real_drain
         worker.session.cleanup.assert_awaited_once()
 
 
+@pytest.fixture
+async def parking_worker(tmp_path, monkeypatch):
+    from amplifier_foundation.session.activation import ActivationGate
+    from amplifier_foundation.session import shared_state
+    worker = Worker()
+    worker.workspace, worker.home = tmp_path / "workspace", tmp_path / "home"
+    worker.workspace.mkdir()
+    worker.home.mkdir()
+    worker.runtime = SimpleNamespace(session_id="desktop-parking", queued_inputs=0,
+                                    inbox=asyncio.Queue(), generation=None)
+    worker.shared_store = shared_state.SharedSessionStore(
+        worker.workspace, "desktop-parking", root=tmp_path / "shared")
+    worker.shared_store_stamp = shared_state.file_stamp
+    worker.shared_handle = worker.shared_store.acquire(app="amplifier-unified", fixture=True)
+    worker.activation_gate = ActivationGate()
+    worker.activation = worker.activation_gate.activate()
+    worker.checkpoint = AsyncMock()
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(get=lambda _: None,
+        get_capability=lambda name: worker.checkpoint if name == "live.checkpoint" else None))
+    monkeypatch.setattr("amplifier_web.runtime_worker.publish", lambda _: None)
+    try:
+        yield worker
+    finally:
+        worker.shutdown.set()
+        worker.clear_computer_park()
+        for task in tuple(worker.tasks):
+            task.cancel()
+        await asyncio.gather(*tuple(worker.tasks), return_exceptions=True)
+        if worker.shared_handle:
+            worker.shared_handle.release()
+
+
+async def test_quiet_desktop_settlement_retries_parking_exactly_once(parking_worker):
+    worker = parking_worker
+    controller, _, registry, sponsor, _, _ = fixture()
+    worker.computer_episodes = registry
+    controller.drained.clear()
+    await sponsor.invoke("computer", {}, AsyncMock())
+    sponsor.finish()
+    await worker.park()
+    await worker.park()  # Repeated idle notifications must not add observers.
+    assert len(registry._settled_callbacks) == 1 and not worker.tasks
+    assert worker.shared_handle.active and not worker.parked
+    worker.checkpoint.assert_not_awaited()
+    controller.drained.set()
+    await registry.join()
+    for _ in range(50):
+        if worker.parked:
+            break
+        await asyncio.sleep(.005)
+    assert worker.parked and worker.shared_handle is None
+    worker.checkpoint.assert_awaited_once_with("completed")
+
+
+@pytest.mark.parametrize("change", ["session", "runtime", "activation", "registry", "shutdown",
+                                   "remount", "yielding", "stop", "invalid_gate", "new_input"])
+async def test_desktop_park_retry_ignores_stale_owner_after_waiting_for_command_lock(
+        parking_worker, change):
+    worker = parking_worker
+    controller, _, registry, sponsor, _, _ = fixture()
+    worker.computer_episodes = registry
+    controller.drained.clear()
+    await sponsor.invoke("computer", {}, AsyncMock())
+    sponsor.finish()
+    await worker.park()
+    async with worker.command_lock:
+        controller.drained.set()
+        await registry.join()
+        await tick()  # The one retry is now queued behind foreground admission.
+        if change == "session":
+            worker.session = SimpleNamespace(coordinator=worker.session.coordinator)
+        elif change == "runtime":
+            worker.runtime = SimpleNamespace(**vars(worker.runtime))
+        elif change == "activation":
+            worker.activation = object()
+        elif change == "registry":
+            worker.computer_episodes = ComputerEpisodes()
+        elif change == "shutdown":
+            worker.shutdown.set()
+        elif change == "remount":
+            worker.remounting = True
+        elif change == "yielding":
+            worker.ownership.yielding = True
+        elif change == "stop":
+            await worker.command({"op": "computer.stop"})
+            await worker.command({"op": "computer.resume"})
+        elif change == "new_input":
+            command = asyncio.create_task(worker.command({"op": "send", "text": "new foreground"}))
+            await tick()  # Invalidates before it can acquire the same lock.
+            command.cancel()
+            await asyncio.gather(command, return_exceptions=True)
+        else:
+            worker.activation_gate.release(worker.activation)
+    await asyncio.gather(*tuple(worker.tasks), return_exceptions=True)
+    assert worker.shared_handle.active and not worker.parked
+    worker.checkpoint.assert_not_awaited()
+    assert not registry._settled_callbacks
+
+
+async def test_desktop_park_retry_rechecks_foreground_input_and_all_ordinary_predicates(parking_worker):
+    worker = parking_worker
+    controller, _, registry, sponsor, _, _ = fixture()
+    worker.computer_episodes = registry
+    controller.drained.clear()
+    await sponsor.invoke("computer", {}, AsyncMock())
+    sponsor.finish()
+    await worker.park()
+    async with worker.command_lock:
+        controller.drained.set()
+        await registry.join()
+        worker.runtime.queued_inputs = 1
+        worker.runtime.inbox.put_nowait("new input")
+    await asyncio.gather(*tuple(worker.tasks), return_exceptions=True)
+    assert worker.shared_handle.active and not worker.parked
+    worker.checkpoint.assert_not_awaited()
+    worker.runtime.queued_inputs = 0
+    worker.runtime.inbox.get_nowait()
+    await worker.park()
+    assert worker.parked  # The ordinary idle boundary still works later.
+
+
+async def test_unconfirmed_settlement_cannot_park_but_passive_confirmation_can(parking_worker):
+    worker = parking_worker
+    controller, _, registry, sponsor, _, _ = fixture()
+    worker.computer_episodes = registry
+    controller.release = False
+    await sponsor.invoke("computer", {}, AsyncMock())
+    sponsor.finish()
+    await worker.park()
+    await asyncio.gather(*tuple(registry.pending), return_exceptions=True)
+    await tick()
+    assert registry.unresolved and worker.shared_handle.active and not worker.tasks
+    assert len(registry._settled_callbacks) == 1
+    controller.release = True
+    registry.reconcile(controller, controller.state(workers=0, admission_open=False,
+                       release_confirmed=True, indicator_settled=True))
+    await asyncio.gather(*tuple(worker.tasks), return_exceptions=True)
+    assert worker.parked and worker.shared_handle is None
+    worker.checkpoint.assert_awaited_once()
+
+
+async def test_failed_child_cleanup_completion_never_wakes_desktop_parking(parking_worker):
+    worker = parking_worker
+    registry = worker.computer_episodes
+    proceed = asyncio.Event()
+    async def failed_cleanup():
+        await proceed.wait()
+        raise OSError("inert child backend cleanup uncertainty")
+    cleanup = registry.retain_cleanup(object(), "child", failed_cleanup)
+    await worker.park()
+    proceed.set()
+    await asyncio.gather(cleanup, return_exceptions=True)
+    await tick()
+    assert registry.cleanups and not registry.pending and not worker.tasks
+    assert worker.shared_handle.active and not worker.parked
+    worker.checkpoint.assert_not_awaited()
+
+
+async def test_desktop_settlement_with_other_active_sponsor_cannot_park(parking_worker):
+    worker = parking_worker
+    controller, _, registry, sponsor, _, _ = fixture()
+    worker.computer_episodes = registry
+    other = registry.install(Coordinator(Controller()), lambda: ("other", lambda: True))
+    await sponsor.invoke("computer", {}, AsyncMock())
+    await other.invoke("computer", {}, AsyncMock())
+    sponsor.finish()
+    await worker.park()
+    await asyncio.gather(*tuple(registry.pending), return_exceptions=True)
+    await tick()
+    assert worker.shared_handle.active and not worker.parked and not worker.tasks
+    other.finish()
+    await registry.join()
+    await asyncio.gather(*tuple(worker.tasks), return_exceptions=True)
+    assert worker.parked
+
+
+async def test_desktop_settlement_retry_checkpoint_failure_retains_writer(parking_worker):
+    worker = parking_worker
+    registry = worker.computer_episodes
+    proceed = asyncio.Event()
+    registry.retain(proceed.wait())
+    worker.checkpoint.side_effect = OSError("inert checkpoint failure")
+    await worker.park()
+    proceed.set()
+    await registry.join()
+    await asyncio.gather(*tuple(worker.tasks), return_exceptions=True)
+    await tick()
+    assert worker.shutdown.is_set() and worker.shared_handle.active and not worker.parked
+    assert not registry.pending and registry.receipt()["settled"]
+
+
+async def test_stop_during_settlement_park_checkpoint_cannot_release_writer(parking_worker):
+    worker = parking_worker
+    controller, _, registry, sponsor, _, _ = fixture()
+    worker.computer_episodes = registry
+    controller.drained.clear()
+    entered, proceed = asyncio.Event(), asyncio.Event()
+    async def checkpoint(*_):
+        entered.set()
+        await proceed.wait()
+    worker.checkpoint.side_effect = checkpoint
+    await sponsor.invoke("computer", {}, AsyncMock())
+    sponsor.finish()
+    await worker.park()
+    controller.drained.set()
+    await entered.wait()
+    await worker.command({"op": "computer.stop"})
+    proceed.set()
+    await asyncio.gather(*tuple(worker.tasks), return_exceptions=True)
+    assert worker.shared_handle.active and not worker.parked
+
+
+async def test_desktop_park_retry_keeps_owner_guard_through_pending_naming(parking_worker):
+    worker = parking_worker
+    registry = worker.computer_episodes
+    proceed, named = asyncio.Event(), asyncio.Event()
+    cleanup = registry.retain(proceed.wait())
+    worker.naming = SimpleNamespace(pending=asyncio.create_task(named.wait()))
+    try:
+        await worker.park()
+        proceed.set()
+        await cleanup
+        await tick()  # Desktop retry delegates waiting to existing naming service.
+        assert worker.naming_park_task is not None
+        await worker.command({"op": "computer.stop"})
+        named.set()
+        await asyncio.gather(*tuple(worker.tasks), return_exceptions=True)
+        assert worker.shared_handle.active and not worker.parked
+        worker.checkpoint.assert_not_awaited()
+    finally:
+        named.set()
+        await worker.naming.pending
+
 async def test_remount_cancels_model_once_then_returns_pending_without_losing_native_task(monkeypatch):
     from amplifier_web import computer_episodes
     monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .02)
@@ -1145,8 +1378,9 @@ async def test_retained_child_cleanup_failure_or_cancelled_waiter_never_means_se
 
 
 @pytest.mark.parametrize("fail_cleanup", [False, True])
+@pytest.mark.parametrize("checkpoint_window", [False, True])
 async def test_real_child_cleanup_is_owned_before_cancelled_wait_and_failed_cleanup_is_retained(
-        tmp_path, monkeypatch, fail_cleanup):
+        tmp_path, monkeypatch, fail_cleanup, checkpoint_window):
     from dataclasses import dataclass
     import importlib.util
     from pathlib import Path
@@ -1161,9 +1395,12 @@ async def test_real_child_cleanup_is_owned_before_cancelled_wait_and_failed_clea
     controller.drained.clear()
     installed = asyncio.Event()
     calls = []
+    constructions = []
+    checkpoint_entered, checkpoint_proceed = asyncio.Event(), asyncio.Event()
     class Loop:
         async def execute(self, prompt, context, providers, tools, hooks, coordinator):
-            await coordinator.get_capability("web.computer_episodes").invoke("computer", {}, AsyncMock())
+            if prompt != "eviction probe":
+                await coordinator.get_capability("web.computer_episodes").invoke("computer", {}, AsyncMock())
             return "body completed"
     class Child:
         def __init__(self, original):
@@ -1171,15 +1408,26 @@ async def test_real_child_cleanup_is_owned_before_cancelled_wait_and_failed_clea
         def __getattr__(self, name):
             return getattr(self.original, name)
         async def cleanup(self):
-            calls.append("cleanup")
-            if fail_cleanup:
+            if self.original.session_id == "cleanup-child":
+                calls.append("cleanup")
+            if fail_cleanup and self.original.session_id == "cleanup-child":
                 raise OSError("inert real child cleanup failure")
             await self.original.cleanup()
     @dataclass
     class Prepared(PreparedBundle):
         async def create_session(self, **kwargs):
+            constructions.append(kwargs.get("session_id"))
             session = await super().create_session(**kwargs)
             await session.coordinator.mount("orchestrator", Loop())
+            if checkpoint_window and kwargs.get("session_id") == "cleanup-child":
+                context = session.coordinator.get("context")
+                get_messages = context.get_messages
+                async def messages():
+                    if children.rows["cleanup-child"]["status"] in {"completed", "cancelled", "error"}:
+                        checkpoint_entered.set()
+                        await checkpoint_proceed.wait()
+                    return await get_messages()
+                context.get_messages = messages
             return Child(session) if kwargs.get("parent_id") else session
     plan = {"session": {"orchestrator": {"module": "loop-live"}, "context": {"module": "context-simple"}},
             "agents": {"worker": {}}}
@@ -1200,14 +1448,38 @@ async def test_real_child_cleanup_is_owned_before_cancelled_wait_and_failed_clea
     operation = asyncio.create_task(children.spawn("worker", "inert", parent, sub_session_id="cleanup-child"))
     try:
         await installed.wait()
+        if checkpoint_window:
+            await checkpoint_entered.wait()
+            assert children.rows["cleanup-child"]["status"] == "completed"
+            assert "_computerCleanup" not in children.rows["cleanup-child"]
+            old_row = children.rows["cleanup-child"]
+            for index in range(255):
+                children.rows[f"old-terminal-{index}"] = {"status": "completed"}
+            await children.spawn("worker", "eviction probe", parent, sub_session_id="checkpoint-eviction")
+            assert children.rows.get("cleanup-child") is old_row
+            with pytest.raises(ValueError, match="already active"):
+                await children.resume("cleanup-child", "eviction probe", parent)
+            assert constructions.count("cleanup-child") == 1
+            checkpoint_proceed.set()
         async with asyncio.timeout(2):
             while not registry.cleanups:
                 await asyncio.sleep(0)
         operation.cancel()
         await asyncio.gather(operation, return_exceptions=True)
         assert registry.cleanups and registry.pending and not calls
+        # Terminal rows are a bounded display index, but retained native/backend
+        # custody must remain an admission barrier at the eviction threshold.
+        old_row = children.rows["cleanup-child"]
+        if not checkpoint_window:
+            for index in range(255):
+                children.rows[f"old-terminal-{index}"] = {"status": "completed"}
+        await children.spawn("worker", "eviction probe", parent, sub_session_id="eviction-child")
+        assert children.rows.get("cleanup-child") is old_row
+        assert "old-terminal-0" not in children.rows and len(children.rows) == 256
+        before_resume = list(constructions)
         with pytest.raises(ValueError, match="cleanup is unconfirmed"):
             await children.resume("cleanup-child", "must not run", parent)
+        assert constructions == before_resume  # No replacement session was built.
         controller.drained.set()
         async with asyncio.timeout(2):
             while not calls or registry.pending:
@@ -1216,9 +1488,17 @@ async def test_real_child_cleanup_is_owned_before_cancelled_wait_and_failed_clea
             assert not registry.receipt()["settled"] and registry.cleanups
             assert children.sessions.get("cleanup-child") is not None
             assert calls == ["cleanup"]
+            await children.spawn("worker", "eviction probe", parent, sub_session_id="post-failure-eviction")
+            assert children.rows.get("cleanup-child") is old_row
+            with pytest.raises(ValueError, match="cleanup is unconfirmed"):
+                await children.resume("cleanup-child", "eviction probe", parent)
+            assert constructions.count("cleanup-child") == 1
         else:
             assert registry.receipt()["settled"] and not children.sessions.get("cleanup-child")
+            await children.resume("cleanup-child", "eviction probe", parent)
+            assert constructions.count("cleanup-child") == 2  # New run only after actual cleanup.
     finally:
+        checkpoint_proceed.set()
         controller.drained.set()
         await asyncio.gather(operation, return_exceptions=True)
         child = children.sessions.get("cleanup-child")

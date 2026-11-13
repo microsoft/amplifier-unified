@@ -69,6 +69,7 @@ class ComputerEpisodes:
         self.pending = set()
         self.unresolved = {}
         self.cleanups = {}
+        self._settled_callbacks = set()
         self.emit = emit
         self.halted = False
         self.terminated = False
@@ -118,8 +119,21 @@ class ComputerEpisodes:
             self.pending.discard(task)
             if not task.cancelled():
                 task.exception()  # Evidence/custody remains in the registry.
+            self.notify_settled()
         task.add_done_callback(finished)
         return task
+
+    def on_settled(self, callback):
+        """One-shot notification only; no polling task or cleanup ownership."""
+        self._settled_callbacks.add(callback)
+        return lambda: self._settled_callbacks.discard(callback)
+
+    def notify_settled(self):
+        if not self._settled_callbacks or not self.receipt()["settled"]:
+            return
+        callbacks, self._settled_callbacks = self._settled_callbacks, set()
+        for callback in callbacks:
+            callback()
 
     def receipt(self, sponsor=None):
         episodes = {episode for owner in self.sponsors.values() for episode in owner.episodes
@@ -191,6 +205,7 @@ class ComputerEpisodes:
                         and (episode.settlement is None or episode.settlement.done())):
                     episode.sponsor.unconfirmed.pop(episode.generation, None)
                     self.unresolved.pop(key, None)
+        self.notify_settled()
 
     def fence(self, coordinator=None, *, halt=False, terminate=False):
         if coordinator is None:

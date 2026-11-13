@@ -530,7 +530,7 @@ class Children:
         from amplifier_core import HookResult
         if identity in self.rows and self.rows[identity].get("_computerCleanup") is not None:
             raise ValueError("The child's computer cleanup is unconfirmed; this identity cannot resume")
-        if identity in self.rows and self.rows[identity].get("status") in {"starting", "running", "idle", "stopping"} and self.rows[identity].get("task") and not self.rows[identity]["task"].done():
+        if identity in self.rows and self.rows[identity].get("task") and not self.rows[identity]["task"].done():
             raise ValueError("A child with this identity is already active")
         prepared = self.prepared.get(parent.session_id)
         if prepared is None:
@@ -583,7 +583,10 @@ class Children:
             raise ValueError(_SUBPROCESS_UNSUPPORTED)
         self.store.directory(identity)
         while len(self.rows) >= 256 and identity not in self.rows:
-            oldest = next((key for key, value in self.rows.items() if value["status"] in {"completed", "cancelled", "error", "interrupted"}), None)
+            oldest = next((key for key, value in self.rows.items()
+                           if value["status"] in {"completed", "cancelled", "error", "interrupted"}
+                           and value.get("_computerCleanup") is None
+                           and (not value.get("task") or value["task"].done())), None)
             if oldest is None:
                 raise RuntimeError("The active worker limit has been reached")
             del self.rows[oldest]

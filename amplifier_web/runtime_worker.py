@@ -104,6 +104,8 @@ class Worker:
             from computer_episodes import ComputerEpisodes
         self.ownership = WorkerOwnership(self, lambda data: publish(data))
         self.computer_episodes = ComputerEpisodes(lambda event: publish(event))
+        self.computer_park_cancel = None
+        self.computer_park_key = None
 
     async def ask(self, prompt, options, identity=None):
         identity = identity or str(uuid.uuid4())
@@ -1166,7 +1168,7 @@ class Worker:
                 if startup_timing and report_directory is not None:
                     startup_timing.save(report_directory, outcome)
 
-    def defer_park_for_naming(self, activation):
+    def defer_park_for_naming(self, activation, *, _computer_owner=None):
         """Keep the writer until naming settles, without holding the live inbox."""
         if self.naming_park_task and not self.naming_park_task.done():
             return
@@ -1184,7 +1186,7 @@ class Worker:
                     and self.naming is naming and self.activation is activation):
                 # Recheck foreground admission under command_lock. Naming may
                 # also have scheduled a newer naming task while this one ended.
-                await self.park(activation=activation)
+                await self.park(activation=activation, _computer_owner=_computer_owner)
         task = self.naming_park_task = asyncio.create_task(settled())
         self.tasks.add(task)
         def finished(task):
@@ -1193,13 +1195,51 @@ class Worker:
                 self.executed(task)
         task.add_done_callback(finished)
 
-    async def park(self, *, activation=None):
+    def clear_computer_park(self):
+        self.computer_park_key = None
+        if self.computer_park_cancel:
+            self.computer_park_cancel()
+            self.computer_park_cancel = None
+
+    def defer_park_for_computer(self, activation):
+        """Retry once on confirmed settlement, never by polling native work."""
+        if self.computer_park_cancel:
+            return
+        session, runtime = self.session, self.runtime
+        registry, gate = self.computer_episodes, self.activation_gate
+        handle, epoch = self.shared_handle, self.stop_revision
+        key = self.computer_park_key = object()
+        def current():
+            return (self.computer_park_key is key and self.session is session and self.runtime is runtime
+                and self.computer_episodes is registry and self.activation_gate is gate
+                and self.shared_handle is handle and self.activation is activation
+                and self.stop_revision == epoch and not self.shutdown.is_set()
+                and not self.remounting and not self.ownership.yielding and gate.current_valid)
+        def settled():
+            if self.computer_park_key is key:
+                self.computer_park_cancel = None  # Registry consumed this one-shot observer.
+            if not current():
+                return
+            task = asyncio.create_task(self.park(activation=activation, _computer_owner=current))
+            self.tasks.add(task)
+            def finished(task):
+                self.tasks.discard(task)
+                if not task.cancelled() and task.exception() is not None:
+                    self.executed(task)
+            task.add_done_callback(finished)
+        self.computer_park_cancel = registry.on_settled(settled)
+
+    async def park(self, *, activation=None, _computer_owner=None):
         """Checkpoint then relinquish only a settled manager activation."""
 
         async with self.command_lock:
+            if _computer_owner is not None and not _computer_owner():
+                return
             if self.ownership.yielding or self.parked or self.shared_handle is None:
                 return
             if not self.computer_episodes.receipt()["settled"]:
+                if _computer_owner is None:
+                    self.defer_park_for_computer(activation or self.activation)
                 return
             loop = self.session.coordinator.get("orchestrator")
             if (self.approvals or self.bridges or self.operation_ids or self.operation_controls or self.runtime.queued_inputs
@@ -1209,15 +1249,19 @@ class Worker:
             activation = activation or self.activation
             self.activation_gate.check(activation)
             if self.naming and self.naming.pending and not self.naming.pending.done():
-                self.defer_park_for_naming(activation)
+                self.defer_park_for_naming(activation, _computer_owner=_computer_owner)
                 return
             token = self.activation_gate.bind(activation)
             try:
                 checkpoint = self.session.coordinator.get_capability("live.checkpoint")
                 if checkpoint:
                     await checkpoint(self.root_generation_outcome or "completed")
+                    if _computer_owner is not None and not _computer_owner():
+                        return
                     from amplifier_web.handoff_boundary import checkpoint_configuration
                     checkpoint_configuration(self)
+                if _computer_owner is not None and not _computer_owner():
+                    return
                 self.parked_history_stamp = self.history_stamp()
                 from amplifier_web.shared_state import configuration_stamp
                 self.parked_config_stamp = configuration_stamp(
@@ -1227,6 +1271,7 @@ class Worker:
                 await asyncio.to_thread(self.shared_handle.release)
                 self.shared_handle = None
                 self.parked = True
+                self.clear_computer_park()
             finally:
                 self.activation_gate.reset(token)
         publish({"type": "runtime.parked", "session_id": self.runtime.session_id})
@@ -1304,6 +1349,7 @@ class Worker:
         """Replace stale mounted state after lock+stamp validation."""
 
         self.remounting = True
+        self.clear_computer_park()
         self.computer_episodes.fence()
         try:
             if self.execution and not self.execution.done():
@@ -1479,6 +1525,10 @@ class Worker:
         """Serialize admission with parking and bind a per-work write token."""
 
         op = data.get("op")
+        if op in {"send", "retry", "resume", "control", "worker.message", "worker.steer", "worker.stop"}:
+            # Foreground intent supersedes the quiet idle boundary even if it
+            # completes in the same activation while the retry is lock-queued.
+            self.clear_computer_park()
         if op in {"approval", "coordination.approval"}:
             # A control can await a human decision while owning command_lock.
             # Both the independent question and its UI answer must bypass it;
@@ -1486,14 +1536,17 @@ class Worker:
             await self._command_serial(data)
             return
         if op == "stop":
+            self.clear_computer_park()
             self.stop_revision += 1
             self.computer_episodes.fence()
         if op == "computer.stop":
+            self.clear_computer_park()
             # Independent input path: do not await a selector, native worker,
             # serialized control or the next model/tool hook.
             self.computer_episodes.fence(halt=True)
             return
         if op == "computer.resume":
+            self.clear_computer_park()
             self.computer_episodes.resume()
             return
         if op == "worker.stop" and self.session:
@@ -2008,6 +2061,7 @@ class Worker:
         try:
             await self.shutdown.wait()
         finally:
+            self.clear_computer_park()
             self.computer_episodes.fence()
             for task in [read, self.start_task, self.execution, *self.tasks]:
                 if task and not task.done():
