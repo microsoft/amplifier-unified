@@ -52,6 +52,8 @@ def definitions(schema, string):
 
 
 def requirement(action, args):
+    if action in {'externalAgents.get', 'externalAgents.save', 'externalAgents.remove'}:
+        return 'connections', 'global'
     if action in {'testing.capacity.save', 'testing.machine.save', 'testing.runners.register', 'testing.runners.refresh', 'testing.runners.enable', 'testing.runners.enrollment.cancel', 'testing.runners.enrollment.reconcile', 'testing.runners.machine.save', 'testing.runners.capacity.save', 'testing.execution.save'}:
         return 'host_defaults', 'global'
     if action in {'workspace.environments.setup', 'workspace.environments.setup.cleanup'}:
