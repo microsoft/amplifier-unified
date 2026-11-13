@@ -9,7 +9,7 @@ from amplifier_web.deployment import config_path, load_server_config, save_serve
 from amplifier_web.errors import AppError
 from test_acp_participant import operations, peer
 from test_automatic_history import app_factory
-from test_client_state import command, snapshot
+from test_live_clients import command, snapshot
 from test_configuration_authority import app, agent
 from test_external_conversation import send, until
 
