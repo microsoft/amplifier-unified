@@ -481,6 +481,54 @@ async def preview(service):
         return view
 
 
+def _launchd_plist(folder, plan):
+    """Closed one-shot definition; no KeepAlive dictionary or external triggers."""
+    return {
+        'Label': 'com.microsoft.amplifier-unified.repair.' + plan['operationId'],
+        'ProgramArguments': [plan['basePython'], '-I', '-S',
+                             str(folder / 'installation_repair_worker.py'), str(folder)],
+        'WorkingDirectory': str(folder),
+        'RunAtLoad': True, 'KeepAlive': False, 'ProcessType': 'Background',
+        'StandardOutPath': os.devnull, 'StandardErrorPath': os.devnull,
+        'Umask': 0o077,
+    }
+
+
+def _prepare_launchd_job(folder, plan):
+    """Prepare the exact private job BEFORE admission, never in LaunchAgents."""
+    from .installation_repair_worker import _atomic
+    path = folder / 'helper.plist'
+    raw = plistlib.dumps(_launchd_plist(folder, plan), sort_keys=True)
+    _atomic(path, raw, exclusive=True)
+    return {
+        **helper_job(plan['operationId']),
+        'domain': 'gui/' + str(plan['uid']),
+        'plistPath': str(path), 'plistSHA256': hashlib.sha256(raw).hexdigest(),
+    }
+
+
+def _checked_launchd_job(folder, plan):
+    """A changed or missing definition never gets rewritten or dispatched."""
+    from .installation_repair_worker import _bytes
+    if (type(plan.get('uid')) is not int or plan['uid'] != os.getuid()
+            or not isinstance(plan.get('operationId'), str)
+            or not IDENTITY.fullmatch(plan['operationId'])
+            or folder != Path(plan['home']) / 'installation-repair' / plan['operationId']):
+        raise ValueError('The repair job owner or operation changed.')
+    job = plan['helperJob']
+    path = folder / 'helper.plist'
+    expected = {**helper_job(plan['operationId']),
+                'domain': 'gui/' + str(plan['uid']), 'plistPath': str(path)}
+    if (not isinstance(job, dict) or set(job) != {*expected, 'plistSHA256'}
+            or any(job[key] != value for key, value in expected.items())):
+        raise ValueError('The repair job custody changed.')
+    raw = _bytes(path, private=True, limit=16_384)
+    if (hashlib.sha256(raw).hexdigest() != job['plistSHA256']
+            or raw != plistlib.dumps(_launchd_plist(folder, plan), sort_keys=True)):
+        raise ValueError('The one-shot repair definition changed.')
+    return job
+
+
 def launch(folder, plan):
     """Manager-owned job, not a child in the host service's kill group."""
     _check_base_python(plan)
@@ -500,10 +548,14 @@ def launch(folder, plan):
             '--property=Type=exec', '--property=Restart=no',
             '--property=StandardOutput=null', '--property=StandardError=null',
             '--property=WorkingDirectory=' + str(folder), '--', *command]
+    elif sys.platform == 'darwin':
+        # `launchctl submit` implies keepalive on failure. A private explicit
+        # definition is necessary even though the worker itself refuses replay:
+        # manager relaunches are not a one-shot dispatch or settled custody.
+        job = _checked_launchd_job(folder, plan)
+        argv = ['launchctl', 'bootstrap', job['domain'], job['plistPath']]
     else:
-        argv = ['launchctl', 'submit', '-l',
-            'com.microsoft.amplifier-unified.repair.' + plan['operationId'],
-            '-o', os.devnull, '-e', os.devnull, '--', *command]
+        raise ValueError('Installation repair is unsupported on this platform.')
     subprocess.run(argv, env=transport, cwd=folder, stdin=subprocess.DEVNULL,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                    check=True, timeout=15)
@@ -515,7 +567,7 @@ def helper_job(operation_id):
              'cleanupState': 'manager-collects-after-exit',
              'cleanupOwner': 'user-service-manager'}
             if sys.platform == 'linux' else
-            {'kind': 'launchd-submitted-job',
+            {'kind': 'launchd-user-job',
              'label': 'com.microsoft.amplifier-unified.repair.' + operation_id,
              'cleanupState': 'retained-for-explicit-review',
              'cleanupOwner': 'installation-owner',
@@ -575,6 +627,10 @@ async def confirm(service, args):
         plan = {**expected, 'operationId': operation_id, 'previewId': identity,
                 'target': view['target'], 'artifact': artifact, 'probe': app_updates.PROBE,
                 'dependencyProbe': DEPENDENCY_PROBE, 'recoverySchema': 1}
+        if sys.platform == 'darwin':
+            # Failure here is still preparation: no admission, local fence or
+            # manager dispatch exists. Neither recovery nor retry rewrites it.
+            operation['helperJob'] = plan['helperJob'] = _prepare_launchd_job(folder, plan)
         # The final no-await gate closes races across preparation/downloads.
         async with service.lock:
             require_idle(service)

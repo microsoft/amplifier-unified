@@ -1,9 +1,11 @@
 """Installation repair admission, identity and no-replay boundaries."""
 import asyncio
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import subprocess
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -301,6 +303,105 @@ def test_detached_dispatch_is_manager_owned_and_credentials_never_in_args(tmp_pa
     assert '--property=Restart=no' in argv
     assert 'private-secret' not in str(calls)
     monkeypatch.setattr(repair.sys, 'platform', 'darwin')
-    repair.launch(tmp_path, plan)
-    assert calls[-1][0][0][:2] == ['launchctl', 'submit']
+    folder = tmp_path / 'installation-repair' / plan['operationId']
+    folder.mkdir(parents=True, mode=0o700)
+    plan.update(home=str(tmp_path), uid=os.getuid())
+    plan['helperJob'] = repair._prepare_launchd_job(folder, plan)
+    repair.launch(folder, plan)
+    assert calls[-1][0][0] == [
+        'launchctl', 'bootstrap', 'gui/' + str(os.getuid()), str(folder / 'helper.plist')]
+    definition = plistlib.loads((folder / 'helper.plist').read_bytes())
+    assert definition == {
+        'Label': 'com.microsoft.amplifier-unified.repair.' + 'a' * 32,
+        'ProgramArguments': ['/stable/python', '-I', '-S',
+                             str(folder / 'installation_repair_worker.py'), str(folder)],
+        'WorkingDirectory': str(folder), 'RunAtLoad': True, 'KeepAlive': False,
+        'ProcessType': 'Background', 'StandardOutPath': os.devnull,
+        'StandardErrorPath': os.devnull, 'Umask': 0o077,
+    }
+    assert (folder / 'helper.plist').stat().st_mode & 0o777 == 0o600
+    assert plan['helperJob']['cleanupOwner'] == 'installation-owner'
+    assert plan['helperJob']['cleanupState'] == 'retained-for-explicit-review'
+    assert 'private-secret' not in (folder / 'helper.plist').read_text()
     assert 'private-secret' not in str(calls)
+
+
+@pytest.mark.parametrize('change', [
+    'keepalive', 'program', 'arguments', 'trigger', 'environment', 'cwd',
+    'custody', 'domain', 'owner', 'relocated', 'missing', 'linked', 'mode',
+])
+def test_mac_one_shot_refuses_changed_definition_before_dispatch(tmp_path, monkeypatch, change):
+    calls = []
+    monkeypatch.setattr(repair.sys, 'platform', 'darwin')
+    monkeypatch.setattr(repair, '_check_base_python', lambda plan: None)
+    monkeypatch.setattr(repair.subprocess, 'run', lambda *a, **kw: calls.append((a, kw)))
+    folder = tmp_path / 'installation-repair' / ('a' * 32)
+    folder.mkdir(parents=True, mode=0o700)
+    plan = {'operationId': 'a' * 32, 'uid': os.getuid(), 'home': str(tmp_path),
+            'basePython': '/stable/python', 'env': {'SECRET': 'must-stay-private'}}
+    plan['helperJob'] = repair._prepare_launchd_job(folder, plan)
+    path = folder / 'helper.plist'
+    if change in {'keepalive', 'program', 'arguments', 'trigger', 'environment', 'cwd'}:
+        definition = plistlib.loads(path.read_bytes())
+        if change == 'keepalive':
+            definition['KeepAlive'] = True
+        elif change == 'program':
+            definition['Program'] = '/foreign/python'
+        elif change == 'arguments':
+            definition['ProgramArguments'].append('--repeat')
+        elif change == 'trigger':
+            definition['StartInterval'] = 10
+        elif change == 'environment':
+            definition['EnvironmentVariables'] = {'SECRET': 'must-stay-private'}
+        else:
+            definition['WorkingDirectory'] = '/'
+        raw = plistlib.dumps(definition, sort_keys=True)
+        path.write_bytes(raw)
+        # Even a matching custody digest cannot bless a changed definition.
+        plan['helperJob']['plistSHA256'] = hashlib.sha256(raw).hexdigest()
+    elif change == 'custody':
+        plan['helperJob']['label'] += '.other'
+    elif change == 'domain':
+        plan['helperJob']['domain'] = 'system'
+    elif change == 'owner':
+        plan['uid'] += 1
+    elif change == 'relocated':
+        plan['home'] = str(tmp_path / 'elsewhere')
+    elif change == 'missing':
+        path.unlink()
+    elif change == 'linked':
+        original = folder / 'other.plist'
+        path.rename(original)
+        path.symlink_to(original)
+    else:
+        path.chmod(0o644)
+    with pytest.raises((ValueError, OSError, KeyError)):
+        repair.launch(folder, plan)
+    assert not calls
+
+
+async def test_mac_prepares_private_definition_before_admission_and_retry_never_rewrites(host, monkeypatch):
+    monkeypatch.setattr(repair.sys, 'platform', 'darwin')
+    _, args = await prepared(host)
+    operation = (await host.service.dispatch('maintenance.installationRepairConfirm', args))['result']
+    folder, plan = host.launched[0]
+    job = plan['helperJob']
+    assert job == operation['helperJob'] and job['kind'] == 'launchd-user-job'
+    path = Path(job['plistPath'])
+    assert path.parent == folder and job['domain'] == 'gui/' + str(os.getuid())
+    assert 'private-secret' not in path.read_text()
+    before = (path.stat().st_ino, path.read_bytes())
+    repeated = (await host.service.dispatch('maintenance.installationRepairConfirm', args))['result']
+    assert repeated == operation
+    assert (path.stat().st_ino, path.read_bytes()) == before
+    assert len(host.launched) == 1
+
+
+async def test_mac_definition_preparation_failure_never_admits_or_dispatches(host, monkeypatch):
+    monkeypatch.setattr(repair.sys, 'platform', 'darwin')
+    _, args = await prepared(host)
+    monkeypatch.setattr(repair, '_prepare_launchd_job', lambda *args: (_ for _ in ()).throw(OSError('fixture')))
+    with pytest.raises(AppError):
+        await host.service.dispatch('maintenance.installationRepairConfirm', args)
+    assert repair._latest(host.service) is None
+    assert not repair.held(host.service) and not host.launched

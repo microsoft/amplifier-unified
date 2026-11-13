@@ -67,9 +67,16 @@ Startup, Status and repeated confirmations never replay it.
 
 The receipt's `helperJob` records the exact OS job label and cleanup owner.
 Linux uses a transient user service with `Restart=no` and manager collection on
-exit. macOS uses a one-shot submitted launchd job; its registration can remain
-after exit and is explicitly retained for installation-owner review/removal of
-that **exact settled label**. A registered job is not running/success proof.
+exit. macOS uses `launchctl bootstrap gui/<uid>` with an exact private `0600`
+plist prepared before admission: `RunAtLoad:true`, `KeepAlive:false`, no
+scheduled/demand triggers, environment credentials or executable override.
+`launchctl submit` is not used: it can keep failed programs alive. The plist
+stays outside `LaunchAgents`, so login does not reload it. Its exact label,
+domain, private plist path and digest are retained in the plan and `helperJob`.
+Its registration can remain after exit and is explicitly retained for
+installation-owner review/removal of that **exact settled job**. No startup,
+status or recovery path bootstraps it again. A registered job is not
+running/success proof.
 Never relaunch a retained helper or remove an unknown live job to hide uncertainty.
 
 `accepted`, `running` and `unknown` are not success. `reinstalled` reports package
