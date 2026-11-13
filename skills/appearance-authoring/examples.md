@@ -53,7 +53,8 @@ preview its exact resolved CSS, and select only within the requested profile.
 Export by that ID with `theme.export({id})`; ZIP is the sole envelope. Reimport
 actual exported bytes in disposable storage before claiming portability.
 Raw CSS import, format-1 ZIP and no-ID export are unsupported. Old files remain
-inert/undeleted; explicit valid format-2 import creates a new library entry.
+inert/undeleted. Explicit valid format-2 import saves into the current library
+without selecting it; an identical existing package may be reused.
 
 ZIP is not a component installer. Preserve fonts/assets/licenses and attribution;
 a notice filename alone proves no rights. Package/schema acceptance is not visual
