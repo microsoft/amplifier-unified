@@ -804,7 +804,12 @@ still report on its original request. Other conversations remain usable.
 
 Routine idle configuration refresh retains that exact enrolled worker while its
 authorized update wait remains current, including after its checkpoint is ready.
-It must not destroy the checkpoint owner or manufacture a settings failure. New
+The updater may then use the ordinary acknowledged idle-retirement handshake
+for that exact owner when only saved configuration freshness is pending, before
+requiring writer absence at the application gate. A refused or unknown retirement
+does not prove release; active resources and unresolved configuration operations
+remain held. Retirement is not configuration adoption or a continuation input.
+Routine refresh must not destroy the checkpoint owner or manufacture a settings failure. New
 settings, Stop or task changes still supersede the wait; an absent or replacement
 worker is not retained by an older owner's boundary.
 

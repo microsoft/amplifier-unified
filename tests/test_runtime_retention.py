@@ -74,6 +74,28 @@ async def test_count_evicts_oldest_settled_worker_and_input_restarts_without_rep
     assert manager.workers['a']['process'] is not first
     assert not [event for event in manager.events if event[0] == 'runtime.error']
 
+@pytest.mark.parametrize('barrier', ['none', 'owner', 'guard', 'mcp', 'late-work'])
+async def test_explicit_idle_retirement_keeps_exact_owner_and_final_worker_refusal(manager, barrier):
+    process = await warm(manager, 'enrolled')
+    row = manager.workers['enrolled']
+    owner = row['runtimeOwnerId']
+    manager.retention.protected = lambda sid: True  # Explicit boundary, not eviction.
+    if barrier == 'mcp':
+        manager._ephemeral_mcp['enrolled'] = ('attached', [])
+    if barrier == 'late-work':
+        await manager.send({'id': 'enrolled'}, 'one original input', 'once', manager.emit)
+        row['idle'] = True  # Native final check must reject a stale host hint.
+    result = await manager.retire_idle('enrolled', 'different' if barrier == 'owner' else owner,
+                                      guard=lambda: barrier == 'guard')
+    assert result is (barrier == 'none')
+    if barrier == 'none':
+        assert process.returncode == 0 and 'enrolled' not in manager.workers
+    else:
+        assert manager.workers['enrolled'] is row and process.returncode is None
+        assert not row.get('closing')
+    assert not any(kind == 'runtime.status' and data.get('status') == 'stopped'
+                   for kind, data in manager.events)
+
 
 async def test_idle_deadline_and_navigation_do_not_extend_retention(manager):
     first = await warm(manager, 'a')
