@@ -21,6 +21,66 @@ export function installationRepairHealthy(operation){
 const statusLabels={accepted:'Repair accepted — not complete',running:'Repair in progress',ready:'Repair needs verification',reinstalled:'Application reinstalled — service health not verified','rolled-back':'Repair rolled back',failed:'Installation repair failed',unknown:'Repair outcome unknown'};
 const preservationLabels={conversations:'Saved conversations',settings:'App settings',credentials:'Credentials',workspaces:'Workspace files','source-selections':'Selected package and component sources','downloaded-sources':'Downloaded source caches','operation-receipts':'Operation and recovery receipts','optional-features':'Installed optional features'};
 const replacementLabels={'uv-tool-environment':'Managed application package environment','application-launch-pointer':'Active application launch pointer'};
+const reconcileJournalKey='amplifier.installation-repair-reconciliation.v1';
+function readReconciliation(){try{return JSON.parse(sessionStorage.getItem(reconcileJournalKey)||'null')}catch{return null}}
+export function installationRepairClosedWithoutReplacement(operation){
+ return !!(id(operation?.operationId)&&id(operation.previewId)&&operation.status==='failed'&&operation.stage==='reconciled-no-effect'&&operation.reinstalled===false&&operation.healthVerified===false&&operation.serviceState==='running'&&operation.reconciliation?.noReplacement===true&&Number.isFinite(operation.reconciliation.verifiedAt)&&operation.reconciliation.verifiedAt>0&&typeof operation.reconciliation.hostInstanceId==='string'&&!!operation.reconciliation.hostInstanceId);
+}
+const pendingRepairCompleted=(operation,pending)=>!!(pending&&operation?.operationId===pending.operationId&&operation.previewId===pending.previewId&&installationRepairHealthy(operation));
+function Reconciliation({operation,target,act,onReceipt,onPending}){
+ const [pending,setPending]=React.useState(readReconciliation);
+ const [busy,setBusy]=React.useState(false),[notice,setNotice]=React.useState('');
+ const active=React.useRef(null),flight=React.useRef(false),mounted=React.useRef(false),generation=React.useRef(0);
+ const renderedGeneration=generation.current;
+ const eligible=id(operation?.operationId)&&id(operation.previewId)&&['accepted','running','unknown'].includes(operation.status)&&operation.reinstalled===false&&target?.operationId===operation.operationId&&typeof target.hostInstanceId==='string'&&!!target.hostInstanceId&&target.confirm===true;
+ const key=eligible?JSON.stringify([operation.previewId,target]):null;
+ const waiting=pending?.operationId===operation.operationId&&pending.previewId===operation.previewId;
+ React.useLayoutEffect(()=>{active.current=key;return()=>{active.current=null}},[key]);
+ React.useLayoutEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[]);
+ const save=value=>{
+  const encoded=JSON.stringify(value);sessionStorage.setItem(reconcileJournalKey,encoded);
+  if(sessionStorage.getItem(reconcileJournalKey)!==encoded)throw Error('Recovery reference was not saved.');
+  setPending(value);
+  onPending(value);
+ };
+ const proven=found=>found?.operationId===operation.operationId&&found.previewId===operation.previewId&&installationRepairClosedWithoutReplacement(found)&&(!waiting||found.reconciliation.hostInstanceId===pending.hostInstanceId);
+ const completed=found=>found?.operationId===operation.operationId&&found.previewId===operation.previewId&&installationRepairHealthy(found);
+ React.useEffect(()=>{if(waiting&&(proven(operation)||pendingRepairCompleted(operation,pending))){try{save(null)}catch{}}},[waiting,operation]);
+ async function run(inspectOnly=false){
+  if(!mounted.current||flight.current||inspectOnly&&!waiting||!inspectOnly&&(!eligible||waiting||active.current!==key||generation.current!==renderedGeneration))return;
+  if(!inspectOnly)generation.current++;
+  flight.current=true;setBusy(true);setNotice('');
+  const requestKey=key;
+  if(!inspectOnly){
+   try{save({operationId:operation.operationId,previewId:operation.previewId,hostInstanceId:target.hostInstanceId})}
+   catch{flight.current=false;setBusy(false);setNotice('This browser could not save the reconciliation recovery reference. No reconciliation was requested.');return}
+  }
+  try{
+   const response=await act(inspectOnly?'maintenance.installationRepairStatus':'maintenance.installationRepairReconcile',inspectOnly?{operationId:pending.operationId}:{...target},{propagateError:true});
+   if(!mounted.current||active.current!==requestKey)return;
+   const found=inspectOnly?response?.result?.operation:response?.result;
+   const expectedHost=inspectOnly?pending.hostInstanceId:target.hostInstanceId;
+   if(response?.accepted===true&&completed(found)){
+    // The original helper may finish while reconciliation is refused or its
+    // response is lost. Its authenticated successor can have a new host ID.
+    onReceipt(found);save(null);setNotice('The original repair completed and is verified healthy. This is not a no-replacement reconciliation result.');
+   }else if(response?.accepted===true&&proven(found)&&found.reconciliation.hostInstanceId===expectedHost){
+    onReceipt(found);save(null);setNotice('The backend proved no installation replacement and closed this repair. This is not a repaired-installation health result. Nothing was installed or restarted.');
+   }else setNotice('No positive no-replacement settlement was confirmed. The repair remains held. Check its retained status; do not repeat the repair or reconciliation.');
+  }catch(error){
+   if(!mounted.current||active.current!==requestKey)return;
+   if(error?.accepted===false&&!inspectOnly)setNotice('Reconciliation was refused. The existing repair remains held. Read current status before another action.');
+   else setNotice('Reconciliation outcome is unknown. Only read the retained repair status; this request will not be replayed.');
+  }finally{flight.current=false;if(mounted.current)setBusy(false)}
+ }
+ if(!eligible&&!waiting)return null;
+ return <div data-part="installation-repair-reconciliation">
+  <p>Reconcile this unfinished repair only if the host can prove no installation replacement occurred. Eligibility is not proof. This check cannot install, stop or restart the service, roll back, reset data, or replay the repair. Missing or conflicting evidence keeps the repair held.</p>
+  {eligible&&<button type="button" className="a-soft" data-action="maintenance.installationRepairReconcile" disabled={busy||waiting} onClick={()=>run(false)}>{busy?'Checking unfinished repair…':'Reconcile unfinished repair'}</button>}
+  {waiting&&<><p role="status">Reconciliation was requested for operation <code>{pending.operationId}</code>. No outcome is inferred from its phase or elapsed time.</p><button type="button" className="a-link" data-action="maintenance.installationRepairStatus" disabled={busy} onClick={()=>run(true)}>Check reconciliation status</button></>}
+  {notice&&<p role="status">{notice}</p>}
+ </div>;
+}
 const verifyJournalKey='amplifier.installation-repair-verification.v1';
 const unverified=operation=>id(operation?.operationId)&&id(operation.previewId)&&operation.status==='reinstalled'&&operation.reinstalled===true&&operation.healthVerified===false;
 function Verification({operation,target,act,onReceipt}){
@@ -89,6 +149,7 @@ function Verification({operation,target,act,onReceipt}){
 export function InstallationRepair({state,act}){
  const projection=state.maintenance?.installationRepair;
  const [preview,setPreview]=React.useState(null),[intent,setIntent]=React.useState(readIntent),[receipt,setReceipt]=React.useState(null);
+ const [reconcilePending,setReconcilePending]=React.useState(readReconciliation);
  const [busy,setBusy]=React.useState(''),[error,setError]=React.useState(''),[acknowledged,setAcknowledged]=React.useState(false);
  const lock=React.useRef(false),alive=React.useRef(false),current=React.useRef(null),intentRef=React.useRef(intent),operationRef=React.useRef(null);
  const displayed=preview||projection?.preview;
@@ -101,7 +162,10 @@ export function InstallationRepair({state,act}){
  const operation=operations[0]||null;
  operationRef.current=operation;
  const anotherOperation=candidate&&intent&&candidate.previewId!==intent.previewId&&!settled(candidate);
- const blocked=!!intent&&!settled(operation)||!!operation&&!settled(operation)||!!candidate&&!settled(candidate);
+ const closedWithoutReplacement=installationRepairClosedWithoutReplacement(operation)&&(!reconcilePending||reconcilePending.operationId===operation.operationId&&reconcilePending.previewId===operation.previewId&&reconcilePending.hostInstanceId===operation.reconciliation.hostInstanceId);
+ const reconciliationHeld=!!reconcilePending&&!closedWithoutReplacement&&!pendingRepairCompleted(operation,reconcilePending);
+ const currentRepairHealthy=operation?.operationId===candidate?.operationId&&operation?.previewId===candidate?.previewId&&installationRepairHealthy(operation);
+ const blocked=reconciliationHeld||!!intent&&!settled(operation)||!!operation&&!settled(operation)||!!candidate&&!settled(candidate)&&!currentRepairHealthy;
  const healthy=installationRepairHealthy(operation);
  React.useLayoutEffect(()=>{current.current=key;setAcknowledged(false);return()=>{current.current=null}},[key]);
  React.useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
@@ -185,11 +249,12 @@ export function InstallationRepair({state,act}){
    </>:<p role="status">{displayed.reason||'Installation repair is unsupported for this host. Native Windows installations are not supported; no alternate repair was started.'}</p>}
   </div>}
   {(intent||operation)&&<div className="a-selection-card" data-part="installation-repair-operation" role="status">
-   <strong>{healthy?'Installation repair verified healthy':statusLabels[operation?.status]||'Repair confirmation unverified'}</strong>
+   <strong>{healthy?'Installation repair verified healthy':closedWithoutReplacement?'Repair closed without installation replacement':statusLabels[operation?.status]||'Repair confirmation unverified'}</strong>
    {intent&&<p className="a-caption a-wrap">Confirmed host: {intent.hostLabel} · Data directory kept: <code>{intent.dataDir}</code> · Preview <code>{intent.previewId}</code></p>}
    {operation&&<><p className="a-wrap">Operation <code>{operation.operationId}</code> · {operation.stage} · Service: {operation.serviceState}</p><p>{operation.detail}</p></>}
    {!healthy&&<p>No healthy completion is claimed. Accepted, running, reinstalled, rolled-back and unknown outcomes are not verified recovery.</p>}
-   {operation&&<Verification key={operation.operationId} operation={operation} target={!anotherOperation?projection.verifyTarget:null} act={act} onReceipt={setReceipt}/>}
+   {operation&&<Verification key={'verify:'+operation.operationId} operation={operation} target={!anotherOperation?projection.verifyTarget:null} act={act} onReceipt={setReceipt}/>}
+   {operation&&<Reconciliation key={'reconcile:'+operation.operationId} operation={operation} target={!anotherOperation?projection.reconcileTarget:null} act={act} onReceipt={setReceipt} onPending={setReconcilePending}/>}
    <p className="a-caption">Reconnect reads the retained status; it never repeats confirmation.</p>
   </div>}
   <button type="button" className="a-link" data-action="maintenance.installationRepairStatus" disabled={!!busy} onClick={status}>{busy==='status'?'Checking repair status…':'Check repair status'}</button>

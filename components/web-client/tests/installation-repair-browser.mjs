@@ -15,10 +15,12 @@ const operation={operationId:'b'.repeat(32),previewId:preview.previewId,hostInst
 const state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{navPinned:true},sessions:[{id:'chat',title:'Repair fixture',sessionKind:'root',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[],workers:[]}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',setup:{providers:[{id:'fixture',module:'provider-fixture',config:{default_model:'fixture-model'}}],providersLoadedAt:1,providersWorkspace:'/fixture'},canvas:{open:false},maintenance:{installationRepair:{preview:null,operation:null}}};
 const shell=createShellHttpFixture(()=>state),calls=[],pageErrors=[],routeErrors=[],checkpoints=[],screenshots=[];
 const evidence=process.env.AMPLIFIER_TEST_ARTIFACTS;
-let vite,browser,page,passed=false,failure=null,phase='setup',heldConfirmation,heldVerification;
+let vite,browser,page,passed=false,failure=null,phase='setup',heldConfirmation,heldVerification,heldReconciliation;
 const confirms=()=>calls.filter(call=>call.action==='maintenance.installationRepairConfirm');
 const verifications=()=>calls.filter(call=>call.action==='maintenance.installationRepairVerify');
 const verifyTarget={operationId:operation.operationId,hostInstanceId:'fixture-successor',confirm:true};
+const reconciliationTarget={operationId:operation.operationId,hostInstanceId:'fixture-reconcile-host',confirm:true};
+const reconciliations=()=>calls.filter(call=>call.action==='maintenance.installationRepairReconcile');
 async function publish(){state.revision++;await page.evaluate(value=>window.emitState(value),shell.state());await page.waitForFunction(revision=>window.amplifier.getState().revision>=revision,state.revision)}
 async function capture(name){if(evidence){await mkdir(evidence,{recursive:true});await page.screenshot({path:evidence+'/'+name+'.png',animations:'disabled'});screenshots.push(name+'.png')}}
 async function checkpoint(name){assert.equal(confirms().length,1,name);checkpoints.push({name,confirmationPosts:confirms().length});}
@@ -54,6 +56,11 @@ try{
     result=state.maintenance.installationRepair.operation={...state.maintenance.installationRepair.operation,
      ...(verifications().length===3?{status:'ready',healthVerified:true,detail:'Synthetic verified healthy successor.'}:{detail:'Synthetic health probe did not pass; installation remains unverified.'}),updatedAt:verifications().length+2};
     if(result.status==='ready')state.maintenance.installationRepair.verifyTarget=null;
+   }
+   if(body.action==='maintenance.installationRepairReconcile'){
+    assert.deepEqual(body.args,reconciliationTarget,'Reconciliation binds the current host target exactly');
+    assert.equal(reconciliations().length,1,'No automatic reconciliation replay');
+    heldReconciliation=route;return;
    }
    state.revision++;await route.fulfill({json:{accepted:true,result,state:shell.state()}});
   }catch(error){routeErrors.push(String(error.stack||error));await route.abort('failed')}
@@ -107,10 +114,41 @@ try{
  phase='deliberate new health check';await verify().click();await expect.poll(()=>verifications().length).toBe(3);
  await expect(repair.getByText('Installation repair verified healthy',{exact:true})).toBeVisible();
  await repair.locator('[data-part="installation-repair-operation"]').scrollIntoViewIfNeeded();await capture('installation-repair-verified-mobile');await checkpoint('only verified ready receipt reports healthy');
+ // Separate synthetic input row, not a real host state transition from healthy
+ // back to unknown. Reload discards HTTP-local results; counters remain evidence.
+ phase='unknown repair reconciliation';
+ state.maintenance.installationRepair={preview:null,operation:{...operation,status:'unknown',reinstalled:false,healthVerified:false,stage:'preflight-unconfirmed',updatedAt:10},verifyTarget:null,reconcileTarget:reconciliationTarget};
+ await page.evaluate(()=>{sessionStorage.removeItem('amplifier.installation-repair.v1');sessionStorage.removeItem('amplifier.installation-repair-verification.v1')});
+ state.revision++;await page.reload();await expect(repair).toBeVisible();
+ const reconcile=()=>repair.getByRole('button',{name:'Reconcile unfinished repair',exact:true});
+ await expect(reconcile()).toBeEnabled();assert.equal(reconciliations().length,0,'advertised target is not a gesture');
+ await expect(repair).toContainText('Eligibility is not proof');
+ await reconcile().click();await expect.poll(()=>reconciliations().length).toBe(1);
+ assert.ok(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.installation-repair-reconciliation.v1')).operationId));
+ await heldReconciliation.abort('failed');await expect(repair).toContainText('Reconciliation outcome is unknown');
+ await expect(reconcile()).toBeDisabled();await capture('installation-repair-reconciliation-unknown');
+ await page.reload();await expect(repair).toBeVisible();await expect(reconcile()).toBeDisabled();
+ await page.evaluate(()=>window.dispatchEvent(new Event('amplifier-reconnected')));
+ await repair.getByRole('button',{name:'Check reconciliation status',exact:true}).click();
+ await expect(repair).toContainText('repair remains held');await expect(reconcile()).toBeDisabled();
+ assert.equal(reconciliations().length,1);assert.equal(confirms().length,1);assert.equal(verifications().length,3);
+ state.maintenance.installationRepair.operation={...operation,status:'failed',reinstalled:false,healthVerified:false,stage:'interrupted',updatedAt:11};state.maintenance.installationRepair.reconcileTarget=null;await publish();
+ await expect(repair.getByRole('button',{name:'Preview installation repair',exact:true})).toBeDisabled();
+ await expect(repair.getByText('Repair closed without installation replacement',{exact:true})).toHaveCount(0);
+ state.maintenance.installationRepair.operation={...operation,status:'failed',stage:'reconciled-no-effect',reinstalled:false,healthVerified:false,serviceState:'running',updatedAt:12,reconciliation:{noReplacement:true,verifiedAt:123,hostInstanceId:'wrong-host'}};await publish();
+ await expect(repair.getByRole('button',{name:'Preview installation repair',exact:true})).toBeDisabled();
+ await expect(repair.getByText('Repair closed without installation replacement',{exact:true})).toHaveCount(0);
+ // Only an exact backend proof receipt releases this original pending request.
+ state.maintenance.installationRepair.operation={...operation,status:'failed',stage:'reconciled-no-effect',reinstalled:false,healthVerified:false,serviceState:'running',updatedAt:13,reconciliation:{noReplacement:true,verifiedAt:123,hostInstanceId:reconciliationTarget.hostInstanceId}};
+ state.maintenance.installationRepair.reconcileTarget=null;await publish();
+ await expect(repair).toContainText('Repair closed without installation replacement');
+ await expect(repair.getByText('Installation repair verified healthy',{exact:true})).toHaveCount(0);
+ await expect(repair.getByRole('button',{name:'Check reconciliation status',exact:true})).toHaveCount(0);
+ assert.equal(reconciliations().length,1);await capture('installation-repair-reconciled-no-replacement');
  assert.deepEqual(pageErrors,[]);assert.deepEqual(routeErrors,[]);
- passed=true;phase='complete';console.log('PASS installation repair synthetic client: confirm once, health-only verification with exact successor, known failed probe/new deliberate check, unknown ack/reload/status without replay, verified ready gate. No actual install/service restart exercised.');
+ passed=true;phase='complete';console.log('PASS installation repair synthetic client: confirm once, exact-successor Verify, no-effect Reconcile explicit once, unknown ack/reload/reconnect/status without replay, positive settlement distinct from healthy ready. No actual install/service restart exercised.');
 }catch(error){failure=String(error.stack||error);console.error(failure);process.exitCode=1;try{await capture('installation-repair-failure')}catch{}}
 finally{
- if(evidence){await mkdir(evidence,{recursive:true});await writeFile(evidence+'/receipt.json',JSON.stringify({passed,phase,failure,scope:'synthetic client HTTP/state; no actual install, provider, host or service restart',transport:'reload and explicit reconnect notification; actual transport reconnect not covered',checkpoints,screenshots,pageErrors,routeErrors,confirmationPosts:confirms().length,healthVerificationPosts:verifications().length,calls},null,2)+'\n')}
+ if(evidence){await mkdir(evidence,{recursive:true});await writeFile(evidence+'/receipt.json',JSON.stringify({passed,phase,failure,scope:'synthetic client HTTP/state; no actual install, provider, host or service restart',transport:'reload and explicit reconnect notification; actual transport reconnect not covered',checkpoints,screenshots,pageErrors,routeErrors,confirmationPosts:confirms().length,healthVerificationPosts:verifications().length,reconciliationPosts:reconciliations().length,calls},null,2)+'\n')}
  await browser?.close();await vite?.close();
 }

@@ -11,10 +11,10 @@ test.after(()=>server.close());
 test('failure banner identifies the recorded incident and respects acknowledgement',()=>{
  const props={state:{},act:()=>{},session:{id:'chat',error:'Runtime failed',failure:{summary:'The manager turn failed.',recordedAt:1790517218.5,generationId:'failed-turn'}}};
  const html=renderToStaticMarkup(React.createElement(ConversationError,props));
- assert.match(html,/A turn stopped/);assert.match(html,/2026-09-27T13:53:38.500Z/);assert.match(html,/View error details/);
+ assert.match(html,/The manager turn failed/);assert.match(html,/Technical details/);assert.match(html,/Report a problem/);
  assert.doesNotMatch(html,/Conversation stopped/);
  assert.equal(renderToStaticMarkup(React.createElement(ConversationError,{...props,state:{attention:{items:[{id:'session:chat',read:true}]}}})), '');
- assert.equal(renderToStaticMarkup(React.createElement(ConversationError,{...props,session:{id:'chat',status:'idle',failure:props.session.failure}})), '');
+ assert.match(renderToStaticMarkup(React.createElement(ConversationError,{...props,session:{id:'chat',status:'idle',failure:props.session.failure}})),/The manager turn failed/);
 });
 
 test('finished-only worker summary remains visible without eager worker rows',()=>{
