@@ -230,9 +230,9 @@ The action allowlist is `appearance.preview`, `appearance.preview.cancel`,
 `appearance.preferences.undo`. Declare a request with `action` and an input
 `schema`, using the installed [appearance API](themes.md). Preview takes
 `{name, css}` for an intentional Reference delta; cancel takes `{}` for the
-resolving document. Complete-theme definitions and token-map inputs are retired.
-Preference requests carry the captured scope and exact CAS fields; Global and
-This browser are independent complete profiles, not field overlays.
+resolving document. Preference update/select requests carry the captured
+destination and exact CAS fields; Undo takes its exact `undoId`. Global and This
+browser are independent complete profiles, not field overlays.
 The host validates both the declared schema and the actual action schema.
 Queued requests have no effect until resolved. The host's review controls
 show the exact payload, scope and approve/decline actions. They use the same
@@ -242,8 +242,6 @@ Preview is document-local and changes neither profile. Browser preference writes
 require storage acknowledgement; that is separate from observed rendering.
 Stale requests conflict without forcing newer revisions. Public preference Undo
 is conditional on its exact whole-profile CAS, not a fresh-revision retry.
-Requests retained from retired appearance controls cannot activate; see the
-[preservation boundary](appearance-contract.md#temporary-rollback-boundary).
 `canvas.apps.resolve` lets an authorized agent use
 the same path, with an explicit `clientId` and current revisions. The sandbox
 cannot approve its own request. An agent should resolve only changes covered

@@ -99,8 +99,15 @@ async def _loader_probe(root, workspace, *, deferred=False, omitted=False):
                 # docs may also link to repository-only contribution guidance.
                 if path.suffix == ".md" and path.is_relative_to(root / "skills"):
                     for link in re.findall(r"\]\(\s*([^)]+?)\s*\)", path.read_text()):
-                        target = (path.parent / link.split("#", 1)[0]).resolve(strict=True)
+                        relative, _, anchor = link.partition("#")
+                        target = (path.parent / relative).resolve(strict=True)
                         assert target.is_file() and target.is_relative_to(root.resolve()), (path, link)
+                        if anchor:
+                            text = target.read_text()
+                            anchors = set(re.findall(r'<a id="([^"]+)"', text))
+                            for heading in re.findall(r"^#+ (.+)$", text, re.MULTILINE):
+                                anchors.add(re.sub(r"[^\w -]", "", heading.lower()).replace(" ", "-"))
+                            assert anchor in anchors, (path, link)
     finally:
         await cleanup()
 
@@ -229,9 +236,11 @@ import yaml
 
 
 def test_palette_example_compiles_and_validates():
+    from jsonschema import Draft202012Validator
+    from amplifier_web import canvas_apps
     from amplifier_web.builtin_behaviors import resource_root
     from amplifier_web import appearance_packages
-    from amplifier_web.service import validate_theme
+    from amplifier_web.service import ACTION_DEFINITIONS, validate_theme
 
     sample = json.loads((resource_root() / "skills/appearance-authoring/quiet-study.json").read_text())
     css = sample["css"]
@@ -239,6 +248,39 @@ def test_palette_example_compiles_and_validates():
     package = appearance_packages.from_css(css, sample['name'])
     assert package.manifest['formatVersion'] == 2 and package.manifest['base'] == 'reference-v1'
     assert 'light-dark(' in css
+    # Keep companion examples tied to actual action schemas, without dispatching
+    # a host mutation or treating schema acceptance as rendered conformance.
+    valid = {
+        'appearance.preview': {'clientId': 'browser', **sample},
+        'appearance.preview.cancel': {},
+        'appearance.preferences.update': {
+            'scope': 'client', 'generation': 'generation', 'expectedRevision': 0,
+            'expectedStorageVersion': 'missing', 'patch': {'accent': None}},
+        'appearance.preferences.select': {
+            'activeScope': 'client', 'generation': 'generation', 'expectedRevision': 0,
+            'expectedStorageVersion': 'missing', 'expectedSharedRevision': 0},
+        'appearance.preferences.undo': {'undoId': 'exact-undo'},
+        'theme.save': sample,
+        'theme.import': {'packageBase64': base64.b64encode(
+            appearance_packages.encode(package.files)).decode('ascii')},
+        'theme.export': {'id': 'builtin:default'},
+        'theme.update': {'id': 'saved.zip', 'expectedFingerprint': 'a' * 64, **sample},
+        'theme.delete': {'id': 'saved.zip', 'expectedFingerprint': 'a' * 64},
+    }
+    for action, value in valid.items():
+        Draft202012Validator(ACTION_DEFINITIONS[action][1]).validate(value)
+    invalid = {
+        'theme.export': {},
+        'theme.import': {'css': css},
+        'appearance.preview': {'name': 'Palette', 'tokens': {'accent': '#123456'}},
+        'appearance.preferences.update': {
+            'scope': 'client', 'expectedRevision': 0, 'patch': {'accent': None}},
+    }
+    for action, value in invalid.items():
+        assert not Draft202012Validator(ACTION_DEFINITIONS[action][1]).is_valid(value), action
+    assert canvas_apps.HOST_ACTIONS == {
+        action for action in valid if action.startswith('appearance.')}
+    assert not {'theme.preview', 'theme.apply', 'theme.revert'} & ACTION_DEFINITIONS.keys()
 
 
 @pytest.mark.parametrize("deferred,omitted", [(False, False), (True, False), (False, True)])

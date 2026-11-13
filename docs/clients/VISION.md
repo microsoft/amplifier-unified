@@ -121,12 +121,12 @@ the assessment says how much of it has actually been demonstrated.
 - A person visits **2 conversations**, returns to their work overview, and
   reconstructs **0 previously chosen filters or reading positions** in that client.
 - A person changes an everyday preference without learning its storage model or
-  making a second persistence choice. The bundled web client's accepted
+  making a second persistence choice. The bundled web client's
   [appearance direction](../shell/appearances.md) uses Reference-based deltas and
-  complete Global / This browser profiles, superseding the temporary rollback.
-  Ordinary choices apply directly; suggested experience profiles remain future
-  design. The [appearance contract](../shell/appearance-contract.md) owns scope,
-  preservation and feedback boundaries, not this vision or historical rollback notes.
+  complete independent Global / This browser profiles. Ordinary choices apply
+  directly, with explicit accent reset and Preview Cancel. The
+  [appearance contract](../shell/appearance-contract.md) owns scope, preservation
+  and feedback boundaries.
 
 ## Current desktop consumers
 
@@ -146,15 +146,3 @@ The optional [device connection PoC contract](../../contracts/device-connections
 applies these boundaries to enrollment and local capability providers in the
 current host. It does not require the future AHP/ACP replacement, Tempo or
 new CLI onboarding. The bundled web client supplies one setup experience.
-
-## Changelog
-
-| Date | Change | Basis |
-| --- | --- | --- |
-| Production redesign | Supersede the temporary rollback with Reference deltas and complete Global / This browser profiles; keep suggested experience profiles future. | User-approved [appearance direction](../shell/appearances.md) and [contract](../shell/appearance-contract.md); qualification, publication and live adoption remain separate. |
-| PR1916 rollback (historical, superseded) | Temporarily restored pre-cutover web appearance direction without weakening consumer usability. | Retained [preservation boundary](../shell/appearance-contract.md#temporary-rollback-boundary), not current rendering guidance. |
-| 2026-11-10 | Make consumer-level usability and progressive disclosure explicit in principle 2. | Product-owner rejection of the appearance settings' repeated scope controls and excessive layout; design correction, not shipped acceptance. |
-| 2026-10-20 | Identify current Mac and planned Windows consumers; link shared desktop journeys. | Product-owner request for coordinated platform documentation. |
-| 2026-10-20 | Apply the accepted Home/sidebar UX amendment. | [Product-owner decision](../ux/decisions/20261020.md). |
-| 2026-10-02 | Adopt protocol boundaries, client-local state and independent repos. | [Family architecture direction](../architecture/README.md); implementation pending. |
-| 2026-09-20 | Initial draft. | Shared-client design discussion and the sources in the direction index. |

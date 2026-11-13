@@ -32,11 +32,12 @@ functional cues. Author small intentional deltas, not a copied complete base.
 Preview `{name, css, clientId}` through `appearance.preview`; cancel through
 `appearance.preview.cancel`. Preview is document-local and distinct from saved
 library/selected profile. `theme.save` wraps named delta CSS into format-2 ZIP;
-`theme.import` accepts only `packageBase64`, and export requires a saved/included
+`theme.import` requires ZIP bytes in `packageBase64`, and export requires a saved/included
 library ID. The root manifest requires `type: appearance`, `formatVersion: 2`,
 `base: reference-v1`, name and stylesheet. Keep declared assets/notices and bounds.
 No external URLs/imports, executable content, SVG assets, raw CSS import or format-1
-promotion. An explicit valid format-2 import is a new copy, not automatic adoption.
+promotion. Explicit valid format-2 import saves into the current library without
+selecting it; an identical existing package may be reused.
 
 For source changes, browser source/tests belong to canonical `amplifier-client-web`;
 follow the linked ownership/whole-snapshot assembly workflow. Generated static and

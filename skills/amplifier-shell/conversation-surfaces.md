@@ -40,8 +40,8 @@ authoring. Discover `canvas.apps.*` action schemas from the running app.
 6. For a host change, declare and queue an allowlisted `appearance.*` request
    through the host's normal validated action path. Preview a small Reference
    delta with `{name, css}`; end it with `appearance.preview.cancel`. Preference
-   update/select/undo uses the captured complete-profile scope and exact CAS,
-   never retired theme definitions or token-map inputs. Pending requests
+   update/select uses the captured complete-profile scope and exact CAS;
+   conditional Undo uses its exact `undoId`. Pending requests
    do nothing until reviewed and resolved outside the sandbox. Agents can
    resolve already-authorized changes on the explicit target client; the
    surface itself cannot grant permission. Resolve an authorized request with
