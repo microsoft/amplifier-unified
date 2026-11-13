@@ -2,11 +2,6 @@
   "schemaVersion": 1,
   "scenarios": [
     {
-      "id": "installation-repair",
-      "command": ["node", "tests/installation-repair-browser.mjs"],
-      "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/installation-repair"}
-    },
-    {
       "id": "shared-notices-motion",
       "command": ["node", "tests/shared-notices-motion-browser.mjs"],
       "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/shared-notices-motion"}

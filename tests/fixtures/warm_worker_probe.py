@@ -66,11 +66,11 @@ Reply with the fixture response.
     )
     # The fixture exercises worker lifecycle, not downloading optional community
     # behaviors. Keep its empty home and declared local provider deterministic.
-    from amplifier_web.builtin_behaviors import IMAGEGEN_BEHAVIOR_URI
+    from amplifier_web.builtin_behaviors import APPENDED_DEFAULTS
     settings = root / "amplifier-home" / "settings.yaml"
     settings.parent.mkdir(parents=True)
     settings.write_text(json.dumps({"bundle": {"active": str(bundle), "app": []},
-                                   "web_bundles": {"excluded": [IMAGEGEN_BEHAVIOR_URI]}}))
+                                   "web_bundles": {"excluded": list(APPENDED_DEFAULTS)}}))
     events = []
     import amplifier_web.runtime_worker as worker_module
 

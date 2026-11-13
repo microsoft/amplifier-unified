@@ -118,6 +118,17 @@ def record(root, value):
         out.write(json.dumps(value) + '\n')
 
 
+def require_retirement_checkpoint(root, pid):
+    """Entry evidence only; caller separately confirms retirement and OS exit."""
+    events = root / f'worker-events-{pid}.jsonl'
+    checkpoints = [event for line in events.read_text().splitlines()
+                   if (event := json.loads(line)).get('method') == 'checkpoint_idle']
+    assert checkpoints, 'Confirmed retirement did not enter the production checkpoint'
+    assert all(event['activationObjectId'] is not None and event['sharedHandleObjectId'] is not None
+               for event in checkpoints), 'Retirement checkpoint lost its lifetime owner'
+    return checkpoints[-1]
+
+
 async def worker(root, mutant):
     from amplifier_web.runtime_worker import Worker, configure_protocol
     from amplifier_web.runtime_controls import RuntimeControls
@@ -331,9 +342,11 @@ async def probe(root, variant):
             assert old.returncode == 0 and sid not in runtime.workers
             retirement = initial_row['retirement_task']
             assert retirement.done() and retirement.result() is True
+            checkpoint = require_retirement_checkpoint(root, old.pid)
             assert await writer_available(workspace, native)
             assert stored.read_bytes() == plan_bytes and controls.read_bytes() == control_bytes
             report['newOwnerRetirement'] = {'oldPid':old.pid, 'oldReturncode':old.returncode,
+                'checkpointEntry':checkpoint,
                 'writerAvailableAfterRetirement':True, 'controlHashBeforeRestart':digest(controls)}
         p = await original_spawn(*argv, **kwargs)
         if '--worker' in argv and str(root) in argv:
@@ -374,15 +387,17 @@ async def probe(root, variant):
             assert row['idle'] and row['process'].returncode is None
             assert not await writer_available(workspace, native), 'Idle worker released its lifetime writer'
             events = root / f"worker-events-{row['process'].pid}.jsonl"
-            checkpoints = [event for line in events.read_text().splitlines()
-                           if (event := json.loads(line)).get('method') == 'checkpoint_idle']
-            assert checkpoints, 'Ordinary idle did not enter the production checkpoint'
+            # Ordinary idle is only a hint: the native loop persisted its
+            # terminal outcome. It does not checkpoint or rotate lifetime ownership.
+            bindings = [event for line in events.read_text().splitlines()
+                        if (event := json.loads(line)).get('method') == 'bind_activation']
+            assert bindings, 'Idle owner has no production lifetime activation binding'
             assert all(event['activationObjectId'] is not None and event['sharedHandleObjectId'] is not None
-                       for event in checkpoints), 'Idle checkpoint lost its lifetime owner'
+                       for event in bindings), 'Idle owner lost its lifetime activation/writer'
             report.setdefault('idleOwnershipObservations', []).append({
                 'pid':row['process'].pid, 'writerHeld':True,
-                'activationObjectId':checkpoints[-1]['activationObjectId'],
-                'sharedHandleObjectId':checkpoints[-1]['sharedHandleObjectId']})
+                'activationObjectId':bindings[-1]['activationObjectId'],
+                'sharedHandleObjectId':bindings[-1]['sharedHandleObjectId']})
             return row
         if variant in {'idle','new-owner','when-idle'}:
             await action('conversation.send', {'sessionId':sid,'text':'PLACEMENT_WARMUP'}, 'placement-warm-input')
@@ -454,8 +469,10 @@ async def probe(root, variant):
                         assert not runtime.retention.protected(identity)
                         retirement = runtime.retention.schedule(identity, old)
                     await asyncio.wait_for(asyncio.shield(retirement), runtime.retention.reply_timeout)
+                    assert retirement.result() is True
                     assert old['process'].returncode == 0
                     assert identity not in runtime.workers and identity in runtime._retired
+                    checkpoint = require_retirement_checkpoint(root, old['process'].pid)
                     assert await writer_available(workspace, native)
                     assert stored.read_bytes() == plan_bytes and controls.read_bytes() == control_bytes
                     assert app.management.configuration_record(sid, before['id']) == before
@@ -464,6 +481,7 @@ async def probe(root, variant):
                         'operationId':before['id'], 'originalRequestHash':before['requestHash'],
                         'attemptId':before['attempts'][-1]['attemptId'],
                         'attemptWorkerPid':before['attempts'][-1]['workerPid'],
+                        'checkpointEntry':checkpoint,
                         'writerHeldBeforeRetirement':True, 'writerAvailableAfterRetirement':True,
                         'controlHashBeforeRestart':digest(controls), 'guardPresent':True}
                     try:

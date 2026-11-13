@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 import React,{act} from 'react';
 import {create} from 'react-test-renderer';
 import {renderToStaticMarkup} from 'react-dom/server';
@@ -112,10 +113,24 @@ test('storage failure prevents confirm, explicit refusal permits fresh review, m
  }
 });
 
-test('backup/runtime controls remain distinct from installation and destructive reset',()=>{
+test('independent lifecycle candidate defers installation controls while retaining backup/runtime and reset guidance',()=>{
  const html=renderToStaticMarkup(React.createElement(SettingsPageContext.Provider,{value:'repair'},React.createElement(MaintenanceSettings,{state:state(),act:()=>{}})));
- assert.match(html,/Repair runtime/);assert.match(html,/Repair installation/);assert.match(html,/Data reset is separate/);
- assert.doesNotMatch(html,/data-action="maintenance.reset"/);
+ assert.match(html,/Repair runtime/);assert.match(html,/Create full backup/);assert.match(html,/Data reset is separate/);
+ assert.doesNotMatch(html,/Repair installation|Verify repaired installation|data-action="maintenance.installationRepair|data-part="installation-repair"|data-action="maintenance.reset"/);
+});
+
+test('deferred maintenance never mounts installation actions even when a host advertises them',async()=>{
+ const calls=[];let root;
+ const advertised=state({preview,operation:{...operation,status:'reinstalled',reinstalled:true,healthVerified:false},verifyTarget:{operationId:operation.operationId,hostInstanceId:'current-host',confirm:true}});
+ await act(()=>{root=create(React.createElement(SettingsPageContext.Provider,{value:'repair'},React.createElement(MaintenanceSettings,{state:advertised,act:(...args)=>calls.push(args)})))});
+ assert.deepEqual(calls,[]);
+ assert.equal(root.root.findAllByProps({'data-part':'installation-repair'}).length,0);
+ assert.equal(root.root.findAllByType('button').filter(button=>button.props['data-action']?.startsWith('maintenance.installationRepair')).length,0);
+ await act(()=>root.unmount());
+ const source=await readFile(new URL('../src/maintenance.jsx',import.meta.url),'utf8');
+ assert.doesNotMatch(source,/InstallationRepair|installation-repair/,'feature source remains unimported by the maintenance entry');
+ const registry=JSON.parse(await readFile(new URL('./browser-checks.json',import.meta.url),'utf8'));
+ assert.equal(registry.scenarios.some(row=>row.id==='installation-repair'||row.command?.some(value=>value.includes('installation-repair'))),false);
 });
 
 test('status for a projected operation uses current exact preview; fresh status wins timestamp ties',async()=>{

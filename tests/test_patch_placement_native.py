@@ -131,6 +131,8 @@ async def test_production_patch_placement_lifecycle(tmp_path, variant):
         assert report['controlHashBefore'] == report['controlHashAfter']
         assert proof['controlHashBeforeRestart'] == proof['controlHashAfterRestart']
         assert proof['oldReturncode'] == 0 and proof['oldPid'] != proof['newPid']
+        assert proof['checkpointEntry']['method'] == 'checkpoint_idle'
+        assert proof['checkpointEntry']['pid'] == proof['oldPid']
         assert proof['attemptWorkerPid'] == proof['oldPid']
         assert proof['guardPresent'] and proof['writerHeldBeforeRetirement'] and proof['writerAvailableAfterRetirement']
         assert proof['writerHeldAfterRefusal'] and proof['originalRecordPreserved'] and proof['noReplay']
@@ -154,7 +156,7 @@ async def test_production_patch_placement_lifecycle(tmp_path, variant):
         assert report['attempts']==1 and len(report['processes'])==(3 if variant == 'new-owner' else 2)
         assert {'binding-settled','field-only-and-actual-replacement-verified','exact-duplicate-no-effect',
                 'fresh-read-write-and-idle-writer-held','next-generation-and-idle-owner-usable'} <= set(report['stages'])
-        assert 'checkpoint_idle' in methods
+        assert 'bind_activation' in methods
         if variant in {'idle','new-owner','when-idle'}:
             assert 'real-initial-startup-and-idle-writer-held' in report['stages']
             assert report['controlStampIgnored']
@@ -162,6 +164,8 @@ async def test_production_patch_placement_lifecycle(tmp_path, variant):
             assert report['externalStampChanged']
             proof = report['newOwnerRetirement']
             assert proof['oldReturncode'] == 0 and proof['oldPid'] != proof['newPid']
+            assert proof['checkpointEntry']['method'] == 'checkpoint_idle'
+            assert proof['checkpointEntry']['pid'] == proof['oldPid']
             assert proof['writerAvailableAfterRetirement']
             assert proof['controlHashBeforeRestart'] == proof['controlHashAfterRestart'] == report['controlHashBefore']
             assert report['productionBoundaryFailure'] == 'new-owner-stale-object-binding-refused'
@@ -332,7 +336,8 @@ async def test_explicit_rebind_requires_authenticated_terminal_none(boundary, ev
         expected = {'missing':'Authenticated native no-effect is unproven',
                     'unknown':'Authenticated native no-effect is unproven',
                     'saved':'Authenticated native no-effect is unproven',
-                    'nonterminal':'not terminal', 'conflicting':'different binding'}[evidence_kind]
+                    'nonterminal':'not terminal',
+                    'conflicting':r'^The retained configuration operation cannot be verified\. Nothing was retried\.$'}[evidence_kind]
         with pytest.raises((AssertionError, AppError), match=expected):
             await reconcile_proven_none(action, b.owner['id'], original['id'], retained)
         assert operation(b) == original and b.owner['configurationBusy']
