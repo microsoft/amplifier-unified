@@ -45,9 +45,10 @@ def coverage_plan():
     responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
     notices_ids = shared_notices_motion_browser_addition(plan['scenarios'])
     multiparty_ids = external_multiparty_browser_addition(plan['scenarios'])
+    shared_room_ids = shared_room_browser_addition(plan['scenarios'])
     rows = []
     for row in plan['scenarios']:
-        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | multiparty_ids:
+        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | multiparty_ids | shared_room_ids:
             continue
         row = {**row, 'command': [coverage_paths(part) for part in row['command']]}
         row.pop('cwd', None)
@@ -1037,6 +1038,50 @@ def shared_notices_motion_browser_addition(rows, readiness_scripts=()):
     return selected_client_browser_addition(rows, readiness_scripts, 'shared-notices-motion', current=True)
 
 
+def shared_room_browser_addition(rows, readiness_scripts=()):
+    return selected_client_browser_addition(rows, readiness_scripts, 'shared-room', current=True)
+
+
+def test_shared_room_is_composed_once_from_selected_client_owner():
+    name = 'shared-room'
+    expected = {'id': name, 'command': ['node', 'tests/shared-room-browser.mjs'],
+                'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/shared-room'}}
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    client_path = source_test('tests/shared-room-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    def owns(row):
+        return row['id'] == name or 'tests/shared-room-browser.mjs' in row['command']
+    assert not any(owns(row) for row in host['scenarios'])
+    assert [row for row in client['scenarios'] if owns(row)] == [expected]
+    assert host['scenarioOrder'].count(name) == 1
+    assert host['scenarioOrder'][-2:] == ['external-multiparty', name]
+    plan, proof = runner.load_plan(ROOT, host_path)
+    assert shared_room_browser_addition(plan['scenarios']) == {name}
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    assert [row for row in plan['scenarios'] if owns(row)] == [{**expected, 'cwd': '.build/web-client'}]
+    assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+    assert (client_path.parent / 'shared-room-browser.mjs').is_file()
+
+
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'host-cwd', 'readiness'])
+def test_shared_room_rejects_missing_duplicate_or_wrong_owner(fault):
+    rows = current_plan()['scenarios']
+    assert shared_room_browser_addition(rows) == {'shared-room'}
+    owner = next(row for row in rows if row['id'] == 'shared-room')
+    readiness = set()
+    if fault == 'missing':
+        rows.remove(owner)
+    elif fault == 'duplicate':
+        rows.append(dict(owner))
+    elif fault == 'host-cwd':
+        owner.pop('cwd')
+    else:
+        readiness.add(owner['command'][1])
+    with pytest.raises(AssertionError, match='shared-room'):
+        shared_room_browser_addition(rows, readiness)
+
+
 def external_multiparty_browser_addition(rows, readiness_scripts=()):
     """Validate the new host journey before subtracting it from frozen counts."""
     script = 'tests/web/external-multiparty-browser.mjs'
@@ -1340,6 +1385,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     sidebar_responsive_browser_addition(current_plan()['scenarios'], readiness_scripts)
     shared_notices_motion_browser_addition(current_plan()['scenarios'], readiness_scripts)
     external_multiparty_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    shared_room_browser_addition(current_plan()['scenarios'], readiness_scripts)
     plan = coverage_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], readiness_scripts)
     sidebar_ids = sidebar_controls_browser_addition(plan['scenarios'], readiness_scripts)
@@ -3737,12 +3783,13 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
     notices_ids = shared_notices_motion_browser_addition(plan['scenarios'])
     multiparty_ids = external_multiparty_browser_addition(plan['scenarios'])
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | multiparty_ids]
+    shared_room_ids = shared_room_browser_addition(plan['scenarios'])
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | multiparty_ids | shared_room_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids)
-    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids)
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids) + len(shared_room_ids)
+    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids) + len(shared_room_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
-    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
+    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(shared_room_ids)
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')

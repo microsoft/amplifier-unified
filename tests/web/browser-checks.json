@@ -1350,6 +1350,7 @@
     "semantic-settings",
     "history-refresh",
     "voice-work-message",
-    "external-multiparty"
+    "external-multiparty",
+    "shared-room"
   ]
 }
