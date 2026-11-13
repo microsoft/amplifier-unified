@@ -304,7 +304,7 @@ class Feedback:
                 'failure': failure, 'runtimeReport': failure.get('runtimeReport', {}),
                 'activity': {'phase': 'error'}, 'execution': {}, 'moduleFailures': [],
                 'messages': [{'role': 'user', 'inputId': exact} for exact in identities],
-                'collaborationGeneration': {'id': context['generationId']},
+                'collaborationGeneration': {'id': context['generationId'], 'terminal': True},
                 'generations': [row for row in session.get('generations', [])[-200:]
                                 if row.get('generation_id') == context['generationId']]
                     or [{'event': 'generation.failed', 'generation_id': context['generationId'],
