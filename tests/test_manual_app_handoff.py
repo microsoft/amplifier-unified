@@ -726,3 +726,54 @@ def test_pinned_reader_rechecks_path_identity_and_closes_all_handles(tmp_path, m
             signature[0] = 2
     assert opened == closed or set(opened) == set(closed)
     assert all(stream.closed for stream in opened)
+
+
+@pytest.mark.parametrize('changed', [None, 'proof', 'binding', 'payload', 'result', 'during-read'])
+async def test_manual_recovery_context_revalidates_existing_proof_only(
+        manager, proof, monkeypatch, changed):
+    proof['artifact'] = {'url': 'https://github.com/microsoft/amplifier-unified/releases/download/v0.71.4/amplifier_unified-0.71.4-py3-none-any.whl',
+                         'sha256': 'a' * 64, 'path': 'fixture-wheel'}
+    await handoff.reconcile(manager, target(manager), 'manual-before-next-app')
+    monkeypatch.setattr(handoff, 'sys', SimpleNamespace(platform='win32'))
+    state = manager.service.state['updates']
+    result = state['manualHandoff']
+    if changed == 'proof':
+        handoff._proof_path(manager, result['requestId']).write_bytes(b'changed')
+    elif changed == 'binding':
+        proof['binding']['dataIdentity'] = 'different-data'
+    elif changed == 'payload':
+        proof['payload']['recordDigest'] = 'f' * 64
+    elif changed == 'result':
+        result['revision'] = 'f' * 40
+    elif changed == 'during-read':
+        def changed_during_read(value):
+            result['proofDigest'] = 'f' * 64
+            return copy.deepcopy(proof['payload'])
+        monkeypatch.setattr(handoff, '_payload', changed_during_read)
+    before = copy.deepcopy(state)
+    if changed:
+        with pytest.raises(ValueError):
+            await handoff.recovery_context(manager)
+    else:
+        context = await handoff.recovery_context(manager)
+        assert context['artifact'] == proof['artifact']
+        assert context['app'] == {
+            'name': 'amplifier-unified', 'version': '0.71.4', 'revision': 'b' * 40,
+            'url': 'https://github.com/microsoft/amplifier-unified',
+            'delivery': {key: proof['artifact'][key] for key in ('url', 'sha256')}}
+        assert not getattr(manager, '_running_artifact', None)  # No optional-feature grant.
+    if changed != 'during-read':
+        assert state == before
+    assert not state.get('applicationResult') and not state.get('pendingRestart')
+
+
+@pytest.mark.parametrize('phase,status', [(None, None), (handoff.PHASE, 'unknown'),
+                                        ('restart-ack', 'succeeded')])
+async def test_manual_recovery_does_not_borrow_other_or_uncertain_receipts(
+        manager, monkeypatch, phase, status):
+    monkeypatch.setattr(handoff, 'sys', SimpleNamespace(platform='win32'))
+    manager.service.state['updates']['manualHandoff'] = {'phase': phase, 'status': status}
+    def forbidden(*args):
+        pytest.fail('No proof may be borrowed for another receipt')
+    monkeypatch.setattr(handoff, '_proof', forbidden)
+    assert await handoff.recovery_context(manager) is None

@@ -706,7 +706,14 @@ async def _activate(manager, *, force=None, holds=None):
                 raise ValueError('The serving interpreter does not match the previous launch target')
             if old_pointer and old_pointer['bootstrap'] != bootstrap_identity(bootstrap):
                 raise ValueError('The previous launch target belongs to another bootstrap')
-            running_app = running_application(manager)
+            manual = None
+            if sys.platform == 'win32' and previous_artifact is None and not selected:
+                from .manual_app_handoff import recovery_context
+                manual = await recovery_context(manager)
+            if manual is not None:
+                previous_artifact = manual['artifact']
+                previous['artifact'] = previous_artifact
+            running_app = manual['app'] if manual is not None else running_application(manager)
             recovery = {'pointer': old_pointer, 'python': installed_python, 'extras': extras,
                 'artifact': previous_artifact, 'installation': bootstrap_identity(old_prefix),
                 'bootstrap': bootstrap_identity(bootstrap),

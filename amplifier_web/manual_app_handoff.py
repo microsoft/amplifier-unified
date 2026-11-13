@@ -369,6 +369,30 @@ async def reconcile(manager, args, request_id):
             return copy.deepcopy(state[RESULTS][request_id])
 
 
+async def recovery_context(manager):
+    """Revalidate the completed manual install only as an old app recovery target.
+
+    This does not grant optional-feature archive eligibility or create a restart
+    receipt. The next normal update still owns candidate/drain/Stop admission.
+    """
+    result = copy.deepcopy(manager.service.state['updates'].get('manualHandoff') or {})
+    if sys.platform != 'win32' or result.get('phase') != PHASE or result.get('status') != 'succeeded':
+        return None
+    proof = await _offloop(_proof, manager, result)
+    binding = await _offloop(_native_binding, manager)
+    _require(binding == proof['binding'])
+    _require(all(result.get(key) == binding[key] for key in ('version', 'revision')))
+    _require(await _offloop(_payload, proof) == proof['payload'])
+    _require(await _offloop(_native_binding, manager) == binding)
+    _require(manager.service.state['updates'].get('manualHandoff') == result)
+    from .app_component_graph import validate_graph
+    artifact = proof['artifact']
+    app = {'name': 'amplifier-unified', 'url': 'https://github.com/microsoft/amplifier-unified',
+           'version': binding['version'], 'revision': binding['revision'],
+           'delivery': {key: artifact[key] for key in ('url', 'sha256')}}
+    return {'artifact': copy.deepcopy(artifact), 'app': validate_graph([app])[0]}
+
+
 def continuing(manager):
     state = manager.service.state['updates']
     sequence = state.get('sequence') or {}
