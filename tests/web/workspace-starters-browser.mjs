@@ -136,9 +136,10 @@ try{
  await expect.poll(async()=>(await state()).workspaceStarters.items.find(row=>row.id===customBefore.id)?.revision).toBe(customBefore.revision+1);
  await editor.getByLabel('Starter name',{exact:true}).fill('Second team starter');
  await settings.getByRole('button',{name:'Save as new starter',exact:true}).click();
- await expect(starters.locator('[data-collection-id] button[aria-current=true]')).toHaveCount(1);
+ await expect.poll(async()=>(await state()).workspaceStarters.items.find(row=>row.name==='Second team starter')?.id).toBeTruthy();
  const secondCustom=(await state()).workspaceStarters.items.find(row=>row.name==='Second team starter');
  assert.ok(secondCustom&&secondCustom.id!==customBefore.id);
+ await expect(starters.locator(`[data-collection-id="${secondCustom.id}"] button`)).toHaveAttribute('aria-current','true');
  assert.equal((await state()).workspaceStarters.items.find(row=>row.id===customBefore.id).name,'My team starter');
  await expect(editor.getByLabel('Starter name',{exact:true})).toHaveValue('Second team starter');
  await editor.getByRole('button',{name:'Delete this starter',exact:true}).click();
@@ -286,6 +287,7 @@ try{
  const evidence=await (await page.request.get(url+'/fixture')).json();assert.equal(evidence.sent[0].workspace,folder);assert.equal(evidence.sent[0].attachments[0].name,'notes.txt');
  const interactionCost={entry:'Settings → Workspaces → Manage starters → choose starter',intendedResult:'Customize a built-in and retain its shipped definition',before:['choose starter','Duplicate to customize','edit fields','Save starter'],after:['choose starter','edit fields','Save as new starter'],removedActions:1,unchangedCosts:['entry navigation','field edits','advanced disclosure'],keyboard:['Enter saves built-in as new','Enter opens compact selection','Tab reaches Cancel edits'],reflow:['320px viewport','200% root text size']};
  const evidenceRecord={status:'passed',scenarios:21,interactionCost,starterEditor:['all edited fields retained','built-in unchanged','editable payload excludes identity and provenance','definite rejection retains draft','lost acknowledgement checks same command without duplicate','custom update and copy','dirty navigation and cancel'],starterInheritance:['explicit app default','built-in inherited choice'],resourceContinuity:['chat and Home return','no manual reservation controls','same editor identity','Settings keyboard and phone drawer inert cleanup','private peer','one held save receipt'],screenshots:out,workspace:folder};
+ assert.deepEqual(errors,[]);
  await writeFile(out+'/workspace-starters-result.json',JSON.stringify(evidenceRecord,null,2)+'\n');
- assert.deepEqual(errors,[]);console.log(JSON.stringify(evidenceRecord));
+ console.log(JSON.stringify(evidenceRecord));
 }catch(error){await page?.screenshot({path:out+'/failure.png'}).catch(()=>{});console.error((await page?.locator('body').innerText())?.slice(-6000));throw error}finally{await browser?.close();fixture.kill('SIGTERM')}
