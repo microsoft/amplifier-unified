@@ -18,6 +18,7 @@ def _hold_binding(session):
     return {
         'operationId': pending.get('operationId'), 'revision': pending.get('revision'),
         'fence': session.get('configurationOperationFence'),
+        'refresh': {key: session.get('configurationRefresh', {}).get(key) for key in ('phase', 'revision')},
         'nativeSessionId': session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'],
         **{key: session.get(key) for key in (
             'workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision',
@@ -28,7 +29,14 @@ def _hold_binding(session):
 def operation_holds(service):
     """Capture held owners, not a second account of their historical effects."""
     return {row['id']: _hold_binding(row) for row in service.state.get('sessions', [])
-            if row.get('configurationBusy')}
+            if _configuration_owner(row)}
+
+
+def _configuration_owner(session):
+    """Saved adoption and unresolved operations need writer exclusion, not recovery."""
+    return bool(session.get('configurationBusy') or session.get('configurationPending')
+        or session.get('configurationOperationFence')
+        or session.get('pendingConfiguration', {}).get('phase') in {'queued', 'applying', 'error'})
 
 
 def retain_operation_holds(service, expected, stack):
@@ -63,11 +71,11 @@ def _application_activity(service, runtime_observation):
 
 
 def _settings_hold(service, session, *, application=False, activity=None):
-    """Separate idle app holds from component adoption's recovery qualification."""
+    """App replacement observes execution; component adoption also qualifies recovery."""
     pending = session.get('pendingConfiguration', {})
     if session.get('status') not in {'idle', 'stopped', 'interrupted', 'error'}:
         return _hold('session-not-quiescent', 'Conversation has not reached a quiescent state')
-    if pending.get('phase') != 'error':
+    if not application and pending.get('phase') != 'error':
         if pending.get('phase') == 'queued':
             return _hold('configuration-queued', 'Conversation settings are queued')
         if pending.get('phase') == 'applying':
@@ -81,9 +89,9 @@ def _settings_hold(service, session, *, application=False, activity=None):
         return _hold('configuration-operation-fence', 'Conversation configuration operation fence remains held')
     if application and any(row.get('phase') == 'pending' for row in session.get('worktreeHandoffs', [])):
         return _hold('checkout-handoff-pending', 'Checkout handoff has not settled')
-    if session.get('configurationPending'):
+    if not application and session.get('configurationPending'):
         return _hold('configuration-pending', 'Conversation configuration changes are pending')
-    if session.get('configurationRefresh', {}).get('phase') == 'applying':
+    if not application and session.get('configurationRefresh', {}).get('phase') == 'applying':
         return _hold('configuration-refresh-applying', 'Conversation configuration refresh is being applied')
     if any(turn.get('phase') == 'running' for turn in session.get('execution', {}).get('turns', [])):
         return _hold('running-turn', 'Conversation has a running turn')
@@ -165,7 +173,8 @@ def assess(service, *, application=False, session_id=None):
     if type(runtime_active) is bool:
         runtime_observation = 'pending' if runtime_active else 'clear'
     elif callable(pending):
-        add('runtime', 'Update cannot verify global runtime activity')
+        add('runtime', 'Update cannot verify global runtime activity',
+            reasonCode='runtime-observer-unavailable', scope='global')
     if runtime_active:
         identify = getattr(runtime, 'pending_session_ids', None)
         ids = identify() if identify else []
@@ -174,7 +183,7 @@ def assess(service, *, application=False, session_id=None):
         if not ids:
             add('runtime', 'Preparing or finishing background runtime work')
     activity = _application_activity(service, runtime_observation) if application and any(
-        row.get('configurationBusy') for row in sessions.values()) else None
+        _configuration_owner(row) for row in sessions.values()) else None
     operations = [op for op in state.get('smartTools', {}).get('operations', []) if op.get('status') in {'queued', 'running'}]
     if operations or any(not task.done() for task in getattr(service, 'smart_tool_tasks', ())):
         add('smart-tools', 'A Smart Tool operation is still running')
@@ -185,7 +194,7 @@ def assess(service, *, application=False, session_id=None):
         add('voice', 'A voice call is active', state['voice'].get('sessionId'))
     for session in sessions.values():
         sid = session['id']
-        if session.get('configurationBusy'):
+        if (_configuration_owner(session) if application else session.get('configurationBusy')):
             unknown = any(row.get('phase') == 'unknown' for row in session.get('worktreeHandoffs', []))
             if unknown:
                 hold = _hold('checkout-handoff-unknown', 'Checkout handoff needs inspection; restarting will not resolve it')

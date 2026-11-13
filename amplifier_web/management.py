@@ -50,11 +50,13 @@ class Management:
                 elif pending.get('phase') in {'queued', 'applying'}:
                     # A persisted dispatch can have saved settings before losing
                     # its result. Reopening is observation, never permission to retry.
-                    self.configuration_transition(session, record['id'], phase='error',
+                    record = self.configuration_transition(session, record['id'], phase='error',
                         stage='interrupted', error='Configuration application was interrupted; its original operation is retained and was not repeated.')
+                record = self.settle_interrupted_configuration(session, record)
                 if record['state']['effect'] != 'none' or pending.get('recoveryRequired'):
                     session['configurationBusy'] = True
-                    session['configurationOperationFence'] = record['id']
+                    if session.get('configurationOperationFence') is None:
+                        session['configurationOperationFence'] = record['id']
             except (OSError, ValueError, KeyError, TypeError):
                 # Older records have neither an immutable payload binding nor a
                 # way to distinguish a user action from missing agent authority.
@@ -63,7 +65,8 @@ class Management:
                     'error': 'The original configuration operation cannot be verified. No pending change was repeated.',
                     'recoveryRequired': True}
                 session['configurationBusy'] = True
-                session['configurationOperationFence'] = pending.get('operationId')
+                if session.get('configurationOperationFence') is None:
+                    session['configurationOperationFence'] = pending.get('operationId')
             restored.add(session['id'])
 
         service._save_changes(sessions=restored, globals={'notificationSettings'})
@@ -78,7 +81,12 @@ class Management:
                 for sid, operation in outcomes:
                     async with service.lock:
                         try:
-                            publish_outcome(self, service._session(sid), operation)
+                            current = service._session(sid)
+                            publish_outcome(self, current, operation)
+                            if (current.get('status') in {'stopped', 'interrupted'}
+                                    or self.unresolved_configuration(current)
+                                    or self.configuration_record(sid, operation).get('recoveryNoInput')):
+                                continue
                         except (OSError, ValueError, KeyError, TypeError):
                             continue  # Retain unavailable evidence; do not invent a continuation.
                     await service.collaboration.drain(sid)
@@ -499,14 +507,12 @@ class Management:
 
     def configuration_error(self, session, operation, error):
         try:
-            from .configuration_recovery import evidence, latest_attempt
+            from .configuration_recovery import terminal_no_effect
             record = self.configuration_record(session['id'], operation)
             changes = {}
             if record['state']['effect'] == 'unknown':
                 try:
-                    attempt = latest_attempt(record)
-                    observed = evidence(attempt, home=self.service.data_dir) if attempt else None
-                    if observed and observed['effect'] == 'none' and observed.get('terminal') is True:
+                    if terminal_no_effect(self, session, record):
                         # The exact native attempt finished before any write.
                         # Retain the error, but don't require manual recovery
                         # merely to release this operation's input fence.
@@ -523,6 +529,49 @@ class Management:
                     error='The original configuration operation cannot be verified. No automatic recovery was attempted.')
                 session['configurationBusy'] = True
             return None
+
+    def settle_interrupted_configuration(self, session, record):
+        """Startup bookkeeping under absent native ownership, never a continuation."""
+        from .configuration_recovery import terminal_no_effect
+        operation = record['id']
+        task = self.pending_config_tasks.get(session['id'])
+        if (record['state']['phase'] != 'error'
+                or record['state']['effect'] == 'none' and not record['state'].get('recoveryRequired')
+                    and not record.get('recoveryNoInputBinding')
+                or session.get('configurationOperationFence') not in {None, operation}
+                or self.lock.locked() or task is not None and not task.done()
+                or not self.configuration_idle({**session, 'pendingConfiguration': {}, 'configurationBusy': False})
+                or any(row.get('phase') in {'pending', 'unknown'} for row in session.get('worktreeHandoffs', []))
+                or any(row.get('phase') == 'running' for row in session.get('execution', {}).get('turns', []))):
+            return record
+        try:
+            with self.service.runtime.stopped_boundary(session):
+                if not terminal_no_effect(self, session, record):
+                    return record
+                # Persist the input cutoff BEFORE releasing admission, including
+                # restart after an interrupted publication. No old input drains.
+                from .host.config import write_private
+                marker = max((row for row in (
+                    record.get('recoveryNoInputBinding'), session.get('cancelledConfigurationInput'),
+                    session['pendingConfiguration'].get('recoveryNoInput')) if isinstance(row, dict)),
+                    key=lambda row: row['acceptedAt'], default=None) or {
+                    'generationId': (session.get('collaborationGeneration') or {}).get('id'),
+                    'acceptedAt': time.time()}
+                record.update(recoveryNoInput=True, recoveryNoInputBinding=marker)
+                write_private(self.configuration_record_path(session['id'], operation), json.dumps(record))
+                session['pendingConfiguration']['recoveryNoInput'] = copy.deepcopy(marker)
+                session['cancelledConfigurationInput'] = copy.deepcopy(marker)
+                session['pendingConfiguration'].update(copy.deepcopy(record['state']), revision=record['revision'])
+                session['configurationOperationFence'] = operation
+                if (record['state'].get('stage') != 'reconciled'
+                        or record['state']['effect'] != 'none' or record['state'].get('recoveryRequired')):
+                    record = self.configuration_transition(session, operation, phase='error', stage='reconciled',
+                        effect='none', recoveryRequired=False,
+                        recovery_source={'origin': 'internal', 'action': 'startup-terminal-observation'})
+                self.settle_configuration_fence(session, operation)
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            pass  # Missing, partial or unavailable proof remains a local hold.
+        return record
 
     @staticmethod
     def configuration_target_binding(session):
