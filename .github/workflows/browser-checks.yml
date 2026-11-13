@@ -183,13 +183,18 @@ jobs:
         id: frontend-build
       - name: Capture verified captured-delivery build output
         if: ${{ inputs.captured_message_delivery && steps.frontend-build.outcome == 'success' }}
-        run: python scripts/frontend_build_artifact.py create --destination output/captured-frontend-build
+        run: |
+          # Evidence is not an authored build input. Preserve it outside the
+          # source while the strict existing source-identity guard inspects Git.
+          mv output/browser-checks "$RUNNER_TEMP/captured-delivery-evidence"
+          trap 'mv "$RUNNER_TEMP/captured-delivery-evidence" output/browser-checks' EXIT
+          python scripts/frontend_build_artifact.py create --destination "$RUNNER_TEMP/captured-frontend-build"
       - name: Retain importable captured-delivery build output
         if: ${{ inputs.captured_message_delivery && steps.frontend-build.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: captured-frontend-build-${{ github.sha }}-${{ github.run_attempt }}
-          path: output/captured-frontend-build/
+          path: ${{ runner.temp }}/captured-frontend-build/
           include-hidden-files: true
           if-no-files-found: error
       - name: Retain the successful production web build

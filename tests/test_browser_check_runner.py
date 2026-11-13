@@ -1540,6 +1540,10 @@ def test_captured_message_delivery_workflow_is_manual_fixed_and_retains_failures
     source = next(step for step in steps if step.get('name') == 'Bind captured delivery source before setup')
     assert 'HEAD^{tree}' in source['run'] and 'selected-client.json' in source['run']
     assert steps.index(source) < next(i for i, step in enumerate(steps) if 'setup-python@' in step.get('uses', ''))
+    capture = next(step for step in steps if step.get('name') == 'Capture verified captured-delivery build output')
+    assert 'mv output/browser-checks "$RUNNER_TEMP/captured-delivery-evidence"' in capture['run']
+    assert 'trap ' in capture['run'] and '--destination "$RUNNER_TEMP/captured-frontend-build"' in capture['run']
+    assert 'gitignore' not in capture['run'] and 'info/exclude' not in capture['run']
 
 
 def test_attachment_focus_selects_exact_existing_owner_without_changing_plan():
