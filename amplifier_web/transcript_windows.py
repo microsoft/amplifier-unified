@@ -455,3 +455,46 @@ class TranscriptWindows:
         end = min(len(text), start + limit)
         return {'value': text[start:end], 'nextOffset': end if end < len(text) else None,
                 'total': len(text)}
+
+    @staticmethod
+    def _public_room_row(row):
+        return (row.get('role') in {'user', 'assistant'} and not row.get('partial')
+                and type(row.get('roomSequence')) is int and row['roomSequence'] > 0
+                and isinstance(row.get('text'), str) and not row.get('displayOnly'))
+
+    async def read_room(self, session_id, *, before=None, limit=20):
+        """Public source data only, without browser actions or private drafts.
+
+        Paging and text ownership remain with the existing saved-window owner.
+        A page can contain fewer public rows than its physical source range.
+        """
+        from .shared_conversation import SharedConversations
+        page = await self.read(session_id, before=before, limit=limit)
+        retained = self.pages.get((session_id, page['windowKey']))
+        if retained is None:
+            raise ValueError('This message window expired. Reload its page.')
+        items = []
+        for row in retained[0]['items']:
+            if not self._public_room_row(row):
+                continue
+            item = {key: copy.deepcopy(row[key]) for key in
+                    ('id', 'roomSequence', 'role', 'agentId', 'agentLabel', 'createdAt') if key in row}
+            actor, is_agent = SharedConversations._actor(row)
+            item['author'] = {'id': actor, 'isAgent': is_agent}
+            text = row['text']
+            item.update(text=text[:2048], textTruncated=len(text) > 2048)
+            if item['textTruncated']:
+                item['continuation'] = {'message_id': row['id'], 'window_key': page['windowKey'],
+                    'digest': hashlib.sha256(text.encode()).hexdigest(), 'offset': 2048}
+            items.append(item)
+        return {'conversationId': session_id, 'items': items, 'before': page['before'],
+                'hasEarlier': page['hasEarlier'], 'unavailableRanges': page['unavailableRanges']}
+
+    async def read_room_text(self, session_id, *, message_id, window_key, digest, offset=0, limit=8000):
+        retained = self.pages.get((session_id, window_key))
+        row = next((row for row in retained[0]['items'] if row.get('id') == message_id), None) if retained else None
+        if row is None or not self._public_room_row(row):
+            raise ValueError('This public message window expired. Reload its page.')
+        result = await self.read_text(session_id, {'field': 'text', 'id': message_id,
+            'windowKey': window_key, 'digest': digest, 'offset': offset, 'limit': limit})
+        return {'conversationId': session_id, 'messageId': message_id, 'offset': offset, **result}

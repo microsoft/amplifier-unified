@@ -53,9 +53,9 @@ class ACPParticipant:
               and message.get('id') == self._active_prompt_id):
             self._active_prompt_id = None
 
-    async def connect(self, binding, save_binding):
+    async def connect(self, binding, save_binding, *, room_context=None):
         from acp import PROTOCOL_VERSION, spawn_agent_process
-        from acp.schema import ClientCapabilities
+        from acp.schema import ClientCapabilities, HttpMcpServer
 
         if self.connection is not None and self.process.returncode is None:
             return
@@ -75,13 +75,20 @@ class ACPParticipant:
             self.capabilities = {'text': True, 'streaming': True, 'stop': True,
                                  'resume': bool(sessions and sessions.resume is not None),
                                  'nativeControls': False}
+            servers = []
+            if room_context is not None:
+                http = initialized.agent_capabilities.mcp_capabilities
+                descriptor = room_context() if http and http.http else None
+                if descriptor is not None:
+                    servers = [HttpMcpServer.model_validate(descriptor)]
+                self.capabilities['roomContext'] = bool(servers)
             identity = binding.get('sessionId')
             if identity:
                 if not self.capabilities['resume']:
                     raise ValueError('This agent cannot resume its saved session. The binding was preserved.')
-                await self.connection.resume_session(session_id=identity, cwd=self.cwd, mcp_servers=[])
+                await self.connection.resume_session(session_id=identity, cwd=self.cwd, mcp_servers=servers)
             else:
-                created = await self.connection.new_session(cwd=self.cwd, mcp_servers=[])
+                created = await self.connection.new_session(cwd=self.cwd, mcp_servers=servers)
                 identity = created.session_id
             self.session_id = identity
             # The host commits the execution identity before any prompt can run.

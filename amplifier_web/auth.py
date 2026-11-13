@@ -257,6 +257,10 @@ async def auth_required(request: web.Request, handler):
     cross_site = request.headers.get("Sec-Fetch-Site") == "cross-site"
     if not extension and ((cross_site and not is_entry_navigation(request)) or not allowed_origin(request)):
         return web.json_response({"error": "Cross-origin requests are not permitted."}, status=403)
+    if request.path == '/api/room-context/mcp' and request.method == 'POST':
+        # This exact handler checks a room/source-bound transport capability.
+        # Neither that capability nor an owner cookie grants other API access.
+        return await handler(request)
     if request.path == browser_entry.ISSUE_PATH:
         authorization = request.headers.get("Authorization", "")
         if (request.method != "POST" or not authorization.startswith("Bearer ")

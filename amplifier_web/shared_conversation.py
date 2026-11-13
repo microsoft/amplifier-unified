@@ -265,9 +265,12 @@ class SharedConversations:
     async def _run(self, sid, turn):
         try:
             session = self.service._session(sid)
+            context_source = getattr(self.service, 'room_context', None)
+            options = ({'room_context': lambda: context_source.descriptor(sid, turn.agent_id)}
+                       if context_source is not None else {})
             await asyncio.wait_for(turn.participant.connect(
                 dict(self.participant(session, turn.agent_id)),
-                lambda value: self.owner._binding(sid, turn.agent_id, value)), 30)
+                lambda value: self.owner._binding(sid, turn.agent_id, value), **options), 30)
             async with self.service.lock:
                 session = self.service._session(sid)
                 if not self._valid(session, turn):
