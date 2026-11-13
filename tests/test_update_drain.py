@@ -32,7 +32,7 @@ def healthy(app):
 
 async def send(app, identity, **kwargs):
     return await app.dispatch('conversation.send', {'sessionId': app._session()['id'],
-        'text': identity, 'allowNextTurn': True, **kwargs}, command_id=identity, include_state=False)
+        'text': identity, **kwargs}, command_id=identity, include_state=False)
 
 
 async def test_many_saved_messages_are_acknowledged_and_released_once_in_order(app):
@@ -118,7 +118,7 @@ async def test_explicit_steering_is_not_converted_to_an_ordinary_saved_message(a
     session['collaborationGeneration'] = {'id': 'active', 'terminal': False}
     app.runtime.steer = AsyncMock(return_value={'accepted': False, 'disposition': 'held', 'reason': 'Steering window ended'})
     result = await app.dispatch('conversation.send', {'sessionId': session['id'], 'text': 'exact steering',
-        'expectedGenerationId': 'active', 'allowNextTurn': False}, command_id='strict', include_state=False)
+        'expectedGenerationId': 'active'}, command_id='strict', include_state=False)
     assert result['steering']['disposition'] == 'held'
     assert app.state['updates']['drain']['messages'] == []
     assert not app.runtime.sent

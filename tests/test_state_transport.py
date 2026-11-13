@@ -372,7 +372,7 @@ async def test_steering_receipt_observes_exact_attachment_consumption(authentica
     with service.clients.bind('sender'):
         queue = service.subscribe()
     args = {'sessionId': sid, 'text': 'Correction', 'expectedGenerationId': 'generation',
-            'allowNextTurn': True, 'attachmentIds': [attachment['id']]}
+            'attachmentIds': [attachment['id']]}
     pending = asyncio.create_task(command('correction', 'conversation.send', args))
     try:
         if disposition == 'early-applied':

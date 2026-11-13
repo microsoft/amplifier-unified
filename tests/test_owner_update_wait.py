@@ -673,8 +673,8 @@ async def supersede_wait_with_human_input(h):
     worker.runtime.generation = None
     h.app._session(h.sid).update(status='idle')
     h.app._session(h.sid)['collaborationGeneration']['terminal'] = True
-    await h.app.dispatch('conversation.send', {'sessionId': h.sid, 'text': 'New direction',
-        'allowNextTurn': True}, command_id='fresh-human', include_state=False)
+    await h.app.dispatch('conversation.send', {'sessionId': h.sid, 'text': 'New direction'},
+        command_id='fresh-human', include_state=False)
     await h.settle()
     worker.runtime.generation = {'id': 'replacement-generation:' + h.sid}
     await generation(h.app, h.app._session(h.sid), worker.runtime.generation['id'], ['fresh-human'])
@@ -1258,8 +1258,8 @@ async def test_unknown_boundary_does_not_hold_a_new_human_generation(waiting):
     h.runtime.native[h.sid].runtime.generation = None
     h.app._session(h.sid).update(status='idle')
     h.app._session(h.sid)['collaborationGeneration']['terminal'] = True
-    await h.app.dispatch('conversation.send', {'sessionId': h.sid, 'text': 'New direction',
-        'allowNextTurn': True}, command_id='fresh-human', include_state=False)
+    await h.app.dispatch('conversation.send', {'sessionId': h.sid, 'text': 'New direction'},
+        command_id='fresh-human', include_state=False)
     await h.settle()
     assert not drain.owner_waiting(h.app, h.sid)
     await drain.observe_waiters(h.manager)

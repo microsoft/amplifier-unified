@@ -301,7 +301,10 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     if kind in {"steering.sent", "steering.accepted", "steering.applied", "steering.pending", "steering.failed", "steering.held", "steering.unknown", "native.outcome_unknown"}:
         return "runtime.steering", {**base, "event": kind, **{key: event[key] for key in
             ("input_id", "response_id", "steer_id", "accepted", "reason", "execution_replayed",
-             "target_generation_id", "disposition", "generation_id", "delivery") if key in event}}
+             "target_generation_id", "disposition", "generation_id", "delivery", "interruptionRevision") if key in event}}
+    if kind in {"input.queued", "input.held", "input.unknown"} and event.get('delivery') in {'request_boundary', 'native'}:
+        return "runtime.steering", {**base, "event": kind, **{key: event[key] for key in
+            ("input_id", "generation_id", "target_generation_id", "delivery", "reason", "interruptionRevision") if key in event}}
     if kind.startswith("job."):
         statuses = {"queued": "queued", "returned": "completed", "failed": "error",
                     "cancelled": "cancelled", "cancel_requested": "stopping", "recovered": "interrupted"}
@@ -331,7 +334,9 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
                 "input.delivered": "working"}
     if kind in statuses:
         return "runtime.status", {**base, "status": statuses[kind], "event": kind,
-            **({"inputId": event["input_id"]} if "input_id" in event else {})}
+            **({"inputId": event["input_id"]} if "input_id" in event else {}),
+            **({key: event[key] for key in ('input_id', 'generation_id', 'target_generation_id',
+                'delivery', 'interruptionRevision') if key in event} if kind == 'input.delivered' else {})}
     if kind in {"provider.error", "persistence.failed", "command.rejected", "native.error"}:
         return "runtime.error", {**base, "error": event.get("reason") or event.get("error_type") or kind,
                                   "event": kind, "errorType": event.get("error_type")}
@@ -1384,7 +1389,7 @@ class RuntimeManager:
                             row["idle"] = False
                     if data.get("type") == "input.delivered" and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
                         row["inputId"] = data.get("input_id")
-                    if (data.get("type") == "input.delivered" or data.get("type", "").startswith("steering.")) and (emitter != row["runtime_id"] or root_emitter != row["runtime_id"]):
+                    if (data.get("type", "").startswith(("input.", "steering.")) or data.get('type') == 'native.outcome_unknown') and (emitter != row["runtime_id"] or root_emitter != row["runtime_id"]):
                         continue  # Child input cannot mutate root admission provenance.
                     if data.get("type", "").startswith("generation.") or data.get("type") == "collaboration.checkpoint":
                         data = dict(data)
@@ -1643,22 +1648,48 @@ class RuntimeManager:
             await self.start(session, emit)
 
     async def send(self, session, text, input_id, emit, *, admission_check=None):
-        if admission_check:
-            admission_check()
+        def current_input():
+            current = self._check_execution(session['id'], session)
+            if current is not None and current.get('interruptionRevision', 0) != session.get('interruptionRevision', 0):
+                raise RuntimeStartupError('This input was stopped before admission. Nothing was sent.')
+            if admission_check:
+                admission_check()
+        current_input()
         update_gate = getattr(self, 'update_input_gate', lambda *args: None)
         update_gate(session['id'], input_id)
-        configuration_guard = await self._start_for_input(session, emit,
-            **({'admission_check': admission_check} if admission_check else {}))
+        configuration_guard = None
         def guard():
+            current_input()
             update_gate(session['id'], input_id)
             message = next((m for m in session.get('messages', []) if m.get('inputId') == input_id), {})
             getattr(self, 'update_message_guard', lambda sid, message: None)(session['id'], message)
             if configuration_guard:
                 configuration_guard()
-        return await self._request(session["id"], "send", guard=guard, text=text, input_id=input_id,
+        arguments = dict(text=text, input_id=input_id,
             reply_context=next((m.get("replyTo") for m in session.get("messages",[]) if m.get("inputId")==input_id),None),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
+        if session.get('pendingModelSelection') or session.get('pendingBundleSelection') or session.get('fileAccessPending'):
+            # Future settings must not interrupt live guidance. Ask the actual
+            # owner to admit with its mounted configuration, or prove no effect
+            # while idle. Host display status/generation never picks the route.
+            pending = None
+            async with self._admission(session['id']):
+                guard()
+                row = self.workers.get(session['id'])
+                if (row and row['process'].returncode is None and not row.get('closing')
+                        and row['ready'].done() and not row['ready'].cancelled() and not row['ready'].exception()):
+                    pending = await self._admit(session['id'], 'send',
+                        {**arguments, 'configuration_if_idle': True})
+            if pending is not None:
+                result = await self._reply(*pending, op='send', args=arguments)
+                if not (isinstance(result, dict) and result.get('accepted') is False
+                        and result.get('effect') == 'none' and result.get('configurationRequired') is True):
+                    return result  # Accepted/unknown/failed input is never resubmitted.
+        if session.get('fileAccessPending'):
+            raise RuntimeStartupError('File permissions are awaiting application. No input was sent.')
+        configuration_guard = await self._start_for_input(session, emit, admission_check=current_input)
+        return await self._request(session["id"], "send", guard=guard, **arguments)
 
     async def steer(self, session, text, input_id, emit):
         """Target the existing worker only; steering can never start a worker."""
@@ -1668,13 +1699,9 @@ class RuntimeManager:
         args = {'operation': 'conversation.steer', 'arguments': {
             'text': text, 'inputId': input_id,
             'targetGenerationId': message['steering']['generationId'],
-            'allowNextTurn': message['steering'].get('allowNextTurn') is True,
             'reply_context': message.get('replyTo'), 'attachments': message.get('attachments', []),
             'context_binding': session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []})}}
         async with self._admission(sid):
-            if message['steering'].get('allowNextTurn') is True:
-                getattr(self, 'update_input_gate', lambda *args: None)(sid, input_id)
-                getattr(self, 'update_message_guard', lambda *args: None)(sid, message)
             row = self.workers.get(sid)
             if self._closed or not row or row['process'].returncode is not None or row.get('closing'):
                 return {'accepted': False, 'reason': 'The run is no longer available for steering.'}

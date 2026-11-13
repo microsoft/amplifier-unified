@@ -625,6 +625,14 @@ class Worker:
             # This is lifecycle evidence, not optimistic host send admission.
             event['observedAt'] = time.time()
         root_generation = event_session_id == root_session_id and event_root_id == root_session_id
+        if root_generation and event.get('input_id') and (
+                event.get('type', '').startswith(('input.', 'steering.'))
+                or event.get('type') == 'native.outcome_unknown'):
+            # Same source capture as generation.started, not a host projection
+            # looked up when a delayed pipe event finally arrives.
+            binding = self.context_bindings.get(event['input_id'], {})
+            event['interruptionRevision'] = binding.get('interruptionRevision',
+                (self.start_config or {}).get('interruptionRevision', 0))
         episode_terminal = event.get('type') in {'generation.finished', 'generation.failed', 'generation.detached'}
         if episode_terminal and root_session_id and root_generation and self.session:
             sponsor = self.session.coordinator.get_capability('web.computer_episodes')
@@ -1397,6 +1405,9 @@ class Worker:
         """Serialize admission with retirement and bind a per-work write token."""
 
         op = data.get("op")
+        # Capture before waiting for admission/preparation. Stop bypasses this
+        # lock and invalidates all already waiting ordinary inputs.
+        stop_revision = self.stop_revision
         if op in {"approval", "coordination.approval"}:
             # A control can await a human decision while owning command_lock.
             # Both the independent question and its UI answer must bypass it;
@@ -1451,6 +1462,11 @@ class Worker:
             return
         try:
             async with self.command_lock:
+                if op in {'send', 'retry'} and self.stop_revision != stop_revision:
+                    publish({'op': 'reply', 'id': data.get('id'), 'result': {
+                        'accepted': False, 'delivery': 'failed', 'effect': 'none',
+                        'reason': 'This input was stopped before admission. Nothing was sent.'}})
+                    return
                 if self.ownership.yielding or self.shutdown.is_set():
                     from amplifier_foundation.session import SessionBusyError
                     raise SessionBusyError(self.shared_handle.owner if self.shared_handle else None)
@@ -1737,7 +1753,22 @@ class Worker:
             elif op in {"send", "retry"}:
                 from amplifier_module_loop_live.runtime import Input
                 from amplifier_web.message_interactions import prepare_input
+                if data.get('configuration_if_idle') and self.runtime.generation is None and data['input_id'] not in self.runtime.accepted:
+                    result = {'accepted': False, 'effect': 'none', 'configurationRequired': True}
+                    publish({'op': 'reply', 'id': identity, 'result': result})
+                    return
+                # An active admission captures the owner's mounted settings.
+                # If completion races preparation/consumption it may begin the
+                # next turn with those same settings; future choices stay saved
+                # and no "configuration applied" receipt is emitted.
+                epoch = self.stop_revision
                 text = await prepare_input(self.session.coordinator, data['text'], data.get('reply_context'), max_chars=self.runtime.max_input_chars)
+                if (self.stop_revision != epoch or self.runtime.closed or self.runtime.stop_requested
+                        or self.shutdown.is_set() or self.ownership.yielding):
+                    publish({'op': 'reply', 'id': identity, 'result': {
+                        'accepted': False, 'delivery': 'failed', 'effect': 'none',
+                        'reason': 'This input was stopped before admission. Nothing was sent.'}})
+                    return
                 self.bind_input_context(data['input_id'], data, data.get('context_binding'))
                 input_id = await self.runtime.submit(Input(
                     "user", text, id=data["input_id"],

@@ -146,10 +146,12 @@ async def test_real_no_command_id_input_keeps_captured_choices_during_ready_boun
     await asyncio.wait_for(entered.wait(), 2)
     try:
         assert app._session()['status'] == 'ready'
-        assert app._session()['execution']['turns'][-1]['phase'] == 'running'
-        before = deepcopy(app._session()['execution'])
+        message = app._session()['messages'][-1]
+        assert message['delivery']['status'] == 'sending'
+        assert not app._session().get('execution', {}).get('turns')
+        before = deepcopy(message)
         await app.dispatch('conversation.configure', choices(app, bundle='work'), include_state=False)
-        assert app._session()['execution'] == before
+        assert app._session()['messages'][-1] == before
         assert app._session()['pendingBundleSelection']['bundle'] == 'work'
     finally:
         release.set()
