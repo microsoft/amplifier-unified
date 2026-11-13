@@ -44,7 +44,7 @@ for line in sys.stdin:
 @pytest.mark.parametrize('terminal', ['finished', 'detached'])
 @pytest.mark.parametrize('reason', [None, 'configuration', 'retention', 'shutdown'])
 async def test_native_closure_does_not_manufacture_stop_before_late_fault(tmp_path, terminal, reason):
-    """Read the actual wire order; closure must not suppress a later failed save."""
+    """Read actual wire order: closure is neither Stop nor proof that saving succeeded."""
     fixture = r'''
 import json,sys
 for line in sys.stdin:
@@ -52,11 +52,14 @@ for line in sys.stdin:
     if data['op']=='start':
         print(json.dumps({'type':'runtime.ready','report':{}}),flush=True)
     elif data['op']=='fixture.close':
+        terminal='''+repr(terminal)+r'''
+        fault={'type':'runtime.error','errorType':'RuntimeError','error':'A runtime fault occurred.'}
+        if terminal=='detached':
+            fault.update(event='persistence.failed',errorType='OSError',
+                         error='The conversation could not be saved. Work was not replayed.')
         for event in [
-            {'type':'generation.'''+terminal+r'''','generation_id':'g','input_ids':['once']},
-            {'type':'session.closed','reason':'cancelled'},
-            {'type':'runtime.error','event':'persistence.failed','errorType':'OSError',
-             'error':'The conversation could not be saved. Work was not replayed.'}]:
+            {'type':'generation.'+terminal,'generation_id':'g','input_ids':['once']},
+            {'type':'session.closed','reason':'cancelled'},fault]:
             print(json.dumps(event),flush=True)
         print(json.dumps({'op':'reply','id':data['id'],'result':{'observed':True}}),flush=True)
         break
@@ -80,8 +83,10 @@ for line in sys.stdin:
             ('runtime.generation', 'generation.' + terminal)]
         assert any(kind == 'runtime.warmth' and data['status'] == 'cold' for kind, data in events)
         assert not any(kind == 'runtime.status' and data['status'] == 'stopped' for kind, data in events)
-        assert any(kind == 'runtime.error' and data.get('event') == 'persistence.failed'
-                   and data['errorType'] == 'OSError' for kind, data in events)
+        assert any(kind == 'runtime.error'
+                   and data.get('event') == ('persistence.failed' if terminal == 'detached' else None)
+                   and data['errorType'] == ('OSError' if terminal == 'detached' else 'RuntimeError')
+                   for kind, data in events)
         assert [data['status'] for kind, data in events if kind == 'runtime.ended'] == ['interrupted']
         assert row['inputId'] is None  # No new input, retry, or model work was admitted.
     finally:
