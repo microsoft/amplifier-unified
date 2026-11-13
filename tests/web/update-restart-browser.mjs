@@ -16,7 +16,7 @@ if(pair){
  for(const name of ['AMPLIFIER_TEST_PYTHON','AMPLIFIER_TEST_INSTALLED_PACKAGE','AMPLIFIER_TEST_HOST_PATH',
   'AMPLIFIER_TEST_ASSEMBLY_RECORD','AMPLIFIER_TEST_INSTALLED_IDENTITY','AMPLIFIER_TEST_SOURCE_ROOT','AMPLIFIER_TEST_PAIR_CWD'])
   assert.ok(process.env[name]&&isAbsolute(process.env[name]),'Installed pair requires absolute '+name);
- assert.equal(process.env.AMPLIFIER_TEST_CLIENT_REVISION,'5c2139446586e74081cc38fd02f64ea49e9d7f33');
+ assert.equal(process.env.AMPLIFIER_TEST_CLIENT_REVISION,'cd7d636249575f2f5c3753afcb35fcc72d87dbc1');
  assert.match(process.env.AMPLIFIER_TEST_SERVER_REVISION||'',/^[a-f0-9]{40}$/);
  const checkout=await realpath(process.env.AMPLIFIER_TEST_SOURCE_ROOT);
  const cwd=await realpath(process.env.AMPLIFIER_TEST_PAIR_CWD),rel=relative(checkout,cwd);

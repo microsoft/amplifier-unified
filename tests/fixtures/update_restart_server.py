@@ -12,8 +12,8 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-CLIENT_REVISION = '5c2139446586e74081cc38fd02f64ea49e9d7f33'
-CLIENT_DIGEST = '4f28608db91419a4458d627b7c86e3163baa61c353255ccf4da04bde997d11a6'
+CLIENT_REVISION = 'cd7d636249575f2f5c3753afcb35fcc72d87dbc1'
+CLIENT_DIGEST = '675aa8ced8ed2bce7853e63928882de2bb26bb5a87c5667aedc8cca9cc5e1ef5'
 
 
 def installed_identity():
@@ -92,7 +92,7 @@ def installed_identity():
     if (source != {'repository': 'https://github.com/microsoft/amplifier-client-web',
                    'revision': CLIENT_REVISION}
             or os.environ['AMPLIFIER_TEST_CLIENT_REVISION'] != CLIENT_REVISION):
-        raise ValueError('The probe requires accepted client 5c213, not another selection')
+        raise ValueError('The probe requires accepted client cd7d636, not another selection')
     selected = json.loads((checkout / 'components/web-client.source.json').read_bytes())
     if (selected['source'] != source or selected['inputsSha256'] != CLIENT_DIGEST
             or selected['delivery'] != {'type': 'directory', 'path': 'components/web-client'}):
