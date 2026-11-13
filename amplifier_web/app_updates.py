@@ -911,7 +911,7 @@ async def restore_promoted_application(manager, promoted, recovery, bootstrap):
     manual = recovery.get('manualHandoff')
     if manual is not None:
         from .manual_app_handoff import recovery_context
-        if await recovery_context(manager) != manual:
+        if await recovery_context(manager, expected=manual) != manual:
             raise ValueError('The manual application recovery proof changed')
     async with manager.service.lock:
         state = manager.service.state['updates']

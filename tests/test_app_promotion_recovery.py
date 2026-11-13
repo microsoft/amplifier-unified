@@ -262,9 +262,11 @@ async def test_windows_next_app_recovery_uses_manual_proof_without_feature_grant
             assert saved_updates(promoted.service)["pendingReplacement"]
             assert work_paused(promoted.service.state)
         assert reader.await_count == 2
-    reader.assert_awaited_with(promoted.manager)
     if outcome in {"missing", "restart"}:
         assert reader.await_count == 1
+        reader.assert_awaited_with(promoted.manager)
+    else:
+        reader.assert_awaited_with(promoted.manager, expected=context)
     assert not getattr(promoted.manager, "_running_artifact", None)
 
 

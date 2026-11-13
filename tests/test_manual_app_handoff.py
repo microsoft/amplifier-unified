@@ -6,7 +6,9 @@ qualification; no native handoff or component promotion is claimed here.
 """
 import asyncio
 import copy
+from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -17,6 +19,7 @@ import pytest
 from amplifier_web import app_updates, manual_app_handoff as handoff, updates, update_sequence, update_health
 from amplifier_web.service import AppService
 from amplifier_web.updates import UpdateManager
+from amplifier_web.app_updates import installed_target as actual_installed_target
 
 
 class Runtime:
@@ -857,3 +860,119 @@ async def test_repaired_prefix_requires_current_official_payload_and_same_data_a
     assert proof_path.read_bytes() == original_bytes
     assert not getattr(manager, '_running_artifact', None)
     assert not state.get('pendingRestart') and not state.get('applicationResult')
+
+
+@pytest.mark.parametrize('change', [None, 'payload', 'receipt', 'owner', 'pointer'])
+async def test_postpromotion_recovery_verifies_serving_witness_not_new_launch_target(
+        manager, native_observations, monkeypatch, tmp_path, change):
+    """Real helper/target/restore composition; only native I/O is synthetic."""
+    from amplifier_web import application_generations as generations, windows_service, windows_task_runtime, windows_files
+    from amplifier_web.host import config
+    binding, _, calls = native_observations
+    prefix = tmp_path / 'serving'
+    info = prefix / 'lib/python3.13/site-packages/amplifier_unified-old.dist-info'
+    info.mkdir(parents=True)
+    (info / 'METADATA').write_text('Name: amplifier-unified\nVersion: 0.71.4\n')
+    (prefix / 'Scripts').mkdir()
+    old_python = prefix / 'Scripts/python.exe'
+    old_python.write_bytes(b'old console interpreter')
+    old_windowless = prefix / 'Scripts/pythonw.exe'
+    old_windowless.write_bytes(b'old windowless interpreter')
+    binding.update(dataIdentity='same-data', directories=[['1', '2'], ['1', '3']],
+                   installation=generations.bootstrap_identity(prefix))
+    anchor = copy.deepcopy(binding)
+    anchor.update(version='0.71.3', revision='a' * 40)
+    anchor['directories'][1] = ['1', 'old']
+    anchor['installation'] = {'prefix': '/old-installation', 'digest': 'a' * 64}
+    digest = handoff._save_proof(manager, 'original', {'binding': anchor, 'tlsPin': 'pin'})
+    state = manager.service.state['updates']
+    state['manualHandoff'] = {'phase': handoff.PHASE, 'status': 'succeeded',
+        'requestId': 'original', 'version': anchor['version'], 'revision': anchor['revision'],
+        'proofDigest': digest}
+    native_sys = SimpleNamespace(platform='win32', prefix=str(prefix), executable=str(old_windowless))
+    monkeypatch.setattr(handoff, 'sys', native_sys)
+    monkeypatch.setattr(app_updates, 'sys', native_sys)
+    monkeypatch.setattr(app_updates, 'os', SimpleNamespace(name='nt'))
+    monkeypatch.setattr(windows_service, 'sys', native_sys)
+    monkeypatch.setattr(handoff, '_read', Path.read_bytes)
+    monkeypatch.setattr(app_updates, 'installed_target', actual_installed_target)
+    monkeypatch.setattr(app_updates.shutil, 'which', lambda name: '/fixture/uv')
+    monkeypatch.setattr(config, 'app_home', lambda: manager.home)
+    spec = SimpleNamespace(supervised=True, python=str(old_windowless), data_dir=manager.home)
+    monkeypatch.setattr(windows_service, '_read', lambda home: ({'state': 4, 'instances': 1}, spec))
+    target_observations = []
+    def actual_owner_hint(home):
+        target_observations.append(generations.active(home))
+        return {'pid': os.getpid()}
+    monkeypatch.setattr(windows_task_runtime, 'current_process_record', actual_owner_hint)
+    monkeypatch.setattr(windows_task_runtime, 'observe',
+                        lambda spec: {'pid': os.getpid(), 'phase': 'listening'})
+    monkeypatch.setattr(windows_files, 'address', Path)
+    @contextmanager
+    def native_directory(path, **kwargs):
+        yield SimpleNamespace(read_private=lambda name, limit: b'MZ launcher')
+    monkeypatch.setattr(windows_files, 'directory', native_directory)
+    monkeypatch.setattr(generations, 'verify_candidate', lambda target: None)
+    original_process = app_updates.process
+    async def process(*args, **kwargs):
+        output = await original_process(*args, **kwargs)
+        if args[3] == app_updates.PROBE:
+            return 'AMPLIFIER_UPDATE_PROBE=' + json.dumps({
+                'ok': True, 'isolated': True, 'stage': 'complete',
+                'packageInEnvironment': True, 'version': binding['version']})
+        return output
+    monkeypatch.setattr(app_updates, 'process', process)
+    context = await handoff.recovery_context(manager)
+    assert target_observations == [None, None]  # Actual Windows target path, before promotion.
+    app = context['app']
+    graph = [app]
+    recovery = {'pointer': None, 'python': old_python, 'extras': [],
+        'artifact': context['artifact'], 'installation': generations.bootstrap_identity(prefix),
+        'bootstrap': generations.bootstrap_identity(prefix),
+        'identity': copy.deepcopy(manager.running_identity), 'graph': graph,
+        'manualHandoff': context, 'replacement': {'exact-attempt': 'this-promotion'}}
+    validated = {'revision': 'c' * 40, 'generation': 'e' * 32, 'version': '0.71.5',
+                 'componentDigest': 'f' * 64}
+    folder = generations.directory(manager.home, validated['revision'], validated['generation'])
+    (folder / 'tools/amplifier-unified/Scripts').mkdir(parents=True)
+    (folder / 'validated.json').write_text(json.dumps(validated))
+    (folder / 'tools/amplifier-unified/Scripts/pythonw.exe').write_bytes(b'new interpreter')
+    promoted = generations.promote(manager.home, validated, prefix)
+    # This is the original failing seam: the real target selector now points at
+    # a different executable although the old native process is still serving.
+    with pytest.raises(windows_service.WindowsServiceError, match='differs'):
+        await actual_installed_target()
+    with pytest.raises(windows_service.WindowsServiceError, match='differs'):
+        await handoff.recovery_context(manager)
+    decisions = len(target_observations)
+    async def no_new_release(*args, **kwargs):
+        pytest.fail('Rollback must reuse its already authenticated current-package witness')
+    monkeypatch.setattr(app_updates.artifacts, 'prepare', no_new_release)
+    monkeypatch.setattr(app_updates, 'installed_extras', lambda: [])
+    monkeypatch.setattr(app_updates.components, 'installed_graph', lambda: [])
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(app_updates.components, 'read_graph', AsyncMock(return_value=graph))
+    state.update(pendingReplacement=copy.deepcopy(recovery['replacement']), pendingRestart=None)
+    if change == 'payload':
+        monkeypatch.setattr(handoff, '_payload', lambda proof: {'members': 6})
+    elif change == 'receipt':
+        state['manualHandoff']['proofDigest'] = 'f' * 64
+    elif change == 'owner':
+        binding['ownerSid'] = 'other-owner'
+    elif change == 'pointer':
+        path = manager.home / 'updates/application-active.json'
+        value = json.loads(path.read_text())
+        value['bootstrap']['digest'] = 'e' * 64
+        path.write_text(json.dumps(value))
+    if change:
+        with pytest.raises(ValueError):
+            await app_updates.restore_promoted_application(manager, promoted, recovery, prefix)
+        assert state['pendingReplacement'] == recovery['replacement']
+        assert (manager.home / 'updates/application-active.json').exists()
+    else:
+        assert await app_updates.restore_promoted_application(manager, promoted, recovery, prefix)
+        assert generations.active(manager.home) is None
+        assert state['pendingReplacement'] is None and not state.get('pendingRestart')
+        assert 'restored' in state['detail'].lower()
+    assert len(target_observations) == decisions  # No launch-target rediscovery in rollback.
+    assert not getattr(manager, '_running_artifact', None)
