@@ -3,7 +3,8 @@ import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {mkdir,readFile,writeFile} from 'node:fs/promises';
+import {mkdir,readdir,readFile,writeFile} from 'node:fs/promises';
+import {resolve,sep} from 'node:path';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
@@ -12,14 +13,17 @@ const moduleFailure=process.argv.includes('--module-failure');
 const contextLimit=process.argv.includes('--context-limit');
 const activeWorker=process.argv.includes('--active-worker');
 const lifecycleMode=process.argv.includes('--request-failure')?'request-failure':process.argv.includes('--completed-runtime-fault')?'completed-runtime-fault':null;
-const fixture=spawn(fixturePython(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),[fileURLToPath(new URL('../../tests/fixtures/session_health_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit'],env:{...process.env,...(moduleFailure?{MODULE_FAILURE_FIXTURE:'1'}:{}),...(contextLimit?{CONTEXT_LIMIT_FIXTURE:'1'}:{}),...(activeWorker?{ACTIVE_WORKER_FIXTURE:'1'}:{}),...(lifecycleMode?{LIFECYCLE_FIXTURE:lifecycleMode}:{})}});
+const output=process.env.AMPLIFIER_TEST_ARTIFACTS?resolve(process.env.AMPLIFIER_TEST_ARTIFACTS)+sep:fileURLToPath(new URL('../../output/conversation-details-proof/',import.meta.url));
+await mkdir(output,{recursive:true});
+if(process.env.AMPLIFIER_TEST_ARTIFACTS)assert.deepEqual(await readdir(output),[],'AMPLIFIER_TEST_ARTIFACTS must be a new or empty directory; existing evidence must not be overwritten');
+const pythonArgs=process.env.AMPLIFIER_TEST_INSTALLED_PACKAGE?['-I','-B','-u']:[];
+const fixture=spawn(fixturePython(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),[...pythonArgs,fileURLToPath(new URL('../../tests/fixtures/session_health_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit'],env:{...process.env,...(moduleFailure?{MODULE_FAILURE_FIXTURE:'1'}:{}),...(contextLimit?{CONTEXT_LIMIT_FIXTURE:'1'}:{}),...(activeWorker?{ACTIVE_WORKER_FIXTURE:'1'}:{}),...(lifecycleMode?{LIFECYCLE_FIXTURE:lifecycleMode}:{})}});
 const stop=ownFixture(fixture,{label:'Session health fixture'});
 let browser,originalError;
 try{
  const ready=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}});fixture.once('exit',code=>reject(Error('Fixture exit '+code)))});
  browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1280,height:900},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));await page.goto(ready.url);await showFixtureConversation(page);
- const output=fileURLToPath(new URL('../../output/conversation-details-proof/',import.meta.url));await mkdir(output,{recursive:true});
  if(lifecycleMode){
   await lifecycleCheck(page,ready,output);
  }else{

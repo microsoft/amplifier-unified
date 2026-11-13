@@ -1,10 +1,24 @@
 """Real host and persisted handoff receipts; synthetic recipient, no model or account."""
 import asyncio
 import json
+import os
 from pathlib import Path
 import signal
+import sys
 import tempfile
 import uuid
+
+if installed := os.environ.get('AMPLIFIER_TEST_INSTALLED_PACKAGE'):
+    if not Path(installed).is_absolute() or not sys.flags.isolated or not sys.dont_write_bytecode:
+        raise ValueError('Installed fixture requires an absolute package path and Python -I -B')
+    import amplifier_web
+    package = Path(installed).resolve()
+    if (Path(amplifier_web.__file__).resolve() != package / '__init__.py'
+            or {Path(path).resolve() for path in amplifier_web.__path__} != {package}):
+        raise ValueError('Fixture imported a different amplifier_web package')
+    # Validate the installed package before exposing only test-helper siblings,
+    # never the checkout root excluded by -I.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from aiohttp import web
 import settings_ui_server as fixture
@@ -89,9 +103,36 @@ async def main(home):
 
     async def check(request):
         authorize(request)
+        # Resident owners can be evicted while this journey creates several
+        # chats. Count canonical directory membership, not its hot working set.
         return web.json_response({'started': runtime.started, 'sent': runtime.sent,
             'sessions': [{key: row.get(key) for key in ('id', 'title', 'workspace', 'sessionKind',
-                'parentId', 'bundle', 'selection', 'creationCommandId')} for row in service.state['sessions']]})
+                'parentId', 'bundle', 'selection', 'creationCommandId')}
+                for row in service.directory.select(limit=100, order='id')]})
+
+    async def receipt(request):
+        authorize(request)
+        from amplifier_web.new_chat_handoffs import public
+        row = service.handoffs.load(request.match_info['request_id'])
+        if not row:
+            raise web.HTTPNotFound(text='No retained handoff receipt')
+        # Inspect the exact journal entry, not the intentionally unresolved-only
+        # browser projection. This endpoint neither reconciles nor replays work.
+        return web.json_response(public(row))
+
+    async def contradict(request):
+        authorize(request)
+        args = await request.json()
+        async with service.lock:
+            row = service.handoffs.load(args['requestId'])
+            if not row or row['status'] != 'pending':
+                raise web.HTTPConflict(text='Only an unstarted fixture review may be contradicted')
+            # Deliberately inconsistent retained evidence, not a canonical success
+            # receipt. No chat/input exists; a status label alone must not hide it.
+            row.update(status='accepted', delivery='unknown',
+                       message='Synthetic contradictory receipt: opening brief acceptance is not confirmed.')
+            service.handoffs.save(row, publish=True)
+        return web.json_response({'requestId': row['requestId']})
 
     async def remove_target(request):
         authorize(request)
@@ -126,6 +167,8 @@ async def main(home):
     app.router.add_post('/fixture/propose', propose)
     app.router.add_post('/fixture/start', start)
     app.router.add_get('/fixture/check', check)
+    app.router.add_get('/fixture/receipt/{request_id}', receipt)
+    app.router.add_post('/fixture/contradict', contradict)
     app.router.add_post('/fixture/remove-target', remove_target)
     app.router.add_post('/fixture/delivery', delivery)
     runner = web.AppRunner(app)
