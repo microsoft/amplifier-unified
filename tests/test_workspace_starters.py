@@ -96,7 +96,7 @@ def test_only_preconfigured_bundles_offered_and_sources_correct(tmp_path):
     assert {row['value'] for row in catalog.listing()['bundles']} == expected
     assert catalog.snapshot('amplifier-development')['bundle'] == 'work-amp-dev'
     assert {row['id']: row['revision'] for row in catalog.listing()['items']} == {
-        'blank': 1, 'development': 7, 'amplifier-development': 9}
+        'blank': 1, 'development': 7, 'amplifier-development': 10}
     assert catalog.snapshot('development')['scratch'] is True
     assert catalog.snapshot('blank')['scratch'] is False
     assert catalog.snapshot('amplifier-development')['rootGit'] is True
@@ -137,10 +137,7 @@ async def test_amplifier_starter_created_root_respects_saved_defaults_or_fallbac
     inherited = bool(app_bundle or shared_bundle)
     assert saved == {**fallback, 'bundle': '' if inherited else 'work-amp-dev'}
     settings = folder / '.amplifier/settings.yaml'
-    if inherited:
-        assert not settings.exists()
-    else:
-        assert read_yaml(settings)['bundle']['active'] == 'work-amp-dev'
+    assert read_yaml(settings) == {'bundle': {'releaseDefault': 'amplifier-development'}}
     assert not (folder / '.amplifier/settings.local.yaml').exists()
     assert (folder / 'AGENTS.md').read_text() == DEVELOPMENT_INSTRUCTIONS + '\n'
     assert (folder / 'SCRATCH.md').read_text() == SCRATCH_TEMPLATE
@@ -196,18 +193,19 @@ async def test_inherited_starter_plan_stays_live_without_retargeting_existing_ro
     assert service._session(first)['bundle'] == 'anchors'
     await service.dispatch('session.create', {'bundle': 'anchors-amp-dev'})
     assert service._session()['bundle'] == 'anchors-amp-dev'
-    assert not (folder / '.amplifier/settings.yaml').exists()
+    from amplifier_web.shared_settings import read_yaml
+    assert read_yaml(folder / '.amplifier/settings.yaml') == {'bundle': {'releaseDefault': 'amplifier-development'}}
     assert not (folder / '.amplifier/settings.local.yaml').exists()
 
 
-@pytest.mark.parametrize('old_revision', [5, 8])
-async def test_reviewed_older_plan_keeps_its_explicit_bundle(
+@pytest.mark.parametrize('old_revision', [8, 9])
+async def test_reviewed_older_builtin_plan_keeps_snapshot_not_automatic_pin(
         service, local_amplifier_repositories, monkeypatch, old_revision):
     original = StarterCatalog.listing
     def older_catalog(catalog):
         value = original(catalog)
         row = next(item for item in value['items'] if item['id'] == 'amplifier-development')
-        row.update(revision=old_revision, bundle='anchors-amp-dev')
+        row.update(revision=old_revision, bundle='work-amp-dev' if old_revision == 9 else 'anchors-amp-dev')
         return value
     # Prepare through the normal owner while reproducing the prior catalog.
     with monkeypatch.context() as patch:
@@ -220,9 +218,9 @@ async def test_reviewed_older_plan_keeps_its_explicit_bundle(
     row = await settle(service)
     assert row['setup']['status'] == 'ready' and row['setup']['starter'] == plan['starter']
     assert row['setup']['starter']['revision'] == old_revision
-    assert defaults(service.data_dir, row['path'], 'work-amp-dev')['workspace'] == 'anchors-amp-dev'
+    assert defaults(service.data_dir, row['path'], 'work-amp-dev')['workspace'] is None
     await service.dispatch('session.create', {})
-    assert service._session()['bundle'] == 'anchors-amp-dev'
+    assert service._session()['bundle'] == 'work-amp-dev'
 
 
 @pytest.mark.parametrize('inherit', [False, True])
@@ -249,7 +247,7 @@ def test_saved_anchors_amplifier_starter_is_not_migrated(tmp_path):
 
 
 @pytest.mark.parametrize('prepared_default_scope', [None, 'app', 'shared'])
-async def test_prepared_starter_keeps_pin_or_inheritance_when_defaults_appear_or_clear(
+async def test_prepared_starter_keeps_release_intent_when_defaults_appear_or_clear(
         service, local_amplifier_repositories, prepared_default_scope):
     from amplifier_web.shared_settings import read_yaml
     await service.dispatch('bundle.default', {'scope': 'app', 'bundle': None})
@@ -261,7 +259,7 @@ async def test_prepared_starter_keeps_pin_or_inheritance_when_defaults_appear_or
             'scope': prepared_default_scope, 'bundle': 'work-amp-dev'})
     plan = (await service.dispatch('workspace.prepare', {
         'name': 'Default transition', 'starterId': 'amplifier-development'}))['result']
-    assert plan['starter']['revision'] == 9
+    assert plan['starter']['revision'] == 10
     assert plan['starter']['bundle'] == ('' if prepared_default_scope else 'work-amp-dev')
     if prepared_default_scope:
         await service.dispatch('bundle.default', {'scope': 'app', 'bundle': None})
@@ -275,14 +273,11 @@ async def test_prepared_starter_keeps_pin_or_inheritance_when_defaults_appear_or
     assert row['setup']['starter'] == plan['starter']
     folder = Path(row['path'])
     settings = folder / '.amplifier/settings.yaml'
-    if prepared_default_scope:
-        assert not settings.exists()
-    else:
-        assert read_yaml(settings)['bundle']['active'] == 'work-amp-dev'
+    assert read_yaml(settings) == {'bundle': {'releaseDefault': 'amplifier-development'}}
     assert not (folder / '.amplifier/settings.local.yaml').exists()
     await service.dispatch('session.create', {})
     assert service._session()['workspace'] == row['path']
-    assert service._session()['bundle'] == ('work' if prepared_default_scope else 'work-amp-dev')
+    assert service._session()['bundle'] == ('work-amp-dev' if prepared_default_scope else 'anchors')
     assert service._session(existing)['bundle'] == 'anchors'
 
 
@@ -309,6 +304,20 @@ async def test_starters_and_chat_share_enabled_standalone_catalog(service):
     assert not Path(prepared['path']).exists()
     with pytest.raises(AppError, match='configured standalone'):
         await service.dispatch('workspace.prepare', {'name': 'Disabled root', 'starterId': saved['id']})
+
+
+async def test_automatic_starter_does_not_validate_disabled_fallback_over_explicit_app(
+        service, local_amplifier_repositories):
+    from amplifier_web.bundles import BundleManager
+    await service.dispatch('bundle.default', {'scope': 'app', 'bundle': 'anchors'})
+    manager = BundleManager(service.data_dir)
+    workspace = service.state['settings']['workspace']
+    listed = await manager.perform('bundles.list', {'workspace': workspace})
+    root = next(row for row in listed['bundles'] if row['name'] == 'work-amp-dev')
+    await manager.perform('bundles.toggle', {'workspace': workspace, 'id': root['id'], 'enabled': False})
+    _, row = await create(service, 'amplifier-development', 'Explicit over disabled fallback')
+    assert row['setup']['status'] == 'ready'
+    assert service._new_session({})['bundle'] == 'anchors'
 
 
 async def test_project_standalone_binding_works_in_new_workspace(service):
@@ -348,6 +357,8 @@ async def test_legacy_prepared_bundle_refuses_without_rewriting(service):
     prepared = (await service.dispatch('workspace.prepare', {'name': 'Legacy plan', 'starterId': 'amplifier-development'}))['result']
     path = service.data_dir / 'workspace-placement' / (prepared['planId'] + '.json')
     value = json.loads(path.read_text())
+    value['starter'].pop('bundleDefault')
+    value['starter']['revision'] = 8
     value['starter']['bundle'] = 'amplifier-dev'
     atomic(path, value)
     before = path.read_bytes()
