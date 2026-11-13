@@ -189,14 +189,30 @@ async def test_reported_theme_envelope_has_executable_read_only_recovery(tmp_pat
             return await app.app_bridge(operation, args, session_id)
         bridge = AsyncMock(side_effect=real_bridge)
         tool = await mounted_tool(bridge)
+        before = deepcopy(app.state)
         result = await tool.execute({'operation': 'list_actions', 'parameters': {'prefix': 'theme.'}})
         assert not result.success and result.error['effect'] == 'none'
         bridge.assert_not_awaited()
+        assert app.state == before
         correction = result.error['recovery']
         assert correction == {'operation': 'list_actions', 'args': {'prefix': 'theme.'}}
         result = await tool.execute(correction)
-        assert result.success and 'theme.apply' in str(result.output)
+        assert result.success
+        listing = next(row for row in result.output['items'] if row['name'] == 'theme.list')
+        assert listing['inputSchema'] == {
+            'type': 'object', 'properties': {}, 'required': [], 'additionalProperties': False}
         bridge.assert_awaited_once_with('list_actions', {'prefix': 'theme.'})
+        assert app.state == before
+        # Discovery must lead to a current read-only control, not a retired apply.
+        action = {'action': listing['name'], 'args': {}}
+        result = await tool.execute({'operation': 'dispatch', 'args': action})
+        assert result.success and result.output['accepted']
+        assert result.output['effects'] == []
+        assert result.output['result']['items'] and not result.output['result']['errors']
+        assert all('css' not in row for row in result.output['result']['items'])
+        assert bridge.await_count == 2
+        bridge.assert_awaited_with('dispatch', action)
+        assert app.state == before
     finally:
         await app.close()
 
