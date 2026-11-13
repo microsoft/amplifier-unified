@@ -4,9 +4,11 @@ The transport/coordinator are synthetic; Core/live-loop coverage is maintained
 separately in test_assignment_readmission_native.py. No provider or process claim.
 """
 import copy
+import asyncio
 import json
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -99,7 +101,7 @@ async def test_lost_completion_retry_publishes_but_retirement_does_not_hydrate(m
 
 
 @pytest.mark.parametrize('restart', [False, True])
-async def test_lost_successor_cannot_retire_stale_completed_projection(member, restart):
+async def test_lost_successor_can_retire_but_cannot_authorize_standing_reuse(member, restart):
     ctx = member
     await complete(ctx)
     stale = copy.deepcopy(ctx.target['task'])
@@ -112,16 +114,17 @@ async def test_lost_successor_cannot_retire_stale_completed_projection(member, r
     saved = ctx.native.state_path().read_bytes()
     assert json.loads(saved)['task']['status'] == 'active'
     async with reopened(ctx, restart) as (app, source, target):
-        before = copy.deepcopy(app.assignments.current(source))
-        with pytest.raises(AppError, match='saved task'):
-            await retire_ui(app, source, target)
-        assert app.assignments.current(source) == before
+        receipt = await retire_ui(app, source, target)
+        assert receipt['reuseBinding'] is None
+        assert app.assignments.current(target) is None
         assert target['task'] == stale and not app.runtime.inputs
+        from amplifier_web.assignment_adoption import reusable_retirement
+        assert not reusable_retirement(app, source, target)
     assert ctx.native.state_path().read_bytes() == saved
 
 
 @pytest.mark.parametrize('broken', ['missing', 'json', 'task-field', 'task-shape'])
-async def test_unavailable_saved_authority_never_uses_cached_completion(app, broken, monkeypatch):
+async def test_unavailable_saved_authority_does_not_block_retirement_or_use_cached_completion(app, broken):
     source, target, _ = await setup(app)
     target['task'] = await save_task(app, target, 'completed')
     path = app.data_dir / 'sessions' / target['id'] / 'control-state.json'
@@ -129,25 +132,29 @@ async def test_unavailable_saved_authority_never_uses_cached_completion(app, bro
         path.unlink()
     else:
         path.write_text({'json': '{', 'task-field': '{}', 'task-shape': '{"task":{}}'}[broken])
-    from amplifier_web import assignment_adoption
-    async def no_retirement(*args, **kwargs):
-        pytest.fail('Unknown task authority must refuse before retiring an idle worker')
-    monkeypatch.setattr(assignment_adoption, 'retire_idle', no_retirement)
-    before = copy.deepcopy(app.assignments.current(source))
-    with pytest.raises(AppError, match='unavailable') as error:
-        await retire(app, source, target)
-    assert error.value.status == 409 and app.assignments.current(source) == before
+    before = None if broken == 'missing' else path.read_bytes()
+    receipt = await retire(app, source, target)
+    assert receipt['reuseBinding'] is None
+    assert app.assignments.current(target) is None
+    assert target['task']['status'] == 'completed'
+    assert (None if not path.exists() else path.read_bytes()) == before
 
 
-async def test_unfinished_task_refuses_before_idle_worker_retirement(app, monkeypatch):
+async def test_unfinished_task_is_not_read_before_idle_worker_retirement(app, monkeypatch):
     source, target, _ = await setup(app)
     await save_task(app, target, 'active')
     from amplifier_web import assignment_adoption
-    async def no_retirement(*args, **kwargs):
-        pytest.fail('Unfinished task must refuse before retiring an idle worker')
-    monkeypatch.setattr(assignment_adoption, 'retire_idle', no_retirement)
-    with pytest.raises(AppError, match='saved task'):
-        await retire(app, source, target)
+    from amplifier_web import assignment_retirement
+    original = assignment_retirement._load_control
+    settled = []
+    async def acknowledge(*args, **kwargs):
+        settled.append(True)
+    def read_after_settled(*args, **kwargs):
+        assert settled == [True]
+        return original(*args, **kwargs)
+    monkeypatch.setattr(assignment_adoption, 'retire_idle', acknowledge)
+    monkeypatch.setattr(assignment_retirement, '_load_control', read_after_settled)
+    assert (await retire(app, source, target))['reuseBinding'] is None
 
 
 @pytest.mark.parametrize('broken', ['missing', 'json'])
@@ -191,12 +198,15 @@ async def test_task_change_at_lease_acquisition_is_rechecked(app, action):
             yield held
     app.runtime.stopped_boundary = race
     before = copy.deepcopy(app.assignments.current(source))
-    with pytest.raises(AppError):
-        if action == 'retire':
-            await retire(app, source, target)
-        else:
+    if action == 'retire':
+        receipt = await retire(app, source, target)
+        assert receipt['reuseBinding'] is None
+        assert app.assignments.current(target) is None
+    else:
+        with pytest.raises(AppError):
             await agent_action(app, source, 'assignment.adopt', args, 'raced-readmit')
-    assert len(entered) == 1 and app.assignments.current(source) == before
+        assert app.assignments.current(source) == before
+    assert len(entered) == 1
     assert path.read_bytes() == successor
 
 
@@ -241,9 +251,165 @@ async def test_available_null_task_is_read_only_bounded_and_reused_inside_lease(
         return Observed() if current == path and args == ('rb',) else original(current, *args, **kwargs)
     monkeypatch.setattr(Path, 'open', observe)
     receipt = await retire(app, source, target)
-    assert reads == [(CONTROL_BYTES + 1, len(before))] * 2
+    assert reads == [(CONTROL_BYTES + 1, len(before))]
     assert receipt['reuseBinding']['targetTask'] == fingerprint({})
     record_property('current_task_reads', len(reads))
     record_property('current_task_bytes', sum(size for _, size in reads))
     with original(path, 'rb') as stream:
         assert stream.read() == before
+
+
+@pytest.mark.parametrize('status', ['active', 'blocked', 'paused'])
+async def test_retirement_preserves_unfinished_native_task_and_forbids_standing_readmission(app, status):
+    source, target, created = await setup(app)
+    await full_access(app, source)
+    target['task'] = await save_task(app, target, status)
+    path = app.data_dir / 'sessions' / target['id'] / 'control-state.json'
+    saved = path.read_bytes()
+    before = copy.deepcopy(target)
+    old = copy.deepcopy(app.collaboration.receipt(created['initialInputId']))
+    inputs = len(app.runtime.inputs)
+    receipt = await retire(app, source, target)
+    assert receipt['reuseBinding'] is None
+    assert app.assignments.current(target) is None
+    assert target == {key: value for key, value in before.items() if key != 'assignmentId'}
+    with pytest.raises(AppError, match='human instruction'):
+        await agent_action(app, source, 'assignment.adopt',
+                           await reviewed_args(app, source, target), 'unfinished-readmit')
+    assert app.collaboration.receipt(created['initialInputId']) == old
+    assert 'retired' in app.collaboration.guard(old)
+    assert len(app.runtime.inputs) == inputs
+    assert path.read_bytes() == saved
+
+
+@pytest.mark.parametrize('case,status', [
+    ('appearance-preview', 'blocked'), ('appearance-client', 'blocked'),
+    ('appearance-server', 'blocked'), ('appearance-review', 'active'),
+])
+async def test_archived_stopped_failed_settings_members_retire_without_repair(app, case, status):
+    """The four historical shapes, not an assertion about those live chats."""
+    source, target, created = await setup(app)
+    target['task'] = await save_task(app, target, status)
+    target.update(status='stopped', interruptionRevision=1,
+        lastInterruption={'at': 1, 'kind': 'user_stop'},
+        configurationBusy=True, configurationPending=False,
+        pendingConfiguration={'phase': 'error', 'effect': 'saved_not_mounted',
+            'stage': 'readback_mismatch', 'operationId': 'old-write-policy-' + case,
+            'error': 'Saved and loaded write policies did not match', 'recoveryRequired': True},
+        configurationOperationFence='old-write-policy-' + case)
+    target['workers'].append({'id': 'historical-child', 'status': 'stopped'})
+    app.state['conversationOrganization'].setdefault('archived', {})[target['id']] = 1
+    # These are inert failure evidence, not a valid plan to mount or replay.
+    directory = app.data_dir / 'sessions' / target['id']
+    config = directory / 'queued-configuration.json'
+    config.write_text('{"historical-failed-plan":"preserve exact bytes"}')
+    native = directory / 'control-state.json'
+    saved, settings = native.read_bytes(), config.read_bytes()
+    old = copy.deepcopy(app.collaboration.receipt(created['initialInputId']))
+    before = copy.deepcopy(target)
+    inputs = len(app.runtime.inputs)
+    receipt = await retire(app, source, target)
+    assert receipt['accepted'] and not receipt['result']['inputSent']
+    assert receipt['reuseBinding'] is None
+    assert app.assignments.current(target) is None
+    assert app.assignments.active_member_count(app.assignments.current(source)) == 1
+    assert target == {key: value for key, value in before.items() if key != 'assignmentId'}
+    assert app.state['conversationOrganization']['archived'][target['id']] == 1
+    assert native.read_bytes() == saved and config.read_bytes() == settings
+    assert app.collaboration.receipt(created['initialInputId']) == old
+    assert 'retired' in app.collaboration.guard(old)
+    assert len(app.runtime.inputs) == inputs
+
+
+@pytest.mark.parametrize('busy', [
+    'queued', 'applying', 'refresh-queued', 'refresh-applying', 'task', 'cancelling-task', 'lock',
+])
+async def test_failed_settings_history_does_not_hide_active_settings_work(app, busy):
+    source, target, _ = await setup(app)
+    target.update(configurationBusy=True,
+        pendingConfiguration={'phase': 'error', 'effect': 'unknown', 'recoveryRequired': True})
+    task = asyncio.get_running_loop().create_future()
+    lock = asyncio.Lock()
+    app.management = SimpleNamespace(pending_config_tasks={}, lock=lock)
+    if busy in {'queued', 'applying'}:
+        target['pendingConfiguration']['phase'] = busy
+    elif busy.startswith('refresh-'):
+        target['configurationRefresh'] = {'phase': busy.removeprefix('refresh-')}
+    elif busy in {'task', 'cancelling-task'}:
+        if busy == 'cancelling-task':
+            task = asyncio.create_task(asyncio.sleep(60))
+            task.cancel()  # A cancellation request is not completion.
+        app.management.pending_config_tasks[target['id']] = task
+    else:
+        await lock.acquire()
+    before = copy.deepcopy(target)
+    try:
+        with pytest.raises(AppError, match='settings change'):
+            await retire(app, source, target)
+        assert target == before and app.assignments.current(target)
+        assert not app.db.execute("SELECT 1 FROM commands WHERE id='retire'").fetchone()
+    finally:
+        if lock.locked():
+            lock.release()
+        task.cancel()
+        if isinstance(task, asyncio.Task):
+            await asyncio.gather(task, return_exceptions=True)
+        app.management = None
+
+
+@pytest.mark.parametrize('change', ['settings', 'input', 'call', 'handoff'])
+async def test_retirement_rechecks_effects_after_wait(app, monkeypatch, change):
+    from amplifier_web import assignment_adoption
+    from amplifier_web.execution import ingest
+    from test_assignments import call
+    source, target, _ = await setup(app)
+    target['task'] = await save_task(app, target, 'blocked')
+    before = copy.deepcopy(app.assignments.current(source))
+    async def changed(*args, **kwargs):
+        if change == 'settings':
+            target['pendingConfiguration'] = {'phase': 'applying'}
+        elif change == 'input':
+            app.collaboration.insert('raced-input', 'fixture', {
+                'commandAction': 'coordination.send', 'target': {'sessionId': target['id']},
+                'delivery': 'unknown'})
+        elif change == 'call':
+            ingest(target, {**call(target, 'raced-call'), 'phase': 'outcome_unknown'})
+        else:
+            target['worktreeHandoffs'] = [{'phase': 'unknown'}]
+    monkeypatch.setattr(assignment_adoption, 'retire_idle', changed)
+    with pytest.raises(AppError):
+        await retire(app, source, target)
+    assert app.assignments.current(source) == before
+    assert not app.db.execute("SELECT 1 FROM commands WHERE id='retire'").fetchone()
+
+
+@pytest.mark.parametrize('busy', ['process', 'bridge', 'stop', 'preparation'])
+async def test_stopped_history_still_requires_actual_native_writer_absence(app, busy):
+    source, target, _ = await setup(app)
+    target.update(status='stopped', interruptionRevision=1, configurationBusy=True,
+        pendingConfiguration={'phase': 'error', 'effect': 'saved_not_mounted'})
+    manager = RuntimeManager()
+    pending = asyncio.get_running_loop().create_future()
+    row = {'process': SimpleNamespace(returncode=0), 'executionEnded': True}
+    if busy == 'process':
+        row['process'].returncode = None
+    elif busy == 'bridge':
+        row['bridge_tasks'] = [pending]
+    elif busy == 'stop':
+        row['stop_task'] = pending
+    else:
+        manager._preparations[target['id']] = pending
+    manager.workers[target['id']] = row
+    # retire_idle sees no transport fixture worker; the real final lease must
+    # still refuse this separately observed native writer/pending operation.
+    app.runtime.stopped_boundary = manager.stopped_boundary
+    before = copy.deepcopy(target)
+    try:
+        with pytest.raises(AppError, match='stopped'):
+            await retire(app, source, target)
+        assert target == before and app.assignments.current(target)
+    finally:
+        pending.cancel()
+        manager.workers.clear()
+        manager._preparations.clear()
+        await manager.close()
