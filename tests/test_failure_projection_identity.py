@@ -284,3 +284,31 @@ async def test_late_same_generation_terminal_cannot_relabel_completed_request(ap
     assert annotate(target, {'role': 'user', 'inputId': 'saved-input'})['inputStatus'] == before
     assert target['messages'][-1]['response']['status'] == 'completed'
     assert not target.get('failure') and not target.get('error')
+
+
+async def test_rejected_duplicate_start_cannot_make_saved_request_current_again(app):
+    from amplifier_web.execution import ensure_turn
+    target = app.state['sessions'][1]
+    ensure_turn(target, 'saved-input')
+    await observed(app, target, 'started')
+    await observed(app, target, 'finished')
+    await observed(app, target, 'started')
+    await app.on_runtime_event('runtime.error', {'sessionId': target['id'], 'errorType': 'RuntimeError'})
+    assert not target.get('failure') and not target.get('error')
+    assert target['execution']['turns'][0]['phase'] == 'completed'
+
+
+async def test_handled_provider_error_does_not_explain_unrelated_runtime_fault(app):
+    from amplifier_web.execution import ensure_turn
+    target = app.state['sessions'][1]
+    ensure_turn(target, 'saved-input')
+    await observed(app, target, 'started')
+    await app.on_runtime_event('execution.event', {'sessionId': target['id'], 'rootSessionId': target['id'],
+        'id': 'old-provider-error', 'turnId': 'saved-input', 'generationId': 'saved-generation',
+        'kind': 'llm', 'phase': 'error', 'failure': {'category': 'authentication', 'errorType': 'AuthenticationError'}})
+    await app.on_runtime_event('runtime.error', {'sessionId': target['id'], 'errorType': 'TypeError',
+        'executionFailure': {'runtimeSessionId': target['id'], 'stage': 'execution',
+            'generationId': 'saved-generation', 'exceptionChain': [{'errorType': 'TypeError', 'frames': []}]}})
+    assert target['failure']['category'] == 'unknown'
+    assert target['failure']['errorType'] == 'TypeError'
+    assert target['failure']['exceptionChain'][0]['errorType'] == 'TypeError'

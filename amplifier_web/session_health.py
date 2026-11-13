@@ -306,10 +306,7 @@ def runtime_fault_is_current(session, payload):
         return True  # A new start is a new operation, even after a completed turn.
     generation = payload.get('generationId') or (payload.get('executionFailure') or {}).get('generationId')
     active = session.get('collaborationGeneration') or {}
-    latest = next((row for row in reversed(session.get('generations', []))
-                   if row.get('sessionId', session['id']) == session['id']
-                   and row.get('rootSessionId', session['id']) == session['id']
-                   and (not active.get('id') or row.get('generation_id') == active['id'])), {})
+    latest = latest_root_event(session)
     if generation and (active.get('id') or latest.get('generation_id')) and generation != (active.get('id') or latest['generation_id']):
         return False
     if (payload.get('event') == 'persistence.failed'
@@ -345,7 +342,7 @@ def causal_timeline(session, failure=None):
     end = _event_time(failure.get('recordedAt'))
     rows = [*generations]
     for row in session.get('runtimeEvents', [])[-100:]:
-        if row.get('type') not in {'runtime.error', 'runtime.ended'}:
+        if row.get('type') not in {'runtime.error', 'runtime.ended', 'runtime.bridge'}:
             continue
         at = _event_time(row.get('at'))
         observed = row.get('generationId') or row.get('generation_id')
@@ -357,11 +354,19 @@ def causal_timeline(session, failure=None):
 
 
 def latest_root_event(session):
-    active = (session.get('collaborationGeneration') or {}).get('id')
-    return next((row for row in reversed(session.get('generations', [])[-200:])
-                 if row.get('sessionId', session['id']) == session['id']
-                 and row.get('rootSessionId', session['id']) == session['id']
-                 and (not active or row.get('generation_id') == active)), {})
+    active = session.get('collaborationGeneration') or {}
+    rows = [row for row in session.get('generations', [])[-200:]
+            if row.get('sessionId', session['id']) == session['id']
+            and row.get('rootSessionId', session['id']) == session['id']
+            and (not active.get('id') or row.get('generation_id') == active['id'])]
+    if active.get('id'):
+        # The canonical owner accepts only the first terminal. Later duplicate
+        # starts/terminals remain evidence, not a new current outcome.
+        if active.get('terminal'):
+            return next((row for row in rows if row.get('event') in {
+                'generation.finished', 'generation.failed', 'generation.detached'}), rows[-1] if rows else {})
+        return next((row for row in rows if row.get('event') == 'generation.started'), {})
+    return rows[-1] if rows else {}
 
 
 def inspection_stamp(session):

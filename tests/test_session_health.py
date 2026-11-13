@@ -99,6 +99,7 @@ async def test_inspection_reports_structured_failure_without_raw_error_or_log_sc
     assert report['historyDirectory'] == str(SessionStore.for_app(tmp_path, session['workspace']).directory(report['runtimeSessionId']))
     assert report['executionDirectory'] == session.get('workingDirectory', session['workspace'])
     assert report['workReplayed'] is False and report['status'] == 'stopped'
+    assert 'recentRequests' not in report and 'performance' not in report
     assert 'error' not in session and session['messages'] == []
     await app.close()
 
@@ -291,6 +292,9 @@ async def test_original_provider_cause_survives_runtime_wrapper(tmp_path, messag
         kind, payload = normalize_event(event, session['id'], 'turn-id')
         await app.on_runtime_event(kind, payload)
     assert not session.get('failure')  # A call error alone is not a request failure.
+    await app.on_runtime_event('runtime.generation', {'sessionId': session['id'], 'rootSessionId': session['id'],
+        'event': 'generation.failed', 'generation_id': 'failed-generation', 'input_ids': ['turn-id'],
+        'error_type': error_class.__name__, 'error_category': 'unknown'})
     await app.on_runtime_event('runtime.error', {'sessionId': session['id'], 'error': 'Manager turn failed; no automatic replay'})
     assert session['failure']['category'] == category
     assert session['failure']['inputId'] == 'turn-id'
