@@ -31,6 +31,8 @@ def new_work(action, args):
 
 
 def input_gate(service, sid=None, identity=None):
+    from .installation_repair import guard as repair_guard
+    repair_guard(service)
     current = service.state.get('updates', {}).get('drain') or {}
     if (sid and identity and current.get('phase') == 'releasing'
             and current.get('releasingInput') == [sid, identity]):

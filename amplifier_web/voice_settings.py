@@ -54,6 +54,8 @@ async def dispatch(service, action, args):
         return await preview(manager, args['model'], args['voice'])
     if action == 'voice.configure':
         async with manager.lock:
+            from .installation_repair import guard as repair_guard
+            repair_guard(service)
             if manager.call and not manager.call.closed or service.state.get('voicePreviewBusy'):
                 raise VoiceError('Finish the active call or preview before changing its key.', 409)
             source = args['source']
@@ -180,6 +182,8 @@ async def preview(manager, model, voice):
         raise VoiceError('Choose a voice available for this model.', 400)
     async with manager.lock:
         async with manager.service.lock:
+            from .installation_repair import guard as repair_guard
+            repair_guard(manager.service)
             if not manager.api_key:
                 raise VoiceError('Add an OpenAI API key in Voice settings first.', 409)
             if work_paused(manager.service.state):

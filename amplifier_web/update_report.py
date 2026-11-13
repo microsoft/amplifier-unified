@@ -16,6 +16,7 @@ import time
 from urllib.parse import urlsplit
 
 from .update_diagnostics import ERROR_TYPES, RECOVERY_REASONS, RESOLUTION_FIELDS, PROBE_PREFIX, probe_record
+from .reset import installer_requirement
 
 
 def scalar(value, pattern):
@@ -70,8 +71,7 @@ def event(row):
                          ('errorType', ERROR_TYPES), ('reason', RECOVERY_REASONS)):
         if isinstance(row.get(key), str) and row[key] in allowed:
             result[key] = row[key]
-    if scalar(row.get('package'), r'amplifier-[a-z0-9-]{1,120}'):
-        result['package'] = row['package']
+    result.update(installer_requirement(row.get('package'), row.get('constraint')))
     if isinstance(row.get('resolutionMismatches'), list):
         fields = sorted({value for value in row['resolutionMismatches']
                          if isinstance(value, str) and value in RESOLUTION_FIELDS})

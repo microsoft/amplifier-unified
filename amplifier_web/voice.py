@@ -18,6 +18,7 @@ from urllib.parse import quote
 
 import aiohttp
 from aiohttp import web
+from .installation_repair import guard as repair_guard
 from .updates import work_paused
 from .voice_diagnostics import VoiceDiagnostics, VoiceTrace
 
@@ -353,6 +354,10 @@ class VoiceCall:
 
     async def require_admission(self):
         async with self.service.lock:
+            try:
+                repair_guard(self.service)
+            except ValueError as exc:
+                raise VoiceError(str(exc), 409, 'installation_repair_held') from exc
             if work_paused(self.service.state):
                 raise VoiceError('An update is activating. Please retry in a moment.', 409, 'update_activating')
             session = next((s for s in self.service.state['sessions'] if s['id'] == self.session_id), None)
@@ -1309,9 +1314,13 @@ class VoiceService:
                 raise VoiceError("The configured voice model is not supported by this app's voice transport.", 409, "unsupported_model")
             selected = ("realtime" if preference == MODELS["realtime"] else "live") if provider == "auto" else provider
             # This endpoint bypasses command dispatch. Claim the active call
-            # under the same lock used by update activation before any provider
-            # request can start; activation then sees the connecting status.
+            # under the same lock used by repair and update activation before any
+            # provider request can start; activation then sees the connecting status.
             async with self.service.lock:
+                try:
+                    repair_guard(self.service)
+                except ValueError as exc:
+                    raise VoiceError(str(exc), 409, 'installation_repair_held') from exc
                 if work_paused(self.service.state):
                     raise VoiceError("An update is activating. Please retry in a moment.", 409, "update_activating")
                 session = next((s for s in self.service.state['sessions'] if s['id'] == session_id), None)

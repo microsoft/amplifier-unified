@@ -504,6 +504,14 @@
       ]
     },
     {
+      "id": "installation-repair-host",
+      "command": ["node", "tests/web/installation-repair-host-browser.mjs"],
+      "env": {
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/installation-repair-host",
+        "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python"
+      }
+    },
+    {
       "id": "configuration-recovery-components",
       "command": [
         "node",
@@ -1248,6 +1256,8 @@
     "portability",
     "testing-settings",
     "settings",
+    "installation-repair",
+    "installation-repair-host",
     "configuration-recovery-components",
     "configuration-recovery",
     "settings-completeness",

@@ -1,0 +1,97 @@
+name: Native installation repair
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/installation-repair-native.yml
+      - tests/fixtures/installation_repair_native.py
+      - tests/fixtures/installation_repair_native_app.py
+      - tests/fixtures/installation_repair_native_full.py
+      - tests/fixtures/installation_repair_acquisition.py
+      - tests/test_installation_repair_native.py
+      - tests/test_installation_repair_native_full.py
+      - amplifier_web/installation_repair.py
+      - amplifier_web/installation_repair_worker.py
+      - amplifier_web/reset.py
+      - amplifier_web/reset_retention.py
+      - amplifier_web/app_release_artifacts.py
+      - amplifier_web/deployment_service.py
+
+permissions:
+  contents: read
+
+# One qualification runner at a time per PR. Never cancel an in-flight native
+# transaction to replace its source; cleanup and its original receipt must settle.
+concurrency:
+  group: native-installation-repair-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-manager:
+    name: Repair transaction (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        os: [ubuntu-latest, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 100
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      UV_PYTHON_DOWNLOADS: never
+      UV_NO_BUILD_PACKAGE: amplifier-core
+      UV_LINK_MODE: copy
+      GIT_TERMINAL_PROMPT: '0'
+      INSTALLATION_REPAIR_NATIVE_CI: '1'
+      INSTALLATION_REPAIR_FULL_ACCEPTED_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+      # Hosted setup-python executables can be group-writable. Do not chmod that
+      # shared installation or relax the product guard: install an owned, real
+      # CPython distribution before the offline transaction selects its base.
+      - name: Install runner-owned CPython for the production executable boundary
+        env:
+          UV_PYTHON_DOWNLOADS: automatic
+          UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/installation-repair-python
+        run: |
+          test ! -e "$UV_PYTHON_INSTALL_DIR"
+          uv python install --no-bin --no-registry 3.13
+          selected="$(uv python find --managed-python --no-project 3.13)"
+          "$selected" -I -S -c 'import os,pathlib,stat,sys; p=pathlib.Path(sys._base_executable).resolve(strict=True); s=p.stat(); assert sys.version_info[:2]==(3,13) and stat.S_ISREG(s.st_mode) and s.st_uid==os.getuid() and not s.st_mode&0o022 and os.access(p,os.X_OK), (str(p),oct(s.st_mode),s.st_uid); print("Owned base interpreter:",p,oct(stat.S_IMODE(s.st_mode)))'
+          dirname "$selected" >> "$GITHUB_PATH"
+          printf 'UV_PYTHON_INSTALL_DIR=%s\n' "$UV_PYTHON_INSTALL_DIR" >> "$GITHUB_ENV"
+      - name: Prepare disclosed mechanics fixture and retain exact source
+        run: python -I -B tests/fixtures/installation_repair_native.py prepare
+      - name: Exercise native transaction failure and recovery boundaries
+        run: python -I -B tests/fixtures/installation_repair_native.py run
+      - name: Settle only mechanics-owned services and jobs
+        if: always()
+        run: python -I -B tests/fixtures/installation_repair_native.py cleanup
+      # The mechanics fixture substitutes health/doctor/probes. It cannot qualify
+      # the actual app. After its custody settles, use the genuine candidate
+      # wheel, full dependencies, public CLI, AppService, doctor and HTTPS health.
+      - name: Prepare full candidate with locally asserted acquisition only
+        run: python -I -B tests/fixtures/installation_repair_native_full.py prepare
+      - name: Exercise full packaged app through the native manager
+        run: python -I -B tests/fixtures/installation_repair_native_full.py run
+      - name: Settle only full-app-owned services and jobs
+        if: always()
+        run: python -I -B tests/fixtures/installation_repair_native_full.py cleanup
+      - name: Retain source, trust-boundary, native effects and cleanup receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installation-repair-native-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/installation-repair-evidence/
+            ${{ runner.temp }}/installation-repair-full-evidence/
+          if-no-files-found: error
+          retention-days: 14
