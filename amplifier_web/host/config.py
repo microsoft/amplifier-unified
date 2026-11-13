@@ -234,7 +234,8 @@ class HostConfig:
 
     @property
     def active_bundle(self):
-        return self.settings.get("bundle", {}).get("active") or "work"
+        from ..bundle_defaults import fallback
+        return self.settings.get("bundle", {}).get("active") or fallback(self.settings)
 
     @property
     def app_bundles(self):
