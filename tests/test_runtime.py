@@ -3212,7 +3212,7 @@ async def test_default_runtime_probe_uninstrumented_journey_keeps_real_acceptanc
                           io_finalized=False, verify_member=Mock())
     owner = SimpleNamespace(job=job, process=SimpleNamespace(pid=11), created=123, result=None)
     row = {'windows_owner': owner, 'process': owner.process, 'ready': ready,
-           'generation': None, 'source_generation': None, 'native_worker_pid': 11, 'parked': True}
+           'generation': None, 'source_generation': None, 'native_worker_pid': 11, 'idle': True}
     session = {'id': 'synthetic-cold-session'}
     class Runtime:
         command = None

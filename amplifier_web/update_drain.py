@@ -359,6 +359,25 @@ async def prepare(manager, release):
         await observe_waiters(manager)
         if any(not row.get('ready') and not row.get('suppressed') for row in prior['workers'].values()):
             return False
+        # Saved settings freshness waits for the enrolled writer's checkpoint.
+        # Once positively ready, retire that exact idle owner rather than
+        # weakening the application gate's real writer-absence requirement.
+        for sid, row in list(prior['workers'].items()):
+            session = service._session(sid)
+            if (row.get('ready') and not row.get('suppressed') and session.get('configurationPending')
+                    and not session.get('configurationBusy') and not session.get('pendingConfiguration')
+                    and not session.get('configurationOperationFence')):
+                if (service.state['updates'].get('drain') is not prior
+                        or continuation_guard(service, {'updateYield': row}, authority_only=True)):
+                    return False
+                if sid in service.runtime.workers:
+                    if not await service.runtime.retire_idle(sid, row['owner'], guard=lambda:
+                            service.state['updates'].get('drain') is not prior
+                            or continuation_guard(service, {'updateYield': row}, authority_only=True)):
+                        return False
+                if (service.state['updates'].get('drain') is not prior
+                        or continuation_guard(service, {'updateYield': row}, authority_only=True)):
+                    return False
     return not held(service) and not manager.app_busy()
 
 

@@ -407,6 +407,20 @@ class RuntimeManager:
         if prior and prior[0] == attachment_id:
             self._ephemeral_mcp.pop(session_id)
 
+    async def retire_idle(self, session_id, owner_id, *, guard):
+        """Retire an exact settled owner by the existing acknowledged handshake."""
+        async with self._locks.setdefault(session_id, asyncio.Lock()):
+            if guard():
+                return False
+            row = self.workers.get(session_id)
+            if (not row or row.get('runtimeOwnerId') != owner_id
+                    or not self.retention.eligible(row) or session_id in self._ephemeral_mcp):
+                return False
+            pending = self.retention.schedule(session_id, row)
+        # A caller timeout/cancellation is not permission to cancel ownership
+        # reconciliation or to treat the worker as absent.
+        return await asyncio.wait_for(asyncio.shield(pending), self.retention.reply_timeout)
+
     def _check_mcp_attachment(self, session_id, row):
         binding = row.get("ephemeral_mcp_binding")
         current = self._ephemeral_mcp.get(session_id)
