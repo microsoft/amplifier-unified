@@ -187,7 +187,7 @@ try{
   assert.equal(row.inputSchema.type,'object');assert.equal(row.inputSchema.additionalProperties,false);
   return [suffix,row.inputSchema];
  }));
- assert.equal(schemas.Confirm.properties.confirm.const,true);
+ assert.deepEqual(schemas.Confirm.properties.confirm.enum,[true]);
  assert.deepEqual([...schemas.Confirm.required].sort(),['confirm','hostInstanceId','previewId']);
  // An extra property must fail public schema admission, without even binding.
  await rejected(prefix+'Preview',{unexpected:true});
