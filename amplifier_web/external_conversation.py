@@ -11,6 +11,7 @@ import uuid
 from .acp_participant import ACPParticipant, endpoint
 from .errors import AppError
 from .execution import finish
+from .shared_conversation import SharedConversations, is_shared
 
 
 def is_external(session):
@@ -83,6 +84,7 @@ class ExternalConversations:
         self.participants = {}
         self.turns = {}
         self.closing = False
+        self.shared = SharedConversations(self)
 
     def create(self, args, workspace):
         if args.get('location', {}).get('kind') == 'managed' or any(
@@ -100,7 +102,7 @@ class ExternalConversations:
                               'cwd': row.get('sessionCwd', workspace)} for row in selected}
         external = rows[0] if len(rows) == 1 else {
             'label': ', '.join(row['label'] for row in rows), 'status': 'idle',
-            'participants': rows, 'capabilities': {'text': True, 'stop': True, 'nativeControls': False}}
+            'participants': rows, 'participation': 'shared', 'capabilities': {'text': True, 'stop': True, 'nativeControls': False}}
         now = time.time()
         return self.service.cold_display.record({
             'id': str(uuid.uuid4()), 'title': args.get('title') or 'New chat',
@@ -127,14 +129,20 @@ class ExternalConversations:
         return binding, selected, source
 
     def capture_recipient(self, session, message, identity=None):
+        if is_shared(session):
+            return self.shared.capture(session, message, identity)
         binding = addressed(session, identity)
         message.update(recipientAgentId=binding['id'], recipientAgentLabel=binding['label'])
 
     def admit(self, session, message):
+        if is_shared(session):
+            return
         binding = addressed(session, message['recipientAgentId'])
         session['externalAgent'].update(activeInputId=message['inputId'], activeAgentId=binding['id'])
 
     def restore(self, session):
+        if is_shared(session):
+            return self.shared.restore(session)
         external = session.get('externalAgent', {})
         if external.get('activeInputId'):
             binding = addressed(session, external.get('activeAgentId'))
@@ -154,9 +162,12 @@ class ExternalConversations:
                 or action == 'session.naming' and args.get('regenerate')):
             raise AppError('This operation is not supported by the external ACP participant.', 409)
         if action == 'conversation.send':
-            self.selected(session, args.get('recipientAgentId'))
+            if not is_shared(session):
+                self.selected(session, args.get('recipientAgentId'))
             if args.get('attachmentIds') or args.get('document') or args.get('replyId') or args.get('expectedGenerationId'):
                 raise AppError('This external participant currently accepts ordinary text messages only.', 409)
+            if is_shared(session):
+                return self.shared.guard(session, args)
             if not admitted:
                 from .message_delivery import find_message
                 drain = self.service.state.get('updates', {}).get('drain') or {}
@@ -170,6 +181,8 @@ class ExternalConversations:
                 raise AppError('The external participant is still working. Stop it or wait before sending.', 409)
 
     async def send(self, session, text, input_id, preserve_draft=False):
+        if is_shared(session):
+            return await self.shared.send(session, input_id, preserve_draft)
         sid = session['id']
         async with self.service.lock:
             current = self.service._session(sid)
@@ -303,6 +316,8 @@ class ExternalConversations:
             self.service._publish_changes(sessions={sid})
 
     async def stop(self, sid):
+        if is_shared(self.service._session(sid)):
+            return await self.shared.stop(sid)
         turn = self.turns.get(sid)
         if turn is None:
             async with self.service.lock:
@@ -337,6 +352,8 @@ class ExternalConversations:
             await asyncio.gather(turn.task, return_exceptions=True)
 
     def delivery(self, session, input_id):
+        if is_shared(session):
+            return self.shared.delivery(session, input_id)
         message = next((row for row in session['messages'] if row.get('inputId') == input_id and row['role'] == 'user'), None)
         if message is None:
             raise AppError('This input is not saved in this conversation.', 404)
@@ -347,8 +364,12 @@ class ExternalConversations:
                            **({'externalSessionId': binding['sessionId']}
                               if binding.get('sessionId') else {})}}
 
+    async def resume_pending(self):
+        await self.shared.resume_pending()
+
     async def close(self):
         self.closing = True
+        await self.shared.close()
         for sid in list(self.turns):
             await self.stop(sid)
         await asyncio.gather(*(participant.close() for participant in self.participants.values()))

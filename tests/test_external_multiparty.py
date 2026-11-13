@@ -21,7 +21,10 @@ async def room(app, path):
     configure(app, path)
     result = await app.dispatch('session.create', {
         'workspace': app.default_workspace, 'externalAgentIds': ['alpha', 'beta']}, command_id='room-create')
-    return app._session(result['result']['sessionId'])
+    session = app._session(result['result']['sessionId'])
+    # Historical directed-group records have no shared participation marker.
+    session['externalAgent'].pop('participation', None)
+    return session
 
 
 async def directed(app, session, agent, text, command):
