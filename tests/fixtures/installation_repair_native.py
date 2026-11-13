@@ -316,6 +316,10 @@ def executable_selection(uv, base_python):
           and callable(getattr(worker, 'children_settled', None))
           and callable(getattr(worker, 'reconcile', None)),
           'joined production source lacks frozen admission/recovery protocol 1')
+    if sys.platform == 'darwin':
+        controller = module(SOURCE / 'amplifier_web/installation_repair.py')
+        check(callable(getattr(controller, '_prepare_launchd_job', None)),
+              'joined production controller lacks private one-shot launchd preparation')
     result = {}
     for key, path in (('uv', uv), ('basePython', base_python)):
         try:
@@ -397,13 +401,45 @@ def helper_observation(label, env):
     for domain, text in rows:
         pids = re.findall(r'^\s*pid = (\d+)\s*$', text, re.M)
         runs = re.findall(r'^\s*runs = (\d+)\s*$', text, re.M)
-        check(not runs or max(map(int, runs)) <= 1, 'one-shot helper automatically reran')
+        check(len(runs) == 1 and int(runs[0]) <= 1,
+              'one-shot helper automatically reran or run count is unobserved')
         settled = settled and not pids
         summaries.append({'domain': domain, 'pids': pids, 'runs': runs})
     return {'label': label, 'domains': summaries, 'settled': settled}
 
 
-def owned_helper_observation(helper, env):
+def checked_helper_plist(helper):
+    """Independently inspect proof from the real production preparer, not write it."""
+    folder = Path(helper['folder'])
+    worker = module(folder / 'installation_repair_worker.py')
+    plan = worker.read(folder / 'plan.json')
+    operation = worker.read(folder / 'operation.json')
+    job = plan.get('helperJob')
+    path = folder / 'helper.plist'
+    required = {'kind': 'launchd-user-job', 'label': helper['label'],
+                'domain': f'gui/{os.getuid()}', 'plistPath': str(path),
+                'cleanupState': 'retained-for-explicit-review', 'cleanupOwner': 'installation-owner'}
+    check(isinstance(job, dict) and set(job) == {*required, 'plistSHA256', 'detail'}
+          and all(job[key] == value for key, value in required.items())
+          and job == operation.get('helperJob') and plan['uid'] == os.getuid()
+          and plan['operationId'] == folder.name and operation['operationId'] == folder.name
+          and plan['basePython'] == helper['basePython'],
+          'saved launchd helper custody is foreign or unidentifiable')
+    raw = worker._bytes(path, private=True, limit=16_384)
+    value = plistlib.loads(raw)
+    expected = {'Label': helper['label'], 'ProgramArguments': worker_command(helper, folder),
+                'WorkingDirectory': str(folder), 'RunAtLoad': True, 'KeepAlive': False,
+                'ProcessType': 'Background', 'StandardOutPath': os.devnull,
+                'StandardErrorPath': os.devnull, 'Umask': 0o077}
+    # Equality alone accepts bool/int aliases. The exact byte representation
+    # closes that gap as well as duplicate keys, alternate triggers and env.
+    check(hashlib.sha256(raw).hexdigest() == job['plistSHA256']
+          and value == expected and raw == plistlib.dumps(expected, sort_keys=True),
+          'private one-shot helper definition changed or has unsafe keys')
+    return job
+
+
+def owned_helper_observation(helper, env, *, qualify=True):
     """A saved label alone does not authorize removing a replacement job."""
     folder = Path(helper['folder'])
     label = helper['label']
@@ -418,19 +454,52 @@ def owned_helper_observation(helper, env):
                   and observed.get('WorkingDirectory') == str(folder) and observed.get('Type') == 'exec',
                   'saved helper label belongs to a foreign or unidentifiable systemd job')
     else:
-        observed = {'label': label, 'domains': [], 'settled': True}
+        job = checked_helper_plist(helper)
+        observed = {'label': label, 'domains': [], 'settled': True, 'helperJob': job}
         for domain, text in launch_job(label, env):
             programs = re.findall(r'^\s*program = (.+?)\s*$', text, re.M)
             argv = re.findall(r'^\s*arguments = \{\s*\n(.*?)^\s*\}', text, re.M | re.S)
             pids = re.findall(r'^\s*pid = (\d+)\s*$', text, re.M)
             runs = re.findall(r'^\s*runs = (\d+)\s*$', text, re.M)
+            states = re.findall(r'^\s*state = (.+?)\s*$', text, re.M)
+            loaded_paths = re.findall(r'^\s*path = (.+?)\s*$', text, re.M)
             check(programs == [expected[0]] and len(argv) == 1
-                  and [line.strip() for line in argv[0].splitlines() if line.strip()] == expected,
+                  and [line.strip() for line in argv[0].splitlines() if line.strip()] == expected
+                  and (not loaded_paths or loaded_paths == [job['plistPath']]),
                   'saved helper label belongs to a foreign or unidentifiable launchd job')
-            check(not runs or max(map(int, runs)) <= 1, 'one-shot helper automatically reran')
-            observed['settled'] = observed['settled'] and not pids
-            observed['domains'].append({'domain': domain, 'pids': pids, 'runs': runs})
+            one_shot = len(runs) == 1 and int(runs[0]) <= 1
+            if qualify:
+                check(one_shot, 'one-shot helper automatically reran or run count is unobserved')
+            # Cleanup may retire an exactly owned settled job after a failed
+            # run-count qualification. It cannot turn that failure into a pass.
+            observed['settled'] = observed['settled'] and not pids and states in [['not running'], ['exited']]
+            observed['domains'].append({'domain': domain, 'pids': pids, 'runs': runs, 'states': states,
+                                        'oneShotQualified': one_shot,
+                                        'loadedDefinitionPathObserved': bool(loaded_paths)})
     return observed
+
+
+def retire_helper(helper, env):
+    """Remove only exact settled ownership; never waive qualification to succeed."""
+    observed = wait_for(lambda: owned_helper_observation(helper, env, qualify=False),
+                        lambda row: row['settled'], seconds=120, description='cleanup helper settlement')
+    child_settlement(Path(helper['folder']))
+    current = owned_helper_observation(helper, env, qualify=False)
+    check(current['settled'], 'saved helper became active during cleanup')
+    label = helper['label']
+    if sys.platform == 'darwin':
+        # One exact GUI-domain bootout. User-domain aliases do not authorize
+        # another removal, and launchctl submit/remove is not a fallback.
+        if current['domains']:
+            job = current['helperJob']
+            execute('launchctl', 'bootout', job['domain'] + '/' + label, env=env)
+        wait_for(lambda: not launch_job(label, env), description='helper registration absence')
+    else:
+        if current['LoadState'] != 'not-found':
+            execute('systemctl', '--user', 'reset-failed', label + '.service', env=env, check_result=False)
+        wait_for(lambda: properties(label + '.service', env).get('LoadState') == 'not-found',
+                 description='transient helper collection')
+    return {'label': label, 'settled': observed, 'absent': True}
 
 
 def owned_definition(saved, env, service_pids):
@@ -659,7 +728,7 @@ def run_case(root, evidence, name, fixture, transport):
               'unadmitted competitor created installer/swap outputs')
         check(not (competing / 'child-boundary.json').exists(), 'unadmitted competitor spawned a repair child')
         check(snapshot(config) == before, 'competing workers produced installation/native effects')
-        observation = helper_observation(label, transport)
+        observation = owned_helper_observation(owner['helpers'][-1], transport)
         check(not observation['settled'], 'manager did not own active detached helper')
         probe_parent = next(row['parentPID'] for row in events(case) if row['kind'] == 'probe')
         if sys.platform == 'linux':
@@ -674,7 +743,7 @@ def run_case(root, evidence, name, fixture, transport):
                      'effectsUnchanged': True, 'helperWhileOldHostAlive': observation}
         (case / 'probe-release').touch(mode=0o600)
     wait_for(lambda: terminal(folder), description=name + ' terminal receipt')
-    settled = wait_for(lambda: helper_observation(label, transport), lambda value: value['settled'],
+    settled = wait_for(lambda: owned_helper_observation(owner['helpers'][-1], transport), lambda value: value['settled'],
                        description='one-shot helper settled')
     receipt = load(folder / 'operation.json')
     expected, stop_intent, stop_settled, mutation, starts, stops, candidate_probes, fresh_probes = EXPECTATIONS[name]
@@ -689,6 +758,7 @@ def run_case(root, evidence, name, fixture, transport):
               'planPublic': {key: plan[key] for key in ('operationId', 'previewId', 'target', 'extras', 'service',
                                                       'pointer', 'recoverySchema', 'executables')},
               'tlsLeafSHA256': config['tls']['pin'],
+              'helperJob': receipt.get('helperJob'),
               'exclusion': exclusion, 'effects': events(case), 'observedEffectCounts': effect_counts(case),
               'limits': LIMITS}
     save(evidence / (name + '.json'), report)
@@ -765,7 +835,7 @@ def run_case(root, evidence, name, fixture, transport):
           'exact settled operation replay produced effects')
     check(child_boundary_identity(folder) == saved_child, 'late worker replay wrote a child spawn-intent boundary')
     time.sleep(.6)
-    check(helper_observation(label, transport)['settled'], 'one-shot helper reran')
+    check(owned_helper_observation(owner['helpers'][-1], transport)['settled'], 'one-shot helper reran')
     counters = effect_counts(case)
     check(counters.get('admit') == 1 and counters.get('dispatch', 0) == (0 if name == 'reconcile' else 1),
           'operation admission/dispatch checkpoint count changed')
@@ -791,32 +861,15 @@ def cleanup(root, evidence):
         return
     env = manager_environment()
     manager_capability(env)
-    results = {'helpers': [], 'definitionAbsent': False, 'processesExited': False, 'passed': False}
+    results = {'helpers': [], 'definitionAbsent': False, 'processesExited': False, 'passed': False,
+               'scope': 'owned-resource-cleanup-only', 'doesNotQualifyMechanics': True}
     save(evidence / 'cleanup.json', results)
     for process in owner['processes']:
         Path(process['release']).touch(mode=0o600)
     # Never kill/remove a possibly running installer. Require its exact saved job
     # to settle. Timeout fails cleanup, retaining definitions/ownership for review.
     for helper in owner['helpers']:
-        label = helper['label']
-        observed = wait_for(lambda: owned_helper_observation(helper, env), lambda row: row['settled'],
-                            seconds=120, description='cleanup helper settlement')
-        child_settlement(Path(helper['folder']))
-        if sys.platform == 'darwin':
-            for row in observed['domains']:
-                current = owned_helper_observation(helper, env)
-                check(current['settled'], 'saved helper became active during cleanup')
-                if not any(item['domain'] == row['domain'] for item in current['domains']):
-                    continue
-                execute('launchctl', 'bootout', row['domain'] + '/' + label, env=env, check_result=False)
-            wait_for(lambda: not launch_job(label, env), description='helper registration absence')
-        else:
-            check(owned_helper_observation(helper, env)['settled'], 'saved helper became active during cleanup')
-            if observed['LoadState'] != 'not-found':
-                execute('systemctl', '--user', 'reset-failed', label + '.service', env=env, check_result=False)
-            wait_for(lambda: properties(label + '.service', env).get('LoadState') == 'not-found',
-                     description='transient helper collection')
-        results['helpers'].append({'label': label, 'settled': observed, 'absent': True})
+        results['helpers'].append(retire_helper(helper, env))
     saved = owner['definition']
     pids, helper_pids, child_pids = [], [], []
     for case in owner['cases']:

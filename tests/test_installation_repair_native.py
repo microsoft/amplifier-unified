@@ -31,7 +31,7 @@ class NativeRepairHarnessTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.version, self.revision = '0.89.0', 'a' * 40
         self.artifacts = native.module(native.SOURCE / 'amplifier_web/app_release_artifacts.py')
 
@@ -374,9 +374,7 @@ class NativeRepairHarnessTests(unittest.TestCase):
         self.assertEqual(index['workflowCommit'], {})
 
     def test_macos_foreign_settled_helper_is_not_adopted(self):
-        identity = 'd' * 32
-        helper = {'label': 'com.microsoft.amplifier-unified.repair.' + identity,
-                  'folder': '/private/data/installation-repair/' + identity, 'basePython': '/outside/python'}
+        helper = self.mac_helper()
         text = 'program = /foreign\narguments = {\n /foreign\n}\nruns = 1\n'
         with patch.object(native.sys, 'platform', 'darwin'), \
                 patch.object(native, 'launch_job', return_value=[('gui/123', text)]), \
@@ -464,6 +462,166 @@ class NativeRepairHarnessTests(unittest.TestCase):
         native.save(boundary, {'schema': 1, 'settled': True})
         self.assertNotEqual(native.child_boundary_identity(self.root), before)
         self.assertEqual(boundary.read_bytes(), before[-1])
+
+    def mac_helper(self):
+        """Test input only. Runtime fixture MUST use the production preparer."""
+        identity = 'd' * 32
+        folder = self.root / 'data/installation-repair' / identity
+        folder.mkdir(parents=True, mode=0o700)
+        helper = {'label': 'com.microsoft.amplifier-unified.repair.' + identity,
+                  'folder': str(folder), 'basePython': '/outside/python3.13'}
+        (folder / 'installation_repair_worker.py').write_bytes(
+            (native.SOURCE / 'amplifier_web/installation_repair_worker.py').read_bytes())
+        path = folder / 'helper.plist'
+        payload = {'Label': helper['label'], 'ProgramArguments': native.worker_command(helper, folder),
+                   'WorkingDirectory': str(folder), 'RunAtLoad': True, 'KeepAlive': False,
+                   'ProcessType': 'Background', 'StandardOutPath': os.devnull,
+                   'StandardErrorPath': os.devnull, 'Umask': 0o077}
+        path.write_bytes(plistlib.dumps(payload, sort_keys=True))
+        path.chmod(0o600)
+        job = {'kind': 'launchd-user-job', 'label': helper['label'], 'domain': f'gui/{os.getuid()}',
+               'plistPath': str(path), 'plistSHA256': native.digest(path),
+               'cleanupState': 'retained-for-explicit-review', 'cleanupOwner': 'installation-owner',
+               'detail': 'test metadata'}
+        native.save(folder / 'plan.json', {'operationId': identity, 'uid': os.getuid(),
+                                           'basePython': helper['basePython'], 'helperJob': job})
+        native.save(folder / 'operation.json', {'operationId': identity, 'helperJob': job})
+        return helper
+
+    def mac_job_print(self, helper, *, runs=1, state='not running', pid=None, path=True):
+        folder = Path(helper['folder'])
+        return ('program = ' + helper['basePython'] + '\narguments = {\n'
+                + ''.join('  ' + arg + '\n' for arg in native.worker_command(helper, folder)) + '}\n'
+                + ('path = ' + str(folder / 'helper.plist') + '\n' if path else '')
+                + f'runs = {runs}\nstate = {state}\n' + (f'pid = {pid}\n' if pid else ''))
+
+    def test_private_launchd_plist_has_closed_keys_and_exact_receipt_digest(self):
+        helper = self.mac_helper()
+        job = native.checked_helper_plist(helper)
+        self.assertEqual(job['kind'], 'launchd-user-job')
+        self.assertEqual(job['domain'], f'gui/{os.getuid()}')
+        self.assertEqual(job['plistSHA256'], native.digest(Path(helper['folder']) / 'helper.plist'))
+
+    def test_changed_private_plist_is_refused_before_manager_observation(self):
+        helper = self.mac_helper()
+        path = Path(helper['folder']) / 'helper.plist'
+        value = plistlib.loads(path.read_bytes())
+        value['KeepAlive'] = True
+        path.write_bytes(plistlib.dumps(value, sort_keys=True))
+        with patch.object(native.sys, 'platform', 'darwin'), patch.object(native, 'launch_job') as manager:
+            with self.assertRaisesRegex(RuntimeError, 'helper definition changed'):
+                native.owned_helper_observation(helper, {}, qualify=False)
+        manager.assert_not_called()
+        self.assertTrue(path.exists())
+
+    def test_rehashed_unsafe_trigger_is_not_adopted_as_new_helper_ownership(self):
+        helper = self.mac_helper()
+        folder = Path(helper['folder'])
+        value = plistlib.loads((folder / 'helper.plist').read_bytes())
+        value['StartInterval'] = 10
+        (folder / 'helper.plist').write_bytes(plistlib.dumps(value, sort_keys=True))
+        for name in ('plan.json', 'operation.json'):
+            receipt = native.load(folder / name)
+            receipt['helperJob']['plistSHA256'] = native.digest(folder / 'helper.plist')
+            native.save(folder / name, receipt)
+        with self.assertRaisesRegex(RuntimeError, 'unsafe keys'):
+            native.checked_helper_plist(helper)
+
+    def test_foreign_loaded_definition_path_is_refused_even_when_program_matches(self):
+        helper = self.mac_helper()
+        text = self.mac_job_print(helper).replace(str(Path(helper['folder']) / 'helper.plist'), '/foreign/helper.plist')
+        with patch.object(native.sys, 'platform', 'darwin'), \
+                patch.object(native, 'launch_job', return_value=[(f'gui/{os.getuid()}', text)]):
+            with self.assertRaisesRegex(RuntimeError, 'foreign or unidentifiable'):
+                native.owned_helper_observation(helper, {}, qualify=False)
+
+    def test_foreign_loaded_argv_is_refused_with_matching_program_and_private_plist(self):
+        helper = self.mac_helper()
+        text = self.mac_job_print(helper).replace('  -S\n', '  -E\n')
+        with patch.object(native.sys, 'platform', 'darwin'), \
+                patch.object(native, 'launch_job', return_value=[(f'gui/{os.getuid()}', text)]), \
+                patch.object(native, 'execute') as execute:
+            with self.assertRaisesRegex(RuntimeError, 'foreign or unidentifiable'):
+                native.retire_helper(helper, {})
+        execute.assert_not_called()
+
+    def test_plan_and_operation_must_share_identical_helper_custody(self):
+        helper = self.mac_helper()
+        path = Path(helper['folder']) / 'operation.json'
+        operation = native.load(path)
+        operation['helperJob']['domain'] = 'gui/foreign'
+        native.save(path, operation)
+        with self.assertRaisesRegex(RuntimeError, 'custody is foreign or unidentifiable'):
+            native.checked_helper_plist(helper)
+
+    def test_loaded_path_optional_observation_does_not_replace_private_plist_proof(self):
+        helper = self.mac_helper()
+        with patch.object(native.sys, 'platform', 'darwin'), \
+                patch.object(native, 'launch_job', return_value=[(f'gui/{os.getuid()}', self.mac_job_print(helper, path=False))]):
+            value = native.owned_helper_observation(helper, {})
+        self.assertTrue(value['settled'])
+        self.assertFalse(value['domains'][0]['loadedDefinitionPathObserved'])
+        self.assertTrue(value['helperJob']['plistSHA256'])
+
+    def test_multirun_is_failed_qualification_but_exact_settled_job_can_be_cleaned(self):
+        helper = self.mac_helper()
+        folder = Path(helper['folder'])
+        domain = f'gui/{os.getuid()}'
+        rows = [(domain, self.mac_job_print(helper, runs=2))]
+        with patch.object(native.sys, 'platform', 'darwin'), patch.object(native, 'launch_job', return_value=rows):
+            with self.assertRaisesRegex(RuntimeError, 'one-shot helper automatically reran'):
+                native.owned_helper_observation(helper, {})
+        # Qualification remains failed; cleanup only has narrowly scoped effect.
+        # No child ever spawned in this unit-test fixture; do not pretend to run
+        # a worker to manufacture a settlement receipt.
+        worker_source = (folder / 'installation_repair_worker.py').read_bytes()
+        with patch.object(native.sys, 'platform', 'darwin'), \
+                patch.object(native, 'launch_job', side_effect=[rows, rows, []]), \
+                patch.object(native, 'child_settlement', return_value={'spawnIntentRecorded': False}), \
+                patch.object(native, 'execute') as execute:
+            value = native.retire_helper(helper, {})
+        self.assertTrue(value['absent'])
+        self.assertFalse(value['settled']['domains'][0]['oneShotQualified'])
+        self.assertEqual(value['settled']['domains'][0]['runs'], ['2'])
+        execute.assert_called_once_with('launchctl', 'bootout', domain + '/' + helper['label'], env={})
+        self.assertEqual((folder / 'installation_repair_worker.py').read_bytes(), worker_source)
+
+    def test_pidless_unknown_state_cannot_authorize_bootout(self):
+        helper = self.mac_helper()
+        rows = [(f'gui/{os.getuid()}', self.mac_job_print(helper, state='unknown'))]
+        with patch.object(native.sys, 'platform', 'darwin'), patch.object(native, 'launch_job', return_value=rows), \
+                patch.object(native.time, 'monotonic', side_effect=[0, 121]), \
+                patch.object(native, 'execute') as execute:
+            with self.assertRaisesRegex(RuntimeError, 'cleanup helper settlement'):
+                native.retire_helper(helper, {})
+        execute.assert_not_called()
+        self.assertTrue((Path(helper['folder']) / 'helper.plist').exists())
+
+    def test_active_multirun_job_still_cannot_be_cleaned(self):
+        helper = self.mac_helper()
+        rows = [(f'gui/{os.getuid()}', self.mac_job_print(helper, runs=2, state='running', pid=4321))]
+        with patch.object(native.sys, 'platform', 'darwin'), patch.object(native, 'launch_job', return_value=rows), \
+                patch.object(native.time, 'monotonic', side_effect=[0, 121]), \
+                patch.object(native, 'execute') as execute:
+            with self.assertRaisesRegex(RuntimeError, 'cleanup helper settlement'):
+                native.retire_helper(helper, {})
+        execute.assert_not_called()
+
+    def test_production_preparer_call_precedes_admission_not_custom_fixture_payload(self):
+        tree = ast.parse((FIXTURES / 'installation_repair_native_app.py').read_text())
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'dispatch')
+        assignment = next(node for node in ast.walk(function) if isinstance(node, ast.Assign)
+                          and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                          and node.value.func.id == 'prepare')
+        admissions = next(node for node in ast.walk(function) if isinstance(node, ast.Call)
+                          and isinstance(node.func, ast.Attribute) and node.func.attr == 'write'
+                          and any(isinstance(part, ast.Constant) and part.value == 'installation-repair/admissions.json'
+                                  for part in ast.walk(node)))
+        self.assertLess(assignment.lineno, admissions.lineno)
+        source = ast.unparse(function)
+        self.assertIn("'_prepare_launchd_job'", source)
+        self.assertNotIn('plistlib.dumps', source)
+        self.assertEqual(len(assignment.targets), 2)  # identical plan and operation helperJob
 
 
 if __name__ == '__main__':

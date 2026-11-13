@@ -95,13 +95,22 @@ def dispatch(home, instance, host_instance, folder, *, launch=True):
                      ['ps', '-p', str(os.getpid()), '-o', 'lstart='], text=True).strip()})
     operation = worker.read(folder / 'operation.json')
     operation['hostInstanceId'] = host_instance
+    if sys.platform == 'darwin':
+        prepare = getattr(controller, '_prepare_launchd_job', None)
+        if not callable(prepare):
+            raise RuntimeError('joined production controller lacks private one-shot launchd preparation')
+        # The real controller owns the bytes and closed metadata. Preparation
+        # must precede plan/receipt publication and the atomic admission.
+        operation['helperJob'] = plan['helperJob'] = prepare(folder, plan)
+    else:
+        operation['helperJob'] = controller.helper_job(plan['operationId'])
     worker.write(folder / 'plan.json', plan)
     worker.write(folder / 'operation.json', operation)
     # This is a controlled fixture admission, NOT production confirm/binding.
     # Mirror the exact atomic admission format, not the retired split records.
     worker.write(home / 'installation-repair/admissions.json', {
         'schema': 1, 'current': plan['operationId'], 'previews': {plan['previewId']: plan['operationId']}})
-    event(config['caseRoot'], 'admit', operationId=plan['operationId'])
+    event(config['caseRoot'], 'admit', operationId=plan['operationId'], helperJob=operation['helperJob'])
     # Ownership of this exact one-shot label was saved by the harness BEFORE
     # this request. Never retry this dispatch if the response is lost.
     if launch:
