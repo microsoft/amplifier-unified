@@ -59,6 +59,9 @@ class Controller:
     async def heartbeat(self, generation):
         self.calls.append(("heartbeat", generation))
 
+    def cached_status(self):
+        return self.state()
+
 
 class Coordinator:
     def __init__(self, controller=None):
@@ -554,6 +557,115 @@ async def test_real_foundation_finite_resumed_and_persistent_children_own_distin
         assert coordinator not in episodes.sponsors
     finally:
         await episodes.close()
+        await parent.cleanup()
+
+
+@pytest.mark.parametrize("outcome", ["result", "error", "cancel"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_real_child_original_outcome_survives_bounded_deferred_cleanup(
+        tmp_path, monkeypatch, outcome, cleanup_fails):
+    from dataclasses import dataclass
+    import importlib.util
+    from pathlib import Path
+    from amplifier_foundation.bundle import Bundle, PreparedBundle, BundleModuleResolver
+    from amplifier_module_loop_live.runtime import Runtime
+    from amplifier_web.host.children import install_children
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web import computer_episodes
+    monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .01)
+    events = []
+    registry = ComputerEpisodes(events.append)
+    proceed = asyncio.Event()
+    cleanup_calls = []
+    original_error = ValueError("original child execution error")
+    observed_error = []
+    executing = asyncio.Event()
+    class Loop:
+        async def execute(self, *args, **kwargs):
+            if outcome == "error":
+                raise original_error
+            if outcome == "cancel":
+                raise asyncio.CancelledError("original child cancellation")
+            return "original child result"
+    class Child:
+        def __init__(self, original):
+            self.original = original
+        def __getattr__(self, name):
+            return getattr(self.original, name)
+        async def execute(self, instruction):
+            if outcome == "cancel":
+                executing.set()
+                await asyncio.Event().wait()  # Cancel the actual host child awaiter.
+            try:
+                return await self.original.execute(instruction)
+            except Exception as exc:
+                observed_error.append(exc)
+                raise
+        async def cleanup(self):
+            cleanup_calls.append(True)
+            await proceed.wait()
+            if cleanup_fails:
+                raise OSError("inert backend cleanup failed")
+            await self.original.cleanup()
+    @dataclass
+    class Prepared(PreparedBundle):
+        async def create_session(self, **kwargs):
+            session = await super().create_session(**kwargs)
+            await session.coordinator.mount("orchestrator", Loop())
+            return Child(session) if kwargs.get("parent_id") else session
+    plan = {"session": {"orchestrator": {"module": "loop-live"}, "context": {"module": "context-simple"}},
+            "agents": {"worker": {}}}
+    paths = {name: Path(importlib.util.find_spec("amplifier_module_" + name.replace("-", "_")).origin).parent
+             for name in ("loop-live", "context-simple")}
+    prepared = Prepared(plan, BundleModuleResolver(paths),
+                        Bundle(name="outcome-fixture", session=plan["session"], agents=plan["agents"]))
+    parent = await prepared.create_session(session_id="outcome-parent")
+    children = await install_children(parent, prepared, Runtime("outcome-parent"),
+                                      SessionStore(tmp_path / "children"), None)
+    def capture():
+        async def install(coordinator):
+            registry.install(coordinator, lambda: ("child", lambda: True))
+        return install
+    parent.coordinator.register_capability("web.app_access.install", capture)
+    try:
+        operation = asyncio.create_task(children.spawn("worker", "inert", parent,
+                                        sub_session_id="outcome-child"))
+        if outcome == "cancel":
+            await executing.wait()
+            operation.cancel()
+        results = await asyncio.gather(operation, return_exceptions=True)
+        if outcome == "result":
+            assert results[0]["output"] == "original child result"
+        elif outcome == "error":
+            # Preserve the exact public Core error, not an invented orchestrator
+            # exception shape or a cleanup-related replacement.
+            assert results[0] is observed_error[0] and "original child execution error" in str(results[0])
+        else:
+            assert isinstance(results[0], asyncio.CancelledError)
+        row = children.rows["outcome-child"]
+        assert any(event.get("type") == "computer.settlement" and not event["settled"] for event in events)
+        assert row.get("_computerCleanup") is not None and registry.cleanups
+        assert children.sessions.get("outcome-child") is not None
+        with pytest.raises(ValueError, match="cleanup is unconfirmed"):
+            await children.resume("outcome-child", "must not execute", parent)
+        proceed.set()
+        await asyncio.gather(*tuple(registry.pending), return_exceptions=True)
+        await tick()
+        assert cleanup_calls == [True]
+        if cleanup_fails:
+            assert registry.cleanups and not registry.receipt()["settled"]
+            assert row.get("_computerCleanup") is not None
+            assert not events[-1]["settled"]
+        else:
+            assert not registry.cleanups and registry.receipt()["settled"]
+            assert row.get("_computerCleanup") is None
+            assert events[-1]["settled"]
+    finally:
+        proceed.set()
+        await asyncio.gather(*tuple(registry.pending), return_exceptions=True)
+        child = children.sessions.get("outcome-child")
+        if child:
+            await child.original.cleanup()  # Test-only teardown of intentional failure.
         await parent.cleanup()
 
 
@@ -1230,15 +1342,18 @@ async def test_close_bounds_hanging_status_without_cancelling_its_owner(monkeypa
     assert not status_cancelled
 
 
-async def test_readiness_wait_is_bounded_but_late_acquired_identity_still_settles(monkeypatch):
+async def test_stop_during_readiness_wakes_caller_but_late_acquired_identity_still_settles(monkeypatch):
     from amplifier_web import computer_episodes
     monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .02)
     controller, _, registry, sponsor, _, _ = fixture()
     controller.ready.clear()
     body = AsyncMock()
-    with pytest.raises(computer_episodes.SettlementPending) as error:
-        await asyncio.wait_for(sponsor.invoke("computer", {}, body), .2)
-    assert error.value.receipt["episodes"][0]["release_confirmed"] is False
+    task = asyncio.create_task(sponsor.invoke("computer", {}, body))
+    await tick()
+    registry.fence(halt=True)
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, .2)
+    assert registry.receipt()["episodes"][0]["release_confirmed"] is False
     assert registry.pending and registry.unresolved and not controller.calls
     body.assert_not_awaited()
     controller.ready.set()
@@ -1247,7 +1362,7 @@ async def test_readiness_wait_is_bounded_but_late_acquired_identity_still_settle
     assert (await registry.close())["settled"]
 
 
-async def test_queued_call_cannot_acquire_over_timed_out_readiness(monkeypatch):
+async def test_queued_call_cannot_acquire_over_cancelled_readiness(monkeypatch):
     from amplifier_web import computer_episodes
     monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .02)
     controller, _, registry, sponsor, _, _ = fixture()
@@ -1264,9 +1379,12 @@ async def test_queued_call_cannot_acquire_over_timed_out_readiness(monkeypatch):
         await asyncio.sleep(0)
     queued = asyncio.create_task(sponsor.invoke("desktop", {}, execute))
     try:
+        await tick()
+        first.cancel()
         results = await asyncio.gather(first, queued, return_exceptions=True)
-        assert all(isinstance(result, computer_episodes.SettlementPending) for result in results)
-        assert len(attempts) == 1  # A timed-out begin retains exclusive custody.
+        assert isinstance(results[0], asyncio.CancelledError)
+        assert isinstance(results[1], computer_episodes.SettlementPending)
+        assert len(attempts) == 1  # Cancelled readiness retains exclusive custody.
         execute.assert_not_called()
     finally:
         controller.ready.set()

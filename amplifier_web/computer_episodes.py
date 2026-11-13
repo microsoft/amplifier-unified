@@ -36,6 +36,8 @@ async def wait_settlement(tasks):
 DESKTOP_NON_ACQUIRING = frozenset({
     "episode_status", "diagnostic_snapshot", "doctor", "end_episode",
 })
+_IDLE_WITHOUT_EPISODE = {"state": "idle", "identity": None, "workers": 0,
+                         "release_confirmed": False}
 
 
 def non_acquiring_desktop(name, arguments):
@@ -59,6 +61,8 @@ class Episode:
     heartbeat: object = None
     settlement: object = None
     users: int = 0
+    interrupted_readiness: object = field(default_factory=asyncio.Event)
+    not_acquired: bool = False
 
 
 class ComputerEpisodes:
@@ -314,6 +318,7 @@ class Sponsor:
             # Explicit old pins and opt-outs retain their existing behavior.
             return None
         episode = Episode(self, key, valid, controller, bounded)
+        before_begin = controller.cached_status()
         episode.status = {"state": "starting", "identity": None, "workers": None,
                           "admission_open": False, "release_confirmed": False}
         self.episodes.add(episode)
@@ -329,27 +334,44 @@ class Sponsor:
                 elif episode.generation:
                     episode.heartbeat = asyncio.create_task(self.heartbeat(episode))
                 return episode
-            except BaseException:
+            except BaseException as exc:
                 cached = controller.cached_status()
                 identity = cached.get("identity") or {}
                 episode.generation = identity.get("generation")
-                episode.status = {"state": "unknown", "release_confirmed": False,
-                                  "identity": identity or None, "reason": "episode_begin_unconfirmed"}
+                # The controller's full idle sentinel before/after a completed
+                # ordinary refusal proves this mount acquired no episode. A
+                # pending/cancelled begin or identity-bearing remote uncertainty
+                # is not this fact and retains native custody below.
+                episode.not_acquired = (isinstance(exc, Exception)
+                    and before_begin == _IDLE_WITHOUT_EPISODE and cached == _IDLE_WITHOUT_EPISODE)
+                episode.status = ({**cached, "reason": "episode_not_acquired"} if episode.not_acquired else
+                    {"state": "unknown", "release_confirmed": False,
+                     "identity": identity or None, "reason": "episode_begin_unconfirmed"})
                 self.publish(episode)
                 raise
 
         # Stop/cancellation can overtake target readiness. Retain the begin so
         # the exact acquired identity is fenced, even after its awaiter leaves.
         episode.begin = self.registry.retain(begin())
+        interrupted = asyncio.create_task(episode.interrupted_readiness.wait())
         try:
-            await wait_settlement({episode.begin})
-            if not episode.begin.done():
-                self.settle(episode, interrupted=True)
-                raise SettlementPending(self.registry.receipt())
-            return episode.begin.result()
+            # Legitimate disclosure/readiness has its own bundle-owned budget,
+            # not the shorter cleanup-wait budget. Stop still wakes this caller
+            # without cancelling the actual begin/native readiness worker.
+            await asyncio.wait({episode.begin, interrupted}, return_when=asyncio.FIRST_COMPLETED)
+            if episode.begin.done():
+                return episode.begin.result()
+            raise asyncio.CancelledError("Computer readiness was interrupted by its sponsor.")
         except BaseException:
             self.settle(episode, interrupted=True)
             raise
+        finally:
+            interrupted.cancel()
+            try:
+                await asyncio.gather(interrupted, return_exceptions=True)
+            except BaseException:
+                self.settle(episode, interrupted=True)
+                raise
 
     async def heartbeat(self, episode):
         try:
@@ -369,6 +391,7 @@ class Sponsor:
             return episode.settlement  # Late finalizers cannot re-fence a completed generation.
         episode.interrupted |= interrupted
         episode.closing = True
+        episode.interrupted_readiness.set()
         if episode.heartbeat:
             episode.heartbeat.cancel()
         if episode.generation:
@@ -390,7 +413,7 @@ class Sponsor:
                 try:
                     await asyncio.shield(episode.begin)
                 except BaseException:
-                    if not episode.generation:
+                    if not episode.generation and not episode.not_acquired:
                         raise
             if episode.generation:
                 # Begin may have completed after the synchronous Stop fence.
@@ -450,7 +473,7 @@ class Sponsor:
                 self.registry.unresolved[(id(self.coordinator), episode.generation or id(episode))] = episode
             else:
                 self.registry.unresolved.pop((id(self.coordinator), episode.generation or id(episode)), None)
-                self.unconfirmed.pop(episode.generation, None)
+                self.unconfirmed.pop(episode.generation or id(episode), None)
             if episode.generation:
                 self.registry.unresolved.pop((id(self.coordinator), id(episode)), None)
             self.episodes.discard(episode)

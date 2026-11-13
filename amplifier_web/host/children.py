@@ -850,11 +850,20 @@ class Children:
                     # cancelled child awaiter cannot erase backend/ledger custody.
                     cleanup = sponsor.registry.retain_cleanup(coordinator, row["runId"], deferred)
                     row["_computerCleanup"] = cleanup
+                    def cleanup_status(_=None):
+                        try:
+                            sponsor.registry.emit({"type": "computer.settlement", **sponsor.registry.receipt()})
+                        except Exception:
+                            pass  # Reporting cannot rewrite the original task result.
+                    cleanup.add_done_callback(cleanup_status)
                     from ..computer_episodes import wait_settlement
-                    await wait_settlement({cleanup})
-                    if not cleanup.done() or (id(coordinator), row["runId"]) in sponsor.registry.cleanups:
-                        from ..computer_episodes import SettlementPending
-                        raise SettlementPending(sponsor.registry.receipt())
+                    try:
+                        await wait_settlement({cleanup})
+                    finally:
+                        if not cleanup.done() or (id(coordinator), row["runId"]) in sponsor.registry.cleanups:
+                            # Execution and cleanup outcomes are separate; retain
+                            # custody and report it even on a newly cancelled wait.
+                            cleanup_status()
                     # The owned task already performed ordinary cleanup.
                     return_cleanup = True
                 else:
