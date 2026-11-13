@@ -342,10 +342,10 @@ class AccessMode:
                     after = self.snapshot(row)
                     if after['revision'] != affected[row['id']]['revision']:
                         changed.add(row['id'])
-                        if after['mode'] != affected[row['id']]['mode']:
+                        if after['mode'] != affected[row['id']]['mode'] and not row.get('externalAgent'):
                             row.update(fileAccessPending=True, configurationPending=True,
                                 configurationPendingRevision=row.get('configurationPendingRevision', 0) + 1)
-                        if after['mode'] == 'full':
+                        if after['mode'] == 'full' and not row.get('externalAgent'):
                             self.service._task(self.settle(row['id']))
                 receipt = {'accepted': True, 'commandAction': action, 'result': snapshot()}
                 self.service.db.execute('INSERT INTO commands VALUES(?,?,?)', (identity, fingerprint, json.dumps(receipt)))

@@ -167,7 +167,7 @@ async def _prepare_baseline(home):
     if not graph or not any(row["name"] == "amplifier-core" for row in graph):
         raise RuntimeError("Initial runtime dependencies are incomplete.")
     await owner.run("initial-runtime-policy", prepare_overrides, project,
-                    receipt / "runtime-install-overrides.txt")
+                    receipt / "runtime-install-overrides.txt", owned_root=home)
     for name, raw in (("runtime.toml", declared_manifest()),
                       ("runtime.lock", (project / "uv.lock").read_bytes())):
         write_private(receipt / name, raw, owned_root=home)

@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {resizeComposer,composerPrimaryAction,composerExpanded,quoteComposerHeightBudget} from '../src/composer.js';
+test('text-only agents retain send and Stop without offering a voice launch',()=>{
+ const textOnly={voiceAvailable:false};
+ assert.deepEqual(composerPrimaryAction(textOnly),{action:'conversation.send',label:'Send message',icon:'send',disabled:true});
+ assert.equal(composerPrimaryAction({...textOnly,draft:'Continue the project'}).disabled,false);
+ assert.equal(composerPrimaryAction({...textOnly,responseActive:true}).action,'conversation.stop');
+ assert.equal(composerPrimaryAction({...textOnly,responseActive:true,stopping:true}).disabled,true);
+ assert.equal(composerPrimaryAction({...textOnly,voiceStatus:'active'}).action,'call.end','An existing call can still be ended');
+ assert.equal(composerPrimaryAction().action,'call.start','Native and draft behavior is unchanged');
+});
 test('compact presentation expands content without altering it or action priority',()=>{
  assert.equal(composerExpanded({draft:''}),false);
  assert.equal(composerExpanded({draft:'Ready to send'}),false);
