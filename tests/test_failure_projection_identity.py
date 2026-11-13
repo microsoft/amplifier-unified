@@ -269,3 +269,18 @@ async def test_original_known_terminal_frames_enrich_exact_request_without_recla
     await app.on_runtime_event('runtime.error', {'sessionId': target['id'], 'terminalFailure': capture})
     assert target['failure'] == {**before, 'exceptionChain': capture['exceptionChain']}
     assert annotate(target, {'role': 'user', 'inputId': 'saved-input'})['inputStatus']['failure'] == target['failure']
+
+
+@pytest.mark.parametrize('late', ['failed', 'detached'])
+async def test_late_same_generation_terminal_cannot_relabel_completed_request(app, late):
+    from amplifier_web.input_status import annotate
+    target = app.state['sessions'][1]
+    await observed(app, target, 'started')
+    await observed(app, target, 'finished')
+    target['messages'].append({'id': 'saved-response', 'role': 'assistant',
+                              'generationId': 'saved-generation', 'response': {'status': 'completed'}})
+    before = copy.deepcopy(annotate(target, {'role': 'user', 'inputId': 'saved-input'})['inputStatus'])
+    await observed(app, target, late, error_type='ValueError', error_category='unknown')
+    assert annotate(target, {'role': 'user', 'inputId': 'saved-input'})['inputStatus'] == before
+    assert target['messages'][-1]['response']['status'] == 'completed'
+    assert not target.get('failure') and not target.get('error')

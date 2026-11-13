@@ -348,8 +348,10 @@ def causal_timeline(session, failure=None):
         if row.get('type') not in {'runtime.error', 'runtime.ended'}:
             continue
         at = _event_time(row.get('at'))
-        if generation and row.get('generationId') == generation or (
-                start is not None and at is not None and start <= at and (end is None or at <= end)):
+        observed = row.get('generationId') or row.get('generation_id')
+        if (generation and observed == generation or
+                not observed and start is not None and at is not None and start <= at
+                and (end is None or at <= end)):
             rows.append(row)
     return [event_detail(row) for row in sorted(rows, key=lambda row: _event_time(row.get('at')) or 0)[-20:]]
 

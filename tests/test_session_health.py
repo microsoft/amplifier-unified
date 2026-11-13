@@ -419,6 +419,7 @@ def test_inspection_omits_stale_execution_and_sorts_only_causal_lifecycle(tmp_pa
             {'event': 'generation.failed', 'generation_id': 'current', 'at': 110}],
         'runtimeEvents': [
             {'type': 'runtime.error', 'at': 105, 'errorType': 'TypeError'},
+            {'type': 'runtime.error', 'generationId': 'older', 'at': 106, 'errorType': 'OldError'},
             {'type': 'runtime.tool', 'at': 106, 'tool': 'noise'},
             {'type': 'runtime.error', 'at': 111, 'errorType': 'OtherError'}],
         'execution': {'nodes': [{'startedAt': 1, 'endedAt': 244296, 'error': 'stale'}]}}
