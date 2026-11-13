@@ -161,6 +161,13 @@ class Sponsor:
             return tool
         return EpisodeTool(tool, name, self)
 
+    def unwrap(self, tool):
+        # Direct-script and bootstrapped package imports have distinct Python
+        # class identities. Only the issuing sponsor recognizes its wrapper.
+        if isinstance(tool, EpisodeTool) and tool._computer_sponsor is self:
+            return tool.original
+        return tool
+
     def wrap_tools(self):
         tools = self.coordinator.get("tools") or {}
         for name, tool in tuple(tools.items()):

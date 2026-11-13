@@ -98,10 +98,11 @@ class Worker:
         self.preparation_report = {}
         if __package__:
             from .ownership import WorkerOwnership
+            from .computer_episodes import ComputerEpisodes
         else:
             from ownership import WorkerOwnership
+            from computer_episodes import ComputerEpisodes
         self.ownership = WorkerOwnership(self, lambda data: publish(data))
-        from amplifier_web.computer_episodes import ComputerEpisodes
         self.computer_episodes = ComputerEpisodes(lambda event: publish(event))
 
     async def ask(self, prompt, options, identity=None):

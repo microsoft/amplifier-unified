@@ -710,3 +710,28 @@ async def test_child_stop_during_preparation_is_retained_for_exact_run(monkeypat
     await install(resumed)
     assert not resumed.get_capability("web.computer_episodes").terminated
     await worker.computer_episodes.close()
+
+
+async def test_direct_script_sponsor_keeps_native_tool_inspection_after_app_bootstrap(monkeypatch):
+    """The constructor's sibling import and later package import are distinct."""
+    import importlib.util
+    from pathlib import Path
+    from amplifier_core import HookRegistry
+    from amplifier_web.app_guidance import install_app_access
+    path = Path(__file__).resolve().parents[1] / "amplifier_web/computer_episodes.py"
+    spec = importlib.util.spec_from_file_location("computer_episodes", path)
+    direct = importlib.util.module_from_spec(spec)
+    import sys
+    monkeypatch.setitem(sys.modules, "computer_episodes", direct)
+    spec.loader.exec_module(direct)
+    coordinator = Coordinator(Controller())
+    coordinator.hooks = HookRegistry()
+    coordinator.register_capability("web.work_effect_check", AsyncMock(return_value={"allowed": True}))
+    await install_app_access(coordinator, AsyncMock(return_value={}))
+    registry = direct.ComputerEpisodes()
+    registry.install(coordinator, lambda: ("turn", lambda: True))
+    native = SimpleNamespace(name="computer", execute=AsyncMock())
+    await coordinator.mount("tools", native, name="computer")
+    mounted = coordinator.tools["computer"]
+    assert coordinator.get_capability("web.work_inspect_tool")("computer", mounted) is native
+    await registry.close()

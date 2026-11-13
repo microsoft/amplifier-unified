@@ -203,9 +203,9 @@ async def install_app_access(coordinator, bridge):
                     execution['active'] = False
                     WORK_EXECUTION.reset(token)
         def wrapped(name, tool):
-            from .computer_episodes import EpisodeTool
-            if isinstance(tool, EpisodeTool) and tool._computer_sponsor is coordinator.get_capability('web.computer_episodes'):
-                tool = tool.original
+            sponsor = coordinator.get_capability('web.computer_episodes')
+            if sponsor:
+                tool = sponsor.unwrap(tool)
             if getattr(tool, '_work_delivery_guard', None) is delivery:
                 tool.refresh_work_check(check)
                 return tool
