@@ -73,6 +73,6 @@ export function ExternalAgentSettings({act,navigate=()=>{}}){
    </SettingsActions>
    {pending&&<p role="status">The change is not confirmed. Check the same change to learn its outcome. Keep Settings open until it is confirmed.</p>}
   </>}
-  {notice&&<p role="status">{notice}</p>}{error&&<p role="alert">{error}</p>}
+  {notice&&<p role="status">{notice}</p>}{error&&<p role="alert" data-private="true">{error}</p>}
  </section>;
 }

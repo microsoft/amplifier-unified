@@ -54,6 +54,7 @@ test('stale edit preserves form until explicit reload; it cannot silently overwr
  await click(root,'Edit');await edit(root,'external-agent-name','My edit');await click(root,'Save connection');
  assert.equal(writes[0].expectedRevision,'row-one');assert.equal(root.root.findByProps({id:'external-agent-name'}).props.value,'My edit');
  assert.equal(button(root,'Check the same change'),undefined);assert.match(JSON.stringify(root.toJSON()),/changed elsewhere/);
+ assert.equal(root.root.findByProps({role:'alert'}).props['data-private'],'true','Server validation errors may quote private launch settings');
  await click(root,'Discard edits and reload');assert.equal(root.root.findByProps({id:'external-agent-name'}).props.value,'Changed elsewhere');
  await renderAct(async()=>root.unmount());
 });
