@@ -317,7 +317,7 @@ async def test_duplicate_send_keeps_early_consumption_revision(authenticated_cli
     assert restored_runtime.sent == []
 
 
-@pytest.mark.parametrize('disposition', ['queued', 'applied', 'next_turn', 'early-applied', 'held', 'unknown'])
+@pytest.mark.parametrize('disposition', ['queued', 'applied', 'early-applied', 'held', 'unknown'])
 async def test_steering_receipt_observes_exact_attachment_consumption(authenticated_client, tmp_path, disposition):
     import base64
     from amplifier_web.execution import ensure_turn

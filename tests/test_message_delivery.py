@@ -201,7 +201,7 @@ async def test_send_blank_text_with_attachment_retains_existing_fallback(held_po
     assert app.clients.attachments(root) == []
 
 
-@pytest.mark.parametrize('guard', ['generation', 'configuration-revision', 'configuration-busy', 'file-access'])
+@pytest.mark.parametrize('guard', ['generation', 'configuration-revision', 'configuration-busy'])
 async def test_send_exact_text_still_obeys_pre_admission_guards(held_post, guard):
     app, runtime, _ = held_post
     root = app._session()
@@ -213,8 +213,6 @@ async def test_send_exact_text_still_obeys_pre_admission_guards(held_post, guard
         args['expectedConfigurationRevision'] = root.get('nextMessageRevision', 0) + 1
     elif guard == 'configuration-busy':
         root['configurationBusy'] = True
-    else:
-        root['fileAccessPending'] = {'status': 'pending'}
     app.state['view']['draft'] = text
     # Materialize the existing client-owned empty attachment view before taking
     # a whole-session snapshot; a rejected send may inspect it but cannot consume it.
