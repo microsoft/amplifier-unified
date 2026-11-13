@@ -51,7 +51,7 @@ export function ExternalAgentSettings({act,navigate=()=>{}}){
    <SettingsActions><button type="button" className="a-primary" disabled={busy||agents===null} onClick={()=>{setDraft(blank());setSaved(blank());setRevision(null);setError('');setNotice('')}}>Add external agent</button><button type="button" className="a-soft" disabled={busy} onClick={load}>Refresh connections</button></SettingsActions>
   </>:<>
    <h4>{draft.id?'Edit connection':'Add external agent'}</h4>
-   <fieldset className="a-external-agent-fields" disabled={busy||!!pending}>
+   <fieldset className="a-external-agent-fields" data-private="true" disabled={busy||!!pending}>
     <label htmlFor="external-agent-name">Name</label><input id="external-agent-name" value={draft.label} onChange={e=>change('label',e.target.value)} placeholder="My Constellation agent" autoComplete="off"/>
     <label htmlFor="external-agent-command">Command</label><input id="external-agent-command" value={draft.command} onChange={e=>change('command',e.target.value)} placeholder="/path/to/agent-instance" autoComplete="off" spellCheck={false}/>
     <p className="a-caption">The executable on this Amplifier host that starts the agent’s ACP connection. Saving does not install or start it.</p>

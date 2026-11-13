@@ -23,7 +23,12 @@ test('create saves private launch fields only through the connection action',asy
  const root=await mount(act);await click(root,'Add external agent');
  await edit(root,'external-agent-name','Constellation');await edit(root,'external-agent-command','/agents/instance');
  await edit(root,'external-agent-arguments','acp\n--token-file\n/private/file with spaces');
- await edit(root,'external-agent-session-cwd','/remote/project');await click(root,'Save connection');
+ await edit(root,'external-agent-session-cwd','/remote/project');
+ for(const input of root.root.findAll(node=>['input','textarea'].includes(node.type))){
+  let boundary=input;while(boundary&&boundary.props['data-private']!=='true')boundary=boundary.parent;
+  assert.ok(boundary,`${input.props.id} must be excluded from ordinary rendered-view reports`);
+ }
+ await click(root,'Save connection');
  assert.deepEqual(calls.map(row=>row.name),['externalAgents.list','externalAgents.save']);
  assert.deepEqual(calls[1].args,{agent:{label:'Constellation',command:'/agents/instance',args:['acp','--token-file','/private/file with spaces'],sessionCwd:'/remote/project'}});
  assert.ok(calls[1].meta.id);assert.match(JSON.stringify(root.toJSON()),/Connection saved/);
