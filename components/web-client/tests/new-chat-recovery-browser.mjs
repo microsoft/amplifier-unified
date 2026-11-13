@@ -302,6 +302,10 @@ try{
   await expect(prominent.getByRole('alert')).toBeVisible();
   if(outcome==='rejected')await expect(prominent.getByRole('alert')).toContainText('Navigation blocked for fixture');
   await expect(prominent.getByRole('button',{name:'Open chat',exact:true})).toBeEnabled();
+  // Disabling a retained button can blur it; only card removal promises focus
+  // continuation. Verify the enabled recovery remains reachable by keyboard.
+  await prominent.getByRole('button',{name:'Check delivery',exact:true}).focus();
+  await page.keyboard.press('Tab');
   await expect(prominent.getByRole('button',{name:'Open chat',exact:true})).toBeFocused();
   await emit();
   await expect(prominent.getByRole('alert')).toBeVisible();

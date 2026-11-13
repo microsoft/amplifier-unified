@@ -89,9 +89,12 @@ async def main(home):
 
     async def check(request):
         authorize(request)
+        # Resident owners can be evicted while this journey creates several
+        # chats. Count canonical directory membership, not its hot working set.
         return web.json_response({'started': runtime.started, 'sent': runtime.sent,
             'sessions': [{key: row.get(key) for key in ('id', 'title', 'workspace', 'sessionKind',
-                'parentId', 'bundle', 'selection', 'creationCommandId')} for row in service.state['sessions']]})
+                'parentId', 'bundle', 'selection', 'creationCommandId')}
+                for row in service.directory.select(limit=100, order='id')]})
 
     async def receipt(request):
         authorize(request)
