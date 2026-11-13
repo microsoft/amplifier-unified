@@ -21,6 +21,70 @@ export function installationRepairHealthy(operation){
 const statusLabels={accepted:'Repair accepted — not complete',running:'Repair in progress',ready:'Repair needs verification',reinstalled:'Application reinstalled — service health not verified','rolled-back':'Repair rolled back',failed:'Installation repair failed',unknown:'Repair outcome unknown'};
 const preservationLabels={conversations:'Saved conversations',settings:'App settings',credentials:'Credentials',workspaces:'Workspace files','source-selections':'Selected package and component sources','downloaded-sources':'Downloaded source caches','operation-receipts':'Operation and recovery receipts','optional-features':'Installed optional features'};
 const replacementLabels={'uv-tool-environment':'Managed application package environment','application-launch-pointer':'Active application launch pointer'};
+const verifyJournalKey='amplifier.installation-repair-verification.v1';
+const unverified=operation=>id(operation?.operationId)&&id(operation.previewId)&&operation.status==='reinstalled'&&operation.reinstalled===true&&operation.healthVerified===false;
+function Verification({operation,target,act,onReceipt}){
+ const [pending,setPending]=React.useState(()=>{try{return JSON.parse(sessionStorage.getItem(verifyJournalKey)||'null')}catch{return null}});
+ const [busy,setBusy]=React.useState(false),[notice,setNotice]=React.useState('');
+ const active=React.useRef(null),flight=React.useRef(null),mounted=React.useRef(false),generation=React.useRef(0);
+ const renderedGeneration=generation.current;
+ const eligible=unverified(operation)&&target?.operationId===operation.operationId&&typeof target.hostInstanceId==='string'&&!!target.hostInstanceId&&target.confirm===true;
+ const key=eligible?JSON.stringify([operation.previewId,target]):null;
+ const waiting=pending?.operationId===operation?.operationId;
+ React.useLayoutEffect(()=>{active.current=key;return()=>{active.current=null}},[key]);
+ React.useLayoutEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[]);
+ const save=value=>{
+  const encoded=JSON.stringify(value);sessionStorage.setItem(verifyJournalKey,encoded);
+  if(sessionStorage.getItem(verifyJournalKey)!==encoded)throw Error('Recovery reference was not saved.');
+  setPending(value);
+ };
+ React.useEffect(()=>{
+  if(waiting&&pending.previewId===operation?.previewId&&installationRepairHealthy(operation)){
+   try{save(null)}catch{} // A verified canonical receipt is not another probe.
+  }
+ },[waiting,operation]);
+ const unknown=()=>setNotice('Verification outcome is unknown. Check repair status before choosing another health check. Verification is never replayed automatically.');
+ async function verify(){
+  if(!mounted.current||!eligible||active.current!==key||flight.current||waiting||generation.current!==renderedGeneration)return;
+  generation.current++;
+  const attempt={};flight.current=attempt;setBusy(true);setNotice('');
+  const saved={operationId:operation.operationId,previewId:operation.previewId,hostInstanceId:target.hostInstanceId};
+  try{save(saved)}catch{flight.current=null;setBusy(false);setNotice('This browser could not save the verification recovery reference. No health check was requested.');return}
+  try{
+   const response=await act('maintenance.installationRepairVerify',{...target},{propagateError:true});
+   if(!mounted.current||active.current!==key||flight.current!==attempt)return;
+   const found=response?.result;
+   if(response?.accepted===false)throw Object.assign(Error(response.error||'Verification was not accepted.'),{accepted:false});
+   if(response?.accepted===true&&found?.operationId===saved.operationId&&found.previewId===saved.previewId&&(unverified(found)||installationRepairHealthy(found))){
+    onReceipt(found);save(null);setNotice(installationRepairHealthy(found)?'Health verification completed.':'Health verification did not establish a healthy installation. Review the result before deliberately checking again.');
+   }else unknown();
+  }catch(error){
+   if(!mounted.current||active.current!==key||flight.current!==attempt)return;
+   if(error?.accepted===false){try{save(null)}catch{}setNotice(error.message||'Verification was not accepted. Read current repair status.')}
+   else unknown();
+  }finally{if(flight.current===attempt){flight.current=null;if(mounted.current)setBusy(false)}}
+ }
+ async function reconcile(){
+  if(!mounted.current||flight.current||!waiting)return;
+  const attempt={};flight.current=attempt;setBusy(true);setNotice('');
+  try{
+   const response=await act('maintenance.installationRepairStatus',{operationId:pending.operationId},{propagateError:true});
+   if(!mounted.current||active.current!==key||flight.current!==attempt)return;
+   const found=response?.result?.operation;
+   if(response?.accepted===true&&found?.operationId===pending.operationId&&found.previewId===pending.previewId&&(unverified(found)||installationRepairHealthy(found))){
+    onReceipt(found);save(null);setNotice(installationRepairHealthy(found)?'The retained receipt verifies a healthy installation.':'The retained installation is still unverified. You may deliberately request a new health-only check; no check was replayed.');
+   }else unknown();
+  }catch{if(mounted.current&&active.current===key)unknown()}
+  finally{if(flight.current===attempt){flight.current=null;if(mounted.current)setBusy(false)}}
+ }
+ if(!eligible&&!waiting)return null;
+ return <div data-part="installation-repair-verification">
+  <p>Verify the repaired application and current host health only. This does not install packages, stop or restart the service, roll back, or reset data.</p>
+  {eligible&&<button type="button" className="a-soft" data-action="maintenance.installationRepairVerify" disabled={busy||waiting} onClick={verify}>{busy?'Checking installation health…':'Verify repaired installation'}</button>}
+  {waiting&&<><p role="status">A health check was requested for operation <code>{pending.operationId}</code>. Its outcome is not inferred from the reinstalled status.</p><button type="button" className="a-link" data-action="maintenance.installationRepairStatus" disabled={busy} onClick={reconcile}>Check verification status</button></>}
+  {notice&&<p role="status">{notice}</p>}
+ </div>;
+}
 
 export function InstallationRepair({state,act}){
  const projection=state.maintenance?.installationRepair;
@@ -125,6 +189,7 @@ export function InstallationRepair({state,act}){
    {intent&&<p className="a-caption a-wrap">Confirmed host: {intent.hostLabel} · Data directory kept: <code>{intent.dataDir}</code> · Preview <code>{intent.previewId}</code></p>}
    {operation&&<><p className="a-wrap">Operation <code>{operation.operationId}</code> · {operation.stage} · Service: {operation.serviceState}</p><p>{operation.detail}</p></>}
    {!healthy&&<p>No healthy completion is claimed. Accepted, running, reinstalled, rolled-back and unknown outcomes are not verified recovery.</p>}
+   {operation&&<Verification key={operation.operationId} operation={operation} target={!anotherOperation?projection.verifyTarget:null} act={act} onReceipt={setReceipt}/>}
    <p className="a-caption">Reconnect reads the retained status; it never repeats confirmation.</p>
   </div>}
   <button type="button" className="a-link" data-action="maintenance.installationRepairStatus" disabled={!!busy} onClick={status}>{busy==='status'?'Checking repair status…':'Check repair status'}</button>

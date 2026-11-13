@@ -198,3 +198,87 @@ for(const [reason,pattern] of Object.entries({'package-index-auth-failed':/crede
  assert.equal(JSON.stringify(exported).includes('SECRET'),false);
  assert.equal(JSON.parse(diagnosticReceipt({lastFailure:{...failure,constraint:'https://SECRET/private'}})).lastFailure.constraint,undefined);
 });
+
+const reinstalled={...operation,status:'reinstalled',reinstalled:true,healthVerified:false};
+const verifyTarget={operationId:operation.operationId,hostInstanceId:'current-successor',confirm:true};
+const verifyProjection=(op=reinstalled,target=verifyTarget)=>({preview:null,operation:op,verifyTarget:target});
+const verificationStatus=root=>root.root.findByProps({'data-part':'installation-repair-verification'}).findAllByType('button').find(button=>button.children.join('')==='Check verification status');
+test('verification is health-only, uses current projected successor identity and never auto-submits',async()=>{
+ const {root,calls}=await mounted(verifyProjection(),name=>({accepted:true,result:name.endsWith('Status')?{operation:reinstalled}:reinstalled}));
+ assert.equal(calls.some(([name])=>name.endsWith('Verify')),false);
+ assert.match(content(root),/does not install packages, stop or restart the service/);
+ const click=byAction(root,'Verify').props.onClick;
+ await act(()=>Promise.all([click(),click()]));await act(()=>click());
+ assert.deepEqual(calls.filter(([name])=>name.endsWith('Verify')),[['maintenance.installationRepairVerify',verifyTarget,{propagateError:true}]]);
+ assert.match(content(root),/did not establish a healthy installation/);
+ assert.doesNotMatch(content(root),/Installation repair verified healthy/);
+ await act(()=>byAction(root,'Verify').props.onClick());
+ assert.equal(calls.filter(([name])=>name.endsWith('Verify')).length,2,'fresh deliberate click after known failed check');
+ await act(()=>root.unmount());await click();assert.equal(calls.filter(([name])=>name.endsWith('Verify')).length,2);
+});
+test('verify eligibility fails closed for other statuses, contradictory facts, missing or unrelated target',async()=>{
+ for(const op of [{...reinstalled,status:'accepted'},{...reinstalled,status:'running'},{...reinstalled,status:'unknown'},{...reinstalled,status:'ready'},{...reinstalled,reinstalled:false},{...reinstalled,healthVerified:undefined},{...reinstalled,healthVerified:true}]){
+  const {root}=await mounted(verifyProjection(op));
+  assert.equal(root.root.findAllByProps({'data-action':'maintenance.installationRepairVerify'}).length,0);
+  await act(()=>root.unmount());
+ }
+ for(const target of [null,{...verifyTarget,operationId:'c'.repeat(32)},{...verifyTarget,hostInstanceId:''},{...verifyTarget,confirm:false}]){
+  const {root}=await mounted(verifyProjection(reinstalled,target));
+  assert.equal(root.root.findAllByProps({'data-action':'maintenance.installationRepairVerify'}).length,0);
+  await act(()=>root.unmount());
+ }
+});
+test('old verify gesture cannot retarget a new host or operation',async()=>{
+ for(const patch of [{verifyTarget:{...verifyTarget,hostInstanceId:'changed'}},{operation:{...reinstalled,operationId:'c'.repeat(32)},verifyTarget:{...verifyTarget,operationId:'c'.repeat(32)}}]){
+  const {root,calls,dispatch}=await mounted(verifyProjection());
+  const click=byAction(root,'Verify').props.onClick;
+  await act(()=>root.update(React.createElement(InstallationRepair,{state:state({...verifyProjection(),...patch}),act:dispatch})));
+  await act(()=>click());assert.equal(calls.filter(([name])=>name.endsWith('Verify')).length,0);
+  await act(()=>root.unmount());
+ }
+});
+test('unknown verification persists across reload and reconciles by explicit status only',async()=>{
+ const handler=name=>{if(name.endsWith('Verify')){assert.ok(storage.get('amplifier.installation-repair-verification.v1'));throw Error('lost ack')}return{accepted:true,result:{operation:reinstalled}}};
+ let {root,calls,dispatch}=await mounted(verifyProjection(),handler);
+ await act(()=>byAction(root,'Verify').props.onClick());assert.match(content(root),/Verification outcome is unknown/);
+ assert.equal(byAction(root,'Verify').props.disabled,true);
+ await act(()=>root.unmount());await act(()=>{root=create(React.createElement(InstallationRepair,{state:state(verifyProjection()),act:dispatch}))});
+ assert.equal(byAction(root,'Verify').props.disabled,true);
+ assert.equal(calls.filter(([name])=>name.endsWith('Verify')).length,1,'remount/status is not a verify gesture');
+ await act(()=>verificationStatus(root).props.onClick());
+ assert.deepEqual(calls.at(-1).slice(0,2),['maintenance.installationRepairStatus',{operationId:operation.operationId}]);
+ assert.match(content(root),/still unverified/);assert.equal(byAction(root,'Verify').props.disabled,false);
+ assert.equal(calls.filter(([name])=>name.endsWith('Verify')).length,1);
+ await act(()=>root.unmount());
+});
+test('malformed or unrelated verification result cannot claim health or unlock; exact ready can',async()=>{
+ for(const result of [undefined,{...reinstalled,operationId:'c'.repeat(32),status:'ready',healthVerified:true,serviceState:'running'},{...reinstalled,status:'ready',healthVerified:false}]){
+  const {root}=await mounted(verifyProjection(),name=>({accepted:true,result:name.endsWith('Status')?{operation:reinstalled}:result}));
+  await act(()=>byAction(root,'Verify').props.onClick());
+  assert.equal(byAction(root,'Verify').props.disabled,true);assert.doesNotMatch(content(root),/Installation repair verified healthy/);
+  await act(()=>root.unmount());storage.clear();
+ }
+ const ready={...reinstalled,status:'ready',healthVerified:true,serviceState:'running',updatedAt:2};
+ const {root}=await mounted(verifyProjection(),name=>({accepted:true,result:name.endsWith('Status')?{operation:reinstalled}:ready}));
+ await act(()=>byAction(root,'Verify').props.onClick());assert.match(content(root),/Installation repair verified healthy/);
+ await act(()=>root.unmount());
+});
+test('storage denial prevents a health-check request and explicit refusal is not recovery',async()=>{
+ for(const denied of [true,false]){
+  const {root,calls}=await mounted(verifyProjection(),name=>name.endsWith('Verify')?{accepted:false,error:'Stale successor.'}:{accepted:true,result:{operation:reinstalled}});
+  if(denied)globalThis.sessionStorage.setItem=()=>{throw Error('denied')};
+  await act(()=>byAction(root,'Verify').props.onClick());
+  assert.equal(calls.filter(([name])=>name.endsWith('Verify')).length,denied?0:1);
+  assert.doesNotMatch(content(root),/Installation repair verified healthy/);
+  await act(()=>root.unmount());storage.clear();globalThis.sessionStorage.setItem=(key,value)=>storage.set(key,value);
+ }
+});
+test('matching canonical healthy projection settles pending verification without a probe',async()=>{
+ storage.set('amplifier.installation-repair-verification.v1',JSON.stringify({operationId:operation.operationId,previewId:operation.previewId,hostInstanceId:verifyTarget.hostInstanceId}));
+ const ready={...reinstalled,status:'ready',healthVerified:true,serviceState:'running',updatedAt:2};
+ const {root,calls}=await mounted(verifyProjection(ready,null),()=>({accepted:true,result:{operation:ready}}));
+ assert.match(content(root),/Installation repair verified healthy/);
+ assert.equal(root.root.findAllByProps({'data-part':'installation-repair-verification'}).length,0);
+ assert.equal(calls.some(([name])=>name.endsWith('Verify')),false);
+ await act(()=>root.unmount());
+});

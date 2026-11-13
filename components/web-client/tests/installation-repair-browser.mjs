@@ -15,8 +15,10 @@ const operation={operationId:'b'.repeat(32),previewId:preview.previewId,hostInst
 const state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{navPinned:true},sessions:[{id:'chat',title:'Repair fixture',sessionKind:'root',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[],workers:[]}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',setup:{providers:[{id:'fixture',module:'provider-fixture',config:{default_model:'fixture-model'}}],providersLoadedAt:1,providersWorkspace:'/fixture'},canvas:{open:false},maintenance:{installationRepair:{preview:null,operation:null}}};
 const shell=createShellHttpFixture(()=>state),calls=[],pageErrors=[],routeErrors=[],checkpoints=[],screenshots=[];
 const evidence=process.env.AMPLIFIER_TEST_ARTIFACTS;
-let vite,browser,page,passed=false,failure=null,phase='setup',heldConfirmation;
+let vite,browser,page,passed=false,failure=null,phase='setup',heldConfirmation,heldVerification;
 const confirms=()=>calls.filter(call=>call.action==='maintenance.installationRepairConfirm');
+const verifications=()=>calls.filter(call=>call.action==='maintenance.installationRepairVerify');
+const verifyTarget={operationId:operation.operationId,hostInstanceId:'fixture-successor',confirm:true};
 async function publish(){state.revision++;await page.evaluate(value=>window.emitState(value),shell.state());await page.waitForFunction(revision=>window.amplifier.getState().revision>=revision,state.revision)}
 async function capture(name){if(evidence){await mkdir(evidence,{recursive:true});await page.screenshot({path:evidence+'/'+name+'.png',animations:'disabled'});screenshots.push(name+'.png')}}
 async function checkpoint(name){assert.equal(confirms().length,1,name);checkpoints.push({name,confirmationPosts:confirms().length});}
@@ -44,6 +46,14 @@ try{
     assert.deepEqual(body.args,{previewId:preview.previewId,hostInstanceId:preview.hostInstanceId,confirm:true});
     assert.equal(confirms().length,1,'Only one explicit confirmation request is allowed');
     heldConfirmation=route;return;
+   }
+   if(body.action==='maintenance.installationRepairVerify'){
+    assert.deepEqual(body.args,verifyTarget,'Use advertised current successor, never original repair host');
+    assert.equal(state.maintenance.installationRepair.operation.status,'reinstalled');
+    if(verifications().length===2){heldVerification=route;return}
+    result=state.maintenance.installationRepair.operation={...state.maintenance.installationRepair.operation,
+     ...(verifications().length===3?{status:'ready',healthVerified:true,detail:'Synthetic verified healthy successor.'}:{detail:'Synthetic health probe did not pass; installation remains unverified.'}),updatedAt:verifications().length+2};
+    if(result.status==='ready')state.maintenance.installationRepair.verifyTarget=null;
    }
    state.revision++;await route.fulfill({json:{accepted:true,result,state:shell.state()}});
   }catch(error){routeErrors.push(String(error.stack||error));await route.abort('failed')}
@@ -77,16 +87,30 @@ try{
  await page.evaluate(()=>window.dispatchEvent(new Event('amplifier-reconnected')));
  await expect.poll(()=>calls.filter(call=>call.action==='maintenance.installationRepairStatus').length).toBeGreaterThan(before);
  await checkpoint('reconnect notification only reads status');
- phase='reinstalled not healthy';state.maintenance.installationRepair.operation={...operation,status:'reinstalled',reinstalled:true,serviceState:'running',updatedAt:2};await publish();
+ phase='reinstalled not healthy';state.maintenance.installationRepair.operation={...operation,status:'reinstalled',reinstalled:true,serviceState:'running',updatedAt:2};state.maintenance.installationRepair.verifyTarget=verifyTarget;await publish();
  await expect(repair).toContainText('service health not verified');await expect(repair.getByText('Installation repair verified healthy',{exact:true})).toHaveCount(0);
  await repair.locator('[data-part="installation-repair-operation"]').scrollIntoViewIfNeeded();await capture('installation-repair-reinstalled-not-healthy');
- phase='verified receipt';state.maintenance.installationRepair.operation={...operation,status:'ready',reinstalled:true,serviceState:'running',healthVerified:true,updatedAt:3};await publish();
+ const verify=()=>repair.getByRole('button',{name:'Verify repaired installation',exact:true});
+ await expect(verify()).toBeEnabled();assert.equal(verifications().length,0);
+ await expect(repair).toContainText('does not install packages, stop or restart the service');
+ phase='known failed verification';await verify().click();await expect.poll(()=>verifications().length).toBe(1);
+ await expect(repair).toContainText('Health verification did not establish a healthy installation');
+ await expect(verify()).toBeEnabled();await capture('installation-repair-verification-failed');
+ phase='verification lost acknowledgement';await verify().click();await expect.poll(()=>verifications().length).toBe(2);await heldVerification.abort('failed');
+ await expect(repair).toContainText('Verification outcome is unknown');await expect(verify()).toBeDisabled();
+ await capture('installation-repair-verification-unknown');await page.reload();await expect(repair).toBeVisible();await expect(verify()).toBeDisabled();
+ assert.equal(verifications().length,2,'reload never repeats health verification');
+ await page.evaluate(()=>window.dispatchEvent(new Event('amplifier-reconnected')));
+ await expect(verify()).toBeDisabled();assert.equal(verifications().length,2,'reconnect notification never repeats verification');
+ await repair.getByRole('button',{name:'Check verification status',exact:true}).click();
+ await expect(repair).toContainText('still unverified');await expect(verify()).toBeEnabled();assert.equal(verifications().length,2);
+ phase='deliberate new health check';await verify().click();await expect.poll(()=>verifications().length).toBe(3);
  await expect(repair.getByText('Installation repair verified healthy',{exact:true})).toBeVisible();
  await repair.locator('[data-part="installation-repair-operation"]').scrollIntoViewIfNeeded();await capture('installation-repair-verified-mobile');await checkpoint('only verified ready receipt reports healthy');
  assert.deepEqual(pageErrors,[]);assert.deepEqual(routeErrors,[]);
- passed=true;phase='complete';console.log('PASS installation repair synthetic client: preview scope/extras, mobile, explicit confirm once, lost ack/reload/reconnect notification read-only recovery, verified health gate. No actual install/service restart exercised.');
+ passed=true;phase='complete';console.log('PASS installation repair synthetic client: confirm once, health-only verification with exact successor, known failed probe/new deliberate check, unknown ack/reload/status without replay, verified ready gate. No actual install/service restart exercised.');
 }catch(error){failure=String(error.stack||error);console.error(failure);process.exitCode=1;try{await capture('installation-repair-failure')}catch{}}
 finally{
- if(evidence){await mkdir(evidence,{recursive:true});await writeFile(evidence+'/receipt.json',JSON.stringify({passed,phase,failure,scope:'synthetic client HTTP/state; no actual install, provider, host or service restart',transport:'reload and explicit reconnect notification; actual transport reconnect not covered',checkpoints,screenshots,pageErrors,routeErrors,confirmationPosts:confirms().length,calls},null,2)+'\n')}
+ if(evidence){await mkdir(evidence,{recursive:true});await writeFile(evidence+'/receipt.json',JSON.stringify({passed,phase,failure,scope:'synthetic client HTTP/state; no actual install, provider, host or service restart',transport:'reload and explicit reconnect notification; actual transport reconnect not covered',checkpoints,screenshots,pageErrors,routeErrors,confirmationPosts:confirms().length,healthVerificationPosts:verifications().length,calls},null,2)+'\n')}
  await browser?.close();await vite?.close();
 }
