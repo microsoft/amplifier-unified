@@ -719,6 +719,8 @@ async def _activate(manager, *, force=None, holds=None):
                 'bootstrap': bootstrap_identity(bootstrap),
                 'identity': dict(manager.running_identity),
                 'graph': sorted([*host_graph, running_app], key=lambda row: row['name'])}
+            if manual is not None:
+                recovery['manualHandoff'] = copy.deepcopy(manual)
         except (OSError, ValueError, metadata.PackageNotFoundError):
             # Lack of old-host proof does not invalidate a qualified candidate,
             # but cannot authorize reopening the old host after a failed probe.
@@ -906,6 +908,11 @@ async def restore_promoted_application(manager, promoted, recovery, bootstrap):
     verified_version(manager, output, recovery['identity']['version'], 'replacement-previous-version')
     graph = await manager.diagnostics.run('replacement-previous-components', components.read_graph,
         process, python, **({'artifact': recovery['artifact']} if recovery['artifact'] is not None else {}))
+    manual = recovery.get('manualHandoff')
+    if manual is not None:
+        from .manual_app_handoff import recovery_context
+        if await recovery_context(manager) != manual:
+            raise ValueError('The manual application recovery proof changed')
     async with manager.service.lock:
         state = manager.service.state['updates']
         if (state.get('pendingReplacement') != recovery['replacement'] or state.get('pendingRestart')
@@ -913,7 +920,8 @@ async def restore_promoted_application(manager, promoted, recovery, bootstrap):
                 or installed_extras() != extras
                 or bootstrap_identity(Path(python).parent.parent) != recovery['installation']
                 or graph != recovery['graph']
-                or sorted([*components.installed_graph(), running_application(manager)],
+                or sorted([*components.installed_graph(),
+                           manual['app'] if manual is not None else running_application(manager)],
                           key=lambda row: row['name']) != recovery['graph']):
             manager.diagnostics.record('replacement-previous-components', 'failed', errorType='ValueError')
             raise ValueError('The serving installation or replacement changed during recovery')

@@ -10,6 +10,7 @@ on:
       - amplifier_web/app_installation_proof.py
       - amplifier_web/app_updates.py
       - tests/test_app_promotion_recovery.py
+      - tests/test_manual_app_handoff.py
 permissions:
   contents: read
 jobs:
@@ -27,7 +28,7 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
       - run: uv sync --locked --group dev
       - name: Check manual recovery in the normal Windows activation pipeline
-        run: uv run --no-sync pytest -q tests/test_app_promotion_recovery.py -k windows_next_app_recovery --junitxml="$RUNNER_TEMP/manual-recovery-composition.xml"
+        run: uv run --no-sync pytest -q tests/test_app_promotion_recovery.py tests/test_manual_app_handoff.py --junitxml="$RUNNER_TEMP/manual-recovery-composition.xml"
       - name: Retain activation composition results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
