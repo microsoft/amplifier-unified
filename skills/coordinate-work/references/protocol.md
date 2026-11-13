@@ -368,7 +368,13 @@ another model turn to acknowledge shipment. Close only that achieved objective;
 a passing diagnostic does not resolve the original incident. This leaves Stop,
 used turns, history, unresolved question/operation records and resource custody
 intact. Read the original command receipt after an uncertain response. Use
-`assignment.retire` separately if finished participation should end; do not create
+`assignment.retire` separately when settled participation should end, including a
+stopped or superseded attempt with an unfinished objective or historical settings
+failure. Do not fake task completion, abandon its evidence or load old settings to
+free a member slot. Retirement preserves those records and Stop; actual writers,
+pending settings/effects, shared claims and test-resource ownership must settle.
+Unreadable/unfinished canonical tasks cannot establish standing Full readmission.
+Independent schedules are not cancelled by membership retirement. Do not create
 another approval or worker-wake cycle just to record acceptance.
 
 Use questions for missing user decisions or authority, not to approve your own

@@ -56,6 +56,16 @@ Resources record ownership separately from whether they still exist.
    without deleting conversations, artifacts, or unfinished changes. Removing a
    working copy is separate and reports blockers rather than deleting the user's original.
 
+8. **Ending participation is not task success.** An assignment owner can retire a
+   settled stopped or superseded member without completing its unfinished objective
+   or repairing a historical settings failure. Native writers, active settings work,
+   pending or uncertain input/calls/handoffs, shared task claims and actual test
+   resource ownership still have to settle. Retirement preserves saved task and
+   configuration bytes, failure evidence, history, spend and Stop. It fences the
+   prior membership's input and returns, not independent schedules. Readmission is
+   separate; standing reuse requires canonical proof of completed or absent local
+   work and the unchanged retirement binding. Unknown task state cannot establish it.
+
 ## Not in v1
 
 - **Cross-host migration** is promoted only when the portability service supplies

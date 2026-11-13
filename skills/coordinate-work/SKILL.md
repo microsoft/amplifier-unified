@@ -146,8 +146,12 @@ After accepting a member's exact contribution, use `assignment.task.read` then
 `assignment.task.complete` with current revisions and completion evidence. The
 worker does not need another model turn to acknowledge acceptance or shipment.
 Use the available result acknowledgement and membership-retirement controls when
-appropriate. Unresolved resource custody remains separate; don't call an incident
-resolved merely because its diagnostic task completed.
+appropriate. `assignment.retire` ends settled participation, not an objective:
+stopped or superseded members can leave with their unfinished tasks and failed
+settings intact. Never fake completion or mount old settings just to retire them.
+Actual writers, pending effects, shared claims and resource custody must settle;
+Stop remains. Standing readmission still needs completed or absent canonical work.
+Don't call an incident resolved merely because its diagnostic task completed.
 
 ## Keep shared context small and current
 

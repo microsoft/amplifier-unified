@@ -41,7 +41,7 @@ def definitions(schema, string):
         'assignment.stop': ('Owner closes assignment admission before requesting interruption of still-bound roots and native children. Does not stop independent peers or remove resources.', schema(revision, ['sessionId', 'expectedRevision'])),
         'assignment.resume': ('User reopens a settled stopped assignment for new requests, preserving members, shared tasks and cumulative usage. Does not send input, resume paused tasks or replay queued work.', schema(revision, ['sessionId', 'expectedRevision'])),
         'assignment.detach': ('User detaches this idle conversation after assignment work settles, retaining attributed usage. Does not resume or send input.', schema(revision, ['sessionId', 'expectedRevision'])),
-        'assignment.retire': ('Owner closes a finished member’s participation and releases its member slot. Requires settled work and completed local/shared tasks. Retains history, resources and cumulative usage; sends no input. The same chat can later be reviewed and added again with assignment.adoption/adopt.', schema({**revision, 'targetSessionId': string(200)}, ['sessionId', 'targetSessionId', 'expectedRevision'])),
+        'assignment.retire': ('Owner ends a settled member’s participation and releases its member slot, without claiming its objective succeeded. Unfinished saved tasks and failed settings stay unchanged. Requires settled writers, settings work, inputs, calls, shared task claims and test resources; sends no input and clears no Stop. Later readmission is separate; standing Full reuse still requires proven completed or absent local work.', schema({**revision, 'targetSessionId': string(200)}, ['sessionId', 'targetSessionId', 'expectedRevision'])),
     }
 
 
@@ -232,7 +232,7 @@ class Assignments:
             return value['id']
         limits = value['limits']
         if limits['maxMembers'] is not None and self.active_member_count(value) >= limits['maxMembers']:
-            self.service.collaboration.error('The assignment member limit is reached. Retire a finished member to release a slot; its history and usage stay retained.', 429)
+            self.service.collaboration.error('The assignment member limit is reached. Retire a settled member to release a slot; its history and usage stay retained.', 429)
         if limits['maxOpenTasks'] is not None:
             pending = {row[0] for row in self.service.db.execute("""SELECT DISTINCT
                 json_extract(receipt,'$.target.sessionId') FROM commands

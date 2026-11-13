@@ -1,4 +1,4 @@
-"""Finished participation releases capacity, not history or spending."""
+"""Settled participation can end without task success, lost history or spending."""
 import copy
 
 import pytest
@@ -451,7 +451,7 @@ def member_time(app, target):
 
 
 @pytest.mark.parametrize('busy', ['generation', 'worker', 'preparation', 'settings',
-                                 'pending', 'unknown', 'call', 'task', 'claim', 'check'])
+                                 'pending', 'unknown', 'call', 'claim', 'check'])
 async def test_retirement_refuses_unfinished_or_uncertain_work(app, busy):
     source, target, _ = await setup(app)
     if busy == 'generation':
@@ -468,8 +468,6 @@ async def test_retirement_refuses_unfinished_or_uncertain_work(app, busy):
             'delivery': 'queued' if busy == 'pending' else 'unknown'})
     elif busy == 'call':
         ingest(target, {**call(target, 'uncertain'), 'phase': 'outcome_unknown'})
-    elif busy == 'task':
-        target['task'] = await save_task(app, target, 'blocked')
     elif busy == 'claim':
         value = app.assignments.current(source)
         value['tasks'] = {'claimed': {'status': 'claimed', 'claim': {'sessionId': target['id']}}}
@@ -555,14 +553,20 @@ async def test_historical_members_do_not_consume_current_capacity(app, status):
     assert len(value['members']) == 3 and app.assignments.active_member_count(value) == 2
 
 
-@pytest.mark.parametrize('state,blocked', [('running', True), ('unknown', True), ('stopped', False)])
-async def test_retirement_observes_environment_owner_after_terminal_queue(app, state, blocked):
+@pytest.mark.parametrize('state,pending,blocked', [
+    ('running', {}, True), ('unknown', {}, True), ('stopped', {}, False),
+    ('removed', {}, False), ('not-started', {}, False),
+    ('removed', {'pendingRequest': 'uncertain-request'}, True),
+    ('stopped', {'pendingRecovery': 'uncertain-recovery'}, True),
+    ('stopped', {'preparationPending': True}, True),
+])
+async def test_retirement_observes_environment_owner_after_terminal_queue(app, state, pending, blocked):
     from contextlib import closing
     from amplifier_web import task_environments as environments
     source, target, _ = await setup(app)
     row = {'id': 'retained-environment', 'kind': environments.KIND,
            'sessionId': target['id'], 'workspaceId': 'workspace',
-           'status': 'ready', 'environmentState': state}
+           'status': 'ready', 'environmentState': state, **pending}
     with closing(environments.storage.connect(app.data_dir)) as db, db:
         environments.storage.save(db, row)
     app.collaboration.insert('terminal-check', 'fingerprint', {
