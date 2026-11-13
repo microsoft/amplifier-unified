@@ -7,6 +7,10 @@ export function externalParticipants(session){
  return Array.isArray(agent?.participants)?agent.participants:agent?.id?[agent]:[];
 }
 
+export function isSharedExternalConversation(session){
+ return session?.externalAgent?.participation==='shared';
+}
+
 export function externalAgentLabel(session,id,savedLabel){
  return savedLabel||externalParticipants(session).find(agent=>agent.id===id)?.label||id||'External agent';
 }

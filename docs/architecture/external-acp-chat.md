@@ -62,13 +62,66 @@ until submission. The same `session.create` action accepts an explicit existing
 `workspace` and `externalAgentId`, or a unique `externalAgentIds` list for a group;
 it does not allocate a managed or new folder for an external chat. The two
 selection forms cannot be combined. **Add agent** includes another configured
-participant before creation. The first message addresses the first selected
-agent; **Send to** chooses the recipient of later messages. The existing chat
+participant before creation. Selecting several agents creates a shared room;
+messages are posted to the conversation without choosing a recipient. Selecting
+one agent retains the existing direct chat experience. Earlier saved directed
+groups retain their **Send to** control and captured recipients. The existing chat
 interface displays external ownership and omits unsupported
 native configuration, voice, attachments, edit and fork controls. Rename, pin,
 archive, ordinary text, Stop and the existing Access control remain host actions.
 
-## Directed conversations with multiple agents
+## Shared conversations
+
+New multi-agent conversations record `externalAgent.participation: "shared"`.
+This marker selects shared participation; existing native, singleton external
+and unmarked directed conversations keep their current admission, streaming,
+Stop and continuation behavior. No saved history is silently converted.
+
+A public message is accepted once by Unified independently of any model turn.
+Each participant has its own exact source/execution binding and delivery record.
+People may post while agents work; separate participants can execute concurrently,
+while each native execution retains one writer and one active prompt. Public
+participant metadata contains current activity and compact receipt facts; streamed
+text belongs to the selected conversation body, not the catalog.
+
+The room connector supplies original message identity/time and bounded attributed
+public context to the agent's advertised Instance attention capability. The
+instance decides whether to engage. Without that optional capability, the
+connector uses the existing Slack-style quiet ordinary ACP speak/pass convention
+on the same participant session. Decision output stays private. A decision is
+neither a permission grant nor proof that work happened; advertised attention
+errors do not silently fall back or repeat. See the canonical
+[Instance attention contract](https://github.com/microsoft/amplifier-constellation-instance/blob/main/docs/attention.md).
+
+Completed public agent contributions are committed once and offered to the other
+participants as source activity, preserving their actual author. Own echoes,
+private tool/reasoning updates and streaming chunks do not trigger new turns.
+Names and optional addressing are context, not mandatory routing controls. A
+participant can remain silent without posting a blank response or acknowledgment.
+
+A busy participant can receive negotiated awareness tied to its actual active
+prompt. Without confirmed incorporation, positively unsubmitted source events
+remain pending consideration after its current turn; later public context can
+show that a request is already resolved. An ambiguous observation remains
+unknown and is not replayed. Neither receiving an event nor observing a cursor
+proves model incorporation or completed effects.
+
+Room Stop advances the existing durable interruption boundary, cancels current
+participant turns and pending opportunities through that boundary, and prevents
+late callbacks from restarting the exchange. A later explicit message may
+continue normally. Restart resumes only known-unsubmitted opportunities with
+their original identities; interrupted or uncertain dispatches retain unknown
+receipts without automatic replay. Update-held inputs stay under the existing
+update owner's admission boundary. An independent participant's failure does not
+transfer or repeat its work through another agent.
+
+The initial shared-room connector supplies bounded public context. On-demand
+retrieval from a Unified-owned room requires the separate source MCP binding;
+the already-qualified Conversations-source retrieval is not evidence that this
+binding is installed. No new history store, Core change, or Instance management
+credential is required for shared participation itself.
+
+## Earlier directed conversations with multiple agents
 
 A group has one host-owned public transcript and a separate saved execution
 binding per participant. `conversation.send.recipientAgentId` explicitly selects

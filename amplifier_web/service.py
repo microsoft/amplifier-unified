@@ -1023,6 +1023,7 @@ class AppService:
         index = self.projections.sessions(self.state)
         session = copy.deepcopy(row)
         session.pop('_externalAgentSource', None)
+        session.pop('_externalRoom', None)
         from .input_status import annotate as input_annotation, PREFIX as input_status_prefix
         session['messages'] = [input_annotation(row, message) for message in session.get('messages', [])]
         session['messageAnnotations'] = {key: value for key, value in session.get('messageAnnotations', {}).items()
@@ -3481,6 +3482,8 @@ class AppService:
                 stopped_generation = (recover_failed_generation(self, session, recovery_boundary)
                     if not session.get('externalAgent') and origin == 'ui' and not update_message and args.get('expectedGenerationId') is None else None)
                 target_generation = None if update_message or session.get('externalAgent') else steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
+                from .external_conversation import is_shared
+                shared_room = is_shared(session)
                 input_id = command_id or str(uuid.uuid4())
                 from .chat_navigation import recent_activity, prepare_human_post, promote_human_post
                 # Origin is chosen by the host adapter, never role/via/action args.
@@ -3509,17 +3512,24 @@ class AppService:
                     hold_message(self, session, message)
                     self._clear_sent_draft(session, message, text, args.get("preserveDraft", False))
                 elif not target_generation:
-                    preparing = session.get('preparation', {}).get('status') == 'preparing'
-                    self._activity(session, "runtime-setup" if preparing else "queued",
-                        (session['preparation'].get('detail') or 'Preparing this chat…') if preparing else "Your message is queued for Amplifier.",
-                        reset=session["status"] not in {"working", "starting"})
-                    session["status"] = "working"
-                    session.pop("error", None)
-                    ensure_turn(session,input_id,text)
+                    if not shared_room:
+                        preparing = session.get('preparation', {}).get('status') == 'preparing'
+                        self._activity(session, "runtime-setup" if preparing else "queued",
+                            (session['preparation'].get('detail') or 'Preparing this chat…') if preparing else "Your message is queued for Amplifier.",
+                            reset=session["status"] not in {"working", "starting"})
+                        session["status"] = "working"
+                        session.pop("error", None)
+                        ensure_turn(session,input_id,text)
                     if session.get('externalAgent'):
                         self.external_conversations.admit(session, message)
                 if not update_message:
-                    pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity, args.get('preserveDraft', False))))
+                    # Shared publication has no single native turn. Its owner
+                    # resolves participants under the lock; retain only this
+                    # accepted input's cancellation boundary across dispatch.
+                    dispatch_session = ({'id': session['id'], 'externalAgent': {'participation': 'shared'},
+                                         'interruptionRevision': session.get('interruptionRevision', 0)}
+                                        if shared_room else copy.deepcopy(session))
+                    pending.append((self._send, (dispatch_session, text, input_id, previous_activity, args.get('preserveDraft', False))))
             elif action == "conversation.delivery":
                 session = self._session(args['sessionId'])
                 pending.append((self._check_delivery, (session['id'], args['inputId'])))

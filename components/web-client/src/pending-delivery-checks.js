@@ -12,6 +12,18 @@ export function deliveryScope(state,session){
  const origin=state?.client?.historyScope||state?.client?.hostInstanceId;
  return origin?JSON.stringify([origin,session?.workspace||null,session?.runtimeSessionId||session?.nativeIdentity||session?.id||null]):null;
 }
+
+// External conversations own their public input receipts. Their host ID is
+// never a native execution identity; native receipts retain their exact source.
+export function deliverySourceScope(state,source,externalSessionId=null){
+ if(!source||!(source.workspace===null||typeof source.workspace==='string'&&source.workspace.length>0))return null;
+ if(externalSessionId!==null){
+  if(typeof externalSessionId!=='string'||!externalSessionId||source.sessionId!==externalSessionId||'nativeIdentity' in source)return null;
+  return deliveryScope(state,{workspace:source.workspace,id:externalSessionId});
+ }
+ if(typeof source.nativeIdentity!=='string'||!source.nativeIdentity)return null;
+ return deliveryScope(state,{workspace:source.workspace,nativeIdentity:source.nativeIdentity});
+}
 export function deliveryRecovery(state,session){
  if(!state?.client?.hostInstanceId||!session?.id)return null;
  return {scope:deliveryScope(state,session),

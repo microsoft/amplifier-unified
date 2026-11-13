@@ -15,7 +15,7 @@ import {PeerMessage,isPeerMessage} from './peer-message';
 import {VoiceWorkMessage} from './voice-work-message.jsx';
 import {isVoiceWorkMessage} from './voice-work-message.js';
 import {Markdown} from './markdown';
-import {externalAgentLabel,externalMessageAttribution} from './external-participants';
+import {externalAgentLabel,externalMessageAttribution,externalParticipants,isSharedExternalConversation} from './external-participants';
 
 export function newestMessageIds(messages){
  const latest=new Map();
@@ -40,6 +40,18 @@ export function completedTurnEnds(session){
 }
 
 export function StreamingMessage({session,state,embedded=false}){
+ if(isSharedExternalConversation(session))return <>{externalParticipants(session).map(agent=>{
+  const stream=session.externalStreams?.[agent.id];
+  const activity={connecting:'Connecting…',listening:'Considering…',starting:'Starting…',working:'Working…',running:'Working…',stopping:'Stopping…'}[agent.status];
+  const problem=agent.status==='unknown'?(agent.error||'Delivery could not be confirmed. Nothing was resent.'):agent.status==='error'?(agent.error||'Needs attention.'):null;
+  if(!stream?.text&&!activity&&!problem)return null;
+  return <article key={agent.id} className="a-message a-assistant" data-agent-id={agent.id} aria-label={`${externalAgentLabel(session,agent.id)} activity`}>
+   <p className="a-message-attribution">{externalAgentLabel(session,agent.id)}</p>
+   {stream?.text&&<div className="a-message-body"><Markdown text={stream.text}/></div>}
+   {activity&&<p className="a-caption" role="status">{activity}</p>}
+   {problem&&<p className="a-caption" role="alert">{problem}</p>}
+  </article>;
+ })}</>;
  if(!session?.streaming)return null;
  const message={id:session.streamingId||'streaming',role:'assistant',source:session.externalAgent?'external':'amplifier',inputId:session.streamingInputId,streaming:true};
  const body=<div className="a-message-body"><Markdown text={session.streaming}/></div>;

@@ -105,6 +105,9 @@ test('adding an independent second agent preserves the draft and cannot select a
   await act(async()=>extra.props.onChange({target:{value:'second'}}));
   assert.deepEqual(calls[1],['view.update',{patch:{newSessionDraft:{...base.view.newSessionDraft,externalAgentIds:['remote','second']}}}]);
   assert.equal(calls.length,2,'Adding a participant does not launch an agent or create a conversation');
+  await act(async()=>root.update(React.createElement(ExternalAgentPicker,{state:{...state,view:{newSessionDraft:calls[1][1].patch.newSessionDraft}},act:dispatch})));
+  const captions=root.root.findAllByProps({className:'a-caption'}).map(node=>node.children.join('')).join(' ');
+  assert.match(captions,/shared chat/);assert.doesNotMatch(captions,/First message to|choose who replies next/);
  }finally{await act(async()=>root?.unmount())}
 });
 

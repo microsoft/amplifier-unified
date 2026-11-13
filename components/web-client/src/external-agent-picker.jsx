@@ -45,7 +45,7 @@ export function ExternalAgentPicker({state,act,refreshKey,disabled=false}){
    {current.agents.map(agent=><option key={agent.id} value={agent.id} disabled={selected.some((other,i)=>i!==index&&other===agent.id)}>{agent.label}</option>)}
   </select></label>)}
   {selected.length>0&&!adding&&<button type="button" className="a-link" disabled={disabled||saving||current.loading} onClick={()=>{if(!disabled&&!saving)setAdding(true)}}>Add agent</button>}
-  {selected.length>1&&<span className="a-caption">First message to {current.agents.find(agent=>agent.id===selected[0])?.label||selected[0]}. You can choose who replies next.</span>}
+  {selected.length>1&&<span className="a-caption">Start a shared chat. Everyone can reply; address an agent by name when useful.</span>}
   <button type="button" className="a-link" disabled={disabled||saving} onClick={()=>perform('view.update',{patch:settingsPatch('external-agents')})}>Configure external agents</button>
   {current.loading&&<span className="a-caption" role="status">Loading agents…</span>}
   {(error||current.error)&&<div role="alert">{error||current.error}{current.error&&<button type="button" className="a-link" disabled={disabled||saving} onClick={()=>setRetry(value=>value+1)}>Retry</button>}</div>}

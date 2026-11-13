@@ -540,6 +540,7 @@ async def finish(manager, reason):
             service._publish_changes(globals={'updates'})
         from .message_delivery import find_message
         from .execution import ensure_turn
+        from .external_conversation import is_shared
         for sid, identity in drain['messages']:
             async with service.lock:
                 session = service._session(sid)
@@ -560,11 +561,13 @@ async def finish(manager, reason):
                 if active.get('id') and not active.get('terminal'):
                     message['steering'] = {'generationId': active['id'], 'allowNextTurn': True,
                                            'disposition': 'sending'}
-                else:
+                elif not is_shared(session):
                     session['status'] = 'working'
                     ensure_turn(session, identity, message['text'])
                 service._publish_changes(sessions={sid}, globals={'updates'})
-                captured = copy.deepcopy(session)
+                captured = ({'id': sid, 'externalAgent': {'participation': 'shared'},
+                             'interruptionRevision': session.get('interruptionRevision', 0)}
+                            if is_shared(session) else copy.deepcopy(session))
             try:
                 await service._send(captured, message['text'], identity, preserve_draft=True)
             except Exception:
@@ -585,6 +588,7 @@ async def finish(manager, reason):
             drain.pop('releasingInput', None)
             drain['phase'] = 'released'
             service._publish_changes(globals={'updates'})
+        service._task(service.external_conversations.resume_pending())
         targets = service.db.execute("""SELECT DISTINCT json_extract(receipt,'$.target.sessionId') FROM commands
             WHERE json_extract(receipt,'$.commandAction')='coordination.send'
             AND json_extract(receipt,'$.delivery')='queued'""").fetchall()
