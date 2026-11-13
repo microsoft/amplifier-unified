@@ -323,7 +323,11 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
             "callId": event.get("callId"), "kind": "session", "updatedAt": event.get("time"),
             **({"routing": public_routing(event["routing"])} if "routing" in event else {}),
             **{key: event[key] for key in ("runId", "parentSessionId", "reportId", "reports", "reportTruncated", "reportSourceChars", "reportWindow", "event") if key in event}}
-    statuses = {"session.ready": "ready", "session.idle": "idle", "session.closed": "stopped",
+    if kind == "session.closed":
+        # Native loop closure is availability evidence, not a human Stop.
+        # The owning reader can add that fact only from its retained stop reason.
+        return "runtime.warmth", {**base, "status": "cold"}
+    statuses = {"session.ready": "ready", "session.idle": "idle",
                 "input.delivered": "working"}
     if kind in statuses:
         return "runtime.status", {**base, "status": statuses[kind], "event": kind,
@@ -1370,11 +1374,10 @@ class RuntimeManager:
                         data["sessionId"] = sid if identity == row["runtime_id"] else identity
                         data["rootSessionId"] = sid if root == row["runtime_id"] else root
                     normalized = normalize_event(data, sid, row["inputId"])
-                    if (normalized and normalized[0] == 'runtime.status'
-                            and normalized[1].get('status') == 'stopped'
-                            and row.get('stop_reason') in {'configuration', 'shutdown', 'retention'}):
-                        # Closing a process for maintenance is not a user Stop.
-                        normalized = ('runtime.warmth', {'sessionId': sid, 'status': 'cold'})
+                    if (normalized and data.get('type') == 'session.closed'
+                            and row.get('stop_reason') == 'stopped'):
+                        normalized = ('runtime.status', {'sessionId': sid,
+                            'status': 'stopped', 'event': 'session.closed'})
                     if normalized:
                         if row.get('runtimeOwnerId') and (normalized[0] in {'execution.event', 'runtime.generation'}
                                 or normalized[0] == 'runtime.status' and normalized[1].get('event') == 'input.delivered'):
