@@ -312,3 +312,18 @@ async def test_handled_provider_error_does_not_explain_unrelated_runtime_fault(a
     assert target['failure']['category'] == 'unknown'
     assert target['failure']['errorType'] == 'TypeError'
     assert target['failure']['exceptionChain'][0]['errorType'] == 'TypeError'
+
+
+@pytest.mark.parametrize('late', ['failed', 'detached'])
+async def test_delayed_final_message_uses_first_accepted_terminal(app, late):
+    target = app.state['sessions'][1]
+    await observed(app, target, 'started')
+    await observed(app, target, 'finished',
+        finalMessageRefs={'version': 1, 'generationId': 'saved-generation', 'sequences': [10]})
+    await observed(app, target, late, error_type='ValueError', error_category='unknown')
+    message = {'sessionId': target['id'], 'generationId': 'saved-generation',
+               'inputId': 'saved-input', 'runtimeMessage': {'sequence': 10}, 'text': 'Saved final'}
+    await app.on_runtime_event('assistant.message', message)
+    assert target['messages'][-1]['response']['status'] == 'completed'
+    await app.on_runtime_event('assistant.message', message)
+    assert target['messages'][-1]['response']['status'] == 'completed'
