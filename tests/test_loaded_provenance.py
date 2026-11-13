@@ -88,6 +88,9 @@ async def test_worker_ready_does_not_wait_for_slow_provenance_hashing(tmp_path, 
     worker.install_collaboration_checkpoint = Mock()
     worker.history_stamp = lambda: ()
     worker.ownership.register = AsyncMock()
+    # The lightweight provenance coordinator has no native tool mounts.
+    # Desktop sponsorship is outside this readiness/explicit-role probe.
+    monkeypatch.setattr(worker.computer_episodes, 'install', Mock())
     try:
         await asyncio.wait_for(worker.start({'id': runtime.session_id, 'workspace': str(tmp_path)},
                                            raise_errors=True, recover_bundle=False), 1)
