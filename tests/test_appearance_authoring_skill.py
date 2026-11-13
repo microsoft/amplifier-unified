@@ -17,6 +17,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -70,18 +71,43 @@ async def _loader_probe(root, workspace, *, deferred=False, omitted=False):
         loaded = await tool.execute({"skill_name": "appearance-authoring"})
         assert loaded.success and "# Author an appearance" in loaded.output["content"]
         assert loaded.output.get("context") != "fork", "Authoring must stay in the user's review loop"
-        directory = Path(loaded.output["skill_directory"]).resolve()
-        assert directory == (root / "skills/appearance-authoring").resolve()
         reader = ReadTool({"allowed_read_paths": [str(root)], "working_dir": str(workspace)}, coordinator)
-        for relative in ("examples.md", "quiet-study.json", "../../docs/shell/themes.md",
-                         "../../docs/shell/appearances.md", "../../docs/shell/appearance-contract.md"):
-            path = (directory / relative).resolve(strict=True)
-            result = await reader.execute({"file_path": str(path)})
-            assert result.success, result.error
-            assert result.output["total_lines"] == result.output["lines_read"]
-            expected = path.read_text().splitlines()
-            assert result.output["content"] == "\n".join(
-                f"{number:6d}\t{line}" for number, line in enumerate(expected, 1))
+        companions = {
+            "appearance-authoring": ("examples.md", "quiet-study.json", "../../docs/shell/themes.md",
+                                     "../../docs/shell/appearances.md", "../../docs/shell/appearance-contract.md"),
+            "amplifier-shell": ("presentation.md", "conversation-surfaces.md",
+                                "../../docs/shell/conversation-surfaces.md"),
+            "unified-app": ("settings.md",),
+        }
+        for name, relatives in companions.items():
+            skill = loaded if name == "appearance-authoring" else await tool.execute({"skill_name": name})
+            assert skill.success, skill.error
+            directory = Path(skill.output["skill_directory"]).resolve()
+            assert directory == (root / "skills" / name).resolve()
+            for relative in relatives:
+                path = (directory / relative).resolve(strict=True)
+                # Read only the appearance section of the general settings
+                # companion; unrelated long lines have the reader's normal cap.
+                limit = 9 if relative == "settings.md" else 2000
+                result = await reader.execute({"file_path": str(path), "limit": limit})
+                assert result.success, result.error
+                expected = path.read_text().splitlines()[:limit]
+                assert result.output["lines_read"] == len(expected)
+                assert result.output["content"] == "\n".join(
+                    f"{number:6d}\t{line}" for number, line in enumerate(expected, 1))
+                # Skill companions must link to shipped resources. Canonical
+                # docs may also link to repository-only contribution guidance.
+                if path.suffix == ".md" and path.is_relative_to(root / "skills"):
+                    for link in re.findall(r"\]\(\s*([^)]+?)\s*\)", path.read_text()):
+                        relative, _, anchor = link.partition("#")
+                        target = (path.parent / relative).resolve(strict=True)
+                        assert target.is_file() and target.is_relative_to(root.resolve()), (path, link)
+                        if anchor:
+                            text = target.read_text()
+                            anchors = set(re.findall(r'<a id="([^"]+)"', text))
+                            for heading in re.findall(r"^#+ (.+)$", text, re.MULTILINE):
+                                anchors.add(re.sub(r"[^\w -]", "", heading.lower()).replace(" ", "-"))
+                            assert anchor in anchors, (path, link)
     finally:
         await cleanup()
 
@@ -168,6 +194,15 @@ if __name__ == "__main__":
         assert "amplifier_web/bundle_data/skills/appearance-authoring/" + entry in {
             str(path) for path in distribution.files}
     records = {str(path): path for path in distribution.files}
+    for relative, expected_hash in expected["companions"].items():
+        record = records[relative]
+        path = Path(distribution.locate_file(record)).resolve(strict=True)
+        assert path.is_relative_to(installed)
+        digest = hashlib.sha256(path.read_bytes()).digest()
+        assert digest.hex() == expected_hash
+        assert record.hash.mode == "sha256"
+        assert record.hash.value == base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+        assert record.size == path.stat().st_size
     for key in ("lightline", "ready"):
         appearance_expected = expected[key]
         resource = Path(files("amplifier_web").joinpath("appearances", f"{key}.amplifier.css"))
@@ -192,6 +227,7 @@ if __name__ == "__main__":
     _installed_package_probe(appearance_packages)
     print("APPEARANCE_PACKAGE_INSTALLED_OK")
     print("APPEARANCE_SKILL_INSTALLED_OK")
+    print("APPEARANCE_COMPANIONS_INSTALLED_OK")
     raise SystemExit(0)
 
 
@@ -200,9 +236,11 @@ import yaml
 
 
 def test_palette_example_compiles_and_validates():
+    from jsonschema import Draft202012Validator
+    from amplifier_web import canvas_apps
     from amplifier_web.builtin_behaviors import resource_root
     from amplifier_web import appearance_packages
-    from amplifier_web.service import validate_theme
+    from amplifier_web.service import ACTION_DEFINITIONS, validate_theme
 
     sample = json.loads((resource_root() / "skills/appearance-authoring/quiet-study.json").read_text())
     css = sample["css"]
@@ -210,6 +248,39 @@ def test_palette_example_compiles_and_validates():
     package = appearance_packages.from_css(css, sample['name'])
     assert package.manifest['formatVersion'] == 2 and package.manifest['base'] == 'reference-v1'
     assert 'light-dark(' in css
+    # Keep companion examples tied to actual action schemas, without dispatching
+    # a host mutation or treating schema acceptance as rendered conformance.
+    valid = {
+        'appearance.preview': {'clientId': 'browser', **sample},
+        'appearance.preview.cancel': {},
+        'appearance.preferences.update': {
+            'scope': 'client', 'generation': 'generation', 'expectedRevision': 0,
+            'expectedStorageVersion': 'missing', 'patch': {'accent': None}},
+        'appearance.preferences.select': {
+            'activeScope': 'client', 'generation': 'generation', 'expectedRevision': 0,
+            'expectedStorageVersion': 'missing', 'expectedSharedRevision': 0},
+        'appearance.preferences.undo': {'undoId': 'exact-undo'},
+        'theme.save': sample,
+        'theme.import': {'packageBase64': base64.b64encode(
+            appearance_packages.encode(package.files)).decode('ascii')},
+        'theme.export': {'id': 'builtin:default'},
+        'theme.update': {'id': 'saved.zip', 'expectedFingerprint': 'a' * 64, **sample},
+        'theme.delete': {'id': 'saved.zip', 'expectedFingerprint': 'a' * 64},
+    }
+    for action, value in valid.items():
+        Draft202012Validator(ACTION_DEFINITIONS[action][1]).validate(value)
+    invalid = {
+        'theme.export': {},
+        'theme.import': {'css': css},
+        'appearance.preview': {'name': 'Palette', 'tokens': {'accent': '#123456'}},
+        'appearance.preferences.update': {
+            'scope': 'client', 'expectedRevision': 0, 'patch': {'accent': None}},
+    }
+    for action, value in invalid.items():
+        assert not Draft202012Validator(ACTION_DEFINITIONS[action][1]).is_valid(value), action
+    assert canvas_apps.HOST_ACTIONS == {
+        action for action in valid if action.startswith('appearance.')}
+    assert not {'theme.preview', 'theme.apply', 'theme.revert'} & ACTION_DEFINITIONS.keys()
 
 
 @pytest.mark.parametrize("deferred,omitted", [(False, False), (True, False), (False, True)])
@@ -308,8 +379,16 @@ def test_wheel_installed_loader_outside_checkout(tmp_path):
                 if row[0] == module_name]
         assert hashlib.sha256(archive.read(module_name)).hexdigest() == source_sha256
     expected = tmp_path / "installed-expectations.json"
+    companion_hashes = {
+        "amplifier_web/bundle_data/" + relative: hashlib.sha256((checkout / relative).read_bytes()).hexdigest()
+        for relative in ("skills/amplifier-shell/presentation.md", "skills/amplifier-shell/conversation-surfaces.md",
+                         "skills/unified-app/settings.md", "docs/shell/conversation-surfaces.md",
+                         "skills/appearance-authoring/SKILL.md", "skills/appearance-authoring/examples.md",
+                         "docs/shell/appearances.md", "docs/shell/themes.md", "docs/shell/appearance-contract.md")
+    }
     expected.write_text(json.dumps({"sourceSha256": source_sha256, "recordHash": row[1],
-                                    "recordSize": int(row[2]), **appearances_expected}), encoding="utf-8")
+                                    "recordSize": int(row[2]), "companions": companion_hashes,
+                                    **appearances_expected}), encoding="utf-8")
     target = tmp_path / "installed"
     uv = shutil.which("uv")
     assert uv, "Wheel qualification requires uv (no packages are downloaded)"
@@ -327,3 +406,4 @@ def test_wheel_installed_loader_outside_checkout(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "APPEARANCE_SKILL_INSTALLED_OK" in result.stdout
     assert "APPEARANCE_PACKAGE_INSTALLED_OK" in result.stdout
+    assert "APPEARANCE_COMPANIONS_INSTALLED_OK" in result.stdout

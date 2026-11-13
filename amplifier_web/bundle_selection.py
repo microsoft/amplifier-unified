@@ -35,11 +35,17 @@ def catalog_entry(name, metadata=None):
 
 
 def defaults(home, workspace, app_bundle=None, *, global_only=False):
+    from .bundle_defaults import fallback
     from .shared_settings import read_yaml, settings_paths
     paths = settings_paths(workspace, global_only=global_only)
-    values = {key: read_yaml(path).get('bundle', {}).get('active') for key, path in paths.items()}
+    settings = {key: read_yaml(path) for key, path in paths.items()}
+    values = {key: value.get('bundle', {}).get('active') for key, value in settings.items()}
     workspace_bundle = values.get('local') or values.get('project')
-    effective = workspace_bundle or app_bundle or values['global'] or 'work'
+    release_intent = {}
+    for value in settings.values():
+        if 'releaseDefault' in value.get('bundle', {}):
+            release_intent = {'bundle': {'releaseDefault': value['bundle']['releaseDefault']}}
+    effective = workspace_bundle or app_bundle or values['global'] or fallback(release_intent)
     source = 'workspace' if workspace_bundle else 'app' if app_bundle else 'shared'
     return {'app': app_bundle or None, 'workspace': workspace_bundle or None,
             'shared': values['global'] or None, 'effective': effective, 'source': source,

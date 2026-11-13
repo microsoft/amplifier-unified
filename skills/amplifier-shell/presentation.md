@@ -13,7 +13,7 @@ installed contracts below; do not invent a single appearance-package API.
    Existing modules can have multiple instances where their contract permits.
 3. Preview the returned change, inspect its browser report, then apply within
    the user's requested scope. Preview does not commit a composition. For a
-   custom CSS skin, discover the theme service's current actions.
+   Reference appearance delta, discover `appearance.*` and `theme.*`.
 4. Reinspect after activation. An `awaiting-browser` receipt is not completion.
    Confirm the matching revision mounted, and verify the intended interaction.
    If stale, inspect and prepare again; do not repeatedly force old revisions.
@@ -37,7 +37,7 @@ Discover registered contribution points in `shell.inspect.slots`; see
 replacement chat composers or whole conversation decomposition unless the
 installed schemas and SDK explicitly expose them.
 
-## Themes
+## Reference appearances
 
 Load [appearance-authoring](../appearance-authoring/SKILL.md) for visual treatment
 and portable assets. It links the interaction contract, current theme API and
@@ -45,25 +45,40 @@ examples; do not duplicate its styling procedures here. Components still own
 focus, scrolling, responsive safety and action semantics. Theme selection does
 not authorize other preference or runtime changes.
 
-The user-approved PR1916 rollback temporarily retires Reference and Global /
-This browser profiles after the `.078` visual regression. Follow the
-[rollback boundary](../../docs/shell/appearance-contract.md#temporary-rollback-boundary):
-newer saved data stays inert and undeleted, never converted or used to seed the
-legacy path. Missing legacy themes use the safe old default, not a claimed
-automatic recovery of the theme removed by `.078`.
+Reference supplies the shared foundation; appearances supply intentional CSS
+deltas. Exactly one complete Global or This browser profile is active. Source
+switching retains both profiles, not per-field overlays. Appearance selection
+changes the library ID without adopting other settings.
 
-Discover `theme.*`. `theme.preview` / `theme.apply` take a name and exactly one
-of `definition` (a complete version-1 theme), `tokens` (an intentional partial
-palette edit retaining the skin/artwork), or `css` (a complete portable skin).
-Preview is client-scoped; apply commits app-wide. `theme.revert` ends a preview
-first, otherwise conditionally reverses the client's last apply. Saving or
-importing a library entry does not apply it. Portable CSS and format-1 ZIP
-import/export are restored; format-2 Reference deltas are not active inputs.
+Read `appearance.preferences.read` for the target scope and revisions. Use
+`appearance.preview({clientId, name, css})` /
+`appearance.preview.cancel` for document-local styling previews, and
+`appearance.preferences.update` at the captured scope/CAS to select a library ID
+or change preferences. `appearance.preferences.select` switches the complete
+profile source; first browser selection copies current Global at its captured
+revision. Browser writes require generation, mirror revision and storage-version
+CAS. Storage ACK and rendered composition ACK are separate; failure never writes
+Global as fallback.
 
-Composition retains its revision, dirty-state fences and lifecycle. Change
-scheme, decorations and other supported `presentation` fields through the
-existing shell prepare/preview/apply/revert protocol, independently of the theme.
-Keep previews, committed styling and private editor drafts distinct.
+Use `theme.read` for exact delta CSS and fingerprint. `theme.save` saves named
+delta CSS as a strict format-2 Reference ZIP; `theme.import` accepts
+`packageBase64`. Neither selects an appearance. `theme.update` and `theme.delete`
+use the saved ID and `expectedFingerprint`; included entries are read-only.
+Selection resolves current library bytes: an update can change the selected
+look, while deletion leaves its ID visibly unavailable with Reference recovery
+and unchanged preferences. `theme.export({id})` exports that exact library ZIP,
+never a preview or private editor draft.
+
+The selected look owns its default accent. A different-ID edit clears the old
+override unless that patch explicitly supplies a new color; same-ID and unrelated
+edits retain it. `patch: {accent: null}` removes only the override at captured
+scope/CAS, restoring the look's own color without storing null.
+
+Independent composition retains its revision, dirty-state fences and lifecycle.
+Keep temporary previews, committed preferences and private editor drafts distinct.
+Ordinary preferences apply quietly without Saved/Undo rituals; Preview Cancel,
+explicit accent reset and Archive Undo remain available. Leaving Appearance or
+closing Settings cancels its preview without discarding a retained editor draft.
 Browser/shared-component source changes belong in `amplifier-client-web`, not
 Unified's selected snapshot or disposable prepared client; follow the linked
 guide's source ownership and two-repository delivery requirements.
