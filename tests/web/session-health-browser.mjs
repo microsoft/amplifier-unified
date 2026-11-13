@@ -238,10 +238,12 @@ async function lifecycleCheck(page,ready,output){
   assert.ok(!JSON.stringify(diagnostic).includes('synthetic/workspace'));
   assert.ok(!JSON.stringify(diagnostic).includes('Private unsent lifecycle draft'));
   assert.ok(!JSON.stringify(diagnostic).includes('failed-input'),'shared report hashes private correlation IDs');
+  await page.screenshot({path:output+'lifecycle-historical-report-optin.png'});
   await feedback.getByRole('button',{name:'Prepare local report',exact:true}).click();
   const local=feedback.getByRole('textbox',{name:'Local feedback report preview',exact:true});
   await expect(local).toHaveValue(/provider_unavailable/);
   assert.doesNotMatch(await local.inputValue(),/authentication|PRIVATE|synthetic\/workspace/);
+  await page.screenshot({path:output+'lifecycle-historical-local-report.png'});
   assert.equal((await facts()).calls.filter(row=>row.operation==='send').length,2,'only the two explicit requests ran; reporting never sends another input');
  }
  await writeFile(output+`lifecycle-${lifecycleMode}-facts.json`,JSON.stringify(await facts(),null,2)+'\n');

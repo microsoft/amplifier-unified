@@ -121,6 +121,8 @@ dev = [
     # Offline native-input fixtures use the real loop/context, not a fake mount.
     # Candidate graph: lifetime-bound execution and observation-only idle callbacks.
     "amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@918528cf55ad1c3123aec7a3d184188a467d8622",
+    # Real finite/resumed/persistent custody checks use the selected Foundation tool.
+    "amplifier-module-tool-delegate @ git+https://github.com/microsoft/amplifier-foundation@05082c89a171758f8d0fb9d8df630ea581e5bdb5#subdirectory=modules/tool-delegate",
     # Match context-managed's authored source; uv.lock records the exact test
     # revision without imposing a resolver-global runtime source override.
     "amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@main",
