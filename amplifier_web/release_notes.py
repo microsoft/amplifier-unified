@@ -76,7 +76,7 @@ def parse(raw, expected=None):
 @lru_cache(maxsize=1)
 def bundled():
     try:
-        return parse(PATH.read_text())
+        return parse(PATH.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         # A missing history must not prevent startup or updating a damaged app.
         return []

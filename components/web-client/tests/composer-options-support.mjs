@@ -1,8 +1,10 @@
 // Keep the single model panel and its pending choices mounted. Only the bundle
 // selector needs disclosure; connection, model and effort share the main panel.
+export const composerOptionsPanel=page=>page.getByRole('dialog',{name:'Model for this chat',exact:true});
 export async function showComposerOptionWith(expect,page,section){
  if(!['model','effort','provider','bundle'].includes(section))throw Error('Unknown composer option: '+section);
- const dialog=page.getByRole('dialog',{name:'Model for this chat',exact:true});
+ const dialog=composerOptionsPanel(page);
+ await expect(dialog).toHaveCount(1);
  await expect(dialog).toBeVisible();
  if(section==='bundle'){
   const advanced=dialog.locator('details').filter({has:page.locator('summary',{hasText:/^Advanced$/})});

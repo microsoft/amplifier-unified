@@ -206,7 +206,7 @@ compare those exact links, not equal message text.
    this workspace and your root session ID. Page each owner with its returned
    cursor. Local publishing reports actual bound ports and immutable served
    directories; Operations reports retained lifecycle observations, not a fresh
-   process probe. Reservations are separate cooperative claims. Scratch folders,
+   process probe. Scratch folders,
    test databases, browser profiles and dynamic previews are not automatically
    allocated or discovered by this view. Do not infer isolation from an empty page.
    Use `workspace.resources.provision/read/retire` for task-owned scratch folders,

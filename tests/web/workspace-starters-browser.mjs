@@ -137,10 +137,7 @@ try{
  await resources.getByRole('button',{name:'Record resource',exact:true}).click();
  await resources.getByLabel('Resource type',{exact:true}).fill('container');await resources.getByLabel('Resource identifier',{exact:true}).fill('fixture-container');await resources.getByLabel('Resource owner',{exact:true}).fill('another system');
  const resourceInput=resources.getByLabel('Resource identifier',{exact:true}),originalResourceNode=await resourceInput.elementHandle();
- const reservationDetails=page.locator('details').filter({has:page.locator('summary').filter({hasText:/^Resource reservations$/})});
- await reservationDetails.locator('summary').click();
- const reservationKey=page.getByRole('region',{name:'Resource reservations'}).getByLabel('Resource key',{exact:true});
- await reservationKey.fill('preview:private-draft');
+ await expect(page.getByRole('region',{name:'Resource reservations'})).toHaveCount(0);
  await resourceInput.focus();
  await action('view.update',{patch:{workWorkspaceTab:'chats'}});
  await expect(resources).not.toBeVisible();
@@ -149,10 +146,9 @@ try{
  await action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:created.id,workWorkspaceTab:'details'}});
  await expect(resources.getByLabel('Resource identifier',{exact:true})).toHaveValue('fixture-container');
  assert.equal(await resourceInput.evaluate((node,original)=>node===original,originalResourceNode),true,'resource editor survives the keyed chat landing');
- await expect(reservationKey).toHaveValue('preview:private-draft');
  await action('view.update',{patch:{workSurface:'home'}});await expect(resources).not.toBeVisible();
  await action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:created.id,workWorkspaceTab:'details'}});
- await expect(resourceInput).toHaveValue('fixture-container');await expect(reservationKey).toHaveValue('preview:private-draft');
+ await expect(resourceInput).toHaveValue('fixture-container');
  assert.equal(await resourceInput.evaluate((node,original)=>node===original,originalResourceNode),true,'Home preserves the same tab-owned editor');
  await resourceInput.focus();
  await openSettingsDialog(page);
@@ -175,7 +171,7 @@ try{
  await peer.evaluate(id=>window.amplifier.dispatch('view.update',{patch:{workSurface:'workspace',workWorkspaceId:id,workWorkspaceTab:'details'}}),created.id);
  await expect(peer.getByRole('region',{name:'Workspace resources'})).toBeVisible();
  await expect(peer.getByLabel('Resource identifier',{exact:true})).toHaveCount(0);
- await peer.close();await reservationKey.fill('');
+ await peer.close();
  let finishResourceSave;const resourceSaveHeld=new Promise(resolve=>{finishResourceSave=resolve});let resourceSaveStarted=false,resourceSaveCalls=0;
  const holdResourceSave=async route=>{const raw=route.request().postDataJSON(),body=raw.action==='shell.command'?raw.args:raw;if(body?.action==='workspace.resources.add'){resourceSaveCalls++;resourceSaveStarted=true;await resourceSaveHeld}await route.continue()};
  await page.route('**/api/actions',holdResourceSave);
@@ -211,5 +207,5 @@ try{
  await expect(composer).toHaveDraft('Retain this draft through starter setup');
  await page.getByRole('button',{name:'Send message',exact:true}).click();await page.getByText('Synthetic first response',{exact:true}).waitFor();
  const evidence=await (await page.request.get(url+'/fixture')).json();assert.equal(evidence.sent[0].workspace,folder);assert.equal(evidence.sent[0].attachments[0].name,'notes.txt');
- assert.deepEqual(errors,[]);console.log(JSON.stringify({status:'passed',scenarios:15,starterInheritance:['explicit app default','built-in inherited choice','duplicate loaded into editor without workspace or chat creation'],resourceContinuity:['chat and Home return','reservation draft','same editor identity','Settings keyboard and phone drawer inert cleanup','private peer','one held save receipt'],screenshots:out,workspace:folder}));
+ assert.deepEqual(errors,[]);console.log(JSON.stringify({status:'passed',scenarios:15,starterInheritance:['explicit app default','built-in inherited choice','duplicate loaded into editor without workspace or chat creation'],resourceContinuity:['chat and Home return','no manual reservation controls','same editor identity','Settings keyboard and phone drawer inert cleanup','private peer','one held save receipt'],screenshots:out,workspace:folder}));
 }catch(error){await page?.screenshot({path:out+'/failure.png'}).catch(()=>{});console.error((await page?.locator('body').innerText())?.slice(-6000));throw error}finally{await browser?.close();fixture.kill('SIGTERM')}

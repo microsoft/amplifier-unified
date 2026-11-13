@@ -27,6 +27,77 @@ for line in sys.stdin:
 '''
 
 
+async def test_unconfirmed_desktop_receipt_survives_owned_process_stop_without_false_release(tmp_path):
+    import json
+    script = SCRIPT.replace(
+        "print(json.dumps({'type': 'runtime.ready'}), flush=True)",
+        """print(json.dumps({'type': 'runtime.ready'}), flush=True)
+        print(json.dumps({'type': 'computer.settlement', 'state': 'stopping', 'settled': False,
+          'episodes': [{'identity': {'owner': 'mount', 'target': 'opaque-target', 'generation': 'episode'},
+            'state': 'unknown', 'workers': 1, 'admission_open': False, 'release_confirmed': False}],
+          'omittedEpisodes': 0}), flush=True)""")
+    manager = RuntimeManager(command=[sys.executable, "-c", script])
+    manager.home = tmp_path / "app"
+    manager.retention.wake = lambda: None
+    events = []
+    async def emit(kind, value):
+        events.append((kind, value))
+    try:
+        await manager.start({"id": "custody", "workspace": str(tmp_path)}, emit)
+        async with asyncio.timeout(2):
+            while "computerSettlement" not in manager.workers["custody"]:
+                await asyncio.sleep(.001)
+        row = manager.workers["custody"]
+        assert row["computerSettlement"]["settled"] is False
+        await manager.stop("custody")
+        assert row["process"].returncode is not None
+        assert "custody" not in manager.workers
+        receipt = json.loads((manager.home / "runtime-reports/custody/computer-settlement.json").read_text())
+        assert receipt["settled"] is False and receipt["episodes"][0]["workers"] == 1
+        assert not receipt["episodes"][0]["release_confirmed"]
+        assert any(kind == "runtime.activity" and value.get("phase") == "stopping"
+                   for kind, value in events)
+    finally:
+        await manager.close()
+
+
+async def test_cleanup_scoped_receipt_replaces_pending_snapshot_without_claiming_whole_computer_release(tmp_path):
+    import json
+    script = SCRIPT.replace(
+        "if data['operation'] == 'hold':",
+        """if data['operation'] in {'pending-cleanup', 'settled-cleanup'}:
+            settled = data['operation'] == 'settled-cleanup'
+            print(json.dumps({'type': 'computer.settlement', 'scope': 'cleanup',
+              'state': 'settled' if settled else 'stopping', 'settled': settled,
+              'episodes': [] if settled else [{'state': 'unknown', 'reason': 'child_cleanup_unconfirmed',
+                'workers': None, 'release_confirmed': False}], 'omittedEpisodes': 0}), flush=True)
+        if data['operation'] == 'hold':""")
+    manager = RuntimeManager(command=[sys.executable, "-c", script])
+    manager.home = tmp_path / "app"
+    manager.retention.wake = lambda: None
+    events = []
+    async def emit(kind, value):
+        events.append((kind, value))
+    try:
+        await manager.start({"id": "cleanup-scope", "workspace": str(tmp_path)}, emit)
+        await manager.control("cleanup-scope", "pending-cleanup")
+        row = manager.workers["cleanup-scope"]
+        assert row["computerSettlement"]["scope"] == "cleanup"
+        assert row["computerSettlement"]["settled"] is False
+        assert any(kind == "runtime.activity" and "cleanup is unconfirmed" in value.get("detail", "")
+                   for kind, value in events)
+        await manager.control("cleanup-scope", "settled-cleanup")
+        receipt = row["computerSettlement"]
+        assert receipt == {"state": "settled", "settled": True, "scope": "cleanup",
+                           "episodes": [], "omittedEpisodes": 0}
+        assert not row["parked"]  # Report scope does not grant writer handoff.
+        await manager.stop("cleanup-scope")
+        saved = json.loads((manager.home / "runtime-reports/cleanup-scope/computer-settlement.json").read_text())
+        assert saved == receipt and "release_confirmed" not in saved
+    finally:
+        await manager.close()
+
+
 @pytest.mark.parametrize('boundary', ['http', 'service'])
 async def test_shutdown_before_async_cleanup_preserves_idle_and_interrupts_active(
         tmp_path, authenticated_client, monkeypatch, boundary):

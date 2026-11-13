@@ -280,17 +280,20 @@ def _check_retained_image_selection(plan, retained_plan):
 
     from .storage import _SECRET_KEYS
     from ..provider_recording import apply_provider_recording
+    from ..runtime_controls import credential_field
     routed = any(not row.get("config", {}).get("backend") for row in current)
 
-    def credential_free(value):
+    def credential_free(value, *, module=None):
         # Checkpoints preserve host credential markers, while the current plan
         # contains their rebound values. Neither form identifies the account:
         # instance/source and every noncredential setting do. Match the store's
-        # secret-key vocabulary, excluding markers as well as literal secrets.
+        # legacy secret keys plus the snapshot serializer's field/module rules.
         # Credential rebinding/authorization remains with its existing owner.
         if isinstance(value, dict):
-            return {key: credential_free(item) for key, item in value.items()
-                    if key.lower() not in _SECRET_KEYS}
+            return {key: credential_free(
+                        item, module=value.get("module") if key == "config" else None)
+                    for key, item in value.items()
+                    if key.lower() not in _SECRET_KEYS and not credential_field(key, module=module)}
         if isinstance(value, list):
             return [credential_free(item) for item in value]
         return value
@@ -316,7 +319,7 @@ def _check_retained_image_selection(plan, retained_plan):
                 "source": row.get("source"),
                 "enabled": row.get("enabled", True),
                 "config": credential_free({key: item for key, item in config.items()
-                                          if key not in {"raw", "raw_debug"}}),
+                                          if key not in {"raw", "raw_debug"}}, module=row["module"]),
             })
         return result
 
@@ -388,6 +391,10 @@ class Children:
     def _runtime(self, row):
         def observe(event):
             kind = event["type"]
+            child = self.sessions.get(row["sessionId"])
+            sponsor = child.coordinator.get_capability("web.computer_episodes") if child else None
+            if sponsor:
+                sponsor.observe(event)
             if kind == "session.ready":
                 row.update(status="running", steering=event.get("steering"), native=event.get("native", False))
             elif kind == "input.delivered":
@@ -524,7 +531,9 @@ class Children:
         install_access = capture_access() if capture_access else None
         from amplifier_foundation import Bundle, ProviderPreference, apply_provider_preferences_with_resolution
         from amplifier_core import HookResult
-        if identity in self.rows and self.rows[identity].get("status") in {"starting", "running", "idle", "stopping"} and self.rows[identity].get("task") and not self.rows[identity]["task"].done():
+        if identity in self.rows and self.rows[identity].get("_computerCleanup") is not None:
+            raise ValueError("The child's computer cleanup is unconfirmed; this identity cannot resume")
+        if identity in self.rows and self.rows[identity].get("task") and not self.rows[identity]["task"].done():
             raise ValueError("A child with this identity is already active")
         prepared = self.prepared.get(parent.session_id)
         if prepared is None:
@@ -577,7 +586,10 @@ class Children:
             raise ValueError(_SUBPROCESS_UNSUPPORTED)
         self.store.directory(identity)
         while len(self.rows) >= 256 and identity not in self.rows:
-            oldest = next((key for key, value in self.rows.items() if value["status"] in {"completed", "cancelled", "error", "interrupted"}), None)
+            oldest = next((key for key, value in self.rows.items()
+                           if value["status"] in {"completed", "cancelled", "error", "interrupted"}
+                           and value.get("_computerCleanup") is None
+                           and (not value.get("task") or value["task"].done())), None)
             if oldest is None:
                 raise RuntimeError("The active worker limit has been reached")
             del self.rows[oldest]
@@ -816,16 +828,54 @@ class Children:
         finally:
             if unregister:
                 unregister()
+            async def release_child():
+                if child:
+                    await child.cleanup()
+                if ledger:
+                    ledger.close()
+                if self.sessions.get(identity) is child:
+                    self.sessions.pop(identity, None)
+                    self.prepared.pop(identity, None)
+                row.pop("task", None)
+                row.pop("_owner", None)
+                row.pop("runtime", None)
+                row.pop('_input_sources', None)
+                row.pop("_computerCleanup", None)
             if child:
-                await child.cleanup()
-            if ledger:
-                ledger.close()
-            self.sessions.pop(identity, None)
-            self.prepared.pop(identity, None)
-            row.pop("task", None)
-            row.pop("_owner", None)
-            row.pop("runtime", None)
-            row.pop('_input_sources', None)
+                sponsor = child.coordinator.get_capability("web.computer_episodes")
+                if sponsor:
+                    async def deferred():
+                        receipt = await sponsor.close(interrupted=row["status"] != "completed")
+                        if not receipt["settled"]:
+                            await sponsor.join()
+                        await release_child()
+                    # Own cleanup before any cancellable wait. A failed or
+                    # cancelled child awaiter cannot erase backend/ledger custody.
+                    cleanup = sponsor.registry.retain_cleanup(coordinator, row["runId"], deferred)
+                    row["_computerCleanup"] = cleanup
+                    def cleanup_status(_=None):
+                        try:
+                            sponsor.registry.emit({"type": "computer.settlement",
+                                                   **sponsor.registry.receipt(settlement_only=True)})
+                        except Exception:
+                            pass  # Reporting cannot rewrite the original task result.
+                    cleanup.add_done_callback(cleanup_status)
+                    from ..computer_episodes import wait_settlement
+                    try:
+                        await wait_settlement({cleanup})
+                    finally:
+                        if not cleanup.done() or (id(coordinator), row["runId"]) in sponsor.registry.cleanups:
+                            # Execution and cleanup outcomes are separate; retain
+                            # custody and report it even on a newly cancelled wait.
+                            cleanup_status()
+                    # The owned task already performed ordinary cleanup.
+                    return_cleanup = True
+                else:
+                    return_cleanup = False
+            else:
+                return_cleanup = False
+            if not return_cleanup:
+                await release_child()
 
     async def control(self, identity, action, text="", input_id=None, attachments=()):
         row = self.rows.get(identity)
@@ -833,6 +883,15 @@ class Children:
             raise ValueError("Worker is no longer active")
         if action not in {"message", "steer", "finish", "cancel"}:
             raise ValueError("Unknown worker action")
+        if action == "finish" and (not row["persistent"] or row["status"] != "idle"):
+            raise ValueError("Wait for a persistent worker's idle report before finishing")
+        if action in {"finish", "cancel"}:
+            row["_computer_stopped"] = row.get("runId")
+            child = self.sessions.get(identity)
+            sponsor = child.coordinator.get_capability("web.computer_episodes") if child else None
+            if sponsor:
+                sponsor.terminated = True
+                sponsor.finish(interrupted=action == "cancel")
         if not row["persistent"]:
             if action != "cancel":
                 raise ValueError("This finite worker accepts cancellation; resume it for a new instruction")

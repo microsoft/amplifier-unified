@@ -64,6 +64,7 @@ import {WorkspaceRail,AgentCanvas,SessionHistoryControls} from './shell-panels';
 import './app-toolbar.css';
 import {useNarrowScreen} from './responsive-navigation';
 import {NewChatSetup,newChatSetup} from './new-chat';
+import {ExternalAgentPicker} from './external-agent-picker';
 import {WorkspaceLayout} from './panel-layout';
 import {AttachmentStrip,readAttachment} from './chat-controls';
 import {useChatFileDrop} from './chat-file-drop.js';
@@ -255,6 +256,8 @@ function App(){
    args={...args,patch:{...args.patch,canvasDraft:{...args.patch.canvasDraft,permissionHistoryKey:key}}};
   }else if(action==='canvas.select'||action==='canvas.visibility'||isNavigationAction(action,args))canvasInputRevision.current++;
   const chatReference=action==='session.select'&&(args.chatReference||args.peerPreview);
+  const handoffNavigation=action==='session.select'&&typeof meta.handoffIsCurrent==='function';
+  if(handoffNavigation&&!meta.handoffIsCurrent())return Promise.resolve({accepted:false,error:'The handoff is no longer in this source chat.'});
   if(chatReference&&meta.chatReferenceIntent!==undefined&&meta.chatReferenceIntent!==archiveRevision.current)
    return Promise.resolve({accepted:false,superseded:true,error:'A newer navigation kept this chat reference from opening.'});
   if(meta.archiveIsCurrent&&!meta.archiveIsCurrent())return Promise.resolve({accepted:false});
@@ -328,10 +331,10 @@ function App(){
   if(action==='view.update'&&Object.keys(args.patch||{}).some(key=>key==='draft'||key.startsWith('canvas')))args={sessionId:latest.current?.selectedSessionId,...args};
   const selectedId=action==='session.select'?args.id:action==='shell.command'&&args.action==='session.select'?args.args?.id:null;
   const openingDraft=action==='session.draft'||action==='shell.command'&&args.action==='session.draft';
-  // References, like external links, keep source controls/editors mounted until
+  // Handoffs and references, like external links, keep source controls mounted until
   // acceptance. The same navigation queue and Settings/Canvas guards still own
   // the transition; rejection must not destroy the control that shows it.
-  const navigationToken=openingDraft?conversationNavigation.current.beginDraft():selectedId&&!meta.chatLink&&!chatReference&&!canvasDirtyBarrier.current?conversationNavigation.current.begin(pendingView.current.apply(latest.current),selectedId,meta.navigationSession):null;
+  const navigationToken=openingDraft?conversationNavigation.current.beginDraft():selectedId&&!meta.chatLink&&!chatReference&&!handoffNavigation&&!canvasDirtyBarrier.current?conversationNavigation.current.begin(pendingView.current.apply(latest.current),selectedId,meta.navigationSession):null;
   if(navigationToken&&serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}
   if(action==='canvas.visibility')args={sessionId:latest.current?.selectedSessionId??null,canvasId:latest.current?.canvas?.id??null,...args};
   const pending=action==='canvas.visibility'?pendingView.current.addCanvas(latest.current,args.open):action==='view.update'?(meta.pendingViewToken??pendingView.current.add(args.patch||{},args.sessionId)):null;
@@ -361,6 +364,7 @@ function App(){
    if((navigation||['question.answer','question.cancel','question.supersede','canvas.views.loadVersion'].includes(action))&&dirtyBarrier)await dirtyBarrier;
    if(capabilityMutation)capabilityStopFence.current.assertMutation(args,meta.capabilityRead);
    if(meta.chatLink&&!meta.chatLinkIsCurrent())return {accepted:false};
+   if(handoffNavigation&&!meta.handoffIsCurrent())return {accepted:false,error:'The handoff is no longer in this source chat.'};
    if(meta.archiveIsCurrent&&!meta.archiveIsCurrent())return {accepted:false};
    if(chatReference&&(meta.chatReferenceIntent!==archiveRevision.current||
      latest.current?.selectedSessionId!==chatReference.sourceSessionId))
@@ -408,9 +412,10 @@ function App(){
     if(historyVisit)destinationHistory.current.finish(result);
     try{
      if(result.state)acceptState(result.state);
-     // Exact annotation and read-only preview receipts settle locally. Navigation
-     // still waits for its authoritative frame and exact history confirmation.
-     else if(!['message.reaction','peer.preview','context.inspect','conversation.delivery'].includes(action))await awaitState(result);
+     // Exact annotation, preview and delivery reads settle locally, including
+     // handoff reads whose scoped receipt may be newer than the stream. Creation,
+     // confirmation and navigation still wait for their authoritative state.
+     else if(!['message.reaction','peer.preview','context.inspect','conversation.delivery','session.handoff.read'].includes(action))await awaitState(result);
     }catch(error){
      // An accepted reset is not a refusal when only its following read fails.
      // Keep the exact receipt; the Canvas owner offers a read, never a replay.
@@ -694,6 +699,7 @@ function App(){
  const detail=useConversationDetail(state?.sessions?.find(s=>s.id===state.selectedSessionId),()=>{stickToBottom.current=false;const pane=messagesPane.current;if(!pane)return;const top=pane.getBoundingClientRect().top,anchor=[...pane.querySelectorAll('[data-message-id]')].find(node=>node.getBoundingClientRect().bottom>top);if(anchor)historyScrollAnchor.current={sessionId:state.selectedSessionId,messageId:anchor.dataset.messageId,top:anchor.getBoundingClientRect().top}},dispatch);
  useEffect(()=>{if(detail.jumpRequest){const frame=requestAnimationFrame(()=>detail.jumpRequest.id==='latest'?chatScroll.current?.reveal():chatScroll.current?.jump(detail.jumpRequest.id));return()=>cancelAnimationFrame(frame)}},[detail.jumpRequest]);
  const session=detail.session,view=state?.view||{},mode=view.mode||'chat',activity=sessionStatus(session),working=activity.busy;
+ const externalConversation=!!(session?.externalAgent||(!session&&view.newSessionDraft?.externalAgentId));
  const outboxSource=deliveryScope(state,session);
  const messages=useMemo(()=>outboxMessages(session?.messages||[],outbox.entries,session?.id,outboxSource),[session?.messages,outbox.entries,session?.id,outboxSource]);
  const historyPending=conversationHistoryPending(session,state?.navigationPending,messages),ownership=ownershipState(session),executionUnavailable=session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||ownership.blocked;
@@ -879,6 +885,7 @@ function App(){
  }
  function addFiles(files){
   if(!files?.length||executionUnavailable||historyPending)return;
+  if(externalConversation){setError("This agent currently accepts text messages. Paste the relevant text instead.");return;}
   const target=latest.current?.selectedSessionId??null,selected=Array.from(files),expectedDraftId=target===null?latest.current?.attachmentDraftId:undefined;
   const admittedClient=latest.current?.client?.id,admittedHost=latest.current?.client?.hostInstanceId;
   if(target===null&&!expectedDraftId){setError('The new-chat draft is not ready. Try attaching again after it loads.');return;}
@@ -897,7 +904,7 @@ function App(){
   }finally{uploadCount.current--;setUploading(uploadCount.current>0)}};
   uploadQueue.current=uploadQueue.current.then(run,run);
  }
- const chatDrop=useChatFileDrop({ownerKey:JSON.stringify([session?.id??null,state?.attachmentDraftId,state?.selectedWorkspaceId]),enabled:!!state&&workSurface(state)==='chat'&&!executionUnavailable&&!historyPending&&!referencingDraft,onFiles:addFiles,onError:setError});
+ const chatDrop=useChatFileDrop({ownerKey:JSON.stringify([session?.id??null,state?.attachmentDraftId,state?.selectedWorkspaceId]),enabled:!!state&&workSurface(state)==='chat'&&!externalConversation&&!executionUnavailable&&!historyPending&&!referencingDraft,onFiles:addFiles,onError:setError});
  async function deliver(entry){
   if(!outboxMatches(entry,deliveryScope(latest.current,latest.current?.sessions?.find(row=>row.id===entry.sessionId))))return;
   if(deliveries.current.has(entry.id))return;
@@ -937,6 +944,8 @@ function App(){
   preserveOtherDraft(session?.id??null);
   const submittedText=draft,editorDocument=quoteApi.current?.document(),id=crypto.randomUUID(),attachments=availableAttachments;
   const submittedDocument=editorDocument?.segments.some(part=>part.type==='quote')?editorDocument:null;
+  if(externalConversation&&(attachments.length||submittedDocument||state.view?.messageReply)){setError('This agent currently accepts text messages. Remove attachments or quotations before sending.');return;}
+  if(externalConversation&&!session&&!creationSetup().workspace){setError('Choose an existing workspace before starting a chat with an external agent.');return;}
   const activeGeneration=session?.collaborationGeneration;
   const expectedGenerationId=activeGeneration&&!activeGeneration.terminal?activeGeneration.id:null;
   if(!submittedText.trim()&&!attachments.length)return;
@@ -996,7 +1005,7 @@ function App(){
  const newChatPending=!session&&outbox.entries.some(row=>outboxMatches(row,outboxSource)&&row.sessionId===null&&['sending','unknown'].includes(row.status));
  const responseActive=working||(session?.workers||[]).some(worker=>['queued','starting','working','running','stopping'].includes(worker.status));
  const sendingHere=outbox.entries.some(row=>outboxMatches(row,outboxSource)&&row.sessionId===(session?.id??null)&&row.status==='sending');
- const primaryAction=composerPrimaryAction({draft,attachments:availableAttachments,uploading,working,responseActive,stopping:session?.status==='stopping',voiceStatus:voice.status,voiceStarting,busy,newChatPending,sending:sendingHere,historyPending,executionUnavailable});
+ const primaryAction=composerPrimaryAction({draft,attachments:availableAttachments,uploading,working,responseActive,stopping:session?.status==='stopping',voiceStatus:voice.status,voiceStarting,voiceAvailable:!externalConversation,busy,newChatPending,sending:sendingHere,historyPending,executionUnavailable});
  const appReload=useAppReload({client:streamClient,canvasWorkspace:state?.canvasWorkspace,blocked:callActive||voiceStarting?'Finish your voice call, then reload.':uploading||sendingHere||busy?'Wait for the current upload or send to finish.':'',prepare:async()=>{
   // Before a first state arrives there is no mounted editor to checkpoint.
   // The existing local draft journal remains intact across this recovery reload.
@@ -1067,10 +1076,10 @@ function App(){
   {chatLink?.status==='failed'&&<div className="a-alert" role="alert" data-chat-link-failure><span>Couldn’t open chat: {actionErrorMessage(chatLink.error)}</span><button type="button" onClick={()=>chatLinkReceiver.current.retry()}>Retry opening chat</button><button type="button" aria-label="Dismiss chat link" onClick={()=>chatLinkReceiver.current.dismiss()}><X/></button></div>}
   <ConnectionNotice connected={connected} updates={state.updates} failure={connectionFailure} onRetry={()=>setBootAttempt(value=>value+1)} onDismiss={()=>setConnectionFailure(null)}/>
   {error&&<div className="a-alert" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={()=>{setError('');act('view.update',{patch:{notice:null}})}} data-action="view.update"><X/></button></div>}
-  {!browsing&&<><ConversationStatus session={session} act={act}/><ConversationError state={state} session={session} act={act}/></>}{!state.runtime?.available&&<div className="a-alert a-runtime"><span><strong>Connect Amplifier to get started.</strong> {state.runtime?.error||'The Amplifier runtime is not installed. Install this app with its runtime dependencies, then relaunch.'}</span><button className="a-link" onClick={()=>open('settings')} data-action="view.update">Setup details <ChevronRight/></button></div>}
+  {!browsing&&<><ConversationStatus session={session} act={act}/><ConversationError state={state} session={session} act={act}/></>}{!externalConversation&&!state.runtime?.available&&<div className="a-alert a-runtime"><span><strong>Connect Amplifier to get started.</strong> {state.runtime?.error||'The Amplifier runtime is not installed. Install this app with its runtime dependencies, then relaunch.'}</span><button className="a-link" onClick={()=>open('settings')} data-action="view.update">Setup details <ChevronRight/></button></div>}
   <LiveChatActivity voice={voice} callSession={state.sessions.find(row=>row.id===state.voice?.sessionId)} callActive={callActive} act={act}><SharingIndicator sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={reportError}/></LiveChatActivity>
   <WorkspaceLayout appearanceScheme={themeScheme} appearanceCss={activeCss} state={layoutState} act={act} presentation={presentation}><WorkspaceRail footer={<AppFooter state={state} act={act} connected={connected} open={open}/>} shell={shell} state={state} session={session} act={act} selectSession={id=>act('session.select',{id})} newSession={newChat}/><section className={`a-conversation ${messages.length||historyDisplayPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation" {...chatDrop.handlers}>{chatDrop.active&&<div className="a-chat-file-overlay" data-part="chat-file-drop" role="status"><div><strong>Drop to attach to {session?.title||'this draft'}</strong><p>Files join this draft. Nothing is sent.</p></div></div>}<WorkSurface shell={shell} state={state} act={act} dispatch={dispatch} navigationRef={workspaceSettingsNavigation}/>
-   <MessageFocus session={session} focus={state.view?.messageFocus} detail={detail} ensureVisible={interim.ensureVisible}/><div className="a-messages" ref={messagesPane} data-part="messages" data-view-source={session?"conversation":undefined} data-session-id={session?.id??undefined} data-host-instance-id={state.client?.hostInstanceId} data-work-projection={workProjectionReceipt(session,state.client?.hostInstanceId)} role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={historyDisplayPending||!!detail.busy}>{historyDisplayPending?<SessionHistoryControls session={{...session,historyLoading:!session?.historyError, messages:[],sharedHistoryOffset:0,historyActivity:null}} act={act}/>:<><div className="a-session-history">{detail.controls}</div><WorkProjectionStatus session={session} messages={messages}/><SessionHistoryControls session={session?.messageWindow?.offset>0?{...session,sharedHistoryOffset:0}:session} messages={messages} act={act} hideEarlier/>{session?.parentId&&<div className="a-chat-origin"><GitBranch/><span>{!isTopLevelChat(session)?'Subagent conversation':session.editOrigin?'Continued from an edited message':'Forked conversation'}</span><button type="button" className="a-link" data-action="session.select" disabled={!state.sessions.some(s=>s.id===session.parentId)} onClick={()=>act('session.select',{id:session.parentId})}>{!isTopLevelChat(session)?'Open parent chat':'Open original chat'}</button></div>}{!session&&conversationRows.length===0&&<NewChatSetup draft={draft} onChoose={value=>{if(lastDraft.current.trim())return;editDraft(value);composerRef.current?.focus()}}/>} {conversationRows.length===0&&!historyDisplayPending&&!session?.historyError&&!executionUnavailable?session&&<div className="a-empty"><img src={logo} alt=""/><h2>What shall we work on?</h2><p>Bring an idea, a question, or a file.</p></div>:conversationRows.map(renderRow)}{!voiceStream&&<StreamingMessage session={session} state={state}/>}{presentation.planPlacement==='inline'&&<ChatPlan session={session} state={state} act={act} placement="inline"/>}<Questions key={`questions:${session?.id}`} session={session} state={state} dispatch={dispatch} reviewState={questionReviewState}/><NewChatHandoffs key={`handoffs:${session?.id}`} state={state} dispatch={dispatch}/></>}<div ref={messagesEnd}/></div>
+   <MessageFocus session={session} focus={state.view?.messageFocus} detail={detail} ensureVisible={interim.ensureVisible}/><div className="a-messages" ref={messagesPane} data-part="messages" data-view-source={session?"conversation":undefined} data-session-id={session?.id??undefined} data-host-instance-id={state.client?.hostInstanceId} data-work-projection={workProjectionReceipt(session,state.client?.hostInstanceId)} role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={historyDisplayPending||!!detail.busy}>{historyDisplayPending?<SessionHistoryControls session={{...session,historyLoading:!session?.historyError, messages:[],sharedHistoryOffset:0,historyActivity:null}} act={act}/>:<><div className="a-session-history">{detail.controls}</div><WorkProjectionStatus session={session} messages={messages}/><SessionHistoryControls session={session?.messageWindow?.offset>0?{...session,sharedHistoryOffset:0}:session} messages={messages} act={act} hideEarlier/>{session?.parentId&&<div className="a-chat-origin"><GitBranch/><span>{!isTopLevelChat(session)?'Subagent conversation':session.editOrigin?'Continued from an edited message':'Forked conversation'}</span><button type="button" className="a-link" data-action="session.select" disabled={!state.sessions.some(s=>s.id===session.parentId)} onClick={()=>act('session.select',{id:session.parentId})}>{!isTopLevelChat(session)?'Open parent chat':'Open original chat'}</button></div>}{!session&&conversationRows.length===0&&<NewChatSetup draft={draft} onChoose={value=>{if(lastDraft.current.trim())return;editDraft(value);composerRef.current?.focus()}}/>} {conversationRows.length===0&&!historyDisplayPending&&!session?.historyError&&!executionUnavailable?session&&<div className="a-empty"><img src={logo} alt=""/><h2>What shall we work on?</h2><p>{session.externalAgent?'Send a message to '+(session.externalAgent.label||session.externalAgent.id)+'.':'Bring an idea, a question, or a file.'}</p></div>:conversationRows.map(renderRow)}{!voiceStream&&<StreamingMessage session={session} state={state}/>}{presentation.planPlacement==='inline'&&<ChatPlan session={session} state={state} act={act} placement="inline"/>}<Questions key={`questions:${session?.id}`} session={session} state={state} dispatch={dispatch} reviewState={questionReviewState}/><NewChatHandoffs key={`handoffs:${session?.id}`} state={state} dispatch={dispatch}/></>}<div ref={messagesEnd}/></div>
    {session&&!historyDisplayPending&&<ConversationRail paneRef={messagesPane} sessionId={session.id} messages={messages} onJump={id=>messages.some(row=>row.id===id)?chatScroll.current?.jump(id):detail.around(id)}/>}
    {(awayFromBottom||detail.focused)&&<div className="a-chat-jump"><button type="button" className="a-soft" aria-label="Jump to latest messages" onClick={()=>detail.focused?detail.latest():chatScroll.current?.reveal()}>↓ Latest messages</button></div>}
    <LiveActivity session={state.sessions.find(row=>row.id===session?.id)||session}/>
@@ -1082,7 +1091,7 @@ function App(){
     {draftStorageError&&<p role="alert" className="a-upload-status">This browser could not keep a recovery copy of your draft. Keep this tab open until it is saved.</p>}
     {outbox.storageError&&outbox.entries.length>0&&<p role="alert" className="a-upload-status">This browser could not save the pending message. Keep this tab open until delivery is confirmed.</p>}
     <ComposerOwnership session={session} runtimeAvailable={state.runtime?.available!==false} dispatch={dispatch}>
-    {!session&&<ComposerWorkspace state={state} act={act}/>}
+    {!session&&<><ComposerWorkspace state={state} act={act}/><ExternalAgentPicker state={state} act={dispatch} refreshKey={settingsRoute} disabled={newChatPending||busy}/></>}
     <div className="a-compose-surface" data-part="composer-surface" data-expanded={composerExpanded({draft,attachments:availableAttachments,quote:state.view?.messageReply||state.view?.draftDocument?.segments?.some(part=>part.type==='quote')})}>
     <div className="a-compose-writing">
     <AttachmentStrip privateDraft sessionId={session?.id??null} items={availableAttachments} remove={id=>act('attachment.remove',{sessionId:session?.id??null,id})}/>{uploading&&<p role="status" className="a-upload-status">Uploading attachments…</p>}
@@ -1106,7 +1115,7 @@ function App(){
     {quoteReturn&&quoteReturn.sid===session?.id&&<button type="button" className="a-link" onClick={()=>{if(messagesPane.current)messagesPane.current.scrollTop=quoteReturn.top;const button=quoteReturn.button;setQuoteReturn(null);if(button?.isConnected&&button.getClientRects().length)button.focus({preventScroll:true});else composerRef.current?.focus({preventScroll:true});}}>Return to reading position</button>}
     </div>
     <div role="status" aria-live="polite" aria-atomic="true" className="a-sr-only">{sendingHere?'Sending message…':''}</div>
-    <ComposerAdd sessionId={session?.id} panel={settingsRoute||null} disabled={uploading||executionUnavailable||historyPending} accessDisabled={browsing} onFiles={kind=>{fileInput.current.accept=kind==='image'?'image/*':'';fileInput.current.click()}} onAccess={()=>open('chat-write-files')}><input ref={fileInput} type="file" multiple className="a-file-input" aria-label="Attach files" data-action="attachment.add" onChange={e=>{addFiles([...e.target.files]);e.target.value=''}}/></ComposerAdd>
+    {!externalConversation&&<ComposerAdd sessionId={session?.id} panel={settingsRoute||null} disabled={uploading||executionUnavailable||historyPending} accessDisabled={browsing} onFiles={kind=>{fileInput.current.accept=kind==='image'?'image/*':'';fileInput.current.click()}} onAccess={()=>open('chat-write-files')}><input ref={fileInput} type="file" multiple className="a-file-input" aria-label="Attach files" data-action="attachment.add" onChange={e=>{addFiles([...e.target.files]);e.target.value=''}}/></ComposerAdd>}
     <div className="a-compose-end"><DictationButton key={session?.id??'dictation-new'} draft={draft} onChange={value=>{if((latest.current?.selectedSessionId??null)===(session?.id??null))editDraft(value)}} controlRef={dictationControl} disabled={executionUnavailable||historyPending||referencingDraft||sendingHere||browsing||callActive}/><button type={primaryAction.action==='conversation.send'?'submit':'button'} className="a-send" data-part="composer-primary-action" data-action={primaryAction.action} aria-label={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice':primaryAction.label} title={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice in Settings':primaryAction.label} disabled={primaryAction.disabled||(referencingDraft&&primaryAction.action==='conversation.send')} onClick={primaryAction.action==='call.start'?startCall:primaryAction.action==='call.end'?()=>act('call.end'):primaryAction.action==='conversation.stop'?()=>act('conversation.stop',{sessionId:session.id}):undefined}>{primaryAction.icon==='voice'?<AudioLines/>:primaryAction.icon==='cancel'?<X/>:<ArrowUp/>}</button></div>
     </div>
     <div className="a-compose-configuration">

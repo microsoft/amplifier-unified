@@ -1,6 +1,7 @@
 """Transient connector settings follow native worker admission and cleanup."""
 import asyncio
 import copy
+from contextlib import asynccontextmanager
 import json
 import sys
 from types import SimpleNamespace
@@ -143,3 +144,147 @@ async def test_release_during_startup_never_sends_transient_settings(tmp_path):
     finally:
         proceed.set();await manager.close()
         await asyncio.gather(pending,return_exceptions=True)
+
+
+@pytest.mark.parametrize('disposition', ['retired', 'busy', 'protected', 'connected', 'refused'])
+async def test_reconnect_retires_only_released_settled_mcp_worker(tmp_path, disposition):
+    # A real subprocess acknowledges/refuses canonical retirement. No model or
+    # mocked stop path stands in for the exclusive worker's reply.
+    reply = repr(disposition != 'refused')
+    worker = WORKER.replace("    elif row['op']=='stop':break", f"""    elif row['op']=='retire':
+        print(json.dumps({{'op':'reply','id':row['id'],'result':{{'retired':{reply}}}}}),flush=True)
+    elif row['op']=='stop':break""")
+    manager = RuntimeManager(command=[sys.executable, '-u', '-c', worker], startup_timeout=3)
+    manager.home = tmp_path/'app'
+    session = {'id': 'owned', 'workspace': str(tmp_path), 'bundle': 'fixture'}
+    writes = []
+    original = manager._write
+    async def write(row, value):
+        writes.append(value['op'])
+        await original(row, value)
+    async def emit(*_):
+        pass
+    manager._write = write
+    try:
+        await manager.bind_ephemeral_mcp('owned', 'first', SERVERS)
+        await manager.start(session, emit)
+        first = manager.workers['owned']
+        first['parked'] = disposition != 'busy'
+        manager.retention.protected = lambda sid: disposition == 'protected'
+        if disposition != 'connected':
+            manager.release_ephemeral_mcp('owned', 'first')
+        if disposition == 'retired':
+            await manager.bind_ephemeral_mcp('owned', 'second', SERVERS)
+            assert first['process'].returncode is not None
+            assert 'owned' not in manager.workers
+            assert manager._ephemeral_mcp['owned'] == ('second', SERVERS)
+            assert writes.count('retire') == 1
+            await manager.start(session, emit)
+            assert manager.workers['owned']['process'].pid != first['process'].pid
+            assert writes.count('start') == 2
+        else:
+            with pytest.raises(ValueError, match='MCP attachment|retirement'):
+                await manager.bind_ephemeral_mcp('owned', 'second', SERVERS)
+            assert manager.workers['owned'] is first and first['process'].returncode is None
+            assert manager._ephemeral_mcp.get('owned') == (('first', SERVERS) if disposition == 'connected' else None)
+            assert writes.count('retire') == (1 if disposition == 'refused' else 0)
+            assert 'stop' not in writes
+        assert 'send' not in writes
+    finally:
+        await manager.close()
+
+
+async def retiring_attachment(tmp_path):
+    worker = WORKER.replace("    elif row['op']=='stop':break", """    elif row['op']=='retire':
+        print(json.dumps({'op':'reply','id':row['id'],'result':{'retired':True}}),flush=True)
+    elif row['op']=='stop':break""")
+    manager = RuntimeManager(command=[sys.executable, '-u', '-c', worker], startup_timeout=3)
+    manager.home = tmp_path/'app'
+    entered, proceed = asyncio.Event(), asyncio.Event()
+    writes = []
+    original = manager._write
+    async def write(row, value):
+        if value['op'] == 'retire':
+            entered.set()
+            await proceed.wait()
+        writes.append(value['op'])
+        await original(row, value)
+    async def emit(*_):
+        pass
+    manager._write = write
+    try:
+        await manager.bind_ephemeral_mcp('owned', 'first', SERVERS)
+        await manager.start({'id': 'owned', 'workspace': str(tmp_path), 'bundle': 'fixture'}, emit)
+    except BaseException:
+        await manager.close()
+        raise
+    row = manager.workers['owned']
+    row['parked'] = True
+    manager.release_ephemeral_mcp('owned', 'first')
+    return manager, row, entered, proceed, writes
+
+
+@pytest.mark.parametrize('interruption', ['cancelled', 'timeout'])
+async def test_detached_reconnect_cannot_cancel_retirement_or_publish_late_binding(tmp_path, interruption):
+    manager, row, entered, proceed, writes = await retiring_attachment(tmp_path)
+    if interruption == 'timeout':
+        manager.retention.reply_timeout = .02
+    binding = asyncio.create_task(manager.bind_ephemeral_mcp('owned', 'detached', SERVERS))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        retirement = row['retirement_task']
+        if interruption == 'cancelled':
+            binding.cancel()
+        with pytest.raises(asyncio.CancelledError if interruption == 'cancelled' else TimeoutError):
+            await binding
+        assert not retirement.done() and row['closing']
+        assert manager.workers['owned'] is row and row['process'].returncode is None
+        assert not manager._ephemeral_mcp
+        assert 'stop' not in writes and 'send' not in writes
+
+        proceed.set()
+        await asyncio.wait_for(asyncio.shield(retirement), 2)
+        assert row['process'].returncode is not None
+        assert 'owned' not in manager.workers and not manager._ephemeral_mcp
+        assert writes.count('retire') == 1 and writes.count('stop') == 1
+        assert 'send' not in writes  # Neither timeout nor detachment replays work.
+    finally:
+        proceed.set()
+        await manager.close()
+        await asyncio.gather(binding, return_exceptions=True)
+
+
+async def test_retirement_wait_rechecks_an_attachment_that_won_admission(tmp_path):
+    manager, row, entered, proceed, writes = await retiring_attachment(tmp_path)
+    other_bound = asyncio.Event()
+    admission = manager._admission
+    first = second = None
+    @asynccontextmanager
+    async def competing_admission(identity):
+        # Let the other already waiting attachment win after the actual worker
+        # retirement. The older caller must recheck, not overwrite that winner.
+        if asyncio.current_task() is first and entered.is_set():
+            await other_bound.wait()
+        async with admission(identity):
+            yield
+    manager._admission = competing_admission
+    async def connect_other():
+        await manager.bind_ephemeral_mcp('owned', 'winner', SERVERS)
+        other_bound.set()
+    try:
+        first = asyncio.create_task(manager.bind_ephemeral_mcp('owned', 'older', SERVERS))
+        await asyncio.wait_for(entered.wait(), 2)
+        second = asyncio.create_task(connect_other())
+        proceed.set()
+        await asyncio.wait_for(second, 2)
+        with pytest.raises(ValueError, match='owner changed'):
+            await asyncio.wait_for(first, 2)
+        assert manager._ephemeral_mcp['owned'] == ('winner', SERVERS)
+        assert row['process'].returncode is not None and 'owned' not in manager.workers
+        assert writes.count('retire') == 1 and writes.count('stop') == 1
+        assert 'send' not in writes
+    finally:
+        proceed.set()
+        other_bound.set()
+        await manager.close()
+        await asyncio.gather(*(task for task in (first, second) if task), return_exceptions=True)

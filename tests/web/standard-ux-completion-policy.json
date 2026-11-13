@@ -982,21 +982,14 @@
     },
     {
       "workflow": "workspace.reservations",
-      "expectedIndices": [
-        0,
-        1,
-        2
-      ],
+      "expectedIndices": [],
       "browserSteps": [
-        "Refresh/page reservations",
-        "Set key/sharing/note",
-        "Reserve",
-        "Reconcile with evidence",
-        "Cancel reconciliation"
+        "Verify retired controls and API requests are absent",
+        "Verify real inventory remains usable"
       ],
-      "status": "requires-exact-ledger-claims",
+      "status": "retired-2026-11-12",
       "limits": [
-        "Exact named synthetic browser context; prerequisite/API and device limitations remain in ledger."
+        "Frozen outcomes 0, 1 and 2 are retired, not passed. Historical inventory and evidence remain unchanged."
       ]
     },
     {
@@ -3267,6 +3260,18 @@
     }
   ],
   "scopeDispositions": [
+    {
+      "workflow": "workspace.reservations",
+      "disposition": "retired-2026-11-12",
+      "rationale": "User-directed full retirement of arbitrary-key cooperative claims, their four actions and two quota controls. No user reconciliation chore; retained evidence remains inert. Real ownership and inventory remain supported.",
+      "sourceRefs": [
+        "docs/workspaces/contracts/execution.v2-candidate.md#cooperative-resource-reservations--2026-10-13",
+        "tests/web/resource-reservations-browser.mjs",
+        "tests/test_resource_reservations.py"
+      ],
+      "reviewer": "integration-owner",
+      "review": "Explicit scope retirement, not a pass of frozen outcomes or physical cleanup acceptance."
+    },
     {
       "workflow": "workspace.environment",
       "disposition": "ordinary-ui-observed-platform-acceptance-partial",

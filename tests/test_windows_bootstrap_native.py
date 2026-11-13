@@ -39,6 +39,19 @@ def test_create_new_does_not_replace_prior_artifacts(tmp_path):
     assert list(target.iterdir()) == [target / "keep"]
 
 
+@pytest.mark.parametrize("consumer", [False, True])
+def test_standalone_compiler_input_declares_framework_not_transport_bypass(tmp_path, consumer):
+    output = tmp_path / "native"
+    builder.prepare(SCRIPTS, output, consumer=consumer_plan() if consumer else None)
+    source = (output / "NativeInstaller.cs").read_text(encoding="utf-8")
+    target = '[assembly:System.Runtime.Versioning.TargetFramework(".NETFramework,Version=v4.8")]'
+    assert source.count(target) == 1
+    assert source.index(target) < source.index("namespace UnifiedBootstrap")
+    assert "ServerCertificateValidationCallback" not in source
+    assert "ServicePointManager.SecurityProtocol=" not in source
+    assert "SslProtocols" not in source
+
+
 @pytest.mark.parametrize("mutation", ["storage", "helper", "license"])
 def test_missing_canonical_inputs_fail_before_output(tmp_path, mutation):
     source = tmp_path / "source"

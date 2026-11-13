@@ -98,6 +98,27 @@ def test_render_projection_does_no_filesystem_work_and_config_revision_invalidat
     assert m.service.state['updates']['currentStatus']['title']=='Checking current configuration'
 
 
+@pytest.mark.parametrize('blocker', [
+    {'kind': 'checkout-handoff'},
+    {'kind': 'configuration', 'reasonCode': 'management-tasks-unavailable'},
+    {'kind': 'configuration', 'reasonCode': 'management-lock-unavailable'},
+    {'kind': 'runtime', 'reasonCode': 'runtime-observer-unavailable'},
+])
+def test_unverified_activity_is_attention_not_an_endless_progress_wait(blocker):
+    state = {'phase': 'app-staged', 'pendingApp': {'revision': 'a' * 40}, 'blockers': [blocker]}
+    before = copy.deepcopy(state)
+    projected = health.current(state)
+    assert projected == {
+        'status': 'action-required', 'actionRequired': True, 'title': 'Update needs attention',
+        'detail': 'Automatic restart is paused because Amplifier cannot confirm earlier work has finished. The current app is kept.',
+        'action': 'diagnostics', 'component': None}
+    assert state == before
+    state['blockers'] = [{'kind': 'configuration', 'reasonCode': 'configuration-task-pending'}]
+    assert health.current(state)['status'] == 'waiting'
+    state['blockers'] = []
+    assert not health.current(state)['actionRequired']
+
+
 def test_retry_witness_preserves_manual_and_unknown_boundaries():
     batch={};failure={'reason':'runtime-source-constraint','status':'failed'}
     health.record_retry(batch,'A',failure)

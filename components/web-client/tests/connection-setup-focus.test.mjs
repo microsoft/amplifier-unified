@@ -46,3 +46,29 @@ test('focus still discovers a new connection and loss of that connection can pro
   assert.equal(f.calls.filter(row=>row.action==='view.update').length,2);
  }finally{await f.close()}
 });
+
+test('a late empty local catalog cannot displace external connection Settings or reopen it on close',async()=>{
+ const calls=[],dispatch=async(action,args)=>{calls.push({action,args});return {accepted:true}};
+ let state={settings:{workspace:'/one'},view:{panel:'settings',settingsExpanded:['external-agents']},setup:{providersLoadedAt:0,providersWorkspace:'/one',providers:[]}},root;
+ const render=()=>React.createElement(Probe,{state,dispatch});
+ try{
+  await act(async()=>{root=create(render())});
+  state={...state,setup:{...state.setup,providersLoadedAt:1}};
+  await act(async()=>{root.update(render());window.dispatchEvent(new Event('focus'))});
+  assert.deepEqual(calls,[]);
+  state={...state,view:{...state.view,panel:null}};
+  await act(async()=>root.update(render()));assert.deepEqual(calls,[],'Closing the editor does not reopen native onboarding');
+  await act(async()=>window.dispatchEvent(new Event('focus')));
+  assert.deepEqual(calls,[{action:'providers.list',args:{}}],'Ordinary native discovery remains available after leaving the external editor');
+ }finally{await act(async()=>root?.unmount())}
+});
+
+for(const mode of ['draft','chat'])test(`external ${mode} needs no native provider onboarding or focus discovery`,async()=>{
+ const calls=[],dispatch=async(action,args)=>{calls.push({action,args});return {accepted:true}};
+ const state={settings:{workspace:'/one'},view:{setupJourney:'welcome',...(mode==='draft'?{newSessionDraft:{externalAgentId:'remote'}}:{})},setup:{providersLoadedAt:1,providersWorkspace:'/one',providers:[]}};
+ const session=mode==='chat'?{id:'external',workspace:'/one',externalAgent:{id:'remote'}}:undefined;let root;
+ try{
+  await act(async()=>{root=create(React.createElement(Probe,{state,session,dispatch}))});
+  await act(async()=>window.dispatchEvent(new Event('focus')));assert.deepEqual(calls,[]);
+ }finally{await act(async()=>root?.unmount())}
+});

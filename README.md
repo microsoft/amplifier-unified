@@ -304,6 +304,11 @@ policy prevents public downloads. [More recovery options](docs/RESET.md).
 
 </details>
 
+To use an existing Unified host behind Constellation or another ACP client, see
+[Unified as an ACP backend](docs/architecture/unified-acp-backend.md). The installed
+attachment command uses the host's accounts and keeps work alive across client
+disconnects.
+
 ## Contributing
 
 Review the [repository privacy guidance](CONTRIBUTING.md) before publishing

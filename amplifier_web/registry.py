@@ -166,7 +166,7 @@ class RegistryManager:
             command=RuntimeManager()._command()[:-1]+[str(Path(__file__).with_name('module_validate.py'))]
             if args.get('behavioral'):command=command[:2]+['--with','pytest','--with','pytest-asyncio']+command[2:]
         from .probe_process import spawn, stop
-        process=await spawn(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,env={**os.environ,'AMPLIFIER_WEB_HOME':str(self.home)})
+        process=await spawn(*command,owned_git=True,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,env={**os.environ,'AMPLIFIER_WEB_HOME':str(self.home)})
         try:
             # Structural validators do not need credentials from browser drafts.
             payload={k:row[k] for k in ('id','module','section','source') if k in row}

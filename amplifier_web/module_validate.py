@@ -65,4 +65,11 @@ def run_behavioral(name,kind):
             code=pytest.main([str(target),'-q','-p','pytest_asyncio.plugin','-p','amplifier_core.pytest_plugin','--module-path='+str(package),'--asyncio-mode=auto'],plugins=[Results()])
     return {'passed':code==0 and any(row['status']=='passed' for row in reports),'exitCode':int(code),'tests':reports}
 
-if __name__=='__main__':asyncio.run(main())
+if __name__=='__main__':
+    if __package__:
+        from .runtime_bootstrap import bootstrap_app_package
+    else:
+        from runtime_bootstrap import bootstrap_app_package
+    bootstrap_app_package()
+    from amplifier_web.probe_git import query as owned_query
+    asyncio.run(owned_query(main()))

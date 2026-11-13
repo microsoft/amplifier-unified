@@ -1,6 +1,5 @@
 import React,{useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {ResourceReservations} from './workspace-resource-reservations';
 import {ManagedResources} from './workspace-managed-resources';
 const unwrap=value=>value?.result?.accepted!==undefined?value.result:value;
 // Keep the existing editors at tab lifetime while the landing page remains keyed
@@ -45,7 +44,7 @@ export function WorkspaceResources({state,act,workspaceId,unavailableId,readOnly
  }
  if(workspace)visited.current.set(identity(workspace),workspace);
  const visibleKey=workspace&&identity(workspace);
- return <>{[...visited.current].map(([key,row])=><div key={key} hidden={key!==visibleKey}><ResourceEditor workspace={row} act={act} readOnly={readOnly}/><ManagedResources workspace={row} state={state} act={act} active={key===visibleKey} readOnly={readOnly}/><ResourceReservations workspace={row} state={state} act={act} readOnly={readOnly} active={key===visibleKey}/></div>)}</>;
+ return <>{[...visited.current].map(([key,row])=><div key={key} hidden={key!==visibleKey}><ResourceEditor workspace={row} act={act} readOnly={readOnly}/><ManagedResources workspace={row} state={state} act={act} active={key===visibleKey} readOnly={readOnly}/></div>)}</>;
 }
 function ResourceEditor({workspace,act,readOnly}){
  const [inventory,setInventory]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[adding,setAdding]=useState(false),[draft,setDraft]=useState({kind:'',resourceId:'',owner:'',note:''}),[updating,setUpdating]=useState(null),[evidence,setEvidence]=useState(''),[status,setStatus]=useState('observed_absent');

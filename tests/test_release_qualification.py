@@ -895,12 +895,15 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert '--junitxml=output/python-checks/junit.xml' in focused['run']
     assert 'tee output/python-checks/pytest.log' in focused['run']
     assert '${{' not in focused['run'] and '${{' not in steps[2]['run']
-    receipts = next(step for step in steps if step.get('name') == 'Prepare pinned native receipt dependencies')
+    receipts = next(step for step in steps if step.get('name') == 'Verify locked native receipt dependencies')
     installed = next(step for step in steps if step.get('name') == 'Verify installed native receipt boundary outside checkout')
     assert receipts['if'] == "${{ env.CHECK_SUITE == 'full' || env.CHECK_SUITE == 'shared-work-native' }}"
     assert installed['if'] == "${{ env.CHECK_SUITE == 'shared-work-native' }}"
-    assert '2b35fa334fb2fb2c5c948842e8c7bd691ce5e834' in receipts['run']
-    assert 'NativeSendAdmission, NativeOutboundEnvelope' in receipts['run']
+    assert 'uv pip install' not in receipts['run']
+    assert 'uv run --no-sync python scripts/native_dependency_preflight.py' in receipts['run']
+    assert '--output output/python-checks/native-readiness.json' in receipts['run']
+    assert steps.index(receipts) < steps.index(complete)
+    assert steps.index(receipts) < steps.index(focused)
     assert 'unset PYTHONPATH' in installed['run']
     assert '--no-deps -r output/python-checks/installed-requirements.txt' in installed['run']
     assert 'uv pip check --python "$RUNNER_TEMP/native-receipt-installed/bin/python"' in installed['run']

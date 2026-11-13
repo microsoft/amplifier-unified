@@ -386,8 +386,8 @@ def _register_actions(definitions):
     return frozenset(definitions)
 
 
-from .workspace_resources import definitions as resource_reservation_definitions
-RESOURCE_RESERVATION_ACTIONS = _register_actions(resource_reservation_definitions(schema, string))
+from .workspace_resources import definitions as workspace_resource_definitions
+WORKSPACE_RESOURCE_ACTIONS = _register_actions(workspace_resource_definitions(schema, string))
 from .task_environments import definitions as environment_definitions
 ENVIRONMENT_ACTIONS = _register_actions(environment_definitions(schema, string))
 from .test_capacity_settings import definitions as test_capacity_definitions
@@ -469,7 +469,7 @@ for _access, _actions in {
         *canvas_view_definitions(schema, string), *canvas_app_definitions(schema, string),
         *canvas_version_definitions(schema, string),
         *publishing_definitions(schema, string),
-        *RESOURCE_RESERVATION_ACTIONS,
+        *WORKSPACE_RESOURCE_ACTIONS,
         *ENVIRONMENT_ACTIONS,
         *TEST_QUEUE_ACTIONS,
         *TEST_CAPACITY_ACTIONS,
@@ -518,6 +518,11 @@ for _action, (_, _spec) in ACTION_DEFINITIONS.items():
         _spec['properties']['nativeProject'] = string(4000)
 
 
+ACTION_DEFINITIONS["session.create"][1]["properties"]["externalAgentId"] = string(100)
+from .external_agent_settings import definitions as external_agent_definitions
+ACTION_DEFINITIONS.update(external_agent_definitions(schema, string))
+
+
 class AppService:
     @property
     def state(self):
@@ -551,6 +556,8 @@ class AppService:
         self.surface_context = SurfaceContext(self)
         self.default_workspace = str(Path(workspace or os.getcwd()).resolve())
         self.runtime = runtime
+        from .external_conversation import ExternalConversations
+        self.external_conversations = ExternalConversations(self)
         if runtime is not None and hasattr(runtime, "home"):
             runtime.home = self.data_dir
         from .next_message_configuration import bind
@@ -662,6 +669,9 @@ class AppService:
             from .capacity import restore_observation
             restore_observation(session)
             restore(session)
+            if session.get('externalAgent', {}).get('activeInputId'):
+                session['externalAgent']['status'] = 'unknown'
+                self._delivery(session, session['externalAgent'].pop('activeInputId'), 'unknown')
             settle_stream(session)
             session["configurationBusy"]=False
             if session.get("bundleChange", {}).get("phase") == "working":
@@ -1002,6 +1012,7 @@ class AppService:
             return {'revision': self.state['revision'], 'sessions': []}
         index = self.projections.sessions(self.state)
         session = copy.deepcopy(row)
+        session.pop('_externalAgentSource', None)
         from .input_status import annotate as input_annotation, PREFIX as input_status_prefix
         session['messages'] = [input_annotation(row, message) for message in session.get('messages', [])]
         session['messageAnnotations'] = {key: value for key, value in session.get('messageAnnotations', {}).items()
@@ -1702,6 +1713,8 @@ class AppService:
         self._require_workspace_scaffold(workspace)
         if not Path(workspace).is_dir():
             raise AppError("The workspace folder does not exist.")
+        if args.get('externalAgentId'):
+            return self.external_conversations.create(args, workspace)
         from .bundle_selection import defaults
         selected_bundle = defaults(self.data_dir, workspace, self.state["settings"].get("appBundle"))["effective"]
         from .new_chat import selection
@@ -2111,6 +2124,14 @@ class AppService:
             if retained is not None:
                 return retained
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
+        if action in {'externalAgents.list', 'externalAgents.get'}:
+            from .external_agent_settings import catalog, read
+            async with self.lock:
+                if admission_check is not None:
+                    admission_check()
+                self.configuration_authority.check(configuration_authority)
+                result = catalog(self) if action.endswith('.list') else read(self, args['id'])
+            return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
         if action in TEST_RUNNER_ACTIONS:
             from .registered_test_runners import dispatch as test_runner_dispatch
             return await test_runner_dispatch(self, action, args, configuration_authority)
@@ -2125,9 +2146,9 @@ class AppService:
         if action in ENVIRONMENT_ACTIONS:
             from .task_environments import dispatch as environment_dispatch
             return await environment_dispatch(self, action, args, origin, caller_session_id, configuration_authority)
-        if action in RESOURCE_RESERVATION_ACTIONS:
-            from .workspace_resources import dispatch_reservation
-            return await dispatch_reservation(self, action, args, origin, command_id, caller_session_id)
+        if action in WORKSPACE_RESOURCE_ACTIONS:
+            from .workspace_resources import dispatch
+            return await dispatch(self, action, args, origin, command_id, caller_session_id)
         if action.startswith("profiling."):
             host = getattr(self, "profiling_host", None)
             if host is None:
@@ -2429,6 +2450,13 @@ class AppService:
         prepared_draft_id = None
         from .managed_chats import is_managed, allocate, creation_identity
         managed_creation = action == 'session.create' and is_managed(args)
+        if action == 'session.create' and args.get('externalAgentId') and not (
+                command_id and self.db.execute('SELECT 1 FROM commands WHERE id=?', (command_id,)).fetchone()):
+            # External chats use an explicitly chosen existing workspace. Check
+            # before native creation can allocate a managed or new directory.
+            workspace = args.get('workspace', '').strip()
+            if managed_creation or not workspace or not Path(workspace).expanduser().is_dir():
+                raise AppError('Choose an existing workspace folder for this external chat.')
         if action == 'session.create' and not managed_creation and not (command_id and self.db.execute('SELECT 1 FROM commands WHERE id=?', (command_id,)).fetchone()):
             try:
                 target_path = self._session_destination(args)
@@ -2679,6 +2707,16 @@ class AppService:
                         raise AppError('Restore this project folder before continuing its chat.', 409)
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
+            external_scoped = (action.startswith('conversation.') or action in {
+                'call.start', 'worker.spawn', 'worker.stop', 'worker.steer', 'worker.message',
+                'runtime.control', 'configuration.inspect', 'configuration.apply',
+                'bundle.switch', 'bundle.preview', 'bundle.fork', 'bundle.save', 'bundle.export',
+                'message.edit', 'history.export', 'session.fork', 'session.recover',
+                'session.takeover', 'session.naming'})
+            if external_scoped:
+                external_target = checked_session or args.get('sessionId') or (args.get('id') if action.startswith('session.') else None) or self.state.get('selectedSessionId')
+                if external_target and self._session(external_target, hydrate=False).get('externalAgent'):
+                    self.external_conversations.guard(self._session(external_target), action, args)
             from .update_drain import held as update_held, new_work as update_new_work
             update_message = action == 'conversation.send' and update_held(self) and (args.get('allowNextTurn') is True or not args.get('expectedGenerationId'))
             if work_paused(self.state) and not update_message and update_new_work(action, args):
@@ -3079,7 +3117,8 @@ class AppService:
                             session['workingDirectory'] = creation[4]['workingDirectory']
                         self.worktrees.require_available_path(session.get('workingDirectory') or session['workspace'])
                         from .new_chat import initial_model
-                        initial = initial_model(self.state, args, session['workspace'], session['bundle'])
+                        initial = (None if session.get('externalAgent') else
+                                   initial_model(self.state, args, session['workspace'], session['bundle']))
                         if initial:
                             session['initialModel'] = initial
                 except ValueError as exc:
@@ -3123,11 +3162,12 @@ class AppService:
                 self.state["view"]["workSurface"] = "chat"
                 self.state["view"]["unreadVisit"] = session.get("manualUnread")
                 self.state["view"]["draft"] = session.get('draft', '')
-                if session.get('nativeProject') or bundled:
+                if not session.get('externalAgent') and (session.get('nativeProject') or bundled):
                     pending.append((self.history.refresh_session, (session['id'],)))
             elif action == "session.warm":
                 session = self._session(args['id'])
-                pending.append((self.warmup.schedule, (session['id'],)))
+                if not session.get('externalAgent'):
+                    pending.append((self.warmup.schedule, (session['id'],)))
             elif action == 'runtime.retention.update':
                 if not callable(getattr(self.runtime, 'configure_retention', None)):
                     raise AppError('This host does not support worker retention settings.')
@@ -3142,6 +3182,9 @@ class AppService:
                 self.runtime.configure_retention(policy)
                 self.server_config = {**getattr(self, 'server_config', saved), 'runtime': policy}
                 self.state['runtime']['retention'] = dict(policy)
+            elif action in {'externalAgents.save', 'externalAgents.remove'}:
+                from .external_agent_settings import mutate
+                diagnostic_result = mutate(self, action, args, command_id)
             elif action == "session.naming.backfill":
                 backfill = getattr(self, 'naming_backfill', None)
                 if backfill is None:
@@ -3420,11 +3463,11 @@ class AppService:
                     if not attachments:
                         raise AppError("Enter a message or attach a file.")
                     text = 'Please review the attached files.'
-                if not self.runtime:
+                if not self.runtime and not session.get('externalAgent'):
                     raise AppError("The Amplifier runtime is unavailable.")
                 stopped_generation = (recover_failed_generation(self, session, recovery_boundary)
-                    if origin == 'ui' and not update_message and args.get('expectedGenerationId') is None else None)
-                target_generation = None if update_message else steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
+                    if not session.get('externalAgent') and origin == 'ui' and not update_message and args.get('expectedGenerationId') is None else None)
+                target_generation = None if update_message or session.get('externalAgent') else steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
                 input_id = command_id or str(uuid.uuid4())
                 from .chat_navigation import recent_activity, prepare_human_post, promote_human_post
                 # Origin is chosen by the host adapter, never role/via/action args.
@@ -3458,6 +3501,8 @@ class AppService:
                     session["status"] = "working"
                     session.pop("error", None)
                     ensure_turn(session,input_id,text)
+                    if session.get('externalAgent'):
+                        session['externalAgent']['activeInputId'] = input_id
                 if not update_message:
                     pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity, args.get('preserveDraft', False))))
             elif action == "conversation.delivery":
@@ -3503,7 +3548,8 @@ class AppService:
                 session = self._session(args.get("sessionId"))
                 session["interruptionRevision"] = session.get("interruptionRevision", 0) + 1
                 session["lastInterruption"] = {"commandId": command_id, "at": time.time(), "origin": origin}
-                session["status"] = "stopping"
+                if session.get('externalAgent', {}).get('status') not in {'unknown', 'error'}:
+                    session["status"] = "stopping"
                 from .input_status import interrupt as interrupt_input_status
                 interrupt_input_status(session)
                 pending.append((self._stop, (session["id"],)))
@@ -4083,7 +4129,7 @@ class AppService:
                             self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), command_id))
                             self.db.commit()
                     raise
-                if action == 'conversation.send' and isinstance(acknowledged, dict) and (acknowledged.get('steering') or acknowledged.get('delivery') == 'queued_for_update'):
+                if action == 'conversation.send' and isinstance(acknowledged, dict) and (acknowledged.get('steering') or acknowledged.get('delivery') == 'queued_for_update' or session.get('externalAgent')):
                     result.update(acknowledged)
                 if action in {'conversation.delivery', 'conversation.retry'}:
                     result['result'] = acknowledged
@@ -4116,7 +4162,7 @@ class AppService:
                     self.smart_tool_requests[command_id] = task
                     task.add_done_callback(lambda finished, identity=command_id: self.smart_tool_requests.pop(identity, None))
         if action == 'conversation.send':
-            if not result.get('steering') and result.get('delivery') != 'queued_for_update':
+            if not session.get('externalAgent') and not result.get('steering') and result.get('delivery') != 'queued_for_update':
                 result['delivery'] = 'accepted'
             if result.get('delivery') == 'accepted':
                 saved = self.db.execute('SELECT receipt FROM commands WHERE id=?', (result['inputId'],)).fetchone()
@@ -4239,6 +4285,8 @@ class AppService:
             await self.on_runtime_event("runtime.error", {"sessionId": sid, "error": str(exc), **diagnostic_reference(exc)})
 
     async def history_page(self, session_id, before, limit):
+        if self._session(session_id).get('externalAgent'):
+            return
         await self.history.load(session_id, before=before, limit=limit, canonical=True)
 
     async def _edit_current(self, source):
@@ -4284,6 +4332,9 @@ class AppService:
             raise AppError(str(exc),409,code=receipt['code']) from exc
 
     async def _check_delivery(self, sid, input_id):
+        if self._session(sid).get('externalAgent'):
+            async with self.lock:
+                return self.external_conversations.delivery(self._session(sid), input_id)
         from .message_delivery import find_message, receipt_delivery, receipt_mapping
         from .session_files import validate_id
 
@@ -4465,6 +4516,8 @@ class AppService:
             self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), message['inputId']))
 
     async def _send(self, session, text, input_id, previous_activity=None, preserve_draft=False, retry=False, known_undelivered=False):
+        if session.get('externalAgent'):
+            return await self.external_conversations.send(session, text, input_id, preserve_draft)
         if not self.runtime:
             raise AppError("The Amplifier runtime is unavailable.")
         from .message_delivery import find_message
@@ -4642,6 +4695,8 @@ class AppService:
                 await self.set_voice_status({"status": "error", "id": call.id, "error": str(exc)})
 
     async def _stop(self, sid):
+        if self._session(sid).get('externalAgent'):
+            return await self.external_conversations.stop(sid)
         # The Stop revision is already durable. Release invalidated inbox slots
         # even while the actual worker interruption is slow or unavailable.
         await self.collaboration.drain(sid)
@@ -5338,7 +5393,8 @@ class AppService:
         # Ordinary requests must keep their existing admission-lock order.
         # An extra no-op lock turn lets later maintenance overtake queued input.
         try:
-            if not self._session(identity).get('configurationPending'):return
+            session = self._session(identity)
+            if session.get('externalAgent') or not session.get('configurationPending'):return
         except AppError:return
         async with self.lock:
             try:session=self._session(identity)
@@ -5675,7 +5731,7 @@ class AppService:
                     result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
                 return result
             compact_smart_tool = args['action'].startswith('smartTools.')
-            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.')) or args['action'] == 'runtime.provenance' or args['action'] in RESOURCE_RESERVATION_ACTIONS
+            compact_domain_receipt = args['action'] in SETTINGS_ACTIONS or args['action'].startswith(('session.handoff.', 'capability.', 'coordination.', 'worktree.', 'assignment.', 'integration.', 'workspace.', 'permissions.', 'providers.', 'configuration.', 'bundles.', 'modules.', 'sources.', 'locations.', 'outputs.')) or args['action'] == 'runtime.provenance'
             task_action = action_args.get('operation') if args['action'] == 'runtime.control' else args['action']
             compact_task_receipt = (isinstance(task_action, str) and task_action in task_definitions(schema, string)
                                     or args['action'].startswith('assignment.task.'))
@@ -5935,6 +5991,7 @@ class AppService:
             return
         self._close_started = True
         self.begin_shutdown()
+        await self.external_conversations.close()
         lifecycle_tasks = [task for task in self._runtime_lifecycle_tasks
                            if task is not asyncio.current_task()]
         for task in lifecycle_tasks:

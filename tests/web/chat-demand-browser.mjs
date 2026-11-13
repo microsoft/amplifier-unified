@@ -10,6 +10,62 @@ import {writeFile} from 'node:fs/promises';
 import {chromium,expect} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url)),measureOnly=process.argv.includes('--measure-only');
 const expectedTransport=process.argv.includes('--transport=sse')?'sse':'websocket';
+// CS4 forbids replaying work, not refreshing appearance preferences. Keep the
+// complete ledger prefix, then allow only this fixture's exact passive refresh.
+// A ready report can mutate a mirror: its entire payload must match the confirmed
+// pre-disconnect profile, with no storage command or changed composition.
+function assertReconnectTraffic(before,after,appearance,client){
+ assert.deepEqual(after.slice(0,before.length),before,'Reconnect changed the original command ledger');
+ const added=after.slice(before.length);
+ assert.deepEqual(added.map(row=>row.action),['appearance.preferences.read','appearance.preferences.read','appearance.client.report'],'Reconnect must not replay actions or add unknown traffic');
+ assert.equal(appearance.clientId,client);assert.equal(appearance.availability,'connected');
+ assert.equal(appearance.local.reported,true);assert.equal(appearance.local.error,null);
+ assert.equal(appearance.command,undefined);assert.equal(appearance.preview,null);
+ const ids=new Set(before.map(row=>row.request.id));
+ for(const row of added){
+  const request=row.request;
+  assert.deepEqual(Object.keys(request).sort(),['action','args','id']);
+  assert.equal(request.action,row.action);assert.equal(row.clientId,client);
+  assert.equal(typeof request.id,'string');assert.ok(request.id&&!ids.has(request.id),'Reconnect reused a command identity');ids.add(request.id);
+  assert.equal(row.status,200);assert.equal(row.accepted,true);assert.deepEqual(row.effects,[]);
+  if(row.action==='appearance.preferences.read'){
+   assert.deepEqual(request.args,{});
+   for(const key of ['namespace','generation','shared','activeScope','local','effective','composition','command','preview'])
+    assert.deepEqual(row.result[key],appearance[key],`Preference refresh changed ${key}`);
+  }else{
+   assert.deepEqual(request.args,{generation:appearance.generation,revision:appearance.local.revision,
+    storageVersion:appearance.local.storageVersion,activeScope:appearance.activeScope,values:appearance.local.values,status:'ready'});
+   assert.deepEqual(row.result,{status:'reported',stored:false,activated:false});
+  }
+ }
+ return added;
+}
+function reconnectNegativeControls(before,after,appearance,client){
+ const rejects=mutate=>{const changed=structuredClone(after);mutate(changed);assert.throws(()=>assertReconnectTraffic(before,changed,appearance,client),{name:'AssertionError'})};
+ // Replays with original OR fresh identities still fail, even if they would be
+ // accepted no-ops. These are oracle-only mutations, never real device commands.
+ for(const action of ['shell.command','conversation.send','device.command','view.update','appearance.preferences.update','unknown.mutation'])
+  for(const id of [before[0].request.id,'fresh-effect-command'])
+   rejects(rows=>{rows.at(-1).action=action;rows.at(-1).request={action,args:{},id}});
+ for(const patch of [{status:'stored'},{commandId:'storage-write'},{error:'failed'},
+  {revision:appearance.local.revision+1},{generation:'other-generation'},
+  {storageVersion:'other-version'},{activeScope:'client'},{values:{}},{renderedCompositionId:'other-composition'},{unknown:true}])
+  rejects(rows=>Object.assign(rows.at(-1).request.args,patch));
+ for(const mutate of [
+  rows=>{rows[0].request.id='rewritten-original'},
+  rows=>{rows.at(-1).request.id=before[0].request.id},
+  rows=>{rows.at(-1).clientId='other-client'},
+  rows=>{rows.at(-1).status=500},
+  rows=>{rows.at(-1).accepted=false},
+  rows=>{rows.at(-1).effects=[{type:'clipboard.write',content:'synthetic'}]},
+  rows=>{rows.at(-1).result.stored=true},
+  rows=>{rows[before.length].request.args={scope:'shared'}},
+  rows=>{rows[before.length].result.shared.revision++},
+  rows=>{rows.pop()},
+  rows=>{rows.push(structuredClone(rows.at(-1)))},
+ ])rejects(mutate);
+ return 33;
+}
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/chat_demand_server.py'],{stdio:['ignore','pipe','pipe']});
 let browser,peerBrowser,page,primaryError,log='';const transportFailures=[];
 fixture.stderr.on('data',x=>{log=(log+x).slice(-16384)});
@@ -97,12 +153,18 @@ try{
  evidence.openBytes=Buffer.byteLength(JSON.stringify(await snapshot()));
  await model.selectOption('second');await settle();
  await expect(model).toHaveValue('second');
+ const configurationMetrics=await api('/fixture/demand'),configured=configurationMetrics.selections[meta.ids[1]];
+ assert.equal(configured.selection.instance,'one');assert.equal(configured.selection.model,'second');
+ assert.equal(configured.modelConnectionKey,configurationMetrics.connectionKeys[meta.ids[1]].one);
+ assert.ok(configured.modelConnectionKey);assert.equal(configured.nextMessageStatus,'saved');
+ assert.deepEqual(configured.pendingModelSelection,configured.selection);
+ evidence.savedSelection=configured;
  await showComposerOption(page,'provider');
  await page.locator('#chat-provider').selectOption('two');await settle();
  await expect(model.locator('option[value="other-account"]')).toBeAttached();
  assert.equal(await model.locator('option[value="second"]').count(),0);
  await page.getByRole('button',{name:'Close chat options'}).click();
- await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('dialog',{name:'Model for this chat',exact:true})).toHaveCount(0);
  // A different private client does not inherit this draft or picker demand.
  await action('view.update',{patch:{draft:'Target private draft'}});
  // Separate process also works on ARM containers requiring --single-process,
@@ -113,6 +175,9 @@ try{
  await expect(peer.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('');await peerBrowser.close();peerBrowser=null;
  // Reconnect uses a fresh full baseline without replay or draft loss.
  await settle();const beforeReconnect=await api('/fixture/demand');
+ const reconnectState=await snapshot(),appearance=reconnectState.appearance;
+ const appearanceStorage=()=>page.evaluate(namespace=>localStorage.getItem(namespace),appearance.namespace);
+ const beforeStorage=await appearanceStorage();
  const reconnectStart=await page.evaluate(()=>({streams:demandStreams.length,frames:demandFrames.length,streamId:demandStreams.at(-1).demandIdentity.streamId}));
  await page.evaluate(()=>{const stream=demandStreams.at(-1);stream.close();if(stream instanceof EventSource)stream.dispatchEvent(new Event('error'))});
  await expect.poll(()=>page.evaluate(()=>demandStreams.length),{timeout:10000}).toBeGreaterThan(reconnectStart.streams);
@@ -121,27 +186,39 @@ try{
  const fresh=await page.evaluate(start=>demandFrames.slice(start.frames).find(f=>f.name==='state'&&f.streamId>start.streamId),reconnectStart);
  await page.waitForFunction(revision=>window.amplifier.getState().revision>=revision,fresh.revision);
  evidence.reconnectFrameBytes=fresh.bytes;evidence.reconnectBaseline=fresh;
- await settle();assert.deepEqual((await api('/fixture/demand')).actions,beforeReconnect.actions,'Reconnect must not replay actions');
+ await settle();const afterReconnect=await api('/fixture/demand');
+ evidence.reconnectTraffic=assertReconnectTraffic(beforeReconnect.actions,afterReconnect.actions,appearance,client);
+ evidence.reconnectNegativeControls=reconnectNegativeControls(beforeReconnect.actions,afterReconnect.actions,appearance,client);
+ const afterState=await snapshot();
+ assert.equal(afterState.selectedSessionId,reconnectState.selectedSessionId);
+ assert.deepEqual(afterState.appearance,appearance,'Reconnect changed confirmed appearance state');
+ assert.equal(await appearanceStorage(),beforeStorage,'Reconnect wrote browser preferences');
+ assert.deepEqual(afterReconnect.selections,beforeReconnect.selections,'Reconnect changed saved model settings');
+ assert.deepEqual(transportFailures,[],'HTTP/transport errors must not hide behind reconnect success');
  await expect(composer).toHaveDraft('Target private draft');
  await action('session.select',{id:meta.ids[0]});await expect(composer).toHaveDraft('Source private draft');
  await action('session.select',{id:meta.ids[1]});await expect(composer).toHaveDraft('Target private draft');
  // Existing-conversation mobile embedded picker must also declare/retire demand.
  await page.setViewportSize({width:390,height:844});
  await page.getByRole('button',{name:'Model and reasoning settings',exact:true}).click();
- await expect(page.getByRole('dialog',{name:'Chat options'})).toBeVisible();
+ await expect(page.getByRole('dialog',{name:'Model for this chat',exact:true})).toBeVisible();
  await showComposerOption(page,'provider');
  await page.locator('#chat-provider').selectOption('one');await settle();
  await expect(page.locator('#chat-model option[value="second"]')).toBeAttached();
  await page.getByRole('button',{name:'Close chat options',exact:true}).click();
- await expect(page.getByRole('dialog',{name:'Chat options'})).toHaveCount(0);
+ await expect(page.getByRole('dialog',{name:'Model for this chat',exact:true})).toHaveCount(0);
  if(!measureOnly){await expect.poll(async()=>(await snapshot()).view.composerModel?.open).toBe(false)}
- await settle();const final=await api('/fixture/demand');assert.deepEqual(final.runtimeCalls,[]);assert.equal(final.workersUnchanged,true);assert.deepEqual(errors,[]);
+ await settle();const final=await api('/fixture/demand');assert.deepEqual(final.runtimeCalls,[]);assert.equal(final.workersUnchanged,true);assert.deepEqual(errors,[]);assert.deepEqual(transportFailures,[]);
+ assert.ok(final.actions.every(row=>row.status===200&&row.accepted===true),'Every action must have a successful admitted receipt');
+ evidence.finalActions=final.actions;evidence.runtimeCalls=final.runtimeCalls;evidence.transportFailures=transportFailures;
+ if(process.env.AMPLIFIER_PERF_EVIDENCE)await page.screenshot({path:process.env.AMPLIFIER_PERF_EVIDENCE+'.png'});
  evidence.controls={historicalNoticesHidden:true,focusedRecoveryEvidence:true,savedWorkResult:true,terminalPrecedenceBothOrders:true,desktopPicker:true,accountIsolation:true,privateDrafts:true,reconnect:true,mobilePicker:true,workerEvidenceUnchanged:true};evidence.pageErrors=errors;
  console.log(JSON.stringify(evidence,null,2));
 }catch(error){
  primaryError=error;
  evidence.failure={name:error.name,message:String(error.message).slice(0,4000),stack:String(error.stack).slice(0,6000),transportFailures};
  if(page){
+  if(process.env.AMPLIFIER_PERF_EVIDENCE)try{await page.screenshot({path:process.env.AMPLIFIER_PERF_EVIDENCE+'.png',timeout:2000})}catch{}
   let timer;
   try{evidence.failure.browser=await Promise.race([page.evaluate(()=>{
    const state=window.amplifier?.getState?.();

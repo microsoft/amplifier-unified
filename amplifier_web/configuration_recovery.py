@@ -330,6 +330,28 @@ def latest_attempt(record):
     return attempt
 
 
+def terminal_no_effect(management, session, record):
+    """Classify only the exact authenticated terminal rejection, never authority.
+
+    Both ordinary error settlement and startup use this proof. A newer native
+    identity or conflicting acknowledged save cannot borrow an old none receipt.
+    """
+    if (not isinstance(record.get('history'), list)
+            or any(not isinstance(row, dict) for row in record['history'])
+            or not isinstance(record.get('attempts'), list)
+            or any(not isinstance(row, dict) for row in record['attempts'])):
+        return False
+    if record['state']['effect'] not in {'none', 'unknown'} or any(
+            row.get('effect') in {'saved_not_mounted', 'mounted'} for row in record['history']):
+        return False
+    attempt = latest_attempt(record)
+    if not attempt or attempt.get('nativeSessionId') != (
+            session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']):
+        return False
+    observed = evidence(attempt, home=management.service.data_dir)
+    return bool(observed and observed['effect'] == 'none' and observed.get('terminal') is True)
+
+
 def authorize(management, sid, args):
     """Host-only worker bridge; public control arguments cannot authorize this."""
     session = management.service._session(sid)

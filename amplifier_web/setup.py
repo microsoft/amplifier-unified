@@ -445,7 +445,7 @@ class SetupManager:
             probe_workspace=probe_workspace.parent
         from .probe_diagnostics import communicate, stderr_tail, ProbeProcessFailure, HostProbeFailure
         from .probe_process import spawn, stop
-        process=await spawn(*command,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env=env,cwd=probe_workspace)
+        process=await spawn(*command,owned_git=True,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env=env,cwd=probe_workspace)
         stderr_task=asyncio.create_task(stderr_tail(process.stderr))
         try:
             try:

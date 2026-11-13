@@ -1,0 +1,2 @@
+include README.md LICENSE pyproject.toml node_runner.cjs
+recursive-include tests *.py

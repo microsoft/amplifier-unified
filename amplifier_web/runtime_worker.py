@@ -98,9 +98,14 @@ class Worker:
         self.preparation_report = {}
         if __package__:
             from .ownership import WorkerOwnership
+            from .computer_episodes import ComputerEpisodes
         else:
             from ownership import WorkerOwnership
+            from computer_episodes import ComputerEpisodes
         self.ownership = WorkerOwnership(self, lambda data: publish(data))
+        self.computer_episodes = ComputerEpisodes(lambda event: publish(event))
+        self.computer_park_cancel = None
+        self.computer_park_key = None
 
     async def ask(self, prompt, options, identity=None):
         identity = identity or str(uuid.uuid4())
@@ -556,6 +561,12 @@ class Worker:
                     from amplifier_web.app_guidance import install_app_access
                     await install_app_access(child_coordinator, self.app_access_bridge(child_coordinator,
                                                                                       assignment=assignment))
+                    self.computer_episodes.install(child_coordinator,
+                        lambda: self.computer_execution(child_coordinator))
+                    children = self.session.coordinator.get_capability('live.children')
+                    row = children.rows.get(child_coordinator.session_id) if children else None
+                    if row and row.get('_computer_stopped') == child_coordinator.get_capability('web.worker_run'):
+                        self.computer_episodes.fence(child_coordinator, terminate=True)
                 return install_child_access
             register("web.app_access.install", capture_child_access)
         if assigned is None and callable(register):
@@ -578,6 +589,35 @@ class Worker:
             register("web.peer_continuation_ready", peer_continuation_ready)
         return bridge
 
+    def computer_execution(self, coordinator, *, explicit=None):
+        """Capture native ownership before desktop readiness/selector awaits."""
+        session, runtime, gate = self.session, self.runtime, self.activation_gate
+        activation, epoch = self.activation, self.stop_revision
+        if not session or not runtime or not gate:
+            return None
+        root = session.coordinator
+        child_origin = coordinator.get_capability('web.child_execution')
+        child = child_origin() if coordinator is not root and callable(child_origin) else None
+        if coordinator is not root and child is None:
+            return None
+        local_runtime = coordinator.get_capability('live.runtime') if child else runtime
+        generation = getattr(local_runtime, 'generation', None)
+        control = explicit or self.control_invocations.get(asyncio.current_task())
+        if coordinator is root and not generation and not (
+                control and control['coordinator'] is coordinator and control['valid']()):
+            return None
+        key = ((generation or {}).get('id') if local_runtime else
+               coordinator.get_capability('web.worker_run'))
+        def valid():
+            return (self.session is session and self.runtime is runtime and self.activation_gate is gate
+                and self.activation is activation and gate.current_valid and self.stop_revision == epoch
+                and not self.parked and not self.remounting and not self.ownership.yielding
+                and not runtime.closed and not runtime.stop_requested
+                and not coordinator.cancellation.is_cancelled
+                and (child_origin() == child if child else session.coordinator is coordinator)
+                and (getattr(local_runtime, 'generation', None) is generation if local_runtime else True))
+        return (key, valid) if valid() else None
+
     def observe(self, event):
         """Publish lifecycle metadata, never provider reasoning or tool inputs."""
         event = dict(event)
@@ -591,6 +631,17 @@ class Worker:
             # This is lifecycle evidence, not optimistic host send admission.
             event['observedAt'] = time.time()
         root_generation = event_session_id == root_session_id and event_root_id == root_session_id
+        episode_terminal = event.get('type') in {'generation.finished', 'generation.failed', 'generation.detached'}
+        if episode_terminal and root_session_id and root_generation and self.session:
+            sponsor = self.session.coordinator.get_capability('web.computer_episodes')
+            if sponsor:
+                sponsor.observe(event)
+        elif episode_terminal and root_session_id and event_root_id == root_session_id and self.session:
+            children = self.session.coordinator.get_capability('live.children')
+            child = children.sessions.get(event_session_id) if children else None
+            sponsor = child.coordinator.get_capability('web.computer_episodes') if child else None
+            if sponsor:
+                sponsor.observe(event)
         if root_generation and event.get('type') == 'generation.started':
             # Explicit inputs carry the host epoch captured at transport
             # admission. Native child/job follow-ups inherit this process's
@@ -887,6 +938,7 @@ class Worker:
                 from amplifier_web.shared_state import configuration_stamp
                 from amplifier_module_loop_live.runtime import Runtime
             self.home = app_home()
+            self.computer_episodes.restore_stop(self.home, config.get('ownerSessionId') or config["id"])
             report_directory = self.home / "runtime-reports" / config["id"]
             from amplifier_web.runtime_qualification import active_install_overrides
             # Caller policy is inherited exactly, even when it names an app path.
@@ -1004,6 +1056,8 @@ class Worker:
             from amplifier_web.app_guidance import install_app_access
             with startup_timing.phase('worker.app.access'):
                 await install_app_access(self.session.coordinator, self.app_access_bridge(self.session.coordinator))
+                root_coordinator = self.session.coordinator
+                self.computer_episodes.install(root_coordinator, lambda: self.computer_execution(root_coordinator))
                 self.install_collaboration_checkpoint(self.session.coordinator)
             original_host = self.session.coordinator.get_capability("live.host")
             class ObservedHost:
@@ -1015,6 +1069,7 @@ class Worker:
                         host.install_activity(coordinator)
                         host.install_collaboration_checkpoint(coordinator)
                         await install_app_access(coordinator, host.app_access_bridge(coordinator))
+                        host.computer_episodes.install(coordinator, lambda: host.computer_execution(coordinator))
                         from amplifier_web.host.session import SelectedProvider
                         transform = coordinator.get_capability('web.provider_transform')
                         if isinstance(getattr(loop,'root_provider',None), SelectedProvider):
@@ -1113,7 +1168,7 @@ class Worker:
                 if startup_timing and report_directory is not None:
                     startup_timing.save(report_directory, outcome)
 
-    def defer_park_for_naming(self, activation):
+    def defer_park_for_naming(self, activation, *, _computer_owner=None):
         """Keep the writer until naming settles, without holding the live inbox."""
         if self.naming_park_task and not self.naming_park_task.done():
             return
@@ -1131,7 +1186,7 @@ class Worker:
                     and self.naming is naming and self.activation is activation):
                 # Recheck foreground admission under command_lock. Naming may
                 # also have scheduled a newer naming task while this one ended.
-                await self.park(activation=activation)
+                await self.park(activation=activation, _computer_owner=_computer_owner)
         task = self.naming_park_task = asyncio.create_task(settled())
         self.tasks.add(task)
         def finished(task):
@@ -1140,11 +1195,51 @@ class Worker:
                 self.executed(task)
         task.add_done_callback(finished)
 
-    async def park(self, *, activation=None):
+    def clear_computer_park(self):
+        self.computer_park_key = None
+        if self.computer_park_cancel:
+            self.computer_park_cancel()
+            self.computer_park_cancel = None
+
+    def defer_park_for_computer(self, activation):
+        """Retry once on confirmed settlement, never by polling native work."""
+        if self.computer_park_cancel:
+            return
+        session, runtime = self.session, self.runtime
+        registry, gate = self.computer_episodes, self.activation_gate
+        handle, epoch = self.shared_handle, self.stop_revision
+        key = self.computer_park_key = object()
+        def current():
+            return (self.computer_park_key is key and self.session is session and self.runtime is runtime
+                and self.computer_episodes is registry and self.activation_gate is gate
+                and self.shared_handle is handle and self.activation is activation
+                and self.stop_revision == epoch and not self.shutdown.is_set()
+                and not self.remounting and not self.ownership.yielding and gate.current_valid)
+        def settled():
+            if self.computer_park_key is key:
+                self.computer_park_cancel = None  # Registry consumed this one-shot observer.
+            if not current():
+                return
+            task = asyncio.create_task(self.park(activation=activation, _computer_owner=current))
+            self.tasks.add(task)
+            def finished(task):
+                self.tasks.discard(task)
+                if not task.cancelled() and task.exception() is not None:
+                    self.executed(task)
+            task.add_done_callback(finished)
+        self.computer_park_cancel = registry.on_settled(settled)
+
+    async def park(self, *, activation=None, _computer_owner=None):
         """Checkpoint then relinquish only a settled manager activation."""
 
         async with self.command_lock:
+            if _computer_owner is not None and not _computer_owner():
+                return
             if self.ownership.yielding or self.parked or self.shared_handle is None:
+                return
+            if not self.computer_episodes.receipt()["settled"]:
+                if _computer_owner is None:
+                    self.defer_park_for_computer(activation or self.activation)
                 return
             loop = self.session.coordinator.get("orchestrator")
             if (self.approvals or self.bridges or self.operation_ids or self.operation_controls or self.runtime.queued_inputs
@@ -1154,15 +1249,19 @@ class Worker:
             activation = activation or self.activation
             self.activation_gate.check(activation)
             if self.naming and self.naming.pending and not self.naming.pending.done():
-                self.defer_park_for_naming(activation)
+                self.defer_park_for_naming(activation, _computer_owner=_computer_owner)
                 return
             token = self.activation_gate.bind(activation)
             try:
                 checkpoint = self.session.coordinator.get_capability("live.checkpoint")
                 if checkpoint:
                     await checkpoint(self.root_generation_outcome or "completed")
+                    if _computer_owner is not None and not _computer_owner():
+                        return
                     from amplifier_web.handoff_boundary import checkpoint_configuration
                     checkpoint_configuration(self)
+                if _computer_owner is not None and not _computer_owner():
+                    return
                 self.parked_history_stamp = self.history_stamp()
                 from amplifier_web.shared_state import configuration_stamp
                 self.parked_config_stamp = configuration_stamp(
@@ -1172,6 +1271,7 @@ class Worker:
                 await asyncio.to_thread(self.shared_handle.release)
                 self.shared_handle = None
                 self.parked = True
+                self.clear_computer_park()
             finally:
                 self.activation_gate.reset(token)
         publish({"type": "runtime.parked", "session_id": self.runtime.session_id})
@@ -1249,15 +1349,31 @@ class Worker:
         """Replace stale mounted state after lock+stamp validation."""
 
         self.remounting = True
+        self.clear_computer_park()
+        self.computer_episodes.fence()
         try:
             if self.execution and not self.execution.done():
                 self.execution.cancel()
-                await asyncio.gather(self.execution, return_exceptions=True)
+                from amplifier_web.computer_episodes import wait_settlement, SettlementPending
+                await wait_settlement({self.execution})
+                if not self.execution.done():
+                    raise SettlementPending(self.computer_episodes.receipt())
+            receipt = await self.computer_episodes.close()
+            if not receipt["settled"]:
+                # Do not remount/clean the native backend over unresolved
+                # workers. The retained registry remains passively recoverable.
+                from amplifier_web.computer_episodes import SettlementPending
+                raise SettlementPending(receipt)
+            publish({"type": "computer.settlement", **receipt})
             if self.controls:
                 await self.controls.close()
             if self.session:
                 await self.session.cleanup()
             self.session = self.controls = self.naming = self.execution = None
+            # All old sponsors are terminated/removed and custody is confirmed;
+            # the replacement mount is a fresh trusted registry, not a revival.
+            from amplifier_web.computer_episodes import ComputerEpisodes
+            self.computer_episodes = ComputerEpisodes(lambda event: publish(event))
             try:
                 await self.start(self.start_config, raise_errors=True)
             except Exception as exc:
@@ -1297,6 +1413,10 @@ class Worker:
                 and not runtime.closed and not runtime.stop_requested
                 and not coordinator.cancellation.is_cancelled
                 and (coordinator.get('tools') or {}).get(name) is tool)
+        sponsor = coordinator.get_capability('web.computer_episodes')
+        if sponsor and name in {'computer', 'desktop', 'ui_use'}:
+            sponsor.controls[task] = (identity, self.computer_execution(coordinator,
+                explicit={'coordinator': coordinator, 'valid': valid}))
         @contextmanager
         def bind(arguments):
             if not valid() or task in self.control_invocations:
@@ -1405,6 +1525,10 @@ class Worker:
         """Serialize admission with parking and bind a per-work write token."""
 
         op = data.get("op")
+        if op in {"send", "retry", "resume", "control", "worker.message", "worker.steer", "worker.stop"}:
+            # Foreground intent supersedes the quiet idle boundary even if it
+            # completes in the same activation while the retry is lock-queued.
+            self.clear_computer_park()
         if op in {"approval", "coordination.approval"}:
             # A control can await a human decision while owning command_lock.
             # Both the independent question and its UI answer must bypass it;
@@ -1412,7 +1536,29 @@ class Worker:
             await self._command_serial(data)
             return
         if op == "stop":
+            self.clear_computer_park()
             self.stop_revision += 1
+            self.computer_episodes.fence()
+        if op == "computer.stop":
+            self.clear_computer_park()
+            # Independent input path: do not await a selector, native worker,
+            # serialized control or the next model/tool hook.
+            self.computer_episodes.fence(halt=True)
+            return
+        if op == "computer.resume":
+            self.clear_computer_park()
+            self.computer_episodes.resume()
+            return
+        if op == "worker.stop" and self.session:
+            children = self.session.coordinator.get_capability('live.children')
+            row = children.rows.get(data.get('worker_id')) if children else None
+            if row:
+                # Retain cancellation before session construction or sponsor
+                # installation. A resumed run replaces this exact row/run.
+                row['_computer_stopped'] = row['runId']
+            child = children.sessions.get(data.get('worker_id')) if children else None
+            if child:
+                self.computer_episodes.fence(child.coordinator, terminate=True)
         memory_control = op == 'control' and data.get('operation') == 'memory.consolidate'
         naming_control = op == 'control' and data.get('operation') == 'session.naming'
         steering_control = op == 'control' and data.get('operation') in {'coordination.steer', 'conversation.steer'}
@@ -1520,6 +1666,9 @@ class Worker:
             if type(exc).__name__ == "SessionBusyError":
                 reply["code"] = "session_busy"
                 reply["owner"] = getattr(exc, "owner", None)
+            if type(exc).__name__ == "SettlementPending":
+                reply["computerSettlement"] = exc.receipt
+                publish({"type": "computer.settlement", **exc.receipt})
             publish(reply)
             if preparation_failed:
                 self.shutdown.set()
@@ -1912,10 +2061,23 @@ class Worker:
         try:
             await self.shutdown.wait()
         finally:
+            self.clear_computer_park()
+            self.computer_episodes.fence()
             for task in [read, self.start_task, self.execution, *self.tasks]:
                 if task and not task.done():
                     task.cancel()
             await asyncio.gather(*(t for t in [read, self.start_task, self.execution, *self.tasks] if t), return_exceptions=True)
+            receipt = await self.computer_episodes.close()
+            if not receipt["settled"]:
+                publish({"type": "computer.settlement", **receipt})
+                # Keep actual cleanup ownership in this process. RuntimeManager
+                # already bounds Stop (15s, then exact process-group/job cleanup);
+                # process death is not a native release acknowledgement.
+                await self.computer_episodes.join()
+                if not self.computer_episodes.receipt()["settled"]:
+                    from amplifier_web.computer_episodes import SettlementPending
+                    raise SettlementPending(self.computer_episodes.receipt())
+                publish({"type": "computer.settlement", **self.computer_episodes.receipt()})
             try:
                 await self.checkpoint_terminal_outcome()
             finally:

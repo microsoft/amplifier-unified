@@ -51,5 +51,5 @@ coverage. Those have separate semantics and owners.
 
 The resource-count policy slice changes other concurrency defaults and the same
 advanced settings form. Integration must preserve its zero defaults for owned
-resources and reservations while adding these peer keys; do not choose either
+resources while adding these peer keys; do not choose either
 whole-file version when resolving that overlap.

@@ -362,6 +362,12 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False)
         return result('working', 'Checking for updates' if phase == 'checking' else 'Updating Amplifier',
                       state.get('detail') or 'Preparing and checking the requested update.')
     if state.get('pendingApp') or state.get('pendingRelease'):
+        if any(row.get('kind') == 'checkout-handoff' or row.get('reasonCode') in {
+                'management-tasks-unavailable', 'management-lock-unavailable', 'runtime-observer-unavailable'}
+                for row in state.get('blockers', [])):
+            return result('action-required', 'Update needs attention',
+                          'Automatic restart is paused because Amplifier cannot confirm earlier work has finished. The current app is kept.',
+                          action='diagnostics')
         return result('action-required' if state.get('error') else 'waiting',
                       'Update needs attention' if state.get('error') else 'Update ready; waiting for work',
                       state.get('error') or 'The qualified update continues automatically when its activation boundary is ready.',

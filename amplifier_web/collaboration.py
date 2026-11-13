@@ -1960,14 +1960,6 @@ class Collaboration:
             from .workspace_awareness import packet, observed_intent
             result['awareness'] = packet(self.service, source['id'], principal=PRINCIPAL.get())
             result['writeIntent'] = observed_intent(self.service, source)
-            workspace = next((w for w in self.service.state['workspaces'] if w['path'] == source['workspace']), None)
-            if workspace:
-                from .workspace_resources import dispatch_reservation
-                resources = await dispatch_reservation(self.service, 'workspace.resources.reservations',
-                    {'workspaceId': workspace['id'], 'limit': 16}, origin, None, caller)
-                # Explicit reads only: never load transcripts or duplicate this
-                # inventory in per-session persistent guidance.
-                result['resources'] = {**resources['result'], 'workspaceId': workspace['id']}
             return {"accepted": True, "result": result}
         if action == "coordination.result":
             receipt = self.receipt(args["requestId"])

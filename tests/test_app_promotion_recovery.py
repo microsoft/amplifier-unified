@@ -210,6 +210,66 @@ async def test_successful_cold_probe_keeps_normal_managed_restart(promoted):
     promoted.restart.assert_awaited_once_with(promoted.manager)
 
 
+@pytest.mark.parametrize("outcome", ["missing", "restart", "restore", "changed-proof"])
+async def test_windows_next_app_recovery_uses_manual_proof_without_feature_grant(
+        promoted, monkeypatch, outcome):
+    from types import SimpleNamespace
+    from amplifier_web import app_features, manual_app_handoff, update_readiness, windows_service
+    monkeypatch.setattr(app_updates, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(windows_service, "update_owner", lambda home: object())
+    monkeypatch.setattr(update_readiness, "artifact_context", lambda manager: None)
+    def local_archive_refused(manager):
+        raise ValueError("The local archive has no optional-feature delivery context")
+    monkeypatch.setattr(app_features, "running_application", local_archive_refused)
+    artifact = {"url": "https://github.com/microsoft/amplifier-unified/releases/download/v"
+                + HOST_APP["version"] + "/amplifier_unified-" + HOST_APP["version"] + "-py3-none-any.whl",
+                "sha256": "a" * 64, "path": str(promoted.bootstrap / "original.whl")}
+    context = {"artifact": artifact, "app": {**HOST_APP,
+               "delivery": {key: artifact[key] for key in ("url", "sha256")}}}
+    reader = AsyncMock(return_value=context if outcome != "missing" else None)
+    if outcome == "changed-proof":
+        reader.side_effect = [context, None]
+    monkeypatch.setattr(manual_app_handoff, "recovery_context", reader)
+    promoted.old_graph = sorted([*copy.deepcopy(BASELINE), context["app"]], key=lambda row: row["name"])
+    if outcome in {"missing", "restart"}:
+        promoted.candidate_failure = None
+    if outcome == "missing":
+        with pytest.raises(ValueError, match="verified untouched previous installation"):
+            await app_updates.activate(promoted.manager)
+        assert generations.active(promoted.manager.home) is None
+        promoted.restart.assert_not_awaited()
+    elif outcome == "restart":
+        await app_updates.activate(promoted.manager)
+        promoted.restart.assert_awaited_once()
+        recovery = promoted.restart.await_args.kwargs["recovery"]
+        assert recovery["artifact"] == artifact
+        assert next(row for row in recovery["graph"] if row["name"] == "amplifier-unified") == context["app"]
+        assert promoted.service.state["updates"]["pendingRestart"]
+    else:
+        await app_updates.activate(promoted.manager)
+        assert promoted.probe_calls[-1] == promoted.old_python
+        promoted.restart.assert_not_awaited()
+        state = promoted.service.state["updates"]
+        assert not state.get("pendingRestart")
+        if outcome == "restore":
+            assert generations.active(promoted.manager.home) is None
+            assert not state.get("pendingReplacement")
+            assert not saved_updates(promoted.service).get("pendingReplacement")
+            assert not work_paused(promoted.service.state)
+            assert "restored" in state["detail"].lower()
+        else:
+            assert generations.active(promoted.manager.home)
+            assert saved_updates(promoted.service)["pendingReplacement"]
+            assert work_paused(promoted.service.state)
+        assert reader.await_count == 2
+    if outcome in {"missing", "restart"}:
+        assert reader.await_count == 1
+        reader.assert_awaited_with(promoted.manager)
+    else:
+        reader.assert_awaited_with(promoted.manager, expected=context)
+    assert not getattr(promoted.manager, "_running_artifact", None)
+
+
 async def test_failed_restore_retains_unknown_marker(promoted, monkeypatch):
     monkeypatch.setattr(generations, "restore", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("write refused")))
     await app_updates.activate(promoted.manager)

@@ -117,13 +117,14 @@ export function WorkHeader({state,session,act,open,narrow,presentation,fileDropH
   </nav>
   <ShellSlot name="conversation.header">{surface!=='home'&&<nav className="a-work-heading" aria-label="Breadcrumb">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight aria-hidden="true"/></>}<strong title={title} aria-current="page" {...(surface==='chat'&&session?{role:'heading','aria-level':1,'data-part':'session-heading','data-session-id':session.id,tabIndex:-1}:{})}>{title}</strong></nav>}</ShellSlot>
   <div className="a-work-header-actions">
-   {!browsing&&session&&<><UIUseShortcut sessionId={session.id} act={act}/><SessionActionMenu key={JSON.stringify([session.id,sessionIdentity(session)])} session={session}>
+   {!browsing&&session&&<>{!session.externalAgent&&<UIUseShortcut sessionId={session.id} act={act}/>}<SessionActionMenu key={JSON.stringify([session.id,sessionIdentity(session)])} session={session}>
     <button onClick={()=>open('chat-rename')}><Pencil/>Rename</button>
     <button data-action="session.pin" onClick={()=>act('session.pin',{id:session.id,pinned:!(state.pinnedSessionIds||[]).includes(session.id)})}><Pin/>{(state.pinnedSessionIds||[]).includes(session.id)?'Unpin':'Pin'}</button>
-    <button onClick={()=>open('chat-share')}><Share2/>Share or save</button>
+    {!session.externalAgent&&<button onClick={()=>open('chat-share')}><Share2/>Share or save</button>}
     <button onClick={()=>open('session-details')}><Info/>Chat info</button>
+    {session.externalAgent&&<button onClick={()=>open('chat-write-files')}><Settings/>Access &amp; approvals</button>}
     <button onClick={()=>open('chat-help')}><Bug/>Help &amp; diagnostics</button>
-    <button onClick={()=>open('chat-advanced')}><Settings/>Advanced<ChevronRight/></button>
+    {!session.externalAgent&&<button onClick={()=>open('chat-advanced')}><Settings/>Advanced<ChevronRight/></button>}
     <hr/>
     <ArchiveButton chat={session} archived={Object.hasOwn(state.conversationOrganization?.archived||{},session.id)}/>
     {session.location?.kind==='managed'&&isTopLevelChat(session)&&<button className="a-danger" onClick={()=>open('delete-session')}><Trash2/>Delete</button>}

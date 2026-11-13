@@ -13,6 +13,7 @@ The design direction was accepted on 2026-09-22 after the attachment flow was si
 - [Handoff](contracts/handoff.v1.md): integration, preview ownership and cleanup
 - [Autonomous progress — proposed](contracts/autonomous-progress.v1-candidate.md): own-task settings continuation promises; draft, not implemented. [Design and planned checks](notes/autonomous-progress-20261107.md) are separate.
 - [Acceptance scenarios](notes/ACCEPTANCE.md)
+- [Registration ownership](notes/registration-ownership.md): current reconciliation and host write boundary; durable identity remains future design.
 
 ## Using the workspace flow
 
@@ -153,22 +154,13 @@ UI and agent callers share `workspace.starters.list/save/duplicate/remove`,
 Edits and status changes use observed revisions; all setup effects are scoped to
 the reviewed creation plan.
 
-Workspace Details also exposes **Resource reservations**, using the shared
-`workspace.resources.reservations/reserve/release/uncertain` actions. A task can
-reserve an agreed exact key exclusively or explicitly share it with other
-holders. Matching keys conflict across workspace registrations in the same app
-data home. Use a stable command ID for each mutation; retries return the saved
-outcome, even after a later release. Updates require the observed revision.
-`coordination.context` includes the first 16 current reservations and a cursor
-for an explicit paginated read; it does not load peer conversations.
-
-The host binds agents to their actual root or child identity; a child cannot
-release its root's claim. A user can reconcile a retained claim with evidence,
-including after its workspace registration disappears. Uncertain claims remain
-held. Stop, restart and disconnect do not release claims. Release never performs
-teardown or proves the underlying resource stopped. These cooperative claims
-do not fence external writers, resolve differently named aliases, or coordinate
-separate app installations. Inventory observations remain independent.
+Manual cooperative resource reservations were retired on November 12, 2026.
+Arbitrary matching-key claims did not fence infrastructure and must not create
+user reconciliation chores. Their four actions and two quota controls are no
+longer supported; context and recap do not read them. Historical claims and
+command receipts remain inert and unchanged, not reported physically released.
+Real managed owners, task-storage allocations, machine admission and external
+resource inventory retain their existing ownership and cleanup boundaries.
 
 ## Active work and shared file plans
 

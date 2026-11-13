@@ -367,22 +367,35 @@ class RuntimeManager:
         if not isinstance(servers, dict):
             raise ValueError("Ephemeral MCP servers must be a mapping")
         servers = copy.deepcopy(servers)
-        async with self._admission(session_id):
-            prior = self._ephemeral_mcp.get(session_id)
-            row = self.workers.get(session_id)
-            if row and row["process"].returncode is None:
-                if row.get("ephemeral_mcp_binding"):
-                    if prior == (attachment_id, servers):
-                        return
-                    raise ValueError("The existing worker still owns another MCP attachment; wait for its retirement before reattaching")
-                if servers:
-                    raise ValueError("MCP attachment requires a fresh native worker; existing work was not stopped")
-            if prior and prior[0] != attachment_id:
-                raise ValueError("This native session already has an MCP attachment")
-            if servers:
-                self._ephemeral_mcp[session_id] = (attachment_id, servers)
-            else:
-                self._ephemeral_mcp.pop(session_id, None)
+        retiring = None
+        while True:
+            async with self._admission(session_id):
+                prior = self._ephemeral_mcp.get(session_id)
+                row = self.workers.get(session_id)
+                if retiring is not None and (row is not None or prior is not None):
+                    raise ValueError("MCP attachment owner changed or retirement was not confirmed; no binding was replaced")
+                if row and row["process"].returncode is None:
+                    if row.get("ephemeral_mcp_binding"):
+                        if prior == (attachment_id, servers):
+                            return
+                        # Only a released attachment may retire its settled worker.
+                        # The worker's own handshake also checks active child work.
+                        if prior or not self.retention.eligible(row) or self.retention.protected(session_id):
+                            raise ValueError("The existing worker still owns another MCP attachment; wait for its retirement before reattaching")
+                        retiring = self.retention.schedule(session_id, row)
+                    elif servers:
+                        raise ValueError("MCP attachment requires a fresh native worker; existing work was not stopped")
+                if retiring is None or row is None:
+                    if prior and prior[0] != attachment_id:
+                        raise ValueError("This native session already has an MCP attachment")
+                    if servers:
+                        self._ephemeral_mcp[session_id] = (attachment_id, servers)
+                    else:
+                        self._ephemeral_mcp.pop(session_id, None)
+                    return
+            # Keep retirement owned by the manager if this attachment goes away.
+            # Recheck the binding and worker after the acknowledged handshake.
+            await asyncio.wait_for(asyncio.shield(retiring), self.retention.reply_timeout)
 
     def release_ephemeral_mcp(self, session_id, attachment_id):
         """Release future use; an admitted worker owns cleanup of its live tools."""
@@ -854,6 +867,22 @@ class RuntimeManager:
         stream.write(encode_message(data))
         await stream.drain()
 
+    def stop_computer(self, sid):
+        """Enqueue a safety fence to an existing worker; never acquire/start it.
+
+        This is transport submission, not native release confirmation. The
+        worker independently retains the real controller settlement.
+        """
+        row = self.workers.get(sid)
+        if row and row["process"].returncode is None:
+            _worker_pipes(row).stdin.write(encode_message({"op": "computer.stop"}))
+
+    def resume_computer(self, sid):
+        """Explicit host latch reset only; bundle halt recovery stays separate."""
+        row = self.workers.get(sid)
+        if row and row["process"].returncode is None:
+            _worker_pipes(row).stdin.write(encode_message({"op": "computer.resume"}))
+
     async def _bridge(self, sid, row, data, *, dequeued_ns=None):
         from .performance_diagnostics import PhaseTiming, BRIDGE_TIMING, timing_metadata, TIMING_ENABLED
         observed = timing_metadata(data.get('_timing'))
@@ -1122,6 +1151,31 @@ class RuntimeManager:
                 elif data.get("type") == "runtime.reactivated":
                     row["parked"] = False
                     await row['emit']('runtime.warmth', {'sessionId': sid, 'status': 'active'})
+                elif data.get("type") == "computer.settlement":
+                    # This pipe belongs to the retained execution owner. Keep
+                    # opaque custody facts even if Stop later reaps that process;
+                    # process exit is not a desktop release acknowledgement.
+                    if (type(data.get("settled")) is bool and data.get("state") in {"settled", "stopping"}
+                            and isinstance(data.get("episodes"), list)
+                            and len(data["episodes"]) <= 64
+                            and (data["settled"] is False or not data["episodes"])):
+                        receipt = {key: data[key] for key in
+                                   ("state", "settled", "episodes", "omittedEpisodes") if key in data}
+                        if data.get("scope") == "cleanup":
+                            receipt["scope"] = "cleanup"
+                        row["computerSettlement"] = receipt
+                        from .host.config import app_home, write_private
+                        home = Path(self.home or app_home())
+                        destination = home / "runtime-reports" / row["runtime_id"] / "computer-settlement.json"
+                        try:
+                            write_private(destination, json.dumps(receipt))
+                        except (OSError, ValueError):
+                            _LOG.warning("Could not persist unresolved computer custody for %s", sid)
+                        if not receipt["settled"]:
+                            await row["emit"]("runtime.activity", {"sessionId": sid, "phase": "stopping",
+                                "detail": ("Computer cleanup is unconfirmed; its owner remains retained."
+                                    if receipt.get("scope") == "cleanup" else
+                                    "Computer release is unconfirmed; its cleanup owner remains retained.")})
                 elif data.get("type") == "runtime.progress":
                     if not row["ready"].done() and not row["closing"]:
                         row["phase"] = data.get("phase", row["phase"])

@@ -421,6 +421,11 @@ async def test_windows_activation_keeps_host_and_candidate_before_replacement(tm
             for path in tmp_path.rglob('*') if path.is_file()
             and any(part in {'applications','config'} for part in path.relative_to(tmp_path).parts)}
     target=AsyncMock(side_effect=AssertionError('No target probe, install, promotion or restart is admitted'))
+    # This Linux-runnable case exercises the unqualified Windows refusal, not
+    # native Task Scheduler identity discovery or supervised-host qualification.
+    from unittest.mock import Mock
+    owner=Mock(return_value=None)
+    monkeypatch.setattr('amplifier_web.windows_service.update_owner',owner)
     monkeypatch.setattr(app_updates,'sys',SimpleNamespace(platform='win32'))
     monkeypatch.setattr(app_updates,'installed_target',target)
     monkeypatch.setattr(app_updates,'process',target)
@@ -441,6 +446,7 @@ async def test_windows_activation_keeps_host_and_candidate_before_replacement(tm
         assert manager.diagnostics.state['latest']['phase']=='restart-capability'
         assert manager.diagnostics.state['latest']['errorType']=='RuntimeError'
         assert manager.diagnostics.state['latest']['attemptId']==pending['attemptId']
+        owner.assert_called_once_with(manager.home)
         target.assert_not_awaited()
         # Failure is a refused activation, not a host shutdown or a new-work gate.
         result=await service.dispatch('conversation.send',{'text':'Current host remains usable'})

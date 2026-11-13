@@ -1,5 +1,5 @@
 import {clearComposer} from './composer-test-helpers.mjs';
-import {showComposerOption} from './composer-options-helpers.mjs';
+import {composerOptionsPanel,showComposerOption} from './composer-options-helpers.mjs';
 // Real packaged UI, isolated storage, and synthetic runtime. No model calls.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -58,7 +58,7 @@ try{
  await page.screenshot({path:out+'/new-chat-desktop.png'});
  await action('view.update',{patch:{navPinned:false,navExpanded:false}});
  for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:out+`/new-chat-${width}.png`});
- await page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true}).click();const panel=page.getByRole('dialog',{name:'Model for this chat',exact:true});await expect(panel).toBeVisible();
+ await page.locator('.a-composer').getByRole('button',{name:'Model and reasoning settings',exact:true}).click();const panel=composerOptionsPanel(page);await expect(panel).toBeVisible();
  const assertPanelFits=async()=>{const geometry=await panel.evaluate(el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom}});
  assert.ok(geometry.x>=0&&geometry.y>=0&&geometry.right<=width&&geometry.bottom<=844,JSON.stringify(geometry))};
  await assertPanelFits();

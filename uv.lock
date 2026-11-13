@@ -7,6 +7,19 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "agent-client-protocol"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pydantic-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/14/e2/085f4857cb864c3a423d76e205f75e1da1643862fd452e5cec47c3078d79/agent_client_protocol-1.0.0.tar.gz", hash = "sha256:24914d9996aaeeb08931191382d0ca1028b83743e2797cc05ded39b3bb754425", size = 187237, upload-time = "2026-11-09T00:34:01.706Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/30/a1/7e29d00f01fede44ffdc84099552720727f8bfda942fea79a4f7d5ef1294/agent_client_protocol-1.0.0-py3-none-any.whl", hash = "sha256:179c14266997841438ee15245a2668d31b2c695c13bff87d01c36e016185ddd0", size = 128090, upload-time = "2026-11-09T00:34:00.324Z" },
+]
+
+[[package]]
 name = "aiohappyeyeballs"
 version = "2.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -204,7 +217,7 @@ wheels = [
 [[package]]
 name = "amplifier-foundation"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#01a7c8bd87fb7feb9cedc697ce7ca7edc6deaeb3" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#05082c89a171758f8d0fb9d8df630ea581e5bdb5" }
 dependencies = [
     { name = "amplifier-core" },
     { name = "filelock" },
@@ -263,7 +276,7 @@ dependencies = [
 [[package]]
 name = "amplifier-module-hooks-session-naming"
 version = "0.2.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main#01a7c8bd87fb7feb9cedc697ce7ca7edc6deaeb3" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=05082c89a171758f8d0fb9d8df630ea581e5bdb5#05082c89a171758f8d0fb9d8df630ea581e5bdb5" }
 
 [[package]]
 name = "amplifier-module-loop-live"
@@ -337,9 +350,10 @@ source = { git = "https://github.com/microsoft/amplifier-bundle-filesystem?subdi
 [[package]]
 name = "amplifier-module-tool-computer-use"
 version = "0.1.0"
-source = { git = "https://github.com/microsoft/amplifier-bundle-computer-use?subdirectory=modules%2Ftool-computer-use&rev=main#27202d8d7717ad216335af00a797d8c0ad277e39" }
+source = { git = "https://github.com/microsoft/amplifier-bundle-computer-use?subdirectory=modules%2Ftool-computer-use&rev=main#f0cb9d99ff6f1016562a58e310d183fb0cef3386" }
 dependencies = [
     { name = "pillow" },
+    { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin'" },
     { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'" },
     { name = "python-xlib", marker = "sys_platform == 'linux'" },
     { name = "pyyaml" },
@@ -383,9 +397,10 @@ dependencies = [
 
 [[package]]
 name = "amplifier-unified"
-version = "0.83.3"
+version = "0.88.0"
 source = { editable = "." }
 dependencies = [
+    { name = "agent-client-protocol" },
     { name = "aiohttp" },
     { name = "amplifier-bundle-context-intelligence", extra = ["client"] },
     { name = "amplifier-bundle-ui-use" },
@@ -461,15 +476,16 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "agent-client-protocol", specifier = "==1.0.0" },
     { name = "aiohttp", specifier = ">=3.12,<4" },
     { name = "amplifier-app-tui", marker = "extra == 'tui'", git = "https://github.com/microsoft/amplifier-app-tui?rev=main" },
     { name = "amplifier-bundle-context-intelligence", extras = ["client"], git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?rev=main" },
     { name = "amplifier-bundle-ui-use", git = "https://github.com/microsoft/amplifier-bundle-ui-use?rev=main" },
     { name = "amplifier-bundle-ui-use", extras = ["browser"], marker = "extra == 'managed-browser'", git = "https://github.com/microsoft/amplifier-bundle-ui-use?rev=main" },
     { name = "amplifier-core", specifier = ">=2.0.2" },
-    { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=main" },
+    { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=05082c89a171758f8d0fb9d8df630ea581e5bdb5" },
     { name = "amplifier-memory", git = "https://github.com/microsoft/amplifier-bundle-memory?rev=main" },
-    { name = "amplifier-module-hooks-session-naming", git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main" },
+    { name = "amplifier-module-hooks-session-naming", git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=05082c89a171758f8d0fb9d8df630ea581e5bdb5" },
     { name = "amplifier-module-provider-azure-openai", extras = ["decisions"], marker = "extra == 'decisions-azure'", git = "https://github.com/microsoft/amplifier-module-provider-azure-openai?rev=main" },
     { name = "amplifier-module-provider-jev", marker = "extra == 'decisions-jev'", git = "https://github.com/microsoft/amplifier-module-provider-jev?rev=main" },
     { name = "amplifier-module-provider-local-decisions", marker = "extra == 'decisions-local'", git = "https://github.com/microsoft/amplifier-module-provider-local-decisions?rev=main" },

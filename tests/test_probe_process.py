@@ -414,6 +414,46 @@ async def test_posix_spawn_preserves_subprocess_object_and_kwargs(posix, monkeyp
     assert posix == []
 
 
+@pytest.mark.parametrize('platform', ['darwin', 'freebsd14'])
+async def test_nonlinux_posix_discovery_keeps_existing_route_without_broker(posix, monkeypatch, platform):
+    from amplifier_web import probe_git
+    monkeypatch.setattr(probe_process, 'sys', SimpleNamespace(platform=platform))
+    process = SimpleNamespace()
+    calls = []
+    def forbidden():
+        pytest.fail('Non-subreaper platforms must not admit the new Git broker')
+    async def start(*command, **kwargs):
+        calls.append((command, kwargs))
+        return process
+    monkeypatch.setattr(probe_git, 'GitProbeOwner', forbidden)
+    monkeypatch.setattr(probe_process.asyncio, 'create_subprocess_exec', start)
+    assert await probe_process.spawn('probe', owned_git=True, env={'EXACT': 'yes'}) is process
+    assert calls == [(('probe',), {'env': {'EXACT': 'yes'}, 'start_new_session': True})]
+    assert posix == []
+
+
+@pytest.mark.parametrize('platform', ['darwin', 'freebsd14', 'win32'])
+async def test_nonlinux_entrypoint_ignores_broker_environment(monkeypatch, platform):
+    from amplifier_web import probe_git
+    monkeypatch.setattr(probe_git, 'sys', SimpleNamespace(platform=platform))
+    monkeypatch.setenv('AMPLIFIER_PROBE_GIT_SOCKET', '/synthetic/not-admitted')
+    async def operation():
+        return 'original-route'
+    assert await probe_git.query(operation()) == 'original-route'
+    with pytest.raises(RuntimeError, match='Linux child subreaper'):
+        probe_git.GitProbeOwner()
+
+
+def test_nonlinux_guard_refuses_before_process_creation(monkeypatch):
+    from amplifier_web import probe_git_guard
+    monkeypatch.setattr(probe_git_guard, 'sys', SimpleNamespace(platform='darwin'))
+    def forbidden(*args, **kwargs):
+        pytest.fail('Non-Linux guard may not create a process')
+    monkeypatch.setattr(probe_git_guard.subprocess, 'Popen', forbidden)
+    with pytest.raises(RuntimeError, match='Linux child subreaper'):
+        probe_git_guard.main()
+
+
 @pytest.mark.parametrize('cancellations', [1, 3])
 async def test_posix_creation_cancellation_still_shields_spawn_and_finalizer(
         posix, monkeypatch, cancellations):
