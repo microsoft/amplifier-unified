@@ -413,7 +413,8 @@ async def test_child_stop_fences_only_named_child_before_command_lock():
     child.session_id = "child"
     worker.computer_episodes = registry
     worker.session = SimpleNamespace(coordinator=root)
-    root.register_capability("live.children", SimpleNamespace(sessions={"child": SimpleNamespace(coordinator=child)}))
+    root.register_capability("live.children", SimpleNamespace(rows={"child": {"runId": "run"}},
+        sessions={"child": SimpleNamespace(coordinator=child)}))
     await sponsor.invoke("computer", {}, AsyncMock())
     await worker.command_lock.acquire()
     task = asyncio.create_task(worker.command({"op": "worker.stop", "worker_id": "child"}))
@@ -650,3 +651,62 @@ async def test_transient_status_failure_keeps_actual_controller_until_workers_se
     await task
     assert sponsor.last_status["release_confirmed"]
     await registry.close()
+
+
+@pytest.mark.parametrize("phase", ["cold", "replacement"])
+async def test_saved_ui_stop_applies_before_new_worker_sponsor_admission(tmp_path, phase):
+    import json
+    (tmp_path / "ui-use-stopped.json").write_text(json.dumps(["chat"]), encoding="utf-8")
+    registry = ComputerEpisodes()
+    if phase == "replacement":
+        registry.install(Coordinator(Controller()), lambda: ("old", lambda: True))
+        await registry.close()
+    registry.restore_stop(tmp_path, "chat")
+    sponsor = registry.install(Coordinator(Controller()), lambda: ("new", lambda: True))
+    with pytest.raises(asyncio.CancelledError):
+        await sponsor.invoke("computer", {}, AsyncMock())
+    assert not sponsor.episodes
+    await registry.close()
+
+
+async def test_child_stop_during_preparation_is_retained_for_exact_run(monkeypatch):
+    worker = Worker()
+    root = Coordinator()
+    worker.session = SimpleNamespace(coordinator=root)
+    worker.runtime = SimpleNamespace(generation={"id": "root", "input_ids": ["input"]},
+        closed=False, stop_requested=False)
+    worker.activation_gate = SimpleNamespace(current_valid=True)
+    worker.activation = object()
+    worker.start_config = {}
+    rows = {"preparing": {"runId": "run-one", "status": "starting"}}
+    children = SimpleNamespace(rows=rows, sessions={})
+    root.register_capability("live.children", children)
+    worker.app_access_bridge(root)
+    install = root.get_capability("web.app_access.install")()
+    await worker.command_lock.acquire()
+    stop = asyncio.create_task(worker.command({"op": "worker.stop", "worker_id": "preparing"}))
+    await tick()
+    assert rows["preparing"]["_computer_stopped"] == "run-one"
+    monkeypatch.setattr("amplifier_web.app_guidance.install_app_access", AsyncMock())
+    child = Coordinator(Controller())
+    child.session_id = "preparing"
+    child.register_capability("web.worker_run", "run-one")
+    children.sessions["preparing"] = SimpleNamespace(coordinator=child)
+    await install(child)
+    sponsor = child.get_capability("web.computer_episodes")
+    assert sponsor.terminated
+    worker.computer_episodes.resume()
+    with pytest.raises(asyncio.CancelledError):
+        await sponsor.invoke("computer", {}, AsyncMock())
+    stop.cancel()
+    worker.command_lock.release()
+    await asyncio.gather(stop, return_exceptions=True)
+    # Resuming the same native ID is a distinct coordinator/run, not a revival.
+    rows["preparing"] = {"runId": "run-two", "status": "starting"}
+    resumed = Coordinator(Controller())
+    resumed.session_id = "preparing"
+    resumed.register_capability("web.worker_run", "run-two")
+    children.sessions["preparing"] = SimpleNamespace(coordinator=resumed)
+    await install(resumed)
+    assert not resumed.get_capability("web.computer_episodes").terminated
+    await worker.computer_episodes.close()

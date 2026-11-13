@@ -6,6 +6,7 @@ bundle supplies opaque episode identities, admission fences and worker drains.
 from __future__ import annotations
 
 import asyncio
+import json
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from weakref import WeakKeyDictionary
@@ -101,6 +102,22 @@ class ComputerEpisodes:
         for sponsor in self.sponsors.values():
             sponsor.halted = False
             sponsor.stop_epoch += 1
+
+    def restore_stop(self, home, session_id):
+        """Read the host-owned saved UI latch before any new mount admits work."""
+        path = home / "ui-use-stopped.json"
+        try:
+            stopped = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+            if not isinstance(stopped, list):
+                raise ValueError("Invalid saved UI Stop latch")
+        except (OSError, ValueError):
+            # An unreadable safety latch is not permission to admit desktop use.
+            self.fence(halt=True)
+            return
+        if session_id in stopped:
+            self.fence(halt=True)
+        else:
+            self.resume()
 
     async def close(self):
         self.fence(terminate=True)

@@ -843,6 +843,7 @@ class Children:
         if action == "finish" and (not row["persistent"] or row["status"] != "idle"):
             raise ValueError("Wait for a persistent worker's idle report before finishing")
         if action in {"finish", "cancel"}:
+            row["_computer_stopped"] = row.get("runId")
             child = self.sessions.get(identity)
             sponsor = child.coordinator.get_capability("web.computer_episodes") if child else None
             if sponsor:

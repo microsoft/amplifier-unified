@@ -560,6 +560,10 @@ class Worker:
                                                                                       assignment=assignment))
                     self.computer_episodes.install(child_coordinator,
                         lambda: self.computer_execution(child_coordinator))
+                    children = self.session.coordinator.get_capability('live.children')
+                    row = children.rows.get(child_coordinator.session_id) if children else None
+                    if row and row.get('_computer_stopped') == child_coordinator.get_capability('web.worker_run'):
+                        self.computer_episodes.fence(child_coordinator, terminate=True)
                 return install_child_access
             register("web.app_access.install", capture_child_access)
         if assigned is None and callable(register):
@@ -930,6 +934,7 @@ class Worker:
                 from amplifier_web.shared_state import configuration_stamp
                 from amplifier_module_loop_live.runtime import Runtime
             self.home = app_home()
+            self.computer_episodes.restore_stop(self.home, config.get('ownerSessionId') or config["id"])
             report_directory = self.home / "runtime-reports" / config["id"]
             from amplifier_web.runtime_qualification import active_install_overrides
             # Caller policy is inherited exactly, even when it names an app path.
@@ -1476,6 +1481,11 @@ class Worker:
             return
         if op == "worker.stop" and self.session:
             children = self.session.coordinator.get_capability('live.children')
+            row = children.rows.get(data.get('worker_id')) if children else None
+            if row:
+                # Retain cancellation before session construction or sponsor
+                # installation. A resumed run replaces this exact row/run.
+                row['_computer_stopped'] = row['runId']
             child = children.sessions.get(data.get('worker_id')) if children else None
             if child:
                 self.computer_episodes.fence(child.coordinator, terminate=True)
