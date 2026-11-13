@@ -59,12 +59,12 @@ test('stale edit preserves form until explicit reload; it cannot silently overwr
  await renderAct(async()=>root.unmount());
 });
 
-test('lost save acknowledgement retries the same command without retaining private fields in browser storage',async()=>{
+for(const failure of [Error('Connection lost'),Object.assign(Error('Unreadable proxy response'),{status:403,unconfirmed:true})])test(`unconfirmed save retries the same command: ${failure.message}`,async()=>{
  const saves=[];const root=await mount(async(name,args,meta)=>{
-  if(name.endsWith('list'))return ok({agents:[]});saves.push({name,args,meta});if(saves.length===1)throw Error('Connection lost');return ok({agents:catalog,savedId:'one'});
+  if(name.endsWith('list'))return ok({agents:[]});saves.push({name,args,meta});if(saves.length===1)throw failure;return ok({agents:catalog,savedId:'one'});
  });
  await click(root,'Add external agent');await edit(root,'external-agent-name','My agent');await edit(root,'external-agent-command','/agent');await click(root,'Save connection');
- assert.equal(root.root.findByType('fieldset').props.disabled,true);assert.match(JSON.stringify(root.toJSON()),/Connection lost/);
+ assert.equal(root.root.findByType('fieldset').props.disabled,true);assert.ok(JSON.stringify(root.toJSON()).includes(failure.message));
  await click(root,'Check the same change');assert.deepEqual(saves[0],saves[1]);assert.match(JSON.stringify(root.toJSON()),/Connection saved/);
  await renderAct(async()=>root.unmount());
 });

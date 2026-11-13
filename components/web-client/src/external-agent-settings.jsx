@@ -41,7 +41,7 @@ export function ExternalAgentSettings({act,navigate=()=>{}}){
   try{
    const result=await request(command.name,command.args,{id:command.id});
    if(alive.current){setAgents(result.agents);discard();setNotice(command.name.endsWith('remove')?'Connection removed. Saved chats are kept.':'Connection saved. Choose it when starting a new chat.')}
-  }catch(e){if(alive.current&&e.status>=400&&e.status<500&&e.status!==408)setPending(null);throw e}
+  }catch(e){if(alive.current&&!e.unconfirmed&&e.status>=400&&e.status<500&&e.status!==408)setPending(null);throw e}
  });
  const valid=!!draft?.label.trim()&&!!draft?.command.trim();
  return <section className="a-settings-section" aria-label="External agents">
