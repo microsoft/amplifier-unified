@@ -20,6 +20,13 @@ EXECUTION = ContextVar("independent_handoff_execution", default=None)
 PREFIX = "session.handoff."
 ACTIVE = {"creating", "created", "delivering"}
 UNFINISHED = ACTIVE | {"pending", "unknown"}
+# Quota accounting above is unchanged; failed and contradictory receipts still
+# need presentation/recovery even though they do not consume proposal capacity.
+UNRESOLVED_SQL = """NOT (
+    (status='accepted' AND coalesce(json_extract(value,'$.creation'),'')='created'
+     AND coalesce(json_extract(value,'$.delivery'),'')='accepted')
+    OR (status='cancelled' AND coalesce(json_extract(value,'$.creation'),'')='not_started'
+        AND coalesce(json_extract(value,'$.delivery'),'')='not_started'))"""
 MAX_REVIEW_REFERENCES = 64
 PUBLIC = {"requestId", "sourceSessionId", "workspace", "title", "text", "bundle",
           "selection", "reviewHash", "status", "revision", "targetSessionId",
@@ -59,10 +66,10 @@ class NewChatHandoffs:
         service.db.execute("""CREATE TABLE IF NOT EXISTS new_chat_handoffs(
             id TEXT PRIMARY KEY, owner TEXT NOT NULL, source TEXT NOT NULL,
             status TEXT NOT NULL, updated REAL NOT NULL, value TEXT NOT NULL)""")
-        service.db.execute("CREATE INDEX IF NOT EXISTS handoff_client_source ON new_chat_handoffs(owner,source,updated DESC)")
         service.db.execute("CREATE INDEX IF NOT EXISTS handoff_pending ON new_chat_handoffs(owner,source,status,updated DESC)")
-        service.db.execute("CREATE INDEX IF NOT EXISTS handoff_owner_recent ON new_chat_handoffs(owner,updated DESC)")
         service.db.execute("CREATE INDEX IF NOT EXISTS handoff_owner_pending ON new_chat_handoffs(owner,status,updated DESC)")
+        service.db.execute("CREATE INDEX IF NOT EXISTS handoff_source_unresolved ON new_chat_handoffs(owner,source,updated DESC) WHERE " + UNRESOLVED_SQL)
+        service.db.execute("CREATE INDEX IF NOT EXISTS handoff_owner_unresolved ON new_chat_handoffs(owner,updated DESC) WHERE " + UNRESOLVED_SQL)
         service.db.execute("CREATE INDEX IF NOT EXISTS handoff_input ON new_chat_handoffs(json_extract(value,'$.inputId'))")
         for (encoded,) in service.db.execute("SELECT value FROM new_chat_handoffs WHERE status IN ('creating','created','delivering')").fetchall():
             row = json.loads(encoded)
@@ -98,32 +105,37 @@ class NewChatHandoffs:
             return []
         # Private reviews and conversation-owned execution have separate bounded
         # windows. Direct work must not displace an outstanding private review.
-        direct = [json.loads(value) for (value,) in self.service.db.execute(
-            "SELECT value FROM new_chat_handoffs INDEXED BY handoff_client_source "
-            "WHERE owner=? AND source=? ORDER BY updated DESC LIMIT 8",
-            ('conversation:' + source, source))]
+        direct = self.unresolved('conversation:' + source, source)
         return [public(row) for row in (*self.visible(owner, source), *direct)]
 
     def visible(self, client, source):
-        # Both owner reads use bounded indexed ranges; copied references use
-        # exact primary keys. Sorting never scans the owner's retained history.
-        rows = {}
-        for condition in (" AND status IN ('pending','creating','created','delivering','unknown')", ""):
-            index = "handoff_pending" if condition else "handoff_client_source"
-            for (value,) in self.service.db.execute(
-                    "SELECT value FROM new_chat_handoffs INDEXED BY " + index + " WHERE owner=? AND source=?" + condition + " ORDER BY updated DESC LIMIT 8", (client, source)):
-                row = json.loads(value); rows[row["requestId"]] = row
-        for row in self.captured(client):
+        # Filter before LIMIT, using partial indexes so retained success history
+        # cannot crowd out unresolved work or be decoded on each publication.
+        rows = {row["requestId"]: row for row in self.unresolved(client, source)}
+        for (value,) in self.service.db.execute(
+                "SELECT value FROM new_chat_handoffs INDEXED BY handoff_pending WHERE owner=? AND source=? "
+                "AND status IN ('pending','creating','created','delivering','unknown') ORDER BY updated DESC LIMIT 8", (client, source)):
+            row = json.loads(value); rows[row["requestId"]] = row
+        for row in self.captured(client, unresolved=True):
             if row["sourceSessionId"] == source:
                 rows[row["requestId"]] = row
         return sorted(rows.values(), key=lambda row: (row["status"] in UNFINISHED, row["updatedAt"]), reverse=True)[:8]
 
-    def captured(self, client):
+    def unresolved(self, client, source=None):
+        index = "handoff_source_unresolved" if source else "handoff_owner_unresolved"
+        scope = " AND source=?" if source else ""
+        return [json.loads(value) for (value,) in self.service.db.execute(
+            "SELECT value FROM new_chat_handoffs INDEXED BY " + index +
+            " WHERE owner=?" + scope + " AND " + UNRESOLVED_SQL +
+            " ORDER BY updated DESC LIMIT ?", (client, source, 8) if source else (client, MAX_REVIEW_REFERENCES))]
+
+    def captured(self, client, *, unresolved=False):
         references = self.service.clients.records.get(client, {}).get("handoffReviews", [])
         captured = {reference["requestId"]: reference["reviewHash"] for reference in references[:MAX_REVIEW_REFERENCES]}
         rows = []
         if captured:
-            for (value,) in self.service.db.execute("SELECT value FROM new_chat_handoffs WHERE id IN (" + ",".join("?" for _ in captured) + ")", list(captured)):
+            for (value,) in self.service.db.execute("SELECT value FROM new_chat_handoffs WHERE id IN (" + ",".join("?" for _ in captured) + ")" +
+                    (" AND " + UNRESOLVED_SQL if unresolved else ""), list(captured)):
                 row = json.loads(value)
                 if row["reviewHash"] == captured[row["requestId"]]:
                     rows.append(row)
@@ -137,14 +149,12 @@ class NewChatHandoffs:
         return rows
 
     def capture_on_attach(self, previous_client, previous, record):
-        # Preserve pending reviews across navigation and exact prior captures,
-        # never a lineage-wide authority over future proposals. Indexed LIMITs
-        # bound work even when this client has years of terminal receipts.
+        # Exact prior captures retain read authority after settlement, including
+        # a lost response, subject to the existing unfinished-first bounded cap.
+        # Add only unresolved owned work, never a completed tail.
         rows = {row["requestId"]: row for row in self.captured(previous_client)}
+        rows.update({row["requestId"]: row for row in self.unresolved(previous_client)})
         rows.update(self.unfinished(previous_client))
-        for (value,) in self.service.db.execute(
-                "SELECT value FROM new_chat_handoffs WHERE owner=? ORDER BY updated DESC LIMIT ?", (previous_client, MAX_REVIEW_REFERENCES)):
-            row = json.loads(value); rows[row["requestId"]] = row
         selected = sorted(rows.values(), key=lambda row: (row["status"] in UNFINISHED, row["updatedAt"]), reverse=True)[:MAX_REVIEW_REFERENCES]
         record["handoffReviews"] = [{"requestId": row["requestId"], "reviewHash": row["reviewHash"]} for row in selected]
 

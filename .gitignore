@@ -27,3 +27,6 @@ dist/
 # Selected client preparation and separately owned web integration dependencies.
 /.build/
 /tests/web/node_modules
+
+# Per-task source checkouts and evidence are not application build inputs.
+/working-files/
