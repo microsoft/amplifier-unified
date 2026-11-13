@@ -100,6 +100,85 @@ async def tick():
         await asyncio.sleep(0)
 
 
+@pytest.mark.parametrize("uncertain", [
+    "workers", "missing_indicator", "false_indicator", "unconfirmed_release",
+    "open_admission", "unknown_before", "unknown_after", "cancelled_begin", "replacement",
+])
+async def test_no_acquisition_requires_complete_prior_proof_same_controller_and_definitive_after(uncertain):
+    controller, coordinator, registry, sponsor, _, _ = fixture()
+    before = {"state": "released", "identity": {"owner": "old", "target": "target", "generation": "old"},
+              "workers": 0, "admission_open": False, "release_confirmed": True, "indicator_settled": True}
+    after = {"state": "idle", "identity": None, "workers": 0, "release_confirmed": False}
+    if uncertain == "workers":
+        before["workers"] = 1
+    elif uncertain == "missing_indicator":
+        before.pop("indicator_settled")
+    elif uncertain == "false_indicator":
+        before["indicator_settled"] = False
+    elif uncertain == "unconfirmed_release":
+        before["release_confirmed"] = False
+    elif uncertain == "open_admission":
+        before["admission_open"] = True
+    elif uncertain == "unknown_before":
+        before["state"] = "unknown"
+    elif uncertain == "unknown_after":
+        after["state"] = "unknown"
+    cache = {"value": before}
+    controller.cached_status = lambda: cache["value"]
+    async def refuse():
+        cache["value"] = after
+        if uncertain == "replacement":
+            coordinator.register_capability("computer_use.episodes", Controller())
+        if uncertain == "cancelled_begin":
+            raise asyncio.CancelledError()
+        raise ValueError("inert begin uncertainty")
+    controller.begin = refuse
+    with pytest.raises((ValueError, asyncio.CancelledError)):
+        await sponsor.invoke("computer", {}, AsyncMock())
+    await asyncio.gather(*tuple(registry.pending), return_exceptions=True)
+    assert registry.unresolved and sponsor.unconfirmed
+    assert all(not episode.not_acquired for episode in registry.unresolved.values())
+    assert not any(call[0] == "end" for call in controller.calls)
+    assert not (await registry.close())["settled"]  # No false release proof.
+
+
+async def test_cleanup_receipt_excludes_normal_readiness_but_not_closing_or_unknown_work():
+    controller, _, registry, sponsor, _, _ = fixture()
+    controller.ready.clear()
+    task = asyncio.create_task(sponsor.invoke("computer", {}, AsyncMock()))
+    await tick()
+    try:
+        assert not registry.receipt()["settled"]
+        assert registry.receipt(settlement_only=True)["settled"]
+        registry.fence()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not registry.receipt(settlement_only=True)["settled"]
+        assert registry.pending and registry.unresolved
+    finally:
+        controller.ready.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await registry.join()
+        await registry.close()
+    assert registry.receipt(settlement_only=True)["settled"]
+
+
+@pytest.mark.parametrize("cancel_cleanup", [False, True])
+async def test_cleanup_receipt_keeps_failed_or_cancelled_obligation_after_task_done(cancel_cleanup):
+    registry = ComputerEpisodes()
+    async def uncertain_cleanup():
+        if cancel_cleanup:
+            raise asyncio.CancelledError()
+        raise OSError("inert uncertain cleanup")
+    task = registry.retain_cleanup(object(), "run", uncertain_cleanup)
+    await asyncio.gather(task, return_exceptions=True)
+    await tick()
+    assert not registry.pending and registry.cleanups
+    receipt = registry.receipt(settlement_only=True)
+    assert not receipt["settled"] and receipt["scope"] == "cleanup"
+    assert receipt["episodes"][0]["reason"] == "child_cleanup_unconfirmed"
+
+
 @pytest.mark.parametrize("outcome", ["completed", "blocked", "budget", "unknown", "denied"])
 async def test_whole_bounded_task_and_nested_operations_keep_original_result(outcome):
     controller, _, registry, sponsor, _, _ = fixture()
@@ -627,6 +706,9 @@ async def test_real_child_original_outcome_survives_bounded_deferred_cleanup(
             registry.install(coordinator, lambda: ("child", lambda: True))
         return install
     parent.coordinator.register_capability("web.app_access.install", capture)
+    root_controller = Controller()
+    root_sponsor = registry.install(Coordinator(root_controller), lambda: ("independent-root", lambda: True))
+    await root_sponsor.invoke("computer", {}, AsyncMock())
     try:
         operation = asyncio.create_task(children.spawn("worker", "inert", parent,
                                         sub_session_id="outcome-child"))
@@ -657,15 +739,17 @@ async def test_real_child_original_outcome_survives_bounded_deferred_cleanup(
             assert row.get("_computerCleanup") is not None
             assert not events[-1]["settled"]
         else:
-            assert not registry.cleanups and registry.receipt()["settled"]
+            assert not registry.cleanups and not registry.receipt()["settled"]
             assert row.get("_computerCleanup") is None
-            assert events[-1]["settled"]
+            assert events[-1]["settled"] and events[-1].get("scope") == "cleanup"
+        assert not any(call[0] == "end" for call in root_controller.calls)
     finally:
         proceed.set()
         await asyncio.gather(*tuple(registry.pending), return_exceptions=True)
         child = children.sessions.get("outcome-child")
         if child:
             await child.original.cleanup()  # Test-only teardown of intentional failure.
+        await root_sponsor.close()
         await parent.cleanup()
 
 

@@ -1148,6 +1148,8 @@ class RuntimeManager:
                             and (data["settled"] is False or not data["episodes"])):
                         receipt = {key: data[key] for key in
                                    ("state", "settled", "episodes", "omittedEpisodes") if key in data}
+                        if data.get("scope") == "cleanup":
+                            receipt["scope"] = "cleanup"
                         row["computerSettlement"] = receipt
                         from .host.config import app_home, write_private
                         home = Path(self.home or app_home())
@@ -1158,7 +1160,9 @@ class RuntimeManager:
                             _LOG.warning("Could not persist unresolved computer custody for %s", sid)
                         if not receipt["settled"]:
                             await row["emit"]("runtime.activity", {"sessionId": sid, "phase": "stopping",
-                                "detail": "Computer release is unconfirmed; its cleanup owner remains retained."})
+                                "detail": ("Computer cleanup is unconfirmed; its owner remains retained."
+                                    if receipt.get("scope") == "cleanup" else
+                                    "Computer release is unconfirmed; its cleanup owner remains retained.")})
                 elif data.get("type") == "runtime.progress":
                     if not row["ready"].done() and not row["closing"]:
                         row["phase"] = data.get("phase", row["phase"])

@@ -852,7 +852,8 @@ class Children:
                     row["_computerCleanup"] = cleanup
                     def cleanup_status(_=None):
                         try:
-                            sponsor.registry.emit({"type": "computer.settlement", **sponsor.registry.receipt()})
+                            sponsor.registry.emit({"type": "computer.settlement",
+                                                   **sponsor.registry.receipt(settlement_only=True)})
                         except Exception:
                             pass  # Reporting cannot rewrite the original task result.
                     cleanup.add_done_callback(cleanup_status)

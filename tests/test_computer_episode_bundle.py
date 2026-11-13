@@ -474,6 +474,61 @@ async def test_local_other_owner_refusal_has_no_host_cleanup_obligation(bundle, 
             child.end_episode(interrupted=True)
 
 
+@pytest.mark.parametrize("previous_interrupted", [False, True])
+async def test_settled_previous_episode_then_foreign_owner_refusal_retires_only_new_attempt(
+        bundle, previous_interrupted):
+    from amplifier_module_tool_computer_use.ledger import HeldInputLedger
+    cu, retrying, indicator = bundle
+    controller = cu.EpisodeController(retrying)
+    first = await controller.begin()
+    old_token = first["identity"]["generation"]
+    previous = await controller.end(old_token, interrupted=previous_interrupted)
+    assert previous["state"] == ("interrupted" if previous_interrupted else "released")
+    assert previous["indicator_settled"] and previous["release_confirmed"] and previous["workers"] == 0
+    foreign = cu.ComputerTool(retrying._backend, {"_indicator_factory": lambda: type(indicator)()})
+    foreign._episode_enabled, foreign._announced = True, True
+    ledger = HeldInputLedger(deadman_seconds=60)
+    foreign._ledger = ledger
+    foreign_controller = cu.EpisodeController(foreign)
+    active = await foreign_controller.begin()
+    releases = []
+    ledger.hold("key", "inert-foreign-key", lambda: releases.append(True))
+    registry = ComputerEpisodes()
+    sponsor = registry.install(Coordinator(controller), lambda: ("new-root-turn", lambda: True))
+    desktop = cu.DesktopTool(retrying)
+    try:
+        with pytest.raises(cu.BackendError, match="another controller"):
+            await sponsor.invoke("desktop", {"action": "get_clipboard"}, desktop.execute)
+        await asyncio.gather(*tuple(registry.pending), return_exceptions=True)
+        assert controller.cached_status() == {
+            "state": "idle", "identity": None, "workers": 0, "release_confirmed": False}
+        assert not registry.unresolved and not sponsor.unconfirmed and not sponsor.episodes
+        assert (await registry.close())["settled"]
+        assert ledger.held_tokens == ["inert-foreign-key"] and not releases
+        assert foreign.episode_status()["identity"] == active["identity"]
+        assert foreign.episode_status()["admission_open"]
+        with pytest.raises(cu.BackendError, match="stale"):
+            controller.fence(old_token)
+        # A further attempt cannot steal the channel or release foreign input.
+        again = ComputerEpisodes()
+        again_sponsor = again.install(Coordinator(controller), lambda: ("another-turn", lambda: True))
+        with pytest.raises(cu.BackendError, match="another controller"):
+            await again_sponsor.invoke("desktop", {"action": "get_clipboard"}, desktop.execute)
+        await asyncio.gather(*tuple(again.pending), return_exceptions=True)
+        assert (await again.close())["settled"] and not releases
+        await foreign_controller.end(active["identity"]["generation"])
+        assert releases == [True] and not ledger.held_tokens
+        recovered = ComputerEpisodes()
+        recovered_sponsor = recovered.install(Coordinator(controller), lambda: ("recovered-turn", lambda: True))
+        assert (await recovered_sponsor.invoke("desktop", {"action": "get_clipboard"}, desktop.execute)).success
+        assert (await recovered.close())["settled"]
+    finally:
+        foreign.end_episode(interrupted=True)
+        if retrying._episode_identity is not None:
+            retrying.end_episode(interrupted=True)
+        ledger.stop()
+
+
 async def test_disclosure_readiness_is_not_limited_by_cleanup_wait(bundle, monkeypatch):
     from amplifier_web import computer_episodes
     monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .01)

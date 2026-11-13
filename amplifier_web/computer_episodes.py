@@ -139,9 +139,12 @@ class ComputerEpisodes:
         for callback in callbacks:
             callback()
 
-    def receipt(self, sponsor=None):
+    def receipt(self, sponsor=None, *, settlement_only=False):
         episodes = {episode for owner in self.sponsors.values() for episode in owner.episodes
                     if sponsor is None or owner is sponsor}
+        normal = {episode for episode in episodes if not episode.closing}
+        if settlement_only:
+            episodes.difference_update(normal)
         episodes.update(episode for episode in self.unresolved.values()
                         if sponsor is None or episode.sponsor is sponsor)
         rows = [copy.deepcopy(episode.status) for episode in episodes]
@@ -149,10 +152,15 @@ class ComputerEpisodes:
         tasks = self.pending if sponsor is None else {
             task for episode in episodes for task in (episode.begin, episode.settlement)
             if task is not None and not task.done()}
+        if settlement_only:
+            # Exclude only ordinary readiness, never retained cleanup/drain work
+            # or a failed obligation merely because its task has completed.
+            tasks = tasks - {episode.begin for episode in normal - episodes}
         settled = not tasks and not rows and not cleanups
         return {"state": "settled" if settled else "stopping", "settled": settled,
                 "episodes": (rows + copy.deepcopy(cleanups))[:64],
-                "omittedEpisodes": max(0, len(rows) + len(cleanups) - 64)}
+                "omittedEpisodes": max(0, len(rows) + len(cleanups) - 64),
+                **({"scope": "cleanup"} if settlement_only else {})}
 
     def retain_cleanup(self, coordinator, run, cleanup):
         key = (id(coordinator), run)
@@ -318,7 +326,7 @@ class Sponsor:
             # Explicit old pins and opt-outs retain their existing behavior.
             return None
         episode = Episode(self, key, valid, controller, bounded)
-        before_begin = controller.cached_status()
+        before_begin = copy.deepcopy(controller.cached_status())
         episode.status = {"state": "starting", "identity": None, "workers": None,
                           "admission_open": False, "release_confirmed": False}
         self.episodes.add(episode)
@@ -338,12 +346,19 @@ class Sponsor:
                 cached = controller.cached_status()
                 identity = cached.get("identity") or {}
                 episode.generation = identity.get("generation")
-                # The controller's full idle sentinel before/after a completed
-                # ordinary refusal proves this mount acquired no episode. A
-                # pending/cancelled begin or identity-bearing remote uncertainty
-                # is not this fact and retains native custody below.
+                # A completed refusal can follow either a pristine mount or a
+                # fully settled prior generation which explicit begin retired
+                # before admission failed. Only the full idle sentinel AFTER
+                # that same controller's call proves no new episode was acquired.
                 episode.not_acquired = (isinstance(exc, Exception)
-                    and before_begin == _IDLE_WITHOUT_EPISODE and cached == _IDLE_WITHOUT_EPISODE)
+                    and self.coordinator.get_capability("computer_use.episodes") is controller
+                    and (before_begin == _IDLE_WITHOUT_EPISODE or (
+                        before_begin.get("state") in {"released", "interrupted"}
+                        and before_begin.get("workers") == 0
+                        and before_begin.get("admission_open") is False
+                        and before_begin.get("release_confirmed") is True
+                        and before_begin.get("indicator_settled") is True))
+                    and cached == _IDLE_WITHOUT_EPISODE)
                 episode.status = ({**cached, "reason": "episode_not_acquired"} if episode.not_acquired else
                     {"state": "unknown", "release_confirmed": False,
                      "identity": identity or None, "reason": "episode_begin_unconfirmed"})
