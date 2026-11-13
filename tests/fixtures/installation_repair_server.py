@@ -208,14 +208,16 @@ def configure(app, home, calls):
         folder = repair.root(service) / launched[0]['operationId']
         assert command[:4] == [str(base_python), '-I', '-S',
                                str(folder / 'installation_repair_worker.py')]
-        assert len(command) == 6 and command[-1] == str(folder)
+        assert command[5] == str(folder)
         assert kwargs == {'cwd': folder, 'stdin': subprocess.DEVNULL,
                           'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL,
                           'timeout': 240 if command[4] == '--verify' else 45, 'check': True}
         if command[4] == '--verify':
+            assert len(command) == 6
             assert journey == 'verify'
             return verify_child(command, **kwargs)
         assert command[4] == '--reconcile'
+        assert len(command) == 7 and command[6] == service.instance_id
         path = folder / 'operation.json'
         operation = repair._read(path, home)
         assert operation['operationId'] == launched[0]['operationId']
