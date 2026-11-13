@@ -11,7 +11,7 @@ import {chromium,expect} from '@playwright/test';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls'],{stdio:['ignore','pipe','inherit']});
 const stopFixture=ownFixture(fixture,{label:'Workspace starters fixture'});
-const out=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-workspace-starters';let browser,page,originalError;
+const out=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-workspace-starters';let browser,page,originalError,evidenceRecord;
 try{
  const url=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}}catch{}})});
  await mkdir(out,{recursive:true});browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});
@@ -26,7 +26,9 @@ try{
  const servedComponent=await page.request.get(url+'/client-component.json');assert.equal(servedComponent.status(),200);
  assert.deepEqual(await servedComponent.json(),component);
  const servedIndex=await (await page.request.get(url)).text();
- for(const [asset,expected] of Object.entries(component.assets).filter(([name])=>/\.(?:js|css)$/.test(name)&&servedIndex.includes(name))){
+ const entryAssets=Object.entries(component.assets).filter(([name])=>/\.(?:js|css)$/.test(name)&&servedIndex.includes(name));
+ assert.ok(entryAssets.some(([name])=>name.endsWith('.js')),'Production entry references a hashed selected JavaScript asset');
+ for(const [asset,expected] of entryAssets){
   const response=await page.request.get(url+'/'+asset);assert.equal(response.status(),200);
   assert.equal(createHash('sha256').update(await response.body()).digest('hex'),expected.sha256,`Actual host serves selected ${asset}`);
  }
@@ -122,7 +124,7 @@ try{
  assert.equal(savedEdited.description,'Every edited field survives Save as new.');
  assert.equal(savedEdited.instructions,'Preserve all edited built-in fields.');
  assert.equal(savedEdited.bundle,'work');
- assert.deepEqual(savedEdited.repositories[0],{url:'https://github.com/example/team.git',directory:'team',ref:'stable'});
+ assert.deepEqual(savedEdited.repositories,[{url:'https://github.com/example/team.git',directory:'team',ref:'stable'},...originalBuiltIn.repositories.slice(1)]);
  assert.equal(savedEdited.scratch,false);assert.equal(savedEdited.rootGit,false);assert.equal(savedEdited.trackResources,false);
  assert.deepEqual((await state()).workspaceStarters.items.find(row=>row.id===originalBuiltIn.id),originalBuiltIn,'Saving a custom definition leaves the built-in unchanged');
  const afterInheritedCopy=await state();
@@ -314,8 +316,9 @@ try{
  await page.getByRole('button',{name:'Send message',exact:true}).click();await page.getByText('Synthetic first response',{exact:true}).waitFor();
  const evidence=await (await page.request.get(url+'/fixture')).json();assert.equal(evidence.sent[0].workspace,folder);assert.equal(evidence.sent[0].attachments[0].name,'notes.txt');
  const interactionCost={entry:'Settings → Workspaces → Manage starters → choose starter',intendedResult:'Customize a built-in and retain its shipped definition',before:['choose starter','Duplicate to customize','edit fields','Save starter'],after:['choose starter','edit fields','Save as new starter'],removedActions:1,unchangedCosts:['entry navigation','field edits','advanced disclosure'],keyboard:['Enter saves built-in as new','Enter opens compact selection','Tab reaches Cancel edits'],reflow:['320px viewport','200% root text size']};
- const evidenceRecord={status:'passed',scenarios:21,clientSource:component.source,build:component.build,interactionCost,validationRefusal:rejection,starterEditor:['all edited fields retained','built-in unchanged','editable payload excludes identity and provenance','real host validation refusal retains editable draft','lost acknowledgement checks same command without duplicate','unknown save cannot be discarded through Settings guard','custom update and copy','dirty navigation and cancel'],starterInheritance:['explicit app default','built-in inherited choice','automatic plan release metadata absent from saved custom plan'],resourceContinuity:['chat and Home return','no manual reservation controls','same editor identity','Settings keyboard and phone drawer inert cleanup','private peer','one held save receipt'],screenshots:out,workspace:folder};
+ evidenceRecord={status:'passed',scenarios:21,clientSource:component.source,build:component.build,interactionCost,validationRefusal:rejection,starterEditor:['all edited fields retained','built-in unchanged','editable payload excludes identity and provenance','real host validation refusal retains editable draft','lost acknowledgement checks same command without duplicate','unknown save cannot be discarded through Settings guard','custom update and copy','dirty navigation and cancel'],starterInheritance:['explicit app default','built-in inherited choice','automatic plan release metadata absent from saved custom plan'],resourceContinuity:['chat and Home return','no manual reservation controls','same editor identity','Settings keyboard and phone drawer inert cleanup','private peer','one held save receipt'],screenshots:out,workspace:folder};
  assert.deepEqual(errors,[]);
- await writeFile(out+'/workspace-starters-result.json',JSON.stringify(evidenceRecord,null,2)+'\n');
- console.log(JSON.stringify(evidenceRecord));
 }catch(error){originalError=error;await page?.screenshot({path:out+'/failure.png'}).catch(()=>{});console.error((await page?.locator('body').innerText())?.slice(-6000));throw error}finally{await finishFixture({label:'Workspace starters fixture',close:[['Browser',()=>browser?.close()]],stop:stopFixture,originalError})}
+evidenceRecord.cleanup='browser closed; owned fixture gracefully exited';
+await writeFile(out+'/workspace-starters-result.json',JSON.stringify(evidenceRecord,null,2)+'\n');
+console.log(JSON.stringify(evidenceRecord));
