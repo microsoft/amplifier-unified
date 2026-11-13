@@ -85,6 +85,13 @@ to the original input and recipient, never replayed through another agent.
 This is explicit directed participation, not a broadcast or autonomous group
 workflow. Adding/removing participants in an existing conversation is separate.
 
+During an app update, each external chat can hold one known-unsubmitted input.
+Its recipient is saved immediately, without marking a remote turn active.
+Another send to that chat is refused before acceptance while the input waits;
+other chats keep their own admission. After release and settlement, an explicit
+next input can proceed. This does not keep unrelated chats waiting for an
+external model turn behind the global update boundary.
+
 Before a group turn, the addressed agent receives a bounded projection of prior
 public messages: at most 32 rows and 24,000 text characters, with speaker/source
 identities and an explicit omission marker. The current request remains a
