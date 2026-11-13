@@ -41,6 +41,66 @@ for line in sys.stdin:
 '''
 
 
+@pytest.mark.parametrize('capture_kind', ['matching', 'foreign', 'wrong-stage', 'empty-chain', 'invalid-input'])
+async def test_reader_execution_failure_uses_shared_validator_and_exact_runtime(tmp_path, capture_kind):
+    """Actual worker pipe joins the runtime reader and shared public sanitizer."""
+    fixture = r'''
+import json,sys
+for line in sys.stdin:
+    command = json.loads(line)
+    if command['op'] == 'start':
+        print(json.dumps({'type':'runtime.ready'}), flush=True)
+    elif command['op'] == 'control':
+        print(json.dumps({'op':'reply', 'id':command['id'], 'result':{'accepted':True}}), flush=True)
+        print(json.dumps({'type':'runtime.error', 'error':'The worker failed.',
+            'errorType':'RuntimeError', 'executionFailure':command['arguments']['capture']}), flush=True)
+    elif command['op'] == 'stop':
+        break
+'''
+    sid = 'reader-execution-fixture'
+    capture = {'runtimeSessionId': sid, 'stage': 'execution',
+               'generationId': 'reader-generation', 'inputIds': ['reader-input'],
+               'exceptionChain': [{'errorType': 'RuntimeError', 'message': 'PRIVATE payload',
+                   'frames': [{'file': 'runtime_worker.py', 'line': 42}]}],
+               'locals': {'secret': 'PRIVATE'}}
+    if capture_kind == 'foreign':
+        capture['runtimeSessionId'] = 'foreign-runtime'
+    elif capture_kind == 'wrong-stage':
+        capture['stage'] = 'arbitrary'
+    elif capture_kind == 'empty-chain':
+        capture['exceptionChain'] = []
+    elif capture_kind == 'invalid-input':
+        capture['inputIds'] = ['unsafe\ninput']
+    manager = RuntimeManager(command=[sys.executable, '-u', '-c', fixture],
+        startup_timeout=3, retention={'prewarm_on_select': False})
+    manager.home = tmp_path / 'app'
+    errors, observed = [], asyncio.Event()
+    async def emit(kind, payload):
+        if kind == 'runtime.error':
+            errors.append(payload)
+            observed.set()
+    try:
+        await manager.start({'id': sid, 'workspace': str(tmp_path), 'bundle': 'fixture'}, emit)
+        await manager.control(sid, 'fixture.failure', {'capture': capture})
+        await asyncio.wait_for(observed.wait(), 3)
+        from amplifier_web.support_diagnostics import public_execution_failure
+        expected = public_execution_failure(capture)
+        if capture_kind == 'foreign':
+            expected = None
+        assert errors[0].get('executionFailure') == expected
+        if expected:
+            assert errors[0]['generationId'] == 'reader-generation'
+            assert 'PRIVATE' not in json.dumps(expected)
+            assert 'locals' not in expected
+            if capture_kind == 'invalid-input':
+                assert 'inputIds' not in expected
+        else:
+            assert 'generationId' not in errors[0]
+    finally:
+        await manager.close()
+    assert not manager.workers and not manager._preparations
+
+
 @pytest.mark.parametrize('boundary', ['admission', 'status', 'qualification', 'spawn'])
 async def test_restart_authority_is_rechecked_after_startup_waits(tmp_path, monkeypatch, boundary):
     """A queued restart cannot mount after Stop/revocation; reap any spawned child."""

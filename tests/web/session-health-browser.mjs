@@ -153,7 +153,7 @@ async function lifecycleCheck(page,ready,output){
  if(lifecycleMode==='completed-runtime-fault'){
   const response=await page.request.post(ready.url+'/fixture/late-runtime-fault');
   assert.equal(response.status(),200);
-  await expect.poll(async()=>(await facts()).runtimeFault).toBeTruthy();
+  await expect.poll(async()=>(await facts()).runtimeFaults.length).toBe(1);
   await expect(page.locator('[data-part=conversation-trouble]')).toHaveCount(0);
   await expect(page.locator('[data-input-phase=failed]')).toHaveCount(0);
  }else{
@@ -193,5 +193,39 @@ async function lifecycleCheck(page,ready,output){
  assert.equal(input(check,'completed-input').inputStatus.phase,'done');
  if(lifecycleMode==='request-failure')assert.equal(input(check,'failed-input').inputStatus.phase,'failed','older request outcome remains local history');
  assert.equal(check.sessions,1);assert.equal(check.selected,ready.sessionId);
+ if(lifecycleMode==='request-failure'){
+  // A later, different failure must not replace the diagnosis selected from history.
+  assert.equal((await page.request.post(ready.url+'/fixture/newer-failure')).status(),200);
+  await expect(page.locator('[data-part=conversation-trouble]')).toContainText('credentials');
+  const failedRow=page.locator(`[data-message-id="${input(check,'failed-input').id}"]`);
+  const details=failedRow.locator('[data-input-phase=failed]');
+  await details.locator(':scope > summary').click();
+  await expect(details).toContainText('The selected provider is unavailable.');
+  await details.getByRole('button',{name:'Report this problem',exact:true}).click();
+  const feedback=page.locator('[data-part=feedback]');
+  await expect(feedback).toContainText('Reporting the recorded request you selected.');
+  await expect(feedback).toContainText('microsoft/amplifier-unified');
+  const include=feedback.getByRole('checkbox',{name:'Include reproduction diagnostics'});
+  await expect(include).not.toBeChecked();
+  await feedback.getByLabel('Title',{exact:true}).fill('Historical lifecycle request');
+  await feedback.getByLabel('Details',{exact:true}).fill('Deliberately entered nonprivate reproduction steps.');
+  await include.check();
+  const preview=feedback.locator('[data-part=feedback-diagnostics]');
+  await preview.locator(':scope > summary').click();
+  await expect(preview.locator('pre')).toContainText('provider_unavailable');
+  await expect(preview.locator('pre')).not.toContainText('authentication');
+  const diagnostic=JSON.parse(await preview.locator('pre').innerText());
+  assert.equal(diagnostic.failureReport.requestOutcome,'generation.failed');
+  assert.equal(diagnostic.troubleshooting.recordedFailure.inputRelation,'earlier');
+  assert.ok(!JSON.stringify(diagnostic).includes('PRIVATE'));
+  assert.ok(!JSON.stringify(diagnostic).includes('synthetic/workspace'));
+  assert.ok(!JSON.stringify(diagnostic).includes('Private unsent lifecycle draft'));
+  assert.ok(!JSON.stringify(diagnostic).includes('failed-input'),'shared report hashes private correlation IDs');
+  await feedback.getByRole('button',{name:'Prepare local report',exact:true}).click();
+  const local=feedback.getByRole('textbox',{name:'Local feedback report preview',exact:true});
+  await expect(local).toHaveValue(/provider_unavailable/);
+  assert.doesNotMatch(await local.inputValue(),/authentication|PRIVATE|synthetic\/workspace/);
+  assert.equal((await facts()).calls.filter(row=>row.operation==='send').length,1,'reporting never sends another input');
+ }
  console.log(`Session health ${lifecycleMode} passed: truthful exact-input outcome, saved answer/draft retained, narrow/reload safe, no automatic work and one ordinary explicit send.`);
 }

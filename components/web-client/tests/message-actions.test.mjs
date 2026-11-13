@@ -18,6 +18,15 @@ test('status disclosure exposes timing and freezes historical/disconnected obser
  const queued=renderToStaticMarkup(React.createElement(InputStatus,{message:{...message,inputStatus:{version:1,inputId:'one',phase:'queued',basis:'steering_queued',updatedAt:142}}}));
  assert.match(queued,/Status observed/);assert.doesNotMatch(queued,/Execution observed/);
 });
+test('historical failure details never borrow the current conversation error or imply its diagnostics match',()=>{
+ const message={role:'user',inputId:'old',text:'Saved request',inputStatus:{version:1,inputId:'old',phase:'failed',basis:'generation',failure:{category:'authentication',summary:'Original request failure',generationId:'old-generation',recordedAt:42}}};
+ const html=renderToStaticMarkup(React.createElement(MessageEntry,{message,session:{id:'chat',error:'NEW PRIVATE ERROR',failure:{summary:'Unrelated latest failure'}},state:{view:{}},act:()=>{},statusCurrent:false}));
+ assert.match(html,/Original request failure/);assert.match(html,/old-generation/);
+ assert.match(html,/Recorded/);assert.doesNotMatch(html,/Occurred|NEW PRIVATE ERROR|Unrelated latest failure/);
+ assert.match(html,/Report this problem/);
+ assert.doesNotMatch(html,/Include the recorded details above yourself/);
+ assert.doesNotMatch(html,/data-action="conversation\.(send|retry)"|Create recovery copy/);
+});
 test('status summary keeps a plain live phase label alongside accessible timing',()=>{
  const message={role:'user',inputId:'one',inputStatus:{version:1,inputId:'one',phase:'working',basis:'execution_observed',startedAt:100,updatedAt:142}};
  for(const [props,label] of [[{},'Working'],[{current:false},'Working last observed · saved history'],[{connected:false},'Working last observed · connection lost']]){

@@ -119,8 +119,8 @@ default = true
 dev = [
     "pytest>=8", "pytest-asyncio>=0.25", "pytest-aiohttp>=1.1", "hatchling>=1.27",
     # Offline native-input fixtures use the real loop/context, not a fake mount.
-    # Accepted descendant adds independent EOF stdin for job subprocesses.
-    "amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@d4b1e69e3222780ccebdfdb7c07915fdcd5d161f",
+    # Candidate graph: lifetime-bound execution and observation-only idle callbacks.
+    "amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@918528cf55ad1c3123aec7a3d184188a467d8622",
     # Match context-managed's authored source; uv.lock records the exact test
     # revision without imposing a resolver-global runtime source override.
     "amplifier-module-context-simple @ git+https://github.com/microsoft/amplifier-module-context-simple@main",

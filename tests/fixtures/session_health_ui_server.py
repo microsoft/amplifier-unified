@@ -75,6 +75,15 @@ async def lifecycle(app, home):
     source = service._session()
     sid = source['id']
     calls = []
+    from amplifier_web import feedback
+    original_which = feedback.shutil.which
+    feedback.shutil.which = lambda name: None if name == 'gh' else original_which(name)
+
+    async def no_delivery(*args, **kwargs):
+        raise AssertionError('Lifecycle diagnostics must not submit or upload feedback')
+
+    feedback.github_api = no_delivery
+    feedback.create_issue = no_delivery
 
     async def generation(event, input_id, generation_id, **values):
         await service.on_runtime_event('runtime.generation', {
@@ -149,6 +158,18 @@ async def lifecycle(app, home):
             'error': 'PRIVATE idle callback failed /synthetic/workspace'})
         return web.json_response({'injected': True})
 
+    async def newer_failure(request):
+        authorized(request)
+        service._message(source, 'user', 'A later different failure', inputId='later-input')
+        await generation('generation.started', 'later-input', 'later-generation')
+        await generation('generation.failed', 'later-input', 'later-generation',
+            error_category='authentication', error_type='AuthenticationError',
+            error_stage='provider_request', retryable=False)
+        await service.on_runtime_event('runtime.error', {
+            'sessionId': sid, 'rootSessionId': sid, 'generationId': 'later-generation',
+            'errorType': 'AuthenticationError', 'error': 'PRIVATE later credentials wrapper'})
+        return web.json_response({'injected': True})
+
     async def check(request):
         authorized(request)
         from amplifier_web.input_status import annotate
@@ -157,10 +178,13 @@ async def lifecycle(app, home):
             'completedUnchanged': source['messages'][:len(completed_messages)] == completed_messages,
             'messages': [annotate(source, row) for row in source['messages']],
             'status': source['status'], 'failure': source.get('failure'),
-            'runtimeFault': source.get('runtimeFault'), 'calls': calls,
+            'runtimeFaults': [row for row in source.get('runtimeEvents', [])
+                              if row.get('type') == 'runtime.error' and row.get('scope') == 'runtime'],
+            'calls': calls,
             'sessions': len(service.state['sessions']), 'selected': service.state['selectedSessionId']})
 
     app.router.add_post('/fixture/late-runtime-fault', fault)
+    app.router.add_post('/fixture/newer-failure', newer_failure)
     app.router.add_get('/fixture/check', check)
     service._publish()
     await serve(app, source)

@@ -1,7 +1,7 @@
 """Finite production-worker placement probe; only provider and mutant are synthetic.
 
 Adapted from TOOL002's queued_configuration_native_probe at dea6fbadc: real
-Worker.run/prepare_manager/ownership/park/replace, retained process identities,
+Worker.run/prepare_manager/checkpoint_idle/retire/replace, retained process identities,
 ordinary close before owned fallback, and a failing cleanup qualification gate.
 No personal settings, remote provider, installed-file edit or worker subclass.
 """
@@ -146,16 +146,20 @@ async def worker(root, mutant):
         if event != 'call':
             return
         name = frame.f_code.co_name
-        if name not in {'start','park','acquire_for_mutation','remount','prepare_manager'}:
+        if name not in {'start','checkpoint_idle','bind_activation','prepare_manager'}:
             return
         file = Path(frame.f_code.co_filename)
-        if ((file.name == 'runtime_worker.py' and name in {'start','park','acquire_for_mutation','remount'})
+        if ((file.name == 'runtime_worker.py' and name in {'start','checkpoint_idle','bind_activation'})
                 or file.name == 'session.py' and file.parent.name == 'host' and name == 'prepare_manager'):
             obj = frame.f_locals.get('self')
-            witness = (name, bool(getattr(obj, 'parked', False)))
+            activation = getattr(obj, 'activation', None)
+            handle = getattr(obj, 'shared_handle', None)
+            witness = (name, id(activation) if activation is not None else None,
+                       id(handle) if handle is not None else None)
             if witness not in seen:
                 seen.add(witness)
-                record(root, {'stage':'production-method-entry','method':name,'parked':witness[1]})
+                record(root, {'stage':'production-method-entry','method':name,'pid':os.getpid(),
+                    'activationObjectId':witness[1], 'sharedHandleObjectId':witness[2]})
     configure_protocol()
     sys.setprofile(profile)
     try:
@@ -221,8 +225,8 @@ async def reap_owned(process, fallback):
     assert process.returncode is not None, 'Owned worker exit not confirmed'
 
 
-def require_next_success(owner):
-    """A parked terminal generation alone is not a successful next response."""
+def require_next_success(owner, expected_text='placement-finite-turn-complete'):
+    """An idle terminal generation alone is not a successful next response."""
     identity = 'placement-next-input'
     generation = owner['collaborationGeneration']
     assert generation['terminal']
@@ -235,7 +239,7 @@ def require_next_success(owner):
     final = [message for message in owner['messages']
              if message.get('role') == 'assistant' and message.get('inputId') == identity
              and message.get('generationId') == generation['id']
-             and message.get('text') == 'placement-finite-turn-complete'
+             and message.get('text') == expected_text
              and message.get('response', {}).get('status') == 'completed'
              and message.get('response', {}).get('phase') == 'final']
     assert len(final) == 1, 'Missing exact successful final response for placement-next-input'
@@ -320,6 +324,17 @@ async def probe(root, variant):
     processes, sid, primary = [], None, None
     original_spawn, original_killpg = asyncio.create_subprocess_exec, os.killpg
     async def spawn(*argv, **kwargs):
+        if '--worker' in argv and str(root) in argv and variant == 'new-owner' and len(processes) == 1:
+            # Observe the actual gap after acknowledged retirement and OS exit,
+            # before spawning the new owner. Never replace a lifecycle method.
+            old = processes[0]
+            assert old.returncode == 0 and sid not in runtime.workers
+            retirement = initial_row['retirement_task']
+            assert retirement.done() and retirement.result() is True
+            assert await writer_available(workspace, native)
+            assert stored.read_bytes() == plan_bytes and controls.read_bytes() == control_bytes
+            report['newOwnerRetirement'] = {'oldPid':old.pid, 'oldReturncode':old.returncode,
+                'writerAvailableAfterRetirement':True, 'controlHashBeforeRestart':digest(controls)}
         p = await original_spawn(*argv, **kwargs)
         if '--worker' in argv and str(root) in argv:
             processes.append(p)
@@ -353,30 +368,75 @@ async def probe(root, variant):
         scenario_value = {'sid':sid,'calls':str(calls),'release':str(release),'request':str(request),'variant':variant}
         scenario.write_text(json.dumps(scenario_value))
         report.update(sessionId=sid, nativeId=native, initialPlanHash=digest(stored))
-        if variant in {'parked','parked-remount','when-idle'}:
+        async def idle_owner():
+            await until(lambda: sid in runtime.workers and runtime.retention.eligible(runtime.workers[sid]))
+            row = runtime.workers[sid]
+            assert row['idle'] and row['process'].returncode is None
+            assert not await writer_available(workspace, native), 'Idle worker released its lifetime writer'
+            events = root / f"worker-events-{row['process'].pid}.jsonl"
+            checkpoints = [event for line in events.read_text().splitlines()
+                           if (event := json.loads(line)).get('method') == 'checkpoint_idle']
+            assert checkpoints, 'Ordinary idle did not enter the production checkpoint'
+            assert all(event['activationObjectId'] is not None and event['sharedHandleObjectId'] is not None
+                       for event in checkpoints), 'Idle checkpoint lost its lifetime owner'
+            report.setdefault('idleOwnershipObservations', []).append({
+                'pid':row['process'].pid, 'writerHeld':True,
+                'activationObjectId':checkpoints[-1]['activationObjectId'],
+                'sharedHandleObjectId':checkpoints[-1]['sharedHandleObjectId']})
+            return row
+        if variant in {'idle','new-owner','when-idle'}:
             await action('conversation.send', {'sessionId':sid,'text':'PLACEMENT_WARMUP'}, 'placement-warm-input')
-            await until(lambda: sid in runtime.workers and runtime.workers[sid].get('parked'))
-            assert await writer_available(workspace, native)
-            report['stages'].append('real-initial-startup-and-park')
-            report['parkedPid'] = runtime.workers[sid]['process'].pid
-        if variant == 'parked-remount':
-            # Invalidate the production stat-stamp without altering any setting.
-            # The first request must retain its refusal. Only an explicit
-            # proven-no-effect disposition may precede a separate fresh request.
+            await until(lambda: owner.get('collaborationGeneration',{}).get('terminal')
+                and any(m.get('inputId') == 'placement-warm-input' for m in owner['messages']))
+            row = await idle_owner()
+            initial_row = row
+            report['stages'].append('real-initial-startup-and-idle-writer-held')
+            report['idlePid'] = row['process'].pid
+            # Worker-owned control persistence is not an external mount change.
+            # Exercise the actual start comparison, not just the stamp helper.
+            initial_object = await runtime._request(sid, 'dependencies', patchPlacement={'moduleId':MODULE})
+            assert initial_object['status'] == 'observed'
+            from amplifier_web.shared_state import mounted_configuration_stamp
+            baseline = copy.deepcopy(row['configurationStamp'])
             previous = controls.stat()
             same_bytes = controls.read_bytes()
             os.utime(controls, ns=(previous.st_atime_ns, previous.st_mtime_ns + 2_000_000_000))
             assert controls.read_bytes() == same_bytes and controls.stat().st_mtime_ns != previous.st_mtime_ns
-            report['staleRemountRequested'] = True
+            assert mounted_configuration_stamp(workspace, native, home,
+                extra_paths=row.get('configurationInputs', ())) == baseline
+            await runtime.start(row['start_session'], row['emit'], preserve_emit=True)
+            unchanged = await runtime._request(sid, 'dependencies', patchPlacement={'moduleId':MODULE})
+            assert runtime.workers[sid] is row and len(processes) == 1
+            assert unchanged == initial_object and controls.read_bytes() == same_bytes
+            assert not await writer_available(workspace, native)
+            report['controlStampIgnored'] = True
         # Freeze bytes at the actual preparation/admission boundary, not before
         # an unrelated ordinary warmup is allowed to persist its controls.
         control_bytes, plan_bytes = controls.read_bytes(), stored.read_bytes()
         bind_command = 'placement-bind-command'
         report['controlHashBefore'] = digest(controls)
+        if variant == 'new-owner':
+            original_control = runtime.control
+            async def observe_placement_control(identity, operation, arguments=None, *, guard=None):
+                if operation != BIND:
+                    return await original_control(identity, operation, arguments, guard=guard)
+                attempt = arguments['_configurationAttempt']
+                observation = {key:attempt[key] for key in ('operationId','attemptId','workerPid')}
+                observation['guardPresent'] = callable(guard)
+                report.setdefault('placementControlAttempts', []).append(observation)
+                try:
+                    return await original_control(identity, operation, arguments, guard=guard)
+                except Exception as exc:
+                    # The public placement failure is deliberately sanitized.
+                    # Observe the actual refused native call without changing
+                    # its arguments, guard, result, evidence or exception.
+                    observation['failure'] = {'type':type(exc).__name__, 'message':str(exc)}
+                    raise
+            runtime.control = observe_placement_control
         if variant == 'retired-control':
             # Inject actual host retirement after ensure_runtime/attempt capture
             # but before the original guarded control reaches _request. Do not
-            # replace startup, ownership, park, retirement or the native writer.
+            # replace startup, ownership, checkpoint, retirement or the native writer.
             original_control = runtime.control
             async def retire_before_control(identity, operation, arguments=None, *, guard=None):
                 if operation == BIND:
@@ -387,6 +447,7 @@ async def probe(root, variant):
                     old = runtime.workers[identity]
                     assert before['attempts'][-1]['workerPid'] == old['process'].pid
                     await until(lambda: runtime.retention.eligible(old))
+                    assert not await writer_available(workspace, native)
                     guard()
                     async with runtime._admission(identity):
                         assert runtime.workers[identity] is old and runtime.retention.eligible(old)
@@ -403,7 +464,7 @@ async def probe(root, variant):
                         'operationId':before['id'], 'originalRequestHash':before['requestHash'],
                         'attemptId':before['attempts'][-1]['attemptId'],
                         'attemptWorkerPid':before['attempts'][-1]['workerPid'],
-                        'writerAvailableAfterRetirement':True,
+                        'writerHeldBeforeRetirement':True, 'writerAvailableAfterRetirement':True,
                         'controlHashBeforeRestart':digest(controls), 'guardPresent':True}
                     try:
                         return await original_control(identity, operation, arguments, guard=guard)
@@ -417,7 +478,7 @@ async def probe(root, variant):
             grant = (await action('capability.grant', {'sessionId':sid,'effects':['runtime_configuration'],
                 'scopes':['session'],'reason':'Synthetic explicit placement choice'}, 'placement-grant'))['result']
             # A host bridge observer only records bytes and identities; it does
-            # not substitute answers, admission, start, acquire, park or persist.
+            # not substitute answers, admission, start, checkpoint or persist.
             original_bridge = runtime.app_bridge
             async def bridge(op, args, identity):
                 result = await original_bridge(op, args, identity)
@@ -443,6 +504,7 @@ async def probe(root, variant):
             await until(lambda: owner.get('pendingConfiguration',{}).get('phase') == 'queued')
             assert not owner['collaborationGeneration']['terminal']
             assert owner['pendingConfiguration']['authority']['grantId'] == grant['id']
+            assert not runtime.retention.eligible(runtime.workers[sid]), 'Active generation became retirement-eligible'
             assert not await writer_available(workspace, native)
             bind_args = json.loads(request.read_text())
             before_calls = calls.read_bytes()
@@ -455,12 +517,23 @@ async def probe(root, variant):
                 assert snapshot['mounted']['status']=='unobserved'
             else:
                 assert snapshot['mounted']['workingDirectory']==str(workspace)
-                assert runtime.workers[sid]['process'].pid==report['parkedPid']
+                assert runtime.workers[sid]['process'].pid==report['idlePid']
             bind_args = {'sessionId':sid,'moduleId':MODULE,'expectedRevision':snapshot['revision'],
                 'expectedExecutionRevision':snapshot['executionRevision'],'choice':'bind-to-execution'}
-            if variant == 'parked-remount':
-                initial_object = await runtime._request(sid, 'dependencies', patchPlacement={'moduleId':MODULE})
-                assert initial_object['status'] == 'observed'
+            if variant == 'new-owner':
+                # Keep the original observed native object in this request.
+                # A changed external input must retire that owner before the
+                # original guarded control runs on a fresh process. Its stale
+                # object is a refusal, never implicit success or automatic replay.
+                settings = shared / 'settings.yaml'
+                previous = settings.stat()
+                settings_bytes = settings.read_bytes()
+                os.utime(settings, ns=(previous.st_atime_ns, previous.st_mtime_ns + 2_000_000_000))
+                assert settings.read_bytes() == settings_bytes
+                assert settings.stat().st_mtime_ns != previous.st_mtime_ns
+                assert mounted_configuration_stamp(workspace, native, home,
+                    extra_paths=row.get('configurationInputs', ())) != baseline
+                report['externalStampChanged'] = True
             before_calls = calls.read_bytes() if calls.exists() else b''
             await action(BIND, bind_args, 'placement-bind-command')
         await until(lambda: 'placement-bind-command' in app.state.get('managementResults',{})
@@ -515,16 +588,21 @@ async def probe(root, variant):
             assert runtime.workers[sid]['process'] is processes[1] and len(processes) == 2
             assert stored.read_bytes() == plan_bytes and controls.read_bytes() == control_bytes
             assert not calls.exists()
-            await until(lambda: runtime.workers[sid].get('parked'))
-            assert await writer_available(workspace, native)
-            proof.update(originalRecordPreserved=True, noReplay=True, writerAvailableAfterRefusal=True)
+            await idle_owner()
+            proof.update(originalRecordPreserved=True, noReplay=True, writerHeldAfterRefusal=True)
             report['stages'].append('retired-start-preserved-original-unknown-held')
             return  # Deliberate held original, not mounted success or a new input.
-        if variant == 'parked-remount':
-            events = [json.loads(line) for p in root.glob('worker-events-*.jsonl')
-                      for line in p.read_text().splitlines()]
-            assert any(x.get('method') == 'remount' for x in events), 'Production stale remount was not entered'
-            report['staleRemountObserved'] = True
+        if variant == 'new-owner':
+            proof = report['newOwnerRetirement']
+            assert report['workerReadyAtSettlement'] and len(processes) == 2
+            assert processes[0].pid == proof['oldPid'] == report['idlePid']
+            assert processes[1].pid != proof['oldPid']
+            proof.update(newPid=processes[1].pid, controlHashAfterRestart=digest(controls))
+            replacement_object = await runtime._request(sid, 'dependencies', patchPlacement={'moduleId':MODULE})
+            assert replacement_object['status'] == 'observed'
+            assert replacement_object['objectId'] != initial_object['objectId']
+            assert replacement_object['workingDirectory'] == initial_object['workingDirectory'] == str(workspace)
+            await idle_owner()
             original = copy.deepcopy(current)
             original_args = copy.deepcopy(bind_args)
             report['explicitRecovery'] = recovery_proof = {
@@ -533,11 +611,24 @@ async def probe(root, variant):
                 'originalState':copy.deepcopy(original['state']),
                 'originalHistory':copy.deepcopy(original['history']),
                 'originalAttemptIds':[a['attemptId'] for a in original['attempts']],
-                'originalMountedObjectId':initial_object['objectId']}
+                'originalMountedObjectId':initial_object['objectId'],
+                'replacementObjectId':replacement_object['objectId']}
             assert original['state']['phase'] == 'error' and original['state']['effect'] == 'unknown'
             assert len(original['attempts']) == 1 and owner['configurationBusy']
-            report['productionBoundaryFailure'] = 'parked-remount-binding-refused'
+            assert original['request']['config']['mounted']['objectId'] == initial_object['objectId']
+            assert original['attempts'][0]['workerPid'] == processes[1].pid
+            native_controls = report['placementControlAttempts']
+            assert len(native_controls) == 1 and native_controls[0]['guardPresent']
+            assert native_controls[0]['operationId'] == original['id']
+            assert native_controls[0]['attemptId'] == original['attempts'][0]['attemptId']
+            assert native_controls[0]['workerPid'] == processes[1].pid
+            assert 'Mounted patch configuration changed before binding' in native_controls[0]['failure']['message']
+            report['productionBoundaryFailure'] = 'new-owner-stale-object-binding-refused'
             assert stored.read_bytes() == plan_bytes and controls.read_bytes() == control_bytes
+            duplicate = await action(BIND, original_args, bind_command)
+            assert duplicate['duplicate']
+            assert app.management.configuration_record(sid, original['id']) == original
+            assert len(processes) == 2 and calls.read_bytes() == before_calls
             try:
                 await reconcile_proven_none(action, sid, original['id'], recovery_proof)
             except BaseException:
@@ -552,7 +643,7 @@ async def probe(root, variant):
             assert reconciled_record['history'][:len(original['history'])] == original['history']
             assert len(reconciled_record['history']) == len(original['history']) + 1
             assert stored.read_bytes() == plan_bytes and controls.read_bytes() == control_bytes
-            assert calls.read_bytes() == before_calls and len(processes) == 1
+            assert calls.read_bytes() == before_calls and len(processes) == 2
             # Explicit synthetic UI/operator disposition, not an agent pin reset.
             await action('configuration.cancel', {'id':sid}, 'placement-original-cancel')
             await until(lambda: 'placement-original-cancel' in app.state.get('managementResults', {}))
@@ -567,11 +658,12 @@ async def probe(root, variant):
             assert not owner.get('pendingConfiguration') and not owner.get('configurationBusy')
             recovery_proof['cancelledState'] = copy.deepcopy(cancelled['state'])
             recovery_proof['cancelledHistory'] = copy.deepcopy(cancelled['history'])
-            remounted = await runtime._request(sid, 'dependencies', patchPlacement={'moduleId':MODULE})
-            assert remounted['status'] == 'observed' and remounted['objectId'] != initial_object['objectId']
+            fresh_object = await runtime._request(sid, 'dependencies', patchPlacement={'moduleId':MODULE})
+            assert fresh_object == replacement_object, 'Cancellation recreated the native object or owner'
+            assert len(processes) == 2
             fresh = (await action(READ, {'sessionId':sid,'moduleId':MODULE}, 'placement-fresh-read'))['result']
             assert fresh['revision'] != snapshot['revision']
-            assert fresh['mounted'] == {'status':'observed','workingDirectory':remounted['workingDirectory']}
+            assert fresh['mounted'] == {'status':'observed','workingDirectory':fresh_object['workingDirectory']}
             bind_args = {**original_args, 'expectedRevision':fresh['revision'],
                          'expectedExecutionRevision':fresh['executionRevision']}
             bind_command = 'placement-fresh-bind-command'
@@ -583,12 +675,17 @@ async def probe(root, variant):
             current = app.management.configuration_record(sid, fresh_operation)
             assert current['request']['source']['origin'] == 'ui'
             assert current['request']['source']['choice'] == 'bind-to-execution'
-            assert current['request']['config']['mounted']['objectId'] == remounted['objectId']
+            assert current['request']['config']['mounted']['objectId'] == fresh_object['objectId']
             assert current['request']['config']['mounted']['objectId'] != original['request']['config']['mounted']['objectId']
             assert current['attempts'][0]['attemptId'] != original['attempts'][0]['attemptId']
+            assert len(native_controls) == 2 and native_controls[1]['guardPresent']
+            assert native_controls[1]['operationId'] == current['id']
+            assert native_controls[1]['attemptId'] == current['attempts'][0]['attemptId']
+            assert native_controls[1]['workerPid'] == processes[1].pid
+            assert 'failure' not in native_controls[1]
             assert app.management.configuration_record(sid, original['id']) == cancelled
             assert calls.read_bytes() == before_calls
-            recovery_proof.update(freshRead=fresh, remountedObjectId=remounted['objectId'],
+            recovery_proof.update(freshRead=fresh, freshMountedObjectId=fresh_object['objectId'],
                 freshOperationId=fresh_operation, freshCommandId=bind_command,
                 freshRequestHash=current['requestHash'], originalRecordPreserved=True,
                 noOriginalReplay=True)
@@ -617,9 +714,11 @@ async def probe(root, variant):
         assert owner.get('configuration') is None
         assert current['request']['commandId']==bind_command and len(current['attempts'])==1
         assert report['workerReadyAtSettlement']
-        assert len(processes)==2 and processes[0].returncode==0
-        if variant in {'parked','parked-remount'}:
-            assert processes[0].pid==report['parkedPid']
+        expected_processes = 3 if variant == 'new-owner' else 2
+        assert len(processes)==expected_processes
+        assert all(p.returncode==0 for p in processes[:-1])
+        if variant in {'idle','new-owner'}:
+            assert processes[0].pid==report['idlePid']
         if variant=='when-idle':
             assert owner['collaborationGeneration']['terminal']
             assert current['request']['source']['generation']['id']==report['generationAtBind']['id']
@@ -660,29 +759,23 @@ async def probe(root, variant):
         assert (await tool('read_file',{'file_path':'file.txt'}))['success']
         assert (await tool('apply_patch',patch))['success']
         assert (checkout/'file.txt').read_text()=='new\n' and (workspace/'file.txt').read_text()=='old\n'
-        await until(lambda: runtime.workers[sid].get('parked'))
-        assert await writer_available(workspace,native)
-        report['stages'].append('fresh-read-write-and-park')
-        messages=history(workspace,native)
-        if variant=='when-idle':
-            ids=[(m.get('metadata') or {}).get('amplifier_input',{}).get('id') for m in messages]
-            assert ids.count('placement-original-input')==1
-            assert sum(m.get('tool_call_id')=='placement-bind-tool' for m in messages)==1
-            report['originalInputCount']=report['originalBindToolCount']=1
+        await idle_owner()
+        report['stages'].append('fresh-read-write-and-idle-writer-held')
         previous_generation = (owner.get('collaborationGeneration') or {}).get('id')
         next_object = await object_identity()
         await action('conversation.send',{'sessionId':sid,'text':'PLACEMENT_NEXT'},'placement-next-input')
         await until(lambda: owner.get('collaborationGeneration',{}).get('terminal')
             and owner['collaborationGeneration'].get('id') != previous_generation
             and any(m.get('inputId')=='placement-next-input' for m in owner['messages'])
-            and runtime.workers[sid].get('parked'))
-        assert len(processes)==2
+            and sid in runtime.workers and runtime.retention.eligible(runtime.workers[sid]))
+        await idle_owner()
+        assert len(processes)==expected_processes
         assert app.management.configuration_record(sid,current['id'])==observed
         assert stored.stat().st_mtime_ns==stamp
+        assert await object_identity() == next_object
         if variant=='when-idle':
-            assert any(m.get('text')=='placement-next-duplicate-verified' for m in owner['messages'])
+            report['nextSuccessfulResponse'] = require_next_success(owner, 'placement-next-duplicate-verified')
             assert len(calls.read_text().splitlines())==6
-            assert await object_identity() == next_object
             assert current['request']['source']['generation']['id'] == report['generationAtBind']['id']
             assert len(report['duplicateObservations']) == 1
             duplicate = report['duplicateObservations'][0]
@@ -691,10 +784,10 @@ async def probe(root, variant):
             report['stages'].append('exact-duplicate-no-effect')
         else:
             report['nextSuccessfulResponse'] = require_next_success(owner)
-        if variant == 'parked-remount':
+        if variant == 'new-owner':
             assert app.management.configuration_record(sid, original['id']) == cancelled
             assert len(app.management.configuration_record(sid, original['id'])['attempts']) == 1
-        report['stages'].append('next-generation-and-park-usable')
+        report['stages'].append('next-generation-and-idle-owner-usable')
     except BaseException as exc:
         primary=exc
         report['failure']={'type':type(exc).__name__,'message':str(exc)}
@@ -721,6 +814,17 @@ async def probe(root, variant):
             if sid:
                 try:
                     report['writerAvailableAfterClose']=await writer_available(workspace,native)
+                    if primary is None and variant == 'when-idle':
+                        assert report['writerAvailableAfterClose']
+                        assert not runtime.workers and all(p.returncode == 0 for p in processes)
+                        # This exclusive native history reader must never run
+                        # against a still-live idle owner's lifetime writer.
+                        messages = history(workspace, native)
+                        ids = [(m.get('metadata') or {}).get('amplifier_input',{}).get('id') for m in messages]
+                        assert ids.count('placement-original-input') == 1
+                        assert sum(m.get('tool_call_id') == 'placement-bind-tool' for m in messages) == 1
+                        report['originalInputCount'] = report['originalBindToolCount'] = 1
+                        report['stages'].append('exclusive-history-read-after-confirmed-close')
                 except BaseException as exc:
                     report['cleanupErrors'].append('writer: '+type(exc).__name__+': '+str(exc))
         finally:
