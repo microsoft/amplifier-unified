@@ -1,4 +1,4 @@
-"""Cleanup may continue after a proven pre-dispatch failure, never a lost effect."""
+"""Common dispatch distinguishes proven local refusal from a lost effect."""
 import json
 import sys
 
@@ -56,6 +56,49 @@ def test_started_cleanup_helper_failure_remains_uncertain(tmp_path, monkeypatch,
     (tmp_path / 'test_environment_worker.py').write_text(source)
     with pytest.raises(ValueError):
         REAL_INVOKE({'python': sys.executable}, home, row, 'remove', {'requestId': 'started-cleanup'})
+
+
+@pytest.mark.parametrize('action', ['prepare', 'start', 'execute', 'stop', 'exportArtifacts', 'job_cancel'])
+@pytest.mark.parametrize('boundary', ['qualification', 'dependencies', 'executable'])
+def test_common_local_refusal_is_not_an_unknown_effect(tmp_path, monkeypatch, action, boundary):
+    home, row = allocated(tmp_path)
+    config = {'python': sys.executable}
+    calls = []
+
+    def refuse(*args, **kwargs):
+        raise ValueError('private dispatch diagnostic')
+
+    def launch(*args, **kwargs):
+        calls.append('Popen')
+        raise FileNotFoundError('private executable diagnostic')
+
+    monkeypatch.setattr(owner.subprocess, 'Popen', launch)
+    if boundary == 'qualification':
+        monkeypatch.setattr(managed_runner_updates, 'validate_execution', refuse)
+    elif boundary == 'dependencies':
+        row.update(preparedDependencies={'status': 'ready'}, snapshot={}, profileId='browser-test')
+        monkeypatch.setattr(owner.dependencies, 'validate_receipt', refuse)
+    result = REAL_INVOKE(config, home, row, action, {'requestId': 'local-refusal'})
+    assert result['effectAdmitted'] is False and result['status'] == 'not-started'
+    assert result['code'] == 'environment_helper_not_started'
+    assert calls == (['Popen'] if boundary == 'executable' else [])
+    assert 'private' not in json.dumps(result)
+    assert owner.durable_state(result) == 'failed'
+
+
+@pytest.mark.parametrize('action', ['execute', 'stop'])
+async def test_common_failed_helper_launch_preserves_guest_and_does_not_replay(app, backend, monkeypatch, action):
+    row = (await start(app))['resource']
+    monkeypatch.setattr(owner, 'invoke', REAL_INVOKE)
+    extra = {'command': 'true'} if action == 'execute' else {}
+    failed = await act(app, action, row, 'unstarted-' + action, **extra)
+    assert failed['request']['state'] == 'failed'
+    assert failed['request']['result']['status'] == 'not-started'
+    assert failed['request']['result']['effectAdmitted'] is False
+    assert failed['resource']['status'] == 'running'
+    monkeypatch.setattr(owner, 'invoke', lambda *a: pytest.fail('local refusal replayed'))
+    duplicate = await act(app, action, row, 'unstarted-' + action, **extra)
+    assert duplicate['request'] == failed['request']
 
 
 async def test_real_failed_helper_launch_can_continue_without_rewriting_request(app, backend, monkeypatch):

@@ -295,6 +295,16 @@ def cleanup_not_started(row):
             'message': 'Cleanup could not start. The stopped environment and its files are unchanged. Inspect the test machine configuration, then continue cleanup with a new request.'}
 
 
+def helper_not_started(row, action):
+    """A known local refusal is not a possibly dispatched backend operation."""
+    if action in {'remove', 'finishCleanup'}:
+        return cleanup_not_started(row)
+    return {'ok': False, 'effectAdmitted': False, 'status': 'not-started',
+            'universeId': row.get('universeId'), 'phase': 'preparing',
+            'code': 'environment_helper_not_started',
+            'message': 'The operation could not start. No backend call was made. Inspect the test machine configuration before submitting a new request.'}
+
+
 def cleanup_refusal_code(exc):
     """Expose known admission boundaries without publishing arbitrary diagnostics."""
     return {
@@ -327,10 +337,8 @@ def invoke(config, home, row, action, args, *, _qualification=False):
                 validate_execution(home, config)
     except (OSError, ValueError, KeyError, TypeError):
         # This is local validation, before either the local helper or remote
-        # runner is invoked. It cannot establish an unknown removal effect.
-        if action in {'remove', 'finishCleanup'}:
-            return cleanup_not_started(row)
-        raise
+        # runner is invoked. It cannot establish an unknown external effect.
+        return helper_not_started(row, action)
     if action == 'execute' and args.get('durableJob') is True:
         action = 'job_start'
     folder = (home / 'workspace-resources' / 'backend-probes' / config_key(config)
@@ -374,9 +382,7 @@ def invoke(config, home, row, action, args, *, _qualification=False):
     except (OSError, ValueError, KeyError, TypeError):
         # Popen raises only after its failed child was reaped; no helper ran.
         # Once Popen returns, transport/process failures remain uncertain.
-        if action in {'remove', 'finishCleanup'}:
-            return cleanup_not_started(row)
-        raise
+        return helper_not_started(row, action)
     output, errors = bytearray(), bytearray()
     drained = False
     deadline = time.monotonic() + (450 if action == 'exportArtifacts' else 650 if action == 'start' else 750 if action == 'finishCleanup' else 750 if action == 'remove' and row.get('preparedDependencies', {}).get('executionContract') else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile', 'job_start', 'job_read', 'job_cancel'} else args.get('timeoutSeconds', 60) + 150)
@@ -553,6 +559,12 @@ def project_result(home, row, request):
     if action == 'start' and (result.get('admissionDenied') or result.get('effectAdmitted') is False):
         changes['backendAdmitted'] = False
     environment_state = ('running' if result.get('ok') else 'unknown') if action == 'execute' else result.get('status', 'unknown')
+    if action != 'start' and result.get('code') == 'environment_helper_not_started' and result.get('effectAdmitted') is False:
+        # A refused execute/stop never changed the guest. Do not strand a running
+        # environment or its earlier preparation under a synthetic UNKNOWN.
+        environment_state = result['environmentState']
+        if action == 'execute':
+            changes['durableJob'] = None
     if action in {'remove', 'finishCleanup'} and result.get('ok') and environment_state == 'removed':
         changes['status'] = 'retired'
         if row.get('workspaceArchivePolicy'):
@@ -656,11 +668,13 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
     lock = FileLock(str(home / 'workspace-resources' / ('environment-' + row['id'] + '.lock')), timeout=0)
     locked = admitted = binding_pending = False
     result = None
+    original_environment_state = row.get('environmentState', 'unknown')
     try:
         lock.acquire()
         locked = True
         admit()
         row = get(home, sid, row['id'])
+        original_environment_state = row.get('environmentState', 'unknown')
         if action != 'start' and row['revision'] != args['expectedRevision']:
             raise ValueError('The environment changed. Inspect its current revision.')
         if action in {'remove', 'finishCleanup'}:
@@ -816,6 +830,8 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
                 result = invoke(config, home, row, action, args)
             else:
                 result = invoke(config, home, row, action, args)
+        if result.get('code') == 'environment_helper_not_started' and result.get('effectAdmitted') is False:
+            result = {**result, 'environmentState': original_environment_state}
         if action in {'remove', 'finishCleanup'} and result.get('ok') and result.get('status') == 'removed':
             # Commit the guest result before removing its prepared image. A
             # restart can finish image cleanup without repeating guest teardown.
@@ -839,7 +855,7 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
         state = 'completed' if result.get('ok') else 'failed' if not_admitted else 'outcome_unknown' if admitted else 'failed'
         if action == 'execute' and result.get('ok') and result.get('result', {}).get('exit_code', 0) != 0:
             state = 'failed'
-        if action == 'execute' and args.get('durableJob') is True:
+        if action == 'execute' and args.get('durableJob') is True and not not_admitted:
             state = durable_state(result)
         request = app.operations.requests.finish(request, state, resourceId=row['id'], result=result,
             message=result.get('message', 'The result is retained; this request will not replay.'))
@@ -899,9 +915,9 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
                 message=message)
             # Without the resource lock, do not change its owner or projection.
             return {'resource': public(home, row), 'request': request}
-        if (locked and action in {'remove', 'finishCleanup'} and isinstance(result, dict)
+        if (locked and isinstance(result, dict)
                 and result.get('effectAdmitted') is False):
-            # A returned helper/preflight refusal establishes that removal was
+            # A returned helper/preflight refusal establishes that the effect was
             # not dispatched. A later journal/projection fault must not erase
             # that evidence and manufacture a permanent unknown-effect hold.
             request = app.operations.requests.finish(request, 'failed', resourceId=row['id'],
@@ -910,7 +926,7 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
                 row = project_result(home, get(home, sid, row['id']), request)
             except (OSError, ValueError, sqlite3.Error):
                 row = {**row, 'observation': {'status': 'unverified'},
-                       'reason': 'Cleanup did not start. Its saved result is available; inspect again to repair the environment metadata.'}
+                       'reason': 'The operation did not start. Its saved result is available; inspect again to repair the environment metadata.'}
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise
             return {'resource': public(home, row), 'request': request}
@@ -958,6 +974,8 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
 
 
 def durable_state(result):
+    if result.get('effectAdmitted') is False or result.get('admissionDenied'):
+        return 'failed'
     job = result.get('job', {})
     if not result.get('ok') or job.get('state') == 'unknown' or not job:
         return 'outcome_unknown'
