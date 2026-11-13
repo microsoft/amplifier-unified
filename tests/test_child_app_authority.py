@@ -176,13 +176,18 @@ async def test_scripted_child_returns_result_after_root_only_refusal(app, tmp_pa
             assert report['effects'][0]['nested']['status'] == 'completed'
             assert late_preparations.count('grandchild') == 1
         assert not app.runtime.inputs, 'Denied sends must not deliver peer input'
+        histories = {}
         for sid in effects or ['child']:
             history = store.load(sid)[0]
-            assert COMMON_GUIDANCE not in json.dumps(history), 'Guidance stays ephemeral'
+            histories[sid] = history
+            # JSON escapes newlines inside persisted strings. Compare the same
+            # encoded substring, not raw multiline text against serialized JSON.
+            assert json.dumps(COMMON_GUIDANCE)[1:-1] not in json.dumps(history), 'Guidance stays ephemeral'
         if artifacts := os.environ.get('AMPLIFIER_TEST_ARTIFACTS'):
             Path(artifacts, f'child-guidance-{scenario}.json').write_text(json.dumps({
                 'scriptedProvider': True, 'workAdmission': 'fixture', 'requests': requests,
-                'delegatedResult': returned, 'effects': effects, 'latePreparations': late_preparations}, indent=2))
+                'delegatedResult': returned, 'effects': effects, 'latePreparations': late_preparations,
+                'savedHistories': histories}, indent=2))
     finally:
         transport.workers.clear()
         await parent.cleanup()

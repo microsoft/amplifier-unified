@@ -80,9 +80,10 @@ async def run():
             assert 'resetPreview' not in serialized and 'window.BABYLON' not in serialized
             assert len(CANVAS_GUIDANCE.encode('utf-8')) < 9000
             context = await session.coordinator.get('context').get_messages()
-            assert CANVAS_GUIDANCE not in json.dumps(context, default=str), 'Ephemeral host instructions must not pollute saved history'
+            assert json.dumps(CANVAS_GUIDANCE)[1:-1] not in json.dumps(context, default=str), 'Ephemeral host instructions must not pollute saved history'
             if artifacts := os.environ.get('AMPLIFIER_TEST_ARTIFACTS'):
                 (Path(artifacts) / 'canvas-provider-request.json').write_text(serialized, encoding='utf-8')
+                (Path(artifacts) / 'canvas-saved-history.json').write_text(json.dumps(context, default=str), encoding='utf-8')
 
             request = provider.requests[0]
             user = next(message for message in request.messages if message.role == 'user' and isinstance(message.content, list))
