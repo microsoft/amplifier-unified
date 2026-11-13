@@ -562,9 +562,12 @@ async def status(service, args):
         return (_operation(service, operation_id)
                 if operation_id else _latest(service))
     operation = await asyncio.to_thread(read)
+    # An exact historical read is a response, not the current installation
+    # owner. In particular an old browser tab cannot relabel successor health.
+    current = await asyncio.to_thread(_latest, service)
     async with service.lock:
-        if operation and operation.get('operationId') == getattr(service, '_installation_repair_gate', None):
-            if operation.get('status') in RELEASED:
+        if current and current.get('operationId') == getattr(service, '_installation_repair_gate', None):
+            if current.get('status') in RELEASED:
                 service._installation_repair_gate = None
-        _publish(service, operation=operation)
+        _publish(service, operation=current)
     return {'operation': operation}

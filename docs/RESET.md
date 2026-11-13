@@ -76,6 +76,11 @@ fresh final installation exactly; constraints alone are not that proof. A target
 release predating this protocol is rejected before service stop. The successor
 retains the repair admission fence until the helper records verified readiness;
 an installed-but-unverified host keeps inspection and Stop available, not new work.
+There is currently no in-app health-only retry or admission-fence override for a
+terminal `reinstalled`/unverified repair. Read its exact receipt and run the
+documented CLI `doctor` and `service status` for diagnosis; if deeper recovery is
+needed, explicitly review and run the separate CLI reset. A passing manual check
+does not rewrite the repair receipt, release its hold, or replay installation.
 
 Focused synthetic checks establish admission, no-replay, ordering and rollback
 boundaries. They do not establish native Linux/macOS service-manager qualification

@@ -229,6 +229,22 @@ async def test_installed_but_unverified_successor_stays_fenced(host):
     assert not repair.held(host.service)
 
 
+async def test_old_exact_status_cannot_replace_new_current_repair_projection(host):
+    first_view, args = await prepared(host)
+    old = (await host.service.dispatch('maintenance.installationRepairConfirm', args))['result']
+    old.update(status='failed', stage='preflight-failed')
+    repair._write(repair._folder(host.service, old['operationId']) / 'operation.json',
+                  old, host.service.data_dir)
+    assert not repair.held(host.service)
+    _, new_args = await prepared(host)
+    current = (await host.service.dispatch('maintenance.installationRepairConfirm', new_args))['result']
+    exact = await repair.status(host.service, {'previewId': first_view['previewId']})
+    assert exact['operation'] == old
+    projected = host.service.state['maintenance']['installationRepair']['operation']
+    assert projected['operationId'] == current['operationId']
+    assert repair.held(host.service)
+
+
 def test_declared_extras_preserve_missing_optional_distribution(tmp_path, monkeypatch):
     from amplifier_web import app_updates, application_generations
     prefix = tmp_path / 'tool'
