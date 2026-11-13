@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import React,{act as renderAct,useLayoutEffect} from 'react';
 import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
-const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
+const server=await createServer({configFile:false,server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {SettingsDraftProvider,useSettingsDraft,useSettingsDrafts,useGuardedSettingsPanel,useGuardedSettingsDraft}=await server.ssrLoadModule('/src/settings-drafts.jsx');
 const {useSettingsHistory}=await server.ssrLoadModule('/src/settings-layout.jsx');
 const {settingsTrail,settingsBaseNavigation}=await server.ssrLoadModule('/src/settings-mobile.js');
@@ -61,6 +61,17 @@ test('incoming shared panel changes retain the editor until confirmed, including
  await renderAct(async()=>root.update(React.createElement(Panel,{requested:'settings'})));
  dirty=false;await renderAct(async()=>root.update(React.createElement(Panel,{requested:null})));
  assert.equal(visible,null);await renderAct(async()=>root.unmount());
+});
+
+test('an editor may refuse discard while a save outcome is unconfirmed',async()=>{
+ let root,pending;const entry={label:'Workspace starter',dirty:true,review:()=>{},discard:()=>false};
+ try{
+  await renderAct(async()=>root=create(React.createElement(Fixture,{entry})));
+  await renderAct(async()=>{pending=guard.confirmClose()});
+  await renderAct(async()=>click(root,'Discard changes'));
+  assert.equal(await pending,false);
+  assert.equal(guard.hasUnsaved(),true);
+ }finally{await renderAct(async()=>root?.unmount())}
 });
 
 test('approved editor survives the discard reset until the selected target is restored',async()=>{
