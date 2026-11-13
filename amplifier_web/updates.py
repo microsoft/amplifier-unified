@@ -566,9 +566,9 @@ class UpdateManager:
             self.service.state['updates'].update(values)
             state = self.service.state['updates']
             from .update_health import publish as publish_health
-            publish_health(self)
             state['blockers'] = (self.app_blockers() if state.get('pendingApp')
                                  else self.blockers()) if self.requires_idle(state) else []
+            publish_health(self)
             from .update_restart import target
             state['forceRestartTarget'] = target(self)
             self.service._publish_changes(globals={'updates','settings'})
@@ -1773,6 +1773,9 @@ class UpdateManager:
         await self.wait_for_work(3)
         while not self.closed:
             self.wakeup.clear()
+            state = self.service.state['updates']
+            sequence = state.get('sequence', {})
+            before = (state.get('phase'), sequence.get('stage'), sequence.get('nextStage'))
             previous_event=self.diagnostics.state.get('latest',{}).get('id')
             try:
                 await self.tick()
@@ -1784,13 +1787,19 @@ class UpdateManager:
                     self.diagnostics.record('background-update','failed',**exception_facts(error))
                 phase=self.diagnostics.state['latest']['phase']
                 await self.publish(phase='activating' if self.service.state['updates'].get('pendingRestart') else 'error',error=failure_guidance(self.diagnostics.state.get('lastFailure', {})) or 'Background update failed during '+phase.replace('-',' ')+'. Review its diagnostic receipt; no work was replayed.')
-            sequence = self.service.state['updates'].get('sequence', {})
-            # A finished stage can continue on the next event-loop turn.
-            # External commands interrupt the ordinary background cadence;
-            # never make a user wait for its next timer tick.
-            if (sequence.get('nextStage') and self.service.state['updates'].get('phase') == 'installed'
+            state = self.service.state['updates']
+            sequence = state.get('sequence', {})
+            from .update_health import pending_preparation
+            # Only a changed stage can request immediate continuation. Retained
+            # nextStage intent cannot rearm a held/no-progress preparation.
+            if (not self.closed and sequence.get('nextStage') and state.get('phase') == 'installed'
+                    and before != (state.get('phase'), sequence.get('stage'), sequence.get('nextStage'))
+                    and not pending_preparation(self.diagnostics.state)
                     and not self.lock.locked() and not (self.check_task and not self.check_task.done())):
                 self.wakeup.set()
+            # A pending external notification can make wait_for_work return
+            # immediately; give HTTP and other owners a turn even in that case.
+            await asyncio.sleep(0)
             await self.wait_for_work(60)
 
     async def retire_storage(self):

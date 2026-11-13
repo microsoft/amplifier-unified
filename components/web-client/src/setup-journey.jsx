@@ -8,17 +8,23 @@ import {fitPanels} from './panel-layout';
 export function useConnectionSetup(state,session,act){
  const prompted=useRef(null);
  const setup=state?.setup||{},workspace=session?.workspace||state?.settings?.workspace;
+ const view=state?.view||{};
+ const settingsOpen=['settings','appearance'].includes(view.panel)||(!view.panel&&state?.canvas?.kind==='settings'&&state.canvas.open&&!view.canvasDraft?.library);
+ const external=!!(session?.externalAgent||(!session&&view.newSessionDraft?.externalAgentId)||(settingsOpen&&view.settingsExpanded?.includes('external-agents')));
  const loaded=setup.providersLoadedAt&&(setup.providersWorkspace===workspace||!session&&setup.providersLocation?.kind==='managed');
  const any=setup.providers?.some(row=>row.enabled!==false);
- const discovering=!session||['welcome','connect'].includes(state?.view?.setupJourney);
+ const discovering=!external&&(!session||['welcome','connect'].includes(state?.view?.setupJourney));
  useEffect(()=>{if(!discovering)return;const revisit=()=>{act('providers.list',session?{sessionId:session.id}:{})};window.addEventListener('focus',revisit);return()=>window.removeEventListener('focus',revisit)},[session?.id,discovering]);
  useEffect(()=>{
+  // Remote agents own their providers. A late local catalog must not replace
+  // their editor or reopen onboarding immediately after that editor closes.
+  if(external){prompted.current=workspace;return;}
   if(!loaded)return;
   if(any&&state?.view?.setupJourney!=='welcome'){prompted.current=null;return;}
   if(prompted.current===workspace)return;
   prompted.current=workspace;
   act('view.update',{patch:{...settingsPatch('ai-connections'),settingsCanvas:false,setupJourney:'connect'}});
- },[loaded,any,workspace,state?.view?.setupJourney,setup.providersLoadedAt]);
+ },[external,loaded,any,workspace,state?.view?.setupJourney,setup.providersLoadedAt]);
 }
 
 export const assistedSetupPrompt='Help me finish setting up Amplifier. Show me how you can help with settings, then offer a quick tour or let me start my own chat.';

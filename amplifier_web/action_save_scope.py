@@ -17,6 +17,7 @@ SESSION_ACTIONS = {
     'configuration.operation.reconcile', 'configuration.operation.resume', 'configuration.operation.cancel',
 }
 GLOBAL_ACTIONS = {
+    'externalAgents.save': set(), 'externalAgents.remove': set(),
     'view.update': set(),
     'session.archive': {'conversationOrganization'},
     'session.restore': {'conversationOrganization'},

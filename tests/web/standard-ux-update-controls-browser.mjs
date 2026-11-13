@@ -38,7 +38,16 @@ for(const [id,width,height,mode] of variants){
   await expect(restart).toContainText('Amplifier 99.0.1 is available, but this action uses the prepared version above.');
   await expect(entry).toHaveAccessibleDescription(/interrupted work will not be replayed automatically/);
   await expect(page.getByRole('alertdialog',{name:'Confirm update restart'})).toHaveCount(0);
-  await activate(blockers.locator('summary'));await expect(blockers).toContainText('Restarting does not recover held settings');
+  await activate(blockers.locator('summary'));
+  await expect(blockers.locator(':scope>summary')).toHaveText('View work delaying the update');
+  const realRows=await page.evaluate(()=>window.amplifier.getState().updates.blockers);
+  assert.ok(realRows.length,'Positive real host rows precede flat-disclosure assertions');
+  await expect(blockers.locator(':scope>ul>li')).toHaveText(realRows.map(item=>item.label+(item.sessionId?' — '+(item.title||'Open conversation'):'')));
+  await expect(blockers.locator('h4,section,ul ul,details')).toHaveCount(0);
+  await expect(blockers).not.toContainText('Restarting does not recover held settings');
+  await expect(restart).toContainText('You can wait for work to finish instead.');
+  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().updates.currentStatus.status)).toBe('action-required');
+  await expect(page.locator('[data-part="application-update"]').first()).toContainText('Update needs attention');
   await activate(blockers.locator('summary'));assert.equal((await state()).calls.length,0,'Inspecting blockers cannot restart');
   const target=(await state()).target;
   const accepted=page.waitForResponse(response=>response.request().method()==='POST'&&response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='updates.forceRestart');

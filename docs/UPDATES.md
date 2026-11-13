@@ -42,10 +42,12 @@ readiness ends that request; it does not install components from the superseded
 sequence. `updates.install` still requests the whole app → included → other
 sequence. A later ordinary policy check can start a new update cycle.
 
-Normal app replacement does not require recovery of an idle configuration error.
+Normal app replacement does not require recovery of an idle configuration error
+or adoption of saved configuration by an absent worker. `configurationPending`
+and retained operation phases describe intent/evidence, not executing work.
 For example, a lost native receipt can leave settings unresolved without keeping
 the host on an old application release. The target must have no mounted worker,
-preparation, running turn or child work, refresh, unsettled management task or
+preparation, running turn or child work, executing refresh, unsettled management task or
 runtime operation. Cancellation requested is not settled work. The app owner
 rechecks held-owner, execution/native target and Stop bindings across validation
 waits and holds the absent native writer boundary through activation. A changed
@@ -61,6 +63,15 @@ not rescan native receipts or saved configuration to decide app quiescence.
 Component activation retains its existing stronger configuration gate; explicit
 user-only force-restart semantics are unchanged. Real active work can still
 require waiting or deliberate interruption; an idle recovery hold alone cannot.
+
+At ordinary error settlement and startup, the configuration owner can observe
+an authenticated terminal no-effect receipt for the exact native attempt without
+renewing its permission. Startup holds exclusive absent-writer ownership, retains
+the original request, attempts and history, and persists an old-input cutoff before
+releasing that operation's local fence. It neither warms the old chat nor drains
+its queued input. Missing, conflicting, partial and saved-but-unloaded outcomes
+remain local fences; no consumer recovery action is required for an unrelated
+application replacement. This bookkeeping is not a second recovery service.
 
 ### Partial failure does not abort independent progress
 

@@ -24,7 +24,7 @@ try{
  const identity=overview.locator('.a-update-version-line');
  await expect(identity).toHaveText('Amplifier 0.20.165 · Latest 99.0.0');
  await updates.getByRole('button',{name:'Update Amplifier',exact:true}).click();
- await expect(overview).toContainText('Waiting for 1 chat to finish');const staged=await receipt();assert.equal(staged.calls.length,1);assert.equal(staged.calls[0].application.latest,'99.0.0');assert.equal(staged.generation.active,'original-generation');assert.deepEqual(staged.updates.pendingApp,staged.target);
+ await expect(overview).toContainText('Waiting for work to finish');const staged=await receipt();assert.equal(staged.calls.length,1);assert.equal(staged.calls[0].application.latest,'99.0.0');assert.equal(staged.generation.active,'original-generation');assert.deepEqual(staged.updates.pendingApp,staged.target);
  await updates.locator('[data-part="update-blockers"]>summary').click();await expect(updates.locator('[data-part="update-blockers"]')).toContainText('Settings test');
  const blockers=updates.locator('[data-part="update-blockers"]');
  for(const [mode,label,code,linked] of [
@@ -42,7 +42,7 @@ try{
   assert.equal((await receipt()).calls.length,1);
   if(process.env.AMPLIFIER_TEST_ARTIFACTS){await mkdir(process.env.AMPLIFIER_TEST_ARTIFACTS,{recursive:true});await page.screenshot({path:process.env.AMPLIFIER_TEST_ARTIFACTS+'/'+mode+'.png'});await writeFile(process.env.AMPLIFIER_TEST_ARTIFACTS+'/'+mode+'.json',JSON.stringify(report,null,2));}
  }
- await receipt('hold-clear');await expect(overview).toContainText('Waiting for 1 chat to finish');
+ await receipt('hold-clear');await expect(overview).toContainText('Waiting for work to finish');
  assert.equal(actions.filter(row=>row.action==='updates.forceRestart').length,0);assert.equal(staged.updates.application.current,'0.20.165');
  await expect(identity).toHaveText('Amplifier 0.20.165 · Latest 99.0.0');await expect(overview).not.toContainText('Latest release installed');
  // A public check refreshes the channel while work is running, without turning
@@ -62,7 +62,7 @@ try{
  assert.equal(actions.filter(row=>row.action==='updates.forceRestart').length,0,'Inspecting the prepared target is not consent to restart');
  await receipt('offline');await updates.getByRole('button',{name:'Check for newer release',exact:true}).click();
  await expect(updates).toContainText('The prepared update is still available');
- await expect(overview).toContainText('Waiting for 1 chat to finish');
+ await expect(overview).toContainText('Waiting for work to finish');
  assert.deepEqual((await receipt()).updates.pendingApp,staged.updates.pendingApp);
  if(process.env.AMPLIFIER_TEST_ARTIFACTS){await mkdir(process.env.AMPLIFIER_TEST_ARTIFACTS,{recursive:true});await page.screenshot({path:process.env.AMPLIFIER_TEST_ARTIFACTS+'/queued-update-offline.png'});}
  await receipt('newer-release');await updates.getByRole('button',{name:'Check for newer release',exact:true}).click();
@@ -72,7 +72,7 @@ try{
  await expect(identity).toContainText('Amplifier 0.20.165 · Latest 99.0.1');assert.equal((await receipt()).generation.active,'original-generation');
  await receipt('known-failure');await expect(updates.getByRole('button',{name:'Try update again',exact:true})).toBeEnabled();assert.equal((await receipt()).generation.active,'original-generation');
  await expect(identity).toContainText('Amplifier 0.20.165 · Latest 99.0.1');await expect(updates).toContainText('Synthetic staging failed; original generation retained.');
- await updates.getByRole('button',{name:'Try update again',exact:true}).click();await expect(overview).toContainText('Waiting for 1 chat to finish');assert.equal((await receipt()).calls.length,2);
+ await updates.getByRole('button',{name:'Try update again',exact:true}).click();await expect(overview).toContainText('Waiting for work to finish');assert.equal((await receipt()).calls.length,2);
  await receipt('rollback-ready');
  // The only rollback control is within Advanced details; this is supplemental
  // coverage of a public entry, not ordinary-path credit for hidden internals.

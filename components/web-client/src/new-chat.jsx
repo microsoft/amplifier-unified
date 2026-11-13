@@ -7,6 +7,7 @@ export function newChatSetup(state){
  const workspace=state?.workspaces?.find(row=>row.id===id)?.path||'';
  const draft=state?.view?.newSessionDraft;
  const path=draft?.workspace??workspace;
+ if(draft?.externalAgentId)return {title:draft.title||'',workspace:path,externalAgentId:draft.externalAgentId,location:{kind:'workspace'}};
  return {title:'',workspace,bundle:'',selection:{},...draft,location:draft?.location||{kind:path?'workspace':'managed'}};
 }
 
