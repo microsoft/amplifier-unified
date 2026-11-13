@@ -5125,16 +5125,6 @@ class AppService:
                 before_generation = (active_before.get('id'), active_before.get('terminal'))
                 current_generation = (not active_before.get('id') or
                     active_before.get('id') == payload.get('generation_id') and not active_before.get('terminal'))
-                from .input_status import generation as observe_input_generation, PREFIX
-                input_annotation = PREFIX + str(payload.get('initial_input_id', ''))
-                before_input = session.get('messageAnnotations', {}).get(input_annotation)
-                observe_input_generation(session, payload)
-                if (payload.get('event') == 'generation.started'
-                        and session.get('messageAnnotations', {}).get(input_annotation) is not before_input):
-                    from .execution import bind_runtime_turn
-                    bind_runtime_turn(session, payload)
-                from .response_completion import apply as apply_response_completion
-                apply_response_completion(session, payload)
                 root_generation = (payload.get('sessionId', session['id']) == session['id']
                     and payload.get('rootSessionId', session['id']) == session['id'])
                 if root_generation and current_generation and payload.get('event') == 'generation.failed':
@@ -5269,6 +5259,22 @@ class AppService:
                 kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
             collaboration_changed = (set() if kind == 'runtime.ended' and not ended_foreground
                                      else self.collaboration.observe(session, kind, payload))
+            if kind == 'runtime.generation':
+                admitted_start = (payload.get('event') == 'generation.started'
+                    and (session.get('collaborationGeneration') or {}).get('id') == payload.get('generation_id')
+                    and before_generation[0] != payload.get('generation_id'))
+                if current_generation or admitted_start:
+                    from .input_status import generation as observe_input_generation, PREFIX, record_failure
+                    input_annotation = PREFIX + str(payload.get('initial_input_id', ''))
+                    before_input = session.get('messageAnnotations', {}).get(input_annotation)
+                    observe_input_generation(session, payload)
+                    if admitted_start and session.get('messageAnnotations', {}).get(input_annotation) is not before_input:
+                        from .execution import bind_runtime_turn
+                        bind_runtime_turn(session, payload)
+                    from .response_completion import apply as apply_response_completion
+                    apply_response_completion(session, payload)
+                    if payload.get('event') == 'generation.failed':
+                        record_failure(session, session.get('failure') or {})
             if (kind == 'runtime.generation' and root_generation and payload.get('event') == 'generation.started'
                     and (session.get('collaborationGeneration') or {}).get('id') == payload.get('generation_id')
                     and before_generation[0] != payload.get('generation_id')):

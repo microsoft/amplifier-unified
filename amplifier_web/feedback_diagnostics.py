@@ -172,7 +172,7 @@ def failure_report(session):
     for row in causal_timeline(session):
         timeline.append({'event': _enum(row.get('event') or row.get('type'), events),
                          'scope': _enum(row.get('scope'), {'runtime', 'persistence', 'request'}),
-                         'generation': correlation(row.get('generation_id')),
+                         'generation': correlation(row.get('generation_id') or row.get('generationId')),
                          'errorType': _enum(row.get('error_type') or row.get('errorType'), ERROR_TYPES, 'other'),
                          'at': row.get('at') if type(row.get('at')) in (int, float) and math.isfinite(row['at']) else None})
     support = _object(_object(session.get('runtimeReport')).get('support'))
