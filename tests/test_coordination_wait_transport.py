@@ -29,6 +29,10 @@ class Transport:
         self.requests.append(request)
         self.tasks.append(asyncio.create_task(self.respond(request)))
 
+    def flush(self):
+        # write() delivers complete JSON lines immediately; no bytes are buffered.
+        pass
+
     async def respond(self, request):
         await asyncio.sleep(self.delay)
         try:
@@ -60,7 +64,7 @@ async def transport(tmp_path, monkeypatch):
     worker = runtime_worker.Worker()
     capabilities = {}
     worker.session = SimpleNamespace(coordinator=SimpleNamespace(
-        session_id="native-root", get_capability=capabilities.get,
+        session_id="native-root", session_state={}, get_capability=capabilities.get,
         register_capability=capabilities.__setitem__))
     wire = Transport(app, worker, root)
     monkeypatch.setattr(runtime_worker, "_PROTOCOL", wire)
