@@ -52,7 +52,8 @@ async def sleeping_owner(manager, monkeypatch):
 
 async def test_manual_check_starts_auto_install_without_timer_tick(manager, monkeypatch):
     installed = asyncio.Event()
-    async def install():
+    async def install(*, automatic=False):
+        assert automatic is True
         assert manager.service.state['updates']['phase'] == 'available'
         assert manager.inventory[0]['latest'] == 'b' * 40
         manager.service.state['updates'].update(phase='checked', available=0)
@@ -67,7 +68,7 @@ async def test_manual_check_starts_auto_install_without_timer_tick(manager, monk
 
 async def test_check_does_not_enable_install_when_user_disabled_it(manager, monkeypatch):
     manager.service.state['settings']['updates']['autoInstall'] = False
-    async def install():
+    async def install(*, automatic=False):
         pytest.fail('Check alone must respect the automatic installation preference')
     monkeypatch.setattr(manager, 'install', install)
     await sleeping_owner(manager, monkeypatch)
