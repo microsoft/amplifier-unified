@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import subprocess
 import tempfile
 import time
 from contextlib import contextmanager
@@ -154,6 +155,39 @@ def configure(app, home, calls):
         raise RuntimeError('Synthetic helper dispatch uncertainty')
 
     repair.launch = launch
+    verification = {'calls': [], 'healthy': False}
+
+    def verify_child(command, **kwargs):
+        # The controller's ordinary --verify child boundary remains real; only
+        # its health/artifact/graph probe result is synthetic in this UI fixture.
+        assert len(launched) == 1
+        folder = repair.root(service) / launched[0]['operationId']
+        assert command == ['/qualified/base/python', '-I', '-S',
+                           str(folder / 'installation_repair_worker.py'), '--verify', str(folder)]
+        assert Path(kwargs['cwd']) == folder
+        operation = repair._read(folder / 'operation.json', home)
+        assert operation['operationId'] == launched[0]['operationId']
+        assert operation['previewId'] == launched[0]['previewId']
+        assert operation['status'] == 'reinstalled' and operation['reinstalled'] is True
+        verification['calls'].append({'operationId': operation['operationId'],
+                                      'healthy': verification['healthy']})
+        ready = verification['healthy']
+        operation.update(status='ready' if ready else 'reinstalled',
+                         stage='fixture-verified' if ready else 'fixture-checks-incomplete',
+                         healthVerified=ready, serviceState='running',
+                         detail='Synthetic read-only verification; no installation or service command ran.',
+                         updatedAt=max(time.time(), operation['updatedAt'] + .001))
+        repair._write(folder / 'operation.json', operation, home)
+        return SimpleNamespace(returncode=0)
+
+    class VerificationProcess:
+        run = staticmethod(verify_child)
+
+        def __getattr__(self, name):
+            return getattr(subprocess, name)
+
+    # Module-local proxy: never patch subprocess.run for unrelated host owners.
+    repair.subprocess = VerificationProcess()
     bound_identity = identity()
     transport = {'sseConnections': 0}
 
@@ -205,8 +239,10 @@ def configure(app, home, calls):
                 'messages': detached['sessions'][0]['messages'],
                 'historySource': 'state_records.load_owner/session_projection.hydrate',
                 'operation': operation, 'projection': projection,
+                'repairHeld': repair.held(service),
                 'counters': {
                     'helpers': len(launched), 'artifactPreparations': app_release_artifacts.prepare.await_count,
+                    'verifications': len(verification['calls']),
                     'bindingReads': repair.binding.await_count,
                     'releaseReads': len(metadata_calls), 'tagReads': len(download_calls),
                     'runtimeCalls': list(calls), **transport,
@@ -219,8 +255,8 @@ def configure(app, home, calls):
         authorize(request)
         payload = await request.json()
         if (not isinstance(payload, dict) or set(payload) != {'mode', 'operationId'}
-                or payload['mode'] not in {'reinstalled', 'ready'}):
-            raise web.HTTPBadRequest(text='Only the two fixed synthetic receipt transitions are allowed.')
+                or payload['mode'] not in {'reinstalled', 'verification-healthy'}):
+            raise web.HTTPBadRequest(text='Only the fixed synthetic receipt/probe controls are allowed.')
         async with service._installation_repair_lock:
             if len(launched) != 1 or payload['operationId'] != launched[0]['operationId']:
                 raise web.HTTPConflict(text='Only this child-owned operation may be advanced.')
@@ -228,12 +264,17 @@ def configure(app, home, calls):
             operation = repair._read(path, home)
             assert operation['previewId'] == launched[0]['previewId']
             assert operation['hostInstanceId'] == service.instance_id
-            previous = 'unknown' if payload['mode'] == 'reinstalled' else 'reinstalled'
-            if operation['status'] != previous:
+            if payload['mode'] == 'verification-healthy':
+                if (operation['status'] != 'reinstalled' or verification['healthy']
+                        or len(verification['calls']) != 1):
+                    raise web.HTTPConflict(text='Verify one failed check before changing the synthetic probe.')
+                verification['healthy'] = True
+                return web.json_response({'operationId': operation['operationId'],
+                                          'status': 'verification-healthy'})
+            if operation['status'] != 'unknown':
                 raise web.HTTPConflict(text='Synthetic transitions cannot be skipped or replayed.')
-            ready = payload['mode'] == 'ready'
-            operation.update(status=payload['mode'], stage='fixture-' + payload['mode'],
-                             reinstalled=True, healthVerified=ready, serviceState='running',
+            operation.update(status='reinstalled', stage='fixture-reinstalled',
+                             reinstalled=True, healthVerified=False, serviceState='running',
                              detail='Synthetic receipt only; no install or service command ran.',
                              updatedAt=max(time.time(), operation['updatedAt'] + .001))
             repair._write(path, operation, home)

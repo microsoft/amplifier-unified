@@ -27,6 +27,7 @@ let owned,browser,page,base,failure,identity,source,component,build,initial,fina
 const unwrap=body=>body.action==='shell.command'?(body.args.command||body.args):body;
 const confirms=()=>actions.filter(row=>row.action===prefix+'Confirm');
 const statuses=()=>actions.filter(row=>row.action===prefix+'Status');
+const verifications=()=>actions.filter(row=>row.action===prefix+'Verify');
 const section=()=>page.locator('[data-part="installation-repair"]');
 const healthy=()=>section().getByText('Installation repair verified healthy',{exact:true});
 const noFallback=()=>{
@@ -98,6 +99,16 @@ async function advance(mode,operationId){
  assert.equal(response.status(),200);
  assert.deepEqual(await response.json(),{operationId,status:mode});
  await checkStatus();
+}
+async function verifyReinstalled(expectedArgs){
+ const button=section().getByRole('button',{name:'Verify repaired installation',exact:true});
+ await expect(button).toBeEnabled();
+ const waiting=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/actions'&&
+  response.request().method()==='POST'&&unwrap(response.request().postDataJSON()).action===prefix+'Verify');
+ await button.click();const response=await waiting;
+ assert.equal(response.status(),200);assert.deepEqual(unwrap(response.request().postDataJSON()).args,expectedArgs);
+ const body=await response.json();assert.equal(body.accepted,true);
+ return body.result;
 }
 async function wireOperation(operationId,status){
  await expect.poll(()=>page.evaluate(({operationId,status})=>
@@ -182,13 +193,15 @@ try{
  phase='public schemas';
  const catalogResponse=await page.request.get(base+'/api/actions');assert.equal(catalogResponse.status(),200);
  const catalog=await catalogResponse.json();
- const schemas=Object.fromEntries(['Preview','Confirm','Status'].map(suffix=>{
+ const schemas=Object.fromEntries(['Preview','Confirm','Status','Verify'].map(suffix=>{
   const row=catalog.find(row=>row.name===prefix+suffix);assert.ok(row,'Real host advertises '+suffix);
   assert.equal(row.inputSchema.type,'object');assert.equal(row.inputSchema.additionalProperties,false);
   return [suffix,row.inputSchema];
  }));
  assert.deepEqual(schemas.Confirm.properties.confirm.enum,[true]);
  assert.deepEqual([...schemas.Confirm.required].sort(),['confirm','hostInstanceId','previewId']);
+ assert.deepEqual(schemas.Verify.properties.confirm.enum,[true]);
+ assert.deepEqual([...schemas.Verify.required].sort(),['confirm','hostInstanceId','operationId']);
  // An extra property must fail public schema admission, without even binding.
  await rejected(prefix+'Preview',{unexpected:true});
  assert.equal((await observe()).counters.bindingReads,0);
@@ -244,6 +257,11 @@ try{
  await rejected(prefix+'Status',{previewId:preview.previewId,operationId:operation.operationId});
  const stillUnknown=await observe();assert.equal(stillUnknown.operation.status,'unknown');
  assert.equal(stillUnknown.projection.operation.status,'unknown');await expect(healthy()).toHaveCount(0);
+ const verificationArgs={operationId:operation.operationId,hostInstanceId:initial.hostInstanceId,confirm:true};
+ await rejected(prefix+'Verify',verificationArgs);
+ assert.equal((await observe()).counters.verifications,0,'Unknown repair cannot launch even a verification child');
+ assert.equal((await observe()).repairHeld,true);
+ await expect(section().getByRole('button',{name:'Verify repaired installation',exact:true})).toHaveCount(0);
  phase='explicit duplicate idempotency probe';
  const duplicate=accepted(await post(prefix+'Confirm',confirmationArgs));
  assert.deepEqual(duplicate,operation);
@@ -280,10 +298,30 @@ try{
  await expect(healthy()).toHaveCount(0);
  const reinstalled=await checkpoint('reinstalled and running service without health are not success',1,3);
  assert.equal(reinstalled.operation.reinstalled,true);assert.equal(reinstalled.operation.healthVerified,false);
+ assert.equal(reinstalled.repairHeld,true);assert.equal(reinstalled.counters.verifications,0);
+ assert.deepEqual(reinstalled.projection.verifyTarget,verificationArgs,'Host projects only the current eligible verification binding');
  await wireOperation(operation.operationId,'reinstalled');
- phase='ready requires exact healthy receipt';
- await advance('ready',operation.operationId);await expect(healthy()).toBeVisible();
- final=await checkpoint('only exact ready receipt is verified healthy',1,3);
+ phase='failed health-only verification retains admission hold';
+ await rejected(prefix+'Verify',{...verificationArgs,hostInstanceId:'wrong-host'});
+ assert.equal((await observe()).counters.verifications,0);
+ const failedVerification=await verifyReinstalled(verificationArgs);
+ assert.equal(failedVerification.status,'reinstalled');assert.equal(failedVerification.healthVerified,false);
+ const held=await checkpoint('failed health-only verification cannot repeat repair or release hold',1,3);
+ assert.equal(held.repairHeld,true);assert.equal(held.counters.verifications,1);
+ assert.equal(held.counters.artifactPreparations,1);await expect(healthy()).toHaveCount(0);
+ const verifyPosts=verifications().length;
+ await page.reload();await expect(section()).toBeVisible();await checkStatus();
+ assert.equal(verifications().length,verifyPosts,'Reload/status never resubmits health-only verification');
+ assert.equal((await observe()).counters.verifications,1);
+ await capture('reinstalled-verification-retained-390');
+ phase='explicit successful health-only verification';
+ await advance('verification-healthy',operation.operationId);
+ const verified=await verifyReinstalled(verificationArgs);
+ assert.equal(verified.operationId,operation.operationId);assert.equal(verified.status,'ready');
+ await expect(healthy()).toBeVisible();
+ final=await checkpoint('only explicit verification of the exact current repair releases its hold',1,3);
+ assert.equal(final.repairHeld,false);assert.equal(final.counters.verifications,2);
+ assert.equal(final.counters.artifactPreparations,1);assert.equal(final.projection.verifyTarget,null);
  assert.equal(final.operation.operationId,operation.operationId);assert.equal(final.operation.healthVerified,true);
  assert.equal(final.operation.serviceState,'running');assert.equal(final.operation.reinstalled,true);
  assert.deepEqual(final.projection.operation,final.operation);
@@ -332,7 +370,7 @@ try{
  passed=passed&&!failure&&cleanup.errors.length===0;
  const receipt={passed,phase,failure:failure?String(failure.stack||failure):null,
   scope:'actual AppService, public HTTP schemas/dispatch, cookie auth, bundled static and real SSE UI',
-  limits:['Synthetic binding/release/artifact/helper/install/service effects only; NOT native end-to-end',
+  limits:['Synthetic binding/release/artifact/helper/install/service/verification-probe effects only; NOT native end-to-end',
    'No real package download, installer, service stop/start, host replacement or provider/worker execution',
    'Fixture narrows real client transport advertisement to HTTP/SSE; no browser request interception or fulfillment',
    'Reload recovery exercised; actual transport disconnect/reconnect and native platform parity not exercised',
