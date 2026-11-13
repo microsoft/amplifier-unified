@@ -383,7 +383,8 @@ class WorkerActivityTests(unittest.TestCase):
 
 
 @pytest.mark.asyncio
-async def test_idle_checkpoint_retains_writer_and_rejects_competing_acquisition(tmp_path):
+async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unchanged(tmp_path):
+    # Stable CI node ID; the revised contract explicitly retains this writer.
     shared = pytest.importorskip("amplifier_foundation.session.shared_state")
 
     workspace = tmp_path / "workspace"

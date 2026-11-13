@@ -12,7 +12,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_actual_worker_retains_writer_reuses_and_retires_with_real_shared_state(tmp_path):
+def test_actual_worker_parks_and_reuses_with_real_shared_state(tmp_path):
+    # Retain the registered CI node ID; parking itself is deliberately gone.
     python = os.environ.get("UNIFIED_RUNTIME_PYTHON")
     foundation = os.environ.get("WARM_FOUNDATION_PATH")
     if not python and not foundation:
