@@ -85,7 +85,7 @@ def test_worker_scripts_do_not_expose_host_site_packages(tmp_path, entrypoint, r
     (foundation / "transcript_guard.py").write_text(
         "class NativeTranscriptGuard: pass\nclass NativeTranscriptConflict(RuntimeError): pass\n"
     )
-    for name in (entrypoint, "runtime_protocol.py", "message_delivery.py", "response_completion.py", "ownership.py", "__init__.py", "runtime_bootstrap.py", "update_diagnostics.py", "runtime_qualification.py", "runtime_environment.py"):
+    for name in (entrypoint, "runtime_protocol.py", "message_delivery.py", "response_completion.py", "ownership.py", "computer_episodes.py", "__init__.py", "runtime_bootstrap.py", "update_diagnostics.py", "runtime_qualification.py", "runtime_environment.py"):
         if (PACKAGE / name).exists():
             shutil.copy2(PACKAGE / name, package / name)
     shutil.copytree(PACKAGE.parent / "amplifier_operations", outer / "amplifier_operations")
@@ -143,6 +143,11 @@ def test_worker_scripts_do_not_expose_host_site_packages(tmp_path, entrypoint, r
         else:
             namespace = runpy.run_path(str(script), run_name="worker_test")
             worker = namespace["Worker"]()
+            # Construction precedes the process-identity handshake and app
+            # bootstrap. It must use only direct sibling/stdlib imports here.
+            assert "amplifier_web" not in sys.modules
+            assert type(worker.computer_episodes).__module__ == "computer_episodes"
+            assert not worker.computer_episodes.sponsors
             worker.start.__func__.__globals__["publish"] = lambda event: print(event)
             asyncio.run(worker.start({"id": "test"}))
     """)

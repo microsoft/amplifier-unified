@@ -31,6 +31,12 @@ class UIUse:
         if stopped:
             # A storage refusal must not leave this process accepting more input.
             self.stopped = values
+            notify = getattr(getattr(self.service, 'runtime', None), 'stop_computer', None)
+            if callable(notify):
+                try:
+                    notify(sid)
+                except (OSError, ValueError, RuntimeError) as exc:
+                    errors.append(exc)
             for operation_id in tuple(self.pending.get(sid,())):
                 try:
                     self.connections.cancel(operation_id)
@@ -42,6 +48,10 @@ class UIUse:
             errors.append(exc)
         if errors:
             raise errors[0]
+        if not stopped:
+            notify = getattr(getattr(self.service, 'runtime', None), 'resume_computer', None)
+            if callable(notify):
+                notify(sid)
         self.stopped = values
 
     def workspace(self, sid):

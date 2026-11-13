@@ -867,6 +867,22 @@ class RuntimeManager:
         stream.write(encode_message(data))
         await stream.drain()
 
+    def stop_computer(self, sid):
+        """Enqueue a safety fence to an existing worker; never acquire/start it.
+
+        This is transport submission, not native release confirmation. The
+        worker independently retains the real controller settlement.
+        """
+        row = self.workers.get(sid)
+        if row and row["process"].returncode is None:
+            _worker_pipes(row).stdin.write(encode_message({"op": "computer.stop"}))
+
+    def resume_computer(self, sid):
+        """Explicit host latch reset only; bundle halt recovery stays separate."""
+        row = self.workers.get(sid)
+        if row and row["process"].returncode is None:
+            _worker_pipes(row).stdin.write(encode_message({"op": "computer.resume"}))
+
     async def _bridge(self, sid, row, data, *, dequeued_ns=None):
         from .performance_diagnostics import PhaseTiming, BRIDGE_TIMING, timing_metadata, TIMING_ENABLED
         observed = timing_metadata(data.get('_timing'))
@@ -1135,6 +1151,31 @@ class RuntimeManager:
                 elif data.get("type") == "runtime.reactivated":
                     row["parked"] = False
                     await row['emit']('runtime.warmth', {'sessionId': sid, 'status': 'active'})
+                elif data.get("type") == "computer.settlement":
+                    # This pipe belongs to the retained execution owner. Keep
+                    # opaque custody facts even if Stop later reaps that process;
+                    # process exit is not a desktop release acknowledgement.
+                    if (type(data.get("settled")) is bool and data.get("state") in {"settled", "stopping"}
+                            and isinstance(data.get("episodes"), list)
+                            and len(data["episodes"]) <= 64
+                            and (data["settled"] is False or not data["episodes"])):
+                        receipt = {key: data[key] for key in
+                                   ("state", "settled", "episodes", "omittedEpisodes") if key in data}
+                        if data.get("scope") == "cleanup":
+                            receipt["scope"] = "cleanup"
+                        row["computerSettlement"] = receipt
+                        from .host.config import app_home, write_private
+                        home = Path(self.home or app_home())
+                        destination = home / "runtime-reports" / row["runtime_id"] / "computer-settlement.json"
+                        try:
+                            write_private(destination, json.dumps(receipt))
+                        except (OSError, ValueError):
+                            _LOG.warning("Could not persist unresolved computer custody for %s", sid)
+                        if not receipt["settled"]:
+                            await row["emit"]("runtime.activity", {"sessionId": sid, "phase": "stopping",
+                                "detail": ("Computer cleanup is unconfirmed; its owner remains retained."
+                                    if receipt.get("scope") == "cleanup" else
+                                    "Computer release is unconfirmed; its cleanup owner remains retained.")})
                 elif data.get("type") == "runtime.progress":
                     if not row["ready"].done() and not row["closing"]:
                         row["phase"] = data.get("phase", row["phase"])
