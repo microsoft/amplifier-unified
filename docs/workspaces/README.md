@@ -55,6 +55,13 @@ or shared Amplifier bundle default, without copying that choice into project
 settings. If neither is set, this starter uses its `work-amp-dev` workspace
 fallback. The currently selected workspace's override does not choose the default
 for a different new workspace. Blank and Development continue to inherit defaults.
+They have no separate specialized bundle policy: with explicit overrides cleared,
+both follow the installed release's **general** conversation fallback, just like
+No workspace and custom starters with an empty bundle. Amplifier development
+alone has a specialized release-default identity. A future change from inheritance
+to specialization is not retroactively promised by this policy; it would need
+its own provenance/migration design. No starter identity is guessed for attached
+folders or old empty Blank folders.
 
 **Settings → Workspaces** keeps ordinary placement settings approachable.
 Its **Manage starters** link opens a separate advanced list/detail editor,

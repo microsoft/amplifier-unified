@@ -263,6 +263,17 @@ current release fallback. Managed No workspace chats ignore project settings.
 Custom starters retain their literal bundle choice; duplicating a built-in
 copies the choice shown at duplication time, not its automatic provenance.
 
+Blank and Development deliberately mean **inherit the general conversation
+default**, as does an empty bundle in a custom starter. They do not own separate
+specialized fallback identities. With all explicit scopes cleared, their new
+conversations follow changes to the release's general fallback; Amplifier
+development follows its specialized fallback. This policy does not promise
+retroactive specialization if a later release changes a formerly inheriting
+starter into a specialized one. That would require an explicit policy and
+provenance/migration change, not just adding a name to the fallback table. In
+particular, old Blank folders have no starter setup snapshot from which to infer
+such an identity. Attaching an existing folder never invents one.
+
 On startup, registered legacy built-in workspaces can replace an automatic
 project pin with release-default intent only when matching placement and setup
 receipts prove a known built-in snapshot, the allocated directory is unchanged,

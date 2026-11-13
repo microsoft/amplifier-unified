@@ -171,6 +171,39 @@ async def test_blank_and_development_created_roots_keep_app_inheritance(service,
     assert service._session()['bundle'] == bundle
 
 
+@pytest.mark.parametrize('starter', ['blank', 'development', 'custom-inherit', 'custom-explicit'])
+async def test_inheriting_starters_follow_general_release_not_implicit_specialization(
+        service, starter, monkeypatch):
+    from amplifier_web import bundle_defaults
+    from amplifier_web.host.config import read_config
+    inherited = starter != 'custom-explicit'
+    if starter.startswith('custom-'):
+        saved = (await service.dispatch('workspace.starters.save', {'starter': {
+            'name': starter, 'bundle': '' if inherited else 'work'}}))['result']
+        starter = saved['id']
+    _, row = await create(service, starter, 'Release inheritance')
+    folder = Path(row['path'])
+    path = folder / '.amplifier/settings.yaml'
+    original = path.read_bytes() if path.exists() else None
+    await service.dispatch('session.create', {})
+    old = service._session()['id']
+    assert service._session(old)['bundle'] == 'work'
+    monkeypatch.setattr(bundle_defaults, 'GENERAL_BUNDLE', 'next-general')
+    # No runtime or settings migration: all inherited folders, including custom
+    # inheritance, use the current general fallback. A literal same-value pin
+    # in a custom starter retains its distinct explicit meaning.
+    expected = 'next-general' if inherited else 'work'
+    assert service._new_session({})['bundle'] == expected
+    assert read_config(folder, home=service.data_dir).active_bundle == expected
+    await service.dispatch('bundle.default', {'scope': 'workspace', 'bundle': 'work'})
+    assert service._new_session({})['bundle'] == 'work'
+    await service.dispatch('bundle.default', {'scope': 'workspace', 'bundle': None})
+    assert service._new_session({})['bundle'] == expected
+    assert service._new_session({'bundle': 'work'})['bundle'] == 'work'
+    assert service._session(old)['bundle'] == 'work'
+    assert (path.read_bytes() if path.exists() else None) == original
+
+
 async def test_inherited_starter_plan_stays_live_without_retargeting_existing_roots(
         service, local_amplifier_repositories):
     await service.dispatch('bundle.default', {'scope': 'app', 'bundle': 'work-amp-dev'})
