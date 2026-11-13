@@ -227,3 +227,20 @@ async def test_add_recovers_saved_config_after_command_receipt_failure(app_facto
     assert (await reopened.dispatch('externalAgents.save', args, command_id='recover-external-add'))['duplicate']
     assert reopened.db.execute('SELECT 1 FROM commands WHERE id=?', ('recover-external-add',)).fetchone()
     assert not (tmp_path / 'peer').exists() and not reopened.runtime.started
+
+
+async def test_external_settings_page_is_discoverable_and_opens_on_its_browser(app_factory):
+    from amplifier_web.settings_navigation import settings_state
+
+    service = app_factory()
+    service.clients.attach('web', kind='web')
+    pages = settings_state(service.state)['pages']
+    assert {'id': 'external-agents', 'title': 'External agents'} in pages
+    receipt = await command(service, 'web', 'settings.open',
+                            {'page': 'external-agents', 'surface': 'dialog'})
+    assert receipt['accepted']
+    assert receipt['result']['page'] == 'external-agents'
+    browser = snapshot(service, 'web')
+    assert browser['view']['panel'] == 'settings'
+    assert browser['view']['settingsExpanded'] == ['external-agents']
+    assert not service.runtime.started and not load_server_config(service.data_dir).get('externalAgents')
