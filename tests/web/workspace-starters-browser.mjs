@@ -3,12 +3,15 @@ import {openSettingsDialog,openSettingsPage} from '../../.build/web-client/tests
 import './composer-test-helpers.mjs';
 // Real host, production assets and filesystem; synthetic runtime only.
 import {spawn} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {mkdir,readFile,readdir,writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls'],{stdio:['ignore','pipe','inherit']});
-const out=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-workspace-starters';let browser,page;
+const stopFixture=ownFixture(fixture,{label:'Workspace starters fixture'});
+const out=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-workspace-starters';let browser,page,originalError;
 try{
  const url=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}}catch{}})});
  await mkdir(out,{recursive:true});browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});
@@ -17,6 +20,16 @@ try{
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  await page.goto(url);await showFixtureConversation(page);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ const component=JSON.parse(await readFile(new URL('../../amplifier_web/static/client-component.json',import.meta.url),'utf8'));
+ const selection=JSON.parse(await readFile(new URL('../../components/web-client.source.json',import.meta.url),'utf8'));
+ assert.deepEqual(component.source,selection.source,'Served production client is bound to the selected canonical source');
+ const servedComponent=await page.request.get(url+'/client-component.json');assert.equal(servedComponent.status(),200);
+ assert.deepEqual(await servedComponent.json(),component);
+ const servedIndex=await (await page.request.get(url)).text();
+ for(const [asset,expected] of Object.entries(component.assets).filter(([name])=>/\.(?:js|css)$/.test(name)&&servedIndex.includes(name))){
+  const response=await page.request.get(url+'/'+asset);assert.equal(response.status(),200);
+  assert.equal(createHash('sha256').update(await response.body()).digest('hex'),expected.sha256,`Actual host serves selected ${asset}`);
+ }
  assert.equal((await (await page.request.get(url+'/fixture')).json()).foundationCachePresent,false);
  await openSettingsPage(page,'defaults');
  const settings=page.getByRole('region',{name:'Settings content'});
@@ -39,6 +52,8 @@ try{
  await expect(initialEditor.getByRole('button',{name:/Duplicate/})).toHaveCount(0);
  await expect(settings.getByRole('button',{name:'Save changes',exact:true})).toHaveCount(0);
  const beforeInheritedCopy=await state(),originalBuiltIn=structuredClone(beforeInheritedCopy.workspaceStarters.items.find(row=>row.id==='amplifier-development'));
+ const builtInPlan=(await action('workspace.prepare',{name:'Unallocated built-in metadata check',starterId:'amplifier-development'})).result;
+ assert.equal(builtInPlan.starter.bundleDefault,'release','Accepted backend retains release-following metadata on automatic plans');
  await initialEditor.getByLabel('Starter name',{exact:true}).fill('Edited built-in starter');
  await initialEditor.getByLabel('Description',{exact:true}).fill('Every edited field survives Save as new.');
  await inheritedBundle.selectOption('work');
@@ -54,16 +69,21 @@ try{
  await initialEditor.locator('summary').filter({hasText:'Local workspace Git'}).click();
  await expect(initialEditor.getByLabel('Initialize local workspace Git',{exact:true})).toBeChecked();
  await initialEditor.getByLabel('Initialize local workspace Git',{exact:true}).uncheck();
- // Reject once before an effect, retaining the built-in draft and selection.
- let rejectedSaves=0;
- const rejectSave=async route=>{const raw=route.request().postDataJSON(),body=raw.action==='shell.command'?raw.args:raw;if(body.action!=='workspace.starters.save')return route.continue();rejectedSaves++;await route.fulfill({status:409,json:{accepted:false,error:'Fixture save rejected. Your edits are kept.'}})};
+ // Exercise a real host validation refusal, not a synthetic accepted:false.
+ // Its receipt must leave the draft editable, without creating a definition.
+ let rejectedSaves=0,rejection;
+ await initialEditor.getByLabel('Git URL 1',{exact:true}).fill('not-a-git-url');
+ const rejectSave=async route=>{const raw=route.request().postDataJSON(),body=raw.action==='shell.command'?raw.args:raw;if(body.action!=='workspace.starters.save')return route.continue();rejectedSaves++;const response=await route.fetch();rejection={status:response.status(),body:await response.json()};await route.fulfill({response})};
  await page.route('**/api/actions',rejectSave);
  await settings.getByRole('button',{name:'Save as new starter',exact:true}).click();
- await expect(starters.getByRole('alert')).toContainText('Fixture save rejected');
+ await expect(starters.getByRole('alert')).toContainText('Git URL');
  await expect(initialEditor.getByLabel('Starter name',{exact:true})).toHaveValue('Edited built-in starter');
+ await expect(initialEditor.getByLabel('Starter name',{exact:true})).toBeEditable();
+ assert.equal(rejection.body.accepted,false);assert.ok(rejection.status>=400&&rejection.status<500);
  assert.equal((await state()).workspaceStarters.items.length,beforeInheritedCopy.workspaceStarters.items.length);
  assert.equal(rejectedSaves,1);
  await page.unroute('**/api/actions',rejectSave);
+ await initialEditor.getByLabel('Git URL 1',{exact:true}).fill('https://github.com/example/team.git');
  // The host commits, but its acknowledgement is lost. No automatic retry may
  // create another custom definition; the unsaved editor remains recoverable.
  let lostSaves=0,lostPayload,lostCommand;
@@ -78,6 +98,12 @@ try{
  assert.equal(lostSaves,1,'A lost Save as new acknowledgement is not automatically replayed');
  await expect(initialEditor.getByLabel('Starter name',{exact:true})).toBeDisabled();
  await expect(settings.getByRole('button',{name:'Cancel edits',exact:true})).toBeDisabled();
+ await page.locator('button[aria-label="Close panel"]:visible, button[aria-label="Close Settings"]:visible, button[aria-label="Close settings"]:visible').click();
+ await expect(page.getByRole('alertdialog').filter({hasText:'Unsaved settings changes'})).toBeVisible();
+ await page.getByRole('button',{name:'Discard changes',exact:true}).click();
+ await expect(settings).toBeVisible();
+ await expect(initialEditor.getByLabel('Starter name',{exact:true})).toHaveValue('Edited built-in starter');
+ await expect(settings.getByRole('button',{name:'Check the same save',exact:true})).toBeEnabled();
  let checkedCommand;
  const checkSameSave=async route=>{const raw=route.request().postDataJSON(),body=raw.action==='shell.command'?raw.args:raw;if(body.action==='workspace.starters.save')checkedCommand=raw;await route.continue()};
  await page.route('**/api/actions',checkSameSave);
@@ -89,6 +115,8 @@ try{
  assert.equal(lostPayload.id,undefined,'Save as new never targets the built-in identity');
  for(const key of ['id','revision','builtIn','bundleDefault','provenance'])assert.equal(Object.hasOwn(lostPayload.starter,key),false,`Custom payload excludes ${key}`);
  const savedEdited=(await state()).workspaceStarters.items.find(row=>row.name==='Edited built-in starter');
+ const customPlan=(await action('workspace.prepare',{name:'Unallocated custom metadata check',starterId:savedEdited.id})).result;
+ assert.equal(Object.hasOwn(customPlan.starter,'bundleDefault'),false,'The saved custom plan does not acquire built-in release-default tracking');
  assert.equal(savedEdited.builtIn,false);
  for(const key of ['bundleDefault','provenance'])assert.equal(Object.hasOwn(savedEdited,key),false);
  assert.equal(savedEdited.description,'Every edited field survives Save as new.');
@@ -286,8 +314,8 @@ try{
  await page.getByRole('button',{name:'Send message',exact:true}).click();await page.getByText('Synthetic first response',{exact:true}).waitFor();
  const evidence=await (await page.request.get(url+'/fixture')).json();assert.equal(evidence.sent[0].workspace,folder);assert.equal(evidence.sent[0].attachments[0].name,'notes.txt');
  const interactionCost={entry:'Settings → Workspaces → Manage starters → choose starter',intendedResult:'Customize a built-in and retain its shipped definition',before:['choose starter','Duplicate to customize','edit fields','Save starter'],after:['choose starter','edit fields','Save as new starter'],removedActions:1,unchangedCosts:['entry navigation','field edits','advanced disclosure'],keyboard:['Enter saves built-in as new','Enter opens compact selection','Tab reaches Cancel edits'],reflow:['320px viewport','200% root text size']};
- const evidenceRecord={status:'passed',scenarios:21,interactionCost,starterEditor:['all edited fields retained','built-in unchanged','editable payload excludes identity and provenance','definite rejection retains draft','lost acknowledgement checks same command without duplicate','custom update and copy','dirty navigation and cancel'],starterInheritance:['explicit app default','built-in inherited choice'],resourceContinuity:['chat and Home return','no manual reservation controls','same editor identity','Settings keyboard and phone drawer inert cleanup','private peer','one held save receipt'],screenshots:out,workspace:folder};
+ const evidenceRecord={status:'passed',scenarios:21,clientSource:component.source,build:component.build,interactionCost,validationRefusal:rejection,starterEditor:['all edited fields retained','built-in unchanged','editable payload excludes identity and provenance','real host validation refusal retains editable draft','lost acknowledgement checks same command without duplicate','unknown save cannot be discarded through Settings guard','custom update and copy','dirty navigation and cancel'],starterInheritance:['explicit app default','built-in inherited choice','automatic plan release metadata absent from saved custom plan'],resourceContinuity:['chat and Home return','no manual reservation controls','same editor identity','Settings keyboard and phone drawer inert cleanup','private peer','one held save receipt'],screenshots:out,workspace:folder};
  assert.deepEqual(errors,[]);
  await writeFile(out+'/workspace-starters-result.json',JSON.stringify(evidenceRecord,null,2)+'\n');
  console.log(JSON.stringify(evidenceRecord));
-}catch(error){await page?.screenshot({path:out+'/failure.png'}).catch(()=>{});console.error((await page?.locator('body').innerText())?.slice(-6000));throw error}finally{await browser?.close();fixture.kill('SIGTERM')}
+}catch(error){originalError=error;await page?.screenshot({path:out+'/failure.png'}).catch(()=>{});console.error((await page?.locator('body').innerText())?.slice(-6000));throw error}finally{await finishFixture({label:'Workspace starters fixture',close:[['Browser',()=>browser?.close()]],stop:stopFixture,originalError})}
