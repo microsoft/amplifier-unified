@@ -5177,8 +5177,10 @@ class AppService:
                     session.pop("streamingId", None)
                     session.pop("streamingInputId", None)
                 # Transport may deliver completion before its saved message.
-                terminal = next((event for event in reversed(session.get("generations", []))
+                terminal = next((event for event in session.get("generations", [])
                                  if event.get("generation_id") == generation_id
+                                 and event.get("sessionId", session['id']) == session['id']
+                                 and event.get("rootSessionId", session['id']) == session['id']
                                  and event.get("event") in {"generation.finished", "generation.failed", "generation.detached"}), None)
                 if terminal:
                     from .response_completion import apply as apply_response_completion
