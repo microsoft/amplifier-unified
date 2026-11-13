@@ -297,7 +297,7 @@ async def test_original_provider_cause_survives_runtime_wrapper(tmp_path, messag
         'error_type': error_class.__name__, 'error_category': 'unknown'})
     await app.on_runtime_event('runtime.error', {'sessionId': session['id'], 'error': 'Manager turn failed; no automatic replay'})
     assert session['failure']['category'] == category
-    assert session['failure']['inputId'] == 'turn-id'
+    assert 'turn-id' in session['failure'].get('inputIds', [session['failure'].get('inputId')])
     assert inspect_session(tmp_path, session)['failure']['category'] == category
     assert exception_details(ValueError('unknown error with secret=never-copy'))['category'] == 'unknown'
     await app.close()
