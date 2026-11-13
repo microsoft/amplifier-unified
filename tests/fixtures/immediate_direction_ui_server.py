@@ -81,11 +81,14 @@ class Socket:
                 await self.frames.put(json.dumps({'type': 'response.steer.accepted', 'steer': {'id': 'steer-one'}}))
                 if os.environ.get('DIRECTION_SCENARIO') == 'native-stop':
                     await wait_stage('pending')
+                    # Pending steering refers to the now-terminal parent. The
+                    # provider records previous_response_id at that terminal,
+                    # then waits for its required tool output before successor.
+                    await self.frames.put(json.dumps({'type': 'response.completed',
+                        'response': terminal('parent', tool=True)}))
                     await self.frames.put(json.dumps({'type': 'response.steer.pending',
                         'steer': {'id': 'steer-one'},
                         'required_input': [{'type': 'function_call_output', 'call_id': 'call-tool'}]}))
-                    await self.frames.put(json.dumps({'type': 'response.completed',
-                        'response': terminal('parent', tool=True)}))
                     return
                 await wait_stage('apply')
                 parent = terminal('parent')

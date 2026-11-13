@@ -87,7 +87,7 @@ for(const scenario of (process.argv.length>2?process.argv.slice(2):['native','or
    await expect(message).not.toContainText('Not sent');
    await expect.poll(async()=>(await inspect()).session.collaborationGeneration.id).not.toBe(parent);
    const completed=await inspect();
-   assert.equal(completed.session.messages.filter(m=>m.inputId===submissions[1].id).length,1);
+   assert.equal(completed.session.messages.filter(m=>m.role==='user'&&m.inputId===submissions[1].id).length,1);
    assert.equal(completed.wire.filter(r=>r.kind==='wire'&&r.payload.type==='response.create').length,2);
    assert.equal(completed.wire.filter(r=>r.kind==='wire'&&r.payload.type==='response.steer').length,0);
   }else if(['native','native-stop'].includes(scenario)){
@@ -163,7 +163,7 @@ for(const scenario of (process.argv.length>2?process.argv.slice(2):['native','or
    const duplicate=await page.request.post(ready.url+'/api/actions',{data:submissions[1]});
    const receipt=await duplicate.json();assert.equal(receipt.duplicate,true,'Same identity returns its recorded outcome');
    const afterDuplicate=await inspect();
-   assert.equal(afterDuplicate.session.messages.filter(m=>m.inputId===submissions[1].id).length,1);
+   assert.equal(afterDuplicate.session.messages.filter(m=>m.role==='user'&&m.inputId===submissions[1].id).length,1);
    assert.equal(afterDuplicate.wire.length,final.wire.length,'Duplicate Send cannot replay any provider transport');
   }
   await composer.fill('KEEP_NEW_PRIVATE_DRAFT');
