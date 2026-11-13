@@ -419,7 +419,12 @@ class RuntimeManager:
             pending = self.retention.schedule(session_id, row)
         # A caller timeout/cancellation is not permission to cancel ownership
         # reconciliation or to treat the worker as absent.
-        return await asyncio.wait_for(asyncio.shield(pending), self.retention.reply_timeout)
+        try:
+            return await asyncio.wait_for(asyncio.shield(pending), self.retention.reply_timeout)
+        except asyncio.CancelledError:
+            if not self._closed and not asyncio.current_task().cancelling():
+                return False  # Conversation Stop superseded this retirement.
+            raise
 
     def _check_mcp_attachment(self, session_id, row):
         binding = row.get("ephemeral_mcp_binding")
