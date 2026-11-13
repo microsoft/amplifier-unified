@@ -470,7 +470,8 @@ class FailureDiagnosticTests(unittest.TestCase):
         self.candidate = [self.app, self.dependency('main')]
         self.fresh = [self.app, self.dependency(self.commit)]
         full.save(self.folder / 'child-boundary.json', {'schema': 1, 'settled': True})
-        full.save(self.folder / 'candidate-graph.json', self.candidate)
+        self.recorded = [self.app, self.worker._dependency_source(self.candidate[1])]
+        full.save(self.folder / 'candidate-graph.json', self.recorded)
         self.prefix(self.failed, self.commit)
         self.prefix(self.candidate_prefix, 'main')
         self.enterContext(patch.object(full, 'execute', side_effect=AssertionError('no commands in diagnostics')))
@@ -529,9 +530,10 @@ class FailureDiagnosticTests(unittest.TestCase):
 
     def test_passive_graph_matches_production_row_normalization_without_execution(self):
         rows, hashes = full.passive_prefix_graph(self.worker, self.plan, self.failed)
-        self.assertEqual(rows, self.fresh)
+        expected = [self.app, self.worker._dependency_source(self.fresh[1])]
+        self.assertEqual(rows, expected)
         self.assertEqual(hashes['staticProtocol'], 1)
-        self.assertEqual(hashes['normalizedGraphSHA256'], full.value_hash(self.fresh))
+        self.assertEqual(hashes['normalizedGraphSHA256'], full.value_hash(expected))
         self.assertTrue(all(item['matchesCandidateSource'] for key, item in hashes['sourceHashes'].items()
                             if key != 'release-source.json'))
         self.assertEqual(len(hashes['distributionHashes']), 2)
@@ -571,7 +573,8 @@ class FailureDiagnosticTests(unittest.TestCase):
         report = full.failure_diagnostics(self.folder, self.plan, self.receipt)
         self.assertEqual(report['originalErrorType'], 'ValueError')
         self.assertEqual(report['diagnosticErrors'], [])
-        self.assertFalse(report['graphComparison']['equal'])
+        self.assertTrue(report['graphComparison']['equal'])
+        self.assertEqual(report['graphComparison']['differences'], [])
         self.assertTrue(report['candidateDiskMatchesRecordedGraph'])
         self.assertEqual(report['effectBoundary'], self.receipt['effectBoundary'])
         self.assertTrue(report['childSettlement']['settled'])

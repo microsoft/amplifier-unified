@@ -476,9 +476,11 @@ def passive_prefix_graph(worker, plan, prefix):
         rows.append(row)
         distribution_hashes.append({'name': name, 'metadataSHA256': hashlib.sha256(raw_metadata).hexdigest(),
              'directSHA256': hashlib.sha256(raw_direct).hexdigest() if raw_direct is not None else None})
-    # Exactly the production normalization for the app; dependencies UNCHANGED.
+    # Match the exact production comparator, including its narrow resolved-Git
+    # identity rule. Raw metadata hashes remain available independently.
     rows = diagnostic_graph(rows)
-    normalized = diagnostic_graph([worker._app_source(plan, row) if row['name'] == 'amplifier-unified' else row
+    normalized = diagnostic_graph([worker._app_source(plan, row) if row['name'] == 'amplifier-unified'
+                                   else worker._dependency_source(row)
                                    for row in rows])
     sources = {}
     protocol = None
