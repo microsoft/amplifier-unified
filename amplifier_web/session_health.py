@@ -216,9 +216,19 @@ def startup_failure_details(event):
     return {'startupAttemptId': attempt, 'startupFailureFacts': facts} if facts is not None else {}
 
 
+def _function_call_truncation_details():
+    return {'category': 'invalid_request', 'code': 'function_call_truncated',
+            'errorType': 'FunctionCallTruncationError', 'stage': 'provider_request',
+            'summary': 'The model tool call was cut off before usable arguments were available.',
+            'guidance': 'This incomplete call was not run. Earlier actions may already have had effects. Review saved results, then explicitly ask for a smaller step or chunked output. This does not mean the whole chat is broken.',
+            'effects': 'not_rolled_back', 'replayed': False, 'retryable': False}
+
+
 def exception_details(error):
-    from .support_diagnostics import exception_chain
+    from .support_diagnostics import exception_chain, terminal_function_call_truncation
     chain = exception_chain(error)
+    if terminal_function_call_truncation(chain):
+        return {**_function_call_truncation_details(), 'exceptionChain': chain}
     current, seen = error, set()
     while id(current) not in seen:
         seen.add(id(current))
@@ -234,7 +244,7 @@ def exception_details(error):
 
 def terminal_exception_failure(session, value):
     """Enrich only an exact retained terminal; never replace or redate a cause."""
-    from .support_diagnostics import terminal_exception_capture, terminal_request_refusal
+    from .support_diagnostics import terminal_exception_capture, terminal_request_refusal, terminal_function_call_truncation
     capture = terminal_exception_capture(value)
     existing = session.get('failure')
     if (not capture or not isinstance(existing, dict) or existing.get('exceptionChain')
@@ -253,6 +263,15 @@ def terminal_exception_failure(session, value):
         return None
     refusal = terminal_request_refusal(capture['exceptionChain'])
     detail = {}
+    if (existing.get('category') == 'unknown' and capture['errorType'] == 'LLMError'
+            and existing.get('stage') == 'provider_request'
+            and terminal_function_call_truncation(capture['exceptionChain'])):
+        detail = {**_function_call_truncation_details(),
+            # Preserve the native terminal classification separately from the
+            # host's certified cause. Do not rewrite the native generation.
+            'errorType': existing['errorType'],
+            'nativeFailure': {key: existing[key] for key in
+                              ('category', 'errorType', 'stage', 'retryable') if key in existing}}
     if refusal and existing.get('category') == 'unknown':
         causes = {
             'bridge_timeout': 'The host did not answer the Work currentness check before its deadline.',

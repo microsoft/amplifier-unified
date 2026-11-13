@@ -54,7 +54,9 @@ ERROR_TYPES = {'Error', 'RuntimeError', 'RuntimeStartupError', 'ConfiguredModule
     'BadRequestError', 'APIConnectionError', 'APITimeoutError', 'TimeoutError',
     'PermissionError', 'FileNotFoundError', 'ValueError', 'ModuleNotFoundError', 'ImportError',
     'ManagerTurnError', 'RequestFitChanged', 'OSError', 'ConnectionError', 'TypeError',
-    'KeyError', 'AttributeError', 'CompactionError', 'LLMError'}
+    'KeyError', 'AttributeError', 'CompactionError', 'LLMError', 'FunctionCallTruncationError'}
+FAILURE_CODES = {'computer_result_not_image', 'function_call_truncated'}
+FAILURE_STAGES = {'turn_setup', 'context_preparation', 'provider_request', 'manager_turn', 'persistence'}
 ACTIVITY_PHASES = {'idle', 'starting', 'preparing', 'model', 'tools', 'retrying',
     'compacting', 'stopping', 'stopped', 'error', 'completed', 'waiting', 'approval'}
 MODULE_TYPES = {'tool', 'hook', 'provider', 'orchestrator', 'context', 'resolver'}
@@ -136,7 +138,7 @@ def troubleshooting(state, session, now):
             'present': bool(failure),
             'category': _enum(failure.get('category'), FAILURE_CATEGORIES),
             'errorType': _enum(failure.get('errorType'), ERROR_TYPES, 'other' if failure.get('errorType') else 'unknown'),
-            'code': _enum(failure.get('code'), {'computer_result_not_image'}),
+            'code': _enum(failure.get('code'), FAILURE_CODES),
             'ageSeconds': _age(failure.get('recordedAt'), now),
             'inputRelation': relation,
         },
@@ -162,7 +164,7 @@ def failure_report(session):
             item = {'errorType': _enum(row['errorType'], ERROR_TYPES, 'other'),
                     'frames': [{'file': frame['file'], 'line': frame['line']}
                                for frame in row['frames'] if frame['file'] in files]}
-            item.update({key: row[key] for key in ('errno', 'winerror', 'requestFit') if key in row})
+            item.update({key: row[key] for key in ('errno', 'winerror', 'requestFit', 'providerFailure') if key in row})
             rows.append(item)
         return rows
     latest = latest_root_event(session)
@@ -181,6 +183,11 @@ def failure_report(session):
                 if key in {'amplifier-core', 'amplifier-foundation', 'amplifier-module-loop-live',
                            'amplifier-module-provider-openai', 'amplifier-module-provider-anthropic'}}
     result = {'requestOutcome': _enum(latest.get('event'), events),
+              'category': _enum(failure.get('category'), FAILURE_CATEGORIES),
+              'errorType': _enum(failure.get('errorType'), ERROR_TYPES, 'other'),
+              'code': _enum(failure.get('code'), FAILURE_CODES),
+              'stage': _enum(failure.get('stage'), FAILURE_STAGES),
+              'retryable': _boolean(failure.get('retryable')),
               'generation': correlation(failure.get('generationId') or latest.get('generation_id')),
               'inputs': [value for raw in (_rows(failure.get('inputIds')) or [failure.get('inputId')])[:128]
                          if (value := correlation(raw))],
@@ -188,6 +195,12 @@ def failure_report(session):
               'runtime': {'applicationVersion': _identity(_object(support.get('environment')).get('applicationVersion'),
                          r'[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.+-]{0,40}'), 'packages': versions},
               'timeline': timeline}
+    native = _object(failure.get('nativeFailure'))
+    if native:
+        result['nativeFailure'] = {'category': _enum(native.get('category'), FAILURE_CATEGORIES),
+            'errorType': _enum(native.get('errorType'), ERROR_TYPES, 'other'),
+            'stage': _enum(native.get('stage'), FAILURE_STAGES),
+            'retryable': _boolean(native.get('retryable'))}
     secondary = _object(failure.get('secondaryFailure'))
     if secondary.get('stage') == 'loop_exit':
         result['secondaryFailure'] = {'stage': 'loop_exit', 'exceptionChain': chain(secondary.get('exceptionChain'))}

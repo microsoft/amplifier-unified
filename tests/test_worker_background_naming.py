@@ -124,6 +124,84 @@ async def test_original_loop_exception_is_captured_before_flattening_with_no_pro
     assert not events  # Publication waits for the real execution done callback.
 
 
+@pytest.mark.parametrize('boundary', ['current', 'stop', 'runtime_replaced', 'mismatched_input'])
+async def test_worker_produces_certified_truncation_supplement_for_bound_terminal(worker, monkeypatch, boundary):
+    from amplifier_module_loop_live.failures import ManagerTurnError, turn_failure
+    from amplifier_module_provider_openai._response_handling import FunctionCallTruncationError
+    from amplifier_web.runtime import normalize_event
+    from amplifier_web.session_health import generation_failure, terminal_exception_failure
+
+    events = []
+    monkeypatch.setattr('amplifier_web.runtime_worker.publish', events.append)
+    worker.finish_name.set()
+    await worker.naming.pending
+    worker.naming = None
+    runtime = worker.runtime
+    runtime.stop_requested = False
+    generation = {'id': 'truncated-generation', 'input_ids': ['truncated-input']}
+    error = FunctionCallTruncationError('PRIVATE arguments /private/path', provider='fixture')
+    native = turn_failure(error)
+    assert (native['error_type'], native['error_category'], native['error_stage']) == (
+        'LLMError', 'unknown', 'provider_request')
+    original = ManagerTurnError(native)
+
+    class Loop:
+        async def execute(self):
+            runtime.generation = generation
+            try:
+                raise error
+            except FunctionCallTruncationError as cause:
+                # Use the real observer while the loop still owns this generation,
+                # then clear it as loop-live does before the wrapper escapes.
+                worker.observe({'type': 'generation.failed',
+                    'generation_id': generation['id'],
+                    'input_ids': ['other-input'] if boundary == 'mismatched_input' else list(generation['input_ids']),
+                    **native})
+                runtime.generation = None
+                if boundary == 'stop':
+                    worker.stop_revision += 1
+                    runtime.stop_requested = True
+                elif boundary == 'runtime_replaced':
+                    worker.runtime = SimpleNamespace(**vars(runtime))
+                raise original from cause
+
+    loop = Loop()
+    worker.session.coordinator.get = lambda _: loop
+    worker.capture_manager_failures()
+    with pytest.raises(ManagerTurnError) as raised:
+        await loop.execute()
+    assert raised.value is original and original.__cause__ is error
+    assert runtime.generation is None
+    terminals = [event for event in events if event.get('type') == 'generation.failed']
+    assert len(terminals) == 1 and terminals[0]['sessionId'] == runtime.session_id
+    supplements = [event for event in events if 'terminalFailure' in event]
+    if boundary != 'current':
+        assert not supplements
+        return
+
+    assert len(supplements) == 1
+    capture = supplements[0]['terminalFailure']
+    assert capture['generationId'] == generation['id'] and capture['inputIds'] == generation['input_ids']
+    assert capture['errorType'] == 'LLMError'
+    assert [row['errorType'] for row in capture['exceptionChain']][:2] == [
+        'ManagerTurnError', 'FunctionCallTruncationError']
+    assert capture['exceptionChain'][1]['providerFailure'] == {'code': 'function_call_truncated'}
+    kind, terminal = normalize_event(terminals[0], runtime.session_id)
+    assert kind == 'runtime.generation'
+    session = {'id': runtime.session_id, 'status': 'error', 'generations': [terminal],
+        'failure': {**generation_failure(terminal), 'generationId': generation['id'],
+                    'inputIds': list(generation['input_ids']), 'recordedAt': 2}}
+    kind, payload = normalize_event(supplements[0], runtime.session_id)
+    assert kind == 'runtime.error'
+    failure = terminal_exception_failure(session, payload['terminalFailure'])
+    assert (failure['category'], failure['code'], failure['errorType']) == (
+        'invalid_request', 'function_call_truncated', 'LLMError')
+    assert failure['nativeFailure'] == {'category': 'unknown', 'errorType': 'LLMError',
+        'stage': 'provider_request', 'retryable': False}
+    assert failure['retryable'] is False and failure['recordedAt'] == 2
+    assert 'PRIVATE' not in str([events, failure]) and '/private/path' not in str([events, failure])
+
+
 async def test_cleanup_invalidates_writer_even_from_a_different_task_context(worker, monkeypatch):
     from contextvars import Context
     token = worker.activation
