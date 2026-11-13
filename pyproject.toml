@@ -119,8 +119,8 @@ default = true
 dev = [
     "pytest>=8", "pytest-asyncio>=0.25", "pytest-aiohttp>=1.1", "hatchling>=1.27",
     # Offline native-input fixtures use the real loop/context, not a fake mount.
-    # Candidate graph: accepted lifetime ownership plus ordered live-first input.
-    "amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@1c2363930fdd3690822ee9aa5305fb8696646cc0",
+    # Accepted main merge has the exact qualified lifetime/live-first source tree.
+    "amplifier-module-loop-live @ git+https://github.com/microsoft/amplifier-module-loop-live@7828753b7f46c6da8f81ca13e97ee02beab30108",
     # Real finite/resumed/persistent custody checks use the selected Foundation tool.
     "amplifier-module-tool-delegate @ git+https://github.com/microsoft/amplifier-foundation@05082c89a171758f8d0fb9d8df630ea581e5bdb5#subdirectory=modules/tool-delegate",
     # Match context-managed's authored source; uv.lock records the exact test
