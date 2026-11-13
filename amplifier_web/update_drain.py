@@ -558,7 +558,6 @@ async def finish(manager, reason):
             drain.update(phase='releasing', result=reason)
             service._publish_changes(globals={'updates'})
         from .message_delivery import find_message
-        from .execution import ensure_turn
         for sid, identity in drain['messages']:
             async with service.lock:
                 session = service._session(sid)
@@ -575,13 +574,7 @@ async def finish(manager, reason):
                 # leaves this input uncertain and the remaining inputs queued.
                 drain['releasingInput'] = [sid, identity]
                 service._delivery(session, identity, 'sending')
-                active = session.get('collaborationGeneration') or {}
-                if active.get('id') and not active.get('terminal'):
-                    message['steering'] = {'generationId': active['id'], 'allowNextTurn': True,
-                                           'disposition': 'sending'}
-                else:
-                    session['status'] = 'working'
-                    ensure_turn(session, identity, message['text'])
+                session['status'] = 'working'
                 service._publish_changes(sessions={sid}, globals={'updates'})
                 captured = copy.deepcopy(session)
             try:
@@ -627,10 +620,5 @@ async def defer_send(service, sid, identity, preserve_draft=False):
             return {'accepted': True, 'inputId': identity, 'delivery': 'queued_for_update'}
         # The gate released while we awaited the commit lock. Continue that
         # same first admission; never append to an already released drain.
-        active = session.get('collaborationGeneration') or {}
-        message.pop('steering', None)
-        if active.get('id') and not active.get('terminal'):
-            message['steering'] = {'generationId': active['id'], 'allowNextTurn': True,
-                                   'disposition': 'sending'}
         captured = copy.deepcopy(session)
     return await service._send(captured, message['text'], identity, preserve_draft=preserve_draft)

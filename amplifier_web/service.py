@@ -140,7 +140,7 @@ ACTION_DEFINITIONS = {
     "message.copy": ("Copy the entire message text as Markdown on the connected browser",schema({"sessionId":string(200),"messageId":string(200)})),
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
     "message.edit": ("Edit a user message and regenerate in the current conversation (mode current), or fork a new conversation (mode fork, also the legacy default). Later active context is replaced; original events and external tool effects remain.",schema({"sessionId":string(200),"messageId":string(200),"text":string(100000),"mode":{"enum":["current","fork"]}},["sessionId","messageId","text"])),
-    "conversation.send": ("Send to the main Amplifier session. During a live run, steer that run without creating a new turn. expectedGenerationId binds a message to the observed run. Explicit steering stays bound; allowNextTurn lets an ordinary message start the next turn only after that exact run completes normally.", schema({"sessionId":string(200),"text": string(100000), "document":{"type":"object"}, "expectedGenerationId":{**string(128),"minLength":1}, "allowNextTurn":{"type":"boolean"}, "preserveDraft":{"type":"boolean"}, "replyId":string(64), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
+    "conversation.send": ("Send a message to this conversation. Its native owner chooses live provider steering first when ready, otherwise the next model-request boundary within the current turn, or a new turn when idle. expectedInterruptionRevision fences intent captured before Stop; it never chooses a route. expectedGenerationId explicitly requests strict steering of only that run; an ended or changed run is refused, never converted into new work.", schema({"sessionId":string(200),"text": string(100000), "document":{"type":"object"}, "expectedGenerationId":{**string(128),"minLength":1}, "expectedInterruptionRevision":{"type":"integer","minimum":0}, "preserveDraft":{"type":"boolean"}, "replyId":string(64), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
     "attachment.add": ("Attach a file or image up to 32 MB to a conversation draft. Provider-specific image limits still apply. expectedDraftId binds an upload admitted from an unnamed browser draft, including its exact creation handoff.", schema({"sessionId":{"type":["string","null"],"maxLength":200},"expectedDraftId":{"type":"string","pattern":"^[a-f0-9]{32}$"},"name":string(200),"base64":string(MAX_ENCODED_BYTES),"source":{"type":"string","enum":["clipboard-text"]}},["name","base64"])),
     "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":{"type":["string","null"],"maxLength":200},"id":string(32)},["id"])),
     "conversation.delivery": ("Check a saved input's delivery without sending or starting work. Missing evidence remains uncertain.", schema({"sessionId": string(200), "inputId": string(200)}, ["sessionId", "inputId"])),
@@ -2715,7 +2715,7 @@ class AppService:
                 if external_target and self._session(external_target, hydrate=False).get('externalAgent'):
                     self.external_conversations.guard(self._session(external_target), action, args)
             from .update_drain import held as update_held, new_work as update_new_work
-            update_message = action == 'conversation.send' and update_held(self) and (args.get('allowNextTurn') is True or not args.get('expectedGenerationId'))
+            update_message = action == 'conversation.send' and update_held(self) and not args.get('expectedGenerationId')
             if work_paused(self.state) and not update_message and update_new_work(action, args):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
             if update_held(self) and update_new_work(action, args) and action not in {'question.answer', 'conversation.send', 'worker.steer'}:
@@ -2727,13 +2727,15 @@ class AppService:
                 if (current.get('configurationBusy') or self.management and self.management.unresolved_configuration(current)) and action != 'question.answer':
                     raise AppError('Applying or reconciling conversation settings; new input must wait.',409)
                 if action != 'question.answer' and current.get('fileAccessPending'):
-                    generation = current.get('collaborationGeneration') or {}
                     # Existing work retains its mounted policy until it settles.
-                    # Let the human guide that work without starting another run.
+                    # Only the native owner may decide whether this input can
+                    # guide active work; idle application still refuses below.
                     steering_existing = (
                         origin == 'ui' and action == 'conversation.send'
-                        and current.get('status') in {'working', 'starting', 'running'}
-                        and generation.get('id') and not generation.get('terminal')
+                        and (args.get('expectedGenerationId') is None or (
+                            current.get('status') in {'working', 'starting', 'running'}
+                            and (current.get('collaborationGeneration') or {}).get('id')
+                            and not (current.get('collaborationGeneration') or {}).get('terminal')))
                     )
                     if not steering_existing:
                         from .chat_permissions import PENDING_DETAIL
@@ -3434,13 +3436,14 @@ class AppService:
                 diagnostic_result = save(self, args, configuration_authority)
             elif action == "conversation.send":
                 session = self._session(args.get("sessionId"))
+                if ('expectedInterruptionRevision' in args
+                        and args['expectedInterruptionRevision'] != session.get('interruptionRevision', 0)):
+                    raise AppError('This message was prepared before Stop. Nothing was sent. Send a new message to continue.',
+                                   409, code='input_stopped')
                 if ('expectedConfigurationRevision' in args
                         and args['expectedConfigurationRevision'] != session.get('nextMessageRevision', 0)):
                     raise AppError('Next message settings changed. Review them before sending.', 409)
                 from .conversation_steering import target as steering_target, recover_failed_generation
-                # A run ending before delivery must not turn this correction
-                # into new work under a policy that is awaiting replacement.
-                allow_next_turn = args.get('allowNextTurn') is True and not session.get('fileAccessPending')
                 # Whitespace can carry Markdown meaning; validate blank input
                 # separately without changing the saved or delivered message.
                 text = args["text"]
@@ -3464,7 +3467,10 @@ class AppService:
                     raise AppError("The Amplifier runtime is unavailable.")
                 stopped_generation = (recover_failed_generation(self, session, recovery_boundary)
                     if not session.get('externalAgent') and origin == 'ui' and not update_message and args.get('expectedGenerationId') is None else None)
-                target_generation = None if update_message or session.get('externalAgent') else steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
+                # Ordinary input is conversation-addressed. Only explicit
+                # anchored callers consult the host's observed generation.
+                target_generation = (steering_target(session, args['expectedGenerationId'])
+                    if not session.get('externalAgent') and args.get('expectedGenerationId') is not None else None)
                 input_id = command_id or str(uuid.uuid4())
                 from .chat_navigation import recent_activity, prepare_human_post, promote_human_post
                 # Origin is chosen by the host adapter, never role/via/action args.
@@ -3474,7 +3480,8 @@ class AppService:
                 session.setdefault('surfaceInputs', {})[input_id] = self.surface_context.bind_input(session['id'])
                 self.computer_visual.bind_input(session['id'], input_id)
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
-                message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), human_post=post_previous is not None,inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending', 'allowNextTurn': allow_next_turn}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
+                message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), human_post=post_previous is not None,inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending'}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
+                message['interruptionRevision'] = session.get('interruptionRevision', 0)
                 handoff = self.handoffs.execution(action, args, origin, command_id, caller_session_id)
                 if handoff is not None:
                     message['handoffOrigin'] = self.handoffs.lineage(handoff)
@@ -3497,8 +3504,8 @@ class AppService:
                         reset=session["status"] not in {"working", "starting"})
                     session["status"] = "working"
                     session.pop("error", None)
-                    ensure_turn(session,input_id,text)
                     if session.get('externalAgent'):
+                        ensure_turn(session,input_id,text)
                         session['externalAgent']['activeInputId'] = input_id
                 if not update_message:
                     pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity, args.get('preserveDraft', False))))
@@ -4126,7 +4133,7 @@ class AppService:
                             self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), command_id))
                             self.db.commit()
                     raise
-                if action == 'conversation.send' and isinstance(acknowledged, dict) and (acknowledged.get('steering') or acknowledged.get('delivery') == 'queued_for_update' or session.get('externalAgent')):
+                if action == 'conversation.send' and isinstance(acknowledged, dict):
                     result.update(acknowledged)
                 if action in {'conversation.delivery', 'conversation.retry'}:
                     result['result'] = acknowledged
@@ -4159,8 +4166,6 @@ class AppService:
                     self.smart_tool_requests[command_id] = task
                     task.add_done_callback(lambda finished, identity=command_id: self.smart_tool_requests.pop(identity, None))
         if action == 'conversation.send':
-            if not session.get('externalAgent') and not result.get('steering') and result.get('delivery') != 'queued_for_update':
-                result['delivery'] = 'accepted'
             if result.get('delivery') == 'accepted':
                 saved = self.db.execute('SELECT receipt FROM commands WHERE id=?', (result['inputId'],)).fetchone()
                 # Capture before returning to the HTTP task. Its later resumption
@@ -4520,7 +4525,7 @@ class AppService:
         from .message_delivery import find_message
         from .update_drain import UpdateDeferred, held, defer_send
         original = find_message(session, input_id) or {}
-        if not retry and held(self) and (not original.get('steering') or original['steering'].get('allowNextTurn')):
+        if not retry and held(self) and not original.get('steering'):
             from .update_drain import input_gate
             try:
                 input_gate(self, session['id'], input_id)
@@ -4652,7 +4657,18 @@ class AppService:
         with measure(self, 'input.delivery.publish', session_id=session['id']):
             async with self.lock:
                 current = self._session(session["id"])
-                self._delivery(current, input_id, 'accepted')
+                observed = find_message(current, input_id) or {}
+                if observed.get('steering'):
+                    # Inbox admission cannot erase an earlier native
+                    # pending/applied/held/unknown observation.
+                    send_result = {**(send_result if isinstance(send_result, dict) else {}), 'delivery': observed['delivery']['status'],
+                                   'steering': copy.deepcopy(observed['steering'])}
+                else:
+                    self._delivery(current, input_id,
+                        'failed' if isinstance(send_result, dict) and send_result.get('accepted') is False
+                            and send_result.get('effect') == 'none' else 'accepted')
+                    send_result = {**(send_result if isinstance(send_result, dict) else {}),
+                                   'delivery': (find_message(current, input_id) or {})['delivery']['status']}
                 sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
                 self._clear_sent_draft(current, sent, text, preserve_draft)
                 current.pop("lockOwner", None)
@@ -5260,6 +5276,10 @@ class AppService:
                     and (session.get('collaborationGeneration') or {}).get('id') == payload.get('generation_id')
                     and before_generation[0] != payload.get('generation_id'))
                 if current_generation or admitted_start:
+                    if admitted_start:
+                        initial = payload.get('initial_input_id')
+                        message = next((m for m in session['messages'] if m.get('inputId') == initial), {})
+                        ensure_turn(session, initial, message.get('text', ''))
                     from .input_status import generation as observe_input_generation, PREFIX, record_failure
                     input_annotation = PREFIX + str(payload.get('initial_input_id', ''))
                     before_input = session.get('messageAnnotations', {}).get(input_annotation)

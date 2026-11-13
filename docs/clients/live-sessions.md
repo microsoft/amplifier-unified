@@ -107,6 +107,18 @@ conflicts with the URL is rejected. The SPA uses the same service dispatch throu
 `/api/actions`; session operations capture their target before awaiting history or
 runtime admission.
 
+Ordinary `conversation.send` is conversation-addressed. Do not supply a displayed
+generation: the native owner chooses live provider steering when ready, otherwise
+the next request boundary within the current turn, or a new turn when idle.
+Explicit `expectedGenerationId` remains strict and refuses an ended/changed run;
+the former `allowNextTurn` option is removed. See
+[message delivery](../MESSAGE-DELIVERY-EDIT.md#ordinary-messages-follow-the-conversation)
+for receipt phases and the no-replay boundary.
+Optional `expectedInterruptionRevision` captures the conversation's existing Stop
+revision at submission. A stale value refuses fresh admission with `input_stopped`;
+it is not a generation/route choice. Exact duplicate receipts still reconcile after
+Stop. The bundled browser preserves this value across uncertain delivery.
+
 Keep the same command ID and arguments after an uncertain transport failure.
 Persisted receipts deduplicate retries by client, action, arguments, and origin.
 A changed command with the same ID is rejected. Command acceptance is distinct
