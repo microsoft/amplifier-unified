@@ -152,7 +152,7 @@ class FullHarnessTests(unittest.TestCase):
         connection.sock.getpeercert.side_effect = lambda **kwargs: events.append('peer') or b'leaf'
         response = connection.getresponse.return_value
         response.status = 200
-        response.read.return_value = b'{"result":{"supported":true}}'
+        response.read.return_value = b'{"accepted":true,"result":{"supported":true}}'
         config = {'port': 1, 'home': str(self.root),
                   'tls': {'pin': hashlib.sha256(b'leaf').hexdigest(), 'ca': 'unused'}}
         with patch.object(full.ssl, 'create_default_context'), \
@@ -170,7 +170,8 @@ class FullHarnessTests(unittest.TestCase):
         repair = Path(config['home']) / 'installation-repair'
         repair.mkdir(parents=True)
         confirmation = {'previewId': 'a' * 32, 'hostInstanceId': 'exact-old-host', 'confirm': True}
-        full.save(repair / ('confirmed-' + confirmation['previewId'] + '.json'), {'operationId': 'b' * 32})
+        full.save(repair / 'admissions.json', {'schema': 1, 'current': 'b' * 32,
+                                             'previews': {confirmation['previewId']: 'b' * 32}})
         for error in (ConnectionResetError(), http.client.RemoteDisconnected(), RuntimeError('HTTP failure'),
                       json.JSONDecodeError('bad receipt', '', 0)):
             with self.subTest(error=type(error).__name__), \
@@ -186,6 +187,122 @@ class FullHarnessTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'timed out'):
                 full.confirm_once(self.root, {'home': str(self.root)}, {'previewId': 'a' * 32})
             self.assertEqual(send.call_count, 1)
+
+    def identity_inputs(self):
+        host = '12912ed3-c6bf-4df7-970b-30b4863543ca'
+        config = {'revision': 'a' * 40, 'version': '0.89.0', 'home': '/private/full/data',
+                  'artifact': {'url': 'https://github.com/microsoft/amplifier-unified/releases/download/v0.89.0/amplifier_unified-0.89.0-py3-none-any.whl'}}
+        health = {'ok': True, 'app': 'amplifier-unified', 'revision': config['revision'],
+                  'version': config['version'], 'hostInstanceId': host, 'instanceId': 'd' * 32}
+        target = {'version': config['version'], 'revision': config['revision'], 'source': config['artifact']['url']}
+        preview = {'supported': True, 'scope': 'application-installation', 'dataDir': config['home'],
+                   'installedExtras': [], 'restart': 'managed-service', 'target': target,
+                   'hostInstanceId': host, 'previewId': 'b' * 32}
+        return config, health, preview
+
+    def test_service_uuid_and_updater_hex_are_separate_and_never_normalized(self):
+        config, health, _ = self.identity_inputs()
+        self.assertEqual(full.health_identities(health, config), (health['hostInstanceId'], health['instanceId']))
+        for bad in (None, '', 42, 'wrong-uuid', health['instanceId'],
+                    health['hostInstanceId'].replace('-', ''), health['hostInstanceId'].upper()):
+            with self.subTest(host=bad), self.assertRaisesRegex(RuntimeError, 'hostInstanceId UUID'):
+                full.health_identities({**health, 'hostInstanceId': bad}, config)
+        without_host = {key: value for key, value in health.items() if key != 'hostInstanceId'}
+        with self.assertRaisesRegex(RuntimeError, 'hostInstanceId UUID'):
+            full.health_identities(without_host, config)
+        for bad in (None, '', 'not-hex', health['hostInstanceId'], health['hostInstanceId'].replace('-', '')):
+            with self.subTest(updater=bad), self.assertRaisesRegex(RuntimeError, 'updater instanceId'):
+                full.health_identities({**health, 'instanceId': bad}, config)
+
+    def test_authenticated_health_requires_exact_source_version_app_and_ok(self):
+        config, health, _ = self.identity_inputs()
+        for key, bad in (('revision', 'c' * 40), ('version', '0.88.0'), ('app', 'substitute'), ('ok', False)):
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'source/app mismatch'):
+                full.health_identities({**health, key: bad}, config)
+
+    def test_preview_confirm_and_plan_bind_service_uuid_not_updater_identity(self):
+        config, health, preview = self.identity_inputs()
+        with patch.object(full, 'action', return_value=preview) as request:
+            actual, confirmation = full.preview_confirmation(config, self.root, health)
+        self.assertEqual(actual, preview)
+        self.assertEqual(confirmation, {'hostInstanceId': health['hostInstanceId'],
+                                       'previewId': preview['previewId'], 'confirm': True})
+        request.assert_called_once_with(config, 'maintenance.installationRepairPreview', {})
+        plan = {'hostInstanceId': health['hostInstanceId'], 'home': config['home'], 'extras': [],
+                'target': preview['target'], 'previewId': preview['previewId'], 'operationId': 'e' * 32}
+        full.require_plan_scope(plan, config, health, confirmation, 'e' * 32)
+        for key, bad in (('hostInstanceId', health['instanceId']), ('home', '/foreign/data'),
+                         ('extras', ['native-desktop']), ('operationId', 'f' * 32), ('previewId', 'f' * 32),
+                         ('target', {**preview['target'], 'revision': 'f' * 40})):
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'plan changed'):
+                full.require_plan_scope({**plan, key: bad}, config, health, confirmation, 'e' * 32)
+
+    def test_preview_scope_mismatch_never_yields_confirmation(self):
+        config, health, preview = self.identity_inputs()
+        for key, bad in (('hostInstanceId', health['instanceId']),
+                         ('hostInstanceId', '11058c39-19d3-4965-a5de-64ed4d035174'),
+                         ('scope', 'whole-runtime'), ('dataDir', '/foreign/data'),
+                         ('installedExtras', ['native-desktop']), ('restart', 'custom'),
+                         ('target', {**preview['target'], 'source': 'https://foreign/wheel'}), ('previewId', 'bad')):
+            with self.subTest(key=key, bad=bad), patch.object(full, 'action', return_value={**preview, key: bad}):
+                with self.assertRaises(RuntimeError):
+                    full.preview_confirmation(config, self.root, health)
+
+    def test_unsupported_preview_and_api_input_errors_leave_explicit_evidence(self):
+        config, health, preview = self.identity_inputs()
+        refused = {**preview, 'supported': False, 'reason': 'The loaded service is not this host.'}
+        with patch.object(full, 'action', return_value=refused):
+            with self.assertRaisesRegex(RuntimeError, 'preview refused'):
+                full.preview_confirmation(config, self.root, health)
+        evidence = full.load(self.root / 'preview.json')
+        self.assertFalse(evidence['supported'])
+        self.assertEqual(evidence['reason'], refused['reason'])
+        with patch.object(full, 'action', side_effect=RuntimeError('full-app authenticated API request failed (HTTP 409)')):
+            with self.assertRaisesRegex(RuntimeError, 'HTTP 409'):
+                full.preview_confirmation(config, self.root, health)
+        evidence = full.load(self.root / 'preview.json')
+        self.assertFalse(evidence['passed'])
+        self.assertEqual(evidence['failure'], 'preview-api-input-or-response')
+        self.assertIn('HTTP 409', evidence['detail'])
+
+    def test_public_action_unwraps_operation_and_status_envelopes_without_guessing(self):
+        operation = {'operationId': 'a' * 32, 'status': 'ready'}
+        for name, result in (('maintenance.installationRepairConfirm', operation),
+                             ('maintenance.installationRepairStatus', {'operation': operation})):
+            with self.subTest(name=name), patch.object(full, 'request', return_value={
+                    'accepted': True, 'revision': 3, 'effects': [], 'hostInstanceId': 'service-envelope',
+                    'result': result}):
+                self.assertEqual(full.action({}, name, {}), result)
+        for envelope in (None, [], {}, {'accepted': False, 'result': operation},
+                         {'accepted': True, 'operation': operation}, {'accepted': True, 'result': None}):
+            with self.subTest(envelope=envelope), patch.object(full, 'request', return_value=envelope):
+                with self.assertRaisesRegex(RuntimeError, 'unrecognized accepted/result'):
+                    full.action({}, 'maintenance.installationRepairConfirm', {})
+
+    def test_atomic_admission_joins_current_and_exact_preview_no_legacy_fallback(self):
+        repair = self.root
+        preview, identity = 'a' * 32, 'b' * 32
+        full.save(repair / 'admissions.json', {'schema': 1, 'current': identity, 'previews': {preview: identity}})
+        self.assertEqual(full.admitted_operation(repair, preview), identity)
+        self.assertIsNone(full.admitted_operation(repair, 'c' * 32))
+        for bad in ({'schema': True, 'current': identity, 'previews': {preview: identity}},
+                    {'schema': 1, 'current': 'x', 'previews': {preview: identity}},
+                    {'schema': 1, 'current': identity, 'previews': {'bad': identity}},
+                    {'schema': 1, 'current': identity, 'previews': {preview: 'bad'}},
+                    {'schema': 1, 'current': None, 'previews': {preview: identity}},
+                    {'schema': 1, 'current': 'c' * 32, 'previews': {preview: identity, 'd' * 32: 'c' * 32}}):
+            full.save(repair / 'admissions.json', bad)
+            with self.subTest(admission=bad), self.assertRaises(RuntimeError):
+                full.admitted_operation(repair, preview)
+
+    def test_legacy_or_prepared_files_without_atomic_admission_never_authorize_recovery(self):
+        preview, identity = 'a' * 32, 'b' * 32
+        full.save(self.root / 'latest.json', {'operationId': identity})
+        full.save(self.root / ('confirmed-' + preview + '.json'), {'operationId': identity})
+        with self.assertRaises(FileNotFoundError):
+            full.admitted_operation(self.root, preview)
+        full.save(self.root / 'admissions.json', {'schema': 1, 'current': None, 'previews': {}})
+        self.assertIsNone(full.admitted_operation(self.root, preview))
 
     def test_ready_requires_real_doctor_health_and_reinstallation(self):
         receipt = {'status': 'ready', 'doctorVerified': True, 'healthVerified': True, 'reinstalled': True}

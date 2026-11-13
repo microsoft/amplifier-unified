@@ -16,6 +16,9 @@ The disclosed acquisition-only sitecustomize asserts LOCAL candidate delivery,
 not published trust; -I probes/doctor and the -I -S worker cannot load it.
 Its passive audit hook records only repair manager-dispatch labels/PIDs, not
 arguments/environments; exact retry must leave the observed attempt count at one.
+Requires bearer health.hostInstanceId as the canonical service UUID, separate
+from updater health.instanceId (32 hex), and atomic admissions.json (schema 1).
+Unknown/missing API or legacy admission shapes FAIL; no compatibility fallback.
 No sudo, OS trust install, bus provisioning, publication, or live adoption.
 Private storage is retained for the disposable runner owner to reclaim.
 """
@@ -44,6 +47,7 @@ import ssl
 import sys
 import time
 import tomllib
+import uuid
 import zipfile
 
 SOURCE = Path(__file__).resolve().parents[2]
@@ -247,7 +251,7 @@ def request(config, path, body=None):
                            headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json',
                                     'X-Amplifier-State-Transport': 'delta-v1'})
         response = connection.getresponse()
-        check(response.status == 200, 'full-app authenticated API request failed')
+        check(response.status == 200, 'full-app authenticated API request failed (HTTP ' + str(response.status) + ')')
         raw = response.read(4_000_001)
         check(len(raw) <= 4_000_000, 'full-app API response exceeds bound')
         return json.loads(raw)
@@ -258,8 +262,76 @@ def request(config, path, body=None):
 def action(config, name, args):
     # No automatic retry and no generic command-id dedup to hide repair retries.
     value = request(config, '/api/actions', {'action': name, 'args': args})
-    check('result' in value, 'full-app API has no result')
+    check(isinstance(value, dict) and value.get('accepted') is True
+          and isinstance(value.get('result'), dict),
+          'full-app API returned an unrecognized accepted/result envelope')
     return value['result']
+
+
+def health_identities(health, config):
+    """Service UUID binds actions; updater hex identity binds running generation.
+
+    UUID() accepts 32-hex input too, so require the canonical hyphenated service
+    spelling. Never substitute/normalize updater instanceId into hostInstanceId.
+    """
+    check(isinstance(health, dict) and health.get('ok') is True
+          and health.get('app') == 'amplifier-unified'
+          and health.get('revision') == config['revision']
+          and health.get('version') == config['version'], 'authenticated health source/app mismatch')
+    host = health.get('hostInstanceId')
+    try:
+        parsed = uuid.UUID(host) if isinstance(host, str) else None
+    except ValueError:
+        parsed = None
+    check(parsed is not None and str(parsed) == host, 'authenticated health requires a service hostInstanceId UUID')
+    instance = health.get('instanceId')
+    check(isinstance(instance, str) and re.fullmatch('[a-f0-9]{32}', instance)
+          and instance != parsed.hex, 'authenticated health requires a distinct updater instanceId (32 hex)')
+    return host, instance
+
+
+def preview_confirmation(config, evidence, health):
+    host, _ = health_identities(health, config)
+    try:
+        preview = action(config, 'maintenance.installationRepairPreview', {})
+    except (RuntimeError, OSError, http.client.HTTPException, json.JSONDecodeError) as error:
+        save(evidence / 'preview.json', {'passed': False, 'failure': 'preview-api-input-or-response',
+             'errorType': type(error).__name__,
+             'detail': str(error) if isinstance(error, RuntimeError) else 'Preview response unavailable; no confirmation sent.'})
+        raise
+    save(evidence / 'preview.json', {key: preview.get(key) for key in
+         ('supported', 'previewId', 'hostInstanceId', 'scope', 'dataDir', 'target', 'reason')})
+    check(preview.get('supported') is True,
+          'real full-app preview refused; inspect preview evidence and production binding/admission, do not bypass')
+    check(preview.get('hostInstanceId') == host
+          and preview.get('scope') == 'application-installation'
+          and preview.get('dataDir') == config['home']
+          and preview.get('installedExtras') == []
+          and preview.get('restart') == 'managed-service',
+          'preview changed service UUID, installation scope, data root or default features')
+    check(preview.get('target') == {'version': config['version'], 'revision': config['revision'],
+                                    'source': config['artifact']['url']},
+          'preview did not select exact full candidate')
+    check(isinstance(preview.get('previewId'), str) and re.fullmatch('[a-f0-9]{32}', preview['previewId']),
+          'preview has no exact preview ID')
+    return preview, {'previewId': preview['previewId'], 'hostInstanceId': host, 'confirm': True}
+
+
+def admitted_operation(repair_root, preview_id):
+    """Read the sole atomic admission, never a legacy/per-preview fallback."""
+    admissions = load(repair_root / 'admissions.json')
+    exact_id = lambda value: isinstance(value, str) and re.fullmatch('[a-f0-9]{32}', value)
+    check(isinstance(admissions, dict) and set(admissions) == {'schema', 'current', 'previews'}
+          and type(admissions['schema']) is int and admissions['schema'] == 1
+          and isinstance(admissions['previews'], dict)
+          and all(exact_id(key) and exact_id(value) for key, value in admissions['previews'].items())
+          and (admissions['current'] is None or admissions['current'] in admissions['previews'].values()),
+          'unrecognized atomic installation repair admission')
+    identity = admissions['previews'].get(preview_id)
+    if identity is None:
+        return None
+    check(identity == admissions['current'], 'confirmed preview is not the current atomic repair admission')
+    return identity
 
 
 def confirm_once(root, config, confirmation):
@@ -271,11 +343,19 @@ def confirm_once(root, config, confirmation):
         # Inspect disk, never turn uncertainty into another confirm request.
         pass
     repair_root = Path(config['home']) / 'installation-repair'
-    mapping = native.wait_for(lambda: load(repair_root / ('confirmed-' + confirmation['previewId'] + '.json')),
-                              seconds=120, description='durable one-shot admission after confirm')
-    identity = mapping['operationId']
-    check(re.fullmatch('[a-f0-9]{32}', identity), 'invalid admitted operation ID')
+    identity = native.wait_for(lambda: admitted_operation(repair_root, confirmation['previewId']),
+                               seconds=120, description='durable atomic one-shot admission after confirm')
     return repair_root / identity
+
+
+def require_plan_scope(plan, config, health, confirmation, operation_id):
+    host, _ = health_identities(health, config)
+    check(plan.get('hostInstanceId') == host == confirmation['hostInstanceId']
+          and plan.get('home') == config['home'] and plan.get('extras') == []
+          and plan.get('operationId') == operation_id and plan.get('previewId') == confirmation['previewId']
+          and plan.get('target') == {'version': config['version'], 'revision': config['revision'],
+                                    'source': config['artifact']['url']},
+          'plan changed service UUID, installation scope, current operation or candidate')
 
 
 def require_ready(receipt):
@@ -462,15 +542,8 @@ def run(root, evidence):
     register_service(root, config, env)
     old_pid = native.wait_for(lambda: capture_service(root, env), description='real managed initial PID')
     health = native.wait_for(lambda: request(config, '/api/health'), seconds=180, description='real initial HTTPS health')
-    check(health.get('revision') == config['revision'] and health.get('instanceId'), 'initial source/instance mismatch')
-    preview = action(config, 'maintenance.installationRepairPreview', {})
-    save(evidence / 'preview.json', {'supported': preview.get('supported'), 'previewId': preview.get('previewId'),
-                                    'hostInstanceId': preview.get('hostInstanceId'), 'target': preview.get('target')})
-    check(preview.get('supported') is True and preview['hostInstanceId'] == health['instanceId'],
-          'real full-app preview refused; inspect production binding/admission, do not bypass')
-    check(preview['target']['version'] == config['version'] and preview['target']['revision'] == config['revision'],
-          'preview did not select exact full candidate')
-    confirmation = {'previewId': preview['previewId'], 'hostInstanceId': health['instanceId'], 'confirm': True}
+    old_host, old_instance = health_identities(health, config)
+    preview, confirmation = preview_confirmation(config, evidence, health)
     folder = confirm_once(root, config, confirmation)
     repair_root = Path(config['home']) / 'installation-repair'
     identity = folder.name
@@ -481,8 +554,7 @@ def run(root, evidence):
         check(digest(folder / name) == digest(SOURCE / 'amplifier_web' / name),
               'prepared helper differs from exact live source')
     check(digest(plan['artifact']['path']) == config['artifact']['sha256'], 'operation artifact mismatch')
-    check(plan['hostInstanceId'] == health['instanceId'] and plan['extras'] == [],
-          'plan changed host or default feature selection')
+    require_plan_scope(plan, config, health, confirmation, identity)
     # Copy equality is necessary but never enough: the genuine worker performs
     # all qualification/admission/stop/swap/start/checks, without a test barrier.
     def progress():
@@ -502,8 +574,8 @@ def run(root, evidence):
     new_pid = native.wait_for(lambda: capture_service(root, env),
                               lambda pid: pid > 0 and pid != old_pid, description='real successor manager PID')
     successor = request(config, '/api/health')
-    check(successor.get('ok') is True and successor['instanceId'] != health['instanceId']
-          and successor['revision'] == config['revision']
+    new_host, new_instance = health_identities(successor, config)
+    check(new_host != old_host and new_instance != old_instance
           and successor['installationRepair'] == {'protocol': 1, 'operationId': identity},
           'authenticated successor health/current operation/protocol mismatch')
     check(not native.pid_start(old_pid, env), 'original service PID survived repair')
@@ -540,11 +612,12 @@ def run(root, evidence):
              'helper': native.owned_helper_observation(helper[0], env),
              'folders': sorted(path.name for path in repair_root.iterdir() if path.is_dir())}
     check(stable == after and capture_service(root, env) == new_pid
-          and request(config, '/api/health')['instanceId'] == successor['instanceId']
+          and health_identities(request(config, '/api/health'), config) == (new_host, new_instance)
           and dispatches(root, helper[0]['label'], old_pid) == audit,
           'exact retry/status changed installation/helper/service identity')
     save(evidence / 'result.json', {'passed': True, 'operationId': identity, 'oldPID': old_pid, 'newPID': new_pid,
-         'oldInstanceId': health['instanceId'], 'newInstanceId': successor['instanceId'],
+         'oldInstanceId': old_instance, 'newInstanceId': new_instance,
+         'oldHostInstanceId': old_host, 'newHostInstanceId': new_host,
          'doctorVerified': True, 'healthVerified': True, 'protocol': 1, 'oldPrefixRetained': True,
          'sentinel': retained, 'candidateInstalledJoin': candidate_join, 'freshInstalledJoin': fresh_join,
          'candidateFreshGraphEqual': True, 'graphPackages': len(graph),
