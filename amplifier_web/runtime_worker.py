@@ -1385,7 +1385,7 @@ class Worker:
                 original = self.execution_failure
                 capture = (original[2] if original and original[:2] == (self.runtime, self.stop_revision)
                            else None)
-                publish({"type": "runtime.error", "error": f"{type(error).__name__}: {error}. Work was not replayed.",
+                publish({"type": "runtime.error", "error": "The conversation worker failed. Work was not replayed.",
                          "errorType": type(error).__name__, "failureSource": "execution",
                          "failureFacts": command_failure_facts(error),
                          **({'executionFailure': capture,
@@ -1930,8 +1930,11 @@ class Worker:
                     await self.session.cleanup()
                 if self.shared_handle is not None:
                     try:
-                        if self.activation_gate is not None and self.activation_gate.current_valid:
-                            self.activation_gate.release(self.activation)
+                        if self.activation_gate is not None and self.activation is not None:
+                            try:
+                                self.activation_gate.release(self.activation)
+                            except RuntimeError:
+                                pass  # The dedicated takeover path already fenced it.
                         await asyncio.to_thread(self.shared_handle.release)
                     finally:
                         self.shared_handle = None

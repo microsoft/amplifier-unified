@@ -35,8 +35,9 @@ async def worker(tmp_path, monkeypatch):
         yield owner
     finally:
         owner.shutdown.set()
-        owner.naming.pending.cancel()
-        await asyncio.gather(owner.naming.pending, *owner.tasks, return_exceptions=True)
+        pending = [owner.naming.pending] if owner.naming else []
+        for task in pending: task.cancel()
+        await asyncio.gather(*pending, *owner.tasks, return_exceptions=True)
         if owner.shared_handle: owner.shared_handle.release()
 
 
@@ -121,6 +122,22 @@ async def test_original_loop_exception_is_captured_before_flattening_with_no_pro
     assert original['exceptionChain'][0]['errorType'] == 'TypeError'
     assert 'private prompt and key' not in str(original)
     assert not events  # Publication waits for the real execution done callback.
+
+
+async def test_cleanup_invalidates_writer_even_from_a_different_task_context(worker, monkeypatch):
+    from contextvars import Context
+    token = worker.activation
+    worker.finish_name.set()
+    await worker.naming.pending
+    worker.naming = None
+    worker.controls = SimpleNamespace(close=AsyncMock())
+    worker.session.cleanup = AsyncMock()
+    worker.read = AsyncMock()
+    worker.shutdown.set()
+    await asyncio.create_task(worker._run(), context=Context())
+    assert worker.shared_handle is None
+    with pytest.raises(RuntimeError, match='released or superseded'):
+        worker.activation_gate.check(token)
 
 
 async def test_real_live_loop_admits_second_turn_while_name_is_pending(worker):
