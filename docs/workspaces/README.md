@@ -60,21 +60,24 @@ for a different new workspace. Blank and Development continue to inherit default
 Its **Manage starters** link opens a separate advanced list/detail editor,
 reusing the routing editor's collection primitives. Basics come first;
 repositories, guidance/working memory and resource tracking expand on demand.
-Built-ins are read-only. Create a custom starter or duplicate an existing one,
-then edit its description, instructions, optional bundle default, repository
-URLs/folders/branches and resource tracking. Deleting a definition never deletes
+Edit any starter's name, description, instructions, optional bundle default,
+repository URLs/folders/branches and resource tracking directly. For a built-in,
+**Save as new starter** creates a custom starter with those edits and leaves the shipped
+definition unchanged; no duplicate-before-edit step is needed. A custom starter
+offers **Save changes** or **Save as new starter**. Deleting a definition never deletes
 created workspaces. Edits apply to future plans; prepared plans retain their exact
 starter snapshot.
 Amplifier development revision 6 makes this choice when the plan is prepared.
 An inherited plan stays inherited if defaults later change; new chats use the
 then-current defaults. Already reviewed revision-5 plans keep their explicit
-bundle, as do saved custom starters. Duplicating a built-in copies its current
-choice when duplicated, including inheritance, from a fresh server snapshot.
+bundle, as do saved custom starters. Saving an edited built-in as new preserves
+the choice shown in the editor, including inheritance, without carrying built-in
+default-tracking metadata into the custom definition.
 Revision 9 changes the built-in fallback from `anchors-amp-dev` to `work-amp-dev`
 for future plans only; existing workspaces, prepared plans and custom starters
 retain their saved choices.
-The returned copy is loaded into the editor; a previously displayed choice may
-be stale. Duplication does not create or change a workspace. Explicit chat choices
+The saved custom starter is selected in the editor. Saving a starter does not
+create or change a workspace. Explicit chat choices
 and existing conversations are unchanged; no workspace settings are migrated.
 Bundle choices share the chat dropdown's catalog: the preconfigured `anchors`
 and `anchors-amp-dev` roots from Amplifier Foundation and `work` and `work-amp-dev` from
