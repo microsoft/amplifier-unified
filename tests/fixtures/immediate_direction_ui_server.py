@@ -61,7 +61,7 @@ class Socket:
                 await self.frames.put(json.dumps({'type': 'response.completed', 'response':
                     terminal('parent', 'TOOL_BOUNDARY_FINAL') if stage('tool-release')
                     else terminal('parent', tool=True)}))
-            elif os.environ.get('DIRECTION_SCENARIO') == 'completion':
+            elif os.environ.get('DIRECTION_SCENARIO') in {'completion', 'stale-config'}:
                 next_turn = stage('complete')
                 async def complete():
                     await wait_stage('complete')
@@ -69,6 +69,10 @@ class Socket:
                         terminal('parent', 'NEXT_TURN_FINAL' if next_turn else 'ORIGINAL_FINAL')}))
                 self.tasks.append(asyncio.create_task(complete()))
         elif value['type'] == 'response.steer':
+            if os.environ.get('DIRECTION_SCENARIO') == 'native-unknown':
+                # Bytes crossed the external transport boundary; deliberately
+                # lose its acknowledgement, never claim a definite no-effect.
+                raise TimeoutError('Scripted native send acknowledgement lost')
             async def phases():
                 await wait_stage('accept')
                 await self.frames.put(json.dumps({'type': 'response.steer.accepted', 'steer': {'id': 'steer-one'}}))
@@ -250,7 +254,9 @@ async def mount(coordinator, config=None):
     async def inspect(request):
         path = root / 'wire.jsonl'
         return web.json_response({'wire': [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else [],
-            'session': {key: service._session().get(key) for key in ('status', 'collaborationGeneration', 'messages', 'error', 'failure')},
+            'session': {key: service._session().get(key) for key in (
+                'id', 'status', 'collaborationGeneration', 'messages', 'error', 'failure',
+                'interruptionRevision', 'nextMessageRevision', 'pendingModelSelection', 'execution')},
             'toolRunning': stage('tool-running'), 'workers': len(runtime.workers)})
     async def release(request):
         name = (await request.json())['stage']
