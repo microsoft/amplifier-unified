@@ -213,16 +213,16 @@ async def test_general_release_change_affects_new_managed_and_workspace_chats_no
     app = AppService(tmp_path / 'app', Runtime(), workspace=tmp_path)
     app.clients.attach('web', kind='web')
     try:
-        await command(app, 'web', 'session.create', {})
-        old = app._session()['id']
+        result = await command(app, 'web', 'session.create', {})
+        old = result['sessionId']
         assert app._session(old)['bundle'] == 'work'
         monkeypatch.setattr(bundle_defaults, 'GENERAL_BUNDLE', 'next-general')
-        await command(app, 'web', 'session.create', {})
-        assert app._session()['bundle'] == 'next-general'
-        await command(app, 'web', 'session.create', {'location': {'kind': 'managed'}})
-        assert app._session()['bundle'] == 'next-general'
-        await command(app, 'web', 'session.create', {'location': {'kind': 'managed'}, 'bundle': 'work'})
-        assert app._session()['bundle'] == 'work'
+        result = await command(app, 'web', 'session.create', {})
+        assert app._session(result['sessionId'])['bundle'] == 'next-general'
+        result = await command(app, 'web', 'session.create', {'location': {'kind': 'managed'}})
+        assert app._session(result['sessionId'])['bundle'] == 'next-general'
+        result = await command(app, 'web', 'session.create', {'location': {'kind': 'managed'}, 'bundle': 'work'})
+        assert app._session(result['sessionId'])['bundle'] == 'work'
         assert app._session(old)['bundle'] == 'work'
     finally:
         await app.close()
