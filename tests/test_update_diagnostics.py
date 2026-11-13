@@ -33,6 +33,25 @@ from test_runtime_ref_identity import normalized_runtime
     ('there is no version of cryptography>=44,<broken', {'reason': 'package-not-found'}),
     ('cryptography was not found in the package registry and you require cryptography>=44, <51',
      {'reason': 'package-not-found', 'package': 'cryptography', 'constraint': '>=44,<51'}),
+    ('`/private/customer api-token` was not found in the package registry',
+     {'reason': 'package-not-found'}),
+    ('"/private/customer api-token" was not found in the package registry',
+     {'reason': 'package-not-found'}),
+    ("'/private/customer api-token' was not found in the package registry",
+     {'reason': 'package-not-found'}),
+    ('/private/customer api-token was not found in the package registry',
+     {'reason': 'package-not-found'}),
+    ('there is no version of `customer api-token`', {'reason': 'package-not-found'}),
+    ('Because `agent-client-protocol` was not found in the package registry and you require `agent-client-protocol==1.0.0`',
+     {'reason': 'package-not-found', 'package': 'agent-client-protocol', 'constraint': '==1.0.0'}),
+    ('there is no version of `agent-client-protocol==1.0.0`',
+     {'reason': 'package-not-found', 'package': 'agent-client-protocol', 'constraint': '==1.0.0'}),
+    ('  ╰─▶ Because `agent-client-protocol` was not found in the package registry and you require `agent-client-protocol==1.0.0`, we can conclude that your requirements are unsatisfiable.',
+     {'reason': 'package-not-found', 'package': 'agent-client-protocol', 'constraint': '==1.0.0'}),
+    ('  ╰─▶ Because `/private/customer api-token` was not found in the package registry',
+     {'reason': 'package-not-found'}),
+    ("fatal: Authentication failed for 'https://github.com/acme/package-index/'", {}),
+    ("fatal: Authentication failed for 'https://github.com/acme/package-registry/'", {}),
 ])
 def test_installer_failures_have_only_fixed_facts_and_actionable_guidance(text, expected):
     from amplifier_web.reset import installer_failure_facts, installer_failure_guidance
@@ -42,7 +61,7 @@ def test_installer_failures_have_only_fixed_facts_and_actionable_guidance(text, 
     receipt = command_facts(b'', text.encode(), 1, .1, installer=True)
     assert {key: receipt[key] for key in expected} == expected
     public = json.dumps(receipt) + str(installer_failure_guidance(facts))
-    assert all(value not in public for value in ('credentialuser', 'secret', 'synthetic-feed.invalid'))
+    assert all(value not in public for value in ('credentialuser', 'secret', 'synthetic-feed.invalid', 'api-token', '/private/customer'))
     # A non-installer's arbitrary output cannot invent a resolver diagnosis.
     assert 'reason' not in command_facts(b'', text.encode(), 1, .1)
 

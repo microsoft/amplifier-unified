@@ -203,6 +203,26 @@ def test_feed_auth_failure_does_not_retry_with_different_github_credentials():
     assert env["GH_TOKEN"] == "synthetic-token"
 
 
+@pytest.mark.parametrize("repository", ["package-index", "package-registry"])
+@pytest.mark.parametrize("argv", [["git", "clone"], ["uv", "tool", "install"]])
+def test_repository_names_do_not_turn_github_auth_into_package_feed_auth(repository, argv):
+    url = f"https://github.com/acme/{repository}/"
+    env = {"GH_TOKEN": "synthetic-token", "UV_INDEX_CORPORATE_PASSWORD": "synthetic-password"}
+    retry = reset.anonymous_retry_environment([*argv, url], env,
+        stderr=f"fatal: Authentication failed for '{url}'")
+    assert retry["AMPLIFIER_GITHUB_ACCESS"] == "anonymous"
+    assert "GH_TOKEN" not in retry
+    assert retry["UV_INDEX_CORPORATE_PASSWORD"] == "synthetic-password"
+    assert env["GH_TOKEN"] == "synthetic-token"
+
+
+def test_direct_git_read_does_not_use_installer_classification():
+    argv = ["git", "clone", "https://github.com/acme/package-index/"]
+    retry = reset.anonymous_retry_environment(argv, {}, stderr=
+        b"fatal: Authentication failed for package registry https://github.com/acme/package-index/")
+    assert retry["AMPLIFIER_GITHUB_ACCESS"] == "anonymous"
+
+
 def test_cli_feed_failure_reports_requirement_without_private_installer_output(monkeypatch, tmp_path):
     monkeypatch.setattr(reset, "service_commands", lambda home: None)
     def fail(*args):

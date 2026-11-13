@@ -235,11 +235,11 @@ def anonymous_retry_environment(argv, env, stdout=b"", stderr=b""):
     args = [str(arg) for arg in argv]
     executable = Path(args[0]).name
     details = b"\n".join(value if isinstance(value, bytes) else str(value or "").encode() for value in (stdout, stderr))
-    if installer_failure_facts(details).get("reason") in {"package-index-auth-failed", "package-not-found"}:
-        return None  # A feed failure is not evidence that GitHub sign-in failed.
     github = "github.com/" in " ".join(args).lower() or b"github.com" in details.lower()
     read = executable == "git" and any(arg in {"ls-remote", "fetch", "clone"} for arg in args[1:]) and not any(arg in {"push", "send-pack"} for arg in args[1:])
     install = executable in {"uv", "uv.exe"} and any(arg in {"install", "sync", "lock"} for arg in args[1:])
+    if install and installer_failure_facts(details).get("reason") in {"package-index-auth-failed", "package-not-found"}:
+        return None  # Classify installers only; direct Git reads keep Git auth policy.
     # The no-model preparation child emits only a boolean classification, not
     # exception text. It may wrap Foundation's Git/uv error several times.
     probe = any(Path(arg).name == "update_probe.py" for arg in args[1:])
@@ -327,13 +327,19 @@ def installer_failure_facts(*details):
     text = "\n".join((value.decode(errors="replace") if isinstance(value, bytes)
                      else str(value or ""))[-262144:] for value in details)
     lower = text.lower()
+    # Feed context must be semantic text or an index API path, not an arbitrary
+    # repository/hostname containing "index" or "registry".
+    feed_context = bool(re.search(
+        r"\b(?:package (?:index|registry)|configured (?:index|indexes|indices|registry)|"
+        r"index (?:url|at)|registry (?:url|at))\b", lower)
+        or re.search(r"https?://[^\s/]+/(?:[^\s]*/)?simple(?:/|[?\s`'\"]|$)", lower))
     facts = {}
     if any(marker in lower for marker in ("no space left on device", "disk quota exceeded")):
         return {"reason": "disk-quota-exceeded" if "disk quota exceeded" in lower else "disk-full"}
     if any(marker in lower for marker in ("certificate verify failed", "invalid peer certificate",
                                          "unknown issuer", "certificate verification failed")):
         reason = "package-tls-failed"
-    elif (any(marker in lower for marker in ("index", "registry", "/simple/"))
+    elif (feed_context
           and any(marker in lower for marker in ("401 unauthorized", "403 forbidden",
                                                  "401 (unauthorized)", "403 (forbidden)",
                                                  "authentication failed", "credentials not found"))):
@@ -343,7 +349,7 @@ def installer_failure_facts(*details):
                                            "connection timed out", "operation timed out",
                                            "network is unreachable", "connect error")):
         reason = "package-network-failed"
-    elif (any(marker in lower for marker in ("index", "registry", "/simple/"))
+    elif (feed_context
           and any(marker in lower for marker in ("failed to fetch", "failed to download",
                                                  "503 service unavailable", "502 bad gateway"))):
         reason = "package-index-unavailable"
@@ -360,27 +366,36 @@ def installer_failure_facts(*details):
     # Capture a complete requirement before validating. A package-looking suffix
     # inside a URL/path, or the valid prefix of a malformed constraint, is not
     # evidence of a public package requirement.
-    requirement = r"([^\r\n`]+?)(?=`|\r?\n|$|\s+(?:and|but|we|which)\b)"
+    requirement = r"""(`[^`\r\n]*`|'[^'\r\n]*'|"[^"\r\n]*"|[^\r\n]+?(?=\r?\n|$|\s+(?:and|but|we|which)\b))"""
     patterns = (
-        rf"\b(?:there is no version of|there are no versions of)\s+`?{requirement}",
-        r"(?<!\S)`?([^\s`]+)`?\s+was not found in the (?:package registry|provided package locations)",
-        rf"\bno matching distribution found for\s+`?{requirement}",
+        rf"\b(?:there is no version of|there are no versions of)\s+{requirement}",
+        r"^[^\S\r\n]*(?:[╰├]─[▶►]\s*)?(?:(?:cause:|because)\s+)*([^\r\n]+?)\s+was not found in the (?:package registry|provided package locations)",
+        rf"\bno matching distribution found for\s+{requirement}",
     )
+    def parsed_requirement(operand):
+        operand = operand.strip()
+        if len(operand) >= 2 and operand[0] in "`'\"" and operand[-1] == operand[0]:
+            operand = operand[1:-1]
+        # Normalize constraint whitespace only, never whitespace inside a name
+        # or path. Validation always covers the complete quoted/unquoted operand.
+        parsed = re.fullmatch(rf"({_PACKAGE})(?:\s*((?:===|==|!=|~=|<=|>=|<|>).*))?",
+                              operand, re.IGNORECASE)
+        if parsed:
+            constraint = re.sub(r"\s+", "", parsed[2]) if parsed[2] else None
+            if constraint is None or (len(constraint) <= 128 and re.fullmatch(_CONSTRAINT, constraint)):
+                return installer_requirement(parsed[1], constraint)
+        return {}
     for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
+        match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
         if match:
-            token = re.sub(r"\s+", "", match[1])
-            parsed = re.fullmatch(rf"({_PACKAGE})({_CONSTRAINT})?", token, re.IGNORECASE)
-            if parsed:
-                facts.update(installer_requirement(parsed[1], parsed[2]))
+            facts.update(parsed_requirement(match[1]))
             break
     if facts.get("package") and "constraint" not in facts:
-        match = re.search(rf"\b(?:you require|depends on)\s+`?{requirement}", text, re.IGNORECASE)
+        match = re.search(rf"\b(?:you require|depends on)\s+{requirement}", text, re.IGNORECASE)
         if match:
-            token = re.sub(r"\s+", "", match[1])
-            parsed = re.fullmatch(rf"({_PACKAGE})({_CONSTRAINT})", token, re.IGNORECASE)
-            if parsed and installer_requirement(parsed[1]).get("package") == facts["package"]:
-                facts.update(installer_requirement(parsed[1], parsed[2]))
+            parsed = parsed_requirement(match[1])
+            if parsed.get("package") == facts["package"]:
+                facts.update(parsed)
     return facts
 
 
