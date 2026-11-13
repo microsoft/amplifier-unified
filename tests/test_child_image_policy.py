@@ -519,7 +519,34 @@ def legacy_image_plan():
 
 
 @pytest.fixture
-def resume_at_image_boundary(tmp_path):
+def no_resume_dispatch(monkeypatch):
+    """Count attempted external effects even if production catches the error."""
+    import os
+    import socket
+    import subprocess
+
+    attempts = []
+
+    def block(name):
+        def denied(*args, **kwargs):
+            attempts.append(name)
+            raise AssertionError(f"Unexpected resume dispatch: {name}")
+        return denied
+
+    for name in ("connect", "connect_ex", "sendto", "bind", "listen"):
+        monkeypatch.setattr(socket.socket, name, block("socket." + name))
+    for name in ("getaddrinfo", "gethostbyname", "gethostbyname_ex"):
+        monkeypatch.setattr(socket, name, block("socket." + name))
+    monkeypatch.setattr(subprocess, "Popen", block("subprocess.Popen"))
+    for name in ("system", "fork", "posix_spawn", "posix_spawnp"):
+        if hasattr(os, name):
+            monkeypatch.setattr(os, name, block("os." + name))
+    yield attempts
+    assert attempts == []
+
+
+@pytest.fixture
+def resume_at_image_boundary(tmp_path, no_resume_dispatch):
     """Exercise public resume and actual plan composition, stopping before mount."""
     async def resume(saved_plan, current_plan, *, overlay=None, error=None, preferences=None, isolation=False):
         captured = {}
@@ -575,6 +602,102 @@ def resume_at_image_boundary(tmp_path):
         return captured
 
     return resume
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["legacy", "routed"])
+@pytest.mark.parametrize("field", [
+    "api_key", "apikey", "github_token", "copilot_agent_token", "Cookie",
+    "Authorization", "access_token", "refresh_token", "client_secret",
+    "password", "cookie_policy",
+])
+async def test_resume_normalizes_serialized_credentials_only_for_comparison(
+        resume_at_image_boundary, mode, field):
+    from amplifier_web.provider_environment import HOST_CREDENTIAL, credential_bindings
+
+    current = legacy_image_plan()
+    config = current["providers"][0]["config"]
+    config.pop("api_key")
+    config[field] = "synthetic-current-value"
+    if mode == "routed":
+        current["tools"][0]["config"] = {"allow_paid": True, "model_role": "image-gen"}
+        config.pop("image_generation")
+    saved = credential_bindings(current)
+    if field == "apikey":
+        # The serializer does not classify this legacy store-only name.
+        # Its removal by SessionStore must remain comparison-equivalent.
+        assert saved["providers"][0]["config"][field] == config[field]
+    else:
+        assert saved["providers"][0]["config"][field] == HOST_CREDENTIAL
+    captured = await resume_at_image_boundary(saved, current)
+    # Comparison never restores a saved marker or strips the effective secret.
+    assert captured["plan"]["providers"][0]["config"][field] == config[field]
+
+
+@pytest.mark.asyncio
+async def test_resume_normalizes_nested_credentials_with_serializer_module_context(
+        resume_at_image_boundary):
+    from amplifier_web.provider_environment import HOST_CREDENTIAL, credential_bindings
+
+    current = legacy_image_plan()
+    config = current["providers"][0]["config"]
+    config.update(
+        default_headers={"Authorization": "synthetic-header", "X-Endpoint": "unchanged"},
+        accounts=[{"github_token": "synthetic-nested", "endpoint": "unchanged"}],
+        nested={"module": "tool-team-pulse", "config": {
+            "key": "synthetic-module-secret", "endpoint": "unchanged",
+            "rows": [{"key": "ordinary-list-setting"}]}},
+    )
+    saved = credential_bindings(current)
+    snapshot = saved["providers"][0]["config"]
+    assert snapshot["default_headers"]["Authorization"] == HOST_CREDENTIAL
+    assert snapshot["accounts"][0]["github_token"] == HOST_CREDENTIAL
+    assert "key" not in snapshot["nested"]["config"]
+    assert snapshot["nested"]["config"]["rows"] == [{"key": "ordinary-list-setting"}]
+    captured = await resume_at_image_boundary(saved, current)
+    assert captured["plan"]["providers"][0]["config"] == config
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", [
+    "module", "instance_id", "source", "enabled", "endpoint", "model", "order",
+    "ordinary-key", "opaque-marker", "nested-endpoint", "nested-list-key",
+])
+async def test_resume_serialized_credentials_do_not_hide_changed_binding(
+        resume_at_image_boundary, change):
+    from amplifier_web.provider_environment import HOST_CREDENTIAL, credential_bindings
+
+    current = legacy_image_plan()
+    current["tools"][0]["config"] = {"allow_paid": True, "model_role": "image-gen"}
+    config = current["providers"][0]["config"]
+    config.pop("image_generation")
+    config.update(github_token="synthetic-token", key="ordinary-setting",
+                  opaque=copy.deepcopy(HOST_CREDENTIAL),
+                  nested={"module": "tool-team-pulse", "config": {
+                      "key": "synthetic-module-secret", "endpoint": "unchanged",
+                      "rows": [{"key": "ordinary-list-setting"}]}})
+    current["providers"].append({
+        "module": "provider-mock", "instance_id": "second", "source": "fixture-second",
+        "config": {"default_model": "second-model"},
+    })
+    saved = credential_bindings(current)
+    if change in {"module", "instance_id", "source", "enabled"}:
+        current["providers"][0][change] = False if change == "enabled" else "changed"
+    elif change == "endpoint":
+        config["base_url"] = "https://changed.example.invalid"
+    elif change == "model":
+        config["default_model"] = "changed"
+    elif change == "order":
+        current["providers"].reverse()
+    elif change == "ordinary-key":
+        config["key"] = "changed"
+    elif change == "opaque-marker":
+        config["opaque"] = "changed"
+    elif change == "nested-endpoint":
+        config["nested"]["config"]["endpoint"] = "changed"
+    else:
+        config["nested"]["config"]["rows"][0]["key"] = "changed"
+    await resume_at_image_boundary(saved, current, error="Saved child image provider binding has changed")
 
 
 @pytest.mark.asyncio
