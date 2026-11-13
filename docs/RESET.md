@@ -114,7 +114,9 @@ amplifier-unified reset --data-dir /path/to/unified-data
    manually launched hosts and workers first; reset refuses detected running
    processes. Do not run other installers or start hosts during repair.
 3. Moves the old uv tool environment aside and installs a completely fresh app
-   and dependencies, bypassing uv caches and project configuration. This removes
+   and dependencies, bypassing uv caches and ignoring inherited Python/uv project
+   overrides. uv package-source, credential and network configuration remains
+   effective, including deliberately configured user/system source policy. This removes
    local changes inside the managed installation. Development checkouts are left
    alone; reset installs the normal uv tool rather than repairing a checkout.
 4. Checks the new app's imports, bundled web assets, authentication library and
