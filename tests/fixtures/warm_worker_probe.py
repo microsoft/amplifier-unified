@@ -38,6 +38,7 @@ async def mount(coordinator, config=None): await coordinator.mount("providers", 
 """
     )
     from amplifier_module_context_simple import __file__ as context_module
+    from amplifier_module_hook_context_intelligence import __file__ as capture_module
 
     bundle = root / "fixture.md"
     bundle.write_text(
@@ -54,6 +55,14 @@ session:
 providers:
   - module: provider-fixture
     source: {provider.parent}
+hooks:
+  - module: hook-context-intelligence
+    source: {Path(capture_module).parent.parent}
+    config:
+      destinations: {{}}
+      context_intelligence_server_url: ''
+      context_intelligence_api_key: ''
+      base_path: {root / 'capture'}
 ---
 Reply with the fixture response.
 """
@@ -66,11 +75,11 @@ Reply with the fixture response.
     )
     # The fixture exercises worker lifecycle, not downloading optional community
     # behaviors. Keep its empty home and declared local provider deterministic.
-    from amplifier_web.builtin_behaviors import IMAGEGEN_BEHAVIOR_URI
+    from amplifier_web.builtin_behaviors import APPENDED_DEFAULTS
     settings = root / "amplifier-home" / "settings.yaml"
     settings.parent.mkdir(parents=True)
     settings.write_text(json.dumps({"bundle": {"active": str(bundle), "app": []},
-                                   "web_bundles": {"excluded": [IMAGEGEN_BEHAVIOR_URI]}}))
+                                   "web_bundles": {"excluded": list(APPENDED_DEFAULTS)}}))
     events = []
     import amplifier_web.runtime_worker as worker_module
 
@@ -80,7 +89,15 @@ Reply with the fixture response.
         if event.get('op') == 'bridge':
             owner = next(worker for worker in workers if event['id'] in worker.bridges)
             operation = event['operation']
-            if operation == 'context.manifest':
+            if operation == 'context.prepare':
+                # Match the ordinary combined bridge without real user context.
+                result = {name: {'available': True, 'value': value} for name, value in {
+                    'context.manifest': {'surfaces': [], 'inputIds': event['args'].get('_contextInputs', [])},
+                    'coordination.current': {'sessionId': owner.session.session_id, 'grants': [], 'requests': [], 'bounded': True},
+                    'memory.context': {'items': []},
+                    'message.reactions.context': {},
+                }.items()}
+            elif operation == 'context.manifest':
                 result = {'surfaces': [], 'inputIds': event['args'].get('_contextInputs', [])}
             elif operation == 'coordination.current':
                 result = {'sessionId': owner.session.session_id, 'grants': [], 'requests': [], 'bounded': True}
