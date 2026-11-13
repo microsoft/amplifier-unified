@@ -441,6 +441,13 @@ def checked_helper_plist(helper):
     return job
 
 
+def launchd_job_states(text):
+    """Read the job's state, not nested resource/coalition state fields."""
+    indentation = re.findall(r'^([ \t]*)program = .+?$', text, re.M)
+    check(len(indentation) == 1, 'launchd job state has no unique program-level scope')
+    return re.findall(r'^' + re.escape(indentation[0]) + r'state = (.+?)[ \t]*$', text, re.M)
+
+
 def owned_helper_observation(helper, env, *, qualify=True, observer=None):
     """A saved label alone does not authorize removing a replacement job."""
     folder = Path(helper['folder'])
@@ -465,7 +472,7 @@ def owned_helper_observation(helper, env, *, qualify=True, observer=None):
         for domain, text in rows:
             pids = re.findall(r'^\s*pid = (\d+)\s*$', text, re.M)
             runs = re.findall(r'^\s*runs = (\d+)\s*$', text, re.M)
-            states = re.findall(r'^\s*state = (.+?)\s*$', text, re.M)
+            states = launchd_job_states(text)
             observed['settled'] = observed['settled'] and not pids and states in [['not running'], ['exited']]
             observed['domains'].append({'domain': domain, 'pids': pids, 'runs': runs, 'states': states,
                                         'oneShotQualified': len(runs) == 1 and int(runs[0]) <= 1,
@@ -477,7 +484,7 @@ def owned_helper_observation(helper, env, *, qualify=True, observer=None):
             argv = re.findall(r'^\s*arguments = \{\s*\n(.*?)^\s*\}', text, re.M | re.S)
             pids = re.findall(r'^\s*pid = (\d+)\s*$', text, re.M)
             runs = re.findall(r'^\s*runs = (\d+)\s*$', text, re.M)
-            states = re.findall(r'^\s*state = (.+?)\s*$', text, re.M)
+            states = launchd_job_states(text)
             loaded_paths = re.findall(r'^\s*path = (.+?)\s*$', text, re.M)
             check(programs == [expected[0]] and len(argv) == 1
                   and [line.strip() for line in argv[0].splitlines() if line.strip()] == expected

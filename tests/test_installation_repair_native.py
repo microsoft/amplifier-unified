@@ -640,6 +640,28 @@ class NativeRepairHarnessTests(unittest.TestCase):
         self.assertNotIn('passed', record)
         execute.assert_not_called()
 
+    def test_launchd_job_state_excludes_nested_active_coalitions(self):
+        helper = self.mac_helper()
+        text = self.mac_job_print(helper) + 'resource coalition = {\n  state = active\n}\njetsam coalition = {\n  state = active\n}\n'
+        # Mirror launchctl's real one-tab job fields and deeper nested fields.
+        text = '\n'.join('\t' + line for line in text.splitlines()) + '\n'
+        self.assertEqual(native.launchd_job_states(text), ['not running'])
+        with patch.object(native.sys, 'platform', 'darwin'), \
+                patch.object(native, 'launch_job', return_value=[(f'gui/{os.getuid()}', text)]):
+            observed = native.owned_helper_observation(helper, {})
+        self.assertTrue(observed['settled'])
+        self.assertEqual(observed['domains'][0]['runs'], ['1'])
+
+    def test_launchd_live_or_unknown_job_state_is_not_masked_by_nested_exit(self):
+        helper = self.mac_helper()
+        for state in ('running', 'waiting for something'):
+            text = self.mac_job_print(helper, state=state) + 'resource coalition = {\n  state = not running\n}\n'
+            with self.subTest(state=state), patch.object(native.sys, 'platform', 'darwin'), \
+                    patch.object(native, 'launch_job', return_value=[(f'gui/{os.getuid()}', text)]):
+                self.assertFalse(native.owned_helper_observation(helper, {})['settled'])
+        with self.assertRaisesRegex(RuntimeError, 'unique program-level scope'):
+            native.launchd_job_states('state = not running\n')
+
     def test_foreign_argv_failure_still_saves_parsed_state_but_not_foreign_argv(self):
         helper = self.mac_helper()
         text = self.mac_job_print(helper).replace('  -S\n', '  SECRET-TOKEN-DO-NOT-STORE\n')
