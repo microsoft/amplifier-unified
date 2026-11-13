@@ -3491,6 +3491,8 @@ class AppService:
                 self.computer_visual.bind_input(session['id'], input_id)
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
                 message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), human_post=post_previous is not None,inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending', 'allowNextTurn': allow_next_turn}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
+                if session.get('externalAgent'):
+                    self.external_conversations.capture_recipient(session, message, args.get('recipientAgentId'))
                 handoff = self.handoffs.execution(action, args, origin, command_id, caller_session_id)
                 if handoff is not None:
                     message['handoffOrigin'] = self.handoffs.lineage(handoff)
@@ -3515,7 +3517,7 @@ class AppService:
                     session.pop("error", None)
                     ensure_turn(session,input_id,text)
                     if session.get('externalAgent'):
-                        self.external_conversations.admit(session, message, args.get('recipientAgentId'))
+                        self.external_conversations.admit(session, message)
                 if not update_message:
                     pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity, args.get('preserveDraft', False))))
             elif action == "conversation.delivery":

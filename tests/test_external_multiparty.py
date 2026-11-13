@@ -180,3 +180,79 @@ async def test_passive_restart_preserves_partial_author_and_unknown_recipient(ap
     assert bindings(restored)[1]['status'] == 'unknown'
     assert 'activeInputId' not in restored['externalAgent']
     assert [row['kind'] for row in operations(tmp_path / 'beta')] == ['new', 'prompt']
+
+
+@pytest.mark.parametrize('group', [True, False])
+async def test_update_held_input_keeps_recipient_without_admitting_until_restart_release(app_factory, tmp_path, group):
+    from amplifier_web import update_drain as drain
+    from amplifier_web.updates import UpdateManager
+    from test_update_drain import healthy, send
+
+    app = app_factory()
+    if group:
+        session = await room(app, tmp_path)
+    else:
+        configure(app, tmp_path)
+        result = await app.dispatch('session.create', {
+            'workspace': app.default_workspace, 'externalAgentId': 'beta'}, command_id='single-create')
+        session = app._session(result['result']['sessionId'])
+    sid = session['id']
+    app.update_manager = UpdateManager(app)
+    app.state['updates']['drain'] = {
+        'attemptId': 'a' * 32, 'target': {'attemptId': 'a' * 32, 'revision': 'b' * 40, 'generation': None},
+        'phase': 'draining', 'hostInstanceId': app.instance_id, 'workers': {}, 'messages': []}
+    accepted = await send(app, 'held-beta', recipientAgentId='beta')
+    assert accepted['delivery'] == 'queued_for_update'
+    message = session['messages'][0]
+    assert message['inputId'] == 'held-beta'
+    assert message['recipientAgentId'] == 'beta' and message['recipientAgentLabel'] == 'Beta'
+    assert not app.external_conversations.turns and not app.external_conversations.participants
+    assert 'activeInputId' not in session['externalAgent'] and 'activeAgentId' not in session['externalAgent']
+    assert not (tmp_path / 'alpha/peer').exists() and not (tmp_path / 'beta/peer').exists()
+    next_agent = 'alpha' if group else 'beta'
+    await app.dispatch('view.update', {'patch': {'draft': 'next explicit input'}})
+    with pytest.raises(AppError, match='already saved') as rejected:
+        await send(app, 'next-explicit', recipientAgentId=next_agent)
+    assert rejected.value.status == 409
+    session = app._session(sid)
+    assert [row['inputId'] for row in session['messages']] == ['held-beta']
+    assert session['messages'][0]['delivery']['status'] == 'queued_for_update'
+    assert app.state['view']['draft'] == 'next explicit input'
+    assert app.db.execute("SELECT 1 FROM commands WHERE id='next-explicit'").fetchone() is None
+    # Another chat may still save its one input during this same update.
+    other = await app.dispatch('session.create', {
+        'workspace': app.default_workspace, 'externalAgentId': 'alpha'}, command_id='other-chat')
+    other_sid = other['result']['sessionId']
+    other_result = await send(app, 'other-held', recipientAgentId='alpha')
+    assert other_result['delivery'] == 'queued_for_update'
+    assert app._session(other_sid)['messages'][0]['inputId'] == 'other-held'
+    await app.close()
+
+    restored = app_factory()
+    configure(restored, tmp_path)
+    restored.update_manager = UpdateManager(restored)
+    session = restored._session(sid)
+    assert session['messages'][0]['delivery']['status'] == 'queued_for_update'
+    assert session['messages'][0]['recipientAgentId'] == 'beta'
+    assert 'activeInputId' not in session['externalAgent'] and 'activeAgentId' not in session['externalAgent']
+    healthy(restored)
+    await drain.finish(restored.update_manager, 'installed')
+    await until(lambda: not restored.external_conversations.turns)
+    await drain.finish(restored.update_manager, 'installed')
+    assert session['messages'][0]['inputId'] == 'held-beta'
+    assert session['messages'][0]['delivery']['status'] == 'accepted'
+    assert session['messages'][-1]['agentId'] == 'beta'
+    assert [row['text'] for row in operations(tmp_path / 'alpha') if row['kind'] == 'prompt'] == ['other-held']
+    observed = operations(tmp_path / 'beta')
+    assert [row['kind'] for row in observed] == ['new', 'prompt']
+    assert observed[-1]['text'] == 'held-beta'
+    beta = next(row for row in bindings(session) if row['id'] == 'beta')
+    assert observed[-1]['sessionId'] == beta['sessionId']
+    await directed(restored, session, next_agent, 'next-explicit', 'next-explicit')
+    await drain.finish(restored.update_manager, 'installed')
+    assert [row['inputId'] for row in session['messages'] if row['role'] == 'user'] == ['held-beta', 'next-explicit']
+    assert all(row['delivery']['status'] == 'accepted' for row in session['messages'] if row['role'] == 'user')
+    assert [row['text'] for row in operations(tmp_path / 'beta') if row['kind'] == 'prompt'] == (
+        ['held-beta'] if group else ['held-beta', 'next-explicit'])
+    assert [row['text'] for row in operations(tmp_path / 'alpha') if row['kind'] == 'prompt'] == (
+        ['other-held', 'next-explicit'] if group else ['other-held'])

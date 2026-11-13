@@ -126,9 +126,12 @@ class ExternalConversations:
             raise AppError('The selected external endpoint changed. The saved execution binding was preserved.', 409)
         return binding, selected, source
 
-    def admit(self, session, message, identity=None):
+    def capture_recipient(self, session, message, identity=None):
         binding = addressed(session, identity)
         message.update(recipientAgentId=binding['id'], recipientAgentLabel=binding['label'])
+
+    def admit(self, session, message):
+        binding = addressed(session, message['recipientAgentId'])
         session['externalAgent'].update(activeInputId=message['inputId'], activeAgentId=binding['id'])
 
     def restore(self, session):
@@ -154,6 +157,14 @@ class ExternalConversations:
             self.selected(session, args.get('recipientAgentId'))
             if args.get('attachmentIds') or args.get('document') or args.get('replyId') or args.get('expectedGenerationId'):
                 raise AppError('This external participant currently accepts ordinary text messages only.', 409)
+            if not admitted:
+                from .message_delivery import find_message
+                drain = self.service.state.get('updates', {}).get('drain') or {}
+                for sid, input_id in drain.get('messages', []):
+                    if sid == session['id']:
+                        message = find_message(session, input_id)
+                        if message and message.get('delivery', {}).get('status') == 'queued_for_update':
+                            raise AppError('An input is already saved for this external chat while the update finishes. Wait for it before sending another.', 409)
             if (self.closing or session['id'] in self.turns
                     or not admitted and session.get('status') in {'starting', 'working', 'stopping'}):
                 raise AppError('The external participant is still working. Stop it or wait before sending.', 409)
