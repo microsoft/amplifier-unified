@@ -312,7 +312,9 @@ async def test_automatic_starter_does_not_validate_disabled_fallback_over_explic
     await service.dispatch('bundle.default', {'scope': 'app', 'bundle': 'anchors'})
     manager = BundleManager(service.data_dir)
     workspace = service.state['settings']['workspace']
-    listed = await manager.perform('bundles.list', {'workspace': workspace})
+    from amplifier_web.host.config import PRECONFIGURED_BUNDLES
+    listed = await manager.perform('bundles.add', {'workspace': workspace,
+        'name': 'work-amp-dev', 'uri': PRECONFIGURED_BUNDLES['work-amp-dev'], 'role': 'standalone'})
     root = next(row for row in listed['bundles'] if row['name'] == 'work-amp-dev')
     await manager.perform('bundles.toggle', {'workspace': workspace, 'id': root['id'], 'enabled': False})
     _, row = await create(service, 'amplifier-development', 'Explicit over disabled fallback')
