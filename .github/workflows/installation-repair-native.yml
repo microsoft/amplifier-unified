@@ -6,7 +6,11 @@ on:
     paths:
       - .github/workflows/installation-repair-native.yml
       - tests/fixtures/installation_repair_native.py
+      - tests/fixtures/installation_repair_native_app.py
+      - tests/fixtures/installation_repair_native_full.py
+      - tests/fixtures/installation_repair_acquisition.py
       - tests/test_installation_repair_native.py
+      - tests/test_installation_repair_native_full.py
       - amplifier_web/installation_repair.py
       - amplifier_web/installation_repair_worker.py
       - amplifier_web/reset.py
@@ -32,12 +36,15 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-26]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 100
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       UV_PYTHON_DOWNLOADS: never
+      UV_NO_BUILD_PACKAGE: amplifier-core
       UV_LINK_MODE: copy
+      GIT_TERMINAL_PROMPT: '0'
       INSTALLATION_REPAIR_NATIVE_CI: '1'
+      INSTALLATION_REPAIR_FULL_ACCEPTED_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -47,18 +54,30 @@ jobs:
         with:
           python-version: '3.13'
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
-      - name: Prepare owned native fixture and retain exact source
+      - name: Prepare disclosed mechanics fixture and retain exact source
         run: python -I -B tests/fixtures/installation_repair_native.py prepare
-      - name: Exercise real native service manager and installation transaction
+      - name: Exercise native transaction failure and recovery boundaries
         run: python -I -B tests/fixtures/installation_repair_native.py run
-      - name: Settle only owned services, jobs and installation fixture
+      - name: Settle only mechanics-owned services and jobs
         if: always()
         run: python -I -B tests/fixtures/installation_repair_native.py cleanup
+      # The mechanics fixture substitutes health/doctor/probes. It cannot qualify
+      # the actual app. After its custody settles, use the genuine candidate
+      # wheel, full dependencies, public CLI, AppService, doctor and HTTPS health.
+      - name: Prepare full candidate with locally asserted acquisition only
+        run: python -I -B tests/fixtures/installation_repair_native_full.py prepare
+      - name: Exercise full packaged app through the native manager
+        run: python -I -B tests/fixtures/installation_repair_native_full.py run
+      - name: Settle only full-app-owned services and jobs
+        if: always()
+        run: python -I -B tests/fixtures/installation_repair_native_full.py cleanup
       - name: Retain source, trust-boundary, native effects and cleanup receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: installation-repair-native-${{ matrix.os }}
-          path: ${{ runner.temp }}/installation-repair-evidence/
+          path: |
+            ${{ runner.temp }}/installation-repair-evidence/
+            ${{ runner.temp }}/installation-repair-full-evidence/
           if-no-files-found: error
           retention-days: 14
