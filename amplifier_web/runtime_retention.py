@@ -117,11 +117,12 @@ class WorkerRetention:
                 row['closing'] = False
                 if row.get('stop_reason') == 'retention':
                     row.pop('stop_reason')
-                return
+                return False
             session, emit = row['start_session'], row['emit']
             await self.manager.stop(sid, reason='retention')
             # Commands held behind even a late acknowledgement can restart.
             self.manager._retired[sid] = (session, emit)
+            return True
 
     async def run(self):
         try:

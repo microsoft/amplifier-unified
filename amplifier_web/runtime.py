@@ -540,6 +540,7 @@ class RuntimeManager:
 
     @asynccontextmanager
     async def _admission(self, sid):
+        refused = None
         while True:
             async with self._locks.setdefault(sid, asyncio.Lock()):
                 if self._closed:
@@ -557,7 +558,8 @@ class RuntimeManager:
                 elif retirement is not None and not retirement.done():
                     pending = retirement
                 elif (row and row.get('update_pending') and self.retention.eligible(row)
-                        and not self.retention.protected(sid) and sid not in self._ephemeral_mcp):
+                        and row is not refused and not self.retention.protected(sid)
+                        and sid not in self._ephemeral_mcp):
                     # Admission wins races with the periodic retirement sweep.
                     # Wait for the same acknowledged handshake before new work.
                     pending = self.retention.schedule(sid, row)
@@ -568,7 +570,12 @@ class RuntimeManager:
             # Never admit work to that closing owner, including after a user
             # Stop. Waiting outside the lock neither cancels nor replays it.
             try:
-                await asyncio.wait_for(asyncio.shield(pending), self.retention.reply_timeout)
+                result = await asyncio.wait_for(asyncio.shield(pending), self.retention.reply_timeout)
+                if result is False:
+                    # A held resource refused retirement. Let this admission
+                    # reach its retained owner (including cleanup controls),
+                    # rather than immediately repeating the same retirement.
+                    refused = row
             except asyncio.CancelledError:
                 if self._closed and not asyncio.current_task().cancelling():
                     raise RuntimeHostClosingError() from None
