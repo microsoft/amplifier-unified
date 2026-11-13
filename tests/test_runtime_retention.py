@@ -552,3 +552,21 @@ async def test_connected_mcp_attachment_is_not_idle_evicted(manager):
     manager._ephemeral_mcp.clear()
     await manager.retention.sweep()
     assert process.returncode == 0
+
+
+async def test_promoted_generation_retirement_refusal_still_admits_resource_cleanup(manager):
+    first = await warm(manager, 'held-resource')
+    await manager._request('held-resource', 'send', text='held native resource', input_id='existing')
+    row = manager.workers['held-resource']
+    row['idle'] = True
+    manager.promote_generation('new-generation')
+    writes = []
+    original = manager._write
+    async def write(owner, data):
+        writes.append(data['op'])
+        await original(owner, data)
+    manager._write = write
+    result = await asyncio.wait_for(manager.control('held-resource', 'kernels.close'), 2)
+    assert result['ok'] and writes == ['retire', 'control']
+    assert manager.workers['held-resource'] is row and first.returncode is None
+    assert row['idle'] and row['update_pending']
