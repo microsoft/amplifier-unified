@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import ssl
 import subprocess
 import sys
 import time
@@ -91,6 +92,19 @@ def dispatch(home, instance, folder):
     controller.launch(folder, plan)
 
 
+def tls_server(config, handler):
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(config['tls']['cert'], config['tls']['key'])
+    server = HTTPServer(('127.0.0.1', config['port']), handler)
+    try:
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+    except BaseException:
+        server.server_close()
+        raise
+    return server
+
+
 def main():
     os.umask(0o077)
     args = sys.argv[1:]
@@ -152,7 +166,7 @@ def main():
             self.reply(200, {'dispatched': identity})
 
     with reset.repair_lock(home, shared=True):
-        server = HTTPServer(('127.0.0.1', config['port']), Handler)
+        server = tls_server(config, Handler)
         server.timeout = .2
         event(config['caseRoot'], 'service-start', instanceId=instance)
         save(Path(config['caseRoot']) / 'host.json', {'pid': os.getpid(), 'instanceId': instance})

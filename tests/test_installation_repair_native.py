@@ -18,7 +18,7 @@ import plistlib
 import shlex
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import zipfile
 
 FIXTURES = Path(__file__).with_name('fixtures')
@@ -165,6 +165,226 @@ class NativeRepairHarnessTests(unittest.TestCase):
         (self.root / 'effects.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in rows))
         self.assertEqual(native.effect_counts(self.root), {
             'probe:candidate': 1, 'probe:fresh': 1, 'service-start': 2, 'service-stop': 1})
+
+    def test_wrong_tls_pin_never_reads_or_sends_token_or_plaintext_http(self):
+        connection = Mock()
+        connection.sock.getpeercert.return_value = b'foreign-leaf'
+        config = {'home': '/must-not-read', 'port': 12345, 'tls': {'pin': '0' * 64}}
+        with patch.object(native.http.client, 'HTTPSConnection', return_value=connection), \
+                patch.object(native.http.client, 'HTTPConnection') as plaintext, \
+                patch.object(native.Path, 'read_text') as read:
+            with self.assertRaisesRegex(RuntimeError, 'TLS pin mismatch'):
+                native.request(config, '/api/health')
+        connection.connect.assert_called_once_with()
+        connection.sock.getpeercert.assert_called_once_with(binary_form=True)
+        connection.request.assert_not_called()
+        connection.getresponse.assert_not_called()
+        read.assert_not_called()
+        plaintext.assert_not_called()
+        connection.close.assert_called_once_with()
+
+    def test_tls_connect_failure_does_not_read_token(self):
+        connection = Mock()
+        connection.connect.side_effect = OSError('unavailable')
+        with patch.object(native.http.client, 'HTTPSConnection', return_value=connection), \
+                patch.object(native.Path, 'read_text') as read:
+            with self.assertRaises(OSError):
+                native.request({'home': '/unread', 'port': 1, 'tls': {'pin': 'a' * 64}}, '/api/health')
+        read.assert_not_called()
+        connection.request.assert_not_called()
+        connection.close.assert_called_once_with()
+
+    def test_correct_tls_pin_precedes_token_read_and_authorization(self):
+        order = []
+        connection = Mock()
+        connection.connect.side_effect = lambda: order.append('connect')
+        connection.sock.getpeercert.side_effect = lambda **_kwargs: order.append('pin') or b'leaf'
+        connection.request.side_effect = lambda *_args, **_kwargs: order.append('request')
+        response = connection.getresponse.return_value
+        response.status = 200
+        response.read.return_value = b'{"ok": true}'
+        config = {'home': '/only-after-pin', 'port': 12345,
+                  'tls': {'pin': hashlib.sha256(b'leaf').hexdigest()}}
+        with patch.object(native.http.client, 'HTTPSConnection', return_value=connection) as https, \
+                patch.object(native.http.client, 'HTTPConnection') as plaintext, \
+                patch.object(native.Path, 'read_text', side_effect=lambda: order.append('token') or 'private-token'):
+            self.assertEqual(native.request(config, '/api/health'), {'ok': True})
+        self.assertEqual(order, ['connect', 'pin', 'token', 'request'])
+        self.assertEqual(connection.request.call_args.kwargs['headers'], {'Authorization': 'Bearer private-token'})
+        self.assertEqual(https.call_args.kwargs['context'].minimum_version, native.ssl.TLSVersion.TLSv1_2)
+        plaintext.assert_not_called()
+
+    def test_fixture_server_wraps_socket_with_server_tls_and_private_chain(self):
+        app = native.module(FIXTURES / 'installation_repair_native_app.py')
+        server, context = Mock(), Mock()
+        raw_socket = server.socket
+        config = {'port': 23456, 'tls': {'cert': '/private/cert.pem', 'key': '/private/key.pem'}}
+        with patch.object(app.ssl, 'SSLContext', return_value=context) as factory, \
+                patch.object(app, 'HTTPServer', return_value=server):
+            self.assertIs(app.tls_server(config, object), server)
+        factory.assert_called_once_with(app.ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain.assert_called_once_with('/private/cert.pem', '/private/key.pem')
+        context.wrap_socket.assert_called_once_with(raw_socket, server_side=True)
+        self.assertEqual(context.minimum_version, app.ssl.TLSVersion.TLSv1_2)
+
+    def test_tls_server_wrap_failure_closes_listener(self):
+        app = native.module(FIXTURES / 'installation_repair_native_app.py')
+        server, context = Mock(), Mock()
+        context.wrap_socket.side_effect = OSError('TLS setup failed')
+        with patch.object(app.ssl, 'SSLContext', return_value=context), \
+                patch.object(app, 'HTTPServer', return_value=server):
+            with self.assertRaises(OSError):
+                app.tls_server({'port': 1, 'tls': {'cert': 'cert', 'key': 'key'}}, object)
+        server.server_close.assert_called_once_with()
+
+    def test_ci_leaf_command_is_mocked_no_real_cert_generation(self):
+        def generate(*args):
+            Path(args[args.index('-out') + 1]).write_text('mock certificate')
+            Path(args[args.index('-keyout') + 1]).write_text('mock private key')
+
+        with patch.object(native.shutil, 'which', return_value='/mock/openssl'), \
+                patch.object(native, 'execute', side_effect=generate) as execute, \
+                patch.object(native.ssl, 'PEM_cert_to_DER_cert', return_value=b'mock DER'):
+            tls = native.tls_leaf(self.root)
+        argv = execute.call_args.args
+        self.assertEqual(argv[:6], ('/mock/openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes'))
+        self.assertEqual(tls['pin'], hashlib.sha256(b'mock DER').hexdigest())
+        if os.name == 'posix':
+            self.assertEqual(Path(tls['key']).stat().st_mode & 0o777, 0o600)
+
+    def test_operation_plan_uses_only_pinned_https_health(self):
+        descriptor = self.archive()
+        home = self.root / 'data'
+        (home / 'installation-repair').mkdir(parents=True)
+        config = {'home': str(home), 'toolRoot': '/tools', 'binRoot': '/bins', 'port': 12345,
+                  'tls': {'pin': 'b' * 64}}
+        fixture = {'artifact': descriptor, 'version': self.version, 'revision': self.revision,
+                   'basePython': '/outside/python3.13', 'uv': '/outside/uv'}
+        with patch.object(native, 'execute') as execute:
+            folder = native.new_operation(config, fixture, {})
+        self.assertEqual(native.load(folder / 'plan.json')['health'], {
+            'urls': ['https://127.0.0.1:12345/api/health'], 'pin': 'b' * 64})
+        execute.assert_not_called()
+
+    def test_manager_environment_platform_paths_do_not_probe_linux_on_macos(self):
+        with patch.dict(native.os.environ, {'PATH': '/usr/bin', 'HOME': '/runner', 'SECRET': 'unpublished'}, clear=True), \
+                patch.object(native.sys, 'platform', 'darwin'), patch.object(native, 'module') as module:
+            self.assertEqual(native.manager_environment(), {'PATH': '/usr/bin', 'HOME': '/runner'})
+        module.assert_not_called()
+        reset = Mock()
+        reset.user_service_environment.return_value = {'PATH': '/usr/bin', 'XDG_RUNTIME_DIR': '/run/user/123',
+                                                     'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/123/bus'}
+        with patch.object(native.sys, 'platform', 'linux'), patch.object(native, 'module', return_value=reset):
+            self.assertIn('DBUS_SESSION_BUS_ADDRESS', native.manager_environment())
+        reset.user_service_environment.assert_called_once_with()
+
+    def test_prepare_refuses_and_cleanup_preserves_preexisting_definition(self):
+        foreign = self.root / 'foreign.service'
+        foreign.write_bytes(b'preexisting user unit')
+        root, evidence = self.root / 'run', self.root / 'evidence'
+        with patch.object(native, 'paths', return_value=foreign), \
+                patch.object(native, 'manager_environment', return_value={}), \
+                patch.object(native, 'manager_capability'), patch.object(native, 'execute') as execute, \
+                patch.object(native, 'tls_leaf') as tls:
+            with self.assertRaisesRegex(RuntimeError, 'preexisting service definition'):
+                native.prepare(root, evidence)
+        with patch.object(native, 'manager_environment') as manager, patch.object(native, 'execute') as effects:
+            native.cleanup(root, evidence)
+        self.assertEqual(foreign.read_bytes(), b'preexisting user unit')
+        manager.assert_not_called()
+        execute.assert_not_called()
+        effects.assert_not_called()
+        tls.assert_not_called()
+
+    def test_cleanup_refuses_foreign_settled_helper_without_manager_mutation(self):
+        root, evidence = self.root / 'run', self.root / 'evidence'
+        root.mkdir()
+        evidence.mkdir()
+        identity = 'd' * 32
+        helper = {'label': 'amplifier-installation-repair-' + identity,
+                  'folder': str(root / 'data/installation-repair' / identity), 'basePython': '/outside/python'}
+        native.save(root / 'owner.json', {'definition': None, 'helpers': [helper], 'processes': [], 'cases': []})
+        value = {'LoadState': 'loaded', 'MainPID': '0', 'ActiveState': 'inactive', 'Restart': 'no',
+                 'NRestarts': '0', 'Type': 'exec', 'WorkingDirectory': helper['folder'],
+                 'ExecStart': '{ path=/foreign ; argv[]=/foreign ; ignore_errors=no ; }'}
+        with patch.object(native.sys, 'platform', 'linux'), \
+                patch.object(native, 'manager_environment', return_value={}), \
+                patch.object(native, 'manager_capability'), \
+                patch.object(native, 'properties', return_value=value), patch.object(native, 'execute') as execute:
+            with self.assertRaisesRegex(RuntimeError, 'foreign or unidentifiable'):
+                native.cleanup(root, evidence)
+        execute.assert_not_called()
+        self.assertFalse(native.load(evidence / 'cleanup.json')['passed'])
+
+    def test_cleanup_does_not_kill_or_remove_unsettled_unknown_job(self):
+        root, evidence = self.root / 'run', self.root / 'evidence'
+        root.mkdir()
+        evidence.mkdir()
+        helper = {'label': 'saved', 'folder': '/saved', 'basePython': '/outside/python'}
+        native.save(root / 'owner.json', {'definition': None, 'helpers': [helper], 'processes': [], 'cases': []})
+        with patch.object(native, 'manager_environment', return_value={}), \
+                patch.object(native, 'manager_capability'), \
+                patch.object(native, 'owned_helper_observation', return_value={'settled': False}), \
+                patch.object(native.time, 'monotonic', side_effect=[0, 121]), \
+                patch.object(native, 'execute') as execute:
+            with self.assertRaisesRegex(RuntimeError, 'cleanup helper settlement'):
+                native.cleanup(root, evidence)
+        execute.assert_not_called()
+        self.assertEqual(native.load(root / 'owner.json')['helpers'], [helper])
+        self.assertFalse(native.load(evidence / 'cleanup.json')['passed'])
+
+    def test_changed_owned_definition_is_preserved_before_control(self):
+        definition = self.root / 'owned.service'
+        definition.write_bytes(b'original')
+        info = definition.stat()
+        saved = {'path': str(definition), 'sha256': native.digest(definition), 'stat': [info.st_dev, info.st_ino]}
+        definition.write_bytes(b'foreign')
+        with patch.object(native, 'paths', return_value=definition), patch.object(native, 'properties') as properties:
+            with self.assertRaisesRegex(RuntimeError, 'owned definition changed'):
+                native.owned_definition(saved, {}, [])
+        properties.assert_not_called()
+        self.assertEqual(definition.read_bytes(), b'foreign')
+
+    def test_source_index_covers_all_test_inputs_and_reports_missing_workflow(self):
+        completed = Mock()
+        completed.stdout = self.revision
+        clean = Mock()
+        clean.stdout = ''
+        with patch.object(native, 'execute', side_effect=[completed, clean]), \
+                patch.object(native, 'WORKFLOW', '.github/workflows/absent-fixture-workflow.yml'), \
+                patch.dict(native.os.environ, {}, clear=True):
+            index = native.source_index()
+        self.assertTrue(set(native.TEST_PATHS) <= set(index['sha256']))
+        self.assertFalse(index['workflow']['present'])
+        self.assertEqual(index['workflowCommit'], {})
+
+    def test_macos_foreign_settled_helper_is_not_adopted(self):
+        identity = 'd' * 32
+        helper = {'label': 'com.microsoft.amplifier-unified.repair.' + identity,
+                  'folder': '/private/data/installation-repair/' + identity, 'basePython': '/outside/python'}
+        text = 'program = /foreign\narguments = {\n /foreign\n}\nruns = 1\n'
+        with patch.object(native.sys, 'platform', 'darwin'), \
+                patch.object(native, 'launch_job', return_value=[('gui/123', text)]), \
+                patch.object(native, 'execute') as execute:
+            with self.assertRaisesRegex(RuntimeError, 'foreign or unidentifiable'):
+                native.owned_helper_observation(helper, {})
+        execute.assert_not_called()
+
+    def test_failed_launchd_lookup_is_not_absence_when_domain_lists_label(self):
+        parent, failed = Mock(), Mock()
+        parent.returncode, parent.stdout = 0, 'services = {\n  0  example.saved.label\n}\n'
+        failed.returncode = 1
+        with patch.object(native, 'execute', side_effect=[parent, failed]):
+            with self.assertRaisesRegex(RuntimeError, 'registration state is unknown'):
+                native.launch_job('example.saved.label', {})
+
+    def test_saved_child_cleanup_reaps_without_signalling(self):
+        with patch.object(native.os, 'waitpid', return_value=(123, 0)) as reap, \
+                patch.object(native, 'pid_start', return_value=''), \
+                patch.object(native.os, 'kill', create=True) as kill:
+            self.assertTrue(native.owned_child_exited(123, {}))
+        reap.assert_called_once_with(123, native.os.WNOHANG)
+        kill.assert_not_called()
 
 
 if __name__ == '__main__':

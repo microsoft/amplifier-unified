@@ -1,8 +1,10 @@
 """CI-only real user-manager installation-repair qualification (stdlib harness).
 
-CLI: python tests/fixtures/installation_repair_native.py prepare|run|cleanup
+CLI: python -I -B tests/fixtures/installation_repair_native.py prepare|run|cleanup
 Requires disposable GitHub-hosted Ubuntu/macOS, setup-python 3.13, uv on PATH,
-UV_PYTHON_DOWNLOADS=never. No sudo, container, network, dependency install or bus
+UV_PYTHON_DOWNLOADS=never. OpenSSL generates a private test leaf during CI prepare
+only. Pinned loopback HTTPS is real; no plaintext bearer transport is allowed.
+No sudo, container, external network, dependency install or bus
 provisioning. Missing real user systemd / GUI launchd is a capability FAILURE.
 Workflow must run cleanup with always(), upload ONLY installation-repair-evidence,
 and serialize OS jobs (max-parallel: 1). Do not run native commands locally.
@@ -21,6 +23,7 @@ import base64
 from collections import Counter
 import csv
 import hashlib
+import hmac
 import http.client
 import importlib.util
 import io
@@ -32,6 +35,7 @@ import re
 import shlex
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -43,6 +47,10 @@ SOURCE = Path(__file__).resolve().parents[2]
 PRODUCTION = ('installation_repair.py', 'installation_repair_worker.py', 'reset.py',
               'reset_retention.py', 'app_release_artifacts.py')
 SIBLINGS = PRODUCTION[1:]
+TEST_PATHS = ('tests/fixtures/installation_repair_native.py',
+              'tests/fixtures/installation_repair_native_app.py',
+              'tests/test_installation_repair_native.py')
+WORKFLOW = '.github/workflows/installation-repair-native.yml'
 UNIT = 'amplifier-unified.service'
 LABEL = 'com.microsoft.amplifier-unified'
 CASES = ('happy', 'preflight', 'rollback', 'verify', 'data-lease')
@@ -129,15 +137,17 @@ def manager_capability(env):
 
 def manager_environment():
     # The runner account's own user bus, never a mounted host/container bus.
-    reset = module(SOURCE / 'amplifier_web/reset.py')
-    recovered = reset.user_service_environment()
+    # reset's helper exists on both platforms at the authoring baseline, but
+    # specifically probes Linux /run/user. macOS uses its unchanged login env.
+    recovered = (module(SOURCE / 'amplifier_web/reset.py').user_service_environment()
+                 if sys.platform == 'linux' else os.environ)
     return {key: value for key, value in recovered.items() if key in {
         'PATH', 'HOME', 'USER', 'LOGNAME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'}}
 
 
 def properties(label, env):
     result = execute('systemctl', '--user', 'show', label,
-                     '--property=MainPID,LoadState,ActiveState,FragmentPath,DropInPaths,NeedDaemonReload,InvocationID,NRestarts,Restart,ControlGroup',
+                     '--property=MainPID,LoadState,ActiveState,FragmentPath,DropInPaths,NeedDaemonReload,InvocationID,NRestarts,Restart,ControlGroup,ExecStart,WorkingDirectory,Type',
                      env=env, check_result=False)
     value = dict(row.split('=', 1) for row in result.stdout.splitlines() if '=' in row)
     check(result.returncode == 0 or value.get('LoadState') == 'not-found',
@@ -164,6 +174,9 @@ def launch_job(label, env):
         result = execute('launchctl', 'print', domain + '/' + label, env=env, check_result=False)
         if result.returncode == 0:
             found.append((domain, result.stdout))
+        else:
+            check(not re.search(r'(?<![\w.-])' + re.escape(label) + r'(?![\w.-])', parent.stdout),
+                  'launchd job lookup disagrees with domain; registration state is unknown')
     # A GUI job may be visible through a user-domain lookup as well. Preserve
     # exact identity; prefer the GUI owner used by production bootstrap/bootout.
     return found
@@ -228,10 +241,36 @@ def definition(launcher, home, workspace, env):
             + '\n\n[Install]\nWantedBy=default.target\n').encode()
 
 
+def tls_leaf(root):
+    """Generate only in CI prepare; never run as an import or unit-test effect."""
+    openssl = shutil.which('openssl')
+    check(openssl is not None, 'OpenSSL is required for the CI-only pinned test leaf')
+    folder = root / 'tls'
+    folder.mkdir(mode=0o700)
+    cert, key = folder / 'cert.pem', folder / 'key.pem'
+    execute(openssl, 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+            '-subj', '/CN=installation-repair-native-fixture', '-keyout', key, '-out', cert)
+    cert.chmod(0o600)
+    key.chmod(0o600)
+    leaf = ssl.PEM_cert_to_DER_cert(cert.read_text())
+    return {'cert': str(cert), 'key': str(key), 'pin': hashlib.sha256(leaf).hexdigest()}
+
+
 def request(config, path, body=None):
-    connection = http.client.HTTPConnection('127.0.0.1', config['port'], timeout=15)
-    token = (Path(config['home']) / 'config/auth/control-token').read_text().strip()
+    pin = config['tls']['pin']
+    check(isinstance(pin, str) and re.fullmatch('[a-f0-9]{64}', pin), 'invalid fixture leaf pin')
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE  # exact leaf checked BEFORE credential access
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    connection = http.client.HTTPSConnection('127.0.0.1', config['port'], timeout=15, context=context)
     try:
+        connection.connect()
+        observed = hashlib.sha256(connection.sock.getpeercert(binary_form=True)).hexdigest()
+        check(hmac.compare_digest(observed, pin), 'fixture listener TLS pin mismatch')
+        # Do not even read the control credential until the connected peer is
+        # authenticated. No HTTP fallback or lost-response replay exists here.
+        token = (Path(config['home']) / 'config/auth/control-token').read_text().strip()
         connection.request('POST' if body is not None else 'GET', path,
                            body=json.dumps(body) if body is not None else None,
                            headers={'Authorization': 'Bearer ' + token})
@@ -240,6 +279,21 @@ def request(config, path, body=None):
         return json.loads(response.read(65536))
     finally:
         connection.close()
+
+
+def source_index():
+    selected = ['amplifier_web/' + name for name in PRODUCTION] + [*TEST_PATHS, 'pyproject.toml']
+    workflow = SOURCE / WORKFLOW
+    if workflow.exists():
+        selected.append(WORKFLOW)
+    revision = execute('git', '-C', SOURCE, 'rev-parse', 'HEAD').stdout.strip()
+    check(re.fullmatch('[a-f0-9]{40}', revision), 'exact source revision required')
+    check(not execute('git', '-C', SOURCE, 'status', '--porcelain', '--', *selected).stdout.strip(),
+          'source/fixture inputs differ from stamped candidate commit')
+    return {'revision': revision, 'sha256': {name: digest(SOURCE / name) for name in selected},
+            'workflow': {'path': WORKFLOW, 'present': workflow.exists()},
+            'workflowCommit': {key: os.environ[key] for key in ('GITHUB_SHA', 'GITHUB_WORKFLOW_SHA')
+                               if re.fullmatch('[a-f0-9]{40}', os.environ.get(key, ''))}}
 
 
 def prepare(root, evidence):
@@ -256,13 +310,8 @@ def prepare(root, evidence):
         check(not launch_job(LABEL, env), 'preexisting launchd label')
     uv = shutil.which('uv')
     check(uv is not None, 'uv must be provided by workflow PATH')
-    revision = execute('git', '-C', SOURCE, 'rev-parse', 'HEAD').stdout.strip()
-    check(re.fullmatch('[a-f0-9]{40}', revision), 'exact source revision required')
-    selected = ['amplifier_web/' + name for name in PRODUCTION] + [
-        'tests/fixtures/installation_repair_native.py', 'tests/fixtures/installation_repair_native_app.py',
-        'tests/test_installation_repair_native.py', 'pyproject.toml']
-    check(not execute('git', '-C', SOURCE, 'status', '--porcelain', '--', *selected).stdout.strip(),
-          'source/fixture inputs differ from stamped candidate commit')
+    index = source_index()
+    revision = index['revision']
     version = tomllib.loads((SOURCE / 'pyproject.toml').read_text())['project']['version']
     artifacts = module(SOURCE / 'amplifier_web/app_release_artifacts.py')
     artifact = root / artifacts.filename(version)
@@ -271,8 +320,10 @@ def prepare(root, evidence):
                   'url': artifacts.SOURCE + '/releases/download/v' + version + '/' + artifact.name}
     artifacts.verify(descriptor, version, revision)
     save(root / 'fixture.json', {'revision': revision, 'version': version, 'artifact': descriptor,
+                               'sourceIndex': index, 'tls': tls_leaf(root),
                                'uv': uv, 'basePython': str(Path(sys.executable).resolve())})
     save(evidence / 'inputs.json', {'revision': revision, 'version': version, 'artifactSHA256': descriptor['sha256'],
+                                  'sourceIndex': index,
                                   'productionSHA256': {name: digest(SOURCE / 'amplifier_web' / name) for name in PRODUCTION},
                                   'fixtureSHA256': {name: digest(Path(__file__).with_name(name)) for name in
                                                    ('installation_repair_native.py', 'installation_repair_native_app.py')},
@@ -300,11 +351,13 @@ def helper_label(identity):
 def helper_observation(label, env):
     if sys.platform == 'linux':
         value = properties(label + '.service', env)
-        if value.get('LoadState') != 'not-found':
+        check(value.get('LoadState') in {'loaded', 'not-found'}, 'helper registration state is unknown')
+        absent = value['LoadState'] == 'not-found'
+        if not absent:
             check(value.get('Restart') == 'no' and value.get('NRestarts') == '0',
                   'helper is not a one-shot no-restart job')
-        return {'label': label, **value, 'settled': value.get('MainPID') == '0'
-                and value.get('ActiveState') in {'inactive', 'failed'}}
+        return {'label': label, **value, 'settled': absent or (
+            value.get('MainPID') == '0' and value.get('ActiveState') in {'inactive', 'failed'})}
     rows = launch_job(label, env)
     settled = True
     summaries = []
@@ -315,6 +368,73 @@ def helper_observation(label, env):
         settled = settled and not pids
         summaries.append({'domain': domain, 'pids': pids, 'runs': runs})
     return {'label': label, 'domains': summaries, 'settled': settled}
+
+
+def owned_helper_observation(helper, env):
+    """A saved label alone does not authorize removing a replacement job."""
+    folder = Path(helper['folder'])
+    label = helper['label']
+    check(re.fullmatch('[a-f0-9]{32}', folder.name)
+          and label == helper_label(folder.name), 'saved helper identity is ambiguous')
+    expected = worker_command(helper, folder)
+    if sys.platform == 'linux':
+        observed = helper_observation(label, env)
+        if observed['LoadState'] != 'not-found':
+            argv = re.findall(r'argv\[\]=(.*?)\s*;', observed.get('ExecStart', ''))
+            check(len(argv) == 1 and shlex.split(argv[0]) == expected
+                  and observed.get('WorkingDirectory') == str(folder) and observed.get('Type') == 'exec',
+                  'saved helper label belongs to a foreign or unidentifiable systemd job')
+    else:
+        observed = {'label': label, 'domains': [], 'settled': True}
+        for domain, text in launch_job(label, env):
+            programs = re.findall(r'^\s*program = (.+?)\s*$', text, re.M)
+            argv = re.findall(r'^\s*arguments = \{\s*\n(.*?)^\s*\}', text, re.M | re.S)
+            pids = re.findall(r'^\s*pid = (\d+)\s*$', text, re.M)
+            runs = re.findall(r'^\s*runs = (\d+)\s*$', text, re.M)
+            check(programs == [expected[0]] and len(argv) == 1
+                  and [line.strip() for line in argv[0].splitlines() if line.strip()] == expected,
+                  'saved helper label belongs to a foreign or unidentifiable launchd job')
+            check(not runs or max(map(int, runs)) <= 1, 'one-shot helper automatically reran')
+            observed['settled'] = observed['settled'] and not pids
+            observed['domains'].append({'domain': domain, 'pids': pids, 'runs': runs})
+    return observed
+
+
+def owned_definition(saved, env, service_pids):
+    path = Path(saved['path'])
+    check(path == paths() and path.is_file() and not path.is_symlink()
+          and digest(path) == saved['sha256']
+          and [path.stat().st_dev, path.stat().st_ino] == saved.get('stat'),
+          'owned definition changed; refusing cleanup')
+    if sys.platform == 'linux':
+        value = properties(UNIT, env)
+        if value.get('LoadState') != 'not-found':
+            check(value.get('FragmentPath') == str(path) and not value.get('DropInPaths')
+                  and value.get('NeedDaemonReload') == 'no'
+                  and value.get('MainPID') in {'0', *(str(pid) for pid in service_pids)},
+                  'loaded service identity changed; refusing cleanup')
+    else:
+        expected = plistlib.loads(path.read_bytes())['ProgramArguments']
+        for _domain, text in launch_job(LABEL, env):
+            pids = re.findall(r'^\s*pid = (\d+)\s*$', text, re.M)
+            argv = re.findall(r'^\s*arguments = \{\s*\n(.*?)^\s*\}', text, re.M | re.S)
+            check(re.findall(r'^\s*program = (.+?)\s*$', text, re.M) == [expected[0]]
+                  and len(argv) == 1
+                  and [line.strip() for line in argv[0].splitlines() if line.strip()] == expected
+                  and all(int(pid) in service_pids for pid in pids),
+                  'loaded launchd service identity changed; refusing cleanup')
+    return path
+
+
+def owned_child_exited(pid, env):
+    # A failure path may leave the harness's lease holder as an exited child.
+    # Reap only that saved child, never signal it or confuse a zombie with live
+    # input. A later workflow cleanup is not its parent and simply observes ps.
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        pass
+    return not pid_start(pid, env)
 
 
 def terminal(folder):
@@ -342,7 +462,7 @@ def new_operation(config, fixture, env):
             'pointer': {'exists': False, 'sha256': None}, 'artifact': descriptor,
             'target': {'version': fixture['version'], 'revision': fixture['revision'], 'source': descriptor['url']},
             'probe': PROBE, 'dependencyProbe': DEPENDENCY,
-            'health': {'urls': [f'http://127.0.0.1:{config["port"]}/api/health'], 'pin': None},
+            'health': {'urls': [f'https://127.0.0.1:{config["port"]}/api/health'], 'pin': config['tls']['pin']},
             'env': env}
     operation = {'operationId': identity, 'previewId': plan['previewId'], 'hostInstanceId': plan['hostInstanceId'],
                  'status': 'accepted', 'stage': 'accepted', 'reinstalled': False,
@@ -393,7 +513,8 @@ def run_case(root, evidence, name, fixture, transport):
         reservation.bind(('127.0.0.1', 0))
         port = reservation.getsockname()[1]
     config = {'case': name, 'caseRoot': str(case), 'home': str(home), 'toolRoot': str(tools), 'binRoot': str(bins),
-              'port': port, 'version': fixture['version'], 'revision': fixture['revision'], 'definition': str(paths())}
+              'port': port, 'tls': fixture['tls'], 'version': fixture['version'],
+              'revision': fixture['revision'], 'definition': str(paths())}
     save(home / 'fixture.json', config)
     (home / 'config/auth/control-token').write_text(uuid.uuid4().hex + uuid.uuid4().hex)
     (home / 'config/auth/control-token').chmod(0o600)
@@ -425,6 +546,11 @@ def run_case(root, evidence, name, fixture, transport):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'wb') as stream:
         stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    info = path.stat()
+    owner['definition']['stat'] = [info.st_dev, info.st_ino]
+    save(root / 'owner.json', owner)  # exact created inode before manager effects
     reset = module(SOURCE / 'amplifier_web/reset.py')
     commands = reset.service_commands(home)
     if sys.platform == 'linux':
@@ -450,7 +576,7 @@ def run_case(root, evidence, name, fixture, transport):
     else:
         check(not launch_job(label, transport), 'preexisting helper registration')
     owner = load(root / 'owner.json')
-    owner['helpers'].append({'label': label, 'folder': str(folder)})
+    owner['helpers'].append({'label': label, 'folder': str(folder), 'basePython': fixture['basePython']})
     save(root / 'owner.json', owner)
     try:
         request(config, '/fixture-dispatch', {'operationId': folder.name})
@@ -498,6 +624,7 @@ def run_case(root, evidence, name, fixture, transport):
               'sourceSHA256': {item: digest(folder / item) for item in SIBLINGS},
               'planSHA256': digest(folder / 'plan.json'), 'artifactSHA256': digest(plan['artifact']['path']),
               'planPublic': {key: plan[key] for key in ('operationId', 'previewId', 'target', 'extras', 'service', 'pointer')},
+              'tlsLeafSHA256': config['tls']['pin'],
               'exclusion': exclusion, 'effects': events(case), 'observedEffectCounts': effect_counts(case),
               'limits': LIMITS}
     save(evidence / (name + '.json'), report)
@@ -573,6 +700,10 @@ def cleanup(root, evidence):
     if not (root / 'owner.json').exists():
         return  # preparation never acquired registration ownership
     owner = load(root / 'owner.json')
+    if not owner['definition'] and not owner['helpers'] and not owner['processes']:
+        # In particular, preparation may have refused a preexisting unit/label.
+        # Do not inspect/control it or claim it was ours and is now absent.
+        return
     env = manager_environment()
     manager_capability(env)
     results = {'helpers': [], 'definitionAbsent': False, 'processesExited': False, 'passed': False}
@@ -583,14 +714,20 @@ def cleanup(root, evidence):
     # to settle. Timeout fails cleanup, retaining definitions/ownership for review.
     for helper in owner['helpers']:
         label = helper['label']
-        observed = wait_for(lambda: helper_observation(label, env), lambda row: row['settled'],
+        observed = wait_for(lambda: owned_helper_observation(helper, env), lambda row: row['settled'],
                             seconds=120, description='cleanup helper settlement')
         if sys.platform == 'darwin':
             for row in observed['domains']:
+                current = owned_helper_observation(helper, env)
+                check(current['settled'], 'saved helper became active during cleanup')
+                if not any(item['domain'] == row['domain'] for item in current['domains']):
+                    continue
                 execute('launchctl', 'bootout', row['domain'] + '/' + label, env=env, check_result=False)
             wait_for(lambda: not launch_job(label, env), description='helper registration absence')
         else:
-            execute('systemctl', '--user', 'reset-failed', label + '.service', env=env, check_result=False)
+            check(owned_helper_observation(helper, env)['settled'], 'saved helper became active during cleanup')
+            if observed['LoadState'] != 'not-found':
+                execute('systemctl', '--user', 'reset-failed', label + '.service', env=env, check_result=False)
             wait_for(lambda: properties(label + '.service', env).get('LoadState') == 'not-found',
                      description='transient helper collection')
         results['helpers'].append({'label': label, 'settled': observed, 'absent': True})
@@ -603,16 +740,14 @@ def cleanup(root, evidence):
         child_pids.extend(row['pid'] for row in events(Path(case))
                           if row['kind'] in {'probe', 'doctor'})
     if saved:
-        path = Path(saved['path'])
-        check(path == paths() and path.is_file() and not path.is_symlink() and digest(path) == saved['sha256'],
-              'owned definition changed; refusing cleanup')
+        path = owned_definition(saved, env, pids)
         commands = module(SOURCE / 'amplifier_web/reset.py').service_commands(Path(saved['home']))
         execute(*commands[0], env=env, check_result=False)
         if sys.platform == 'linux':
             wait_for(lambda: properties(UNIT, env).get('MainPID') == '0', description='service stopped')
         else:
             wait_for(lambda: not launch_job(LABEL, env), description='service bootout')
-        check(digest(path) == saved['sha256'], 'definition changed during cleanup')
+        owned_definition(saved, env, pids)
         path.unlink()
         if sys.platform == 'linux':
             execute('systemctl', '--user', 'daemon-reload', env=env)
@@ -623,7 +758,7 @@ def cleanup(root, evidence):
     wait_for(lambda: all(not pid_start(pid, env) for pid in pids)
              and all(not pid_start(pid, env) for pid in helper_pids)
              and all(not pid_start(pid, env) for pid in child_pids)
-             and all(not pid_start(row['pid'], env) for row in owner['processes']), description='owned PIDs exited')
+             and all(owned_child_exited(row['pid'], env) for row in owner['processes']), description='owned PIDs exited')
     results.update(definitionAbsent=not paths().exists(), processesExited=True,
                    servicePIDs=sorted(set(pids)), helperPIDs=sorted(set(helper_pids)),
                    probeDoctorPIDs=sorted(set(child_pids)), passed=True)
@@ -638,6 +773,7 @@ def cleanup(root, evidence):
 
 def run(root, evidence):
     fixture = load(root / 'fixture.json')
+    check(source_index() == fixture['sourceIndex'], 'source/fixture/workflow inputs changed after prepare')
     transport = manager_environment()
     for case in CASES:
         try:
