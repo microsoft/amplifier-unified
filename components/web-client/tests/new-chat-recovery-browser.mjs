@@ -84,7 +84,7 @@ try{
  await page.getByRole('button',{name:'Choose workspace',exact:true}).click();
  await page.getByRole('button',{name:'Existing · /existing',exact:true}).click();
  await expect(page.getByRole('dialog',{name:'Choose a workspace',exact:true})).toHaveCount(0);
- await page.getByRole('button',{name:'Retry',exact:true}).click();
+ await page.getByRole('article',{name:'Your message',exact:true}).getByRole('button',{name:'Retry',exact:true}).click();
  await expect(page.getByText('Start fresh',{exact:true})).toHaveCount(1);
  await expect(page.getByRole('banner')).toContainText('Created conversation');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),'created');

@@ -129,7 +129,7 @@ try{
  let confirmRequests=0,replyLost=false;
  const intercept=async route=>{
   const body=route.request().postDataJSON();
-  if(body.action!=='session.handoff.confirm'||body.args?.requestId!==proposal.requestId){await route.continue();return}
+  if(body?.action!=='session.handoff.confirm'||body.args?.requestId!==proposal.requestId){await route.continue();return}
   confirmRequests++;enteredResolve();await hold;
   const response=await route.fetch();assert.equal(response.status(),200,await response.text());
   observations.confirmResponse=await response.json();replyLost=true;await route.abort('failed');
@@ -338,7 +338,7 @@ try{
  const readGate=new Promise(resolve=>releaseRead=resolve),readReady=new Promise(resolve=>readEntered=resolve);
  const holdRead=async route=>{
   const body=route.request().postDataJSON();
-  if(body.action!=='session.handoff.read'||body.args?.requestId!==failed.requestId){await route.continue();return}
+  if(body?.action!=='session.handoff.read'||body.args?.requestId!==failed.requestId){await route.continue();return}
   const response=await route.fetch();readEntered();await readGate;await route.fulfill({response});
  };
  await page.route('**/api/actions',holdRead);
