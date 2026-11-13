@@ -44,9 +44,10 @@ def coverage_plan():
     appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
     responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
     notices_ids = shared_notices_motion_browser_addition(plan['scenarios'])
+    repair_ids = installation_repair_browser_additions(plan['scenarios'])
     rows = []
     for row in plan['scenarios']:
-        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids:
+        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | repair_ids:
             continue
         row = {**row, 'command': [coverage_paths(part) for part in row['command']]}
         row.pop('cwd', None)
@@ -1036,6 +1037,119 @@ def shared_notices_motion_browser_addition(rows, readiness_scripts=()):
     return selected_client_browser_addition(rows, readiness_scripts, 'shared-notices-motion', current=True)
 
 
+def installation_repair_browser_additions(rows, readiness_scripts=()):
+    """Validate both new owners before excluding them from frozen coverage."""
+    expected = [
+        {'id': 'installation-repair',
+         'command': ['node', 'tests/installation-repair-browser.mjs'],
+         'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/installation-repair'},
+         'cwd': '.build/web-client'},
+        {'id': 'installation-repair-host',
+         'command': ['node', 'tests/web/installation-repair-host-browser.mjs'],
+         'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/installation-repair-host',
+                 'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python'}},
+    ]
+    for owner in expected:
+        identity, script = owner['id'], owner['command'][1]
+        owners = [row for row in rows if row['id'] == identity
+                  or any(Path(part).name == Path(script).name for part in row['command'])]
+        assert owners == [owner], f'{identity}: expected one exact ordinary owner and environment'
+        assert coverage_paths(script) not in {coverage_paths(part) for part in readiness_scripts}, \
+            f'{identity}: duplicate readiness owner'
+    return {row['id'] for row in expected}
+
+
+def test_installation_repair_is_composed_once_from_distinct_client_and_host_owners():
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    client_path = source_test('tests/installation-repair-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    plan, proof = runner.load_plan(ROOT, host_path)
+    identities = installation_repair_browser_additions(plan['scenarios'])
+    assert identities == {'installation-repair', 'installation-repair-host'}
+    for identity in identities:
+        script_name = f'{identity}-browser.mjs'
+        def owns(row):
+            return row['id'] == identity or any(Path(part).name == script_name for part in row['command'])
+        host_owners = [row for row in host['scenarios'] if owns(row)]
+        client_owners = [row for row in client['scenarios'] if owns(row)]
+        if identity == 'installation-repair':
+            assert host_owners == []
+            selected, = client_owners
+            expected = {**selected, 'cwd': '.build/web-client'}
+        else:
+            assert client_owners == []
+            expected, = host_owners
+            assert 'cwd' not in expected  # The host fixture runs from Unified's root.
+        assert [row for row in plan['scenarios'] if owns(row)] == [expected]
+        assert host['scenarioOrder'].count(identity) == 1
+    index = host['scenarioOrder'].index('installation-repair')
+    assert host['scenarioOrder'][index - 1:index + 3] == [
+        'settings', 'installation-repair', 'installation-repair-host', 'configuration-recovery-components']
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+    assert not identities & {row['id'] for row in coverage_plan()['scenarios']}
+
+
+@pytest.mark.parametrize('identity', ['installation-repair', 'installation-repair-host'])
+@pytest.mark.parametrize('fault', [
+    'missing', 'duplicate', 'identical-duplicate', 'renamed', 'relocated-duplicate',
+    'command', 'executable', 'extra-argument', 'environment', 'wrong-artifacts',
+    'extra-environment', 'cwd', 'cwd-presence', 'readiness',
+])
+def test_installation_repair_additions_reject_changed_or_duplicate_owner(identity, fault):
+    rows = current_plan()['scenarios']
+    assert installation_repair_browser_additions(rows) == {'installation-repair', 'installation-repair-host'}
+    owner = next(row for row in rows if row['id'] == identity)
+    readiness = set()
+    if fault == 'missing':
+        rows.remove(owner)
+    elif fault == 'duplicate':
+        rows.append({**owner, 'id': identity + '-duplicate'})
+    elif fault == 'identical-duplicate':
+        rows.append(json.loads(json.dumps(owner)))
+    elif fault == 'renamed':
+        owner['id'] += '-renamed'
+    elif fault == 'relocated-duplicate':
+        rows.append({**owner, 'id': identity + '-duplicate',
+                     'command': ['node', 'other/' + Path(owner['command'][1]).name]})
+    elif fault == 'command':
+        owner['command'][1] = 'tests/settings-browser.mjs'
+    elif fault == 'executable':
+        owner['command'][0] = 'python'
+    elif fault == 'extra-argument':
+        owner['command'].append('--extra')
+    elif fault == 'environment':
+        owner.pop('env')
+    elif fault == 'wrong-artifacts':
+        owner['env']['AMPLIFIER_TEST_ARTIFACTS'] = '{root}/output/browser-checks/settings'
+    elif fault == 'extra-environment':
+        owner['env']['UNEXPECTED'] = 'extra'
+    elif fault == 'cwd':
+        owner['cwd'] = 'tests/web'
+    elif fault == 'cwd-presence':
+        if identity == 'installation-repair':
+            owner.pop('cwd')
+        else:
+            owner['cwd'] = '.'
+    else:
+        readiness.add(coverage_paths(owner['command'][1]))
+    with pytest.raises(AssertionError, match=identity):
+        installation_repair_browser_additions(rows, readiness)
+
+
+@pytest.mark.parametrize('fault', ['missing', 'wrong'])
+def test_installation_repair_host_requires_selected_fixture_python(fault):
+    rows = current_plan()['scenarios']
+    owner = next(row for row in rows if row['id'] == 'installation-repair-host')
+    if fault == 'missing':
+        del owner['env']['AMPLIFIER_TEST_PYTHON']
+    else:
+        owner['env']['AMPLIFIER_TEST_PYTHON'] = '/unselected/python'
+    with pytest.raises(AssertionError, match='installation-repair-host'):
+        installation_repair_browser_additions(rows)
+
+
 def test_shared_notices_motion_is_composed_once_from_selected_client_owner():
     name = 'shared-notices-motion'
     script = f'tests/{name}-browser.mjs'
@@ -1308,6 +1422,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     appearance_lifecycle_browser_addition(current_plan()['scenarios'], readiness_scripts)
     sidebar_responsive_browser_addition(current_plan()['scenarios'], readiness_scripts)
     shared_notices_motion_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    installation_repair_browser_additions(current_plan()['scenarios'], readiness_scripts)
     plan = coverage_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], readiness_scripts)
     sidebar_ids = sidebar_controls_browser_addition(plan['scenarios'], readiness_scripts)
@@ -3704,12 +3819,13 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
     responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
     notices_ids = shared_notices_motion_browser_addition(plan['scenarios'])
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids]
+    repair_ids = installation_repair_browser_additions(plan['scenarios'])
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | repair_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
-    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(repair_ids)
+    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(repair_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
-    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
+    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(repair_ids & {'installation-repair'})
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
