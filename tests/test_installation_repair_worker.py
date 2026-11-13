@@ -72,6 +72,11 @@ class RepairFixture(unittest.TestCase):
         self.uv = self.root / "uv"
         self.uv.write_text("not executed")
         self.uv.chmod(0o700)
+        # This fixture mocks every command. Its selected interpreter is private
+        # test data, not the possibly group-writable interpreter running tests.
+        self.base_python = self.root / "base-python"
+        self.base_python.write_text("not executed")
+        self.base_python.chmod(0o700)
         shutil.copyfile(Path(worker.__file__).with_name("app_release_artifacts.py"),
                         self.folder / "app_release_artifacts.py")
         with patch.object(worker, "__file__", str(self.folder / "installation_repair_worker.py")):
@@ -98,9 +103,9 @@ class RepairFixture(unittest.TestCase):
             "home": str(self.home), "uid": os.getuid(), "dataStat": [info.st_dev, info.st_ino],
             "runningIdentity": {"version": "1.2.2", "revision": "c" * 40, "instanceId": "d" * 32},
             "toolRoot": str(self.tools), "binRoot": str(self.bins), "uv": str(self.uv),
-            "basePython": str(Path(sys.executable).resolve()),
+            "basePython": str(self.base_python),
             "executables": {"uv": worker.executable_identity(self.uv),
-                            "basePython": worker.executable_identity(Path(sys.executable).resolve())},
+                            "basePython": worker.executable_identity(self.base_python)},
             "service": {"commands": self.commands, "path": str(self.service_file),
                         "sha256": worker._digest(self.service_file), "pid": 123,
                         "processStart": "Mon Nov 16 11:22:33 2026"},
@@ -767,13 +772,13 @@ class RepairFixture(unittest.TestCase):
         self.assertNotIn("stop", self.names())
 
     def test_reconcile_stopped_no_mutation_requires_explicit_start_then_original_health(self):
-        self.fail = "lease"
+        self.failure_mode = "lease"
         result = self.run_worker()
         self.assertEqual((result["status"], result["stage"]), ("unknown", "left-stopped"))
         with self.assertRaises(ValueError):
             worker.reconcile(self.folder)
         self.assertNotIn("start", self.names())
-        self.fail = None
+        self.failure_mode = None
         self.pid = 456  # Owner explicitly started the unchanged old service.
         self.health_override = {**self.plan["runningIdentity"], "instanceId": "f" * 32}
         result = worker.reconcile(self.folder)
