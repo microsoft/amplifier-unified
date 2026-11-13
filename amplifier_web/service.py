@@ -4617,7 +4617,7 @@ class AppService:
                     # transport refusal; it cannot erase an admitted human post.
                     self._clear_sent_draft(current, rejected, text, preserve_draft)
                     self._publish_changes(sessions={session['id']}, globals={'view'})
-                    return {'accepted': True, 'duplicate': True}
+                    return {'accepted': True, 'delivery': 'accepted', 'duplicate': True}
                 self._post_disposition(current, rejected, 'rejected')
                 current["messages"] = [
                     row for row in current["messages"] if row.get("inputId") != input_id
