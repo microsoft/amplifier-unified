@@ -65,8 +65,8 @@ policy/store test suite. Unified maps this nested package directly into its norm
 wheel and editable install, and continues to import `amplifier_scheduling`; its scheduler, authorization, Stop handling, execution
 admission and browser integration tests remain with Unified. There is no new
 scheduler process, Unified runtime dependency or database migration in this packaging
-step. The `0.1.0` component version is preparation metadata, not a publication or
-an independently selected Unified dependency.
+step. A version in this project does not itself establish publication or an
+independently selected Unified dependency.
 
 Use a separate environment for the standalone distribution for now. Do not
 install it alongside `amplifier-unified`: Unified still owns the same installed
@@ -78,3 +78,32 @@ do not maintain a second implementation at the old repository-root path.
 Independent publication and Unified's dependency selection are separate delivery
 steps. Existing schedule databases, run identities and uncertain outcomes retain
 their current authority throughout that transition.
+
+## Standalone releases while this source is in Unified
+
+The **Scheduling package** workflow qualifies changes in pull requests. Its manual
+publication takes one full commit SHA already merged into Unified's `main`.
+It builds this project once and runs the existing five tests against that same
+installed wheel, outside the source checkout, on Linux and Windows. It publishes
+the wheel, source archive, `SHA256SUMS`, and `scheduling-source.json` under
+`scheduling-v<version>` in the public Unified repository. The source receipt binds
+the component version, exact Git commit/tree, source files and artifact hashes.
+
+The component release is explicitly **not Latest**. It does not change Unified's
+app version, application publisher, update feed or installed dependency selection.
+The release owner must coordinate the component version before dispatch; existing
+tags and published bytes are never replaced. Retrying an interrupted draft can
+upload only missing matching assets; a completed release is verified without
+rewriting it. An identity or checksum mismatch requires review.
+
+For an interrupted publication, rerun only the failed jobs so the publisher
+downloads the original successful build artifact. A whole workflow rerun builds
+again; timestamped archives are not promised to reproduce identical bytes and
+will be refused if they differ from an existing release. Keep the original
+workflow artifact available until publication and its checks are complete.
+
+Unified still bundles this package, so the separate-environment restriction above
+continues after artifact publication. A later consumer change must select an
+available public dependency and remove the embedded mapping together. Git-source,
+registry and archive delivery have different updater contracts; publishing these
+assets does not silently add archive support to the host component graph.
