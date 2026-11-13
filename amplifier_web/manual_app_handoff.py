@@ -231,9 +231,7 @@ async def _health(manager, binding):
 
 async def qualify(manager, pending):
     """Produce proof from actual bytes, never from a caller's receipt assertion."""
-    from . import app_updates, app_release_artifacts as artifacts
-    from .app_feature_probe import DEPENDENCY_PROBE
-    from .update_diagnostics import probe_record
+    from . import app_updates
     binding = await asyncio.to_thread(_native_binding, manager)
     staged, staged_digest = await asyncio.to_thread(_staged, manager, pending)
     current, previous = app_updates.version_tuple(binding['version']), app_updates.version_tuple(staged['version'])
@@ -248,6 +246,35 @@ async def qualify(manager, pending):
     target = await app_updates.installed_target()
     _require(Path(target[2]).parent.parent == Path(sys.prefix)
              and target[3]['installation'] == str(Path(sys.prefix)))
+    descriptor = await _published_artifact(manager, binding)
+    if current == previous:
+        _require(descriptor['sha256'] == staged['artifact']['sha256'])
+    proof = {'binding': binding, 'artifact': descriptor, 'stagedDigest': staged_digest,
+             'launcher': str(target[1]), 'hostInstanceId': manager.service.instance_id}
+    return await _verify_installation(manager, binding, target, proof)
+
+
+async def _verify_installation(manager, binding, target, proof):
+    from . import app_updates
+    from .app_feature_probe import DEPENDENCY_PROBE
+    from .update_diagnostics import probe_record
+    proof['payload'] = await _offloop(_payload, proof)
+    output = await app_updates.process(target[2], '-I', '-c', app_updates.PROBE,
+        *binding['extras'], **app_updates.browser_process_options(manager, binding['extras']), timeout=30)
+    report = probe_record(output)
+    _require(report and report.get('ok') is True and report.get('isolated') is True
+             and report.get('stage') == 'complete' and report.get('version') == binding['version'])
+    await app_updates.process(target[2], '-I', '-c', DEPENDENCY_PROBE, *binding['extras'], timeout=30)
+    proof['tlsPin'] = await _health(manager, binding)
+    _require(await app_updates.installed_target() == target)
+    _require(await asyncio.to_thread(_native_binding, manager) == binding)
+    _require(await _offloop(_payload, proof) == proof['payload'])
+    return proof
+
+
+async def _published_artifact(manager, binding):
+    """Authenticate the serving local wheel against its own official release."""
+    from . import app_release_artifacts as artifacts
     direct = binding['direct']
     _require(isinstance(direct, dict) and set(direct) == {'url', 'archive_info'})
     parsed = urlsplit(direct['url'])
@@ -273,22 +300,7 @@ async def qualify(manager, pending):
         _require(isinstance(hashes, dict))
         _require('sha256' not in hashes or hashes['sha256'] == published['sha256'])
         _require('hash' not in archive_info or archive_info['hash'] == 'sha256=' + published['sha256'])
-        if current == previous:
-            _require(published['sha256'] == staged['artifact']['sha256'])
-        proof = {'binding': binding, 'artifact': descriptor, 'stagedDigest': staged_digest,
-                 'launcher': str(target[1]), 'hostInstanceId': manager.service.instance_id}
-        proof['payload'] = await _offloop(_payload, proof)
-    output = await app_updates.process(target[2], '-I', '-c', app_updates.PROBE,
-        *binding['extras'], **app_updates.browser_process_options(manager, binding['extras']), timeout=30)
-    report = probe_record(output)
-    _require(report and report.get('ok') is True and report.get('isolated') is True
-             and report.get('stage') == 'complete' and report.get('version') == binding['version'])
-    await app_updates.process(target[2], '-I', '-c', DEPENDENCY_PROBE, *binding['extras'], timeout=30)
-    proof['tlsPin'] = await _health(manager, binding)
-    _require(await app_updates.installed_target() == target)
-    _require(await asyncio.to_thread(_native_binding, manager) == binding)
-    _require(await _offloop(_payload, proof) == proof['payload'])
-    return proof
+        return descriptor
 
 
 async def reconcile(manager, args, request_id):
@@ -367,6 +379,51 @@ async def reconcile(manager, args, request_id):
             if not isinstance(error, Exception):
                 raise
             return copy.deepcopy(state[RESULTS][request_id])
+
+
+async def recovery_context(manager):
+    """Revalidate the completed manual install only as an old app recovery target.
+
+    This does not grant optional-feature archive eligibility or create a restart
+    receipt. The next normal update still owns candidate/drain/Stop admission.
+    """
+    result = copy.deepcopy(manager.service.state['updates'].get('manualHandoff') or {})
+    if sys.platform != 'win32' or result.get('phase') != PHASE or result.get('status') != 'succeeded':
+        return None
+    proof = await _offloop(_proof, manager, result)
+    binding = await _offloop(_native_binding, manager)
+    previous = proof['binding']
+    _require(all(result.get(key) == previous[key] for key in ('version', 'revision')))
+    if binding != previous:
+        # A normal side-by-side repair changes the package/prefix, not ownership
+        # of this physical data directory. Authenticate the NEW package; never
+        # relabel or rewrite the original manual receipt as proof of its bytes.
+        from .app_updates import version_tuple
+        _require(all(binding[key] == previous[key] for key in ('ownerSid', 'dataIdentity', 'extras')))
+        _require(binding['directories'][0] == previous['directories'][0])
+        current_version, old_version = version_tuple(binding['version']), version_tuple(previous['version'])
+        _require(current_version and old_version and current_version >= old_version)
+        if current_version == old_version:
+            _require(binding['revision'] == previous['revision'])
+        from .app_updates import installed_target
+        target = await installed_target()
+        _require(Path(target[2]).parent.parent == Path(sys.prefix)
+                 and target[3]['installation'] == str(Path(sys.prefix)))
+        artifact = await _published_artifact(manager, binding)
+        current = await _verify_installation(manager, binding, target,
+            {'binding': binding, 'artifact': artifact})
+        _require(current['tlsPin'] == proof['tlsPin'])
+        proof = current
+    else:
+        _require(await _offloop(_payload, proof) == proof['payload'])
+    _require(await _offloop(_native_binding, manager) == binding)
+    _require(manager.service.state['updates'].get('manualHandoff') == result)
+    from .app_component_graph import validate_graph
+    artifact = proof['artifact']
+    app = {'name': 'amplifier-unified', 'url': 'https://github.com/microsoft/amplifier-unified',
+           'version': binding['version'], 'revision': binding['revision'],
+           'delivery': {key: artifact[key] for key in ('url', 'sha256')}}
+    return {'artifact': copy.deepcopy(artifact), 'app': validate_graph([app])[0]}
 
 
 def continuing(manager):
