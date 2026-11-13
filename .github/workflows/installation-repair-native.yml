@@ -54,6 +54,20 @@ jobs:
         with:
           python-version: '3.13'
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+      # Hosted setup-python executables can be group-writable. Do not chmod that
+      # shared installation or relax the product guard: install an owned, real
+      # CPython distribution before the offline transaction selects its base.
+      - name: Install runner-owned CPython for the production executable boundary
+        env:
+          UV_PYTHON_DOWNLOADS: automatic
+          UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/installation-repair-python
+        run: |
+          test ! -e "$UV_PYTHON_INSTALL_DIR"
+          uv python install --no-bin --no-registry 3.13
+          selected="$(uv python find --managed-python --no-project 3.13)"
+          "$selected" -I -S -c 'import os,pathlib,stat,sys; p=pathlib.Path(sys._base_executable).resolve(strict=True); s=p.stat(); assert sys.version_info[:2]==(3,13) and stat.S_ISREG(s.st_mode) and s.st_uid==os.getuid() and not s.st_mode&0o022 and os.access(p,os.X_OK), (str(p),oct(s.st_mode),s.st_uid); print("Owned base interpreter:",p,oct(stat.S_IMODE(s.st_mode)))'
+          dirname "$selected" >> "$GITHUB_PATH"
+          printf 'UV_PYTHON_INSTALL_DIR=%s\n' "$UV_PYTHON_INSTALL_DIR" >> "$GITHUB_ENV"
       - name: Prepare disclosed mechanics fixture and retain exact source
         run: python -I -B tests/fixtures/installation_repair_native.py prepare
       - name: Exercise native transaction failure and recovery boundaries
