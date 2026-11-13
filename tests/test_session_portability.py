@@ -7,6 +7,57 @@ from amplifier_web.host.storage import SessionStore
 from amplifier_web.service import AppService
 
 
+async def prepare_discovered_session(app, sid, workspace):
+    """Finish initial discovery before testing a subsequent external update."""
+    from amplifier_web.session_files import project_slug
+
+    # Even an explicit refresh advances only one bounded discovery slice.
+    # Prepare the original record, never retry the post-CLI rename assertion.
+    for attempt in range(64):
+        await app.history.refresh(force=attempt == 0)
+        shared = app.state['sharedHistory']
+        assert not shared.get('error'), shared
+        if shared.get('reconciliation', {}).get('phase') == 'complete':
+            break
+    else:
+        raise AssertionError(f'Initial native discovery did not complete: {shared}')
+    row = app.history.index._catalog.get(project_slug(workspace), sid)
+    assert row is not None, shared
+    assert row['name'] == app._session(sid)['title'] == 'Created in web'
+    return row
+
+
+async def test_round_trip_preparation_finishes_bounded_cold_discovery(tmp_path, monkeypatch):
+    """A partial cold slice is not evidence that a later rename was ignored."""
+    from amplifier_web.session_files import project_slug
+
+    app = AppService(tmp_path / 'web', workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {'title': 'Created in web'})
+        sid = app._session()['id']
+        web = SessionStore.for_app(app.data_dir, tmp_path)
+        messages = [{'role': 'user', 'content': 'Existing request'}]
+        web.save(sid, messages, {'bundle': 'anchors', 'working_dir': str(tmp_path)})
+        directory = web.directory(sid)
+        original = (directory / 'transcript.jsonl').read_bytes()
+        # Deterministically suspend real discovery, without sleeping, replacing
+        # its reader, or increasing the production reconciliation budget.
+        with monkeypatch.context() as cold:
+            cold.setattr(app.history.index, '_recovery_budget', 1)
+            await app.history.refresh()
+            assert app.state['sharedHistory']['reconciliation']['phase'] == 'running'
+            assert app.history.index._catalog.get(project_slug(tmp_path), sid) is None
+            await prepare_discovered_session(app, sid, tmp_path)
+        SessionMetadataStore(directory).set_name('External canonical name')
+        await app.history.refresh()
+        assert app._session(sid)['title'] == 'External canonical name'
+        assert app.history.index._catalog.get(project_slug(tmp_path), sid)['name'] == 'External canonical name'
+        assert (directory / 'transcript.jsonl').read_bytes() == original
+        assert web.load(sid)[0] == messages
+    finally:
+        await app.close()
+
+
 async def test_fallback_is_visible_in_native_metadata_and_reverse_rename_survives(tmp_path):
     app = AppService(tmp_path / "web", workspace=tmp_path)
     try:
@@ -98,6 +149,10 @@ async def test_installed_cli_round_trip(tmp_path, monkeypatch):
         events = directory / "events.jsonl"
         events.write_text('{"event":"tool:post","result":"do not repeat"}\n')
         original_events = events.read_bytes()
+        original_transcript = (directory / 'transcript.jsonl').read_bytes()
+        # This bare service has no background discovery loop. Establish the
+        # original native catalog row before exercising the CLI update.
+        before = await prepare_discovered_session(app, sid, tmp_path)
         listed = subprocess.run([sys.executable, "-m", "amplifier_app_cli", "session", "list", "--format", "json"],
                                 env={**os.environ, 'AMPLIFIER_ALLOW_SHARED_VENV': '1'}, capture_output=True, text=True, timeout=30)
         assert listed.returncode == 0, listed.stderr
@@ -121,8 +176,16 @@ async def test_installed_cli_round_trip(tmp_path, monkeypatch):
             root.release()
         assert web.load(sid)[1]["name"] == "Renamed in the actual CLI"
         await app.history.refresh()
-        assert app._session(sid)["title"] == "Renamed in the actual CLI"
+        after = app.history.index._catalog.get(before['nativeProject'], sid)
+        witness = {'canonical': web.load(sid)[1], 'catalog': after,
+                   'resident': {key: app._session(sid).get(key) for key in
+                                ('title', 'nativeNameRevision', 'nativeNamePolicyRevision')},
+                   'discovery': app.state['sharedHistory']}
+        assert after is not None and after['name'] == "Renamed in the actual CLI", witness
+        assert app._session(sid)["title"] == "Renamed in the actual CLI", witness
+        assert app.directory.resolve(sid)['title'] == "Renamed in the actual CLI", witness
         assert web.load(sid)[0] == messages
+        assert (directory / 'transcript.jsonl').read_bytes() == original_transcript
         assert events.read_bytes() == original_events
     finally:
         await app.close()
