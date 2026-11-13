@@ -92,6 +92,10 @@ async def lifecycle(app, home):
             'input_ids': [input_id], 'observedAt': time.time(),
             'interruptionRevision': source.get('interruptionRevision', 0),
             'runtimeOwnerId': 'lifecycle-fixture-owner', **values})
+        if event == 'generation.started':
+            await service.on_runtime_event('runtime.status', {
+                'sessionId': sid, 'status': 'working', 'event': 'input.delivered',
+                'inputId': input_id, 'runtimeOwnerId': 'lifecycle-fixture-owner'})
 
     async def complete(input_id, text):
         generation_id = 'generation-' + input_id
@@ -136,7 +140,16 @@ async def lifecycle(app, home):
 
     async def send(session, text, input_id, emit, **kwargs):
         calls.append({'operation': 'send', 'inputId': input_id})
-        await complete(input_id, 'A fresh explicit message worked.')
+        if text == 'A later different failure':
+            await generation('generation.started', input_id, 'later-generation')
+            await generation('generation.failed', input_id, 'later-generation',
+                error_category='authentication', error_type='AuthenticationError',
+                error_stage='provider_request', retryable=False)
+            await service.on_runtime_event('runtime.error', {
+                'sessionId': sid, 'rootSessionId': sid, 'generationId': 'later-generation',
+                'errorType': 'AuthenticationError', 'error': 'PRIVATE later credentials wrapper'})
+        else:
+            await complete(input_id, 'A fresh explicit message worked.')
 
     service.runtime.start = start
     service.runtime.control = control
@@ -194,14 +207,11 @@ async def lifecycle(app, home):
 
     async def newer_failure(request):
         authorized(request)
-        service._message(source, 'user', 'A later different failure', inputId='later-input')
-        await generation('generation.started', 'later-input', 'later-generation')
-        await generation('generation.failed', 'later-input', 'later-generation',
-            error_category='authentication', error_type='AuthenticationError',
-            error_stage='provider_request', retryable=False)
-        await service.on_runtime_event('runtime.error', {
-            'sessionId': sid, 'rootSessionId': sid, 'generationId': 'later-generation',
-            'errorType': 'AuthenticationError', 'error': 'PRIVATE later credentials wrapper'})
+        # Use ordinary explicit admission, not a synthetic message appended
+        # behind the current execution turn's back.
+        await service.dispatch('conversation.send', {
+            'sessionId': sid, 'text': 'A later different failure'},
+            command_id='later-input')
         return web.json_response({'injected': True})
 
     async def check(request):

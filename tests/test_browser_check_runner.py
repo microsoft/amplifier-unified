@@ -389,8 +389,16 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     assert [row for row in rows if row['id'] in recovery_ids] == recovery_additions
     original = [row for row in historical_rows if row['id'] not in additions and row['id'] not in recovery_ids]
     assert len(original) == 65 and len(historical_rows) == 132
+    lifecycle_additions = [
+        {'id': 'session-health-request-failure',
+         'command': ['node', 'tests/session-health-browser.mjs', '--request-failure']},
+        {'id': 'session-health-completed-runtime-fault',
+         'command': ['node', 'tests/session-health-browser.mjs', '--completed-runtime-fault']},
+    ]
+    lifecycle_ids = {row['id'] for row in lifecycle_additions}
+    assert [row for row in rows if row['id'] in lifecycle_ids] == lifecycle_additions
     # Preserve the preceding total after validating all exact additive owners.
-    assert len([row for row in rows if row['id'] not in navigation_ids | sidebar_ids | client_addition_ids | {'context-inspector-layout', 'delivery-warning', 'legacy-outbox-notice', 'delivery-reconciliation', 'delivery-new-chat', 'navigation-waiting', 'canvas-versions', 'question-resume'}]) == 138
+    assert len([row for row in rows if row['id'] not in navigation_ids | sidebar_ids | client_addition_ids | lifecycle_ids | {'context-inspector-layout', 'delivery-warning', 'legacy-outbox-notice', 'delivery-reconciliation', 'delivery-new-chat', 'navigation-waiting', 'canvas-versions', 'question-resume'}]) == 138
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},

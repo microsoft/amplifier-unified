@@ -242,7 +242,7 @@ async function lifecycleCheck(page,ready,output){
   const local=feedback.getByRole('textbox',{name:'Local feedback report preview',exact:true});
   await expect(local).toHaveValue(/provider_unavailable/);
   assert.doesNotMatch(await local.inputValue(),/authentication|PRIVATE|synthetic\/workspace/);
-  assert.equal((await facts()).calls.filter(row=>row.operation==='send').length,1,'reporting never sends another input');
+  assert.equal((await facts()).calls.filter(row=>row.operation==='send').length,2,'only the two explicit requests ran; reporting never sends another input');
  }
  await writeFile(output+`lifecycle-${lifecycleMode}-facts.json`,JSON.stringify(await facts(),null,2)+'\n');
  console.log(`Session health ${lifecycleMode} passed: truthful exact-input outcome, saved answer/draft retained, narrow/reload safe, no automatic work and one ordinary explicit send.`);
