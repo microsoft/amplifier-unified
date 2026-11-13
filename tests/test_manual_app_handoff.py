@@ -777,3 +777,83 @@ async def test_manual_recovery_does_not_borrow_other_or_uncertain_receipts(
         pytest.fail('No proof may be borrowed for another receipt')
     monkeypatch.setattr(handoff, '_proof', forbidden)
     assert await handoff.recovery_context(manager) is None
+
+
+@pytest.mark.parametrize('changed', [
+    None, 'newer', 'owner', 'data', 'directory', 'extras', 'downgrade', 'same-version-revision',
+    'launcher', 'artifact', 'payload', 'probe', 'health', 'during-read', 'receipt',
+])
+async def test_repaired_prefix_requires_current_official_payload_and_same_data_anchor(
+        manager, native_observations, monkeypatch, changed):
+    binding, _, calls = native_observations
+    binding.update(dataIdentity='fixture-data', directories=[['1', '2'], ['1', 'new']],
+                   installation={'prefix': sys.prefix, 'digest': '1' * 64})
+    original = copy.deepcopy(binding)
+    original['directories'][1] = ['1', 'old']
+    original['installation']['digest'] = '2' * 64
+    old_proof = {'binding': original, 'payload': {'members': 4}, 'tlsPin': 'pin',
+                 'artifact': {'sha256': 'a' * 64}}
+    digest = handoff._save_proof(manager, 'original-data', old_proof)
+    proof_path = handoff._proof_path(manager, 'original-data')
+    original_bytes = proof_path.read_bytes()
+    state = manager.service.state['updates']
+    state['manualHandoff'] = {
+        'requestId': 'original-data', 'status': 'succeeded', 'phase': handoff.PHASE,
+        'version': original['version'], 'revision': original['revision'], 'proofDigest': digest}
+    monkeypatch.setattr(handoff, 'sys', SimpleNamespace(platform='win32', prefix=sys.prefix))
+    monkeypatch.setattr(handoff, '_read', Path.read_bytes)
+    if changed == 'newer':
+        binding.update(version='0.71.5', revision='c' * 40,
+                       graph=[{'name': 'current-dependency', 'version': '2'}])
+        binding['direct']['url'] = binding['direct']['url'].replace('0.71.4', '0.71.5')
+    elif changed in {'owner', 'data', 'directory', 'extras', 'downgrade', 'same-version-revision'}:
+        if changed == 'owner':
+            binding['ownerSid'] = 'different-owner'
+        elif changed == 'data':
+            binding['dataIdentity'] = 'different-data'
+        elif changed == 'directory':
+            binding['directories'][0][1] = 'different-directory'
+        elif changed == 'extras':
+            binding['extras'] = ['tui']
+        elif changed == 'downgrade':
+            binding['version'] = '0.71.3'
+        else:
+            binding['revision'] = 'c' * 40
+    elif changed == 'launcher':
+        async def wrong_target():
+            return ('uv', 'launcher', Path('/foreign/Scripts/python.exe'), {'installation': '/foreign'})
+        monkeypatch.setattr(app_updates, 'installed_target', wrong_target)
+    elif changed == 'artifact':
+        binding['direct']['archive_info']['hashes']['sha256'] = 'a' * 64
+    elif changed == 'payload':
+        def invalid_payload(proof):
+            raise ValueError('Actual installed bytes differ')
+        monkeypatch.setattr(handoff, '_payload', invalid_payload)
+    elif changed == 'probe':
+        async def invalid_probe(*args, **kwargs):
+            raise ValueError('Current isolated installation failed')
+        monkeypatch.setattr(app_updates, 'process', invalid_probe)
+    elif changed in {'health', 'during-read', 'receipt'}:
+        async def changed_health(*args):
+            if changed == 'during-read':
+                binding['graph'] = [{'name': 'changed', 'version': '1'}]
+            elif changed == 'receipt':
+                state['manualHandoff']['proofDigest'] = 'e' * 64
+            return 'different-pin' if changed == 'health' else 'pin'
+        monkeypatch.setattr(handoff, '_health', changed_health)
+    before = copy.deepcopy(state)
+    if changed not in {None, 'newer'}:
+        with pytest.raises(ValueError):
+            await handoff.recovery_context(manager)
+    else:
+        context = await handoff.recovery_context(manager)
+        assert context['app']['version'] == binding['version']
+        assert context['app']['revision'] == binding['revision']
+        assert context['artifact']['sha256'] == 'f' * 64  # Not the old proof's hash.
+        assert calls == ['target', ('official-wheel', binding['version'], binding['revision']),
+                         'probe', 'dependencies', 'health', 'target']
+    if changed != 'receipt':
+        assert state == before
+    assert proof_path.read_bytes() == original_bytes
+    assert not getattr(manager, '_running_artifact', None)
+    assert not state.get('pendingRestart') and not state.get('applicationResult')
