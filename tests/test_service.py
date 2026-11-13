@@ -738,7 +738,10 @@ async def test_failed_direct_send_settles_activity_without_replay_or_lost_input(
         message = next(row for row in session['messages'] if row.get('inputId') == 'failed-start')
         assert message['text'] == request['text']
         assert message['delivery']['status'] == 'failed'
-        assert session['execution']['turns'][-1]['phase'] == 'error'
+        # Startup failed before the actual owner admitted a generation. Saving
+        # the failed input is not evidence that a turn ever began.
+        assert not session.get('execution', {}).get('turns')
+        assert not session.get('collaborationGeneration')
         assert not UpdateManager(app).busy()
         duplicate = await app.dispatch('conversation.send', request, command_id='failed-start')
         assert duplicate['duplicate'] is True

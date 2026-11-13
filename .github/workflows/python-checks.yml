@@ -29,6 +29,7 @@ on:
           - native-child-fixtures
           - question-answer-resume
           - question-answer-installed
+          - live-first-send
       core_wheels:
         description: Qualify published Core wheels and real runtime on both Linux architectures
         type: boolean
@@ -80,6 +81,7 @@ jobs:
               'native-child-fixtures': ['tests/test_child_app_assignment_capture.py', 'tests/test_history_scope_native.py', 'tests/test_file_source_native_children.py'],
               'question-answer-resume': ['tests/test_question_peer_resume.py', 'tests/test_peer_resume.py', 'tests/test_peer_resume_native.py', 'tests/test_failed_peer_recovery.py', 'tests/test_retained_failure_recovery.py', 'tests/test_questions.py', 'tests/test_question_handoffs.py'],
               'question-answer-installed': ['tests/test_question_peer_resume.py', 'tests/test_peer_resume_native.py'],
+              'live-first-send': ['tests/test_conversation_steering.py', 'tests/test_steering_runtime.py', 'tests/test_native_provider.py', 'tests/test_message_delivery.py', 'tests/test_queued_configuration_boundary.py', 'tests/test_service.py::test_failed_direct_send_settles_activity_without_replay_or_lost_input'],
           }
           selection = os.environ['CHECK_SUITE']
           if selection not in suites:
@@ -88,7 +90,7 @@ jobs:
           output = Path('output/python-checks')
           output.mkdir(parents=True, exist_ok=True)
           git = lambda *args: subprocess.check_output(['git', *args], text=True).strip()
-          missing = [path for path in targets if not Path(path).is_file()]
+          missing = [path for path in targets if not Path(path.split('::', 1)[0]).is_file()]
           record = {'suite': selection, 'fullSuite': selection == 'full', 'targets': targets,
                     'revision': git('rev-parse', 'HEAD'), 'tree': git('rev-parse', 'HEAD^{tree}'),
                     'runId': os.environ.get('GITHUB_RUN_ID'), 'runAttempt': os.environ.get('GITHUB_RUN_ATTEMPT'),
@@ -130,7 +132,10 @@ jobs:
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import os, tomllib
           p = tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb"))
-          revision = ("76073827ba6742ae026a12b524f596120cd2b314" if os.environ["CHECK_SUITE"] == "manager-exception-boundary"
+          locked = tomllib.load(open("uv.lock", "rb"))
+          loop, = [row for row in locked["package"] if row["name"] == "amplifier-module-loop-live"]
+          revision = (loop["source"]["git"].rsplit("#", 1)[1] if os.environ["CHECK_SUITE"] == "live-first-send"
+                      else "76073827ba6742ae026a12b524f596120cd2b314" if os.environ["CHECK_SUITE"] == "manager-exception-boundary"
                       else p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])
           print("revision=" + revision)
           PY
@@ -142,6 +147,7 @@ jobs:
           ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
           persist-credentials: false
       - name: Install runtime prerequisites for host and child tests
+        if: ${{ env.CHECK_SUITE != 'live-first-send' }}
         run: >-
           uv pip install --python .venv/bin/python
           .ci/loop-live
@@ -192,7 +198,7 @@ jobs:
           print(json.dumps(result, indent=2))
           PY
       - name: Run the selected repair suite
-        if: ${{ env.CHECK_SUITE != 'full' && env.CHECK_SUITE != 'native-child-fixtures' && env.CHECK_SUITE != 'question-answer-installed' }}
+        if: ${{ env.CHECK_SUITE != 'full' && env.CHECK_SUITE != 'native-child-fixtures' && env.CHECK_SUITE != 'question-answer-installed' && env.CHECK_SUITE != 'live-first-send' }}
         shell: bash
         run: |
           mapfile -t targets < output/python-checks/targets.txt
@@ -357,6 +363,99 @@ jobs:
           rows = list(ET.parse('output/python-checks/installed-junit.xml').getroot().iter('testcase'))
           assert rows and not any(row.find(kind) is not None for row in rows for kind in ('failure', 'error', 'skipped'))
           assert len([row for row in rows if 'test_peer_resume_native' in row.get('classname', '')]) == 9
+          PY
+      - name: Qualify live-first Send from the installed wheel with scripted external transports
+        if: ${{ env.CHECK_SUITE == 'live-first-send' }}
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Reuse committed, verified production assets: no second frontend build.
+          python scripts/web_client_build.py verify > output/python-checks/client-build.json
+          npm ci --prefix tests/web
+          (cd tests/web && npx playwright install --with-deps chromium)
+          uv build --wheel --out-dir output/python-checks/dist
+          python - <<'PY'
+          import hashlib, json, zipfile
+          from pathlib import Path
+          wheel, = Path('output/python-checks/dist').glob('*.whl')
+          with zipfile.ZipFile(wheel) as archive:
+              files = {name: hashlib.sha256(archive.read(name)).hexdigest()
+                       for name in archive.namelist() if name.startswith('amplifier_web/') and not name.endswith('/')}
+              for name, digest in files.items():
+                  assert hashlib.sha256(Path(name).read_bytes()).hexdigest() == digest, name
+          Path('output/python-checks/wheel.json').write_text(json.dumps({
+              'wheel': wheel.name, 'sha256': hashlib.sha256(wheel.read_bytes()).hexdigest(),
+              'files': files}, indent=2) + '\n')
+          PY
+          uv pip install --python .venv/bin/python --no-deps --reinstall-package amplifier-unified output/python-checks/dist/*.whl
+          uv pip check --python .venv/bin/python
+          export AMPLIFIER_TEST_PYTHON="$GITHUB_WORKSPACE/.venv/bin/python"
+          export AMPLIFIER_DIRECTION_EVIDENCE="$GITHUB_WORKSPACE/output/python-checks/immediate-direction"
+          export DIRECTION_INSTALLED_HOST="$("$AMPLIFIER_TEST_PYTHON" -I -c 'import amplifier_web; from pathlib import Path; print(Path(amplifier_web.__file__).parent)')"
+          export HARNESS="$RUNNER_TEMP/live-first-installed"
+          mkdir -p "$HARNESS/.build/web-client/tests"
+          cp -a tests "$HARNESS/"
+          cp .build/web-client/tests/composer-test-support.mjs "$HARNESS/.build/web-client/tests/"
+          (
+            cd "$HARNESS"
+            unset PYTHONPATH
+            "$AMPLIFIER_TEST_PYTHON" -I - <<'PY'
+          import hashlib, importlib, importlib.metadata as md, json, os, subprocess, tomllib
+          from pathlib import Path
+          root = Path(os.environ['GITHUB_WORKSPACE'])
+          host = Path(os.environ['DIRECTION_INSTALLED_HOST']).resolve()
+          assert not host.is_relative_to(root / 'amplifier_web'), host
+          wheel = json.loads((root / 'output/python-checks/wheel.json').read_text())
+          for name, digest in wheel['files'].items():
+              path = host.parent / name
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, name
+          locked = tomllib.loads((root / 'uv.lock').read_text())
+          packages = {row['name']: row for row in locked['package']}
+          modules = {}
+          for package, module in (
+              ('amplifier-core', 'amplifier_core'), ('amplifier-foundation', 'amplifier_foundation'),
+              ('amplifier-module-loop-live', 'amplifier_module_loop_live.orchestrator'),
+              ('amplifier-module-loop-streaming', 'amplifier_module_loop_streaming'),
+              ('amplifier-module-provider-openai', 'amplifier_module_provider_openai.native')):
+              distribution = md.distribution(package)
+              direct = json.loads(distribution.read_text('direct_url.json') or 'null')
+              expected = packages[package]
+              if 'git' in expected['source']:
+                  assert direct['vcs_info']['commit_id'] == expected['source']['git'].rsplit('#', 1)[1], package
+              else:
+                  assert distribution.version == expected['version'], package
+              path = Path(importlib.import_module(module).__file__).resolve()
+              assert path.is_relative_to(Path(os.environ['AMPLIFIER_TEST_PYTHON']).parent.parent), path
+              modules[package] = {'version': distribution.version, 'source': direct,
+                                   'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+          assert subprocess.check_output(['git', '-C', str(root / '.ci/loop-live'), 'rev-parse', 'HEAD'], text=True).strip() == packages['amplifier-module-loop-live']['source']['git'].rsplit('#', 1)[1]
+          record = {'host': str(host), 'wheel': wheel['sha256'], 'modules': modules,
+                    'revision': subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip(),
+                    'runId': os.environ['GITHUB_RUN_ID'], 'attempt': os.environ['GITHUB_RUN_ATTEMPT']}
+          (root / 'output/python-checks/installed-imports.json').write_text(json.dumps(record, indent=2) + '\n')
+          PY
+            mapfile -t targets < "$GITHUB_WORKSPACE/output/python-checks/targets.txt"
+            "$AMPLIFIER_TEST_PYTHON" -I -m pytest -c /dev/null -o asyncio_mode=auto --rootdir=. \
+              -v --tb=short "${targets[@]}" --junitxml="$GITHUB_WORKSPACE/output/python-checks/installed-junit.xml" \
+              2>&1 | tee "$GITHUB_WORKSPACE/output/python-checks/installed-tests.log"
+            node tests/web/immediate-direction-browser.mjs \
+              native ordinary tool completion stale-config stop native-unknown native-stop \
+              2>&1 | tee "$GITHUB_WORKSPACE/output/python-checks/immediate-direction.log"
+          )
+          python - <<'PY'
+          import json, xml.etree.ElementTree as ET
+          from pathlib import Path
+          output = Path('output/python-checks')
+          cases = list(ET.parse(output / 'installed-junit.xml').getroot().iter('testcase'))
+          assert cases and not any(row.find(tag) is not None for row in cases for tag in ('failure', 'error', 'skipped'))
+          modes = ['native', 'ordinary', 'tool', 'completion', 'stale-config', 'stop', 'native-unknown', 'native-stop']
+          for mode in modes:
+              row = json.loads((output / 'immediate-direction' / (mode + '.json')).read_text())
+              assert row['passed'] and row['scenario'] == mode and row['host'], mode
+          (output / 'live-first-qualified.json').write_text(json.dumps({
+              'installedCases': len(cases), 'skips': 0, 'browserModes': modes,
+              'scope': 'Candidate graph, scripted external transports; not paid-provider parity or release'}, indent=2) + '\n')
           PY
       - name: Run and retain exact native child fixture evidence
         if: ${{ env.CHECK_SUITE == 'native-child-fixtures' }}
