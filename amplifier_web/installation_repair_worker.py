@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import shlex
 import ssl
 import stat
 import subprocess
@@ -377,6 +378,20 @@ def _assert_other_processes(plan):
         if int(parts[0]) in {os.getpid(), plan["service"]["pid"]}:
             continue
         text = parts[1]
+        # exec delegation removes the bootstrap interpreter from a generation
+        # host's command line. Refuse another serving profile even when its
+        # bootstrap relationship cannot be established from process arguments.
+        # No unrelated home-directory or registry scan is needed.
+        try:
+            arguments = shlex.split(text)
+        except ValueError:
+            if "amplifier" in text and "serve" in text:
+                raise ValueError("Another serving profile cannot be identified")
+            arguments = []
+        serving = ('serve' in arguments and any(
+            arg == 'amplifier_web' or Path(arg).name == 'amplifier-unified' for arg in arguments))
+        if serving:
+            raise ValueError("Another Unified serving profile may share this bootstrap")
         if any(root in text for root in roots):
             raise ValueError("The installation is used by another process")
 
@@ -800,7 +815,10 @@ class Worker:
             if _exists(pointer):
                 raise ValueError("Application pointer unexpectedly appeared")
             self.receipt("running", "reinstalled", "The fresh installation passed its probes.",
-                         reinstalled=True)
+                         reinstalled=True, finalInstallation={
+                             "bootstrap": bootstrap_identity(prefix),
+                             "launcher": file_identity(launcher),
+                             "uvReceiptDigest": _digest(prefix / "uv-receipt.toml")})
             return "reinstalled"
         except Exception as error:
             if not prefix_moved:
@@ -938,7 +956,7 @@ class Worker:
                 "Repair did not complete. Inspect the saved operation before further action.",
                 serviceState=state, healthVerified=False, error=error)
 
-    def post_checks(self, plan):
+    def post_checks(self, plan, *, before_receipt=None):
         doctor_ok = health_ok = False
         error = None
         try:
@@ -957,6 +975,8 @@ class Worker:
             error = error_type(failure)
         state = service_state(plan)
         ready = doctor_ok and health_ok and state == "running"
+        if before_receipt is not None:
+            before_receipt()
         return self.receipt(
             "ready" if ready else "reinstalled", "ready" if ready else "checks-incomplete",
             "The repaired installation is ready." if ready else
@@ -996,13 +1016,71 @@ def run(operation_folder):
                 serviceState="unknown", healthVerified=False, errorType=error_type(error))
 
 
+def verify(operation_folder):
+    """Explicit health-only recovery of a known completed reinstall, never replay."""
+    folder = directory(operation_folder, private=True)
+    with lock(folder / "worker.lock"):
+        operation = read(folder / "operation.json")
+        if (operation.get("status") != "reinstalled" or operation.get("reinstalled") is not True
+                or operation.get("healthVerified") is not False):
+            raise ValueError("Only a known reinstalled operation can be verified")
+        plan = read(folder / "plan.json")
+        reset, artifacts = siblings()
+        namespace = directory(directory(plan["home"]) / "installation-repair", private=True)
+        with reset.repair_lock(namespace):
+            validate_plan(plan, operation, folder)
+            artifacts.verify(plan["artifact"], plan["target"]["version"], plan["target"]["revision"])
+            prefix = Path(plan["toolRoot"]) / "amplifier-unified"
+            python = prefix / "bin/python"
+            subject = Worker(folder, operation)
+            try:
+                info = directory(plan["home"]).stat()
+                if [info.st_dev, info.st_ino] != plan["dataStat"] or plan["uid"] != os.getuid():
+                    raise ValueError("Repair data identity changed")
+                if _exists(Path(plan["home"]) / "updates/application-active.json"):
+                    raise ValueError("The repaired launch pointer changed")
+                if _digest(Path(plan["service"]["path"])) != plan["service"]["sha256"]:
+                    raise ValueError("The service definition changed")
+                expected = operation["finalInstallation"]
+                if (bootstrap_identity(prefix) != expected["bootstrap"]
+                        or file_identity(Path(plan["binRoot"]) / "amplifier-unified") != expected["launcher"]
+                        or _digest(prefix / "uv-receipt.toml") != expected["uvReceiptDigest"]):
+                    raise ValueError("The final repaired installation identity changed")
+                pid = _service_pid(plan)
+                if not pid or pid == plan["service"]["pid"]:
+                    raise ValueError("The repaired successor is not running")
+                current_plan = {**plan, "service": {**plan["service"], "pid": pid,
+                    "processStart": command("ps", "-p", str(pid), "-o", "lstart=",
+                                            env=plan["env"]).stdout.strip()}}
+                _check_service_process(current_plan)
+                _installed_provenance(plan, prefix)
+                qualify(plan, python, plan["env"])
+                if installed_graph(plan, python, plan["env"]) != read(folder / "candidate-graph.json"):
+                    raise ValueError("The repaired installation changed")
+                # No install, service control, rollback, or mutation of earlier
+                # unknown outcomes is reachable from this entry point.
+                def final_witness():
+                    _check_service_process(current_plan)
+                    if (_service_pid(plan) != pid
+                            or bootstrap_identity(prefix) != expected["bootstrap"]
+                            or file_identity(Path(plan["binRoot"]) / "amplifier-unified") != expected["launcher"]
+                            or _exists(Path(plan["home"]) / "updates/application-active.json")):
+                        raise ValueError("The successor changed during verification")
+                return subject.post_checks(plan, before_receipt=final_witness)
+            except Exception as error:
+                return subject.receipt("reinstalled", "verification-incomplete",
+                    "The existing repaired installation could not be verified. Nothing was reinstalled or restarted.",
+                    reinstalled=True, healthVerified=False, serviceState=service_state(plan), error=error)
+
+
 def main():
     os.umask(0o077)
-    if (len(sys.argv) != 2 or not sys.flags.isolated or not sys.flags.no_site
+    verification = len(sys.argv) == 3 and sys.argv[1] == "--verify"
+    if ((len(sys.argv) != 2 and not verification) or not sys.flags.isolated or not sys.flags.no_site
             or os.name != "posix"):
         return 2
     try:
-        run(sys.argv[1])
+        verify(sys.argv[2]) if verification else run(sys.argv[1])
         return 0
     except BaseException:
         # No traceback: its arguments, child output and private plan can contain

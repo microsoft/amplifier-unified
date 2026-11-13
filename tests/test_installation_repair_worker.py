@@ -224,7 +224,7 @@ class RepairFixture(unittest.TestCase):
         args = [str(arg) for arg in args]
         if args[0] == "systemctl":
             return subprocess.CompletedProcess([], 0, (
-                "MainPID=123\nFragmentPath=" + str(self.service_file)
+                "MainPID=" + str(self.pid) + "\nFragmentPath=" + str(self.service_file)
                 + "\nDropInPaths=\nNeedDaemonReload=no\n"), "")
         if args[0] == "ps":
             if args[-1] == "lstart=":
@@ -245,6 +245,7 @@ class RepairFixture(unittest.TestCase):
             (target / "bin/python").write_text("fresh interpreter")
             (target / "bin/amplifier-unified").write_text("fresh launcher target")
             self.populate_distribution(target, "1.2.3", "b" * 40, self.artifact)
+            (target / "uv-receipt.toml").write_text("fresh uv receipt")
             (target / "new-marker").write_text("preserve failed candidates too")
             if not is_candidate:
                 self.assertIn(self.home, self.active_locks)
@@ -635,6 +636,54 @@ class RepairFixture(unittest.TestCase):
         count = len(self.events)
         self.assertEqual(self.run_worker()["status"], "ready")
         self.assertEqual(len(self.events), count)
+
+    def test_explicit_known_reinstalled_verification_recovers_without_effect_replay(self):
+        self.doctor_ok = False
+        self.assertEqual(self.run_worker()["status"], "reinstalled")
+        self.doctor_ok = True
+        before = self.names().count("stop"), self.names().count("start"), self.names().count("fresh-install")
+        result = worker.verify(self.folder)
+        self.assertEqual(result["status"], "ready")
+        self.assertTrue(result["healthVerified"])
+        self.assertEqual(before, (self.names().count("stop"), self.names().count("start"),
+                                  self.names().count("fresh-install")))
+
+    def test_verification_never_clears_unknown_or_replays_accepted_repair(self):
+        with self.assertRaises(ValueError):
+            worker.verify(self.folder)
+        operation = worker.read(self.folder / "operation.json")
+        operation.update(status="unknown", reinstalled=True)
+        worker.write(self.folder / "operation.json", operation)
+        with self.assertRaises(ValueError):
+            worker.verify(self.folder)
+        self.assertEqual(worker.read(self.folder / "operation.json")["status"], "unknown")
+        self.assertFalse(self.events)
+
+    def test_delegated_generation_host_in_other_profile_blocks_before_stop(self):
+        original = self.command
+        def command(*args, **kwargs):
+            if list(args[:2]) == ["ps", "-axo"]:
+                return subprocess.CompletedProcess([], 0,
+                    "789 /other-data/updates/applications/rev/gen/tools/amplifier-unified/bin/python "
+                    "-I -m amplifier_web --data-dir /other-data serve\n", "")
+            return original(*args, **kwargs)
+        with patch.object(worker, "command", side_effect=command):
+            result = self.run_worker()
+        self.assertEqual(result["status"], "failed")
+        self.assertNotIn("stop", self.names())
+
+    def test_health_only_verify_changed_final_launcher_remains_held_without_effects(self):
+        self.doctor_ok = False
+        self.assertEqual(self.run_worker()["status"], "reinstalled")
+        self.doctor_ok = True
+        self.launcher.unlink()
+        self.launcher.symlink_to(self.prefix / "bin/python")
+        before = self.names().count("stop"), self.names().count("start"), self.names().count("fresh-install")
+        result = worker.verify(self.folder)
+        self.assertEqual(result["status"], "reinstalled")
+        self.assertFalse(result["healthVerified"])
+        self.assertEqual(before, (self.names().count("stop"), self.names().count("start"),
+                                  self.names().count("fresh-install")))
 
     def test_post_move_rollback_receipt_write_failure_stays_unknown_not_released(self):
         original = worker.Worker.receipt

@@ -137,7 +137,7 @@ def initialize(service):
                          'detail': 'The saved installation repair could not be read. Do not repeat it.',
                          'reinstalled': False, 'healthVerified': False, 'serviceState': 'unknown'}
     service.state.setdefault('maintenance', {})['installationRepair'] = {
-        'preview': None, 'operation': operation}
+        'preview': None, 'operation': operation, 'verifyTarget': _verify_target(service, operation)}
     service._installation_repair_gate = (
         operation.get('operationId') or 'receipt-unreadable'
         if operation and operation.get('status') in ACTIVE else None)
@@ -376,8 +376,17 @@ def _publish(service, *, preview=None, operation=None, replace_preview=False):
     if replace_preview:
         projection['preview'] = preview
     projection['operation'] = copy.deepcopy(operation)
+    projection['verifyTarget'] = _verify_target(service, operation)
     service._publish_changes(globals={'maintenance'})
     return copy.deepcopy(projection)
+
+
+def _verify_target(service, operation):
+    if (operation and operation.get('status') == 'reinstalled'
+            and operation.get('reinstalled') is True and operation.get('healthVerified') is False):
+        return {'operationId': operation['operationId'],
+                'hostInstanceId': service.instance_id, 'confirm': True}
+    return None
 
 
 async def preview(service):
@@ -571,3 +580,31 @@ async def status(service, args):
                 service._installation_repair_gate = None
         _publish(service, operation=current)
     return {'operation': operation}
+
+
+async def verify(service, args):
+    """Deliberate bounded verification, not another installation admission."""
+    async with service._installation_repair_lock:
+        if args.get('confirm') is not True or args.get('hostInstanceId') != service.instance_id:
+            raise ValueError('Review and confirm verification on this exact host.')
+        identity = args['operationId']
+        operation = _operation(service, identity)
+        if (_latest(service).get('operationId') != identity
+                or operation['status'] != 'reinstalled' or not operation['reinstalled']
+                or operation['healthVerified']):
+            raise ValueError('Only the exact current known reinstalled operation can be verified. Unknown repairs remain held.')
+        folder = _folder(service, identity)
+        plan = _read(folder / 'plan.json', service.data_dir)
+        _private(folder / 'installation_repair_worker.py', service.data_dir)
+        command = [plan['basePython'], '-I', '-S', str(folder / 'installation_repair_worker.py'),
+                   '--verify', str(folder)]
+        try:
+            await asyncio.to_thread(subprocess.run, command, cwd=folder,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=240, check=True)
+        except (OSError, subprocess.SubprocessError):
+            # Verification is read-only until its exact result write. Read the
+            # sole receipt; never convert a lost response into installation replay.
+            pass
+        result = await status(service, {'operationId': identity})
+        return result['operation']

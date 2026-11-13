@@ -156,7 +156,7 @@ async def test_initial_projection_recovers_only_authoritative_receipt_no_replay(
     view, args = await prepared(host)
     operation = (await host.service.dispatch('maintenance.installationRepairConfirm', args))['result']
     repair.initialize(host.service)
-    assert host.service.state['maintenance']['installationRepair'] == {'preview': None, 'operation': operation}
+    assert host.service.state['maintenance']['installationRepair'] == {'preview': None, 'operation': operation, 'verifyTarget': None}
     assert repair.held(host.service)
     assert len(host.launched) == 1
     operation.update(status='failed', stage='preflight-failed')
@@ -244,6 +244,28 @@ async def test_old_exact_status_cannot_replace_new_current_repair_projection(hos
     assert projected['operationId'] == current['operationId']
     assert repair.held(host.service)
 
+
+async def test_verification_action_only_known_reinstalled_never_dispatches_repair(host, monkeypatch):
+    _, confirmation = await prepared(host)
+    operation = (await host.service.dispatch('maintenance.installationRepairConfirm', confirmation))['result']
+    args = {'operationId': operation['operationId'], 'hostInstanceId': host.service.instance_id, 'confirm': True}
+    with pytest.raises(AppError, match='known reinstalled'):
+        await host.service.dispatch('maintenance.installationRepairVerify', args)
+    path = repair._folder(host.service, operation['operationId']) / 'operation.json'
+    operation.update(status='reinstalled', stage='checks-incomplete', reinstalled=True)
+    repair._write(path, operation, host.service.data_dir)
+    await repair.status(host.service, {'operationId': operation['operationId']})
+    assert host.service.state['maintenance']['installationRepair']['verifyTarget'] == args
+    calls = []
+    def verified(command, **kwargs):
+        calls.append(command)
+        assert '--verify' in command and '-I' in command and '-S' in command
+        operation.update(status='ready', stage='ready', healthVerified=True, serviceState='running')
+        repair._write(path, operation, host.service.data_dir)
+    monkeypatch.setattr(repair.subprocess, 'run', verified)
+    result = (await host.service.dispatch('maintenance.installationRepairVerify', args))['result']
+    assert result['status'] == 'ready' and not repair.held(host.service)
+    assert len(calls) == 1 and len(host.launched) == 1
 
 def test_declared_extras_preserve_missing_optional_distribution(tmp_path, monkeypatch):
     from amplifier_web import app_updates, application_generations
