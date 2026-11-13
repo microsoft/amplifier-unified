@@ -37,15 +37,17 @@ authoring. Discover `canvas.apps.*` action schemas from the running app.
    is needed, retain user work in `migratedState` and submit both expected
    revisions. Never clear a dirty view on the user's behalf. Restoration
    changes the design while preserving current compatible inputs.
-6. For a host change, declare and queue a supported request. Preview/apply/
-   revert themes use the host's normal validated action path. Prefer small
-   `{name, tokens}` palette requests; the host preserves the existing skin, so
-   do not copy its entire stylesheet into the surface. Pending requests
+6. For a host change, declare and queue an allowlisted `appearance.*` request
+   through the host's normal validated action path. Preview a small Reference
+   delta with `{name, css}`; end it with `appearance.preview.cancel`. Preference
+   update/select uses the captured complete-profile scope and exact CAS;
+   conditional Undo uses its exact `undoId`. Pending requests
    do nothing until reviewed and resolved outside the sandbox. Agents can
    resolve already-authorized changes on the explicit target client; the
-   surface itself cannot grant permission. Finish an authorized apply with
+   surface itself cannot grant permission. Resolve an authorized request with
    `canvas.apps.resolve {id, clientId, requestId, approve:true, expectedRevision,
-   expectedStateRevision}`; queuing alone is not completion.
+   expectedStateRevision}`; queuing alone is not completion. Storage ACK and
+   rendered composition ACK remain distinct; see the linked contract.
 7. Verify the actual running view: one tab after refinement, user/agent parity,
    visible theme effects, retained state on refresh, intact chat draft/history,
    and a usable revert path. Distinguish deterministic tests from an actual
