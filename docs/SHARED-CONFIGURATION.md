@@ -252,6 +252,31 @@ then the workspace's shared local/project default, then Unified's optional app
 preference, then the shared user default (falling back to `work`, shown as **Work**). Existing
 conversations retain their saved root.
 
+The last fallback is release-owned intent, not a saved user choice. With no
+explicit override, new conversations follow the installed release's defaults:
+currently `work` generally and `work-amp-dev` in built-in Amplifier development
+workspaces. Those workspaces record `bundle.releaseDefault:
+amplifier-development`, not `bundle.active`. Explicit local/project, app and
+shared defaults always win, even if their value equals a previous shipped
+default. Clearing an override reveals the remaining explicit scopes, then the
+current release fallback. Managed No workspace chats ignore project settings.
+Custom starters retain their literal bundle choice; duplicating a built-in
+copies the choice shown at duplication time, not its automatic provenance.
+
+On startup, registered legacy built-in workspaces can replace an automatic
+project pin with release-default intent only when matching placement and setup
+receipts prove a known built-in snapshot, the allocated directory is unchanged,
+and the file is exactly the generator's `created` YAML (or the inherited starter
+left that file absent). Altered files, preserved files, custom source bindings,
+unknown snapshots and missing evidence remain untouched. Shared-global and app
+values have no comparable automatic-origin proof and are never guessed from a
+bundle name. Historical receipts did not record later direct-file intent: a
+byte-identical manual rewrite of the original generated project setting cannot
+be distinguished and follows the generated-file rule. Explicit same-value
+choices through the UI/agent workspace action are in `settings.local.yaml` and
+remain authoritative. No existing conversation, transcript or mounted
+configuration is migrated. Read-only default inspection never migrates files.
+
 The default picker exposes three scopes. **This Unified app** stores `appBundle`
 in app state and leaves shared settings untouched. **This workspace on this
 computer** edits `bundle.active` in `.amplifier/settings.local.yaml`; clearing it

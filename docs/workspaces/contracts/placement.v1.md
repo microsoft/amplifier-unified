@@ -51,6 +51,17 @@ The following action names describe the proposed surface, not today's API.
    child path inside the approved root. Traversal, reserved names, symlink swaps,
    and filesystem-equivalent collisions cannot escape the reviewed destination.
 
+8. **Automatic bundle defaults follow the release; explicit choices do not.**
+   A built-in starter's fallback is release-owned intent for future conversations,
+   not an implicit user override. Prepared snapshots retain that distinction.
+   Explicit workspace/project, app, shared and conversation/draft choices survive
+   updates, including choices equal to an old shipped default. Custom starters
+   remain literal. Existing conversations never change roots on upgrade.
+   Legacy automatic settings require matching host-generated provenance and
+   unchanged owned file shape; unknown/manual settings are preserved. The
+   [configuration guide](../../SHARED-CONFIGURATION.md#root-bundle-defaults-in-unified)
+   specifies the irrecoverable byte-identical direct-file rewrite boundary.
+
 ## Not in v1
 
 - **Moving existing workspace folders** is promoted when an explicit relocation
