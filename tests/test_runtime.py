@@ -41,6 +41,79 @@ for line in sys.stdin:
 '''
 
 
+@pytest.mark.parametrize('terminal', ['finished', 'detached'])
+@pytest.mark.parametrize('reason', [None, 'configuration', 'retention', 'shutdown'])
+async def test_native_closure_does_not_manufacture_stop_before_late_fault(tmp_path, terminal, reason):
+    """Read the actual wire order; closure must not suppress a later failed save."""
+    fixture = r'''
+import json,sys
+for line in sys.stdin:
+    data=json.loads(line)
+    if data['op']=='start':
+        print(json.dumps({'type':'runtime.ready','report':{}}),flush=True)
+    elif data['op']=='fixture.close':
+        for event in [
+            {'type':'generation.'''+terminal+r'''','generation_id':'g','input_ids':['once']},
+            {'type':'session.closed','reason':'cancelled'},
+            {'type':'runtime.error','event':'persistence.failed','errorType':'OSError',
+             'error':'The conversation could not be saved. Work was not replayed.'}]:
+            print(json.dumps(event),flush=True)
+        print(json.dumps({'op':'reply','id':data['id'],'result':{'observed':True}}),flush=True)
+        break
+    elif data['op']=='stop':
+        print(json.dumps({'type':'session.closed'}),flush=True)
+        break
+'''
+    manager = RuntimeManager(command=[sys.executable, '-u', '-c', fixture],
+                             retention={'prewarm_on_select': False})
+    manager.home = tmp_path
+    events = []
+    async def emit(kind, payload):
+        events.append((kind, payload))
+    try:
+        await manager.start({'id':'closed-probe'}, emit)
+        row = manager.workers['closed-probe']
+        row['stop_reason'] = reason
+        await manager._request('closed-probe', 'fixture.close')
+        await asyncio.wait_for(asyncio.shield(row['reader']), 3)
+        assert [(kind, data['event']) for kind, data in events if kind == 'runtime.generation'] == [
+            ('runtime.generation', 'generation.' + terminal)]
+        assert any(kind == 'runtime.warmth' and data['status'] == 'cold' for kind, data in events)
+        assert not any(kind == 'runtime.status' and data['status'] == 'stopped' for kind, data in events)
+        assert any(kind == 'runtime.error' and data.get('event') == 'persistence.failed'
+                   and data['errorType'] == 'OSError' for kind, data in events)
+        assert [data['status'] for kind, data in events if kind == 'runtime.ended'] == ['interrupted']
+        assert row['inputId'] is None  # No new input, retry, or model work was admitted.
+    finally:
+        await manager.close()
+
+
+async def test_only_actual_stop_turns_native_closure_into_stopped(tmp_path):
+    manager = RuntimeManager(command=[sys.executable, '-u', '-c', r'''
+import json,sys
+for line in sys.stdin:
+    data=json.loads(line)
+    if data['op']=='start':
+        print(json.dumps({'type':'runtime.ready','report':{}}),flush=True)
+    elif data['op']=='stop':
+        print(json.dumps({'type':'session.closed','reason':'cancelled'}),flush=True)
+        break
+'''], retention={'prewarm_on_select': False})
+    manager.home = tmp_path
+    events = []
+    async def emit(kind, payload):
+        events.append((kind, payload))
+    try:
+        await manager.start({'id':'stopped-probe'}, emit)
+        await manager.stop('stopped-probe')
+        assert any(kind == 'runtime.status' and data['status'] == 'stopped' for kind, data in events)
+        assert [data['status'] for kind, data in events if kind == 'runtime.ended'] == ['stopped']
+        assert not any(kind == 'runtime.error' for kind, _ in events)
+        assert not any(kind == 'runtime.generation' for kind, _ in events)
+    finally:
+        await manager.close()
+
+
 @pytest.mark.parametrize('boundary', ['admission', 'status', 'qualification', 'spawn'])
 async def test_restart_authority_is_rechecked_after_startup_waits(tmp_path, monkeypatch, boundary):
     """A queued restart cannot mount after Stop/revocation; reap any spawned child."""
