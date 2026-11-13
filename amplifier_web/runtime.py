@@ -367,22 +367,35 @@ class RuntimeManager:
         if not isinstance(servers, dict):
             raise ValueError("Ephemeral MCP servers must be a mapping")
         servers = copy.deepcopy(servers)
-        async with self._admission(session_id):
-            prior = self._ephemeral_mcp.get(session_id)
-            row = self.workers.get(session_id)
-            if row and row["process"].returncode is None:
-                if row.get("ephemeral_mcp_binding"):
-                    if prior == (attachment_id, servers):
-                        return
-                    raise ValueError("The existing worker still owns another MCP attachment; wait for its retirement before reattaching")
-                if servers:
-                    raise ValueError("MCP attachment requires a fresh native worker; existing work was not stopped")
-            if prior and prior[0] != attachment_id:
-                raise ValueError("This native session already has an MCP attachment")
-            if servers:
-                self._ephemeral_mcp[session_id] = (attachment_id, servers)
-            else:
-                self._ephemeral_mcp.pop(session_id, None)
+        retiring = None
+        while True:
+            async with self._admission(session_id):
+                prior = self._ephemeral_mcp.get(session_id)
+                row = self.workers.get(session_id)
+                if retiring is not None and (row is not None or prior is not None):
+                    raise ValueError("MCP attachment owner changed or retirement was not confirmed; no binding was replaced")
+                if row and row["process"].returncode is None:
+                    if row.get("ephemeral_mcp_binding"):
+                        if prior == (attachment_id, servers):
+                            return
+                        # Only a released attachment may retire its settled worker.
+                        # The worker's own handshake also checks active child work.
+                        if prior or not self.retention.eligible(row) or self.retention.protected(session_id):
+                            raise ValueError("The existing worker still owns another MCP attachment; wait for its retirement before reattaching")
+                        retiring = self.retention.schedule(session_id, row)
+                    elif servers:
+                        raise ValueError("MCP attachment requires a fresh native worker; existing work was not stopped")
+                if retiring is None or row is None:
+                    if prior and prior[0] != attachment_id:
+                        raise ValueError("This native session already has an MCP attachment")
+                    if servers:
+                        self._ephemeral_mcp[session_id] = (attachment_id, servers)
+                    else:
+                        self._ephemeral_mcp.pop(session_id, None)
+                    return
+            # Keep retirement owned by the manager if this attachment goes away.
+            # Recheck the binding and worker after the acknowledged handshake.
+            await asyncio.wait_for(asyncio.shield(retiring), self.retention.reply_timeout)
 
     def release_ephemeral_mcp(self, session_id, attachment_id):
         """Release future use; an admitted worker owns cleanup of its live tools."""
