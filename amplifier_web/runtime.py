@@ -854,6 +854,22 @@ class RuntimeManager:
         stream.write(encode_message(data))
         await stream.drain()
 
+    def stop_computer(self, sid):
+        """Enqueue a safety fence to an existing worker; never acquire/start it.
+
+        This is transport submission, not native release confirmation. The
+        worker independently retains the real controller settlement.
+        """
+        row = self.workers.get(sid)
+        if row and row["process"].returncode is None:
+            _worker_pipes(row).stdin.write(encode_message({"op": "computer.stop"}))
+
+    def resume_computer(self, sid):
+        """Explicit host latch reset only; bundle halt recovery stays separate."""
+        row = self.workers.get(sid)
+        if row and row["process"].returncode is None:
+            _worker_pipes(row).stdin.write(encode_message({"op": "computer.resume"}))
+
     async def _bridge(self, sid, row, data, *, dequeued_ns=None):
         from .performance_diagnostics import PhaseTiming, BRIDGE_TIMING, timing_metadata, TIMING_ENABLED
         observed = timing_metadata(data.get('_timing'))

@@ -189,7 +189,11 @@ async def install_app_access(coordinator, bridge):
                             'message': 'Current Work requirements or host execution scope are unavailable.'})
                     mark(timing, 'body.start')
                     try:
-                        result = await self.original.execute(arguments)
+                        sponsor = coordinator.get_capability('web.computer_episodes')
+                        if sponsor and self.mounted_name in {'computer', 'desktop', 'ui_use'}:
+                            result = await sponsor.invoke(self.mounted_name, arguments, self.original.execute)
+                        else:
+                            result = await self.original.execute(arguments)
                         if timing and getattr(result, 'success', None) is False:
                             timing.outcome = 'failed'
                         return result
@@ -199,6 +203,9 @@ async def install_app_access(coordinator, bridge):
                     execution['active'] = False
                     WORK_EXECUTION.reset(token)
         def wrapped(name, tool):
+            from .computer_episodes import EpisodeTool
+            if isinstance(tool, EpisodeTool) and tool._computer_sponsor is coordinator.get_capability('web.computer_episodes'):
+                tool = tool.original
             if getattr(tool, '_work_delivery_guard', None) is delivery:
                 tool.refresh_work_check(check)
                 return tool

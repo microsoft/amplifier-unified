@@ -185,3 +185,20 @@ def test_bundle_include_wires_available_executors_without_installing_or_overridi
     configure_bundle(bundle)
     assert bundle.tools[0]['config']['observed_control'] is False
     assert bundle.tools[1]['config']['browser']['host_adapter'] is False
+
+
+def test_ui_stop_fences_existing_runtime_before_storage_even_if_transport_fails(host, monkeypatch):
+    calls = []
+    def notify(sid):
+        assert sid in host.stopped
+        calls.append(('native', sid))
+        raise BrokenPipeError('fixture disconnected worker')
+    host.service.runtime = SimpleNamespace(stop_computer=notify)
+    host.pending['a1'] = {'pending'}
+    host.connections.cancel = lambda identity: calls.append(('browser', identity))
+    monkeypatch.setattr('amplifier_web.ui_use.write_private',
+                        lambda *args, **kwargs: calls.append(('save', None)))
+    with pytest.raises(BrokenPipeError):
+        host.stop('a1', True)
+    assert calls == [('native', 'a1'), ('browser', 'pending'), ('save', None)]
+    assert 'a1' in host.stopped

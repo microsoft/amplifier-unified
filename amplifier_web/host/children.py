@@ -388,6 +388,10 @@ class Children:
     def _runtime(self, row):
         def observe(event):
             kind = event["type"]
+            child = self.sessions.get(row["sessionId"])
+            sponsor = child.coordinator.get_capability("web.computer_episodes") if child else None
+            if sponsor:
+                sponsor.observe(event)
             if kind == "session.ready":
                 row.update(status="running", steering=event.get("steering"), native=event.get("native", False))
             elif kind == "input.delivered":
@@ -817,6 +821,9 @@ class Children:
             if unregister:
                 unregister()
             if child:
+                sponsor = child.coordinator.get_capability("web.computer_episodes")
+                if sponsor:
+                    await sponsor.close(interrupted=row["status"] != "completed")
                 await child.cleanup()
             if ledger:
                 ledger.close()
@@ -833,6 +840,14 @@ class Children:
             raise ValueError("Worker is no longer active")
         if action not in {"message", "steer", "finish", "cancel"}:
             raise ValueError("Unknown worker action")
+        if action == "finish" and (not row["persistent"] or row["status"] != "idle"):
+            raise ValueError("Wait for a persistent worker's idle report before finishing")
+        if action in {"finish", "cancel"}:
+            child = self.sessions.get(identity)
+            sponsor = child.coordinator.get_capability("web.computer_episodes") if child else None
+            if sponsor:
+                sponsor.terminated = True
+                sponsor.finish(interrupted=action == "cancel")
         if not row["persistent"]:
             if action != "cancel":
                 raise ValueError("This finite worker accepts cancellation; resume it for a new instruction")

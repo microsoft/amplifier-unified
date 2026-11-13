@@ -101,6 +101,8 @@ class Worker:
         else:
             from ownership import WorkerOwnership
         self.ownership = WorkerOwnership(self, lambda data: publish(data))
+        from amplifier_web.computer_episodes import ComputerEpisodes
+        self.computer_episodes = ComputerEpisodes(lambda event: publish(event))
 
     async def ask(self, prompt, options, identity=None):
         identity = identity or str(uuid.uuid4())
@@ -556,6 +558,8 @@ class Worker:
                     from amplifier_web.app_guidance import install_app_access
                     await install_app_access(child_coordinator, self.app_access_bridge(child_coordinator,
                                                                                       assignment=assignment))
+                    self.computer_episodes.install(child_coordinator,
+                        lambda: self.computer_execution(child_coordinator))
                 return install_child_access
             register("web.app_access.install", capture_child_access)
         if assigned is None and callable(register):
@@ -578,6 +582,35 @@ class Worker:
             register("web.peer_continuation_ready", peer_continuation_ready)
         return bridge
 
+    def computer_execution(self, coordinator, *, explicit=None):
+        """Capture native ownership before desktop readiness/selector awaits."""
+        session, runtime, gate = self.session, self.runtime, self.activation_gate
+        activation, epoch = self.activation, self.stop_revision
+        if not session or not runtime or not gate:
+            return None
+        root = session.coordinator
+        child_origin = coordinator.get_capability('web.child_execution')
+        child = child_origin() if coordinator is not root and callable(child_origin) else None
+        if coordinator is not root and child is None:
+            return None
+        local_runtime = coordinator.get_capability('live.runtime') if child else runtime
+        generation = getattr(local_runtime, 'generation', None)
+        control = explicit or self.control_invocations.get(asyncio.current_task())
+        if coordinator is root and not generation and not (
+                control and control['coordinator'] is coordinator and control['valid']()):
+            return None
+        key = ((generation or {}).get('id') if local_runtime else
+               coordinator.get_capability('web.worker_run'))
+        def valid():
+            return (self.session is session and self.runtime is runtime and self.activation_gate is gate
+                and self.activation is activation and gate.current_valid and self.stop_revision == epoch
+                and not self.parked and not self.remounting and not self.ownership.yielding
+                and not runtime.closed and not runtime.stop_requested
+                and not coordinator.cancellation.is_cancelled
+                and (child_origin() == child if child else session.coordinator is coordinator)
+                and (getattr(local_runtime, 'generation', None) is generation if local_runtime else True))
+        return (key, valid) if valid() else None
+
     def observe(self, event):
         """Publish lifecycle metadata, never provider reasoning or tool inputs."""
         event = dict(event)
@@ -591,6 +624,16 @@ class Worker:
             # This is lifecycle evidence, not optimistic host send admission.
             event['observedAt'] = time.time()
         root_generation = event_session_id == root_session_id and event_root_id == root_session_id
+        if root_generation and self.session:
+            sponsor = self.session.coordinator.get_capability('web.computer_episodes')
+            if sponsor:
+                sponsor.observe(event)
+        elif event_root_id == root_session_id and self.session:
+            children = self.session.coordinator.get_capability('live.children')
+            child = children.sessions.get(event_session_id) if children else None
+            sponsor = child.coordinator.get_capability('web.computer_episodes') if child else None
+            if sponsor:
+                sponsor.observe(event)
         if root_generation and event.get('type') == 'generation.started':
             # Explicit inputs carry the host epoch captured at transport
             # admission. Native child/job follow-ups inherit this process's
@@ -1004,6 +1047,8 @@ class Worker:
             from amplifier_web.app_guidance import install_app_access
             with startup_timing.phase('worker.app.access'):
                 await install_app_access(self.session.coordinator, self.app_access_bridge(self.session.coordinator))
+                root_coordinator = self.session.coordinator
+                self.computer_episodes.install(root_coordinator, lambda: self.computer_execution(root_coordinator))
                 self.install_collaboration_checkpoint(self.session.coordinator)
             original_host = self.session.coordinator.get_capability("live.host")
             class ObservedHost:
@@ -1015,6 +1060,7 @@ class Worker:
                         host.install_activity(coordinator)
                         host.install_collaboration_checkpoint(coordinator)
                         await install_app_access(coordinator, host.app_access_bridge(coordinator))
+                        host.computer_episodes.install(coordinator, lambda: host.computer_execution(coordinator))
                         from amplifier_web.host.session import SelectedProvider
                         transform = coordinator.get_capability('web.provider_transform')
                         if isinstance(getattr(loop,'root_provider',None), SelectedProvider):
@@ -1249,10 +1295,12 @@ class Worker:
         """Replace stale mounted state after lock+stamp validation."""
 
         self.remounting = True
+        self.computer_episodes.fence()
         try:
             if self.execution and not self.execution.done():
                 self.execution.cancel()
                 await asyncio.gather(self.execution, return_exceptions=True)
+            await self.computer_episodes.close()
             if self.controls:
                 await self.controls.close()
             if self.session:
@@ -1297,6 +1345,10 @@ class Worker:
                 and not runtime.closed and not runtime.stop_requested
                 and not coordinator.cancellation.is_cancelled
                 and (coordinator.get('tools') or {}).get(name) is tool)
+        sponsor = coordinator.get_capability('web.computer_episodes')
+        if sponsor and name in {'computer', 'desktop', 'ui_use'}:
+            sponsor.controls[task] = (identity, self.computer_execution(coordinator,
+                explicit={'coordinator': coordinator, 'valid': valid}))
         @contextmanager
         def bind(arguments):
             if not valid() or task in self.control_invocations:
@@ -1413,6 +1465,20 @@ class Worker:
             return
         if op == "stop":
             self.stop_revision += 1
+            self.computer_episodes.fence()
+        if op == "computer.stop":
+            # Independent input path: do not await a selector, native worker,
+            # serialized control or the next model/tool hook.
+            self.computer_episodes.fence(halt=True)
+            return
+        if op == "computer.resume":
+            self.computer_episodes.resume()
+            return
+        if op == "worker.stop" and self.session:
+            children = self.session.coordinator.get_capability('live.children')
+            child = children.sessions.get(data.get('worker_id')) if children else None
+            if child:
+                self.computer_episodes.fence(child.coordinator, terminate=True)
         memory_control = op == 'control' and data.get('operation') == 'memory.consolidate'
         naming_control = op == 'control' and data.get('operation') == 'session.naming'
         steering_control = op == 'control' and data.get('operation') in {'coordination.steer', 'conversation.steer'}
@@ -1912,10 +1978,12 @@ class Worker:
         try:
             await self.shutdown.wait()
         finally:
+            self.computer_episodes.fence()
             for task in [read, self.start_task, self.execution, *self.tasks]:
                 if task and not task.done():
                     task.cancel()
             await asyncio.gather(*(t for t in [read, self.start_task, self.execution, *self.tasks] if t), return_exceptions=True)
+            await self.computer_episodes.close()
             try:
                 await self.checkpoint_terminal_outcome()
             finally:
