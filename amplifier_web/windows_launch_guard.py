@@ -125,6 +125,7 @@ def main():
         config["argv"], executable=config["argv"][0], cwd=config["cwd"],
         env=config["env"], stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr,
         close_fds=True, shell=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     # Popen retains its creation handle until wait, preventing PID reuse while
     # we open a query-only identity handle. It is never used to signal anything.

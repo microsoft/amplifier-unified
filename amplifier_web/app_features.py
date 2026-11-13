@@ -76,7 +76,8 @@ asyncio.run(main())
     try:
         result = subprocess.run([python, '-I', '-c', script],
             env={**os.environ, 'PLAYWRIGHT_BROWSERS_PATH': cache},
-            capture_output=True, text=True, timeout=3)
+            capture_output=True, text=True, timeout=3,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         if result.returncode == 0 and len(result.stdout) < 4096:
             path = Path(result.stdout.strip())
             if path.is_absolute() and path.is_relative_to(Path(cache)):
