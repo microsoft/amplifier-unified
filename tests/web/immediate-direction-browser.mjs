@@ -105,6 +105,7 @@ for(const scenario of (process.argv.length>2?process.argv.slice(2):['native','or
     await expect.poll(async()=>(await inspect()).toolRunning).toBe(true);
     await page.getByRole('button',{name:'Stop response',exact:true}).click();
     await expect.poll(async()=>(await inspect()).session.collaborationGeneration.terminal).toBe(true);
+    await expect.poll(async()=>(await inspect()).session.messages.find(m=>m.inputId===submissions[1].id)?.steering?.disposition).toBe('unknown');
     await expect(message).not.toContainText('Live direction applied');
    }else{
     await release('apply');await expect(message).toContainText('Live direction applied to the successor response');
@@ -116,6 +117,10 @@ for(const scenario of (process.argv.length>2?process.argv.slice(2):['native','or
    await expect(message).not.toContainText('Live direction applied');
    assert.equal((await inspect()).wire.filter(r=>r.kind==='wire'&&r.payload.type==='response.create').length,1);
    assert.equal((await inspect()).wire.filter(r=>r.kind==='ordinary-request').length,0,'Unknown native effect has no fallback request');
+   const beforeCheck=(await inspect()).wire.length;
+   await message.getByRole('button',{name:'Check delivery',exact:true}).click();
+   await expect(message).toContainText('Nothing was resent');
+   assert.equal((await inspect()).wire.length,beforeCheck,'Passive delivery check cannot resend');
   }else if(scenario==='ordinary'){
    await expect(message).toContainText('waiting for its next step');
    const before=await inspect();assert.equal(before.wire.filter(r=>r.kind==='ordinary-request').length,1);
@@ -179,6 +184,8 @@ for(const scenario of (process.argv.length>2?process.argv.slice(2):['native','or
   if(!ready)fixture.kill('SIGTERM');
   let timer;try{await Promise.race([exited,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Fixture cleanup timeout')),15000)})])}finally{clearTimeout(timer)}
   assert.match(stdout,/"cleanupConfirmed": true/);
+  const result=results.at(-1);
+  if(result?.scenario===scenario){result.cleanupConfirmed=true;if(output)writeFileSync(output+'/'+scenario+'.json',JSON.stringify(result,null,2)+'\n')}
  }
 }
 if(output)writeFileSync(output+'/result.json',JSON.stringify({passed:true,productionBuiltBrowser:true,externalTransportOnly:true,results},null,2)+'\n');

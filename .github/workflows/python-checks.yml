@@ -376,14 +376,21 @@ jobs:
           (cd tests/web && npx playwright install --with-deps chromium)
           uv build --wheel --out-dir output/python-checks/dist
           python - <<'PY'
-          import hashlib, json, zipfile
+          import hashlib, json, tomllib, zipfile
           from pathlib import Path
           wheel, = Path('output/python-checks/dist').glob('*.whl')
+          mappings = tomllib.loads(Path('pyproject.toml').read_text())['tool']['hatch']['build']['targets']['wheel']['force-include']
           with zipfile.ZipFile(wheel) as archive:
               files = {name: hashlib.sha256(archive.read(name)).hexdigest()
                        for name in archive.namelist() if name.startswith('amplifier_web/') and not name.endswith('/')}
               for name, digest in files.items():
-                  assert hashlib.sha256(Path(name).read_bytes()).hexdigest() == digest, name
+                  source = Path(name)
+                  if not source.is_file():
+                      candidates = [Path(original) / name[len(destination) + 1:] if name.startswith(destination + '/')
+                                    else Path(original) for original, destination in mappings.items()
+                                    if name == destination or name.startswith(destination + '/')]
+                      source, = candidates
+                  assert hashlib.sha256(source.read_bytes()).hexdigest() == digest, name
           Path('output/python-checks/wheel.json').write_text(json.dumps({
               'wheel': wheel.name, 'sha256': hashlib.sha256(wheel.read_bytes()).hexdigest(),
               'files': files}, indent=2) + '\n')
@@ -452,7 +459,7 @@ jobs:
           modes = ['native', 'ordinary', 'tool', 'completion', 'stale-config', 'stop', 'native-unknown', 'native-stop']
           for mode in modes:
               row = json.loads((output / 'immediate-direction' / (mode + '.json')).read_text())
-              assert row['passed'] and row['scenario'] == mode and row['host'], mode
+              assert row['passed'] and row['scenario'] == mode and row['host'] and row['cleanupConfirmed'], mode
           (output / 'live-first-qualified.json').write_text(json.dumps({
               'installedCases': len(cases), 'skips': 0, 'browserModes': modes,
               'scope': 'Candidate graph, scripted external transports; not paid-provider parity or release'}, indent=2) + '\n')
