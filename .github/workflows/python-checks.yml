@@ -442,13 +442,22 @@ jobs:
                     'runId': os.environ['GITHUB_RUN_ID'], 'attempt': os.environ['GITHUB_RUN_ATTEMPT']}
           (root / 'output/python-checks/installed-imports.json').write_text(json.dumps(record, indent=2) + '\n')
           PY
+            # Preserve independent browser evidence even when a Python oracle
+            # fails; neither phase may turn the combined result green alone.
+            browser_status=0
+            for mode in native ordinary tool completion stale-config stop native-unknown native-stop; do
+              node tests/web/immediate-direction-browser.mjs "$mode" \
+                > "$GITHUB_WORKSPACE/output/python-checks/immediate-direction-$mode.log" 2>&1 || browser_status=1
+            done
+            printf '%s\n' "$browser_status" > "$GITHUB_WORKSPACE/output/python-checks/browser-exit.txt"
             mapfile -t targets < "$GITHUB_WORKSPACE/output/python-checks/targets.txt"
+            set +e
             "$AMPLIFIER_TEST_PYTHON" -I -m pytest -c /dev/null -o asyncio_mode=auto --rootdir=. \
               -v --tb=short "${targets[@]}" --junitxml="$GITHUB_WORKSPACE/output/python-checks/installed-junit.xml" \
               2>&1 | tee "$GITHUB_WORKSPACE/output/python-checks/installed-tests.log"
-            node tests/web/immediate-direction-browser.mjs \
-              native ordinary tool completion stale-config stop native-unknown native-stop \
-              2>&1 | tee "$GITHUB_WORKSPACE/output/python-checks/immediate-direction.log"
+            test_status=${PIPESTATUS[0]}
+            set -e
+            printf '%s\n' "$test_status" > "$GITHUB_WORKSPACE/output/python-checks/tests-exit.txt"
           )
           python - <<'PY'
           import json, xml.etree.ElementTree as ET
