@@ -307,3 +307,19 @@ async def test_active_configuration_capture_survives_normal_completion_during_pr
     assert replies[-1]['result']['accepted']
     assert runtime.accepted['ordinary'].target_generation_id is None
     assert runtime.queued_inputs == 1
+
+
+async def test_pending_file_policy_idle_no_effect_cannot_apply_or_submit():
+    from amplifier_web.runtime import RuntimeManager, RuntimeStartupError
+    manager = RuntimeManager()
+    ready = asyncio.get_running_loop().create_future()
+    ready.set_result(True)
+    manager.workers['chat'] = {'process': SimpleNamespace(returncode=None), 'ready': ready}
+    manager._admit = AsyncMock(return_value=('row', 'rpc', 'future'))
+    manager._reply = AsyncMock(return_value={'accepted': False, 'effect': 'none', 'configurationRequired': True})
+    manager._start_for_input = AsyncMock()
+    manager._request = AsyncMock()
+    with pytest.raises(RuntimeStartupError, match='permissions'):
+        await manager.send({'id': 'chat', 'fileAccessPending': True}, 'ordinary', 'input', AsyncMock())
+    manager._start_for_input.assert_not_awaited()
+    manager._request.assert_not_awaited()
