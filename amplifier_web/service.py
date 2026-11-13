@@ -513,7 +513,7 @@ for _action, (_, _spec) in ACTION_DEFINITIONS.items():
             schema({'kind': {'const': 'workspace'}, 'workspaceId': string(200)}, ['kind', 'workspaceId']),
         ]}
 for _action, (_, _spec) in ACTION_DEFINITIONS.items():
-    if (_action not in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}
+    if (_action not in {'workspace.environments.removal.read', 'workspace.environments.removal.list', 'workspace.environments.runner.read'}
             and ('sessionId' in _spec.get('properties', {}) or _action in SESSION_ID_ACTIONS)):
         _spec['properties']['nativeProject'] = string(4000)
 
@@ -1915,7 +1915,7 @@ class AppService:
             action == 'runtime.control' and isinstance(args.get('operation'), str) and args['operation'] in
             {'task.get', 'task.history', 'task.detail', 'task.receipt'})
         passive_metadata = passive_task or action in {'assignment.brief', 'coordination.list', 'conversation.configuration'}
-        if action in {'workspace.environments.removal.read', 'workspace.environments.removal.list'}:
+        if action in {'workspace.environments.removal.read', 'workspace.environments.removal.list', 'workspace.environments.runner.read'}:
             # Exact retained IDs only. General alias resolution can refresh
             # history and admit a dormant owner before the passive read runs.
             try:
@@ -5628,7 +5628,7 @@ class AppService:
                         revision=self.state['revision'], command_id=args.get('id'))
                 return domain_receipt(result, action=args['action'], session_id=session_id,
                                       revision=self.state['revision'])
-            if args['action'] in {'workspace.environments.removal.read', 'workspace.environments.removal.list', 'assignment.brief', 'conversation.configuration'}:
+            if args['action'] in {'workspace.environments.removal.read', 'workspace.environments.removal.list', 'workspace.environments.runner.read', 'assignment.brief', 'conversation.configuration'}:
                 # Do not infer nativeProject, flush progress or build a snapshot:
                 # even _session(hydrate=False) admits dormant owners. Each passive
                 # action validates its own caller scope without runtime demand.

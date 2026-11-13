@@ -1,9 +1,10 @@
 """Explicit owner-scoped reconciliation; backend inspection never repeats effects."""
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, ExitStack
 import json
 import os
+from pathlib import Path
 import re
 import sqlite3
 import stat
@@ -59,7 +60,7 @@ def _removal_page(app, sid, rid, offset, limit):
     return rows, items[:limit], offset + limit if len(rows) > limit else None
 
 
-def read_removal(app, args, origin, caller, *, listing=False):
+def read_removal(app, args, origin, caller, *, listing=False, runner=False):
     """Read one retained pair, never infer a historical binding or repair it.
 
     No await or mutation admission occurs here. The existing physical lock and
@@ -140,19 +141,36 @@ def read_removal(app, args, origin, caller, *, listing=False):
 
     captured = root_binding()
     sid, rid = args['sessionId'], args['id']
+    pins = ExitStack()
     try:
         import fcntl  # Same POSIX lock as the managed Linux environment owner.
         if str(uuid.UUID(rid)) != rid:
             raise ValueError('invalid resource identity')
         folder = app.data_dir / 'workspace-resources'
         target = folder / 'reservations.sqlite3'
-        if folder.is_symlink() or not stat.S_ISDIR(folder.stat().st_mode) or not stat.S_ISREG(target.lstat().st_mode):
+        if runner:
+            from . import test_origin_files as private
+            pinned = pins.enter_context(private.directory(folder, private=True))
+            ledger = pins.enter_context(pinned.open('reservations.sqlite3', private=True))
+            private.private_info(os.fstat(ledger.fileno()), 1024**3)
+            # The resource owner uses a DELETE-mode journal. Read the pinned
+            # existing main file, not a possibly substituted pathname. No WAL
+            # or SQLite initialization is introduced by this diagnostic.
+            target = Path('/proc/self/fd') / str(ledger.fileno())
+        elif folder.is_symlink() or not stat.S_ISDIR(folder.stat().st_mode) or not stat.S_ISREG(target.lstat().st_mode):
             raise ValueError('unavailable ledger')
         # FileLock's acquire can create/truncate its file. Open the already-owned
         # lock read-only instead; closing releases the same flock without writes.
-        descriptor = os.open(folder / ('environment-' + rid + '.lock'),
-                             os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        descriptor = os.open(('environment-' + rid + '.lock') if runner else folder / ('environment-' + rid + '.lock'),
+                             os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             **({'dir_fd': pinned.fd} if runner else {}))
         with os.fdopen(descriptor, 'rb') as lock:
+            if runner:
+                info = os.fstat(lock.fileno())
+                # FileLock intentionally creates ordinary shared-mode lock
+                # files inside this private pinned parent. Do not chmod them.
+                if info.st_uid != os.getuid() or info.st_nlink != 1:
+                    raise ValueError('invalid lock owner')
             if not stat.S_ISREG(os.fstat(lock.fileno()).st_mode):
                 raise ValueError('invalid lock')
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -167,6 +185,12 @@ def read_removal(app, args, origin, caller, *, listing=False):
                     raise AppError('Removal inspection requires the recorded root owner.', 403)
                 if type(row.get('revision')) is not int or row['revision'] != args['expectedRevision']:
                     raise AppError('Removal inspection changed or is busy.', 409)
+                if runner:
+                    # Internal snapshot only; the runner reader projects it and
+                    # revalidates this same owner after its bounded inventory.
+                    if (root_binding() != captured or pinned.stat('reservations.sqlite3') != os.fstat(ledger.fileno())):
+                        raise AppError('Runner inspection changed or is busy.', 409)
+                    return row, captured
                 if listing:
                     offset, limit = args.get('offset', 0), args.get('limit', 20)
                     if type(offset) is not int or not 0 <= offset <= 2**53-21 or type(limit) is not int or not 1 <= limit <= 20:
@@ -229,6 +253,8 @@ def read_removal(app, args, origin, caller, *, listing=False):
                 return result
     except (OSError, ValueError, TypeError, KeyError, sqlite3.Error, ImportError):
         raise AppError('Removal inspection changed or is busy.', 409) from None
+    finally:
+        pins.close()
 
 
 def backend_identity(value):

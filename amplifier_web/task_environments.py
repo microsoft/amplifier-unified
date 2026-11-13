@@ -54,6 +54,8 @@ def definitions(schema, string):
     return {
         **setup.definitions(schema, string),
         'workspace.environments.read': ('Inspect this task’s test environments, retained results and current backend availability. Does not launch, resume or replay work.', schema({**scope, 'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 50}}, list(scope))),
+        'workspace.environments.runner.read': ('Diagnose the exact owned environment’s retained runner qualification, execution binding and runtime inventory. Read-only: no backend or candidate code execution, proof acceptance, selection, repair or operation replay. Missing or unsafe evidence stays blocked; original unknown outcomes are unchanged.', schema({
+            **scope, 'id': string(100), 'expectedRevision': {'type': 'integer', 'minimum': 1}})),
         'workspace.environments.removal.read': ('Read this root’s exact retained removal binding at the current resource revision. Strictly passive: no backend probe, configuration lookup, repair, operation admission or continuation. Missing original evidence remains held.', schema({
             **scope, 'id': string(100), 'expectedRevision': {'type': 'integer', 'minimum': 1},
             'originalRequestId': {**string(200), 'minLength': 1}})),
@@ -1156,6 +1158,9 @@ async def dispatch_full_setup(app, action, args, origin, caller, authority):
 
 
 async def dispatch(app, action, args, origin, caller, authority):
+    if action == 'workspace.environments.runner.read':
+        from .managed_runner_diagnostics import read as read_runner
+        return {'accepted': True, 'result': await read_runner(app, args, origin, caller)}
     if action == 'workspace.environments.removal.read':
         return {'accepted': True, 'result': recovery.read_removal(app, args, origin, caller)}
     if action == 'workspace.environments.removal.list':
