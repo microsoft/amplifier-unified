@@ -154,7 +154,7 @@ try{
  await saveAsNew.focus();await page.keyboard.press('Enter');
  await expect.poll(()=>saveStarted).toBe(true);
  await expect(editor.getByLabel('Starter name',{exact:true})).toBeDisabled();
- await expect(saveAsNew).toBeDisabled();
+ await expect(settings.getByRole('button',{name:'Check the same save',exact:true})).toBeDisabled();
  releaseSave();
  await expect(starters.getByText('My team starter',{exact:true})).toBeVisible();
  await expect(settings.getByRole('button',{name:'Save changes',exact:true})).toBeEnabled();
