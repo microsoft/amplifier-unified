@@ -75,11 +75,13 @@ or broader protocol conformance; those need their own evidence.
 
 ### First native execution-owner integration
 
-The next bounded pilot injects a trusted execution owner into the existing ACP
-server. Standard clients send ordinary ACP requests; the native owner supplies
-Unified's authority and lifecycle behavior internally. Reuse the existing parser
-and standard update projection rather than implementing a second wire translator
-or pretending an owner is a worker process.
+The initial bounded pilot injected a trusted execution owner into the existing
+ACP application. The [installed Unified attachment](unified-acp-backend.md) uses
+the public ACP Python SDK for framing and standard dispatch, avoiding a private
+application dependency. It delegates execution to the same Unified owner; neither
+adapter becomes a native worker, receipt store or permission authority. The
+launcher-to-host WebSocket carrier is a Unified implementation detail, not a new
+portable ACP transport claim.
 
 The initial owner delegates the complete lifecycle to existing `AppService` and
 `RuntimeManager` paths. Those paths create native identities, admit work, correlate

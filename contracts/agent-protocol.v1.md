@@ -73,6 +73,11 @@ only with explicit semantics and independent acceptance. No new kernel protocol 
 
 ## How the kit checks it
 
+The [installed Unified backend](../docs/architecture/unified-acp-backend.md)
+applies AP3/AP4 to persistent host attachment: connection loss releases observation,
+while the host retains admitted work. Explicit Stop and host shutdown remain
+distinct operations. Multiple attachments do not acquire competing native writers.
+
 - AP1/AP4: run our host with another ACP agent and our agent in an independent client.
 - AP2/AP5: compare every affected module-class implementation and advertised control.
 - AP3: race independent clients/hosts against the same native session and inspect writes.

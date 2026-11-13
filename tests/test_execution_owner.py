@@ -1,6 +1,7 @@
 """Attachment isolation and backpressure; native policy is tested by its owners."""
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 import pytest
 
 from amplifier_web.errors import AppError
@@ -191,3 +192,128 @@ async def test_pending_approval_waits_for_owner_then_reports_unavailable(tmp_pat
         assert approval["status"] == "pending" and not service.completed.done()
     assert not any(row[0] in {"conversation.stop", "approval.respond"} for row in service.calls)
     await owner.close()
+
+
+@pytest.mark.parametrize("first", [0, 1])
+async def test_shared_observers_keep_one_canonical_sink_in_either_close_order(tmp_path, first):
+    service = Service()
+    service.close = AsyncMock()
+    original = service.on_runtime_event
+    owners = [ExecutionOwner(service, workspace=tmp_path, bundle="configured", origin="ui")
+              for _ in range(2)]
+    sink = service.on_runtime_event
+    assert owners[0]._observers is owners[1]._observers
+    assert owners[0]._observers.original is original
+    seen = [[], []]
+
+    def observer(index):
+        async def observe(kind, payload):
+            assert (kind, payload) in service.events  # Canonical ingestion is first.
+            seen[index].append((kind, payload))
+        return observe
+    for index, owner in enumerate(owners):
+        owner.observe = observer(index)
+
+    event = ("assistant.delta", {"sessionId": "actual-owner", "inputId": "input", "text": "one"})
+    await sink(*event)
+    batch = [("assistant.delta", {**event[1], "text": "two"}),
+             ("assistant.message", {**event[1], "text": "three"})]
+    await sink.batch(batch)
+    assert service.events == [event, *batch]
+    assert seen == [[event, *batch], [event, *batch]]
+
+    await owners[first].disconnect()
+    assert service.on_runtime_event is sink
+    later = ("assistant.delta", {**event[1], "text": "after disconnect"})
+    await service.on_runtime_event(*later)
+    assert seen[first] == [event, *batch]
+    assert seen[1-first] == [event, *batch, later]
+    with pytest.raises(ValueError, match="disconnected"):
+        await owners[first].create(str(tmp_path))
+
+    await owners[1-first].disconnect()
+    await owners[first].disconnect()  # Repeated cleanup cannot disturb the host.
+    assert service.on_runtime_event is sink
+    assert not service._execution_observers.attachments
+    service.close.assert_not_called()
+    reopened = ExecutionOwner(service, workspace=tmp_path, bundle="configured", origin="ui")
+    reopened.observe = AsyncMock()
+    # A resident worker can retain its callback across every client's departure.
+    # New attachments must join that exact tap, not a new wrapper around it.
+    assert service.on_runtime_event is sink
+    await sink(*later)
+    reopened.observe.assert_awaited_once_with(*later)
+    assert service.events == [event, *batch, later, later]
+    await reopened.close()  # The standalone launcher still owns service shutdown.
+    service.close.assert_awaited_once()
+    assert not service._execution_observers.attachments
+
+
+async def test_disconnect_settles_observation_and_drain_without_stopping_work(tmp_path):
+    owner, service = await attached(tmp_path)
+    service.close = AsyncMock()
+    other = ExecutionOwner(service, workspace=tmp_path, bundle="configured", origin="ui")
+    sink = service.on_runtime_event
+    entered = asyncio.Event()
+    async def slow(event):
+        entered.set()
+        await asyncio.Event().wait()
+    task = await started(owner, slow)
+    row = owner.pending["actual-owner"]
+    await sink("assistant.delta", {"sessionId": "actual-owner", "inputId": "input", "text": "saved"})
+    await entered.wait()
+    await owner.disconnect()
+    with pytest.raises(ValueError, match="Observation detached"):
+        await task
+    assert not owner.pending and not owner.attached
+    assert row["delivery"].task.done()
+    assert not service.completed.done()
+    assert not any(call[0] == "conversation.stop" for call in service.calls)
+    assert service.on_runtime_event is sink
+    service.close.assert_not_called()
+    await other.disconnect()
+
+
+async def test_disconnection_during_creation_keeps_created_work_without_late_attachment(tmp_path):
+    service = Service()
+    service.close = AsyncMock()
+    owner = ExecutionOwner(service, workspace=tmp_path, bundle="configured", origin="ui")
+    entered, proceed = asyncio.Event(), asyncio.Event()
+    dispatch = service.dispatch
+    async def held_create(*args, **kwargs):
+        receipt = await dispatch(*args, **kwargs)
+        entered.set()
+        await proceed.wait()
+        return receipt
+    service.dispatch = held_create
+    create = asyncio.create_task(owner.create(str(tmp_path)))
+    await entered.wait()
+    await owner.disconnect()
+    proceed.set()
+    with pytest.raises(ValueError, match="disconnected"):
+        await create
+    assert not owner.attached
+    assert [call[0] for call in service.calls] == ["session.create"]
+    service.close.assert_not_called()
+
+
+async def test_disconnection_during_mcp_binding_releases_only_its_binding(tmp_path):
+    service = Service()
+    entered, proceed = asyncio.Event(), asyncio.Event()
+    bound = {}
+    async def bind(identity, attachment, servers):
+        entered.set()
+        await proceed.wait()
+        bound[identity] = attachment
+    def release(identity, attachment):
+        assert bound[identity] == attachment
+        del bound[identity]
+    service.runtime = SimpleNamespace(bind_ephemeral_mcp=bind, release_ephemeral_mcp=release)
+    owner = ExecutionOwner(service, workspace=tmp_path, bundle="configured", origin="ui", enable_mcp=True)
+    create = asyncio.create_task(owner.create(str(tmp_path), mcp_servers={}))
+    await entered.wait()
+    await owner.disconnect()
+    proceed.set()
+    with pytest.raises(ValueError, match="disconnected"):
+        await create
+    assert not bound and not owner.attached
