@@ -91,7 +91,14 @@ automatically pruned or replayed.
 
 The candidate must implement repair protocol 1 and must not downgrade the serving
 version. Its resolved distribution versions and source identities must match the
-fresh final installation exactly; constraints alone are not that proof. A target
+fresh final installation exactly; constraints alone are not that proof.
+A Git dependency is compared by exact URL, VCS, full resolved commit, subdirectory
+and every other recorded source field. Only its informational
+`vcs_info.requested_revision` is omitted when `vcs=git` and a valid full commit
+is recorded: freezing can rewrite a branch request to that same commit without
+changing the resolved source. Other VCS, archives, directory/hash fields and
+malformed commit metadata receive no such relaxation. The official application's
+wheel/checksum/source-stamp proof is unchanged. A target
 release predating this protocol is rejected before service stop. The successor
 retains the repair admission fence until the helper records verified readiness;
 an installed-but-unverified host keeps inspection and Stop available, not new work.

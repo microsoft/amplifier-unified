@@ -730,10 +730,34 @@ def _app_source(plan, row):
     if not isinstance(hashes, dict) or hashes.get("sha256") != plan["artifact"]["sha256"]:
         raise ValueError("Installed app archive checksum changed")
     # Only the exact verified local archive is represented as official delivery.
-    # Dependency direct URLs remain untouched, including their source identity.
+    # Dependency source normalization below is separate from official app proof.
     return {**row, "direct": {
         "url": plan["artifact"]["url"], "archive_info": {"hashes": {"sha256": hashes["sha256"]}},
     }}
+
+
+def _dependency_source(row):
+    """Compare resolved Git identity, not the request ref rewritten by freeze.
+
+    Keep every other observed field (including unknown fields). Only a Git
+    source with an exact full commit may omit its informational requested ref.
+    This is intentionally narrower than app_component_graph.normalized: a new
+    direct/archive/directory field still causes candidate/final inequality.
+    """
+    direct = row["direct"]
+    if not isinstance(direct, dict) or "vcs_info" not in direct:
+        return row
+    vcs = direct["vcs_info"]
+    if not isinstance(vcs, dict):
+        raise ValueError("Installed dependency VCS metadata is malformed")
+    if vcs.get("vcs") != "git":
+        return row  # No request-field normalization for other VCS/source kinds.
+    if (not isinstance(vcs.get("commit_id"), str)
+            or not re.fullmatch(r"[a-f0-9]{40}", vcs["commit_id"])
+            or "requested_revision" in vcs and not isinstance(vcs["requested_revision"], str)):
+        raise ValueError("Installed dependency has no exact Git source identity")
+    return {**row, "direct": {**direct, "vcs_info": {
+        key: value for key, value in vcs.items() if key != "requested_revision"}}}
 
 
 def installed_graph(plan, python, env):
@@ -751,7 +775,8 @@ def installed_graph(plan, python, env):
                 or not isinstance(row.get("version"), str) or not row["version"]
                 or not isinstance(row.get("direct"), (dict, type(None)))):
             raise ValueError("Installed graph is malformed")
-        normalized.append(_app_source(plan, row) if row["name"] == "amplifier-unified" else row)
+        normalized.append(_app_source(plan, row) if row["name"] == "amplifier-unified"
+                          else _dependency_source(row))
     names = [row["name"] for row in normalized]
     if len(names) != len(set(names)) or names.count("amplifier-unified") != 1:
         raise ValueError("Installed graph contains duplicate or missing distributions")

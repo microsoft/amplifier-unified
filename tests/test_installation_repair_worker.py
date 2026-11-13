@@ -1,5 +1,6 @@
 """No service, installer, browser, or network effects: stdlib fixtures + mocks."""
 from contextlib import contextmanager
+import copy
 import hashlib
 import importlib.util
 import json
@@ -482,6 +483,101 @@ class RepairFixture(unittest.TestCase):
             return rows
         self.graph_change = change
         self.assertEqual(self.run_worker()["status"], "rolled-back")
+
+    def git_graph(self):
+        rows = self.graph()
+        rows[1]["direct"] = {
+            "url": "https://example.invalid/exact-dependency",
+            "vcs_info": {"vcs": "git", "commit_id": "c" * 40, "requested_revision": "main"},
+            "subdirectory": "modules/example",
+        }
+        return rows
+
+    def normalized_graph(self, rows):
+        with patch.object(worker, "command", return_value=subprocess.CompletedProcess(
+                [], 0, json.dumps(rows), "")):
+            return worker.installed_graph(self.plan, "/unused/fixture/python", {})
+
+    def test_frozen_git_requested_revision_is_not_resolved_source_drift(self):
+        rows = self.git_graph()
+        expected = copy.deepcopy(rows)
+        final = copy.deepcopy(rows)
+        final[1]["direct"]["vcs_info"]["requested_revision"] = "c" * 40
+        assert self.normalized_graph(rows) == self.normalized_graph(final)
+        self.assertEqual(rows, expected)  # No mutation of observed metadata.
+        source = self.normalized_graph(rows)[1]["direct"]
+        self.assertNotIn("requested_revision", source["vcs_info"])
+        self.assertEqual(source["vcs_info"]["commit_id"], "c" * 40)
+        self.assertEqual(source["subdirectory"], "modules/example")
+
+    def test_git_branch_to_frozen_commit_lifecycle_reaches_ready(self):
+        rows = self.git_graph()
+        with patch.object(self, "graph", side_effect=lambda: copy.deepcopy(rows)):
+            def freeze_reference(final):
+                final[1]["direct"]["vcs_info"]["requested_revision"] = "c" * 40
+                return final
+            self.graph_change = freeze_reference
+            result = self.run_worker()
+        assert result["status"] == "ready"
+        self.assertTrue(result["healthVerified"])
+        self.assertNotIn("requested_revision",
+                         worker.read(self.folder / "candidate-graph.json")[1]["direct"]["vcs_info"])
+
+    def test_git_source_normalization_preserves_every_other_identity_field(self):
+        rows = self.git_graph()
+        cases = [
+            ("url", lambda row: row["direct"].update(url="https://example.invalid/other")),
+            ("commit", lambda row: row["direct"]["vcs_info"].update(commit_id="d" * 40)),
+            ("vcs", lambda row: row["direct"]["vcs_info"].update(vcs="hg")),
+            ("subdirectory", lambda row: row["direct"].update(subdirectory="modules/other")),
+            ("version", lambda row: row.update(version="4.5.7")),
+            ("name", lambda row: row.update(name="other-example")),
+            ("stamp", lambda row: row.update(stamp={"unexpected": True})),
+            ("dir_info", lambda row: row["direct"].update(dir_info={"editable": True})),
+            ("archive_hash", lambda row: row["direct"].update(
+                archive_info={"hashes": {"sha256": "f" * 64}})),
+            ("unknown_direct", lambda row: row["direct"].update(other="retained")),
+            ("unknown_vcs", lambda row: row["direct"]["vcs_info"].update(other="retained")),
+        ]
+        for name, change in cases:
+            with self.subTest(name=name):
+                final = copy.deepcopy(rows)
+                final[1]["direct"]["vcs_info"]["requested_revision"] = "c" * 40
+                change(final[1])
+                self.assertNotEqual(self.normalized_graph(rows), self.normalized_graph(final))
+
+    def test_git_source_normalization_refuses_malformed_proof(self):
+        cases = [
+            ("short_commit", lambda d: d["vcs_info"].update(commit_id="abc123")),
+            ("nonhex_commit", lambda d: d["vcs_info"].update(commit_id="g" * 40)),
+            ("missing_commit", lambda d: d["vcs_info"].pop("commit_id")),
+            ("typed_commit", lambda d: d["vcs_info"].update(commit_id=3)),
+            ("typed_revision", lambda d: d["vcs_info"].update(requested_revision=[])),
+            ("typed_vcs", lambda d: d.update(vcs_info=[])),
+        ]
+        for name, change in cases:
+            with self.subTest(name=name):
+                rows = self.git_graph()
+                change(rows[1]["direct"])
+                with self.assertRaises(ValueError):
+                    self.normalized_graph(rows)
+
+    def test_nongit_and_archive_requested_revision_remain_compared(self):
+        for vcs in (None, "hg"):
+            with self.subTest(vcs=vcs):
+                rows = self.git_graph()
+                if vcs is None:
+                    rows[1]["direct"] = {"url": "file:///fixture.whl",
+                                        "archive_info": {"hashes": {"sha256": "c" * 64}},
+                                        "requested_revision": "main"}
+                else:
+                    rows[1]["direct"]["vcs_info"]["vcs"] = vcs
+                final = copy.deepcopy(rows)
+                if vcs is None:
+                    final[1]["direct"]["requested_revision"] = "c" * 40
+                else:
+                    final[1]["direct"]["vcs_info"]["requested_revision"] = "c" * 40
+                self.assertNotEqual(self.normalized_graph(rows), self.normalized_graph(final))
 
     def test_graph_app_archive_source_change_rolls_back(self):
         def change(rows):
