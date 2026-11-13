@@ -16,6 +16,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -357,15 +358,20 @@ async def test_owner_update_wait_yields_then_continues_once_on_exact_healthy_ado
             assert enrolled["sourceInterruptionRevision"] == app._session(sid).get("interruptionRevision", 0)
             assert worker.controls.tasks.record()["status"] == "active"
 
-            # Native idle alone must not count as checkpoint/release proof.
+            # Native idle alone must not retire a worker with held resources.
+            # Boundary inspection now awaits its own save instead of observing
+            # an earlier park/release. A kernel remains a meaningful blocker.
+            old_kernels = worker.controls.kernels
+            worker.controls.kernels = SimpleNamespace(records={"held-kernel": {}})
+            old_handle = worker.shared_handle
             assert not await update_drain.prepare(manager, RELEASE)
             row = app.state["updates"]["drain"]["workers"][sid]
             assert not row["ready"] and "checkpoint" in row["waitingFor"]
-            old_handle = worker.shared_handle
-            await host.checkpoint_and_park(worker)
-            assert not old_handle.active
+            assert old_handle.active
+            worker.controls.kernels = old_kernels
             assert await update_drain.prepare(manager, RELEASE)
             assert row["ready"] and not row["waitingFor"]
+            assert old_handle.active and worker.shared_handle is old_handle
             assert row["yieldedGoal"] == {key: yielded_goal[key]
                                           for key in ("task_id", "cap", "turns_used", "continuations")}
             saved = json.loads(worker.controls.state_path().read_text())
