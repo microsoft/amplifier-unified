@@ -153,6 +153,49 @@ try{
  await finishedObserved(); // A terminal duration remains fixed, not a newly running timer.
  assert.deepEqual((await inspect()).statusEvents.map(row=>row.step),['ambient','unrelated','started','finished']);
  await screenshot('message-delivery-input-status-finished-mobile');
+ // Hold exactly the first send POST. The second rendered Send captures A and
+ // waits in the ordinary send queue while real host navigation selects B.
+ await page.setViewportSize({width:1280,height:900});
+ const targets=await inspect();
+ let releaseFirst,firstHeld;
+ const held=new Promise(resolve=>firstHeld=resolve);
+ await page.route('**/api/actions',async route=>{
+  const body=route.request().postDataJSON();
+  if(body?.action==='conversation.send'&&body.args.text==='Captured target first'){
+   firstHeld(body);
+   await new Promise(resolve=>releaseFirst=resolve);
+  }
+  await route.continue();
+ });
+ await composer.fill('Captured target first');
+ await page.getByRole('button',{name:'Send message',exact:true}).click();
+ const firstSend=await held;
+ await composer.fill('Captured target queued');
+ await page.getByRole('button',{name:'Send message',exact:true}).click();
+ const queued=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).find(row=>row.text==='Captured target queued'));
+ assert.ok(queued);assert.equal(queued.sessionId,sessionId);
+ await page.evaluate(async id=>{
+  const receipt=await window.amplifier.dispatch('session.select',{id});
+  if(receipt.accepted!==true)throw Error('Fixture navigation refused');
+ },targets.targetB);
+ const selected=await page.evaluate(()=>window.amplifier.getState());
+ assert.equal(selected.selectedSessionId,targets.targetB);
+ assert.equal(selected.sessions.some(row=>row.id===sessionId),false,'Real selected-only frame omits captured A');
+ releaseFirst();
+ // Observe either the exact queued POST or its terminal local refusal, rather
+ // than timing out while waiting only for the desired successful network path.
+ let settlement;
+ await expect.poll(async()=>{
+  const sent=(await inspect()).capturedSends;
+  const local=await page.evaluate(id=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).find(row=>row.id===id),queued.id);
+  settlement={sent,local};
+  return sent.some(row=>row.inputId===queued.commandId)?'posted':local?.status!=='sending'?'refused':'pending';
+ },{timeout:5000,message:'Finite queued-send settlement after releasing first POST'}).not.toBe('pending');
+ assert.ok(settlement.sent.some(row=>row.inputId===queued.commandId),
+  `CAPTURED TARGET CAUSAL REGRESSION: selected-only omission refused queued A: ${JSON.stringify(settlement)}`);
+ assert.deepEqual(settlement.sent.map(row=>row.sessionId),[sessionId,sessionId]);
+ assert.equal(firstSend.args.sessionId,sessionId);
+ await screenshot('message-delivery-captured-target-after-navigation');
  assert.deepEqual(errors,[]);
  console.log('Delivery recovery and actual-server input status passed: exact passive receipt, cancel/confirmation negatives, one confirmed retry, Received without timer despite ambient/unrelated work, exact observed Working/start across active reload, fixed Turn finished duration across reload, original input/attachment/draft, no resend and mobile bounds.');
 }catch(error){originalError=error;throw error}

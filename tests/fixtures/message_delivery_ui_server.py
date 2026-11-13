@@ -19,8 +19,13 @@ class Runtime(fixture.Runtime):
         self.known = set()
         self.accepted = None
         self.status_events = []
+        self.captured_sends = []
 
     async def send(self, session, text, input_id, emit):
+        if text.startswith('Captured target '):
+            self.captured_sends.append({'sessionId': session['id'], 'inputId': input_id, 'text': text})
+            await emit('runtime.status', {'sessionId': session['id'], 'status': 'idle'})
+            return {'accepted': True}
         raise RuntimeError('Synthetic lost reply')
 
     async def delivery(self, session, input_id):
@@ -48,6 +53,11 @@ async def main(home):
     app = await fixture.main(home)
     service = app['service']
     service.state['updates'].update(items=[], available=0)
+    target_a = service._session()['id']
+    await service.dispatch('session.create', {})
+    target_b = service._session()['id']
+    await service.dispatch('session.rename', {'id': target_b, 'title': 'Captured target B'})
+    await service.dispatch('session.select', {'id': target_a})
     await service.dispatch('session.rename', {'id': service._session()['id'], 'title': 'Delivery recovery fixture'})
     attachment = await service.dispatch('attachment.add', {'name': 'reference.txt', 'base64': 'UmV0YWluIHRoaXMgYXR0YWNobWVudC4='})
     attachment_id = attachment['state']['sessions'][0]['draftAttachments'][0]['id']
@@ -60,7 +70,8 @@ async def main(home):
         binding = runtime.accepted
         return web.json_response({'sent': runtime.sent, 'checked': runtime.checked, 'retried': runtime.retried,
             'accepted': {'sessionId': binding[0]['id'], 'inputId': binding[1]} if binding else None,
-            'statusEvents': runtime.status_events})
+            'statusEvents': runtime.status_events, 'capturedSends': runtime.captured_sends,
+            'targetA': target_a, 'targetB': target_b})
     status_lock = asyncio.Lock()
     async def status(request):
         if request.headers.get('Authorization') != f"Bearer {app['control_token']}":
