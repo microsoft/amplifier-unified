@@ -248,13 +248,12 @@ def terminal_exception_failure(session, value):
             or existing.get('generationId') != capture['generationId']
             or latest.get('error_type') != capture['errorType']
             or existing.get('errorType') != capture['errorType']
-            or existing.get('category') != 'unknown' or existing.get('stage') != 'manager_turn'
             or set(latest.get('input_ids') or []) != set(capture['inputIds'])
             or set(existing.get('inputIds') or []) != set(capture['inputIds'])):
         return None
     refusal = terminal_request_refusal(capture['exceptionChain'])
     detail = {}
-    if refusal:
+    if refusal and existing.get('category') == 'unknown':
         causes = {
             'bridge_timeout': 'The host did not answer the Work currentness check before its deadline.',
             'bridge_error': 'The host could not complete the Work currentness check.',
@@ -278,11 +277,97 @@ def terminal_exception_failure(session, value):
             **({'secondaryFailure': capture['secondaryFailure']} if 'secondaryFailure' in capture else {})}
 
 
+def request_call_failure(session, inputs, generation=None, error_type=None):
+    """An earlier call can explain a terminal, but is not itself a turn failure."""
+    from .support_diagnostics import public_exception_chain
+    tree = session.get('execution') or {}
+    for row in reversed([*tree.get('retiredUsageNodes', [])[-40:], *tree.get('nodes', [])[-40:]]):
+        if (row.get('sessionId') not in {session['id'], session.get('runtimeSessionId')}
+                or row.get('lifecycle') in {'background', 'voice'} or row.get('purpose')
+                or not row.get('failure')
+                or generation and row.get('generationId') not in {None, generation}
+                or (row.get('admissionInputId') or row.get('turnId')) not in inputs):
+            continue
+        failure = row['failure']
+        if (error_type and failure.get('errorType') != error_type
+                and failure.get('category') not in {'content_filter', 'computer_capture_stop'}):
+            continue  # A handled earlier error is not this terminal's cause.
+        return {**failure, 'exceptionChain': public_exception_chain(failure.get('exceptionChain')),
+                'inputId': row.get('admissionInputId') or row.get('turnId'),
+                'recordedAt': row.get('endedAt')}
+    return None
+
+
+def runtime_fault_is_current(session, payload):
+    """Runtime availability is not the outcome of an already saved response."""
+    if session.get('status') in {'stopped', 'stopping'}:
+        return False  # An error cannot turn actual Stop into an application failure.
+    if payload.get('phase') == 'worker_startup' or payload.get('errorType') == 'RuntimeStartupError':
+        return True  # A new start is a new operation, even after a completed turn.
+    generation = payload.get('generationId') or (payload.get('executionFailure') or {}).get('generationId')
+    active = session.get('collaborationGeneration') or {}
+    latest = next((row for row in reversed(session.get('generations', []))
+                   if row.get('sessionId', session['id']) == session['id']
+                   and row.get('rootSessionId', session['id']) == session['id']
+                   and (not active.get('id') or row.get('generation_id') == active['id'])), {})
+    if generation and (active.get('id') or latest.get('generation_id')) and generation != (active.get('id') or latest['generation_id']):
+        return False
+    if (payload.get('event') == 'persistence.failed'
+            or latest.get('event') != 'generation.finished' or latest.get('active_job_ids')):
+        return True
+    # Ordinary new send creates its own display turn before native admission.
+    # Do not mistake that pending/unknown delivery for the previous saved result.
+    tree = session.get('execution') or {}
+    current = tree.get('currentTurnId')
+    turn = next((row for row in reversed(tree.get('turns', [])) if row['id'] == current), {})
+    if turn.get('phase') in {'running', 'working', 'starting', 'pending'} and (
+            current not in latest.get('input_ids', [])
+            or turn.get('retriedAt', 0) > latest.get('at', 0)):
+        return True
+    # The response checkpoint is already terminal. Retain a later runtime fault
+    # on the runtime, not as a failed request. A real save has its own explicit
+    # persistence.failed event; this does not attest that later state was saved.
+    return False
+
+
+def causal_timeline(session, failure=None):
+    """Small ordered tail from existing facts, not unrelated current activity."""
+    from .support_diagnostics import event_detail
+    failure = failure or session.get('failure') or {}
+    generation = failure.get('generationId')
+    if not generation:
+        latest = latest_root_event(session)
+        generation = latest.get('generation_id')
+    generations = [row for row in session.get('generations', [])[-200:]
+                   if row.get('generation_id') == generation]
+    start = next((_event_time(row.get('at')) for row in generations
+                  if row.get('event') == 'generation.started'), None)
+    end = _event_time(failure.get('recordedAt'))
+    rows = [*generations]
+    for row in session.get('runtimeEvents', [])[-100:]:
+        if row.get('type') not in {'runtime.error', 'runtime.ended'}:
+            continue
+        at = _event_time(row.get('at'))
+        if generation and row.get('generationId') == generation or (
+                start is not None and at is not None and start <= at and (end is None or at <= end)):
+            rows.append(row)
+    return [event_detail(row) for row in sorted(rows, key=lambda row: _event_time(row.get('at')) or 0)[-20:]]
+
+
+def latest_root_event(session):
+    active = (session.get('collaborationGeneration') or {}).get('id')
+    return next((row for row in reversed(session.get('generations', [])[-200:])
+                 if row.get('sessionId', session['id']) == session['id']
+                 and row.get('rootSessionId', session['id']) == session['id']
+                 and (not active or row.get('generation_id') == active)), {})
+
+
 def inspection_stamp(session):
     """Match the diagnostic snapshot without comparing conversation content."""
     return (tuple(session.get(key) for key in (
         'id', 'runtimeSessionId', 'nativeIdentity', 'title', 'workspace', 'bundle',
         'status', 'selection', 'error', 'errorAt', 'failure', 'configurationBusy', 'diagnosticReceipt', 'runtimeEvents')),
+        tuple(event.get('generation_id') for event in session.get('generations', [])[-200:]),
         tuple(worker.get('status') for worker in session.get('workers', [])))
 
 
@@ -318,7 +403,7 @@ def _belongs_to_failure(event, data, session):
 
 def inspect_session(home, session):
     from .host.storage import SessionStore
-    from .support_diagnostics import environment, event_detail, execution_detail
+    from .support_diagnostics import environment, event_detail
     identity = session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
     report = {'diagnosticsSchema': 2, 'environment': environment(),
               'capture': {'scope': 'bounded metadata; no prompts, tool arguments or provider payloads',
@@ -354,9 +439,14 @@ def inspect_session(home, session):
         report['runtime'] = runtime_support
     else:
         report['capture']['limitations'].append('Worker dependency versions were not recorded by this runtime.')
-    report['recentExecution'] = [execution_detail(row) for row in (session.get('execution') or {}).get('nodes', [])[-40:] if isinstance(row, dict)]
-    report['timeline'] = [event_detail(row) for row in session.get('generations', [])[-30:] if isinstance(row, dict)]
-    report['timeline'].extend(event_detail(row) for row in session.get('runtimeEvents', [])[-40:] if isinstance(row, dict))
+    report['timeline'] = causal_timeline(session)
+    latest = latest_root_event(session)
+    report['requestOutcome'] = {'event': latest.get('event'), 'generationId': latest.get('generation_id'),
+                                'inputIds': latest.get('input_ids', [])}
+    from .support_diagnostics import public_exception_chain
+    report['runtimeFaults'] = [{**event_detail(row), 'exceptionChain': public_exception_chain(row.get('exceptionChain'))}
+        for row in session.get('runtimeEvents', [])[-100:]
+        if row.get('type') == 'runtime.error' and row.get('generationId') == latest.get('generation_id')][-5:]
     if session.get('error') and report['failure']['category'] == 'unknown':
         # Older versions discarded the cause at the manager boundary. Read a
         # bounded tail of this session's own native event log, only on request.

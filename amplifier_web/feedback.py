@@ -37,6 +37,9 @@ def definitions(schema, string):
     from .feedback_additions import definitions as addition_definitions
     request_id = {"type": "string", "pattern": "^[A-Za-z0-9_-]{8,100}$"}
     attachment_id = {"type": "string", "pattern": "^[a-f0-9]{32}$"}
+    failure_context = schema({key: {**string(200), "minLength": 1}
+                              for key in ("sessionId", "inputId", "generationId")},
+                             ["sessionId", "inputId", "generationId"])
     from .feedback_excerpts import definitions as excerpt_definitions
     return {
         **excerpt_definitions(schema, string),
@@ -46,13 +49,15 @@ def definitions(schema, string):
             "Read the exact repository identity, visibility and selected ordinary-file hashes. Full autonomous callers read only their conversation-owned staging; this optional read does not publish.", schema({}, [])),
         "feedback.diagnostics": (
             "Preview complete allowlisted reproduction facts on demand, without posting feedback, reading logs or running a conversation. With requestId, read only the immutable diagnostics saved with that local feedback receipt (null when opted out). Host active component generation does not verify a running worker. No raw logs, message text, paths or credentials.",
-            schema({"requestId": request_id, "deviceDiagnostics": feedback_diagnostics.DEVICE_SCHEMA}, []),
+            schema({"requestId": request_id, "deviceDiagnostics": feedback_diagnostics.DEVICE_SCHEMA,
+                    "failureContext": failure_context}, []),
         ),
         "feedback.report": (
             "Prepare the supplied feedback text as a local Markdown report, optionally downloading it. No GitHub CLI, account, network, issue submission, conversation execution or attachment upload. Diagnostics require includeDiagnostics:true; only allowlisted facts are added. Attachments/excerpts are not included. A download effect means started, not proof the file was saved.",
             schema({"title": {**string(200), "minLength": 1}, "body": {**string(16000), "minLength": 1},
                     "category": {"enum": list(CATEGORIES)}, "includeDiagnostics": {"type": "boolean"},
                     "deviceDiagnostics": feedback_diagnostics.DEVICE_SCHEMA,
+                    "failureContext": failure_context,
                     "destination": {"enum": ["none", "download"]}}, ["title", "body", "category"]),
         ),
         "feedback.submit": (
@@ -66,6 +71,7 @@ def definitions(schema, string):
                     "confirmedExcerpts": {"type": "array", "maxItems": feedback_attachments.MAX_FILES, "uniqueItems": True,
                         "items": schema({"id": attachment_id, "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}, ["id", "sha256"])},
                     "deviceDiagnostics": feedback_diagnostics.DEVICE_SCHEMA,
+                    "failureContext": failure_context,
                     "attachmentIds": {"type": "array", "items": attachment_id, "maxItems": feedback_attachments.MAX_FILES, "uniqueItems": True}},
                    ["requestId", "title", "body", "category"]),
         ),
@@ -272,8 +278,41 @@ class Feedback:
             payload, receipt = map(json.loads, row)
             return {'snapshot': 'accepted', 'capturedAt': receipt.get('createdAt'),
                     'diagnostics': payload.get('_diagnostics')}
-        return {'snapshot': 'current', 'capturedAt': time.time(),
-                'diagnostics': feedback_diagnostics.snapshot(self.service.state_context(), args.get('deviceDiagnostics'))}
+        return {'snapshot': 'request' if args.get('failureContext') else 'current', 'capturedAt': time.time(),
+                'diagnostics': self.diagnostic_snapshot(args)}
+
+    def diagnostic_snapshot(self, args):
+        state = self.service.state_context()
+        context = args.get('failureContext')
+        if context:
+            from .input_status import PREFIX, public
+            session = self.service._session(context['sessionId'])
+            entry = session.get('messageAnnotations', {}).get(PREFIX + context['inputId'], {})
+            status = public(entry.get('inputStatus'), context['inputId'])
+            failure = (status or {}).get('failure') or {}
+            if (not status or status.get('phase') != 'failed'
+                    or status.get('generationId') != context['generationId']
+                    or failure.get('generationId') != context['generationId']
+                    or context['inputId'] not in (failure.get('inputIds') or [failure.get('inputId')])):
+                raise ValueError('The selected request diagnosis is unavailable or changed. Select its recorded details again.')
+            # Borrow only this request's retained observations. Newer runtime
+            # versions, faults, activity and messages cannot explain old failure.
+            selected = {'id': session['id'], 'status': 'error', 'error': failure.get('summary'),
+                'failure': failure, 'runtimeReport': failure.get('runtimeReport', {}),
+                'activity': {'phase': 'error'}, 'execution': {}, 'moduleFailures': [],
+                'messages': [{'role': 'user', 'inputId': context['inputId']}],
+                'collaborationGeneration': {'id': context['generationId']},
+                'generations': [row for row in session.get('generations', [])[-200:]
+                                if row.get('generation_id') == context['generationId']]
+                    or [{'event': 'generation.failed', 'generation_id': context['generationId'],
+                         'input_ids': failure.get('inputIds', []), 'at': failure.get('recordedAt')}],
+                'runtimeEvents': [row for row in session.get('runtimeEvents', [])
+                                  if row.get('generationId') == context['generationId']
+                                  and type(row.get('at')) in (int, float)
+                                  and type(failure.get('recordedAt')) in (int, float)
+                                  and row['at'] <= failure['recordedAt']]}
+            state = {**state, 'selectedSessionId': session['id'], 'sessions': [selected]}
+        return feedback_diagnostics.snapshot(state, args.get('deviceDiagnostics'))
 
     def report(self, args):
         """Caller-supplied text only; no saved draft or transcript is read."""
@@ -282,7 +321,7 @@ class Feedback:
         content = '# ' + args['title'].strip() + '\n\n' + args['body']
         content += '\n\n---\nCategory: ' + CATEGORIES[args['category']]
         if args.get('includeDiagnostics') is True:
-            facts = feedback_diagnostics.snapshot(self.service.state_context(), args.get('deviceDiagnostics'))
+            facts = self.diagnostic_snapshot(args)
             content += feedback_diagnostics.markdown(facts)
         content += '\n\nLocal report only. No feedback was submitted and no attachments were uploaded.\n'
         return {'filename': 'amplifier-feedback.md', 'mime': 'text/markdown',
@@ -308,14 +347,19 @@ class Feedback:
         if active >= 8:
             raise AppError("Feedback is still sending. Wait for a submission to finish before sending more.", 409)
         authority = feedback_context.capture(self.service, origin, caller)
+        if args.get("includeDiagnostics", True) and args.get('failureContext'):
+            try:
+                args["_diagnostics"] = self.diagnostic_snapshot(args)
+            except ValueError as exc:
+                raise AppError(str(exc), 409) from None
         try:
             # Persist exactly the selected metadata/hash at acceptance. Changes
             # to the draft or file store after this point cannot alter a send.
             args["_attachments"] = self.selected_files(args, authority)
             if authority:
                 args['_authority'] = authority
-            if args.get("includeDiagnostics", True):
-                args["_diagnostics"] = feedback_diagnostics.snapshot(self.service.state_context(),args.get("deviceDiagnostics"))
+            if args.get("includeDiagnostics", True) and "_diagnostics" not in args:
+                args["_diagnostics"] = self.diagnostic_snapshot(args)
         except ExcerptConsentError as exc:
             raise AppError(str(exc), 409) from None
         except (OSError, ValueError):

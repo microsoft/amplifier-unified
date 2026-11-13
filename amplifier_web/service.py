@@ -4791,12 +4791,9 @@ class AppService:
             ingest_execution(session,payload)
         if getattr(self, 'status_emitter', None):
             self.status_emitter.execution(session, payload)
-        if payload.get('failure') and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')} and payload.get('lifecycle') != 'background' and payload.get('purpose') != 'context_compaction':
-            # Auxiliary preparation failures stay on their call. The
-            # manager's terminal generation.failed event owns whether
-            # this turn stopped; a successful recovery is not an app fault.
-            session['failure'] = {**payload['failure'], 'inputId': payload.get('turnId'), 'recordedAt': payload.get('endedAt')}
-            session.pop('health', None)
+        # Call failures remain on the operation that failed. Only terminal
+        # request evidence (or an actual runtime loss) can fail the request.
+        session.pop('health', None)
 
     def _apply_runtime_receipt(self, session, kind, payload):
         """Shared synchronous reducer for eligible single and batched receipts."""
@@ -4962,11 +4959,6 @@ class AppService:
                     finish_execution(session, 'interrupted')
             elif kind == "runtime.warmth":
                 session['preparation'] = {'status': payload['status']}
-                if payload['status'] == 'warm' and session['status'] == 'ready':
-                    session['status'] = 'idle'
-                    # Parking a prepared worker releases the same idle boundary
-                    # as session.idle. Only retained guarded input may run.
-                    self._task(self.collaboration.drain(session["id"]))
             elif kind == "runtime.status":
                 if payload.get('event') == 'input.delivered' and payload.get('inputId'):
                     self._delivery(session, payload['inputId'], 'accepted')
@@ -4997,17 +4989,21 @@ class AppService:
                 if session["status"] == "ready":
                     from .session_health import current_terminal_failure
                     retained_failure = current_terminal_failure(session)
-                    if (session.get('failure', {}).get('category') != 'execution_interrupted'
-                            and not retained_failure):
+                    startup_recovered = (session.get('failure', {}).get('category') == 'worker_startup'
+                                         or session.get('failure', {}).get('startupAttemptId'))
+                    if startup_recovered and not retained_failure:
                         session.pop("error", None)
                         session.pop("failure", None)
-                    if not retained_failure:
+                    if startup_recovered and not retained_failure:
                         session.pop("errorType", None)
                         session.pop("turnErrorType", None)
                     session.pop("moduleFailures", None)
                     if isinstance(session.get("health"), dict):
                         session["health"].pop("moduleFailures", None)
                     session['preparation'] = {'status': 'ready'}
+                    # Boot idle may arrive before readiness. Reconsider only
+                    # retained guarded input; readiness never manufactures work.
+                    self._task(self.collaboration.drain(session["id"]))
                 labels = {"starting": "Preparing your Amplifier session…", "working": "Waiting for the model response…", "ready": "Ready to work", "idle": "Ready", "stopped": "Stopped", "stopping": "Stopping work…"}
                 activity = self._activity(session, payload.get("phase", session["status"]), payload.get("detail") or labels.get(session["status"], session["status"]))
                 if session["status"] in {"idle", "stopped"}:
@@ -5027,6 +5023,30 @@ class AppService:
                 if payload.get("runtimeSessionId"):
                     session["runtimeSessionId"] = payload["runtimeSessionId"]
             elif kind == "runtime.error":
+                from .support_diagnostics import event_detail, public_execution_failure
+                capture = public_execution_failure(payload.get('executionFailure'))
+                native = session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
+                if capture and capture['runtimeSessionId'] != native:
+                    capture = None
+                event = {**event_detail(payload), 'type': kind, 'at': time.time(),
+                         'generationId': payload.get('generationId') or (capture or {}).get('generationId') or
+                             (session.get('collaborationGeneration') or {}).get('id'),
+                         **({'exceptionChain': capture['exceptionChain']} if capture else {})}
+                session.setdefault('runtimeEvents', []).append(event)
+                session['runtimeEvents'] = session['runtimeEvents'][-100:]
+                from .session_health import runtime_fault_is_current
+                if not runtime_fault_is_current(session, payload):
+                    event['scope'] = 'runtime'
+                    from .session_health import latest_root_event
+                    latest = latest_root_event(session)
+                    if (session.get('status') not in {'stopped', 'stopping'}
+                            and latest.get('event') == 'generation.finished'
+                            and event.get('generationId') == latest.get('generation_id')):
+                        session['status'] = 'idle'
+                        self._activity(session, 'idle', 'Response saved; runtime details are available.')
+                    session.pop('health', None)
+                    self._publish(session_ids={session['id']}, record_only=True)
+                    return
                 if 'terminalFailure' in payload:
                     from .session_health import terminal_exception_failure
                     enriched = terminal_exception_failure(session, payload['terminalFailure'])
@@ -5051,9 +5071,17 @@ class AppService:
                 error_type = payload.get('errorType') or (None if startup else session.get('turnErrorType'))
                 from .session_health import current_terminal_failure, failure_details, startup_failure_details
                 projected = failure_details(detail, error_type)
+                if payload.get('event') == 'persistence.failed':
+                    projected = {**projected, 'category': 'persistence', 'stage': 'persistence',
+                        'summary': 'Conversation progress could not be saved.',
+                        'guidance': 'Inspect saved results and restore storage before continuing. The completed response is not proof that later progress was saved; no work was replayed.'}
                 if startup:
                     projected.update(startup_failure_details(payload))
                 existing = session.get('failure')
+                if not existing and not startup:
+                    from .session_health import request_call_failure
+                    current = session.get('execution', {}).get('currentTurnId')
+                    existing = request_call_failure(session, [current]) if current else None
                 if startup and projected['category'] == 'unknown':
                     error_type = 'RuntimeStartupError'
                     projected = failure_details(detail, error_type)
@@ -5061,7 +5089,8 @@ class AppService:
                 failure_inputs = (existing.get('inputIds') or [existing.get('inputId')]) if isinstance(existing, dict) else []
                 same_input = (current_terminal_failure(session) or not current_input
                     or not any(failure_inputs) or current_input in failure_inputs)
-                if (not startup and same_input and isinstance(existing, dict)
+                if (not startup and payload.get('event') != 'persistence.failed'
+                        and same_input and isinstance(existing, dict)
                         and (existing.get('stage') or projected['category'] == 'unknown'
                              and existing.get('category') != 'unknown')):
                     # A later generic process-exit error must not replace the
@@ -5074,7 +5103,13 @@ class AppService:
                 session['error'] = ('This turn exceeded the model context limit. Your conversation and saved surfaces are kept. '
                     'Inspect the current state and continue with a smaller, focused request; completed actions were not replayed.'
                     if projected['category'] == 'context_limit' and not projected.get('stage') else detail)
+                if payload.get('event') == 'persistence.failed':
+                    session['error'] = projected['summary'] + ' ' + projected['guidance']
                 session['failure'] = {**projected, 'recordedAt': session['errorAt']}
+                if capture and not session['failure'].get('exceptionChain'):
+                    session['failure']['exceptionChain'] = capture['exceptionChain']
+                from .input_status import record_failure
+                record_failure(session, session['failure'])
                 if projected['category']=='authentication' and self.management is not None:
                     # Recheck current connections outside the event lock. A late
                     # failure from an old worker must not label a newly signed-in account.
@@ -5086,6 +5121,10 @@ class AppService:
                 event = {**payload, "at": time.time()}
                 session.setdefault("generations", []).append(event)
                 session["generations"] = session["generations"][-200:]
+                active_before = session.get('collaborationGeneration') or {}
+                before_generation = (active_before.get('id'), active_before.get('terminal'))
+                current_generation = (not active_before.get('id') or
+                    active_before.get('id') == payload.get('generation_id') and not active_before.get('terminal'))
                 from .input_status import generation as observe_input_generation, PREFIX
                 input_annotation = PREFIX + str(payload.get('initial_input_id', ''))
                 before_input = session.get('messageAnnotations', {}).get(input_annotation)
@@ -5098,23 +5137,16 @@ class AppService:
                 apply_response_completion(session, payload)
                 root_generation = (payload.get('sessionId', session['id']) == session['id']
                     and payload.get('rootSessionId', session['id']) == session['id'])
-                if root_generation and payload.get('event') == 'generation.started':
-                    session.pop('modelAdmission', None)
-                    session.pop('diagnosticReceipt', None)
-                    session.pop('turnErrorType', None)
-                    session.pop('errorType', None)
-                    session.pop('error', None)
-                    session.pop('failure', None)
-                    session.pop('health', None)
-                    session.pop('errorAt', None)
-                elif root_generation and payload.get('event') == 'generation.failed':
+                if root_generation and current_generation and payload.get('event') == 'generation.failed':
                     from .execution import fail_generation
                     fail_generation(session, payload.get('input_ids', []))
                     session['turnErrorType'] = payload.get('error_type')
                     from .session_health import generation_failure
                     from .model_admission import failure as admission_failure
                     failure = admission_failure(session, payload) or generation_failure(payload)
-                    existing = session.get('failure')
+                    from .session_health import request_call_failure
+                    existing = request_call_failure(session, payload.get('input_ids', []),
+                                                    payload.get('generation_id'), payload.get('error_type'))
                     safety_categories = {'content_filter', 'computer_capture_stop'}
                     explicit_change = (failure and failure.get('category') != 'unknown'
                         and isinstance(existing, dict) and failure['category'] != existing.get('category'))
@@ -5131,18 +5163,16 @@ class AppService:
                         session['failure'] = {**failure, 'recordedAt': event['at'],
                             'generationId': payload.get('generation_id'), 'inputIds': payload.get('input_ids', [])}
                     elif isinstance(existing, dict):
-                        active = session.get('collaborationGeneration') or {}
-                        # A classified provider cause precedes the terminal
-                        # event. Bind it only to its observed admitted input
-                        # and generation, never to an unrelated later failure.
-                        if (active.get('id') == payload.get('generation_id') and not active.get('terminal')
-                                and existing.get('generationId') in {None, active.get('id')}
-                                and existing.get('inputId')
-                                and existing['inputId'] in active.get('inputIds', [])
-                                and existing['inputId'] in payload.get('input_ids', [])):
-                            session['failure'] = {**existing, 'generationId': active['id'],
-                                'inputIds': payload['input_ids']}
-                if root_generation and payload.get("event") == "generation.finished":
+                        session['failure'] = {**existing, 'generationId': payload.get('generation_id'),
+                            'inputIds': payload.get('input_ids', [])}
+                    from .input_status import record_failure
+                    record_failure(session, session.get('failure') or {})
+                if root_generation and current_generation and payload.get("event") == "generation.finished":
+                    if not payload.get('active_job_ids'):
+                        for turn in session.get('execution', {}).get('turns', []):
+                            if (turn.get('inputId', turn['id']) in payload.get('input_ids', [])
+                                    and turn.get('generationId') in {None, payload.get('generation_id')}):
+                                turn.update(phase='completed', endedAt=event['at'])
                     if not scheduled_generation:
                         from .attention import completed
                         completed(session,event)
@@ -5239,7 +5269,14 @@ class AppService:
                 kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
             collaboration_changed = (set() if kind == 'runtime.ended' and not ended_foreground
                                      else self.collaboration.observe(session, kind, payload))
-            if (kind == 'runtime.generation' and root_generation
+            if (kind == 'runtime.generation' and root_generation and payload.get('event') == 'generation.started'
+                    and (session.get('collaborationGeneration') or {}).get('id') == payload.get('generation_id')
+                    and before_generation[0] != payload.get('generation_id')):
+                # Clear only on admission accepted by the canonical reducer.
+                for key in ('modelAdmission', 'diagnosticReceipt', 'turnErrorType', 'errorType',
+                            'error', 'failure', 'health', 'errorAt'):
+                    session.pop(key, None)
+            if (kind == 'runtime.generation' and root_generation and current_generation
                     and payload.get('event') == 'generation.failed'
                     and session.get('status') not in {'stopped', 'stopping'}):
                 from .session_health import current_terminal_failure

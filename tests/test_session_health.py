@@ -120,9 +120,9 @@ async def test_inspection_does_not_cache_snapshot_changed_while_reading(tmp_path
         if change == 'status':
             await app.on_runtime_event('runtime.status', {'sessionId': session['id'], 'status': 'stopped'})
         elif change == 'failure':
-            await app.on_runtime_event('execution.event', {
-                'sessionId': session['id'], 'id': 'failed-call', 'kind': 'llm', 'phase': 'error',
-                'failure': failure_details('Invalid image base64', 'ValueError'),
+                await app.on_runtime_event('runtime.error', {
+                    'sessionId': session['id'], 'errorType': 'ValueError',
+                    'error': 'Invalid image base64',
             })
         elif change == 'worker':
             session['workers'] = [{'id': 'synthetic-worker', 'status': 'working'}]
@@ -281,6 +281,8 @@ async def test_original_provider_cause_survives_runtime_wrapper(tmp_path, messag
             raise error_class(message)
     provider, emitted = Provider(), []
     events = ExecutionEvents(session['id'], emitted.append)
+    from amplifier_web.execution import ensure_turn
+    ensure_turn(session, 'turn-id')
     events.lifecycle({'type': 'input.delivered', 'input_id': 'turn-id'})
     events.instrument_provider(session['id'], provider)
     with pytest.raises(error_class):
@@ -288,6 +290,7 @@ async def test_original_provider_cause_survives_runtime_wrapper(tmp_path, messag
     for event in emitted:
         kind, payload = normalize_event(event, session['id'], 'turn-id')
         await app.on_runtime_event(kind, payload)
+    assert not session.get('failure')  # A call error alone is not a request failure.
     await app.on_runtime_event('runtime.error', {'sessionId': session['id'], 'error': 'Manager turn failed; no automatic replay'})
     assert session['failure']['category'] == category
     assert session['failure']['inputId'] == 'turn-id'
@@ -405,3 +408,21 @@ def test_support_timeline_excludes_payloads_and_bounds_fields():
         'response': 'private answer', 'error': 'private exception'})
     assert event['bridgeId'] == 'bridge-1' and event['phase'] == 'timeout'
     assert not {'args', 'response', 'error'} & event.keys()
+
+
+def test_inspection_omits_stale_execution_and_sorts_only_causal_lifecycle(tmp_path):
+    session = {'id': 'root', 'workspace': str(tmp_path), 'status': 'error',
+        'failure': {'category': 'unknown', 'generationId': 'current', 'recordedAt': 110},
+        'generations': [
+            {'event': 'generation.finished', 'generation_id': 'older', 'at': 1},
+            {'event': 'generation.started', 'generation_id': 'current', 'at': 100},
+            {'event': 'generation.failed', 'generation_id': 'current', 'at': 110}],
+        'runtimeEvents': [
+            {'type': 'runtime.error', 'at': 105, 'errorType': 'TypeError'},
+            {'type': 'runtime.tool', 'at': 106, 'tool': 'noise'},
+            {'type': 'runtime.error', 'at': 111, 'errorType': 'OtherError'}],
+        'execution': {'nodes': [{'startedAt': 1, 'endedAt': 244296, 'error': 'stale'}]}}
+    report = inspect_session(tmp_path, session)
+    assert 'recentExecution' not in report
+    assert [row.get('at') for row in report['timeline']] == [100, 105, 110]
+    assert report['requestOutcome']['event'] == 'generation.failed'
