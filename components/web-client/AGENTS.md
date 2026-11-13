@@ -19,6 +19,13 @@ Keep each assertion with its owner. Shared generic helper APIs retain one
 implementation with injected test-framework facades, not copied implementations.
 A fixture pass is not actual-server, provider, release or cross-version acceptance.
 
+For interaction work, follow upstream
+[CX8](https://github.com/microsoft/amplifier-unified/blob/main/contracts/client-experience.v1.md#the-promises)
+and the [client vision](https://github.com/microsoft/amplifier-unified/blob/main/docs/clients/VISION.md):
+design for ordinary information workers and consumers, with familiar labels,
+accessible controls and low cognitive load. UX is like golf: fewer strokes win,
+without losing authority, feedback or recovery.
+
 ## Temporary dual-repository maintenance
 
 While private, maintain both this canonical source and Unified's committed

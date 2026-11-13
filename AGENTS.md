@@ -7,6 +7,17 @@ contracts and tests. Ordinary `rg` does not apply these context classifications;
 use the map's selective-search examples, and expand to retained evidence or
 generated output when the task needs it.
 
+## Design for everyday users
+
+Use the [shared-client vision](docs/clients/VISION.md#2-common-meaning-native-interaction)
+and [CX8](contracts/client-experience.v1.md#the-promises) for all user-facing work,
+not only appearance changes. The baseline is ordinary information-worker,
+end-user and consumer usability: plain familiar language, useful defaults and low
+cognitive load. UX is golf: every click or stroke counts; fewer steps wins without
+sacrificing accessibility, authority, meaningful feedback or recovery. Measure the
+whole journey, including entry, repeated setup and keyboard/focus behavior, rather
+than optimizing one control in isolation.
+
 ## Web client: temporary two-repository maintenance
 
 Author browser source, client tests and client build tools in
