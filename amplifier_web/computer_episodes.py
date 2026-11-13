@@ -14,6 +14,19 @@ from weakref import WeakKeyDictionary
 
 _CURRENT = ContextVar("unified_computer_episode", default=None)
 
+# These routes observe metadata or release existing custody. They do not read
+# screen/clipboard contents or acquire input authority. The bundle still owns
+# their argument, target and generation validation.
+DESKTOP_NON_ACQUIRING = frozenset({
+    "episode_status", "diagnostic_snapshot", "doctor", "end_episode",
+})
+
+
+def non_acquiring_desktop(name, arguments):
+    return (name == "desktop" and isinstance(arguments, dict)
+            and isinstance(arguments.get("action"), str)
+            and arguments.get("action") in DESKTOP_NON_ACQUIRING)
+
 
 @dataclass(eq=False)
 class Episode:
@@ -318,6 +331,41 @@ class Sponsor:
         self.registry.sponsors.pop(self.coordinator, None)
 
     async def invoke(self, name, arguments, execute):
+        if non_acquiring_desktop(name, arguments):
+            if arguments.get("action") == "end_episode":
+                controller = self.coordinator.get_capability("computer_use.episodes")
+                if controller is None:
+                    return await execute(arguments)
+                from amplifier_core import ToolResult
+                if (set(arguments) != {"action", "generation"}
+                        or not isinstance(arguments.get("generation"), str)):
+                    return ToolResult(success=False, error={
+                        "type": "ValueError", "message": "end_episode accepts only an exact generation string"})
+                cached = controller.cached_status()
+                identity = cached.get("identity") or {}
+                generation = arguments["generation"]
+                if identity and identity.get("generation") != generation:
+                    return ToolResult(success=False, error={
+                        "type": "BackendError", "message": "wrong or stale episode generation"})
+                episode = next((item for item in self.episodes
+                    if item.controller is controller and item.generation == generation), None)
+                if episode is not None:
+                    # Release only the exact existing host episode, including
+                    # after Stop. The retained controller drain is the sole end
+                    # owner; raw DesktopTool.end must not race it or startup.
+                    settlement = self.settle(episode)
+                    try:
+                        await asyncio.shield(settlement)
+                    except asyncio.CancelledError:
+                        self.settle(episode, interrupted=True)
+                        raise
+                    return ToolResult(success=True, output=dict(episode.status))
+                if not identity or (cached.get("state") in {"released", "interrupted", "stopping", "unknown"}
+                                    and cached.get("admission_open") is not True):
+                    return ToolResult(success=True, output=dict(cached))
+                return ToolResult(success=False, error={
+                    "type": "BackendError", "message": "No matching host episode is available for settlement"})
+            return await execute(arguments)
         bounded = name == "ui_use" and arguments.get("surface") == "computer"
         if name == "ui_use" and not bounded:
             return await execute(arguments)

@@ -735,3 +735,51 @@ async def test_direct_script_sponsor_keeps_native_tool_inspection_after_app_boot
     mounted = coordinator.tools["computer"]
     assert coordinator.get_capability("web.work_inspect_tool")("computer", mounted) is native
     await registry.close()
+
+
+@pytest.mark.parametrize("name,arguments,allowed", [
+    ("desktop", {"action": action}, True) for action in ("episode_status", "diagnostic_snapshot", "doctor")
+] + [
+    ("desktop", {"action": "end_episode", "generation": "exact"}, True),
+    *[("desktop", {"action": action}, False) for action in
+      ("begin_episode", "retarget", "get_clipboard", "set_clipboard", "list_windows", "screen_info")],
+    *[("computer", {"action": action}, False) for action in
+      ("observe", "screenshot", "doctor", "episode_status", "diagnostic_snapshot", "act", "type")],
+    ("computer", {"version": 1, "actions": [{"action": "screenshot"}], "capture_after": True}, False),
+    ("ui_use", {"surface": "computer", "action": "diagnostic_snapshot"}, False),
+])
+async def test_host_stop_hook_allows_only_desktop_non_acquiring_routes(name, arguments, allowed):
+    from amplifier_core import HookRegistry
+    from amplifier_web.app_guidance import install_app_access
+    coordinator = Coordinator()
+    coordinator.hooks = HookRegistry()
+    bridge = AsyncMock(return_value={"stopped": True})
+    await install_app_access(coordinator, bridge)
+    result = await coordinator.hooks.emit("tool:pre", {"tool_name": name, "tool_input": arguments})
+    assert (result.action != "deny") is allowed
+    if allowed:
+        bridge.assert_not_awaited()
+
+
+async def test_passive_route_still_runs_work_check_and_preserves_native_inspection():
+    from amplifier_core import HookRegistry, ToolResult
+    from amplifier_web.app_guidance import install_app_access
+    coordinator = Coordinator(Controller())
+    coordinator.hooks = HookRegistry()
+    check = AsyncMock(return_value={"allowed": False})
+    coordinator.register_capability("web.work_effect_check", check)
+    await install_app_access(coordinator, AsyncMock(return_value={}))
+    registry = ComputerEpisodes()
+    sponsor = registry.install(coordinator, lambda: None)
+    native = SimpleNamespace(name="desktop", execute=AsyncMock(return_value=ToolResult(success=True)))
+    await coordinator.mount("tools", native, name="desktop")
+    mounted = coordinator.tools["desktop"]
+    try:
+        result = await mounted.execute({"action": "diagnostic_snapshot"})
+        assert not result.success
+        check.assert_awaited_once()
+        native.execute.assert_not_awaited()
+        assert coordinator.get_capability("web.work_inspect_tool")("desktop", mounted) is native
+        assert not sponsor.episodes
+    finally:
+        await registry.close()

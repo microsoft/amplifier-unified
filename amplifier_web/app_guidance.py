@@ -367,7 +367,9 @@ async def install_app_access(coordinator, bridge):
         return await bridge('ui.use', {'operation': operation, 'args': args})
     coordinator.register_capability('ui.use.host', ui_host)
     async def ui_stop_guard(event, data):
-        if data.get('tool_name') in {'computer','desktop','ui_use'} and (data.get('tool_input') or {}).get('action') not in {'observe','screenshot','doctor','list_windows'}:
+        from .computer_episodes import non_acquiring_desktop
+        if (data.get('tool_name') in {'computer','desktop','ui_use'}
+                and not non_acquiring_desktop(data.get('tool_name'), data.get('tool_input'))):
             current = await ui_host('configuration', {'surface':'computer'})
             if current.get('stopped'):
                 return HookResult(action='deny',reason='The user paused UI access. Resume from Browser & computer controls before further input.')
