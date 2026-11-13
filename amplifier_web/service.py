@@ -519,6 +519,8 @@ for _action, (_, _spec) in ACTION_DEFINITIONS.items():
 
 
 ACTION_DEFINITIONS["session.create"][1]["properties"]["externalAgentId"] = string(100)
+from .external_agent_settings import definitions as external_agent_definitions
+ACTION_DEFINITIONS.update(external_agent_definitions(schema, string))
 
 
 class AppService:
@@ -2122,6 +2124,14 @@ class AppService:
             if retained is not None:
                 return retained
         configuration_authority = self.configuration_authority.capture(action, args, origin, caller_session_id)
+        if action in {'externalAgents.list', 'externalAgents.get'}:
+            from .external_agent_settings import catalog, read
+            async with self.lock:
+                if admission_check is not None:
+                    admission_check()
+                self.configuration_authority.check(configuration_authority)
+                result = catalog(self) if action.endswith('.list') else read(self, args['id'])
+            return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
         if action in TEST_RUNNER_ACTIONS:
             from .registered_test_runners import dispatch as test_runner_dispatch
             return await test_runner_dispatch(self, action, args, configuration_authority)
@@ -2440,6 +2450,13 @@ class AppService:
         prepared_draft_id = None
         from .managed_chats import is_managed, allocate, creation_identity
         managed_creation = action == 'session.create' and is_managed(args)
+        if action == 'session.create' and args.get('externalAgentId') and not (
+                command_id and self.db.execute('SELECT 1 FROM commands WHERE id=?', (command_id,)).fetchone()):
+            # External chats use an explicitly chosen existing workspace. Check
+            # before native creation can allocate a managed or new directory.
+            workspace = args.get('workspace', '').strip()
+            if managed_creation or not workspace or not Path(workspace).expanduser().is_dir():
+                raise AppError('Choose an existing workspace folder for this external chat.')
         if action == 'session.create' and not managed_creation and not (command_id and self.db.execute('SELECT 1 FROM commands WHERE id=?', (command_id,)).fetchone()):
             try:
                 target_path = self._session_destination(args)
@@ -3165,6 +3182,9 @@ class AppService:
                 self.runtime.configure_retention(policy)
                 self.server_config = {**getattr(self, 'server_config', saved), 'runtime': policy}
                 self.state['runtime']['retention'] = dict(policy)
+            elif action in {'externalAgents.save', 'externalAgents.remove'}:
+                from .external_agent_settings import mutate
+                diagnostic_result = mutate(self, action, args)
             elif action == "session.naming.backfill":
                 backfill = getattr(self, 'naming_backfill', None)
                 if backfill is None:
