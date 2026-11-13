@@ -152,7 +152,10 @@ test('manual read removes locally without waiting for a parent snapshot; older s
 });
 
 for(const status of ['accepted','cancelled'])test(`exact ${status} settlement survives omission before stale pending returns`,async()=>{
- const pending={...row,revision:8},calls=[];
+ const pending={...row,revision:8},calls=[];let globalRevision=100;
+ // These are increasing whole-state revisions carrying older per-receipt rows,
+ // not globally old frames (which App.acceptState already rejects).
+ const snapshot=rows=>({...state(rows),revision:globalRevision++});
  const settled={...accepted,revision:9,status,text:'Evicted exact brief',message:'Evicted exact feedback',
   ...(status==='cancelled'?{creation:'not_started',delivery:'not_started',targetSessionId:null}:{})};
  const dispatch=async action=>{
@@ -160,18 +163,18 @@ for(const status of ['accepted','cancelled'])test(`exact ${status} settlement su
   if(action.endsWith('.confirm'))throw Error('Lost confirmation');
   return {accepted:true,result:settled};
  };
- await act(async()=>{root=create(view(state(pending),dispatch))});
+ await act(async()=>{root=create(view(snapshot(pending),dispatch))});
  await act(async()=>button('session.handoff.confirm').props.onClick());
  await act(async()=>button('session.handoff.read').props.onClick());
  assert.equal(root.toJSON(),null,'Exact revision 9 settles ahead of stream revision 8');
  for(let cycle=0;cycle<2;cycle++){
-  await act(async()=>root.update(view(state([]),dispatch)));
+  await act(async()=>root.update(view(snapshot([]),dispatch)));
   assert.equal(root.toJSON(),null,'Omission renders no shell');
-  await act(async()=>root.update(view(state(pending),dispatch)));
+  await act(async()=>root.update(view(snapshot(pending),dispatch)));
   assert.equal(root.toJSON(),null,'Older pending receipt cannot resurrect after omission');
  }
  for(const revision of [9,10]){
-  await act(async()=>root.update(view(state({...pending,revision,status:'unknown',message:'Stream uncertainty'}),dispatch)));
+  await act(async()=>root.update(view(snapshot({...pending,revision,status:'unknown',message:'Stream uncertainty'}),dispatch)));
   assert.deepEqual(activeIds(),['request'],'Equal or newer stream receipt wins over the compact witness');
   assert.ok(button('session.handoff.read'));
   assert.doesNotMatch(text(),/Evicted exact brief|Evicted exact feedback|Lost confirmation/);
@@ -179,17 +182,32 @@ for(const status of ['accepted','cancelled'])test(`exact ${status} settlement su
  assert.deepEqual(calls,['session.handoff.confirm','session.handoff.read'],'Omission and restoration never replay or poll');
 });
 
+test('a newer incomplete exact read stays actionable over an older settlement watermark',async()=>{
+ let finish,calls=0;
+ const dispatch=()=>{calls++;return calls===1?Promise.resolve({accepted:true,result:{...accepted,revision:9}}):new Promise(resolve=>{finish=resolve})};
+ const unknown={...row,status:'unknown',revision:8};
+ await act(async()=>{root=create(view(state(unknown),dispatch))});
+ await act(async()=>button('session.handoff.read').props.onClick());
+ await act(async()=>root.update(view(state([]),dispatch)));
+ await act(async()=>root.update(view(state({...unknown,revision:10}),dispatch)));
+ await act(async()=>{button('session.handoff.read').props.onClick()});
+ await act(async()=>root.update(view(state(unknown),dispatch)));
+ await act(async()=>finish({accepted:true,result:{...row,revision:11,status:'accepted'}}));
+ assert.deepEqual(activeIds(),['request'],'A newer exact receipt with missing phases cannot be suppressed by an older watermark');
+ assert.ok(button('session.handoff.read'));assert.equal(calls,2);
+});
+
 for(const outcome of ['accepted','unconfirmed'])test(`repeated ${outcome} omission renders reuse compact interaction identity`,async()=>{
- let commits=0,calls=0;
+ let commits=0,calls=0;const phases=[];
  const dispatch=async()=>{calls++;if(outcome==='unconfirmed')throw Error('Lost confirmation');return {accepted:true,result:accepted}};
- const profiled=current=>React.createElement(React.Profiler,{id:'handoffs',onRender:()=>{commits++}},view(current,dispatch));
+ const profiled=current=>React.createElement(React.Profiler,{id:'handoffs',onRender:(_id,phase)=>{commits++;phases.push(phase)}},view(current,dispatch));
  await act(async()=>{root=create(profiled(state()))});
  await act(async()=>button('session.handoff.confirm').props.onClick());
  await act(async()=>root.update(profiled(state([]))));
  for(let cycle=0;cycle<4;cycle++){
   const before=commits;
   await act(async()=>root.update(profiled(state([]))));
-  assert.equal(commits-before,1,'Unchanged omission must not schedule a nested interaction-state commit');
+  assert.equal(commits-before,1,`Unchanged omission must not schedule a nested interaction-state commit; phases: ${phases.slice(before).join(', ')}`);
   assert.equal(root.toJSON(),null);
  }
  await act(async()=>root.update(profiled(state())));

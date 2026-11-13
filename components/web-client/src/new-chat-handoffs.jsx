@@ -9,19 +9,15 @@ function isSettled(receipt){
  return false;
 }
 
-// Omission is not a newer receipt. Retain only scalar settlement ordering and
+// Omission is not a newer receipt. Retain only a settlement revision and
 // safety flags in this source view, never the evicted brief or old feedback.
 function omittedInteraction(interaction){
- const {read,unconfirmed,busy}=interaction;
- let witness=isSettled(read||{})?{revision:read.revision,status:read.status,creation:read.creation,delivery:read.delivery,targetSessionId:read.targetSessionId??null}:null;
- if(witness&&Object.keys(read).length===Object.keys(witness).length&&Object.entries(witness).every(([key,value])=>Object.is(read[key],value)))witness=read;
- const retained={
-  ...(witness?{read:witness}:{}),
+ if(Object.keys(interaction).every(key=>['settledRevision','unconfirmed','busy'].includes(key)))return interaction;
+ const {settledRevision,unconfirmed,busy}=interaction;
+ return {
+  ...(settledRevision===undefined?{}:{settledRevision}),
   ...(unconfirmed?{unconfirmed:true}:{}),...(busy?{busy:true}:{}),
  };
- // Once compacted, unchanged nested/outer identity lets the layout effect bail
- // out instead of scheduling another commit for every parent render.
- return Object.keys(interaction).length===Object.keys(retained).length&&Object.entries(retained).every(([key,value])=>Object.is(interaction[key],value))?interaction:retained;
 }
 
 function HandoffCard({receipt,interaction={},perform,open}){
@@ -55,27 +51,25 @@ function HandoffList({rows,dispatch}){
  useLayoutEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[]);
  useLayoutEffect(()=>{
   projected.current=new Set(rows.map(row=>row.requestId));
-  setInteractions(previous=>{
-   const kept=Object.entries(previous).flatMap(([id,interaction])=>{
-    const retained=projected.current.has(id)||running.current.has(id)?interaction:omittedInteraction(interaction);
-    return Object.keys(retained).length?[[id,retained]]:[];
-   });
-   return kept.length===Object.keys(previous).length&&kept.every(([id,interaction])=>interaction===previous[id])?previous:Object.fromEntries(kept);
+  const kept=Object.entries(interactions).flatMap(([id,interaction])=>{
+   const retained=projected.current.has(id)||running.current.has(id)?interaction:omittedInteraction(interaction);
+   return Object.keys(retained).length?[[id,retained]]:[];
   });
- },[rows]);
+  // A no-op updater dispatched during layout can still cause a React commit.
+  // Refresh the projection ref, but dispatch state only for actual compaction.
+  if(kept.length!==Object.keys(interactions).length||kept.some(([id,interaction])=>interaction!==interactions[id]))setInteractions(Object.fromEntries(kept));
+ },[rows,interactions]);
  const entries=rows.map(row=>{
   const interaction=interactions[row.requestId]||{},read=interaction.read;
-  // Only a compact witness borrows display fields; a full exact read must not
-  // inherit missing phases from an older stream row.
-  const receipt=read&&read.revision>row.revision?(read.requestId?read:{...row,...read}):row;
+  const receipt=read&&read.revision>row.revision?read:row;
   return {receipt,interaction};
- }).filter(({receipt,interaction})=>!isSettled(receipt)||interaction.busy||interaction.error||interaction.unconfirmed);
+ }).filter(({receipt,interaction})=>(!isSettled(receipt)&&!(receipt.revision<interaction.settledRevision))||interaction.busy||interaction.error||interaction.unconfirmed);
  const update=(id,patch)=>{
   if(!mounted.current)return;
   setInteractions(previous=>{
    const prior=previous[id]||{},next={...prior,...(typeof patch==='function'?patch(prior):patch)};
    // A late result must not restore an evicted receipt body. Preserve an already
-   // observed settlement witness and the current uncertainty/duplicate fences.
+   // observed settlement revision and the current uncertainty/duplicate fences.
    if(!projected.current.has(id)){
     const retained=omittedInteraction({...prior,busy:next.busy,unconfirmed:next.unconfirmed});
     if(Object.keys(retained).length)return {...previous,[id]:retained};
@@ -102,7 +96,10 @@ function HandoffList({rows,dispatch}){
     const response=await dispatch('session.handoff.'+action,args,{feedback:false}),read=response?.result;
     if(response?.accepted!==true||read?.requestId!==id||read?.sourceSessionId!==receipt.sourceSessionId||!Number.isSafeInteger(read?.revision))
      throw Error('The result could not be confirmed. Check delivery before taking another action.');
-    update(id,prior=>({read:prior.read?.revision>read.revision?prior.read:read,error:'',unconfirmed:false}));
+    update(id,prior=>{
+     const latest=prior.read?.revision>read.revision?prior.read:read;
+     return {read:latest,settledRevision:isSettled(latest)?Math.max(prior.settledRevision??-1,latest.revision):prior.settledRevision,error:'',unconfirmed:false};
+    });
    }
   }catch(e){update(id,{error:e.message||'The result could not be confirmed. Check delivery before taking another action.',...(['confirm','cancel'].includes(action)?{unconfirmed:true}:{})})}
   finally{running.current.delete(id);update(id,{busy:false})}
