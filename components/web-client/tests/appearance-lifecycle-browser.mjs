@@ -61,6 +61,17 @@ async function ready(page){
  await page.waitForFunction(()=>{const a=window.amplifier?.getState()?.appearance;return a?.availability==='connected'&&a.local?.reported===true&&!a.local.error});
  await expect(page.locator('#amp-one')).toBeVisible();
 }
+async function openAppearanceEditor(page){
+ // The editor is nested under ordinary Advanced choices. A look switch or
+ // reload can remount either disclosure; never toggle an already-open parent.
+ for(const selector of ['.a-appearance-more','.a-appearance-advanced']){
+  const disclosure=page.locator('[data-settings-page="appearance"] '+selector);
+  await expect(disclosure).toHaveCount(1);
+  if(await disclosure.getAttribute('open')===null)await disclosure.locator(':scope > summary').click();
+  await expect(disclosure).toHaveJSProperty('open',true);
+ }
+ await expect(page.getByLabel('Reference CSS delta',{exact:true})).toBeVisible();
+}
 async function records(context,base){
  const response=await context.request.get(base+'/fixture/appearance-records');
  assert.ok(response.ok(),'Authenticated fixture evidence is readable');
@@ -275,7 +286,7 @@ try{
   evidence.checks.push('quiet preference success; accent-only reset and look switch preserve other preferences');
 
   const name='Lifecycle reference',css='#amp-one[data-theme-scheme="light"]{--a-accent:#338855}\n#amp-one[data-theme-scheme="dark"]{--a-accent:#55bb88}';
-  await page.getByText('Advanced customization',{exact:true}).click();
+  await openAppearanceEditor(page);
   await page.getByLabel('Appearance name',{exact:true}).fill(name);
   await page.getByLabel('Reference CSS delta',{exact:true}).fill(css);
   const editorKey='amplifier.appearance-editor.v3:'+namespace;
@@ -327,7 +338,7 @@ try{
   assert.equal(current.namespace,namespace);assert.equal(current.activeScope,'client');
   assert.deepEqual(current.local.values,local.values);assert.equal(current.local.storageVersion,local.version);
   await openSettingsPage(page,'appearance');await observeQuiet(page);
-  await page.getByText('Advanced customization',{exact:true}).click();
+  await openAppearanceEditor(page);
   await expect(page.getByLabel('Reference CSS delta',{exact:true})).toHaveValue(css);
   await canaries(page);
   const tab=await context.newPage();await tab.goto(base);await ready(tab);await openSettingsPage(tab,'appearance');
