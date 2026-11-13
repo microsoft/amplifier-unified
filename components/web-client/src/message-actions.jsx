@@ -85,7 +85,7 @@ export function MessageEntry({message:m,session,state,connected=true,statusCurre
   </div>
   <AssistantReactions message={m}/>
   {attribution&&<p className="a-message-attribution">{attribution}</p>}
-  {!editing&&<InputStatus message={m} connected={connected} current={statusCurrent}/>}
+  {!editing&&<InputStatus message={m} connected={connected} current={statusCurrent} act={act} sessionId={session.id} state={state}/>}
   {!editing&&<div className="a-message-actions" data-delivery-problem={!!delivery||undefined}>
    <button type="button" className="a-icon" title="Copy as Markdown" aria-label="Copy message as Markdown" data-action="message.copy" disabled={copying} data-operation-pending={copying||undefined} aria-busy={copying||undefined} onClick={async()=>{if(!session.externalAgent&&!localDelivery&&!m.displayOnly){await act('message.copy',{sessionId:session.id,messageId:m.id});return}setCopying(true);try{await navigator.clipboard.writeText(m.textDetail?await readDetail(m.textDetail):m.text);setLocalCopied(true)}catch(error){setDetailError(error.message)}finally{setCopying(false)}}}>{copied?.status==='ready'||localCopied?<Check/>:<Copy/>}</button>
    {!session.externalAgent&&!localDelivery&&!m.displayOnly&&['user','assistant'].includes(m.role)&&<MessageInteractions message={m} sessionId={session.id} dispatch={dispatch}/>}

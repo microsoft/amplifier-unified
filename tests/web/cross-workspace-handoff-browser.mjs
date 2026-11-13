@@ -11,7 +11,8 @@ import {chromium,expect} from '@playwright/test';
 
 const output=process.env.AMPLIFIER_TEST_ARTIFACTS||await mkdtemp(join(tmpdir(),'unified-handoff786-'));
 await mkdir(output,{recursive:true});
-const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u',fileURLToPath(new URL('../../tests/fixtures/handoff786_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','pipe']});
+const pythonArgs=process.env.AMPLIFIER_TEST_INSTALLED_PACKAGE?['-I','-B','-u']:['-u'];
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[...pythonArgs,fileURLToPath(new URL('../../tests/fixtures/handoff786_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','pipe']});
 const started=Date.now(),errors=[],actions=[],observations={},timings={};
 let log='',browser,otherBrowser,page,phase='fixture-start';
 fixture.stderr.on('data',chunk=>log+=chunk);

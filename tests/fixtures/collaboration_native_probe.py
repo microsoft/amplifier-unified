@@ -447,7 +447,13 @@ class DirectNativeHost:
                    nativeProject=project_slug(worker.workspace), sessionKind="root",
                    historyManaged=False)
         await self.before_execute(worker)
-        worker.execution = asyncio.create_task(session.execute(""))
+        gate = worker.activation_gate
+        token = gate.bind(worker.activation) if gate else None
+        try:
+            worker.execution = asyncio.create_task(session.execute(""))
+        finally:
+            if gate:
+                gate.reset(token)
         await worker.runtime.wait_for(lambda e: e["type"] == "session.ready", timeout=30)
         await worker.runtime.wait_for(lambda e: e["type"] == "session.idle", timeout=30)
         await self.flush()

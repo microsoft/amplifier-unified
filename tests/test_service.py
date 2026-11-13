@@ -575,15 +575,33 @@ async def test_attention_read_persists_and_errors_route_to_their_page(tmp_path):
     await restored.close()
 
 
-async def test_successful_session_start_clears_persisted_error_and_attention(service):
+@pytest.mark.parametrize('startup', [True, False], ids=['startup-failure', 'request-failure'])
+async def test_successful_session_start_clears_only_startup_error_and_attention(service, startup):
     sid=service.get_state()['selectedSessionId']
-    await service.on_runtime_event('runtime.error',{'sessionId':sid,'error':'ValueError: contextTokens must be a positive integer'})
+    error = 'ValueError: contextTokens must be a positive integer'
+    await service.on_runtime_event('runtime.error', {
+        'sessionId': sid, 'error': error,
+        **({'errorType': 'RuntimeStartupError', 'phase': 'worker_startup'} if startup else {}),
+    })
+    failure = dict(service._session(sid)['failure'])
+    assert (failure['category'] == 'worker_startup') is startup
     assert service.get_state()['attention']['unread']==1
     await service.on_runtime_event('runtime.status',{'sessionId':sid,'status':'ready','phase':'ready'})
-    assert 'error' not in service.get_state()['sessions'][0]
-    assert service.get_state()['attention']['unread']==0
+    if startup:
+        assert 'error' not in service.get_state()['sessions'][0]
+        assert 'failure' not in service._session(sid)
+    else:
+        # Readiness is not recovery of an unresolved model request.
+        assert service.get_state()['sessions'][0]['error'] == error
+        assert service._session(sid)['failure'] == failure
+    assert service.get_state()['attention']['unread'] == (0 if startup else 1)
     await service.on_runtime_event('runtime.status',{'sessionId':sid,'status':'idle'})
-    assert 'error' not in service.get_state()['sessions'][0]
+    if startup:
+        assert 'error' not in service.get_state()['sessions'][0]
+    else:
+        assert service.get_state()['sessions'][0]['error'] == error
+        assert service._session(sid)['failure'] == failure
+    assert service.get_state()['attention']['unread'] == (0 if startup else 1)
 
 
 @pytest.mark.parametrize('status',['starting','idle','stopping','stopped'])
@@ -764,8 +782,22 @@ async def test_restart_and_rewarming_cannot_turn_unconfirmed_work_into_success(t
         assert current['execution']['turns'][0]['phase'] == 'interrupted'
         assert current['error'] and current['failure']['category'] == 'execution_interrupted'
         assert not restored.runtime.sent
+        # An unidentifiable start is evidence, not canonical admission.
         await restored.on_runtime_event('runtime.generation', {'sessionId': sid, 'event': 'generation.started'})
+        assert current['error'] and current['failure']['category'] == 'execution_interrupted'
+        assert not current.get('collaborationGeneration')
+        assert current['execution']['turns'][0]['phase'] == 'interrupted'
+        await restored.on_runtime_event('runtime.generation', {
+            'sessionId': sid, 'rootSessionId': sid, 'event': 'generation.started',
+            'generation_id': 'fresh-after-restart',
+            'interruptionRevision': current.get('interruptionRevision', 0),
+        })
+        assert current['collaborationGeneration']['id'] == 'fresh-after-restart'
+        assert current['collaborationGeneration']['terminal'] is False
         assert 'error' not in current
+        assert 'failure' not in current
+        assert current['execution']['turns'][0]['phase'] == 'interrupted'
+        assert not restored.runtime.sent  # New admission never replays unfinished input.
     finally:
         await restored.close()
 

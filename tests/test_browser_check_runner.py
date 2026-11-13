@@ -294,8 +294,16 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     navigation_ids = agent_navigation_browser_additions(rows, set())
     sidebar_ids = sidebar_controls_browser_addition(rows, set())
     client_addition_ids = input_status_and_action_spacing_browser_additions(rows, set())
+    lifecycle_additions = [
+        {'id': 'session-health-request-failure',
+         'command': ['node', 'tests/session-health-browser.mjs', '--request-failure']},
+        {'id': 'session-health-completed-runtime-fault',
+         'command': ['node', 'tests/session-health-browser.mjs', '--completed-runtime-fault']},
+    ]
+    lifecycle_ids = {row['id'] for row in lifecycle_additions}
+    assert [row for row in rows if row['id'] in lifecycle_ids] == lifecycle_additions
     historical_rows = [row for row in rows
-                       if row['id'] not in navigation_ids | sidebar_ids | client_addition_ids
+                       if row['id'] not in navigation_ids | sidebar_ids | client_addition_ids | lifecycle_ids
                        and not (canvas_additions | breadbin_addition | question_fade_addition | context_addition | immediate_addition | delivery_addition | waiting_addition | resume_addition).intersection(row['command'])]
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
@@ -390,7 +398,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     original = [row for row in historical_rows if row['id'] not in additions and row['id'] not in recovery_ids]
     assert len(original) == 65 and len(historical_rows) == 132
     # Preserve the preceding total after validating all exact additive owners.
-    assert len([row for row in rows if row['id'] not in navigation_ids | sidebar_ids | client_addition_ids | {'context-inspector-layout', 'delivery-warning', 'legacy-outbox-notice', 'delivery-reconciliation', 'delivery-new-chat', 'navigation-waiting', 'canvas-versions', 'question-resume'}]) == 138
+    assert len([row for row in rows if row['id'] not in navigation_ids | sidebar_ids | client_addition_ids | lifecycle_ids | {'context-inspector-layout', 'delivery-warning', 'legacy-outbox-notice', 'delivery-reconciliation', 'delivery-new-chat', 'navigation-waiting', 'canvas-versions', 'question-resume'}]) == 138
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -3704,10 +3712,18 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
     responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
     notices_ids = shared_notices_motion_browser_addition(plan['scenarios'])
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids]
+    lifecycle_additions = [
+        {'id': 'session-health-request-failure',
+         'command': ['node', 'tests/web/session-health-browser.mjs', '--request-failure']},
+        {'id': 'session-health-completed-runtime-fault',
+         'command': ['node', 'tests/web/session-health-browser.mjs', '--completed-runtime-fault']},
+    ]
+    lifecycle_ids = {row['id'] for row in lifecycle_additions}
+    assert [row for row in plan['scenarios'] if row['id'] in lifecycle_ids] == lifecycle_additions
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | lifecycle_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
-    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(lifecycle_ids)
+    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(lifecycle_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
     assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')

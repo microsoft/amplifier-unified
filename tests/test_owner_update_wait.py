@@ -8,6 +8,7 @@ admitted, and the objective/progress it receives, not another provider turn.
 import asyncio
 import copy
 import json
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -37,7 +38,7 @@ class OwnerRuntime(Runtime):
 
     def __init__(self):
         super().__init__()
-        self.workers = {}
+        self.workers, self._preparations = {}, {}
         self.native = {}
         self.controllers = {}
         self.hooks = {}
@@ -67,7 +68,18 @@ class OwnerRuntime(Runtime):
         worker.controls = controller
         worker.runtime = controller.runtime
         worker.runtime.inbox = asyncio.Queue()
-        worker.parked = True
+        from amplifier_foundation.session.activation import ActivationGate
+        worker.shared_handle = object()
+        worker.activation_gate = ActivationGate()
+        worker.activation = worker.activation_gate.activate()
+        worker.checkpoint_entered, worker.checkpoint_release = asyncio.Event(), asyncio.Event()
+        worker.checkpoint_release.set()
+        async def checkpoint(_status='completed'):
+            worker.activation_gate.check_current()
+            worker.checkpoint_entered.set()
+            await worker.checkpoint_release.wait()
+            controller.persist(task_only=True)
+        coordinator.register_capability('live.checkpoint', checkpoint)
         self.native[sid] = worker
         self.controllers[sid] = controller
         self.hooks[sid] = hooks
@@ -78,6 +90,23 @@ class OwnerRuntime(Runtime):
         if guard:
             guard()
         return await self.controllers[sid].perform(operation, args)
+
+    @contextmanager
+    def stopped_boundary(self, session):
+        assert session['id'] not in self.workers
+        yield
+
+    def has_pending_operations(self):
+        return bool(self._preparations)
+
+    async def retire_idle(self, sid, owner_id, *, guard):
+        if guard():
+            return False
+        assert self.workers[sid]['runtimeOwnerId'] == owner_id
+        if not await self.native[sid].checkpoint_idle():
+            return False
+        self.workers.pop(sid)
+        return True
 
     async def handoff_boundary(self, sid, boundary_id, cancel=False, *, update=False, receipt=None):
         self.boundary_calls.append((sid, boundary_id, cancel, update))
@@ -175,7 +204,6 @@ class UpdateWait:
                                     command_id='pause:' + sid, include_state=False)
         else:
             self.runtime.native[sid].runtime.generation = {'id': 'original-generation:' + sid}
-            self.runtime.native[sid].parked = False
             self.app._session(sid).update(
                 status='working', collaborationGeneration={
                     'id': 'original-generation:' + sid, 'inputIds': ['original:' + sid], 'terminal': False})
@@ -222,7 +250,7 @@ class UpdateWait:
     def controller(self):
         return self.runtime.controllers[self.sid]
 
-    async def yield_turn(self, *, park=True):
+    async def yield_turn(self, *, hold_checkpoint=False):
         worker = self.runtime.native[self.sid]
         before = worker.session.coordinator.session_state['goal']
         await self.runtime.hooks[self.sid]['orchestrator:goal_progress'](
@@ -233,7 +261,9 @@ class UpdateWait:
         after = worker.session.coordinator.session_state['goal']
         assert after == before and after is not before
         worker.runtime.generation = None
-        worker.parked = park
+        if hold_checkpoint:
+            worker.checkpoint_entered.clear()
+            worker.checkpoint_release.clear()
         session = self.app._session(self.sid)
         session['collaborationGeneration']['terminal'] = True
         await self.app.on_runtime_event('runtime.status', {'sessionId': self.sid, 'status': 'idle'})
@@ -290,6 +320,9 @@ class UpdateWait:
                 for result in results:
                     if isinstance(result, Exception):
                         raise result
+                # An all-done gather can complete synchronously; let the host's
+                # registered discard callbacks remove those observed tasks.
+                await asyncio.sleep(0)
 
     async def finish(self):
         await drain.finish(self.manager, 'installed')
@@ -397,11 +430,13 @@ async def test_owner_wait_yields_restores_and_continues_exactly_once_without_res
     h.app._session(independent)['status'] = 'idle'  # Synthetic transport settlement.
 
     # An idle host status without a positive native checkpoint is insufficient.
-    await h.yield_turn(park=False)
-    assert not await drain.prepare(h.manager, h.release)
-    assert 'checkpoint' in h.row['waitingFor']
-    h.runtime.native[h.sid].parked = True
-    assert await drain.prepare(h.manager, h.release)
+    await h.yield_turn(hold_checkpoint=True)
+    worker = h.runtime.native[h.sid]
+    preparation = asyncio.create_task(drain.prepare(h.manager, h.release))
+    await asyncio.wait_for(worker.checkpoint_entered.wait(), 2)
+    assert not preparation.done() and not h.runtime.admitted and not h.row['ready']
+    worker.checkpoint_release.set()
+    assert await asyncio.wait_for(preparation, 3)
     assert h.row['ready']
     yielded = copy.deepcopy(h.row)
     h.replace()
@@ -636,14 +671,12 @@ async def test_unknown_native_enrollment_is_retained_and_never_replayed(waiting)
 async def supersede_wait_with_human_input(h):
     worker = h.runtime.native[h.sid]
     worker.runtime.generation = None
-    worker.parked = True
     h.app._session(h.sid).update(status='idle')
     h.app._session(h.sid)['collaborationGeneration']['terminal'] = True
     await h.app.dispatch('conversation.send', {'sessionId': h.sid, 'text': 'New direction',
         'allowNextTurn': True}, command_id='fresh-human', include_state=False)
     await h.settle()
     worker.runtime.generation = {'id': 'replacement-generation:' + h.sid}
-    worker.parked = False
     await generation(h.app, h.app._session(h.sid), worker.runtime.generation['id'], ['fresh-human'])
 
 
@@ -695,12 +728,18 @@ async def test_changed_update_waits_for_native_checkpoint_before_releasing_its_g
     await drain.observe_waiters(h.manager)
     assert not h.runtime.admitted and not any(call[2] for call in h.runtime.boundary_calls)
     assert h.sid in h.app.state['updates']['drain']['workers']
-    await h.yield_turn(park=False)
-    await drain.observe_waiters(h.manager)
+    worker = h.runtime.native[h.sid]
+    async def observe_settlement():
+        await h.yield_turn(hold_checkpoint=True)
+        await drain.observe_waiters(h.manager)
+    observation = asyncio.create_task(observe_settlement())
+    await asyncio.wait_for(worker.checkpoint_entered.wait(), 2)
+    assert not observation.done()
     assert not h.runtime.admitted and not any(call[2] for call in h.runtime.boundary_calls)
-    h.runtime.native[h.sid].parked = True
+    worker.checkpoint_release.set()
+    await asyncio.wait_for(observation, 3)
     await drain.observe_waiters(h.manager)
-    await h.settle()
+    await asyncio.wait_for(h.settle(), 3)
     assert len(h.runtime.admitted) == 1
 
 
@@ -1217,7 +1256,6 @@ async def test_unknown_boundary_does_not_hold_a_new_human_generation(waiting):
     # Finish the original synthetic transport before admitting fresh human input;
     # a held steering attempt is not a new accepted generation.
     h.runtime.native[h.sid].runtime.generation = None
-    h.runtime.native[h.sid].parked = True
     h.app._session(h.sid).update(status='idle')
     h.app._session(h.sid)['collaborationGeneration']['terminal'] = True
     await h.app.dispatch('conversation.send', {'sessionId': h.sid, 'text': 'New direction',
@@ -1270,7 +1308,8 @@ async def test_stop_supersedes_lost_owner_wait_without_claiming_checkpoint_or_re
     assert not h.runtime.admitted
 
 
-async def test_idle_configuration_refresh_preserves_update_checkpoint_and_continuation(waiting):
+@pytest.mark.parametrize('barrier', ['none', 'refused', 'unknown', 'operation', 'fence', 'busy'])
+async def test_idle_configuration_refresh_preserves_update_checkpoint_and_continuation(waiting, barrier):
     h = waiting
     session = h.app._session(h.sid)
     session.update(configurationPending=True, configurationPendingRevision=7)
@@ -1283,10 +1322,32 @@ async def test_idle_configuration_refresh_preserves_update_checkpoint_and_contin
     assert h.runtime.workers[h.sid]['runtimeOwnerId'] == owner
     assert session['configurationPending'] and not session.get('configurationBusy')
 
-    assert await drain.prepare(h.manager, h.release)
+    retire = h.runtime.retire_idle
+    if barrier == 'refused':
+        h.runtime.retire_idle = AsyncMock(return_value=False)
+    elif barrier == 'unknown':
+        h.runtime.retire_idle = AsyncMock(side_effect=TimeoutError('Retirement acknowledgement unknown'))
+    elif barrier == 'operation':
+        session['pendingConfiguration'] = {'operationId':'held-operation', 'phase':'error'}
+    elif barrier == 'fence':
+        session['configurationOperationFence'] = 'held-operation'
+    elif barrier == 'busy':
+        session['configurationBusy'] = True
+    if barrier != 'none':
+        if barrier == 'unknown':
+            with pytest.raises(TimeoutError):
+                await drain.prepare(h.manager, h.release)
+        else:
+            assert not await drain.prepare(h.manager, h.release)
+        assert h.runtime.workers[h.sid]['runtimeOwnerId'] == owner
+        assert not h.runtime.stopped and not h.runtime.admitted
+        return
+    from amplifier_web.update_blockers import assess
+    assert await drain.prepare(h.manager, h.release), (h.row['waitingFor'], h.row.get('ready'),
+                                                      assess(h.app, application=True))
     assert h.row['ready'] and not h.row.get('suppressed')
-    await h.app.refresh_configuration(h.sid)
-    assert not h.runtime.stopped, 'Refresh must not invalidate an already ready update wait'
+    assert h.sid not in h.runtime.workers
+    assert session['configurationPending']  # Retirement is not configuration adoption.
     h.replace()
     await h.reconnect(successor=True)
     await h.app.refresh_configuration(h.sid)  # The successor has no old runtime to retire.
@@ -1308,9 +1369,8 @@ async def test_update_wait_does_not_block_superseding_configuration_refresh(wait
     session = h.app._session(h.sid)
     session.update(configurationPending=True, configurationPendingRevision=7)
     await h.wait()
-    # Park without an idle event so this test controls refresh admission order.
+    # Settle without an idle event to control refresh admission order.
     h.runtime.native[h.sid].runtime.generation = None
-    h.runtime.native[h.sid].parked = True
     session.update(status='idle')
     session['collaborationGeneration']['terminal'] = True
     if superseded == 'configuration':
@@ -1338,7 +1398,6 @@ async def test_predecessor_block_is_not_an_update_wait_and_remains_blocked(waiti
         'reason': 'Yield for the authorized app update'}, command_id='old-block', include_state=False)
     worker = h.runtime.native[h.sid]
     worker.runtime.generation = None
-    worker.parked = True
     h.app._session(h.sid).update(status='idle')
     h.app._session(h.sid)['collaborationGeneration']['terminal'] = True
     assert not await h.controller.tasks.continuation_allowed()

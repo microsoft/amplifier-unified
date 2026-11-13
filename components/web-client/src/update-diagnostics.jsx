@@ -4,6 +4,14 @@ const phaseLabels={'candidate-install':'Prepare application','candidate-probe':'
 const recoveryGuidance={'runtime-installed-source-mismatch':'A component changed to a different source during update preparation. Amplifier kept the current components active. Check for an app update before retrying; if this happens again, share the update details.','smart-tool-startup-failed':'The updated Smart Tool could not complete its configured connection check. Review its required dependencies and connection settings.','smart-tool-update-failed':'This Smart Tool could not finish updating. Other ready tools can continue.','missing-configured-environment':'A saved configuration refers to an environment value that is missing. Review AI connections and configured environment values before retrying.','incompatible-conversation-loop':'A configured conversation profile uses an unsupported orchestrator. Choose a profile using loop-streaming or loop-live in Bundles & modules.','host-component-conflict':'App behavior module identities conflict. Review duplicate module declarations and instance IDs in Bundles & modules; the current ecosystem is preserved.','module-prepare-failed':'A module could not be prepared in the new worker. The current ecosystem is preserved; review its dependencies before retrying.','bundle-not-found':'A configured bundle could not be found. Review its registration in Bundles & modules.','bundle-load-failed':'A configured bundle could not be loaded. Review its source and dependencies in Bundles & modules.','bundle-validation-failed':'A configured bundle did not pass validation. Review its configuration before retrying.','bundle-dependency-failed':'A bundle dependency could not be prepared. Review its source and dependency configuration.','protected-runtime-source':'Local source changes or an explicit dependency override were preserved. Review this module in Bundles & modules and preserve its source configuration before checking for updates again.','runtime-source-changed':'Worker sources changed while checking. Let source changes finish, then check for updates again.'};
 recoveryGuidance['runtime-source-constraint']='A protected package source declaration conflicts with the checked update. Current components remain active. This does not establish local edits. Unchanged automatic attempts are paused. A compatible update to the declaring component or a deliberate source-configuration change is needed; do not remove pins or caches to bypass this check.';
 recoveryGuidance['runtime-resolution-mismatch']='The prepared component does not match its checked source revision. Current components remain active and unchanged automatic attempts are paused. Check current sources and share the update diagnostics if the mismatch remains.';
+Object.assign(recoveryGuidance,{
+ 'package-index-auth-failed':'The package source rejected authentication. Ask the host operator to review uv package-index credentials and access, then retry. Do not share credentials in diagnostics.',
+ 'package-index-unavailable':'The configured package source is unavailable. Ask the host operator to check its availability and uv index configuration before retrying.',
+ 'package-not-found':'A required package or version is unavailable from the configured package sources. Ask the host operator to check source coverage and the required version. Reinstalling or resetting app data cannot make a missing package available.',
+ 'dependency-resolution-failed':'The package requirements could not be resolved together. Review the required versions and configured uv package sources before retrying; keep deliberate source selections and pins.',
+ 'package-tls-failed':'The package source could not pass a secure connection check. Ask the host operator to review the host trust store and uv TLS configuration. Do not disable certificate verification.',
+ 'package-network-failed':'The package download could not complete. Check the host network, proxy and access to its configured package sources, then retry.',
+});
 const statuses={started:'Running',accepted:'Accepted',rejected:'Rejected',uncertain:'Unconfirmed',succeeded:'Succeeded',failed:'Failed',interrupted:'Interrupted'};
 const failedStatuses=['failed','interrupted','rejected'];
 const label=phase=>phaseLabels[phase]||phase?.replaceAll('-',' ')||'Update';
@@ -12,8 +20,10 @@ export function diagnosticReceipt(diagnostics,reconciliation){
  const clean=event=>{
   if(!event)return undefined;
   const result=Object.fromEntries(fields.filter(key=>event[key]!==undefined).map(key=>[key,event[key]]));
+  if(safeConstraint(event.constraint))result.constraint=event.constraint;
   if(Array.isArray(event.resolutionMismatches))result.resolutionMismatches=[...new Set(event.resolutionMismatches.filter(value=>['source','repository','ref','subdirectory','revision'].includes(value)))].sort();
   if(event.probe)result.probe=Object.fromEntries(['ok','isolated','packageInEnvironment','frontendPresent','loginAvailable','standalone','providersPresent','cliAbsent','dependenciesPrepared','stage','errorType','version','pythonVersion','reason','package','failureLocation','osError','profileIndex'].filter(key=>event.probe[key]!==undefined).map(key=>[key,event.probe[key]]));
+  if(safeConstraint(event.probe?.constraint)&&result.probe)result.probe.constraint=event.probe.constraint;
   return result;
  };
  const verified=reconciliation?Object.fromEntries(['attemptId','version','revision','verifiedAt'].filter(key=>reconciliation[key]!==undefined).map(key=>[key,reconciliation[key]])):undefined;
@@ -29,10 +39,13 @@ export function reconciledFailure(updates){
   (!application.runningRevision||receipt.revision===application.runningRevision)&&
   !updates.error&&!updates.pendingRestart&&!updates.pendingApp&&updates.pendingReplacement==null);
 }
+const safeConstraint=value=>typeof value==='string'&&value.length<=128&&/^(?:===|==|!=|~=|<=|>=|<|>)[0-9][0-9A-Za-z.*+!_-]*(?:,(?:===|==|!=|~=|<=|>=|<|>)[0-9][0-9A-Za-z.*+!_-]*)*$/.test(value);
 function facts(event){
  const parts=[];
  if(event.component||event.installationId)parts.push(event.component||event.installationId);
  if(event.package||event.probe?.package)parts.push(event.package||event.probe.package);
+ const constraint=event.constraint||event.probe?.constraint;
+ if(safeConstraint(constraint))parts.push('Required '+constraint);
  if(event.osError||event.probe?.osError)parts.push(event.osError||event.probe.osError);
  if(recoveryGuidance[event.reason||event.probe?.reason])parts.push(recoveryGuidance[event.reason||event.probe?.reason]);
  if(event.probe?.errorType)parts.push(event.probe.errorType);

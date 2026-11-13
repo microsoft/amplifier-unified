@@ -281,7 +281,7 @@ source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory
 [[package]]
 name = "amplifier-module-loop-live"
 version = "0.2.0"
-source = { git = "https://github.com/microsoft/amplifier-module-loop-live?rev=d4b1e69e3222780ccebdfdb7c07915fdcd5d161f#d4b1e69e3222780ccebdfdb7c07915fdcd5d161f" }
+source = { git = "https://github.com/microsoft/amplifier-module-loop-live?rev=022a54eeb343a568ccd717abf2a67c55431fdf58#022a54eeb343a568ccd717abf2a67c55431fdf58" }
 dependencies = [
     { name = "amplifier-module-loop-streaming" },
     { name = "jsonschema" },
@@ -357,6 +357,14 @@ dependencies = [
     { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'" },
     { name = "python-xlib", marker = "sys_platform == 'linux'" },
     { name = "pyyaml" },
+]
+
+[[package]]
+name = "amplifier-module-tool-delegate"
+version = "0.1.0"
+source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Ftool-delegate&rev=05082c89a171758f8d0fb9d8df630ea581e5bdb5#05082c89a171758f8d0fb9d8df630ea581e5bdb5" }
+dependencies = [
+    { name = "amplifier-core" },
 ]
 
 [[package]]
@@ -464,6 +472,7 @@ dev = [
     { name = "amplifier-module-loop-live" },
     { name = "amplifier-module-provider-openai", extra = ["native"] },
     { name = "amplifier-module-tool-apply-patch" },
+    { name = "amplifier-module-tool-delegate" },
     { name = "amplifier-module-tool-exec" },
     { name = "amplifier-module-tool-filesystem" },
     { name = "amplifier-module-tool-image" },
@@ -522,9 +531,10 @@ dev = [
     { name = "amplifier-module-context-simple", git = "https://github.com/microsoft/amplifier-module-context-simple?rev=main" },
     { name = "amplifier-module-hook-context-intelligence", git = "https://github.com/microsoft/amplifier-bundle-context-intelligence?subdirectory=modules%2Fhook-context-intelligence&rev=a80ce69d0e96e9a343501f238dcd867350dd9aa2" },
     { name = "amplifier-module-hooks-candidate-guard", git = "https://github.com/microsoft/amplifier-bundle-converge?subdirectory=modules%2Fhooks-candidate-guard&rev=da7dd8878c9e7b672e86151b32d59c0cce68bcb6" },
-    { name = "amplifier-module-loop-live", git = "https://github.com/microsoft/amplifier-module-loop-live?rev=d4b1e69e3222780ccebdfdb7c07915fdcd5d161f" },
+    { name = "amplifier-module-loop-live", git = "https://github.com/microsoft/amplifier-module-loop-live?rev=022a54eeb343a568ccd717abf2a67c55431fdf58" },
     { name = "amplifier-module-provider-openai", extras = ["native"], git = "https://github.com/microsoft/amplifier-module-provider-openai?rev=main" },
     { name = "amplifier-module-tool-apply-patch", git = "https://github.com/microsoft/amplifier-bundle-filesystem?subdirectory=modules%2Ftool-apply-patch&rev=515599f0d0763a946aa96ed1d0110db723f5c386" },
+    { name = "amplifier-module-tool-delegate", git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Ftool-delegate&rev=05082c89a171758f8d0fb9d8df630ea581e5bdb5" },
     { name = "amplifier-module-tool-exec", git = "https://github.com/microsoft/amplifier-module-tool-exec?rev=f267548ccd1b38a236a46afb96252bb6dd474dcd" },
     { name = "amplifier-module-tool-filesystem", git = "https://github.com/microsoft/amplifier-module-tool-filesystem?rev=663f26a878ae71e136f439fa73ded52b2eb24174" },
     { name = "amplifier-module-tool-image", git = "https://github.com/microsoft/amplifier-bundle-imagegen?subdirectory=modules%2Ftool-image&rev=8acd3773102b77378c0d46da53a901f8297a38fc" },
