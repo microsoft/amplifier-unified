@@ -22,6 +22,7 @@ from aiohttp import web
 import settings_ui_server as settings
 from amplifier_web import app_release_artifacts, installation_repair as repair, reset
 from amplifier_web.auth import SESSION_COOKIE, new_session
+from amplifier_web.installation_repair_worker import executable_identity
 
 
 TOKEN = 'fixture-browser-control-token'
@@ -73,6 +74,11 @@ async def main(home):
 
         async def stop(self, *args, **kwargs):
             calls.append('stop')
+            raise AssertionError('Installation repair must not stop a runtime')
+
+        async def send(self, *args, **kwargs):
+            calls.append('send')
+            raise AssertionError('Installation repair must not send conversation input')
 
     # Reuse maintained Settings initialization without starting background work
     # or provider preparation. Do not close/reopen UpdateManager: closed managers
@@ -94,6 +100,8 @@ async def main(home):
 
 
 def configure(app, home, calls):
+    journey = os.environ.get('INSTALLATION_REPAIR_FIXTURE_JOURNEY', 'verify')
+    assert journey in {'verify', 'reconcile'}
     service = app['service']
     manager = service.update_manager
     assert not manager.closed
@@ -106,9 +114,16 @@ def configure(app, home, calls):
     }])
     sid = session['id']
     service._publish_full(reason='Private installation repair browser fixture')
+    # A real owner-private file satisfies the controller's executable identity
+    # check. Its contents are deliberately NOT an interpreter. The module-local
+    # subprocess seam below must intercept every invocation; never execute it.
+    base_python = home / 'synthetic-base-python-not-executed'
+    base_python.write_bytes(b'Synthetic fixture identity only; never execute.\n')
+    base_python.chmod(0o700)
     expected = {
         'home': str(home), 'uid': os.getuid(), 'hostInstanceId': service.instance_id,
-        'extras': ['native-desktop'], 'basePython': '/qualified/base/python',
+        'extras': ['native-desktop'], 'basePython': str(base_python),
+        'executables': {'basePython': executable_identity(base_python)},
         'env': {'UV_INDEX_PASSWORD': SECRET}, 'pointer': {'exists': False, 'sha256': None},
     }
     repair.binding = AsyncMock(side_effect=lambda _: copy.deepcopy(expected))
@@ -146,6 +161,13 @@ def configure(app, home, calls):
         path = folder / 'operation.json'
         operation = repair._read(path, home)
         assert operation['status'] == 'accepted'
+        assert repair._admissions(service) == {
+            'schema': 1, 'current': plan['operationId'],
+            'previews': {plan['previewId']: plan['operationId']}}
+        for name in ('installation_repair_worker.py', 'reset.py', 'reset_retention.py',
+                     'app_release_artifacts.py'):
+            assert digest(folder / name) == digest(ROOT / 'amplifier_web' / name)
+            repair._private(folder / name, home)
         operation.update(status='unknown', stage='fixture-outcome-unknown',
                          detail='Synthetic helper outcome unknown. Inspect this receipt; do not repeat.',
                          updatedAt=time.time())
@@ -156,13 +178,14 @@ def configure(app, home, calls):
 
     repair.launch = launch
     verification = {'calls': [], 'healthy': False}
+    reconciliation = {'calls': [], 'positive': False, 'writes': 0}
 
     def verify_child(command, **kwargs):
         # The controller's ordinary --verify child boundary remains real; only
         # its health/artifact/graph probe result is synthetic in this UI fixture.
         assert len(launched) == 1
         folder = repair.root(service) / launched[0]['operationId']
-        assert command == ['/qualified/base/python', '-I', '-S',
+        assert command == [str(base_python), '-I', '-S',
                            str(folder / 'installation_repair_worker.py'), '--verify', str(folder)]
         assert Path(kwargs['cwd']) == folder
         operation = repair._read(folder / 'operation.json', home)
@@ -180,14 +203,52 @@ def configure(app, home, calls):
         repair._write(folder / 'operation.json', operation, home)
         return SimpleNamespace(returncode=0)
 
-    class VerificationProcess:
-        run = staticmethod(verify_child)
+    def inspect_child(command, **kwargs):
+        assert len(launched) == 1
+        folder = repair.root(service) / launched[0]['operationId']
+        assert command[:4] == [str(base_python), '-I', '-S',
+                               str(folder / 'installation_repair_worker.py')]
+        assert len(command) == 6 and command[-1] == str(folder)
+        assert kwargs == {'cwd': folder, 'stdin': subprocess.DEVNULL,
+                          'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL,
+                          'timeout': 240 if command[4] == '--verify' else 45, 'check': True}
+        if command[4] == '--verify':
+            assert journey == 'verify'
+            return verify_child(command, **kwargs)
+        assert command[4] == '--reconcile'
+        path = folder / 'operation.json'
+        operation = repair._read(path, home)
+        assert operation['operationId'] == launched[0]['operationId']
+        assert operation['previewId'] == launched[0]['previewId']
+        assert operation['hostInstanceId'] == service.instance_id
+        assert operation['status'] == 'unknown' and operation['reinstalled'] is False
+        reconciliation['calls'].append({'operationId': operation['operationId'],
+                                        'positive': reconciliation['positive']})
+        if not reconciliation['positive']:
+            # Simulate an uncertain probe acknowledgement, with no canonical
+            # result write. The real controller must reread the unchanged receipt.
+            raise subprocess.TimeoutExpired(command, 45)
+        assert journey == 'reconcile' and reconciliation['writes'] == 0
+        operation.update(status='failed', stage='reconciled-no-effect',
+                         reinstalled=False, healthVerified=False, serviceState='running',
+                         reconciliation={'noReplacement': True, 'verifiedAt': time.time(),
+                                         'hostInstanceId': service.instance_id},
+                         detail='Synthetic no-replacement proof; no install, stop or restart ran.',
+                         updatedAt=max(time.time(), operation['updatedAt'] + .001))
+        # Sole synthetic worker write; neither a fixture control nor the
+        # controller manufactures the settlement or publishes substitute state.
+        repair._write(path, operation, home)
+        reconciliation['writes'] += 1
+        return SimpleNamespace(returncode=0)
+
+    class InspectionProcess:
+        run = staticmethod(inspect_child)
 
         def __getattr__(self, name):
             return getattr(subprocess, name)
 
     # Module-local proxy: never patch subprocess.run for unrelated host owners.
-    repair.subprocess = VerificationProcess()
+    repair.subprocess = InspectionProcess()
     bound_identity = identity()
     transport = {'sseConnections': 0}
 
@@ -239,10 +300,16 @@ def configure(app, home, calls):
                 'messages': detached['sessions'][0]['messages'],
                 'historySource': 'state_records.load_owner/session_projection.hydrate',
                 'operation': operation, 'projection': projection,
+                'journey': journey,
+                'receiptSha256': digest(repair.root(service) / operation['operationId'] / 'operation.json')
+                                 if operation else None,
+                'admissions': repair._admissions(service),
                 'repairHeld': repair.held(service),
                 'counters': {
                     'helpers': len(launched), 'artifactPreparations': app_release_artifacts.prepare.await_count,
                     'verifications': len(verification['calls']),
+                    'reconciliations': len(reconciliation['calls']),
+                    'noReplacementWrites': reconciliation['writes'],
                     'bindingReads': repair.binding.await_count,
                     'releaseReads': len(metadata_calls), 'tagReads': len(download_calls),
                     'runtimeCalls': list(calls), **transport,
@@ -255,7 +322,7 @@ def configure(app, home, calls):
         authorize(request)
         payload = await request.json()
         if (not isinstance(payload, dict) or set(payload) != {'mode', 'operationId'}
-                or payload['mode'] not in {'reinstalled', 'verification-healthy'}):
+                or payload['mode'] not in {'reinstalled', 'verification-healthy', 'reconciliation-positive'}):
             raise web.HTTPBadRequest(text='Only the fixed synthetic receipt/probe controls are allowed.')
         async with service._installation_repair_lock:
             if len(launched) != 1 or payload['operationId'] != launched[0]['operationId']:
@@ -264,6 +331,15 @@ def configure(app, home, calls):
             operation = repair._read(path, home)
             assert operation['previewId'] == launched[0]['previewId']
             assert operation['hostInstanceId'] == service.instance_id
+            if payload['mode'] == 'reconciliation-positive':
+                if (journey != 'reconcile' or operation['status'] != 'unknown'
+                        or reconciliation['positive'] or reconciliation['calls']):
+                    raise web.HTTPConflict(text='Only the fresh reconciliation probe may be changed.')
+                reconciliation['positive'] = True
+                return web.json_response({'operationId': operation['operationId'],
+                                          'status': 'reconciliation-positive'})
+            if journey != 'verify':
+                raise web.HTTPConflict(text='Reinstallation evidence belongs to the Verify journey.')
             if payload['mode'] == 'verification-healthy':
                 if (operation['status'] != 'reinstalled' or verification['healthy']
                         or len(verification['calls']) != 1):

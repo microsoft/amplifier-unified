@@ -24,17 +24,24 @@ const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const readJSON=async name=>JSON.parse(await readFile(resolve(root,name),'utf8'));
 const actions=[],errors=[],observerErrors=[],httpErrors=[],checkpoints=[],screenshots=[],assetReads=[];
 const servedAssets={},cleanup={browser:'not-started',fixture:'not-started',errors:[]};
+const journeys={},fixtureCleanups=[];
+let journey,actionStart=0;
 let owned,browser,page,base,failure,identity,source,component,build,initial,final,streamEvidence,phase='setup',passed=false;
 const unwrap=body=>body.action==='shell.command'?(body.args.command||body.args):body;
-const confirms=()=>actions.filter(row=>row.action===prefix+'Confirm');
-const statuses=()=>actions.filter(row=>row.action===prefix+'Status');
-const verifications=()=>actions.filter(row=>row.action===prefix+'Verify');
+const posts=suffix=>actions.slice(actionStart).filter(row=>row.action===prefix+suffix);
+const confirms=()=>posts('Confirm');
+const statuses=()=>posts('Status');
+const verifications=()=>posts('Verify');
+const reconciliations=()=>posts('Reconcile');
 const section=()=>page.locator('[data-part="installation-repair"]');
 const healthy=()=>section().getByText('Installation repair verified healthy',{exact:true});
+const closedWithoutReplacement=()=>section().getByText('Repair closed without installation replacement',{exact:true});
+const reconciliationJournal=()=>page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.installation-repair-reconciliation.v1')));
 const noFallback=()=>{
  assert.deepEqual(actions.filter(row=>['maintenance.repair','maintenance.reset','maintenance.resetCleanup',
   'updates.install','updates.forceRestart','conversation.send','conversation.warm','session.warm',
-  'runtime.start','runtime.control'].includes(row.action)),[],'No fallback, reset, update install, send or warm');
+  'runtime.start','runtime.control','runtime.stop','conversation.stop','worker.stop'].includes(row.action)),[],
+  'No fallback, reset, update install, stop, send or warm');
  assert.deepEqual(observerErrors,[]);
 };
 async function observe(){
@@ -63,7 +70,7 @@ async function rejected(action,args){
 async function capture(name){
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'No horizontal viewport overflow');
  assert.ok(await section().evaluate(node=>node.scrollWidth<=node.clientWidth+1),'Repair section must reflow');
- const path=resolve(output,name+'.png');
+ const path=resolve(output,journey+'-'+name+'.png');
  await page.screenshot({path,animations:'disabled'});screenshots.push({path,viewport:page.viewportSize()});
 }
 async function checkpoint(name,helpers,confirmations){
@@ -78,7 +85,7 @@ async function checkpoint(name,helpers,confirmations){
  assert.deepEqual(observed.messages,initial.messages,'Saved history preserved');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),initial.sessionId);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.draft),'Keep my unsent installation repair draft');
- noFallback();checkpoints.push({name,helpers,confirmationPosts:confirmations,counters:observed.counters});
+ noFallback();checkpoints.push({journey,name,helpers,confirmationPosts:confirmations,counters:observed.counters});
  return observed;
 }
 async function checkStatus(){
@@ -111,6 +118,26 @@ async function verifyReinstalled(expectedArgs){
  const body=await response.json();assert.equal(body.accepted,true);
  return body.result;
 }
+async function reconcileUnfinished(expectedArgs){
+ const button=section().getByRole('button',{name:'Reconcile unfinished repair',exact:true});
+ await expect(button).toBeEnabled();
+ const waiting=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/actions'&&
+  response.request().method()==='POST'&&unwrap(response.request().postDataJSON()).action===prefix+'Reconcile');
+ await button.click();const response=await waiting;
+ assert.equal(response.status(),200);assert.deepEqual(unwrap(response.request().postDataJSON()).args,expectedArgs);
+ const body=await response.json();assert.equal(body.accepted,true);
+ return body.result;
+}
+async function checkReconciliationStatus(operationId){
+ const button=section().getByRole('button',{name:'Check reconciliation status',exact:true});
+ await expect(button).toBeEnabled();
+ const waiting=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/actions'&&
+  response.request().method()==='POST'&&unwrap(response.request().postDataJSON()).action===prefix+'Status');
+ await button.click();const response=await waiting;
+ assert.equal(response.status(),200);
+ assert.deepEqual(unwrap(response.request().postDataJSON()).args,{operationId});
+ const body=await response.json();assert.equal(body.accepted,true);return body.result.operation;
+}
 async function wireOperation(operationId,status){
  await expect.poll(()=>page.evaluate(({operationId,status})=>
   installationRepairStreams.flatMap(s=>s.operations).some(row=>row.operationId===operationId&&row.status===status),
@@ -127,17 +154,29 @@ try{
  assert.deepEqual(component.source,source.source,'Build the selected client before pairing');
  assert.deepEqual(component.build,build);
  assert.equal(component.pairedServer.qualification,'unqualified','Shared-input provenance is not actual-host acceptance');
+ browser=await chromium.launch({headless:true,
+  ...(process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}:{}),
+  ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});
+ cleanup.browser='running';
+ // Separate private homes/counters and browser contexts; one owned browser.
+ // No settled receipt is rewritten back to unknown to manufacture a second run.
+ for(journey of ['verify','reconcile']){
+ actionStart=actions.length;phase=journey+': setup';
+ const priorStreams=[];
  owned=await startFixture({command:fixturePython(root+'.venv/bin/python'),
-  args:['-u',root+'tests/fixtures/installation_repair_server.py'],env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'},
+  args:['-u',root+'tests/fixtures/installation_repair_server.py'],
+  env:{...process.env,PYTHONDONTWRITEBYTECODE:'1',INSTALLATION_REPAIR_FIXTURE_JOURNEY:journey},
   tag:'installation-repair-host',name:'Installation repair host'});
  base=owned.base;cleanup.fixture='running';
  const unauthorized=await fetch(base+'/api/state');assert.equal(unauthorized.status,401);
  const invalidToken=await fetch(base+'/api/state',{headers:{Authorization:'Bearer invalid-fixture-token'}});
  assert.equal(invalidToken.status,401,'Invalid bearer alone must not authenticate');
- browser=await chromium.launch({headless:true,
-  ...(process.env.DTU_CHROMIUM_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}:{}),
-  ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});
- cleanup.browser='running';
+ for(const headers of [{},{Authorization:'Bearer invalid-fixture-token'}]){
+  const response=await fetch(base+'/api/actions',{method:'POST',
+   headers:{...headers,'Content-Type':'application/json'},
+   body:JSON.stringify({action:prefix+'Reconcile',args:{operationId:'f'.repeat(32),hostInstanceId:'wrong-host',confirm:true}})});
+  assert.equal(response.status,401,'Reconcile requires actual host authentication');
+ }
  const context=await browser.newContext({viewport:{width:1280,height:1000}});
  const cookie=await context.request.post(base+'/fixture/installation-repair-cookie',{headers:{Authorization:token}});
  assert.equal(cookie.status(),200);
@@ -173,7 +212,7 @@ try{
       const walk=value=>{
        if(!value||typeof value!=='object')return;
        if(/^[a-f0-9]{32}$/.test(value.operationId)&&/^[a-f0-9]{32}$/.test(value.previewId)&&
-        ['unknown','reinstalled','ready'].includes(value.status))
+        ['unknown','reinstalled','ready','failed'].includes(value.status))
         probe.operations.push({operationId:value.operationId,previewId:value.previewId,status:value.status});
        for(const child of Object.values(value))if(child&&typeof child==='object')walk(child);
       };
@@ -188,6 +227,11 @@ try{
  await page.goto(base+'/');await showFixtureConversation(page);
  await expect.poll(()=>page.evaluate(()=>installationRepairStreams.reduce((n,s)=>n+s.states,0))).toBeGreaterThan(0);
  initial=await observe();identity=initial.identity;
+ assert.equal(initial.journey,journey);
+ for(const previous of Object.values(journeys)){
+  assert.notEqual(initial.hostInstanceId,previous.hostInstanceId);
+  assert.notEqual(initial.dataDir,previous.dataDir);
+ }
  for(const [name,digest] of Object.entries(identity))assert.equal(sha(await readFile(resolve(root,name))),digest,name);
  assert.ok(initial.counters.sseConnections>0);
  assert.equal(initial.operation,null);assert.deepEqual(initial.counters.runtimeCalls,[]);
@@ -199,7 +243,7 @@ try{
  phase='public schemas';
  const catalogResponse=await page.request.get(base+'/api/actions');assert.equal(catalogResponse.status(),200);
  const catalog=await catalogResponse.json();
- const schemas=Object.fromEntries(['Preview','Confirm','Status','Verify'].map(suffix=>{
+ const schemas=Object.fromEntries(['Preview','Confirm','Status','Verify','Reconcile'].map(suffix=>{
   const row=catalog.find(row=>row.name===prefix+suffix);assert.ok(row,'Real host advertises '+suffix);
   assert.equal(row.inputSchema.type,'object');assert.equal(row.inputSchema.additionalProperties,false);
   return [suffix,row.inputSchema];
@@ -208,6 +252,8 @@ try{
  assert.deepEqual([...schemas.Confirm.required].sort(),['confirm','hostInstanceId','previewId']);
  assert.deepEqual(schemas.Verify.properties.confirm.enum,[true]);
  assert.deepEqual([...schemas.Verify.required].sort(),['confirm','hostInstanceId','operationId']);
+ assert.deepEqual(schemas.Reconcile.properties.confirm.enum,[true]);
+ assert.deepEqual([...schemas.Reconcile.required].sort(),['confirm','hostInstanceId','operationId']);
  // An extra property must fail public schema admission, without even binding.
  await rejected(prefix+'Preview',{unexpected:true});
  assert.equal((await observe()).counters.bindingReads,0);
@@ -228,7 +274,7 @@ try{
  assert.deepEqual(preview.target,{version:'99.0.0',revision:'a'.repeat(40),
   source:'https://github.com/microsoft/amplifier-unified/releases/download/v99.0.0/amplifier_unified-99.0.0-py3-none-any.whl'});
  assert.deepEqual(preview.installedExtras,['native-desktop']);
- assert.deepEqual(actions.filter(row=>row.action===prefix+'Preview').at(-1).args,{});
+ assert.deepEqual(posts('Preview').at(-1).args,{});
  for(const text of ['Application installation only','Workspace files','Credentials','Downloaded source caches',
   'Operation and recovery receipts','Installed optional features','native-desktop','99.0.0',initial.hostInstanceId,initial.dataDir])
   await expect(section()).toContainText(text);
@@ -298,6 +344,37 @@ try{
  assert.equal(Number.isInteger(ownerHealthBody.installationRepair.protocol),true);
  assert.equal(JSON.stringify(ownerHealthBody).includes('INSTALLATION_REPAIR_FIXTURE_CREDENTIAL'),false);
  await expect(healthy()).toHaveCount(0);
+ phase='explicit reconciliation admission and proof guard';
+ const reconciliationArgs={operationId:operation.operationId,hostInstanceId:initial.hostInstanceId,confirm:true};
+ const beforeReconciliation=await observe();
+ assert.deepEqual(beforeReconciliation.projection.reconcileTarget,reconciliationArgs);
+ assert.equal(beforeReconciliation.projection.verifyTarget,null);
+ for(const args of [{...reconciliationArgs,confirm:false},{...reconciliationArgs,unexpected:true},
+  {...reconciliationArgs,hostInstanceId:'wrong-host'},{...reconciliationArgs,operationId:'f'.repeat(32)}])
+  await rejected(prefix+'Reconcile',args);
+ assert.equal((await observe()).counters.reconciliations,0,'Invalid admission never launches an inspection child');
+ await expect(closedWithoutReplacement()).toHaveCount(0);
+ if(journey==='verify'){
+  const unknownReconciliation=await reconcileUnfinished(reconciliationArgs);
+  assert.deepEqual(unknownReconciliation,operation,'Uncertain probe returns only the unchanged canonical receipt');
+  const pending={operationId:operation.operationId,previewId:operation.previewId,hostInstanceId:initial.hostInstanceId};
+  await expect.poll(reconciliationJournal).toEqual(pending);
+  await expect(section()).toContainText('No positive no-replacement settlement was confirmed');
+  await expect(section().getByRole('button',{name:'Reconcile unfinished repair',exact:true})).toBeDisabled();
+  await expect(section().getByRole('button',{name:'Preview installation repair',exact:true})).toBeDisabled();
+  const retained=await checkpoint('uncertain reconciliation retains the hold and exact receipt',1,3);
+  assert.equal(retained.counters.reconciliations,1);assert.equal(retained.counters.noReplacementWrites,0);
+  assert.equal(retained.receiptSha256,beforeReconciliation.receiptSha256);
+  assert.deepEqual(retained.admissions,beforeReconciliation.admissions);assert.equal(retained.repairHeld,true);
+  assert.deepEqual(await checkReconciliationStatus(operation.operationId),operation);
+  const reconciliationPosts=reconciliations().length;
+  await page.reload();await expect(section()).toBeVisible();await checkStatus();
+  assert.deepEqual(await checkReconciliationStatus(operation.operationId),operation);
+  assert.equal(reconciliations().length,reconciliationPosts,'Reload and status never replay reconciliation');
+  assert.deepEqual(await reconciliationJournal(),pending);
+  assert.equal((await observe()).counters.reconciliations,1);
+  await expect(closedWithoutReplacement()).toHaveCount(0);await expect(healthy()).toHaveCount(0);
+  await capture('reconciliation-unknown-retained-390');
  phase='reinstalled is not healthy';
  await advance('reinstalled',operation.operationId);
  await expect(section()).toContainText('Application reinstalled — service health not verified');
@@ -332,14 +409,63 @@ try{
  assert.equal(final.operation.serviceState,'running');assert.equal(final.operation.reinstalled,true);
  assert.deepEqual(final.projection.operation,final.operation);
  await wireOperation(operation.operationId,'ready');
- assert.ok(await page.evaluate(()=>installationRepairStreams.some(s=>s.deltas>0)),'Actual SSE deltas observed');
- streamEvidence=await page.evaluate(()=>installationRepairStreams);
- await section().locator('[data-part="installation-repair-operation"]').scrollIntoViewIfNeeded();await capture('verified-390');
+ await expect.poll(reconciliationJournal).toBe(null);
+ await expect(section().getByRole('button',{name:'Check reconciliation status',exact:true})).toHaveCount(0);
+ await expect(section().getByRole('button',{name:'Preview installation repair',exact:true})).toBeEnabled();
+ await expect(closedWithoutReplacement()).toHaveCount(0);
+ assert.equal(final.counters.reconciliations,1);assert.equal(final.counters.noReplacementWrites,0);
+ }else{
+  // Fixture control changes only the synthetic probe. Status alone cannot
+  // write settlement, release the hold, or produce the no-replacement heading.
+  await advance('reconciliation-positive',operation.operationId);
+  const armed=await observe();
+  assert.equal(armed.receiptSha256,beforeReconciliation.receiptSha256);
+  assert.equal(armed.repairHeld,true);assert.equal(armed.counters.noReplacementWrites,0);
+  await expect(closedWithoutReplacement()).toHaveCount(0);
+  const reconciled=await reconcileUnfinished(reconciliationArgs);
+  assert.equal(reconciled.operationId,operation.operationId);assert.equal(reconciled.previewId,preview.previewId);
+  assert.equal(reconciled.status,'failed');assert.equal(reconciled.stage,'reconciled-no-effect');
+  assert.equal(reconciled.reinstalled,false);assert.equal(reconciled.healthVerified,false);
+  assert.equal(reconciled.serviceState,'running');assert.equal(reconciled.reconciliation.noReplacement,true);
+  assert.equal(Number.isFinite(reconciled.reconciliation.verifiedAt),true);
+  assert.ok(reconciled.reconciliation.verifiedAt>0);
+  assert.equal(reconciled.reconciliation.hostInstanceId,initial.hostInstanceId);
+  await expect(closedWithoutReplacement()).toBeVisible();await expect(healthy()).toHaveCount(0);
+  await expect.poll(reconciliationJournal).toBe(null);
+  await expect(section().getByRole('button',{name:'Preview installation repair',exact:true})).toBeEnabled();
+  await expect(section().getByRole('button',{name:'Reconcile unfinished repair',exact:true})).toHaveCount(0);
+  await expect(section().getByRole('button',{name:'Verify repaired installation',exact:true})).toHaveCount(0);
+  final=await checkpoint('only explicit positive no-replacement proof closes without claiming repair health',1,3);
+  assert.deepEqual(final.operation,reconciled);assert.deepEqual(final.projection.operation,reconciled);
+  assert.equal(final.repairHeld,false);assert.equal(final.projection.reconcileTarget,null);
+  assert.equal(final.projection.verifyTarget,null);
+  assert.deepEqual(final.admissions,beforeReconciliation.admissions);
+  assert.equal(final.counters.reconciliations,1);assert.equal(final.counters.noReplacementWrites,1);
+  assert.equal(final.counters.verifications,0);assert.equal(final.counters.artifactPreparations,1);
+  await wireOperation(operation.operationId,'failed');
+  assert.deepEqual(await checkStatus(),reconciled);
+  assert.deepEqual(accepted(await post(prefix+'Confirm',confirmationArgs)),reconciled,
+   'Late original confirmation reads the settled admission without a new helper');
+  const reconciliationPosts=reconciliations().length;
+  // Retain the actual settlement wire evidence before reload creates a new
+  // document/observer. An unchanged read need not publish a fresh state delta.
+  priorStreams.push(...await page.evaluate(()=>installationRepairStreams));
+  await page.reload();await expect(section()).toBeVisible();await checkStatus();
+  await expect(closedWithoutReplacement()).toBeVisible();await expect(healthy()).toHaveCount(0);
+  assert.equal(reconciliations().length,reconciliationPosts);
+  final=await checkpoint('settled reload and late original confirmation are read-only',1,4);
+  assert.equal(final.counters.reconciliations,1);assert.equal(final.counters.noReplacementWrites,1);
+ }
+ streamEvidence=[...priorStreams,...await page.evaluate(()=>installationRepairStreams)];
+ assert.ok(streamEvidence.some(s=>s.deltas>0),'Actual SSE deltas observed');
+ await section().locator('[data-part="installation-repair-operation"]').scrollIntoViewIfNeeded();await capture('settled-390');
  await page.getByRole('button',{name:/^Close (settings|panel)$/i}).click();
  await showFixtureConversation(page);
  await expect(composer).toHaveText('Keep my unsent installation repair draft');
  await expect(page.getByText('Keep this saved installation repair conversation.',{exact:true})).toBeVisible();
- await checkpoint('return to original history and unsent draft',1,3);
+ await checkpoint('return to original history and unsent draft',1,journey==='verify'?3:4);
+ journeys[journey]={hostInstanceId:initial.hostInstanceId,dataDir:initial.dataDir,
+  operation:final.operation,counters:final.counters,streamEvidence,actionRange:[actionStart,actions.length]};
  // Fetch the exact metadata through ordinary static HTTP too; loaded JS/CSS
  // response bytes below prove the actual browser used this bundled build.
  for(const name of ['build.json','client-component.json']){
@@ -354,7 +480,12 @@ try{
  for(const [name,binding] of Object.entries(servedAssets)){
   if(name!=='client-component.json')assert.deepEqual(binding,component.assets[name],name+' served bytes');
  }
- assert.deepEqual(errors,[]);noFallback();passed=true;phase='complete';
+ assert.deepEqual(errors,[]);noFallback();
+ await context.close();
+ const stopped=await owned.stop();fixtureCleanups.push({journey,state:'closed',...stopped});
+ owned=null;cleanup.fixture='closed';
+ }
+ passed=true;phase='complete';
 }catch(error){
  failure=error;try{if(page)await page.screenshot({path:resolve(output,'failure.png'),animations:'disabled'})}catch{}
 }finally{
@@ -376,7 +507,7 @@ try{
  passed=passed&&!failure&&cleanup.errors.length===0;
  const receipt={passed,phase,failure:failure?String(failure.stack||failure):null,
   scope:'actual AppService, public HTTP schemas/dispatch, cookie auth, bundled static and real SSE UI',
-  limits:['Synthetic binding/release/artifact/helper/install/service/verification-probe effects only; NOT native end-to-end',
+  limits:['Synthetic binding/release/artifact/helper/install/service/verification/reconciliation-probe effects only; NOT native end-to-end',
    'No real package download, installer, service stop/start, host replacement or provider/worker execution',
    'Fixture narrows real client transport advertisement to HTTP/SSE; no browser request interception or fulfillment',
    'Reload recovery exercised; actual transport disconnect/reconnect and native platform parity not exercised',
@@ -384,7 +515,7 @@ try{
   identity,sourceSelection:source,build,clientComponent:component?{source:component.source,
    build:component.build,sharedInputs:component.sharedInputs,pairedServer:component.pairedServer}:null,
   servedAssets,streamEvidence,checkpoints,screenshots,actions,httpErrors,pageErrors:errors,observerErrors,
-  finalCounters:final?.counters,operation:final?.operation,cleanup};
+  journeys,fixtureCleanups,finalCounters:final?.counters,operation:final?.operation,cleanup};
  await writeFile(resolve(output,'receipt.json'),JSON.stringify(receipt,null,2)+'\n');
 }
 if(failure)throw failure;
