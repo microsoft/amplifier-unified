@@ -11,7 +11,12 @@ const waiting=[],deliveryWaiting=[],deferredDelivery=new Set(),calls=[],errors=[
 const unknownDelivery='Delivery is still uncertain. Nothing was sent again.';
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(check,label){for(let i=0;i<150&&!check();i++)await sleep(10);assert.ok(check(),label)}
-async function next(){await until(()=>waiting.length,'Expected pending operation');return waiting.shift()}
+function ordinarySend(item){
+ assert.equal(item.body.action,'conversation.send');
+ assert.equal(Object.hasOwn(item.body.args,'expectedGenerationId'),false,'Ordinary Send does not bind execution to a browser-observed run');
+ assert.equal(Object.hasOwn(item.body.args,'allowNextTurn'),false,'The owner, not the browser, chooses live/boundary/idle admission');
+}
+async function next(strict=false){await until(()=>waiting.length,'Expected pending operation');const item=waiting.shift();if(!strict&&item.body.action==='conversation.send')ordinarySend(item);return item}
 async function nextDelivery(inputId){await until(()=>deliveryWaiting.some(item=>item.body.args.inputId===inputId),'Expected pending delivery read for '+inputId);return deliveryWaiting.splice(deliveryWaiting.findIndex(item=>item.body.args.inputId===inputId),1)[0]}
 function deliveryReply(item,delivery,extra={}){
  const {sessionId,inputId}=item.body.args;
@@ -203,7 +208,7 @@ try{
  await page.getByText(/Sending again could repeat that work/).waitFor();
  assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lostRejection.body.id).length,1,'Opening uncertain-retry confirmation is not admission');
  await page.getByRole('button',{name:'Send this message again',exact:true}).click();
- const rejectionReceipt=await next();assert.equal(rejectionReceipt.body.action,'conversation.send');assert.equal(rejectionReceipt.body.id,lostRejection.body.id,'Original-submission retry keeps its deduplication identity');assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lostRejection.body.id).length,2,'Only the explicit click retries the original submission');await rejectionReceipt.route.fulfill({json:{accepted:false,duplicate:true,status:409,error:'Saved rejection',state:shell.state()}});
+ const rejectionReceipt=await next();assert.equal(rejectionReceipt.body.action,'conversation.send');assert.equal(rejectionReceipt.body.id,lostRejection.body.id,'Original-submission retry keeps its deduplication identity');assert.deepEqual(rejectionReceipt.body.args,lostRejection.body.args,'Unknown retry preserves the exact captured payload');assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lostRejection.body.id).length,2,'Only the explicit click retries the original submission');await rejectionReceipt.route.fulfill({json:{accepted:false,duplicate:true,status:409,error:'Saved rejection',state:shell.state()}});
  await page.getByRole('button',{name:'Retry',exact:true}).click();const rejectedRetry=await next();assert.notEqual(rejectedRetry.body.id,lostRejection.body.id);await received(rejectedRetry);
  const delayed=await send('Acknowledgement delayed');chat().status='working';chat().messages.push({id:'delayed',inputId:delayed.body.id,role:'user',text:delayed.body.args.text,delivery:{status:'sending'}});await emit();
  await composer().fill('Keep this next draft');await until(()=>state.view.draft==='Keep this next draft','Draft saves while acknowledgement waits');
@@ -278,9 +283,12 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
   assert.equal(JSON.stringify(chat().messages),historyBefore);assert.deepEqual(await outbox(),[]);assert.equal(calls.filter(c=>c.id===oldEdit.body.id).length,1);assert.equal(waiting.length,0);
   await page.locator('.a-message-editor').getByRole('button',{name:'Cancel',exact:true}).click();await editor().waitFor({state:'detached'});await until(()=>state.view.messageEdit===null,'Settled editor can be canceled');
  }
- chat().status='working';chat().collaborationGeneration={id:'original-run',terminal:false};await emit();
+ // A stale active projection must not choose the execution route or pin the run.
+ chat().status='working';chat().collaborationGeneration={id:'stale-browser-run',terminal:false};chat().nextMessageRevision=7;await emit();
  await composer().fill('Please find a good pause point.');await page.getByRole('button',{name:'Send message',exact:true}).click();
- const correction=await next();assert.equal(correction.body.args.expectedGenerationId,'original-run','Composer binds steering to the observed run');assert.equal(correction.body.args.allowNextTurn,true,'Ordinary messages may cross normal completion');
+ const correction=await next();assert.equal(correction.body.args.sessionId,'chat');assert.equal(correction.body.args.expectedConfigurationRevision,7);
+ const capturedCorrection=(await outbox()).find(row=>row.commandId===correction.body.id);
+ assert.equal(Object.hasOwn(capturedCorrection,'expectedGenerationId'),false);assert.equal(Object.hasOwn(capturedCorrection,'allowNextTurn'),false);
  const steered={id:'steered',inputId:correction.body.id,role:'user',text:correction.body.args.text,delivery:{status:'accepted'},steering:{generationId:'original-run',disposition:'queued'}};
  chat().messages.push(steered);state.revision++;await correction.route.fulfill({json:{accepted:true,delivery:'accepted',steering:steered.steering,state:shell.state()}});
  await page.getByText('Received by the active run; waiting for its next step…',{exact:true}).waitFor();
@@ -288,24 +296,57 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
  deferredDelivery.delete(correction.body.id);await deliveryReply(steeringCheck,'accepted',{steering:steered.steering});
  steered.steering.disposition='applied';await emit();await page.getByText('Added to the active run’s context',{exact:true}).waitFor();
  assert.equal(calls.filter(c=>c.id===correction.body.id).length,1,'Steering updates and checks never resend');
+ // The same ordinary Send also renders native receipts without treating host
+ // acceptance or provider pending as successor application.
+ steered.steering={generationId:'actual-owner-run',mode:'native',phase:'sent',disposition:'sending'};await emit();
+ await page.getByText('Sending live direction…',{exact:true}).waitFor();
+ steered.steering.disposition='queued';steered.steering.phase='accepted';await emit();
+ await page.getByText('Accepted; applying live direction…',{exact:true}).waitFor();
+ assert.equal(await page.getByText('Live direction applied to the successor response',{exact:true}).count(),0);
+ steered.steering.phase='pending';await emit();await page.getByText('Accepted; queued at the provider until a successor response can start…',{exact:true}).waitFor();
+ steered.steering.phase='applied';steered.steering.disposition='applied';await emit();await page.getByText('Live direction applied to the successor response',{exact:true}).waitFor();
+ assert.equal(calls.filter(c=>c.id===correction.body.id).length,1,'Native phase changes do not replay Send');
  await page.screenshot({path:'/tmp/amplifier-steering-applied.png'});
 
- // A rejected send keeps its text, but an explicit Retry must not reuse the expired run.
+ // A rejected send keeps its text. Explicit Retry refreshes only configuration,
+ // never a generation or browser-selected execution route.
  const boundary=await send('This is another message, not a correction.');
- assert.equal(boundary.body.args.expectedGenerationId,'original-run');
- chat().status='idle';chat().collaborationGeneration.terminal=true;await emit();
- await boundary.route.fulfill({status:409,json:{accepted:false,code:'steering_target_changed',error:'The run changed. Your message was not sent.'}});
+ assert.equal(boundary.body.args.expectedConfigurationRevision,7);
+ chat().collaborationGeneration={id:'another-stale-run',terminal:false};chat().nextMessageRevision=8;await emit();
+ await boundary.route.fulfill({status:409,json:{accepted:false,code:'configuration_changed',error:'The configuration changed. Your message was not sent.'}});
  const boundaryRejected=page.locator(`[data-input-id="${boundary.body.id}"]`);
  await boundaryRejected.getByRole('button',{name:'Retry',exact:true}).click();
  const retried=await next();assert.notEqual(retried.body.id,boundary.body.id);
- assert.equal(retried.body.args.expectedGenerationId,undefined,'Explicit retry refreshes the expired generation');
- assert.equal(retried.body.args.allowNextTurn,true);assert.equal(retried.body.args.text,boundary.body.args.text);
+ assert.equal(retried.body.args.expectedConfigurationRevision,8);assert.equal(retried.body.args.text,boundary.body.args.text);
+ assert.equal(retried.body.args.sessionId,boundary.body.args.sessionId);assert.deepEqual(retried.body.args.attachmentIds,boundary.body.args.attachmentIds);
  await received(retried);
+ chat().messages.at(-1).steering={disposition:'next_turn'};await emit();await page.getByText('Received for the next turn',{exact:true}).waitFor();
  chat().status='idle';chat().collaborationGeneration.terminal=true;await emit();
+ // An explicit anchored API call remains distinct from the ordinary composer;
+ // generic action dispatch must not strip or reinterpret its caller's fields.
+ const strictArgs={sessionId:'chat',text:'Explicit anchored API input',expectedGenerationId:'explicit-run',expectedConfigurationRevision:8};
+ const strictCall=page.evaluate(args=>window.amplifier.dispatch('conversation.send',args,{id:'strict-api-input',feedback:false}),strictArgs);
+ strictCall.catch(()=>{}); // Cleanup must not mask an earlier assertion failure.
+ const strict=await next(true);assert.deepEqual(strict.body.args,strictArgs);assert.equal(strict.body.id,'strict-api-input');
+ await strict.route.fulfill({json:{accepted:true,delivery:'accepted',state:shell.state()}});await strictCall;
+ // Reload an uncertain submission captured before route removal. Its old wire
+ // intent stays intact; even explicit confirmation cannot send it unanchored.
+ const historical={id:'historical-local',commandId:'historical-input',sessionId:'chat',scope:capturedCorrection.scope,text:'Retained historical route intent',attachmentIds:[],status:'unknown',expectedGenerationId:'old-run',allowNextTurn:true,expectedConfigurationRevision:7};
+ await page.evaluate(entry=>sessionStorage.setItem('amplifier.messageOutbox.v1',JSON.stringify([entry])),historical);
+ await page.reload();await composer().waitFor();
+ const historicalBubble=page.locator('[data-input-id="historical-input"]');
+ await historicalBubble.getByText(unknownDelivery,{exact:true}).waitFor();
+ assert.ok(calls.some(call=>call.action==='conversation.delivery'&&call.args.inputId==='historical-input'),'Historical recovery reads only its original receipt');
+ await historicalBubble.getByRole('button',{name:'Retry original submission',exact:true}).click();
+ await historicalBubble.getByRole('button',{name:'Send this message again',exact:true}).click();
+ await page.getByText('This earlier submission is still uncertain and cannot be sent again here. Use Check delivery for its original receipt. The saved message was kept.',{exact:true}).waitFor();
+ assert.deepEqual(await outbox(),[historical]);assert.equal(calls.filter(call=>call.action==='conversation.send'&&call.id==='historical-input').length,0);
+ // The synthetic fixture now removes its seed, not a production recovery path.
+ await page.evaluate(()=>sessionStorage.setItem('amplifier.messageOutbox.v1','[]'));await page.reload();await composer().waitFor();
  await page.screenshot({path:'/tmp/amplifier-optimistic-messages.png'});await page.setViewportSize({width:390,height:844});await page.evaluate(()=>{const save=Storage.prototype.setItem;Storage.prototype.setItem=function(key,value){if(key==='amplifier.messageOutbox.v1')throw new DOMException('Fixture quota','QuotaExceededError');return save.call(this,key,value)}});const mobile=await send('Mobile failed message');await mobile.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection'}});await page.getByRole('button',{name:'Retry',exact:true}).waitFor();await page.getByText('This browser could not save the pending message. Keep this tab open until delivery is confirmed.',{exact:true}).waitFor();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:'/tmp/amplifier-message-retry-mobile.png'});
  await page.addInitScript(()=>Object.defineProperty(window,'sessionStorage',{get(){throw new DOMException('Fixture storage blocked','SecurityError')}}));await page.reload();await composer().waitFor();
  const blockedStorage=await send('Storage unavailable');await blockedStorage.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection'}});
  await page.getByRole('button',{name:'Retry',exact:true}).waitFor();await page.getByText('This browser could not save the pending message. Keep this tab open until delivery is confirmed.',{exact:true}).waitFor();
  assert.equal(deliveryWaiting.length,0,'All deliberately deferred passive reads were settled');assert.equal(deferredDelivery.size,0);
- assert.deepEqual(errors,[]);console.log('Outbox browser passed: scoped payload, immediate clear/bubble, late identical draft, server dedup, held current/fork locks typing/paste/mode/Escape/submit and direct handlers, pre-render double requestSubmit, closed pending retry with byte-exact outbox text across local/shared identities and explicit Edit after rejection, old rejection preserves newer editor without restoration writes, blocked editor guards, neighboring drafts/outbox, delayed504/late acknowledgement without replay, automatic passive mount/reload reads on an independent queue, exact-bound replies, confirmed original-identity retry, mobile, blocked storage. Controlled transport measures admission/saved/accepted states, not model execution.');
+ assert.deepEqual(errors,[]);console.log('Outbox browser passed: conversation-addressed ordinary Send/retry without generation or route flags despite stale active state; captured config and exact unknown-retry payload/identity; historical unknown row retained byte-for-byte after passive read and refused confirmed resend; explicit strict anchored API preserved; native sent/accepted/pending/applied, request-boundary queued/applied and next-turn labels; scoped payload, immediate clear/bubble, late identical draft, server dedup, held current/fork locks typing/paste/mode/Escape/submit and direct handlers, pre-render double requestSubmit, closed pending retry with byte-exact outbox text across local/shared identities and explicit Edit after rejection, old rejection preserves newer editor without restoration writes, blocked editor guards, neighboring drafts/outbox, delayed504/late acknowledgement without replay, automatic passive mount/reload reads on an independent queue, exact-bound replies, confirmed original-identity retry, mobile, blocked storage. Controlled transport measures admission/saved/accepted states, not model execution.');
 }finally{await browser?.close();await vite?.close()}
