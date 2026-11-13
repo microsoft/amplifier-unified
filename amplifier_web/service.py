@@ -5147,7 +5147,8 @@ class AppService:
                             'generationId': payload.get('generation_id'), 'inputIds': payload.get('input_ids', [])}
                     elif isinstance(existing, dict):
                         session['failure'] = {**existing, 'generationId': payload.get('generation_id'),
-                            'inputIds': payload.get('input_ids', [])}
+                            'inputIds': payload.get('input_ids', []),
+                            'stage': (failure or {}).get('stage', 'manager_turn')}
                     from .input_status import record_failure
                     record_failure(session, session.get('failure') or {})
                 if root_generation and current_generation and payload.get("event") == "generation.finished":
