@@ -1145,14 +1145,22 @@ async def test_worker_retry_never_resubmits_accepted_input(source):
 
 
 async def test_duplicate_retry_restores_settled_turn(recovery):
+    from amplifier_web.execution import ensure_turn
     app, runtime, _ = recovery
+    # The lost-send fixture has no native admission, so ordinary Send must not
+    # invent its execution turn. This case specifically needs a settled turn
+    # whose existing outcome/owner evidence a duplicate retry must preserve.
+    ensure_turn(app._session(), 'original', 'Previously admitted request')
+    settled = app._session()['execution']['turns'][-1]
+    settled.update(phase='error', endedAt=123, runtimeOwnerId='original-owner',
+                   generationId='original-generation')
     before = copy.deepcopy(app._session()['execution']['turns'][-1])
     runtime.retry = AsyncMock(return_value={'accepted': True, 'duplicate': True})
     result = await app.dispatch('conversation.retry', {**recovery_args(app), 'confirmUncertain': True})
     assert result['result']['resent'] is False
     assert app._session()['status'] == 'error'
     after = app._session()['execution']['turns'][-1]
-    for key in ('phase', 'endedAt'):
+    for key in ('phase', 'endedAt', 'retriedAt', 'runtimeOwnerId', 'generationId'):
         assert after.get(key) == before.get(key)
     assert not runtime.sent
 
@@ -1188,19 +1196,22 @@ async def test_late_acceptance_during_check_is_never_downgraded(recovery):
 
 
 async def test_worker_retry_requires_ownership_but_check_does_not():
-    from amplifier_foundation.session import SessionBusyError
     worker = Worker()
     worker.execution = object()
     worker.runtime = SimpleNamespace(accepted={'original': object()}, submit=AsyncMock())
     worker.session = SimpleNamespace(coordinator=SimpleNamespace(get=lambda name: None))
-    worker.acquire_for_mutation = AsyncMock(side_effect=SessionBusyError({'app': 'amplifier-cli', 'pid': 123}))
+    # Lifetime ownership is fenced directly; retry must not hot-reacquire the
+    # old writer through the removed acquire_for_mutation parking path.
+    owner = {'app': 'amplifier-cli', 'pid': 123}
+    handle = worker.shared_handle = SimpleNamespace(owner=owner)
+    worker.ownership.yielding = True
     with patch('amplifier_web.runtime_worker.publish') as publish:
         await worker.command({'op': 'delivery', 'id': 'check', 'input_id': 'original'})
         assert publish.call_args.args[0]['result']['delivery'] == 'accepted'
-        worker.acquire_for_mutation.assert_not_awaited()
         await worker.command({'op': 'retry', 'id': 'retry', 'input_id': 'original', 'text': 'Request'})
         assert publish.call_args.args[0]['code'] == 'session_busy'
-    worker.acquire_for_mutation.assert_awaited_once()
+        assert publish.call_args.args[0]['owner'] == owner
+    assert worker.shared_handle is handle and worker.ownership.yielding
     worker.runtime.submit.assert_not_awaited()
 
 
