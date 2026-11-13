@@ -7,8 +7,10 @@ their runtime and history owners. Core is unchanged.
 
 The host owns the chat ID, accepted messages, displayed replies, command receipts,
 workspace association and saved access choice. The external agent owns its
-execution session, tools, model and private context. `externalAgent.sessionId` is
-the remote execution identity; it never becomes `runtimeSessionId`, `nativeProject`
+execution session, tools, model and private context. A singleton's
+`externalAgent.sessionId`, or each group member's
+`externalAgent.participants[].sessionId`, is its remote execution identity;
+it never becomes `runtimeSessionId`, `nativeProject`
 or `nativeIdentity`. Launch arguments and enrollment secrets are not public chat
 metadata. Host-owned messages use the existing view persistence mechanism under
 `external-conversations/<host-id-digest>` rather than a fictitious native session.
@@ -57,11 +59,39 @@ the local pilot.
 Choose the external agent in New chat and an existing workspace, then submit the
 first message. The draft stays private and creates no conversation or connection
 until submission. The same `session.create` action accepts an explicit existing
-`workspace` and `externalAgentId`; it does not allocate a managed or new folder for
-an external chat. Each conversation currently has one external agent; different
-agents can back separate chats. The existing chat interface displays external ownership and omits unsupported
+`workspace` and `externalAgentId`, or a unique `externalAgentIds` list for a group;
+it does not allocate a managed or new folder for an external chat. The two
+selection forms cannot be combined. **Add agent** includes another configured
+participant before creation. The first message addresses the first selected
+agent; **Send to** chooses the recipient of later messages. The existing chat
+interface displays external ownership and omits unsupported
 native configuration, voice, attachments, edit and fork controls. Rename, pin,
 archive, ordinary text, Stop and the existing Access control remain host actions.
+
+## Directed conversations with multiple agents
+
+A group has one host-owned public transcript and a separate saved execution
+binding per participant. `conversation.send.recipientAgentId` explicitly selects
+one group member. The browser captures that choice with the submitted input,
+including retries and uncertain receipts; navigation or a later picker change
+does not redirect it. Saved messages retain their recipient or author's ID and
+label. Streaming and interrupted partial replies retain the actual author.
+Existing singleton chats and their saved bindings remain usable.
+
+One turn executes at a time in each conversation. Stop addresses that active
+participant; it does not cancel another member's idle execution session. Each
+member resumes its own exact remote identity. Unknown delivery remains attached
+to the original input and recipient, never replayed through another agent.
+This is explicit directed participation, not a broadcast or autonomous group
+workflow. Adding/removing participants in an existing conversation is separate.
+
+Before a group turn, the addressed agent receives a bounded projection of prior
+public messages: at most 32 rows and 24,000 text characters, with speaker/source
+identities and an explicit omission marker. The current request remains a
+separate prompt block. Historical requests are labeled as context, not new work.
+The projection never reads another agent's private working context or unsent
+client drafts and does not claim complete-history retrieval. On-demand retrieval
+from an experience remains a separate capability.
 
 ## Delivery, recovery and permission
 
@@ -82,8 +112,9 @@ continue after cleanup; the earlier unknown message remains unknown.
 
 Reconnect uses the same saved remote identity only when the agent advertises
 `session/resume`; an unsupported or failed resume does not create a replacement.
-This pilot does not import legacy history or replay the host transcript into the
-agent. Changing the configured launch identity requires a new chat rather than
+This pilot does not import legacy history. Singleton continuation keeps its
+existing prompt behavior; group turns include only the bounded public context
+described above. Changing a configured launch identity requires a new chat rather than
 silently rebinding existing work.
 
 Stop records the ordinary durable interruption revision before sending

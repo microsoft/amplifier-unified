@@ -43,6 +43,16 @@ compatibility fallback, SDK owner or updater.
 
 ## Build and try the independent artifact
 
+The multiparty external-chat interface is paired with Unified's external ACP
+conversation owner. New chat can select several configured agents in one existing
+workspace. The first selected agent receives the first message; subsequent
+messages choose one recipient explicitly. Replies and streaming text name their
+actual author. Execution remains serialized in that chat, with the existing
+room-level Stop and delivery recovery; choosing a recipient does not launch work.
+Each participant keeps its independent execution identity. Native Amplifier and
+single-external-agent chats retain their existing behavior. This source change
+requires its paired host and selected-copy delivery before it is a released feature.
+
 Use Node 22 and an owned test environment. Prepare the 14 shared files selected
 by `build-inputs.lock.json`: catalogs, the shell SDK, branding and their licenses.
 Run `npm run prepare:inputs` here to fetch only the pinned public files

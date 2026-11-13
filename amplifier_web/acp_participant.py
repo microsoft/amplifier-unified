@@ -50,12 +50,13 @@ class ACPParticipant:
             await self.close()
             raise
 
-    async def prompt(self, text):
+    async def prompt(self, text, *, context=None):
         from acp.schema import TextContentBlock
 
         if self.connection is None or self.session_id is None:
             raise RuntimeError('The external participant is not connected.')
-        return await self.connection.prompt(session_id=self.session_id, prompt=[TextContentBlock(text=text)])
+        blocks = ([TextContentBlock(text=context)] if context else []) + [TextContentBlock(text=text)]
+        return await self.connection.prompt(session_id=self.session_id, prompt=blocks)
 
     async def cancel(self):
         if self.connection is not None and self.session_id is not None:

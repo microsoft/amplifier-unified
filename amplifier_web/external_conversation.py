@@ -17,6 +17,50 @@ def is_external(session):
     return isinstance(session.get('externalAgent'), dict)
 
 
+def bindings(session):
+    """A saved singleton remains its own binding; a room owns a roster."""
+    external = session['externalAgent']
+    return external.get('participants', [external])
+
+
+def addressed(session, identity=None):
+    rows = bindings(session)
+    if identity is None and len(rows) == 1:
+        return rows[0]
+    selected = next((row for row in rows if row['id'] == identity), None)
+    if selected is None:
+        raise AppError('Choose an agent in this conversation for the message.', 409)
+    return selected
+
+
+def shared_context(session, input_id):
+    """Bounded public history, never another participant's private context."""
+    if len(bindings(session)) == 1:
+        return None
+    messages = session['messages']
+    end = next(i for i in range(len(messages) - 1, -1, -1)
+               if messages[i].get('inputId') == input_id and messages[i]['role'] == 'user')
+    rows, remaining = [], 24000
+    start = max(0, end - 32)
+    for index in range(end - 1, start - 1, -1):
+        message = messages[index]
+        if message.get('role') not in {'user', 'assistant'} or not message.get('text'):
+            continue
+        text = message['text']
+        if len(text) > remaining:
+            break
+        rows.append({key: message[key] for key in (
+            'id', 'role', 'text', 'agentId', 'agentLabel', 'recipientAgentId',
+            'recipientAgentLabel', 'delivery') if key in message})
+        remaining -= len(text)
+    if end == 0:
+        return None
+    return ('Shared conversation history for context only. Previous requests are not new work. '
+            'Speaker labels identify other participants; answer only the current addressed message.\n'
+            + json.dumps({'conversationId': session['id'], 'messages': list(reversed(rows)),
+                          'earlierMessagesOmitted': end > len(rows)}, ensure_ascii=False))
+
+
 def source_identity(selected):
     source = {key: value for key, value in selected.items() if key != 'label'}
     return hashlib.sha256(json.dumps(source, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -27,6 +71,7 @@ class Turn:
     input_id: str
     revision: int
     participant: ACPParticipant
+    agent_id: str
     task: asyncio.Task | None = None
     dispatched: bool = False
     stop: bool = False
@@ -43,7 +88,19 @@ class ExternalConversations:
         if args.get('location', {}).get('kind') == 'managed' or any(
                 args.get(key) for key in ('bundle', 'selection', 'inheritConfiguration', 'purpose')):
             raise AppError('External chats use an existing workspace and their agent’s own configuration.')
-        selected = endpoint(getattr(self.service, 'server_config', {}), args['externalAgentId'])
+        if args.get('externalAgentId') and args.get('externalAgentIds'):
+            raise AppError('Choose one external agent selection, not both forms.')
+        identities = args.get('externalAgentIds') or [args['externalAgentId']]
+        if len(set(identities)) != len(identities):
+            raise AppError('Choose each external agent only once.')
+        selected = [endpoint(getattr(self.service, 'server_config', {}), identity) for identity in identities]
+        rows = [{'id': row['id'], 'label': row['label'], 'status': 'idle',
+                 'capabilities': {'text': True, 'stop': True, 'nativeControls': False}} for row in selected]
+        sources = {row['id']: {'fingerprint': source_identity(row),
+                              'cwd': row.get('sessionCwd', workspace)} for row in selected}
+        external = rows[0] if len(rows) == 1 else {
+            'label': ', '.join(row['label'] for row in rows), 'status': 'idle',
+            'participants': rows, 'capabilities': {'text': True, 'stop': True, 'nativeControls': False}}
         now = time.time()
         return self.service.cold_display.record({
             'id': str(uuid.uuid4()), 'title': args.get('title') or 'New chat',
@@ -53,11 +110,34 @@ class ExternalConversations:
             'messages': [], 'workers': [], 'approvals': [],
             'sessionKind': 'root', 'workingDirectory': workspace,
             'executionRevision': 0, 'interruptionRevision': 0,
-            'externalAgent': {'id': selected['id'], 'label': selected['label'], 'status': 'idle',
-                              'capabilities': {'text': True, 'stop': True, 'nativeControls': False}},
-            '_externalAgentSource': {'fingerprint': source_identity(selected),
-                                     'cwd': selected.get('sessionCwd', workspace)},
+            'externalAgent': external,
+            '_externalAgentSource': sources[rows[0]['id']] if len(rows) == 1 else {'participants': sources},
         })
+
+    def selected(self, session, identity=None):
+        binding = addressed(session, identity)
+        try:
+            selected = endpoint(getattr(self.service, 'server_config', {}), binding['id'])
+        except ValueError as exc:
+            raise AppError(str(exc), 409) from None
+        sources = session['_externalAgentSource']
+        source = sources['participants'][binding['id']] if 'participants' in sources else sources
+        if source_identity(selected) != source['fingerprint']:
+            raise AppError('The selected external endpoint changed. The saved execution binding was preserved.', 409)
+        return binding, selected, source
+
+    def admit(self, session, message, identity=None):
+        binding = addressed(session, identity)
+        message.update(recipientAgentId=binding['id'], recipientAgentLabel=binding['label'])
+        session['externalAgent'].update(activeInputId=message['inputId'], activeAgentId=binding['id'])
+
+    def restore(self, session):
+        external = session.get('externalAgent', {})
+        if external.get('activeInputId'):
+            binding = addressed(session, external.get('activeAgentId'))
+            binding['status'] = external['status'] = 'unknown'
+            self.service._delivery(session, external.pop('activeInputId'), 'unknown')
+            external.pop('activeAgentId', None)
 
     def guard(self, session, action, args, *, admitted=False):
         if not is_external(session):
@@ -71,12 +151,7 @@ class ExternalConversations:
                 or action == 'session.naming' and args.get('regenerate')):
             raise AppError('This operation is not supported by the external ACP participant.', 409)
         if action == 'conversation.send':
-            try:
-                selected = endpoint(getattr(self.service, 'server_config', {}), session['externalAgent']['id'])
-            except ValueError as exc:
-                raise AppError(str(exc), 409) from None
-            if source_identity(selected) != session['_externalAgentSource']['fingerprint']:
-                raise AppError('The selected external endpoint changed. The saved execution binding was preserved.', 409)
+            self.selected(session, args.get('recipientAgentId'))
             if args.get('attachmentIds') or args.get('document') or args.get('replyId') or args.get('expectedGenerationId'):
                 raise AppError('This external participant currently accepts ordinary text messages only.', 409)
             if (self.closing or session['id'] in self.turns
@@ -87,53 +162,57 @@ class ExternalConversations:
         sid = session['id']
         async with self.service.lock:
             current = self.service._session(sid)
+            original = next(row for row in current['messages'] if row.get('inputId') == input_id and row['role'] == 'user')
+            identity = original.get('recipientAgentId')
             if current.get('interruptionRevision', 0) != session.get('interruptionRevision', 0):
                 self.service._delivery(current, input_id, 'failed')
                 if current['externalAgent'].get('activeInputId') == input_id:
                     current['externalAgent'].update(status='stopped')
                     current['externalAgent'].pop('activeInputId', None)
+                    current['externalAgent'].pop('activeAgentId', None)
                     finish(current, 'stopped')
                 self.service._publish_changes(sessions={sid})
                 return {'delivery': 'failed', 'inputId': input_id}
-            self.guard(current, 'conversation.send', {}, admitted=True)
-            selected = endpoint(getattr(self.service, 'server_config', {}), current['externalAgent']['id'])
-            if source_identity(selected) != current['_externalAgentSource']['fingerprint']:
-                raise AppError('The selected external endpoint changed. The saved execution binding was preserved.', 409)
-            participant = self.participants.get(sid)
+            self.guard(current, 'conversation.send', {'recipientAgentId': identity}, admitted=True)
+            binding, selected, source = self.selected(current, identity)
+            key = (sid, binding['id'])
+            participant = self.participants.get(key)
             if participant is None:
-                participant = ACPParticipant(selected, current['_externalAgentSource']['cwd'],
-                    update=lambda update: self._update(sid, update),
-                    permission=lambda options: self._permission(sid, options))
-                self.participants[sid] = participant
-            turn = Turn(input_id, current.get('interruptionRevision', 0), participant)
+                participant = ACPParticipant(selected, source['cwd'],
+                    update=lambda update: self._update(sid, binding['id'], update),
+                    permission=lambda options: self._permission(sid, binding['id'], options))
+                self.participants[key] = participant
+            turn = Turn(input_id, current.get('interruptionRevision', 0), participant, binding['id'])
             self.turns[sid] = turn
-            current['externalAgent'].update(status='connecting', activeInputId=input_id)
-            original = next(row for row in current['messages'] if row.get('inputId') == input_id and row['role'] == 'user')
+            binding['status'] = 'connecting'
+            current['externalAgent'].update(status='connecting', activeInputId=input_id, activeAgentId=binding['id'])
             self.service._clear_sent_draft(current, original, text, preserve_draft)
             self.service._publish_changes(sessions={sid}, globals={'view'})
             turn.task = self.service._task(self._run(sid, text, turn))
         # The host has accepted the message; ACP has no early prompt acknowledgement.
         return {'delivery': 'sending', 'inputId': input_id}
 
-    async def _binding(self, sid, value):
+    async def _binding(self, sid, identity, value):
         async with self.service.lock:
             session = self.service._session(sid)
-            session['externalAgent'].update(value)
+            addressed(session, identity).update(value)
             self.service._publish_changes(sessions={sid})
 
     async def _run(self, sid, text, turn):
         try:
             session = self.service._session(sid)
             await asyncio.wait_for(turn.participant.connect(
-                dict(session['externalAgent']), lambda value: self._binding(sid, value)), 30)
+                dict(addressed(session, turn.agent_id)), lambda value: self._binding(sid, turn.agent_id, value)), 30)
             async with self.service.lock:
                 session = self.service._session(sid)
                 if turn.stop or session.get('interruptionRevision', 0) != turn.revision:
                     raise asyncio.CancelledError()
                 session['externalAgent']['status'] = 'working'
+                addressed(session, turn.agent_id)['status'] = 'working'
                 self.service._publish_changes(sessions={sid})
                 turn.dispatched = True
-            response = await turn.participant.prompt(text)
+            context = shared_context(session, turn.input_id)
+            response = await turn.participant.prompt(text, context=context)
             await self._settle(sid, turn, 'accepted',
                                'stopped' if response.stop_reason == 'cancelled' else 'idle',
                                stop_reason=response.stop_reason)
@@ -156,12 +235,14 @@ class ExternalConversations:
             if self.turns.get(sid) is turn:
                 self.turns.pop(sid)
 
-    async def _update(self, sid, update):
+    async def _update(self, sid, identity, update):
         turn = self.turns.get(sid)
-        if turn is None or not turn.dispatched:
+        if turn is None or not turn.dispatched or turn.agent_id != identity:
             return
         async with self.service.lock:
             session = self.service._session(sid)
+            if self.turns.get(sid) is not turn:
+                return
             kind = update.get('sessionUpdate')
             if kind == 'agent_message_chunk' and update.get('content', {}).get('type') == 'text':
                 session.setdefault('streamingId', str(uuid.uuid4()))
@@ -173,11 +254,11 @@ class ExternalConversations:
                 return
             self.service._publish_progress(session_ids={sid}, record_only=True)
 
-    async def _permission(self, sid, options):
+    async def _permission(self, sid, identity, options):
         async with self.service.lock:
             session = self.service._session(sid)
             turn = self.turns.get(sid)
-            if (turn is not None and turn.dispatched and not turn.stop
+            if (turn is not None and turn.agent_id == identity and turn.dispatched and not turn.stop
                     and session.get('interruptionRevision', 0) == turn.revision
                     and self.service.access_mode.full(session)):
                 allowed = next((option for kind in ('allow_always', 'allow_once')
@@ -191,14 +272,17 @@ class ExternalConversations:
     async def _settle(self, sid, turn, delivery, status, *, stop_reason=None, error=None):
         async with self.service.lock:
             session = self.service._session(sid)
+            binding = addressed(session, turn.agent_id)
             if session.get('streaming'):
                 self.service._message(session, 'assistant', session['streaming'], inputId=turn.input_id,
-                                      source='external', agentId=session['externalAgent']['id'])
+                                      source='external', agentId=binding['id'], agentLabel=binding['label'])
             for key in ('streaming', 'streamingId', 'streamingInputId'):
                 session.pop(key, None)
             session['status'] = 'error' if status == 'unknown' else status
             session['externalAgent']['status'] = status
+            binding['status'] = status
             session['externalAgent'].pop('activeInputId', None)
+            session['externalAgent'].pop('activeAgentId', None)
             if stop_reason:
                 session['externalAgent']['stopReason'] = stop_reason
             if error:
@@ -245,11 +329,12 @@ class ExternalConversations:
         message = next((row for row in session['messages'] if row.get('inputId') == input_id and row['role'] == 'user'), None)
         if message is None:
             raise AppError('This input is not saved in this conversation.', 404)
+        binding = addressed(session, message.get('recipientAgentId'))
         return {'sessionId': session['id'], 'inputId': input_id, 'delivery': message.get('delivery', {}).get('status', 'unknown'), 'resent': False,
                 'source': {'sessionId': session['id'], 'workspace': session['workspace'],
-                           'externalAgentId': session['externalAgent']['id'],
-                           **({'externalSessionId': session['externalAgent']['sessionId']}
-                              if session['externalAgent'].get('sessionId') else {})}}
+                           'externalAgentId': binding['id'],
+                           **({'externalSessionId': binding['sessionId']}
+                              if binding.get('sessionId') else {})}}
 
     async def close(self):
         self.closing = True
