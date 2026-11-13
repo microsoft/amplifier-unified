@@ -96,6 +96,32 @@ async def test_explicit_idle_retirement_keeps_exact_owner_and_final_worker_refus
     assert not any(kind == 'runtime.status' and data.get('status') == 'stopped'
                    for kind, data in manager.events)
 
+@pytest.mark.parametrize('cancel_owner', ['conversation-stop', 'caller'])
+async def test_explicit_idle_retirement_distinguishes_stop_from_caller_cancellation(manager, cancel_owner):
+    from unittest.mock import AsyncMock
+    process = await warm(manager, 'enrolled')
+    row = manager.workers['enrolled']
+    entered = asyncio.Event()
+    async def held_request(*args, **kwargs):
+        entered.set()
+        await asyncio.Future()
+    manager._request_unlocked = AsyncMock(side_effect=held_request)
+    retirement = asyncio.create_task(manager.retire_idle('enrolled', row['runtimeOwnerId'],
+                                                        guard=lambda: False))
+    await asyncio.wait_for(entered.wait(), 1)
+    if cancel_owner == 'conversation-stop':
+        # RuntimeManager.stop cancels the competing retirement task, not the
+        # updater preparation that is observing it.
+        await manager.stop('enrolled')
+        assert await asyncio.wait_for(retirement, 2) is False
+        assert not retirement.cancelled() and process.returncode is not None
+    else:
+        retirement.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await retirement
+        assert not row['retirement_task'].done()  # Reconciliation stays owned.
+        await manager.stop('enrolled')
+
 
 async def test_idle_deadline_and_navigation_do_not_extend_retention(manager):
     first = await warm(manager, 'a')
