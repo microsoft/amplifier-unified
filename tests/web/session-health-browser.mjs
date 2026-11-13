@@ -6,16 +6,23 @@ import {fileURLToPath} from 'node:url';
 import {mkdir,readFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
+import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
+import './composer-test-helpers.mjs';
 const moduleFailure=process.argv.includes('--module-failure');
 const contextLimit=process.argv.includes('--context-limit');
 const activeWorker=process.argv.includes('--active-worker');
-const fixture=spawn(fixturePython(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),[fileURLToPath(new URL('../../tests/fixtures/session_health_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit'],env:{...process.env,...(moduleFailure?{MODULE_FAILURE_FIXTURE:'1'}:{}),...(contextLimit?{CONTEXT_LIMIT_FIXTURE:'1'}:{}),...(activeWorker?{ACTIVE_WORKER_FIXTURE:'1'}:{})}});
-let browser;
+const lifecycleMode=process.argv.includes('--request-failure')?'request-failure':process.argv.includes('--completed-runtime-fault')?'completed-runtime-fault':null;
+const fixture=spawn(fixturePython(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),[fileURLToPath(new URL('../../tests/fixtures/session_health_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit'],env:{...process.env,...(moduleFailure?{MODULE_FAILURE_FIXTURE:'1'}:{}),...(contextLimit?{CONTEXT_LIMIT_FIXTURE:'1'}:{}),...(activeWorker?{ACTIVE_WORKER_FIXTURE:'1'}:{}),...(lifecycleMode?{LIFECYCLE_FIXTURE:lifecycleMode}:{})}});
+const stop=ownFixture(fixture,{label:'Session health fixture'});
+let browser,originalError;
 try{
  const ready=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}});fixture.once('exit',code=>reject(Error('Fixture exit '+code)))});
  browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1280,height:900},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));await page.goto(ready.url);await showFixtureConversation(page);
  const output=fileURLToPath(new URL('../../output/conversation-details-proof/',import.meta.url));await mkdir(output,{recursive:true});
+ if(lifecycleMode){
+  await lifecycleCheck(page,ready,output);
+ }else{
  if(contextLimit){
   await expect(page.getByText('Context limit reached.',{exact:true})).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('The conversation exceeded the model context limit.');
@@ -124,4 +131,67 @@ try{
  }
  assert.deepEqual(errors,[]);
  console.log('Session health browser passed: compact error, inline copy, Auto naming, one regeneration, manual name precedence, mobile bounds, recovery and original transcript preservation.');
-}finally{await browser?.close();fixture.kill();}
+ }
+ assert.deepEqual(errors,[]);
+}catch(error){originalError=error;throw error;}
+finally{await finishFixture({label:'Session health browser',close:[['browser',()=>browser?.close()]],stop,originalError});}
+
+async function lifecycleCheck(page,ready,output){
+ const actions=[];
+ page.on('request',request=>{if(request.url().endsWith('/api/actions')&&request.method()==='POST')actions.push(request.postDataJSON())});
+ const facts=()=>page.request.get(ready.url+'/fixture/check').then(response=>response.json());
+ const input=(state,id)=>state.messages.find(row=>row.inputId===id&&row.role==='user');
+ const before=await facts(),completed=input(before,'completed-input');
+ assert.equal(completed.inputStatus.phase,'done');
+ assert.equal(before.messages.find(row=>row.role==='assistant').response.status,'completed');
+ const completedRow=page.locator(`[data-message-id="${completed.id}"]`);
+ await expect(completedRow).toBeVisible();
+ await expect(page.getByText('The saved answer is complete.',{exact:true})).toBeVisible();
+ const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
+ await expect(composer).toBeEditable();
+ await composer.fill('Private unsent lifecycle draft');
+ if(lifecycleMode==='completed-runtime-fault'){
+  const response=await page.request.post(ready.url+'/fixture/late-runtime-fault');
+  assert.equal(response.status(),200);
+  await expect.poll(async()=>(await facts()).runtimeFault).toBeTruthy();
+  await expect(page.locator('[data-part=conversation-trouble]')).toHaveCount(0);
+  await expect(page.locator('[data-input-phase=failed]')).toHaveCount(0);
+ }else{
+  const failed=input(before,'failed-input');
+  assert.equal(failed.inputStatus.phase,'failed');
+  assert.equal(failed.inputStatus.failure.category,'provider_unavailable');
+  const failedRow=page.locator(`[data-message-id="${failed.id}"]`);
+  await expect(failedRow.locator('[data-input-phase=failed]')).toBeVisible();
+  await expect(page.locator('[data-part=conversation-trouble]')).toBeVisible();
+  await expect(completedRow.locator('[data-input-phase=failed]')).toHaveCount(0);
+ }
+ for(const width of [390,320]){
+  await page.setViewportSize({width,height:844});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'failure UX fits narrow viewport');
+  await page.screenshot({path:output+`lifecycle-${lifecycleMode}-${width}.png`});
+ }
+ await expect(composer).toHaveDraft('Private unsent lifecycle draft');
+ await expect(page.getByRole('button',{name:'Continue conversation',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Check readiness',exact:true})).toHaveCount(0);
+ let check=await facts();
+ assert.equal(check.completedUnchanged,true);assert.equal(check.originalUnchanged,true);
+ assert.equal(check.sessions,1);assert.equal(check.selected,ready.sessionId);assert.deepEqual(check.calls,[]);
+ assert.equal(input(check,'completed-input').inputStatus.phase,'done');
+ assert.deepEqual(actions.filter(row=>['conversation.send','session.recover','runtime.restart','runtime.stop'].includes(row.action)),[]);
+ await page.reload();await showFixtureConversation(page);
+ await expect(page.getByText('The saved answer is complete.',{exact:true})).toBeVisible();
+ await expect(composer).toHaveDraft('Private unsent lifecycle draft');
+ if(lifecycleMode==='completed-runtime-fault')await expect(page.locator('[data-part=conversation-trouble]')).toHaveCount(0);
+ // One new explicit message is the normal continuation; diagnostics/reload sent nothing.
+ await composer.fill('A new explicit request');
+ await composer.press('Enter');
+ await expect(page.getByText('A fresh explicit message worked.',{exact:true})).toBeVisible();
+ await expect(page.locator('[data-part=conversation-trouble]')).toHaveCount(0);
+ check=await facts();
+ assert.equal(check.calls.filter(row=>row.operation==='send').length,1);
+ assert.equal(check.completedUnchanged,true);
+ assert.equal(input(check,'completed-input').inputStatus.phase,'done');
+ if(lifecycleMode==='request-failure')assert.equal(input(check,'failed-input').inputStatus.phase,'failed','older request outcome remains local history');
+ assert.equal(check.sessions,1);assert.equal(check.selected,ready.sessionId);
+ console.log(`Session health ${lifecycleMode} passed: truthful exact-input outcome, saved answer/draft retained, narrow/reload safe, no automatic work and one ordinary explicit send.`);
+}
