@@ -1,4 +1,4 @@
-"""Cancellation must settle native acquisition before either worker path exits."""
+"""Cancellation must settle native acquisition before startup exits."""
 import asyncio
 import json
 import os
@@ -37,9 +37,8 @@ finally: held.release()
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='Independent OS-lock witness is qualified on POSIX')
-@pytest.mark.parametrize('entry', ['startup', 'parked'])
 @pytest.mark.parametrize('barrier', ['before-acquire', 'before-delivery'])
-async def test_worker_cancel_waits_for_real_acquire_and_release(tmp_path, monkeypatch, entry, barrier):
+async def test_worker_cancel_waits_for_real_acquire_and_release(tmp_path, monkeypatch, barrier):
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
     root = tmp_path / 'ownership'
@@ -55,7 +54,6 @@ async def test_worker_cancel_waits_for_real_acquire_and_release(tmp_path, monkey
     worker.workspace, worker.home = workspace, tmp_path / 'app'
     worker.runtime = SimpleNamespace(session_id='cancelled-worker')
     worker.shared_store = store
-    worker.parked = entry == 'parked'
     entered, acquired, proceed, releasing, release_now = (threading.Event() for _ in range(5))
     handles, calls = [], []
     original_acquire, original_release = store.acquire, shared_state.HeldSession.release
@@ -83,7 +81,6 @@ async def test_worker_cancel_waits_for_real_acquire_and_release(tmp_path, monkey
 
     monkeypatch.setattr(store, 'acquire', acquire)
     monkeypatch.setattr(shared_state.HeldSession, 'release', release)
-    monkeypatch.setattr(worker, 'history_stamp', forbidden)
     monkeypatch.setattr('amplifier_web.history_revision.recover_pending', forbidden)
     monkeypatch.setattr('amplifier_web.host.session.prepare_manager', forbidden)
     monkeypatch.setattr('amplifier_web.runtime_bootstrap.bootstrap_app_package', lambda: None)
@@ -92,9 +89,8 @@ async def test_worker_cancel_waits_for_real_acquire_and_release(tmp_path, monkey
                         SimpleNamespace(Runtime=lambda **kwargs: worker.runtime))
     events = []
     monkeypatch.setattr(runtime_worker, 'publish', events.append)
-    operation = (worker.start({'id': 'cancelled-worker', 'workspace': str(workspace)},
+    operation = worker.start({'id': 'cancelled-worker', 'workspace': str(workspace)},
                              recover_bundle=False, raise_errors=True)
-                 if entry == 'startup' else worker.acquire_for_mutation())
     task = asyncio.create_task(operation)
     try:
         await observed(entered if barrier == 'before-acquire' else acquired)
@@ -114,7 +110,7 @@ async def test_worker_cancel_waits_for_real_acquire_and_release(tmp_path, monkey
         assert caught.value.args == ('original cancellation',)
         assert calls == [{'app': 'amplifier-unified', 'pid': os.getpid()}]
         assert len(handles) == 1 and not handles[0].active
-        assert worker.shared_handle is None and worker.parked == (entry == 'parked')
+        assert worker.shared_handle is None
         assert not any(e['type'] in {'runtime.ready', 'runtime.reactivated'} for e in events)
         assert store.checkpoint_path.read_bytes() == checkpoint
         await asyncio.to_thread(independent_acquire, workspace, root)

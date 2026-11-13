@@ -263,7 +263,9 @@ is advisory: a worker can retire or another host can acquire ownership before
 the next command. Send through the normal command API regardless of warmth.
 Preparation never requests takeover, submits input, or replays earlier work.
 The host defaults to 32 idle workers for 12 hours, with two simultaneous
-background starts. Idle workers release the Foundation writer lock. Client
+background starts. Idle live workers retain the Foundation writer lock until
+acknowledged retirement and cleanup. Retirement rechecks pending work after saving;
+the next ordinary input starts a fresh worker from native history. Client
 disconnect does not stop active work or reset the idle-retention clock.
 
 ## Reconnect and lifetime

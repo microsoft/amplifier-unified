@@ -76,7 +76,9 @@ Settings writes lock `<file>.lock` across read/modify/atomic replace, matching
 the CLI's locking convention. Unknown fields are preserved. This coordinates
 with CLI writers that use the lock; an older or external editor that ignores
 the lock can still race. Settings reads never import a cache or rewrite YAML.
-File changes invalidate parked session mounts; active work is not interrupted.
+External file changes are checked before reusing a mounted worker. A changed
+configuration requires acknowledged retirement and a fresh worker; active work
+and held resources refuse replacement rather than being silently cancelled.
 New sessions resolve the default bundle from their own workspace. Deliberate
 existing Unified conversation overrides (`configuration.json` and
 `control-state.json`) remain in force; they are not flattened into user defaults.

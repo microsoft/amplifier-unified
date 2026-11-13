@@ -6,9 +6,9 @@ is the deliberate **Continue here** action; selecting or reconnecting a chat
 does not request another application's release.
 
 When a CLI or another compatible host owns the chat, Unified requests a safe
-release through Foundation and reacquires before loading/continuing. A warm
-worker must check ownership again: its earlier ready notification does not prove
-that it still owns a parked session. A competing new owner is never silently
+release through Foundation and acquires before loading/continuing. A live
+worker retains its exclusive writer, busy or idle, until retirement or exit.
+A competing new owner is never silently
 asked to yield under the original request.
 
 When another host requests release, Unified blocks new input, stops the live
@@ -20,7 +20,8 @@ The worker publishes `runtime.ownership` transitions. App state exposes an
 `ownership` object with `status` and optional `source`/`detail`; the UI reflects
 read-only, moving, taking-over, and failure states without discarding drafts.
 After yielding, deliberate `session.takeover` is required before resumption.
-Ordinary idle parking retains its existing reacquisition behavior.
+Idle retention retires a settled worker through save and exit. Later ordinary
+input starts a fresh worker; it never hot-reacquires an ownerless live mount.
 
 The protocol uses configurable Foundation coordination roots and local private
 endpoints. It does not change native history, introduce checkpoints, migrate

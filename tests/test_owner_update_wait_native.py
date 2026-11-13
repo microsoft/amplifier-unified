@@ -57,13 +57,13 @@ class OwnerUpdateHost(OrderingHost):
 
     async def mount(self, row, provider, paths):
         # Unlike OrderingHost's post-mount gate, this test needs activation
-        # installed BEFORE execute captures context, for real park/reacquisition.
+        # installed BEFORE execute captures its writer-lifetime context.
         return await DirectNativeHost.mount(self, row, provider, paths)
 
     async def before_execute(self, worker):
         sid = worker.runtime.session_id
         # RuntimeManager owns this identity independently of shared-store
-        # acquisitions. Reacquiring a parked writer does not replace the process.
+        # acquisitions. The idle writer retains the same process.
         owner = self.workers[sid] = {"runtimeOwnerId": "native-probe-owner:" + sid}
         transport = worker.bridge
 
@@ -199,17 +199,16 @@ class OwnerUpdateHost(OrderingHost):
     async def checkpoint_and_park(self, worker):
         token = PUBLISH_ROOT.set(worker.runtime.session_id)
         try:
-            await worker.park(activation=worker.activation)
+            assert await worker.checkpoint_idle()
         finally:
             PUBLISH_ROOT.reset(token)
         await self.flush()
-        assert worker.parked and worker.shared_handle is None
+        assert worker.idle() and worker.shared_handle.active
 
     async def automatic_input(self, session, args, guard, steering):
         worker = self.roots[session["id"]]
         root = PUBLISH_ROOT.set(session["id"])
         try:
-            await worker.acquire_for_mutation()
             token = worker.activation_gate.bind(worker.activation)
             try:
                 return await super().automatic_input(session, args, guard, steering)
