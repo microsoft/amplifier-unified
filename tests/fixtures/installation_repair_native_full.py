@@ -746,9 +746,9 @@ def bind_helper_custody(root, helper):
     return bound
 
 
-def owned_full_helper(root, helper, env):
+def owned_full_helper(root, helper, env, *, qualify=True):
     helper = bind_helper_custody(root, helper)
-    observed = native.owned_helper_observation(helper, env)
+    observed = native.owned_helper_observation(helper, env, qualify=qualify)
     if sys.platform == 'darwin':
         job = helper['helperJob']
         # Native helpers qualify argv/PIDs/no reruns. Independently require the
@@ -763,16 +763,17 @@ def owned_full_helper(root, helper, env):
                   and values('working directory') == [helper['folder']]
                   and values('stdout path') == [os.devnull] and values('stderr path') == [os.devnull],
                   'loaded launchd source/working directory/stdio differs from bound private helper')
-            check(not re.search(r'(?i)keepalive|keep alive|ondemand = false', text),
-                  'loaded launchd helper has an unqualified restart policy')
+            if qualify:
+                check(not re.search(r'(?i)keepalive|keep alive|ondemand = false', text),
+                      'loaded launchd helper has an unqualified restart policy')
         check(gui_seen, 'helper not observable in its exact GUI domain')
         # A user-domain alias is observation, not another cleanup target.
         observed = {**observed, 'domains': [row for row in observed['domains'] if row['domain'] == job['domain']]}
     return observed
 
 
-def observe_helper(root, helper, env):
-    observed = owned_full_helper(root, helper, env)
+def observe_helper(root, helper, env, *, qualify=True):
+    observed = owned_full_helper(root, helper, env, qualify=qualify)
     pids = ([int(observed['MainPID'])] if sys.platform == 'linux' and observed.get('MainPID') not in {None, '', '0'}
             else [int(pid) for row in observed.get('domains', []) for pid in row['pids']])
     owner = load(root / 'owner.json')
@@ -925,18 +926,26 @@ def cleanup(root, evidence):
     check(not owner['cleanupStarted'], 'cleanup already attempted; inspect saved result, do not replay unknown input')
     owner['cleanupStarted'] = True
     save(root / 'owner.json', owner)
-    results = {'passed': False, 'helpers': [], 'definitionAbsent': False, 'processesExited': False}
+    results = {'passed': False, 'helpers': [], 'definitionAbsent': False, 'processesExited': False,
+               'scope': 'owned-resource-cleanup-only', 'doesNotQualifyRepair': True}
     save(evidence / 'cleanup.json', results)
     env = native.manager_environment()
     native.manager_capability(env)
     for helper in owner['helpers']:
         helper = bind_helper_custody(root, helper)
-        observed = native.wait_for(lambda: observe_helper(root, helper, env),
+        # Failed run-count/restart-policy qualification is not uncertain custody:
+        # cleanup still requires exact definition/inode/uid/argv/domain/runtime
+        # identity, proven child settlement and a positively settled manager job.
+        observed = native.wait_for(lambda: observe_helper(root, helper, env, qualify=False),
                                    lambda row: row['settled'], seconds=1800, description='owned full helper settlement')
+        native.child_settlement(Path(helper['folder']))
+        current = owned_full_helper(root, helper, env, qualify=False)
+        check(current['settled'], 'helper became active')
         if sys.platform == 'darwin':
-            for row in observed['domains']:
-                check(owned_full_helper(root, helper, env)['settled'], 'helper became active')
-                execute('launchctl', 'bootout', row['domain'] + '/' + helper['label'], env=env, check_result=False)
+            if current['domains']:
+                # One exact GUI-owner removal. No retry, submit/remove, alias,
+                # missing ownership or command-failure fallback.
+                execute('launchctl', 'bootout', helper['helperJob']['domain'] + '/' + helper['label'], env=env)
             native.wait_for(lambda: not native.launch_job(helper['label'], env), description='full helper absence')
         else:
             if observed['LoadState'] != 'not-found':

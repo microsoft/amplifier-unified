@@ -356,7 +356,7 @@ class FullHarnessTests(unittest.TestCase):
         path.write_text('test-only definition, never submitted')
         owner = {'definition': {'path': str(path), 'sha256': full.digest(path),
                                'stat': [path.stat().st_dev, path.stat().st_ino], 'home': str(self.root / 'data')},
-                 'helpers': [{'label': 'owned-helper'}], 'servicePIDs': [], 'helperPIDs': [],
+                 'helpers': [{'label': 'owned-helper', 'folder': str(self.root)}], 'servicePIDs': [], 'helperPIDs': [],
                  'cleanupStarted': False}
         full.save(self.root / 'owner.json', owner)
         stopped = False
@@ -382,6 +382,7 @@ class FullHarnessTests(unittest.TestCase):
              patch.object(full.native, 'pid_start', side_effect=lambda pid, env: '' if stopped else 'observed-start'), \
              patch.object(full.native, 'properties', side_effect=properties), \
              patch.object(full.native, 'owned_helper_observation', return_value=absent), \
+             patch.object(full.native, 'child_settlement', return_value={'settled': True}), \
              patch.object(full.native, 'module', return_value=reset), \
              patch.object(full, 'execute', side_effect=execute):
             full.cleanup(self.root, self.root)
@@ -849,6 +850,22 @@ class FullLaunchdBootstrapTests(unittest.TestCase):
                      'basePython': self.config['basePython'], 'helperJob': self.job}
         self.operation = {'operationId': self.folder.name, 'helperJob': self.job}
         self.write_inputs()
+        # Joined ownership reader imports this exact copied worker and performs
+        # its real private-file checks; no missing-file polling is mocked away.
+        worker = self.folder / 'installation_repair_worker.py'
+        shutil.copyfile(full.SOURCE / 'amplifier_web/installation_repair_worker.py', worker)
+        worker.chmod(0o600)
+        full.save(self.folder / 'child-boundary.json', {'schema': 1, 'settled': True})
+
+        def once(read, predicate=bool, **kwargs):
+            value = read()
+            if not predicate(value):
+                raise RuntimeError('bounded unit observation is not positively settled')
+            return value
+
+        # All synthetic manager transitions are immediate. A missing fixture
+        # input/state must fail this test, never enter a production sleep loop.
+        self.enterContext(patch.object(full.native, 'wait_for', side_effect=once))
         self.spawn = self.enterContext(patch.object(subprocess, 'Popen', side_effect=AssertionError('no native input')))
 
     def write_inputs(self):
@@ -996,7 +1013,7 @@ class FullLaunchdBootstrapTests(unittest.TestCase):
         return ('path = ' + str(self.plist) + '\nworking directory = ' + str(self.folder)
                 + '\nstdout path = /dev/null\nstderr path = /dev/null\nprogram = ' + self.config['basePython']
                 + '\narguments = {\n' + '\n'.join(self.definition['ProgramArguments'])
-                + '\n}\nruns = 1\n')
+                + '\n}\nruns = 1\nstate = not running\n')
 
     def test_native_helper_receives_bound_fields_and_actual_gui_runtime_matches(self):
         observed = {'label': self.job['label'], 'settled': True,
@@ -1094,6 +1111,109 @@ class FullLaunchdBootstrapTests(unittest.TestCase):
                 command.assert_not_called()
         self.assertFalse(full.load(self.root / 'cleanup.json')['passed'])
         self.assertTrue(self.plist.exists())
+
+    def test_qualification_flag_propagates_and_default_run_stays_strict(self):
+        observed = {'label': self.job['label'], 'settled': True, 'domains': []}
+        with patch.object(full.sys, 'platform', 'darwin'), \
+             patch.object(full.native, 'owned_helper_observation', return_value=observed) as native, \
+             patch.object(full.native, 'launch_job', return_value=[]):
+            bound = full.bind_helper_custody(self.root, self.helper)
+            full.observe_helper(self.root, bound, {})
+            native.assert_called_once_with(bound, {}, qualify=True)
+            native.reset_mock()
+            full.observe_helper(self.root, bound, {}, qualify=False)
+            native.assert_called_once_with(bound, {}, qualify=False)
+
+    def test_failed_multirun_qualification_still_allows_exact_settled_cleanup_only(self):
+        text = self.manager_text().replace('runs = 1', 'runs = 2')
+        with patch.object(full.sys, 'platform', 'darwin'), \
+             patch.object(full.native, 'launch_job', return_value=[(self.job['domain'], text)]):
+            with self.assertRaisesRegex(RuntimeError, 'automatically reran'):
+                full.owned_full_helper(self.root, self.helper, {})
+        self.operation.update(status='unknown', errorType='ValueError')
+        self.write_inputs()
+        original_receipt = full.digest(self.folder / 'operation.json')
+        with patch.object(self, 'manager_text', return_value=text):
+            self.test_cleanup_boots_out_only_bound_settled_gui_job_then_confirms_absence()
+        receipt = full.load(self.root / 'cleanup.json')
+        self.assertTrue(receipt['doesNotQualifyRepair'])
+        self.assertEqual(receipt['scope'], 'owned-resource-cleanup-only')
+        self.assertFalse(receipt['helpers'][0]['settled']['domains'][0]['oneShotQualified'])
+        self.assertEqual(full.digest(self.folder / 'operation.json'), original_receipt)
+        self.assertEqual(full.load(self.folder / 'operation.json')['status'], 'unknown')
+
+    def test_missing_run_count_fails_run_qualification_but_not_exact_settled_cleanup(self):
+        text = self.manager_text().replace('runs = 1\n', '')
+        with patch.object(full.sys, 'platform', 'darwin'), \
+             patch.object(full.native, 'launch_job', return_value=[(self.job['domain'], text)]):
+            with self.assertRaisesRegex(RuntimeError, 'run count is unobserved'):
+                full.owned_full_helper(self.root, self.helper, {})
+        with patch.object(self, 'manager_text', return_value=text):
+            self.test_cleanup_boots_out_only_bound_settled_gui_job_then_confirms_absence()
+        self.assertFalse(full.load(self.root / 'cleanup.json')['helpers'][0]['settled']['domains'][0]['oneShotQualified'])
+
+    def test_failed_loaded_policy_qualification_not_waived_by_cleanup_success(self):
+        text = self.manager_text() + 'properties = keepalive\n'
+        with patch.object(full.sys, 'platform', 'darwin'), \
+             patch.object(full.native, 'launch_job', return_value=[(self.job['domain'], text)]):
+            with self.assertRaisesRegex(RuntimeError, 'unqualified restart policy'):
+                full.owned_full_helper(self.root, self.helper, {})
+        # The closed private definition is still KeepAlive=false, manager is
+        # positively stopped, children settled. Cleanup does not qualify the run.
+        with patch.object(self, 'manager_text', return_value=text):
+            self.test_cleanup_boots_out_only_bound_settled_gui_job_then_confirms_absence()
+        self.assertTrue(full.load(self.root / 'cleanup.json')['doesNotQualifyRepair'])
+
+    def test_cleanup_refuses_active_pidless_unknown_foreign_argv_or_domain(self):
+        base = self.manager_text()
+        for domain, text in (
+                (self.job['domain'], base.replace('state = not running', 'state = running') + 'pid = 123\n'),
+                (self.job['domain'], base.replace('state = not running', 'state = unknown')),
+                (self.job['domain'], base.replace('state = not running\n', '')),
+                (self.job['domain'], base.replace('\n-I\n', '\n-foreign\n')),
+                ('gui/foreign', base),
+                (self.job['domain'], base.replace(str(self.plist), '/foreign/helper.plist'))):
+            full.save(self.root / 'owner.json', {'definition': None, 'helpers': [self.helper],
+                      'servicePIDs': [], 'helperPIDs': [], 'cleanupStarted': False})
+            with self.subTest(domain=domain, text=text), patch.object(full.sys, 'platform', 'darwin'), \
+                 patch.object(full.native, 'manager_environment', return_value={}), \
+                 patch.object(full.native, 'manager_capability'), \
+                 patch.object(full.native, 'launch_job', return_value=[(domain, text)]), \
+                 patch.object(full.native, 'pid_start', return_value='synthetic-active-child'), \
+                 patch.object(full, 'execute') as command:
+                with self.assertRaises(RuntimeError):
+                    full.cleanup(self.root, self.root)
+                command.assert_not_called()
+            self.assertFalse(full.load(self.root / 'cleanup.json')['passed'])
+
+    def test_cleanup_refuses_unsettled_child_even_with_exact_stopped_manager(self):
+        full.save(self.folder / 'child-boundary.json', {'schema': 1, 'settled': False})
+        owner = full.load(self.root / 'owner.json')
+        owner.update(definition=None, servicePIDs=[], cleanupStarted=False)
+        full.save(self.root / 'owner.json', owner)
+        with patch.object(full.sys, 'platform', 'darwin'), \
+             patch.object(full.native, 'manager_environment', return_value={}), \
+             patch.object(full.native, 'manager_capability'), \
+             patch.object(full.native, 'launch_job', return_value=[(self.job['domain'], self.manager_text())]), \
+             patch.object(full, 'execute') as command:
+            with self.assertRaisesRegex(RuntimeError, 'child settlement is unproven'):
+                full.cleanup(self.root, self.root)
+            command.assert_not_called()
+        self.assertFalse(full.load(self.root / 'cleanup.json')['passed'])
+
+    def test_cleanup_bootout_failure_is_not_retried_or_given_alias_fallback(self):
+        owner = full.load(self.root / 'owner.json')
+        owner.update(definition=None, servicePIDs=[], cleanupStarted=False)
+        full.save(self.root / 'owner.json', owner)
+        with patch.object(full.sys, 'platform', 'darwin'), \
+             patch.object(full.native, 'manager_environment', return_value={}), \
+             patch.object(full.native, 'manager_capability'), \
+             patch.object(full.native, 'launch_job', return_value=[(self.job['domain'], self.manager_text())]), \
+             patch.object(full, 'execute', side_effect=RuntimeError('bootout observation failed')) as command:
+            with self.assertRaisesRegex(RuntimeError, 'bootout observation failed'):
+                full.cleanup(self.root, self.root)
+            command.assert_called_once_with('launchctl', 'bootout', self.job['domain'] + '/' + self.job['label'], env={})
+        self.assertFalse(full.load(self.root / 'cleanup.json')['passed'])
 
 
 if __name__ == '__main__':
