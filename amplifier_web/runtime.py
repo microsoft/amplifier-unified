@@ -13,7 +13,6 @@ import json
 import logging
 import os
 from pathlib import Path
-import re
 import shutil
 import signal
 import sys
@@ -1317,22 +1316,12 @@ class RuntimeManager:
                         await row["emit"]("runtime.ownership", {"sessionId": sid, "status": "blocked", "owner": failure.owner})
                     else:
                         from .module_failures import ConfiguredModuleError
-                        from .support_diagnostics import public_exception_chain
-                        capture = data.get('executionFailure')
                         execution_failure = None
-                        if (not startup and isinstance(capture, dict) and capture.get('stage') == 'execution'
-                                and capture.get('runtimeSessionId') == row['runtime_id']):
-                            chain = public_exception_chain(capture.get('exceptionChain'))
-                            if chain:
-                                execution_failure = {'runtimeSessionId': row['runtime_id'],
-                                    'stage': 'execution', 'exceptionChain': chain}
-                                generation = capture.get('generationId')
-                                if isinstance(generation, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}', generation):
-                                    execution_failure['generationId'] = generation
-                                inputs = capture.get('inputIds')
-                                if isinstance(inputs, list) and len(inputs) <= 128 and all(
-                                        isinstance(item, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}', item) for item in inputs):
-                                    execution_failure['inputIds'] = inputs
+                        if not startup and isinstance(data.get('executionFailure'), dict):
+                            from .support_diagnostics import public_execution_failure
+                            execution_failure = public_execution_failure(data['executionFailure'])
+                            if execution_failure and execution_failure['runtimeSessionId'] != row['runtime_id']:
+                                execution_failure = None
                         await row["emit"]("runtime.error", {"sessionId": sid, "error": error,
                             **({"errorType": "RuntimeStartupError"} if startup else
                                {"errorType": failure_details(error, data["errorType"])["errorType"]} if data.get("errorType") else {}),
