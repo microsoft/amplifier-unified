@@ -280,17 +280,20 @@ def _check_retained_image_selection(plan, retained_plan):
 
     from .storage import _SECRET_KEYS
     from ..provider_recording import apply_provider_recording
+    from ..runtime_controls import credential_field
     routed = any(not row.get("config", {}).get("backend") for row in current)
 
-    def credential_free(value):
+    def credential_free(value, *, module=None):
         # Checkpoints preserve host credential markers, while the current plan
         # contains their rebound values. Neither form identifies the account:
         # instance/source and every noncredential setting do. Match the store's
-        # secret-key vocabulary, excluding markers as well as literal secrets.
+        # legacy secret keys plus the snapshot serializer's field/module rules.
         # Credential rebinding/authorization remains with its existing owner.
         if isinstance(value, dict):
-            return {key: credential_free(item) for key, item in value.items()
-                    if key.lower() not in _SECRET_KEYS}
+            return {key: credential_free(
+                        item, module=value.get("module") if key == "config" else None)
+                    for key, item in value.items()
+                    if key.lower() not in _SECRET_KEYS and not credential_field(key, module=module)}
         if isinstance(value, list):
             return [credential_free(item) for item in value]
         return value
@@ -316,7 +319,7 @@ def _check_retained_image_selection(plan, retained_plan):
                 "source": row.get("source"),
                 "enabled": row.get("enabled", True),
                 "config": credential_free({key: item for key, item in config.items()
-                                          if key not in {"raw", "raw_debug"}}),
+                                          if key not in {"raw", "raw_debug"}}, module=row["module"]),
             })
         return result
 
