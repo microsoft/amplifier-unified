@@ -19,12 +19,16 @@ arguments/environments; exact retry must leave the observed attempt count at one
 Requires bearer health.hostInstanceId as the canonical service UUID, separate
 from updater health.instanceId (32 hex), and atomic admissions.json (schema 1).
 Unknown/missing API or legacy admission shapes FAIL; no compatibility fallback.
+Failure diagnostics are passive provenance-verified metadata observations only:
+raw source URLs/refs and private plans never ship, equality never waives readiness,
+and a diagnostic error never replaces the original native failure.
 No sudo, OS trust install, bus provisioning, publication, or live adoption.
 Private storage is retained for the disposable runner owner to reclaim.
 """
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 import configparser
 from contextlib import contextmanager
@@ -35,6 +39,8 @@ import hashlib
 import hmac
 import http.client
 import importlib.util
+from importlib import metadata
+from itertools import islice
 import io
 import json
 import os
@@ -364,6 +370,231 @@ def require_ready(receipt):
           'full-app repair did not verify ready; retain failed evidence, never relabel')
 
 
+def value_hash(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def diagnostic_error_type(name):
+    safe = {'ValueError', 'TypeError', 'KeyError', 'FileNotFoundError', 'PermissionError', 'OSError',
+            'RuntimeError', 'TimeoutError', 'TimeoutExpired', 'CommandFailed', 'BlockingIOError',
+            'InterruptedError', 'Exception'}
+    return name if isinstance(name, str) and name in safe else 'Exception'
+
+
+def diagnostic_graph(rows):
+    """The worker's graph shape, with stricter bounded printable identifiers."""
+    check(isinstance(rows, list) and 0 < len(rows) <= 512, 'diagnostic graph size/shape refused')
+    for row in rows:
+        check(isinstance(row, dict) and isinstance(row.get('name'), str)
+              and re.fullmatch('[a-z0-9]+(?:-[a-z0-9]+)*', row['name']) and len(row['name']) <= 200
+              and isinstance(row.get('version'), str) and re.fullmatch('[A-Za-z0-9.!+_-]{1,200}', row['version'])
+              and isinstance(row.get('direct'), (dict, type(None))), 'diagnostic graph row refused')
+    names = [row['name'] for row in rows]
+    check(len(names) == len(set(names)) and names.count('amplifier-unified') == 1,
+          'diagnostic graph duplicate/missing app')
+    return sorted(rows, key=lambda row: row['name'])
+
+
+def compare_diagnostic_graphs(candidate, failed):
+    """Hash all source values. Never publish raw URLs, refs, metadata or keys."""
+    candidate, failed = diagnostic_graph(candidate), diagnostic_graph(failed)
+    fields = ('name', 'version', 'stamp', 'direct', 'direct.url', 'direct.vcs_info',
+              'direct.vcs_info.vcs', 'direct.vcs_info.commit_id', 'direct.vcs_info.requested_revision',
+              'direct.archive_info', 'direct.dir_info')
+
+    def field(row, path):
+        value = row
+        for key in path.split('.'):
+            if not isinstance(value, dict) or key not in value:
+                return {'present': False}
+            value = value[key]
+        return {'present': True, 'sha256': value_hash(value)}
+
+    def summary(row):
+        result = {'name': row['name'], 'version': row['version'], 'rowSHA256': value_hash(row)}
+        direct = row.get('direct')
+        vcs = direct.get('vcs_info') if isinstance(direct, dict) else None
+        commit = vcs.get('commit_id') if isinstance(vcs, dict) else None
+        if isinstance(commit, str) and re.fullmatch('[a-f0-9]{40}', commit):
+            result['gitCommit'] = commit
+        return result
+
+    left, right = ({row['name']: row for row in rows} for rows in (candidate, failed))
+    differences = []
+    for name in sorted(left.keys() | right.keys()):
+        a, b = left.get(name), right.get(name)
+        if a != b:
+            differences.append({'name': name, 'candidatePresent': a is not None, 'failedPresent': b is not None,
+                'fields': {path: {'equal': field(a, path) == field(b, path),
+                                  'candidate': field(a, path), 'failed': field(b, path)} for path in fields}})
+    return {'equal': candidate == failed, 'candidateSHA256': value_hash(candidate), 'failedSHA256': value_hash(failed),
+            'candidatePackages': [summary(row) for row in candidate], 'failedPackages': [summary(row) for row in failed],
+            'differenceCount': len(differences), 'differences': differences[:64],
+            'differencesTruncated': len(differences) > 64}
+
+
+def passive_prefix_graph(worker, plan, prefix):
+    """GRAPH_PROBE-equivalent metadata only; never run/import retained code.
+
+    The UNMODIFIED worker proves app provenance before any discovery or further
+    prefix inspection. .dist-info reads use its non-symlink/ownership checks;
+    Distribution.discover is scoped to the one proven site, never sys.path.
+    """
+    before = worker._installed_provenance(plan, prefix)
+    sites = list(prefix.glob('lib/python*/site-packages'))
+    check(len(sites) == 1, 'diagnostic prefix has no unique site')
+    site = worker.directory(sites[0])
+    distributions = list(islice(metadata.Distribution.discover(path=[str(site)]), 513))
+    check(0 < len(distributions) <= 512, 'diagnostic distribution count refused')
+    remaining = 16_000_000
+
+    def read(path, limit=1_000_000):
+        nonlocal remaining
+        raw = worker._bytes(path, limit=min(limit, remaining), single=False)
+        remaining -= len(raw)
+        return raw
+
+    rows, distribution_hashes = [], []
+    for distribution in distributions:
+        # CPython's stdlib PathDistribution is only a directory locator here.
+        # Do not call metadata properties that could read linked/unbounded files.
+        check(isinstance(distribution, metadata.PathDistribution), 'nonphysical diagnostic distribution')
+        info = worker.directory(Path(distribution._path))
+        check(info.parent == site and info.name.endswith('.dist-info'), 'foreign diagnostic distribution path')
+        raw_metadata = read(info / 'METADATA')
+        parsed = Parser().parsestr(raw_metadata.decode())
+        name = re.sub('[-_.]+', '-', parsed.get('Name', '').lower())
+        direct_path = info / 'direct_url.json'
+        raw_direct = read(direct_path, 65_536) if worker._exists(direct_path) else None
+        row = {'name': name, 'version': parsed.get('Version'),
+               'direct': json.loads(raw_direct) if raw_direct is not None else None}
+        if name == 'amplifier-unified':
+            row['stamp'] = json.loads(read(site / 'amplifier_web/release-source.json', 16_384))
+        rows.append(row)
+        distribution_hashes.append({'name': name, 'metadataSHA256': hashlib.sha256(raw_metadata).hexdigest(),
+             'directSHA256': hashlib.sha256(raw_direct).hexdigest() if raw_direct is not None else None})
+    # Exactly the production normalization for the app; dependencies UNCHANGED.
+    rows = diagnostic_graph(rows)
+    normalized = diagnostic_graph([worker._app_source(plan, row) if row['name'] == 'amplifier-unified' else row
+                                   for row in rows])
+    sources = {}
+    protocol = None
+    for name in (*native.PRODUCTION, 'release-source.json'):
+        raw = read(site / 'amplifier_web' / name)
+        sources[name] = {'sha256': hashlib.sha256(raw).hexdigest(),
+                         'matchesCandidateSource': raw == (SOURCE / 'amplifier_web' / name).read_bytes()
+                         if name != 'release-source.json' else None}
+        if name == 'installation_repair.py':
+            # Static literal only, not an import/protocol execution.
+            values = [node.value.value for node in ast.parse(raw).body
+                      if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+                      and any(isinstance(target, ast.Name) and target.id == 'PROTOCOL' for target in node.targets)]
+            protocol = values[0] if len(values) == 1 and type(values[0]) is int else None
+    check(worker._installed_provenance(plan, prefix) == before, 'diagnostic prefix changed while reading')
+    return normalized, {'rawGraphSHA256': value_hash(rows), 'normalizedGraphSHA256': value_hash(normalized),
+        'distributionHashes': sorted(distribution_hashes, key=lambda row: row['name']),
+        'sourceHashes': sources, 'staticProtocol': protocol}
+
+
+def failure_diagnostics(folder, plan, receipt):
+    """Failure-only observation, not causal qualification or a recovery action."""
+    errors = []
+    result = {'diagnosticOnly': True, 'executesRetainedCode': False, 'causeQualified': False,
+              'originalErrorType': diagnostic_error_type(receipt['errorType']) if receipt.get('errorType') is not None else None,
+              'diagnosticErrors': errors}
+
+    def observe(section, read):
+        try:
+            return read()
+        except Exception as error:
+            errors.append({'section': section, 'errorType': diagnostic_error_type(type(error).__name__)})
+            return None
+
+    def known_worker():
+        check(re.fullmatch('[a-f0-9]{32}', folder.name)
+              and folder == Path(plan['home']) / 'installation-repair' / plan['operationId']
+              and folder.resolve() == folder, 'diagnostic operation path refused')
+        for name in native.SIBLINGS:
+            path = folder / name
+            check(not path.is_symlink() and digest(path) == digest(SOURCE / 'amplifier_web' / name),
+                  'diagnostic worker sibling differs from exact source')
+        return native.module(folder / 'installation_repair_worker.py')
+
+    worker = observe('worker-source', known_worker)
+    if worker is None:
+        return result
+    result['workerArtifacts'] = {name: digest(folder / name) for name in native.SIBLINGS}
+    result['workerArtifacts'].update(graphProbeSHA256=hashlib.sha256(worker.GRAPH_PROBE.encode()).hexdigest(),
+                                     protocolProbeSHA256=hashlib.sha256(worker.PROTOCOL_PROBE.encode()).hexdigest())
+
+    def artifact_hash():
+        path = Path(plan['artifact']['path'])
+        check(path.parent == folder and path.name == 'amplifier_unified-' + plan['target']['version'] + '-py3-none-any.whl'
+              and re.fullmatch('[a-f0-9]{64}', plan['artifact']['sha256']), 'diagnostic artifact path refused')
+        actual = hashlib.sha256(worker._bytes(path, private=True, limit=64_000_000)).hexdigest()
+        return {'sha256': actual, 'matchesExpected': actual == plan['artifact']['sha256']}
+
+    result['operationArtifact'] = observe('operation-artifact', artifact_hash)
+    # Only booleans/known schema leave the private receipt/child ledger.
+    boundary = receipt.get('effectBoundary')
+    result['effectBoundary'] = ({key: boundary[key] for key in ('schema', 'stopIntent', 'stopSettled', 'mutationIntent')}
+        if isinstance(boundary, dict) and type(boundary.get('schema')) is int and boundary['schema'] == 1
+        and all(type(boundary.get(key)) is bool for key in ('stopIntent', 'stopSettled', 'mutationIntent')) else None)
+
+    def child_proof():
+        raw = worker._bytes(folder / 'child-boundary.json', private=True, limit=16_384)
+        value = json.loads(raw)
+        check(isinstance(value, dict) and set(value) == {'schema', 'settled'}
+              and type(value['schema']) is int and value['schema'] == 1 and type(value['settled']) is bool,
+              'diagnostic child ledger shape refused')
+        return {'schema': 1, 'settled': value['settled'], 'sha256': hashlib.sha256(raw).hexdigest()}
+
+    result['childSettlement'] = observe('child-settlement', child_proof)
+
+    def candidate_graph():
+        raw = worker._bytes(folder / 'candidate-graph.json', private=True)
+        rows = diagnostic_graph(json.loads(raw))
+        result['candidateGraphSHA256'] = hashlib.sha256(raw).hexdigest()
+        return rows
+
+    candidate = observe('candidate-graph', candidate_graph)
+    # Uncertain rollback/children: no prefix inspection, and never execution.
+    if (receipt.get('status') != 'rolled-back' or receipt.get('stage') != 'rolled-back'
+            or not result['childSettlement'] or result['childSettlement']['settled'] is not True):
+        result['prefixInspection'] = 'refused-unproven-rollback-or-child-settlement'
+        return result
+    reset = native.module(folder / 'reset.py')  # exact source checked above
+    failed = reset.tool_recovery_root(Path(plan['toolRoot'])) / plan['operationId'] / 'failed'
+    observed = observe('failed-prefix', lambda: passive_prefix_graph(worker, plan, failed))
+    if observed is not None:
+        failed_rows, result['failedPrefix'] = observed
+        if candidate is not None:
+            result['graphComparison'] = observe('graph-comparison', lambda: compare_diagnostic_graphs(candidate, failed_rows))
+    observed = observe('candidate-prefix', lambda: passive_prefix_graph(worker, plan, folder / 'candidate-tools/amplifier-unified'))
+    if observed is not None:
+        candidate_rows, result['candidatePrefix'] = observed
+        result['candidateDiskMatchesRecordedGraph'] = candidate_rows == candidate if candidate is not None else None
+    return result
+
+
+def accept_ready(folder, plan, receipt, evidence):
+    if not (receipt.get('status') == 'ready' and receipt.get('doctorVerified') is True
+            and receipt.get('healthVerified') is True and receipt.get('reinstalled') is True):
+        try:
+            report = failure_diagnostics(folder, plan, receipt)
+        except Exception as error:
+            # Never replace native failure with a diagnostic failure/traceback.
+            report = {'diagnosticOnly': True, 'causeQualified': False,
+                      'originalErrorType': diagnostic_error_type(receipt['errorType']) if receipt.get('errorType') is not None else None,
+                      'diagnosticErrors': [{'section': 'diagnostic-collection',
+                                            'errorType': diagnostic_error_type(type(error).__name__)}]}
+        try:
+            save(evidence / 'failure-diagnostics.json', report)
+        except OSError:
+            pass  # Original operation.json and readiness failure remain authoritative.
+    require_ready(receipt)
+
+
 def dispatches(root, label, pid):
     path = root / 'dispatch-audit.jsonl'
     rows = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
@@ -572,7 +803,7 @@ def run(root, evidence):
                     ('operationId', 'previewId', 'hostInstanceId', 'status', 'stage', 'reinstalled',
                      'doctorVerified', 'healthVerified', 'serviceState', 'errorType')}
     save(evidence / 'operation.json', {'receipt': safe_receipt, 'helper': settled, 'planSHA256': digest(folder / 'plan.json')})
-    require_ready(receipt)
+    accept_ready(folder, plan, receipt, evidence)
     audit = dispatches(root, helper[0]['label'], old_pid)
     new_pid = native.wait_for(lambda: capture_service(root, env),
                               lambda pid: pid > 0 and pid != old_pid, description='real successor manager PID')

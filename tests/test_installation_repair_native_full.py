@@ -14,7 +14,9 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import ssl
+import subprocess
 import tempfile
 from types import ModuleType, SimpleNamespace
 import unittest
@@ -423,6 +425,248 @@ class FullHarnessTests(unittest.TestCase):
         path.write_text(path.read_text() * 2)
         with self.assertRaisesRegex(RuntimeError, 'exactly one'):
             full.dispatches(self.root, label, 10)
+
+
+class FailureDiagnosticTests(unittest.TestCase):
+    """Artificial metadata/graphs only. Never execute or install a prefix."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+        self.worker = full.native.module(full.SOURCE / 'amplifier_web/installation_repair_worker.py')
+        self.reset = full.native.module(full.SOURCE / 'amplifier_web/reset.py')
+        self.identity = 'a' * 32
+        self.folder = self.root / 'data/installation-repair' / self.identity
+        self.folder.mkdir(parents=True)
+        for name in full.native.SIBLINGS:
+            shutil.copyfile(full.SOURCE / 'amplifier_web' / name, self.folder / name)
+        self.plan = {'home': str(self.root / 'data'), 'toolRoot': str(self.root / 'tools'),
+                     'operationId': self.identity, 'target': {'version': '0.89.0', 'revision': 'b' * 40},
+                     'artifact': {'path': str(self.folder / 'amplifier_unified-0.89.0-py3-none-any.whl'),
+                                  'url': 'https://github.com/microsoft/amplifier-unified/releases/download/v0.89.0/amplifier_unified-0.89.0-py3-none-any.whl',
+                                  'sha256': 'c' * 64}, 'env': {'TOKEN': 'secret-env-not-evidence'}}
+        self.receipt = {'operationId': self.identity, 'status': 'rolled-back', 'stage': 'rolled-back',
+                        'reinstalled': False, 'serviceState': 'running', 'errorType': 'ValueError',
+                        'effectBoundary': {'schema': 1, 'stopIntent': True, 'stopSettled': True, 'mutationIntent': True},
+                        'detail': 'private detail not for evidence'}
+        # Hash-only artifact fixture; not a wheel/archive and never installed.
+        artifact = Path(self.plan['artifact']['path'])
+        artifact.write_bytes(b'unit-test artifact checksum input only')
+        artifact.chmod(0o600)
+        self.plan['artifact']['sha256'] = full.digest(artifact)
+        self.failed = self.reset.tool_recovery_root(Path(self.plan['toolRoot'])) / self.identity / 'failed'
+        self.candidate_prefix = self.folder / 'candidate-tools/amplifier-unified'
+        self.secret = 'credential-sentinel-never-serialize'
+        self.url = 'https://user:' + self.secret + '@example.test/repo.git?token=' + self.secret
+        self.commit = 'd' * 40
+        self.stamp = {'schema': 1, 'repository': 'microsoft/amplifier-unified',
+                      'version': '0.89.0', 'revision': self.plan['target']['revision']}
+        self.raw_app = {'name': 'amplifier-unified', 'version': '0.89.0', 'stamp': self.stamp,
+                        'direct': {'url': Path(self.plan['artifact']['path']).as_uri(), 'archive_info': {}}}
+        self.app = self.worker._app_source(self.plan, self.raw_app)
+        self.candidate = [self.app, self.dependency('main')]
+        self.fresh = [self.app, self.dependency(self.commit)]
+        full.save(self.folder / 'child-boundary.json', {'schema': 1, 'settled': True})
+        full.save(self.folder / 'candidate-graph.json', self.candidate)
+        self.prefix(self.failed, self.commit)
+        self.prefix(self.candidate_prefix, 'main')
+        self.enterContext(patch.object(full, 'execute', side_effect=AssertionError('no commands in diagnostics')))
+        self.enterContext(patch.object(full.native, 'execute', side_effect=AssertionError('no native commands')))
+        self.spawn = self.enterContext(patch.object(subprocess, 'Popen', side_effect=AssertionError('never spawn retained code')))
+
+    def dependency(self, requested):
+        return {'name': 'dependency-fixture', 'version': '1.2.3',
+                'direct': {'url': self.url, 'vcs_info': {'vcs': 'git', 'commit_id': self.commit,
+                                                      'requested_revision': requested}}}
+
+    def prefix(self, prefix, requested):
+        site = prefix / 'lib/python3.13/site-packages'
+        for row in (self.raw_app, self.dependency(requested)):
+            info = site / (row['name'].replace('-', '_') + '-' + row['version'] + '.dist-info')
+            info.mkdir(parents=True)
+            (info / 'METADATA').write_text('Metadata-Version: 2.1\nName: ' + row['name'] + '\nVersion: ' + row['version'] + '\n')
+            (info / 'direct_url.json').write_text(json.dumps(row['direct']))
+        app = site / 'amplifier_web'
+        app.mkdir()
+        for name in full.native.PRODUCTION:
+            shutil.copyfile(full.SOURCE / 'amplifier_web' / name, app / name)
+        (app / 'release-source.json').write_text(json.dumps(self.stamp))
+        # No usable interpreter/launcher, package import, wheel or install exists.
+        (prefix / 'bin').mkdir()
+        (prefix / 'bin/python').write_text('DO NOT EXECUTE: unit-test metadata fixture')
+        # Authoring host may use group-writable umask; make only these temporary
+        # test inputs private so the UNCHANGED production ownership gate applies.
+        for path in (prefix, *prefix.rglob('*')):
+            path.chmod(0o700 if path.is_dir() else 0o600)
+
+    def test_artificial_graphs_show_commit_equal_requested_ref_unequal_without_raw_values(self):
+        report = full.compare_diagnostic_graphs(self.candidate, self.fresh)
+        self.assertFalse(report['equal'])
+        self.assertEqual(report['differenceCount'], 1)
+        row = report['differences'][0]
+        self.assertEqual(row['name'], 'dependency-fixture')
+        self.assertTrue(row['fields']['direct.vcs_info.commit_id']['equal'])
+        ref = row['fields']['direct.vcs_info.requested_revision']
+        self.assertFalse(ref['equal'])
+        self.assertEqual(ref['candidate']['sha256'], full.value_hash('main'))
+        self.assertEqual(ref['failed']['sha256'], full.value_hash(self.commit))
+        text = json.dumps(report)
+        for forbidden in (self.url, self.secret, 'https://', 'user:', '"main"'):
+            self.assertNotIn(forbidden, text)
+        self.assertEqual(report['candidatePackages'][1]['gitCommit'], self.commit)
+
+    def test_equal_graph_is_only_observation_not_repair_success(self):
+        report = full.compare_diagnostic_graphs(self.candidate, self.candidate)
+        self.assertTrue(report['equal'])
+        self.assertEqual(report['differences'], [])
+        with self.assertRaisesRegex(RuntimeError, 'did not verify ready'):
+            full.accept_ready(self.folder, self.plan, self.receipt, self.root)
+        self.assertEqual(self.receipt['errorType'], 'ValueError')
+        self.assertFalse(full.load(self.root / 'failure-diagnostics.json')['causeQualified'])
+
+    def test_passive_graph_matches_production_row_normalization_without_execution(self):
+        rows, hashes = full.passive_prefix_graph(self.worker, self.plan, self.failed)
+        self.assertEqual(rows, self.fresh)
+        self.assertEqual(hashes['staticProtocol'], 1)
+        self.assertEqual(hashes['normalizedGraphSHA256'], full.value_hash(self.fresh))
+        self.assertTrue(all(item['matchesCandidateSource'] for key, item in hashes['sourceHashes'].items()
+                            if key != 'release-source.json'))
+        self.assertEqual(len(hashes['distributionHashes']), 2)
+        with patch.object(self.worker, 'command', return_value=SimpleNamespace(
+                stdout=json.dumps([self.raw_app, self.dependency(self.commit)]))):
+            production_rows = self.worker.installed_graph(self.plan, self.failed / 'bin/python', {})
+        self.assertEqual(rows, production_rows)
+        self.spawn.assert_not_called()
+
+    def test_provenance_refusal_precedes_any_metadata_discovery(self):
+        with patch.object(self.worker, '_installed_provenance', side_effect=ValueError('foreign prefix')), \
+             patch.object(full.metadata.Distribution, 'discover') as discover:
+            with self.assertRaises(ValueError):
+                full.passive_prefix_graph(self.worker, self.plan, self.failed)
+            discover.assert_not_called()
+        self.spawn.assert_not_called()
+
+    def test_real_provenance_rejects_tampered_stamp_before_discovery(self):
+        path = self.failed / 'lib/python3.13/site-packages/amplifier_web/release-source.json'
+        path.write_text(json.dumps({**self.stamp, 'revision': 'f' * 40}))
+        with patch.object(full.metadata.Distribution, 'discover') as discover:
+            with self.assertRaises(ValueError):
+                full.passive_prefix_graph(self.worker, self.plan, self.failed)
+            discover.assert_not_called()
+
+    def test_symlinked_dependency_metadata_is_not_read(self):
+        path = self.failed / 'lib/python3.13/site-packages/dependency_fixture-1.2.3.dist-info/direct_url.json'
+        original = self.root / 'foreign-private-metadata'
+        original.write_text('{"private":"' + self.secret + '"}')
+        path.unlink()
+        path.symlink_to(original)
+        with self.assertRaises(ValueError):
+            full.passive_prefix_graph(self.worker, self.plan, self.failed)
+        self.spawn.assert_not_called()
+
+    def test_bounded_failure_report_preserves_native_error_and_redacts_all_private_inputs(self):
+        report = full.failure_diagnostics(self.folder, self.plan, self.receipt)
+        self.assertEqual(report['originalErrorType'], 'ValueError')
+        self.assertEqual(report['diagnosticErrors'], [])
+        self.assertFalse(report['graphComparison']['equal'])
+        self.assertTrue(report['candidateDiskMatchesRecordedGraph'])
+        self.assertEqual(report['effectBoundary'], self.receipt['effectBoundary'])
+        self.assertTrue(report['childSettlement']['settled'])
+        self.assertEqual(report['candidateGraphSHA256'], full.digest(self.folder / 'candidate-graph.json'))
+        self.assertTrue(report['operationArtifact']['matchesExpected'])
+        self.assertIn('protocolProbeSHA256', report['workerArtifacts'])
+        text = json.dumps(report)
+        self.assertLess(len(text), 24_000)
+        for forbidden in (self.secret, self.url, 'secret-env-not-evidence', 'private detail', 'https://', '"env"', str(self.root)):
+            self.assertNotIn(forbidden, text)
+        self.spawn.assert_not_called()
+
+    def test_failed_prefix_refusal_is_own_diagnostic_error_not_original_cause(self):
+        shutil.move(self.failed / 'lib/python3.13/site-packages/amplifier_unified-0.89.0.dist-info/METADATA',
+                    self.root / 'retained-metadata')
+        report = full.failure_diagnostics(self.folder, self.plan, self.receipt)
+        self.assertEqual(report['originalErrorType'], 'ValueError')
+        self.assertIn({'section': 'failed-prefix', 'errorType': 'FileNotFoundError'}, report['diagnosticErrors'])
+        self.assertNotIn('graphComparison', report)
+        self.spawn.assert_not_called()
+
+    def test_unknown_rollback_incomplete_or_unsettled_children_never_inspect_prefix(self):
+        for status, stage, settled in (('unknown', 'rollback-incomplete', True),
+                                        ('rolled-back', 'rolled-back', False)):
+            full.save(self.folder / 'child-boundary.json', {'schema': 1, 'settled': settled})
+            with self.subTest(status=status, settled=settled), patch.object(full, 'passive_prefix_graph') as inspect:
+                report = full.failure_diagnostics(self.folder, self.plan, {**self.receipt, 'status': status, 'stage': stage})
+                self.assertEqual(report['prefixInspection'], 'refused-unproven-rollback-or-child-settlement')
+                inspect.assert_not_called()
+
+    def test_missing_child_ledger_never_assumes_settled(self):
+        (self.folder / 'child-boundary.json').unlink()
+        with patch.object(full, 'passive_prefix_graph') as inspect:
+            report = full.failure_diagnostics(self.folder, self.plan, self.receipt)
+            self.assertIsNone(report['childSettlement'])
+            inspect.assert_not_called()
+        self.assertIn({'section': 'child-settlement', 'errorType': 'FileNotFoundError'}, report['diagnosticErrors'])
+
+    def test_diagnostic_failure_cannot_replace_readiness_failure_or_publish_exception_text(self):
+        with patch.object(full, 'failure_diagnostics', side_effect=ValueError(self.url)):
+            with self.assertRaisesRegex(RuntimeError, 'did not verify ready'):
+                full.accept_ready(self.folder, self.plan, self.receipt, self.root)
+        report = full.load(self.root / 'failure-diagnostics.json')
+        self.assertEqual(report['diagnosticErrors'], [{'section': 'diagnostic-collection', 'errorType': 'ValueError'}])
+        self.assertEqual(report['originalErrorType'], 'ValueError')
+        self.assertNotIn(self.secret, json.dumps(report))
+        self.assertEqual(self.receipt['errorType'], 'ValueError')
+
+    def test_failure_evidence_written_before_unchanged_ready_requirement(self):
+        with patch.object(full, 'require_ready', side_effect=RuntimeError('original readiness failure')) as require:
+            with self.assertRaisesRegex(RuntimeError, 'original readiness failure'):
+                full.accept_ready(self.folder, self.plan, self.receipt, self.root)
+        self.assertTrue((self.root / 'failure-diagnostics.json').is_file())
+        require.assert_called_once_with(self.receipt)
+
+    def test_ready_success_does_not_inspect_failed_prefix_or_collect_diagnostics(self):
+        receipt = {'status': 'ready', 'doctorVerified': True, 'healthVerified': True, 'reinstalled': True}
+        with patch.object(full, 'failure_diagnostics') as collect, patch.object(full, 'save') as save:
+            full.accept_ready(self.folder, self.plan, receipt, self.root)
+            collect.assert_not_called()
+            save.assert_not_called()
+
+    def test_unknown_source_worker_never_imported_or_prefix_read(self):
+        path = self.folder / 'installation_repair_worker.py'
+        path.write_bytes(path.read_bytes() + b'\n# unaccepted source\n')
+        with patch.object(full.native, 'module') as import_worker, patch.object(full, 'passive_prefix_graph') as inspect:
+            report = full.failure_diagnostics(self.folder, self.plan, self.receipt)
+            import_worker.assert_not_called()
+            inspect.assert_not_called()
+        self.assertEqual(report['diagnosticErrors'], [{'section': 'worker-source', 'errorType': 'RuntimeError'}])
+        self.assertEqual(report['originalErrorType'], 'ValueError')
+
+    def test_untrusted_graph_fields_are_hashed_and_invalid_identifiers_refused(self):
+        dependency = self.dependency(self.secret)
+        dependency['direct']['unexpected-' + self.secret] = {'env': self.secret}
+        report = full.compare_diagnostic_graphs(self.candidate, [self.app, dependency])
+        self.assertNotIn(self.secret, json.dumps(report))
+        self.assertFalse(report['equal'])
+        with self.assertRaises(RuntimeError):
+            full.compare_diagnostic_graphs(self.candidate, [self.app, {**dependency, 'version': self.url}])
+
+    def test_difference_details_and_graph_size_are_bounded(self):
+        candidate = [self.app, *({'name': 'package-' + str(index), 'version': '1', 'direct': None}
+                                 for index in range(65))]
+        failed = [candidate[0], *({**row, 'version': '2'} for row in candidate[1:])]
+        report = full.compare_diagnostic_graphs(candidate, failed)
+        self.assertEqual(report['differenceCount'], 65)
+        self.assertEqual(len(report['differences']), 64)
+        self.assertTrue(report['differencesTruncated'])
+        with self.assertRaises(RuntimeError):
+            full.diagnostic_graph([self.app] * 513)
+
+    def test_diagnostic_evidence_write_failure_leaves_original_readiness_failure(self):
+        with patch.object(full, 'save', side_effect=PermissionError('private write detail')):
+            with self.assertRaisesRegex(RuntimeError, 'did not verify ready'):
+                full.accept_ready(self.folder, self.plan, self.receipt, self.root)
+        self.assertEqual(self.receipt['errorType'], 'ValueError')
 
 
 class AcquisitionAdapterTests(unittest.TestCase):
