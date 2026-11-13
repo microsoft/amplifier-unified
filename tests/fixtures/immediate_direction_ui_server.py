@@ -102,6 +102,7 @@ async def worker():
     import websockets
     import amplifier_module_provider_openai.native as native
     import amplifier_module_loop_live.orchestrator as loop
+    import amplifier_module_loop_streaming
     import amplifier_web
     from amplifier_web.runtime_worker import Worker, configure_protocol
     host = Path(amplifier_web.__file__).resolve().parent
@@ -110,9 +111,10 @@ async def worker():
         packages={name: {'version': importlib.metadata.version(name),
                         'directUrl': json.loads(importlib.metadata.distribution(name).read_text('direct_url.json') or 'null')}
                   for name in ('amplifier-core', 'amplifier-foundation', 'amplifier-module-loop-live',
-                               'amplifier-module-provider-openai', 'openai', 'websockets')},
+                               'amplifier-module-loop-streaming', 'amplifier-module-provider-openai',
+                               'openai', 'websockets')},
         sourceHashes={str(Path(module.__file__)): hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()
-                      for module in (native, loop)})
+                      for module in (native, loop, amplifier_module_loop_streaming)})
 
     async def connect(*args, **kwargs):
         return Socket()
