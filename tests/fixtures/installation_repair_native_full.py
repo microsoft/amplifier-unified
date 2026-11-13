@@ -22,6 +22,9 @@ Unknown/missing API or legacy admission shapes FAIL; no compatibility fallback.
 Failure diagnostics are passive provenance-verified metadata observations only:
 raw source URLs/refs and private plans never ship, equality never waives readiness,
 and a diagnostic error never replaces the original native failure.
+Mac helpers require the accepted explicit one-shot bootstrap contract: acquisition
+reserves names before production creates helper.plist; the driver then binds
+plan/receipt metadata and exact private definition bytes before manager custody.
 No sudo, OS trust install, bus provisioning, publication, or live adoption.
 Private storage is retained for the disposable runner owner to reclaim.
 """
@@ -676,7 +679,7 @@ def prepare_fixture(root, evidence, index):
     site = ('import os\nfrom installation_repair_acquisition import install\n'
             "install(os.environ['INSTALLATION_REPAIR_FULL_MANIFEST'])\n")
     (adapter / 'sitecustomize.py').write_text(site)
-    config = {'root': str(root), 'home': str(home), 'toolRoot': str(tools), 'binRoot': str(bins),
+    config = {'root': str(root), 'home': str(home), 'toolRoot': str(tools), 'binRoot': str(bins), 'uid': os.getuid(),
               'workspace': str(workspace), 'port': port, 'basePython': base, 'uv': uv,
               'version': version, 'revision': index['revision'], 'artifact': descriptor,
               'sourceIndex': index, 'payload': payload, 'sentinel': sentinel,
@@ -718,8 +721,58 @@ def capture_service(root, env):
     return pids[0] if len(pids) == 1 else 0
 
 
-def observe_helper(root, helper, env):
+def bind_helper_custody(root, helper):
+    """Complete provisional acquisition custody from production's private inputs.
+
+    No manager operation (including cleanup) may use an unbound Mac helper.
+    Recovery after a lost confirmation reads exactly the same plan/receipt/plist.
+    """
+    if sys.platform != 'darwin':
+        return helper
+    config = load(root / 'fixture.json')
+    adapter_path = Path(__file__).with_name('installation_repair_acquisition.py')
+    check(digest(adapter_path) == config['adapterSHA256'], 'helper custody adapter source changed')
+    adapter = native.module(adapter_path)
+    folder = Path(helper['folder'])
+    job, definition, _ = adapter.checked_launchd_inputs(config, folder)
+    owner = load(root / 'owner.json')
+    check(len(owner['helpers']) == 1 and owner['helpers'][0] == helper, 'saved provisional helper custody changed')
+    bound = {**helper, **job, 'helperJob': job, 'savedDefinition': definition}
+    if 'helperJob' in helper:
+        check(bound == helper, 'bound helper job/definition changed; refuse manager operations')
+    else:
+        owner['helpers'][0] = bound
+        save(root / 'owner.json', owner)  # bytes/inode and complete job BEFORE manager reads/removal
+    return bound
+
+
+def owned_full_helper(root, helper, env):
+    helper = bind_helper_custody(root, helper)
     observed = native.owned_helper_observation(helper, env)
+    if sys.platform == 'darwin':
+        job = helper['helperJob']
+        # Native helpers qualify argv/PIDs/no reruns. Independently require the
+        # actual loaded source path + working directory + private runtime policy.
+        rows = native.launch_job(helper['label'], env)
+        gui_seen = not rows
+        for domain, text in rows:
+            check(domain in {job['domain'], 'user/' + str(os.getuid())}, 'foreign launchd helper domain')
+            gui_seen = gui_seen or domain == job['domain']
+            values = lambda key: re.findall(r'^\s*' + re.escape(key) + r' = (.+?)\s*$', text, re.M)
+            check(values('path') == [job['plistPath']]
+                  and values('working directory') == [helper['folder']]
+                  and values('stdout path') == [os.devnull] and values('stderr path') == [os.devnull],
+                  'loaded launchd source/working directory/stdio differs from bound private helper')
+            check(not re.search(r'(?i)keepalive|keep alive|ondemand = false', text),
+                  'loaded launchd helper has an unqualified restart policy')
+        check(gui_seen, 'helper not observable in its exact GUI domain')
+        # A user-domain alias is observation, not another cleanup target.
+        observed = {**observed, 'domains': [row for row in observed['domains'] if row['domain'] == job['domain']]}
+    return observed
+
+
+def observe_helper(root, helper, env):
+    observed = owned_full_helper(root, helper, env)
     pids = ([int(observed['MainPID'])] if sys.platform == 'linux' and observed.get('MainPID') not in {None, '', '0'}
             else [int(pid) for row in observed.get('domains', []) for pid in row['pids']])
     owner = load(root / 'owner.json')
@@ -781,6 +834,7 @@ def run(root, evidence):
     plan = load(folder / 'plan.json')
     helper = load(root / 'owner.json')['helpers']
     check(len(helper) == 1 and helper[0]['folder'] == str(folder), 'helper lacks prior acquisition custody')
+    helper = [bind_helper_custody(root, helper[0])]
     for name in native.SIBLINGS:
         check(digest(folder / name) == digest(SOURCE / 'amplifier_web' / name),
               'prepared helper differs from exact live source')
@@ -843,7 +897,7 @@ def run(root, evidence):
     after = {'prefix': worker._path_snapshot(prefix),
              'launcher': worker.file_identity(Path(config['binRoot']) / 'amplifier-unified'),
              'operation': digest(folder / 'operation.json'),
-             'helper': native.owned_helper_observation(helper[0], env),
+             'helper': owned_full_helper(root, helper[0], env),
              'folders': sorted(path.name for path in repair_root.iterdir() if path.is_dir())}
     check(stable == after and capture_service(root, env) == new_pid
           and health_identities(request(config, '/api/health'), config) == (new_host, new_instance)
@@ -876,11 +930,12 @@ def cleanup(root, evidence):
     env = native.manager_environment()
     native.manager_capability(env)
     for helper in owner['helpers']:
+        helper = bind_helper_custody(root, helper)
         observed = native.wait_for(lambda: observe_helper(root, helper, env),
                                    lambda row: row['settled'], seconds=1800, description='owned full helper settlement')
         if sys.platform == 'darwin':
             for row in observed['domains']:
-                check(native.owned_helper_observation(helper, env)['settled'], 'helper became active')
+                check(owned_full_helper(root, helper, env)['settled'], 'helper became active')
                 execute('launchctl', 'bootout', row['domain'] + '/' + helper['label'], env=env, check_result=False)
             native.wait_for(lambda: not native.launch_job(helper['label'], env), description='full helper absence')
         else:

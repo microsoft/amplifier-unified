@@ -14,6 +14,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import plistlib
 import shutil
 import ssl
 import subprocess
@@ -775,7 +776,8 @@ class AcquisitionAdapterTests(unittest.TestCase):
         mac = 'com.microsoft.amplifier-unified.repair.' + 'c' * 32
         audit('subprocess.Popen', ('launchctl', ['launchctl', 'submit', '-l', mac, '--', 'private'], None, private))
         rows = [json.loads(line) for line in path.read_text().splitlines()]
-        self.assertEqual(rows[-1]['label'], mac)
+        # Legacy submit is specifically NOT acceptable one-shot bootstrap proof.
+        self.assertEqual(rows, [{'label': label, 'servicePID': os.getpid()}])
 
     def test_audit_failure_does_not_block_actual_dispatch(self):
         audit = self.audit_registration.call_args.args[0]
@@ -811,6 +813,287 @@ class AcquisitionAdapterTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'helper changed'):
                 acquisition.helper_custody(config, self.folder)
             spec.assert_not_called()
+
+
+class FullLaunchdBootstrapTests(unittest.TestCase):
+    """Closed a0d829e8 job inputs and native readbacks, all effects mocked."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+        self.folder = self.root / 'data/installation-repair' / ('e' * 32)
+        self.folder.mkdir(parents=True)
+        self.config = {'root': str(self.root), 'home': str(self.root / 'data'), 'uid': os.getuid(),
+                       'basePython': '/stable/owned/python3.13',
+                       'adapterSHA256': full.digest(Path(acquisition.__file__))}
+        self.reservation = acquisition.launchd_reservation(self.config, self.folder)
+        self.helper = {'label': self.reservation['label'], 'folder': str(self.folder),
+                       'basePython': self.config['basePython'], 'launchdReservation': self.reservation}
+        full.save(self.root / 'fixture.json', self.config)
+        full.save(self.root / 'owner.json', {'helpers': [self.helper], 'helperPIDs': []})
+        self.definition = {
+            'Label': self.helper['label'],
+            'ProgramArguments': [self.config['basePython'], '-I', '-S',
+                                 str(self.folder / 'installation_repair_worker.py'), str(self.folder)],
+            'WorkingDirectory': str(self.folder), 'RunAtLoad': True, 'KeepAlive': False,
+            'ProcessType': 'Background', 'StandardOutPath': os.devnull, 'StandardErrorPath': os.devnull, 'Umask': 0o077}
+        self.plist = self.folder / 'helper.plist'
+        self.raw = plistlib.dumps(self.definition, sort_keys=True)
+        self.plist.write_bytes(self.raw)
+        self.plist.chmod(0o600)
+        self.job = {**self.reservation, 'plistSHA256': hashlib.sha256(self.raw).hexdigest(),
+                    'cleanupState': 'retained-for-explicit-review', 'cleanupOwner': 'installation-owner',
+                    'detail': 'The one-shot registration may remain after exit. Remove only this exact settled job after reviewing its receipt; do not relaunch it.'}
+        self.plan = {'operationId': self.folder.name, 'home': self.config['home'], 'uid': self.config['uid'],
+                     'basePython': self.config['basePython'], 'helperJob': self.job}
+        self.operation = {'operationId': self.folder.name, 'helperJob': self.job}
+        self.write_inputs()
+        self.spawn = self.enterContext(patch.object(subprocess, 'Popen', side_effect=AssertionError('no native input')))
+
+    def write_inputs(self):
+        full.save(self.folder / 'plan.json', self.plan)
+        full.save(self.folder / 'operation.json', self.operation)
+
+    def hook(self):
+        with patch.object(acquisition.sys, 'addaudithook') as register:
+            acquisition.observe_dispatches(self.config)
+        return register.call_args.args[0]
+
+    def audit(self, hook, argv):
+        hook('subprocess.Popen', ('launchctl', argv, 'private cwd', {'TOKEN': 'credential-audit-sentinel'}))
+
+    def args(self):
+        return ['launchctl', 'bootstrap', self.job['domain'], str(self.plist)]
+
+    def test_exact_private_closed_plist_and_plan_operation_custody(self):
+        job, saved, definition = acquisition.checked_launchd_inputs(self.config, self.folder)
+        self.assertEqual(job, self.job)
+        self.assertEqual(definition, self.definition)
+        self.assertEqual(saved, {'sha256': self.job['plistSHA256'],
+                                 'stat': [self.plist.stat().st_dev, self.plist.stat().st_ino]})
+        self.spawn.assert_not_called()
+
+    def test_known_bootstrap_observed_only_as_label_and_service_pid(self):
+        self.audit(self.hook(), self.args())
+        text = (self.root / 'dispatch-audit.jsonl').read_text()
+        self.assertEqual(json.loads(text), {'label': self.job['label'], 'servicePID': os.getpid()})
+        for secret in ('credential-audit-sentinel', str(self.folder), 'private cwd', self.config['basePython'],
+                       'helper.plist', 'TOKEN', 'http'):
+            self.assertNotIn(secret, text)
+
+    def test_submit_unknown_bootstrap_domain_path_extra_args_and_no_reservation_ignored(self):
+        hook = self.hook()
+        for args in (['launchctl', 'submit', '-l', self.job['label'], '--', 'private'],
+                     ['launchctl', 'bootstrap', 'gui/foreign', str(self.plist)],
+                     ['launchctl', 'bootstrap', self.job['domain'], str(self.root / 'foreign.plist')],
+                     [*self.args(), '--extra']):
+            self.audit(hook, args)
+        self.assertFalse((self.root / 'dispatch-audit.jsonl').exists())
+        full.save(self.root / 'owner.json', {'helpers': []})
+        self.audit(hook, self.args())
+        self.assertFalse((self.root / 'dispatch-audit.jsonl').exists())
+
+    def test_closed_job_rejects_keepalive_triggers_argv_workdir_stdio_process_umask(self):
+        changes = (('KeepAlive', True), ('KeepAlive', {'SuccessfulExit': False}), ('RunAtLoad', False),
+                   ('ProgramArguments', ['/foreign/python']), ('WorkingDirectory', '/foreign'),
+                   ('StandardOutPath', '/foreign/log'), ('StandardErrorPath', '/foreign/err'),
+                   ('ProcessType', 'Interactive'), ('Umask', 0o022),
+                   ('StartInterval', 1), ('EnvironmentVariables', {'SECRET': 'credential-audit-sentinel'}))
+        for key, value in changes:
+            with self.subTest(key=key, value=value):
+                raw = plistlib.dumps({**self.definition, key: value}, sort_keys=True)
+                self.plist.write_bytes(raw)
+                # Even consistent forged plan hashes cannot relax the closed plist.
+                forged = {**self.job, 'plistSHA256': hashlib.sha256(raw).hexdigest()}
+                self.plan['helperJob'] = self.operation['helperJob'] = forged
+                self.write_inputs()
+                with self.assertRaises(ValueError):
+                    acquisition.checked_launchd_inputs(self.config, self.folder)
+                self.audit(self.hook(), self.args())
+                self.assertFalse((self.root / 'dispatch-audit.jsonl').exists())
+
+    def test_changed_digest_missing_mode_and_symlink_private_definition_refused(self):
+        for mode in (0o644, 0o640):
+            self.plist.chmod(mode)
+            with self.assertRaisesRegex(ValueError, 'nonprivate'):
+                acquisition.checked_launchd_inputs(self.config, self.folder)
+        self.plist.chmod(0o600)
+        self.plist.write_bytes(self.raw + b'\n')
+        with self.assertRaisesRegex(ValueError, 'definition changed'):
+            acquisition.checked_launchd_inputs(self.config, self.folder)
+        self.plist.unlink()
+        with self.assertRaises(FileNotFoundError):
+            acquisition.checked_launchd_inputs(self.config, self.folder)
+        target = self.root / 'foreign-private-plist'
+        target.write_bytes(self.raw)
+        target.chmod(0o600)
+        self.plist.symlink_to(target)
+        with self.assertRaisesRegex(ValueError, 'redirected'):
+            acquisition.checked_launchd_inputs(self.config, self.folder)
+
+    def test_plan_and_operation_metadata_must_match_exact_closed_owner(self):
+        for key, bad in (('kind', 'launchd-submitted-job'), ('domain', 'gui/foreign'),
+                         ('plistPath', '/foreign/helper.plist'), ('cleanupOwner', 'foreign'),
+                         ('label', 'foreign'), ('plistSHA256', 'f' * 64)):
+            with self.subTest(key=key):
+                self.plan['helperJob'] = {**self.job, key: bad}
+                self.write_inputs()
+                with self.assertRaises(ValueError):
+                    acquisition.checked_launchd_inputs(self.config, self.folder)
+        self.plan['helperJob'] = self.job
+        self.operation['helperJob'] = {**self.job, 'cleanupState': 'foreign'}
+        self.write_inputs()
+        with self.assertRaises(ValueError):
+            acquisition.checked_launchd_inputs(self.config, self.folder)
+
+    def test_provisional_custody_does_not_require_as_yet_uncreated_plist(self):
+        self.plist.unlink()
+        full.save(self.root / 'owner.json', {'helpers': []})
+        config = {**self.config, 'nativeHarness': acquisition.__file__,
+                  'nativeHarnessSHA256': acquisition.sha(acquisition.__file__)}
+        fake = SimpleNamespace(check=full.check, sys=SimpleNamespace(platform='darwin'),
+                               manager_environment=Mock(return_value={}),
+                               helper_label=lambda identity: 'com.microsoft.amplifier-unified.repair.' + identity,
+                               launch_job=Mock(return_value=[]), load=full.load, save=full.save)
+        with patch.object(acquisition.importlib.util, 'spec_from_file_location', return_value=Mock()), \
+             patch.object(acquisition.importlib.util, 'module_from_spec', return_value=fake):
+            acquisition.helper_custody(config, self.folder)
+        self.assertEqual(full.load(self.root / 'owner.json')['helpers'], [self.helper])
+        self.assertFalse(self.plist.exists())
+
+    def test_bind_completes_saved_metadata_bytes_before_native_observation(self):
+        with patch.object(full.sys, 'platform', 'darwin'):
+            bound = full.bind_helper_custody(self.root, self.helper)
+            self.assertEqual(bound['helperJob'], self.job)
+            self.assertEqual(bound['kind'], 'launchd-user-job')
+            self.assertEqual(bound['plistSHA256'], full.digest(self.plist))
+            self.assertEqual(full.load(self.root / 'owner.json')['helpers'], [bound])
+            self.assertEqual(full.bind_helper_custody(self.root, bound), bound)
+        self.spawn.assert_not_called()
+
+    def test_bound_inode_replacement_same_bytes_is_not_adopted_for_cleanup(self):
+        with patch.object(full.sys, 'platform', 'darwin'):
+            bound = full.bind_helper_custody(self.root, self.helper)
+            self.plist.rename(self.folder / 'retained-old-definition')
+            self.plist.write_bytes(self.raw)
+            self.plist.chmod(0o600)
+            with self.assertRaisesRegex(RuntimeError, 'bound helper'):
+                full.bind_helper_custody(self.root, bound)
+
+    def test_foreign_metadata_blocks_observation_or_cleanup_effects(self):
+        self.operation['helperJob'] = {**self.job, 'domain': 'gui/foreign'}
+        self.write_inputs()
+        with patch.object(full.sys, 'platform', 'darwin'), \
+             patch.object(full.native, 'owned_helper_observation') as observe, \
+             patch.object(full, 'execute') as execute:
+            with self.assertRaises(ValueError):
+                full.owned_full_helper(self.root, self.helper, {})
+            observe.assert_not_called()
+            execute.assert_not_called()
+
+    def manager_text(self):
+        return ('path = ' + str(self.plist) + '\nworking directory = ' + str(self.folder)
+                + '\nstdout path = /dev/null\nstderr path = /dev/null\nprogram = ' + self.config['basePython']
+                + '\narguments = {\n' + '\n'.join(self.definition['ProgramArguments'])
+                + '\n}\nruns = 1\n')
+
+    def test_native_helper_receives_bound_fields_and_actual_gui_runtime_matches(self):
+        observed = {'label': self.job['label'], 'settled': True,
+                    'domains': [{'domain': self.job['domain'], 'pids': [], 'runs': ['1']}]}
+        with patch.object(full.sys, 'platform', 'darwin'), \
+             patch.object(full.native, 'owned_helper_observation', return_value=observed) as native, \
+             patch.object(full.native, 'launch_job', return_value=[(self.job['domain'], self.manager_text())]):
+            actual = full.owned_full_helper(self.root, self.helper, {})
+            self.assertEqual(actual, observed)
+            saved = native.call_args.args[0]
+            self.assertEqual(saved['helperJob'], self.job)
+            self.assertEqual(saved['domain'], self.job['domain'])
+            self.assertIn('stat', saved['savedDefinition'])
+
+    def test_runtime_source_domain_workdir_stdio_and_restart_mismatch_refused(self):
+        with patch.object(full.sys, 'platform', 'darwin'):
+            bound = full.bind_helper_custody(self.root, self.helper)
+            observed = {'label': self.job['label'], 'settled': True, 'domains': []}
+            for domain, text in (
+                    ('gui/foreign', self.manager_text()),
+                    (self.job['domain'], self.manager_text().replace(str(self.plist), '/foreign/plist')),
+                    (self.job['domain'], self.manager_text().replace('working directory = ', 'wrong directory = ')),
+                    (self.job['domain'], self.manager_text().replace('/dev/null', '/foreign/log')),
+                    (self.job['domain'], self.manager_text() + 'properties = keepalive\n')):
+                with self.subTest(domain=domain, text=text), \
+                     patch.object(full.native, 'owned_helper_observation', return_value=observed), \
+                     patch.object(full.native, 'launch_job', return_value=[(domain, text)]):
+                    with self.assertRaises(RuntimeError):
+                        full.owned_full_helper(self.root, bound, {})
+
+    def test_settled_exact_job_absence_keeps_bound_custody_without_redispatch(self):
+        observed = {'label': self.job['label'], 'settled': True, 'domains': []}
+        with patch.object(full.sys, 'platform', 'darwin'), \
+             patch.object(full.native, 'owned_helper_observation', return_value=observed), \
+             patch.object(full.native, 'launch_job', return_value=[]):
+            self.assertEqual(full.owned_full_helper(self.root, self.helper, {}), observed)
+        self.spawn.assert_not_called()
+
+    def test_unmodified_native_ownership_rejects_actual_argv_or_automatic_rerun(self):
+        with patch.object(full.sys, 'platform', 'darwin'):
+            bound = full.bind_helper_custody(self.root, self.helper)
+            for text in (self.manager_text().replace('\n-I\n', '\n-foreign\n'),
+                         self.manager_text().replace('runs = 1', 'runs = 2'),
+                         self.manager_text().replace('program = ' + self.config['basePython'], 'program = /foreign/python')):
+                with self.subTest(text=text), \
+                     patch.object(full.native, 'launch_job', return_value=[(self.job['domain'], text)]):
+                    with self.assertRaises(RuntimeError):
+                        full.owned_full_helper(self.root, bound, {})
+
+    def test_cleanup_boots_out_only_bound_settled_gui_job_then_confirms_absence(self):
+        owner = full.load(self.root / 'owner.json')
+        owner.update(definition=None, cleanupStarted=False, servicePIDs=[])
+        full.save(self.root / 'owner.json', owner)
+        present = True
+        commands = []
+
+        def read_job(label, env):
+            return [(self.job['domain'], self.manager_text())] if present else []
+
+        def command(*args, **kwargs):
+            nonlocal present
+            commands.append(args)
+            self.assertEqual(args, ('launchctl', 'bootout', self.job['domain'] + '/' + self.job['label']))
+            # Durable closed bytes/custody existed before the only manager input.
+            saved = full.load(self.root / 'owner.json')['helpers'][0]
+            self.assertEqual(saved['helperJob'], self.job)
+            self.assertEqual(saved['savedDefinition']['sha256'], full.digest(self.plist))
+            present = False
+
+        with patch.object(full.sys, 'platform', 'darwin'), \
+             patch.object(full.native, 'manager_environment', return_value={}), \
+             patch.object(full.native, 'manager_capability'), \
+             patch.object(full.native, 'launch_job', side_effect=read_job), \
+             patch.object(full.native, 'paths', return_value=self.root / 'not-our-service'), \
+             patch.object(full, 'execute', side_effect=command):
+            full.cleanup(self.root, self.root)
+        receipt = full.load(self.root / 'cleanup.json')
+        self.assertTrue(receipt['passed'])
+        self.assertEqual(len(commands), 1)
+        self.assertTrue(receipt['helpers'][0]['absent'])
+        self.assertTrue(self.plist.exists())  # private fixture retained for CI owner
+        self.spawn.assert_not_called()
+
+    def test_cleanup_changed_definition_refuses_bootout_and_preserves_custody(self):
+        with patch.object(full.sys, 'platform', 'darwin'):
+            full.bind_helper_custody(self.root, self.helper)
+            owner = full.load(self.root / 'owner.json')
+            owner.update(definition=None, cleanupStarted=False, servicePIDs=[])
+            full.save(self.root / 'owner.json', owner)
+            self.plist.write_bytes(self.raw + b'\n')
+            with patch.object(full.native, 'manager_environment', return_value={}), \
+                 patch.object(full.native, 'manager_capability'), patch.object(full, 'execute') as command:
+                with self.assertRaises(ValueError):
+                    full.cleanup(self.root, self.root)
+                command.assert_not_called()
+        self.assertFalse(full.load(self.root / 'cleanup.json')['passed'])
+        self.assertTrue(self.plist.exists())
 
 
 if __name__ == '__main__':

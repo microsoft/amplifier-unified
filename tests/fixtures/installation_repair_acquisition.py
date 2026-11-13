@@ -7,6 +7,8 @@ admission, launches, worker, probes, graph, doctor and health remain production.
 This asserts local candidate delivery, never official published-release trust.
 An observational Python audit hook counts manager-dispatch attempts; it neither
 replaces launch nor changes argv/environment or enters isolated worker/probes.
+Mac bootstrap is counted only for the exact reserved, closed private helper.plist;
+legacy submit and unknown/mismatched definitions are ignored, never replayed.
 """
 from __future__ import annotations
 
@@ -15,8 +17,10 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -30,6 +34,72 @@ def read(path):
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def private_bytes(path, limit=16_384):
+    path = Path(path)
+    if not path.is_absolute() or '..' in path.parts or any(part.is_symlink() for part in (path, *path.parents)):
+        raise ValueError('redirected private helper input')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+            raise ValueError('nonprivate helper input')
+        raw = stream.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError('helper input exceeds bound')
+    return raw, [info.st_dev, info.st_ino]
+
+
+def launchd_reservation(config, folder):
+    if (type(config.get('uid')) is not int or config['uid'] != os.getuid()
+            or folder.parent != Path(config['home']) / 'installation-repair'
+            or not re.fullmatch('[a-f0-9]{32}', folder.name)):
+        raise ValueError('helper reservation owner changed')
+    return {'kind': 'launchd-user-job', 'label': 'com.microsoft.amplifier-unified.repair.' + folder.name,
+            'domain': 'gui/' + str(config['uid']), 'plistPath': str(folder / 'helper.plist')}
+
+
+def checked_launchd_inputs(config, folder):
+    """Read-only a0d829e8 contract check, never prepare/rewrite/dispatch a job.
+
+    Called by passive audit before bootstrap and by the external custody owner.
+    Acquisition reserves names only: production has not created the plist then.
+    """
+    reservation = launchd_reservation(config, folder)
+    owner = json.loads(private_bytes(Path(config['root']) / 'owner.json', 65_536)[0])
+    helpers = owner.get('helpers')
+    if (not isinstance(helpers, list) or len(helpers) != 1
+            or helpers[0].get('launchdReservation') != reservation
+            or helpers[0].get('folder') != str(folder) or helpers[0].get('basePython') != config['basePython']
+            or helpers[0].get('label') != reservation['label']):
+        raise ValueError('missing exact provisional helper custody')
+    plan = json.loads(private_bytes(folder / 'plan.json', 4_000_000)[0])
+    operation = json.loads(private_bytes(folder / 'operation.json', 4_000_000)[0])
+    if (plan.get('operationId') != folder.name or operation.get('operationId') != folder.name
+            or plan.get('home') != config['home'] or plan.get('uid') != config['uid']
+            or plan.get('basePython') != config['basePython']):
+        raise ValueError('private helper plan owner changed')
+    expected = {**reservation, 'cleanupState': 'retained-for-explicit-review', 'cleanupOwner': 'installation-owner',
+                'detail': 'The one-shot registration may remain after exit. Remove only this exact settled job after reviewing its receipt; do not relaunch it.'}
+    job = plan.get('helperJob')
+    if (not isinstance(job, dict) or set(job) != {*expected, 'plistSHA256'}
+            or any(job[key] != value for key, value in expected.items())
+            or job != operation.get('helperJob') or not isinstance(job['plistSHA256'], str)
+            or not re.fullmatch('[a-f0-9]{64}', job['plistSHA256'])):
+        raise ValueError('private plan/operation helper custody changed')
+    definition = {'Label': reservation['label'],
+                  'ProgramArguments': [config['basePython'], '-I', '-S',
+                                       str(folder / 'installation_repair_worker.py'), str(folder)],
+                  'WorkingDirectory': str(folder), 'RunAtLoad': True, 'KeepAlive': False,
+                  'ProcessType': 'Background', 'StandardOutPath': os.devnull,
+                  'StandardErrorPath': os.devnull, 'Umask': 0o077}
+    raw, inode = private_bytes(folder / 'helper.plist')
+    if (hashlib.sha256(raw).hexdigest() != job['plistSHA256']
+            or raw != plistlib.dumps(definition, sort_keys=True)):
+        raise ValueError('closed private helper definition changed')
+    return job, {'sha256': job['plistSHA256'], 'stat': inode}, definition
 
 
 def observe_dispatches(config):
@@ -46,8 +116,12 @@ def observe_dispatches(config):
                 labels = [word.removeprefix('--unit=') for word in argv
                           if isinstance(word, str) and word.startswith('--unit=')]
                 pattern = r'amplifier-installation-repair-[a-f0-9]{32}'
-            elif Path(argv[0]).name == 'launchctl' and list(argv[1:3]) == ['submit', '-l']:
-                labels, pattern = list(argv[3:4]), r'com\.microsoft\.amplifier-unified\.repair\.[a-f0-9]{32}'
+            elif Path(argv[0]).name == 'launchctl' and len(argv) == 4 and argv[1] == 'bootstrap':
+                folder = Path(argv[3]).parent
+                job, _, _ = checked_launchd_inputs(config, folder)
+                if list(argv[1:]) != ['bootstrap', job['domain'], job['plistPath']]:
+                    return
+                labels, pattern = [job['label']], r'com\.microsoft\.amplifier-unified\.repair\.[a-f0-9]{32}'
             else:
                 return
             if len(labels) != 1 or not re.fullmatch(pattern, labels[0]):
@@ -86,7 +160,10 @@ def helper_custody(config, folder):
     owner_path = Path(config['root']) / 'owner.json'
     owner = native.load(owner_path)
     native.check(not owner['helpers'], 'fixture already acquired a helper; do not replay')
-    owner['helpers'].append({'label': label, 'folder': str(folder), 'basePython': config['basePython']})
+    helper = {'label': label, 'folder': str(folder), 'basePython': config['basePython']}
+    if native.sys.platform == 'darwin':
+        helper['launchdReservation'] = launchd_reservation(config, folder)
+    owner['helpers'].append(helper)
     native.save(owner_path, owner)
 
 
