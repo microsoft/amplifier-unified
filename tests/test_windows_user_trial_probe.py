@@ -1141,6 +1141,9 @@ def test_first_turn_discriminators_keep_real_send_and_outcome_assertions():
                 for target in node.targets)]
     assert set(steps) == probe.TURN_STEPS and len(steps) == len(probe.TURN_STEPS)
     source = ast.unparse(journey)
+    assert "get('idle')" in source
+    assert "get('parked')" not in source
+    assert "SessionHistoryStore(directory).load_messages()" in source
     for required in (
         "await action('conversation.send'",
         "await until(completed)",
