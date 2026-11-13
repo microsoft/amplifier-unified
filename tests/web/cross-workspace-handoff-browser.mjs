@@ -47,36 +47,57 @@ try{
  observations.clientBuild=(await state(page)).client.build;observations.browserVersion=browser.version();
  const inspect=async()=>{const response=await page.request.get(info.url+'/fixture/check');assert.equal(response.status(),200);return response.json()};
  const post=async(path,data)=>{const response=await page.request.post(info.url+path,{data});assert.equal(response.status(),200,await response.text());return response.json()};
+ const journal=async id=>{const response=await page.request.get(info.url+'/fixture/receipt/'+encodeURIComponent(id));assert.equal(response.status(),200);return response.json()};
+ const read=async(id,current=page)=>{
+  const value=await action(current,'session.handoff.read',{requestId:id});
+  assert.equal(value.accepted,true,JSON.stringify(value));assert.equal(value.result.requestId,id);return value.result;
+ };
  const propose=async(requestId,title,text,target='target-project')=>{
   const value=await post('/fixture/propose',{requestId,title,text,target,clientId:(await state(page)).client.id});assert.equal(value.accepted,true,JSON.stringify(value));return value.result;
  };
  const card=id=>page.locator(`[data-handoff-id="${id}"]`);
  const row=id=>state(page).then(value=>value.handoffs.find(row=>row.requestId===id));
- const history=(current=page)=>current.locator('details.a-handoffs-past');
- const summary=(current=page)=>history(current).locator(':scope > summary');
- const collapsed=async(count,current=page)=>{
-  await expect(history(current)).toHaveCount(1);
-  await expect(summary(current)).toHaveText(`Past handoffs (${count})`);
-  await expect(history(current)).not.toHaveAttribute('open','');
-  await expect(history(current).locator('[data-handoff-id]')).toHaveCount(count);
-  await expect(history(current).locator('[data-handoff-id]:visible')).toHaveCount(0);
+ const absent=async(ids,current=page)=>{
+  for(const id of ids)await expect(current.locator(`[data-handoff-id="${id}"]`)).toHaveCount(0);
+  await expect(current.locator('.a-handoffs-past,.a-handoffs-history,.a-handoff--settled')).toHaveCount(0);
+  await expect(current.getByText(/^Past handoffs \(/)).toHaveCount(0);
  };
- const expand=async(current=page)=>{
-  await summary(current).focus();await summary(current).press('Enter');
-  await expect(history(current)).toHaveAttribute('open','');
+ const noRequests=async(current=page)=>{
+  await expect(current.getByRole('region',{name:'New chat requests',exact:true})).toHaveCount(0);
+  await expect(current.locator('.a-handoffs')).toHaveCount(0);
+  assert.deepEqual((await state(current)).handoffs,[]);
  };
- const details=async(receiptCard)=>{
-  await receiptCard.locator(':scope > details > summary').focus();
-  await receiptCard.locator(':scope > details > summary').press('Enter');
-  await expect(receiptCard.locator('pre')).toBeVisible();
- };
- const prominent=async(id)=>{
-  await expect(page.locator(`.a-handoffs > [data-handoff-id="${id}"]`)).toBeVisible();
-  await expect(history().locator(`[data-handoff-id="${id}"]`)).toHaveCount(0);
+ const prominent=async id=>expect(page.locator(`.a-handoffs > [data-handoff-id="${id}"]`)).toBeVisible();
+ const keyboardContinuation=async()=>{
+  await expect.poll(()=>page.evaluate(()=>{
+   const node=document.activeElement;
+   return !!node?.isConnected&&node.matches('button,summary,textarea,input,select,a[href],[contenteditable="true"],[tabindex]');
+  })).toBe(true);
+  await page.keyboard.press('Tab');
+  await expect.poll(()=>page.evaluate(()=>document.activeElement!==document.body)).toBe(true);
  };
  const draft='Keep this source-only draft. Do not send it.';
  await composer.fill(draft);await expect(composer).toHaveDraft(draft);
  observations.before=await inspect();assert.equal(observations.before.sessions.length,2);assert.equal(observations.before.sent.length,0);
+ // Settle the only visible request by keyboard. It must leave neither a card
+ // nor an empty section, including after reload and at a narrow viewport.
+ phase='cancel';const cancelled=await propose('review-cancel','Not needed','This brief must never be sent.');
+ const cancelResponse=page.waitForResponse(response=>{
+  const request=response.request();
+  return request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'&&request.postDataJSON().action==='session.handoff.cancel';
+ });
+ const cancelButton=card(cancelled.requestId).getByRole('button',{name:'Not now',exact:true});
+ await cancelButton.focus();await cancelButton.press('Enter');
+ const cancelledResult=await (await cancelResponse).json();
+ assert.equal(cancelledResult.accepted,true);assert.equal(cancelledResult.result.status,'cancelled');
+ await absent([cancelled.requestId]);await noRequests();await keyboardContinuation();
+ observations.cancelledReceipt=await read(cancelled.requestId);
+ assert.equal(observations.cancelledReceipt.creation,'not_started');assert.equal(observations.cancelledReceipt.delivery,'not_started');
+ for(const width of [320,1300]){
+  await page.setViewportSize({width,height:width===320?844:1000});await page.reload();await expect(composer).toBeVisible();
+  await absent([cancelled.requestId]);await noRequests();await expect(composer).toHaveDraft(draft);
+ }
+ assert.deepEqual(await inspect(),observations.before,'cancel and exact receipt reads create no target and start no runtime');
  const title='Review the target project',brief='Read README.md in the target folder and report a short summary.\nKeep this exact second line, <literal> and **plain text**.\nDo not inherit the source chat history.';
  const proposalStarted=Date.now(),proposal=await propose('review-create-once',title,brief);
  observations.proposal=proposal;
@@ -102,18 +123,13 @@ try{
   await review.screenshot({path:join(output,`review-card-${width}.png`),animations:'disabled'});
  }
  await page.setViewportSize({width:1300,height:1000});
- phase='cancel';const cancelled=await propose('review-cancel','Not needed','This brief must never be sent.');
- await card(cancelled.requestId).getByRole('button',{name:'Not now',exact:true}).click();
- await expect.poll(async()=>(await row(cancelled.requestId))?.status).toBe('cancelled');
- await collapsed(1);await prominent(proposal.requestId);
- assert.deepEqual(await inspect(),observations.before,'cancel creates no target and starts no runtime');
  // Delay the real confirmation to check the local click fence. Lose the HTTP
  // reply while the synthetic recipient holds its initial-input acknowledgement.
  phase='confirm-lost-ack';let release,enteredResolve;const hold=new Promise(resolve=>release=resolve),entered=new Promise(resolve=>enteredResolve=resolve);
  let confirmRequests=0,replyLost=false;
  const intercept=async route=>{
   const body=route.request().postDataJSON();
-  if(body.action!=='session.handoff.confirm'||body.args?.requestId!==proposal.requestId){await route.continue();return}
+  if(body?.action!=='session.handoff.confirm'||body.args?.requestId!==proposal.requestId){await route.continue();return}
   confirmRequests++;enteredResolve();await hold;
   const response=await route.fetch();assert.equal(response.status(),200,await response.text());
   observations.confirmResponse=await response.json();replyLost=true;await route.abort('failed');
@@ -128,14 +144,26 @@ try{
  await expect(review.getByRole('button',{name:'Check delivery',exact:true})).toBeEnabled();
  await expect.poll(async()=>(await inspect()).sent.length).toBe(1);
  await expect.poll(async()=>(await row(proposal.requestId))?.status).toBe('delivering');
- await prominent(proposal.requestId);await collapsed(1);
+ await prominent(proposal.requestId);await absent([cancelled.requestId]);
  await post('/fixture/delivery',{requestId:proposal.requestId,stage:'unknown'});
  await expect.poll(async()=>(await row(proposal.requestId))?.status).toBe('unknown');
  await review.getByRole('button',{name:'Check delivery',exact:true}).click();
  await expect(review.getByRole('button',{name:'Check delivery',exact:true})).toBeEnabled();
  await expect(review.getByRole('alert')).toHaveCount(0);
- await prominent(proposal.requestId);await collapsed(1);
+ await prominent(proposal.requestId);await absent([cancelled.requestId]);
  assert.equal((await row(proposal.requestId)).delivery,'unknown');
+ const unknownEffects=await inspect();
+ for(const width of [320,1300]){
+  await page.setViewportSize({width,height:width===320?844:1000});await page.reload();
+  await prominent(proposal.requestId);await expect.poll(async()=>(await row(proposal.requestId))?.status).toBe('unknown');
+  const check=review.getByRole('button',{name:'Check delivery',exact:true});
+  await check.focus();await check.press('Enter');await expect(check).toBeEnabled();
+  await expect(review.getByRole('button',{name:'Create and start',exact:true})).toHaveCount(0);
+  await expect(composer).toHaveDraft(draft);assert.equal((await state(page)).selectedSessionId,info.sourceId);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'unknown recovery must not overflow the viewport');
+  await absent([cancelled.requestId]);await page.screenshot({path:join(output,`unknown-actionable-${width}.png`),animations:'disabled'});
+ }
+ assert.deepEqual(await inspect(),unknownEffects,'unknown reload and explicit reads must not replay creation or input');
  const unknown=await row(proposal.requestId);
  // Keep an older real projection pending while the canonical late runtime
  // receipt arrives. The next manual read must settle the UI before that stream.
@@ -146,41 +174,34 @@ try{
  await post('/fixture/delivery',{requestId:proposal.requestId,stage:'accepted'});
  await expect.poll(()=>delayedFrames.length).toBeGreaterThan(0);
  await review.getByRole('button',{name:'Check delivery',exact:true}).click();
- await collapsed(2);await expect(summary()).toBeFocused();
+ await absent([proposal.requestId,cancelled.requestId]);await keyboardContinuation();
  assert.equal((await row(proposal.requestId)).status,'unknown','held stream must lag the exact read');
  for(const frame of olderFrames)frame.deliver();
  await prominent(retainedReview.requestId);
- await collapsed(2);
+ await absent([proposal.requestId,cancelled.requestId]);
  assert.equal((await row(proposal.requestId)).status,'unknown','late older projection must exercise retained read result');
  const lateFrames=delayedFrames;delayedFrames=null;for(const frame of lateFrames)frame.deliver();
- await expect.poll(async()=>(await row(proposal.requestId))?.status).toBe('accepted');
- await collapsed(2);
- assert.ok((await row(proposal.requestId)).revision>unknown.revision);
+ await expect.poll(async()=>(await row(proposal.requestId))===undefined).toBe(true);
+ await absent([proposal.requestId,cancelled.requestId]);
+ const accepted=await read(proposal.requestId);
+ assert.equal(accepted.status,'accepted');assert.ok(accepted.revision>unknown.revision);
  observations.delayedStream={olderFrames:olderFrames.length,lateFrames:lateFrames.length};
  timings.confirmReleasedToReconciledMs=Date.now()-confirmReleased;
  await page.unroute('**/api/actions',intercept);
- observations.accepted=await inspect();const accepted=await row(proposal.requestId);
+ observations.accepted=await inspect();
  assert.equal(observations.accepted.sessions.length,3);assert.equal(accepted.creation,'created');assert.equal(accepted.delivery,'accepted');
  assert.equal(observations.accepted.sent[0].sessionId,accepted.targetSessionId);assert.equal(observations.accepted.sent[0].inputId,accepted.inputId);
  assert.equal(observations.accepted.sent[0].text,brief);assert.equal(observations.accepted.sent[0].workspace,info.target);
  assert.equal((await state(page)).selectedSessionId,info.sourceId);await expect(composer).toHaveDraft(draft);
  assert.equal((await state(other)).selectedSessionId,info.otherSourceId);await expect(otherComposer).toHaveDraft('Other browser private draft');
- phase='accepted-review-reload';await page.reload();await collapsed(2);await prominent(retainedReview.requestId);await expect(composer).toHaveDraft(draft);
- const beforeHistory=actions.length;
- await expand();await expect(review.getByRole('button',{name:'Open chat',exact:true})).toBeVisible();
- await details(review);await expect(review.locator('pre')).toHaveText(brief);
- await expect(review).toContainText('does not mean its requested work has completed');
- assert.equal(actions.length,beforeHistory,'keyboard disclosure must not dispatch an app action');
- await review.scrollIntoViewIfNeeded();await page.screenshot({path:join(output,'accepted-desktop.png'),animations:'disabled'});
- await review.getByRole('button',{name:'Check delivery',exact:true}).click();
- await expect(review.getByRole('button',{name:'Check delivery',exact:true})).toBeEnabled();
- await expect.poll(async()=>(await row(proposal.requestId))?.status).toBe('accepted');assert.deepEqual(await inspect(),observations.accepted,'reload and status read must not repeat creation or delivery');
+ phase='accepted-review-reload';await page.reload();await absent([proposal.requestId,cancelled.requestId]);await prominent(retainedReview.requestId);await expect(composer).toHaveDraft(draft);
+ const acceptedRead=await read(proposal.requestId);
+ assert.equal(acceptedRead.targetSessionId,accepted.targetSessionId);assert.equal(acceptedRead.inputId,accepted.inputId);assert.equal(acceptedRead.text,brief);
+ await absent([proposal.requestId,cancelled.requestId]);
+ await page.screenshot({path:join(output,'accepted-absent-desktop.png'),animations:'disabled'});
+ assert.deepEqual(await inspect(),observations.accepted,'reload and exact receipt read must not repeat creation or delivery');
  const reads=actions.filter(value=>value.action==='session.handoff.read').length;
  await page.waitForTimeout(1700);assert.equal(actions.filter(value=>value.action==='session.handoff.read').length,reads,'idle UI must not poll handoff receipts');
- phase='explicit-open';await review.getByRole('button',{name:'Open chat',exact:true}).click();await expect.poll(async()=>(await state(page)).selectedSessionId).toBe(accepted.targetSessionId);
- await expect(page.getByText('Synthetic recipient accepted the brief.',{exact:true})).toBeVisible();
- assert.equal((await state(other)).selectedSessionId,info.otherSourceId);await expect(otherComposer).toHaveDraft('Other browser private draft');
- await action(page,'session.select',{id:info.sourceId});await expect(composer).toHaveDraft(draft);
  phase='stale-target';const stale=await propose('review-removed-folder','Removed target','This must not run.','removed-project');
  await expect(card(stale.requestId)).toBeVisible();await post('/fixture/remove-target',{});
  await card(stale.requestId).getByRole('button',{name:'Create and start',exact:true}).click();
@@ -215,12 +236,11 @@ try{
  assert.equal(observations.directStartResponse.result.mode,'direct');
  assert.notEqual(observations.directStartResponse.result.status,'pending','explicit start is not a review proposal');
  await page.unroute('**/fixture/start',interceptStart);
- const directCard=card(direct.requestId);
- await expect.poll(async()=>(await row(direct.requestId))?.status).toBe('accepted');
- await collapsed(3);await expand();await expect(directCard).toBeVisible();
- await expect(directCard.getByRole('button',{name:'Create and start',exact:true})).toHaveCount(0);
+ await expect.poll(async()=>(await journal(direct.requestId)).status).toBe('accepted');
+ await expect.poll(async()=>(await row(direct.requestId))===undefined).toBe(true);
+ await absent([proposal.requestId,cancelled.requestId,direct.requestId]);
  timings.directStartToAcceptedMs=Date.now()-directStarted;
- const directReceipt=await row(direct.requestId);observations.directAcceptedReceipt=directReceipt;
+ const directReceipt=await read(direct.requestId);observations.directAcceptedReceipt=directReceipt;
  observations.directAccepted=await inspect();
  assert.equal(observations.directAccepted.sessions.length,observations.directBefore.sessions.length+1);
  assert.equal(observations.directAccepted.sent.length,observations.directBefore.sent.length+1);
@@ -233,96 +253,132 @@ try{
  assert.equal((await state(page)).selectedSessionId,info.sourceId);await expect(composer).toHaveDraft(draft);
  assert.equal((await state(other)).selectedSessionId,info.otherSourceId);await expect(otherComposer).toHaveDraft('Other browser private draft');
  assert.equal(actions.filter(value=>value.action==='session.handoff.confirm'&&value.args.requestId===direct.requestId).length,0,'explicit start never dispatches confirmation');
- await directCard.scrollIntoViewIfNeeded();await page.screenshot({path:join(output,'direct-start-accepted.png'),animations:'disabled'});
+ await page.screenshot({path:join(output,'direct-start-accepted-absent.png'),animations:'disabled'});
  // Retrying the identical agent request after its lost acknowledgement returns
  // the durable receipt; it must not create or send again.
  phase='direct-start-retry-reload';
  const retry=await post('/fixture/start',direct);assert.equal(retry.accepted,true,JSON.stringify(retry));
  assert.equal(retry.result.targetSessionId,directReceipt.targetSessionId);assert.equal(retry.result.inputId,directReceipt.inputId);
  assert.deepEqual(await inspect(),observations.directAccepted,'identical explicit start retry must not replay work');
- await page.reload();await collapsed(3);await expand();await expect(directCard.getByRole('button',{name:'Open chat',exact:true})).toBeVisible();
+ await page.reload();await expect(composer).toBeVisible();await absent([proposal.requestId,cancelled.requestId,direct.requestId]);
  await expect(composer).toHaveDraft(draft);assert.equal((await state(page)).selectedSessionId,info.sourceId);
- await details(directCard);await expect(directCard.locator('pre')).toHaveText(direct.text);
- await directCard.getByRole('button',{name:'Check delivery',exact:true}).click();
- await expect(directCard.getByRole('button',{name:'Check delivery',exact:true})).toBeEnabled();
- await expect.poll(async()=>(await row(direct.requestId))?.status).toBe('accepted');
- assert.equal((await row(direct.requestId)).targetSessionId,directReceipt.targetSessionId);
- assert.equal((await row(direct.requestId)).inputId,directReceipt.inputId);
+ const directRead=await read(direct.requestId);
+ assert.equal(directRead.status,'accepted');assert.equal(directRead.text,direct.text);
+ assert.equal(directRead.targetSessionId,directReceipt.targetSessionId);assert.equal(directRead.inputId,directReceipt.inputId);
+ await absent([direct.requestId]);
  assert.deepEqual(await inspect(),observations.directAccepted,'direct-start reload and status read must not replay work');
  // Deliberately visit the same source in the other client only after asserting
- // that creation preserved its original selection/draft. NewChatHandoffs.project
- // includes conversation-owned starts for that source; private reviews are not
- // shared (authorize still requires the original/restored client for reviews).
+ // that creation preserved its original selection/draft. A conversation-owned
+ // receipt remains exactly readable, but settled work has no shared UI tail.
  phase='direct-start-other-client';
  await action(other,'session.select',{id:info.sourceId});await other.reload();await expect(otherComposer).toBeVisible();
- await collapsed(1,other);await expand(other);
- await expect(other.locator(`[data-handoff-id="${direct.requestId}"]`)).toBeVisible();
- assert.equal((await state(other)).handoffs.find(value=>value.requestId===direct.requestId).inputId,directReceipt.inputId);
+ await absent([direct.requestId],other);await noRequests(other);
+ const sharedRead=await read(direct.requestId,other);
+ assert.equal(sharedRead.targetSessionId,directReceipt.targetSessionId);assert.equal(sharedRead.inputId,directReceipt.inputId);
  for(const id of [proposal.requestId,cancelled.requestId,retainedReview.requestId,stale.requestId]){
   await expect(other.locator(`[data-handoff-id="${id}"]`)).toHaveCount(0);
-  assert.equal((await state(other)).handoffs.some(value=>value.requestId===id),false,'private reviews must not leak with shared direct receipts');
+  assert.equal((await state(other)).handoffs.some(value=>value.requestId===id),false,'private reviews must not leak with exact shared receipt reads');
  }
- await other.locator(`[data-handoff-id="${direct.requestId}"] > details > summary`).press('Enter');
- await other.locator(`[data-handoff-id="${direct.requestId}"]`).getByRole('button',{name:'Check delivery',exact:true}).click();
- await expect(other.locator(`[data-handoff-id="${direct.requestId}"]`).getByRole('button',{name:'Check delivery',exact:true})).toBeEnabled();
+ await noRequests(other);
+ const deniedPendingRead=await action(other,'session.handoff.read',{requestId:retainedReview.requestId}).then(value=>({value}),error=>({error:error.message}));
+ assert.ok(deniedPendingRead.error||deniedPendingRead.value?.accepted===false,'the private pending review stays unreadable to the other client');
  await action(other,'session.select',{id:info.otherSourceId});await expect(otherComposer).toHaveDraft('Other browser private draft');
  observations.directFinal=await inspect();assert.deepEqual(observations.directFinal,observations.directAccepted);
- // Eight genuine settled receipts share one small default disclosure. Keep an
- // unfinished private review alongside them; do not lower counts to fit history.
- phase='eight-settled-history';
+ // A retained success tail must take no presentation space and must not crowd
+ // out pending, failed or contradictory outcomes. Exact journal reads remain.
+ phase='settled-absent-unresolved-actionable';
  const extra=[];
  for(let index=0;index<5;index++){
-  const request={...direct,requestId:`history-start-${index}`,title:`History chat ${index+1}`,text:`Exact history brief ${index+1}.`,clientId:(await state(page)).client.id};
+  const request={...direct,requestId:`settled-start-${index}`,title:`Settled chat ${index+1}`,text:`Exact retained brief ${index+1}.`,clientId:(await state(page)).client.id};
   const response=await post('/fixture/start',request);assert.equal(response.accepted,true,JSON.stringify(response));
-  await expect.poll(async()=>(await row(request.requestId))?.status).toBe('accepted');
-  extra.push(await row(request.requestId));
+  await expect.poll(async()=>(await journal(request.requestId)).status).toBe('accepted');
+  extra.push(await journal(request.requestId));
  }
- const failedRequest={...direct,requestId:'history-failed',title:'Undelivered initial brief',
+ const failedRequest={...direct,requestId:'delivery-failed',title:'Undelivered initial brief',
   text:'Fixture: reject this initial brief before recipient admission.',clientId:(await state(page)).client.id};
  const failedStart=await post('/fixture/start',failedRequest);assert.equal(failedStart.accepted,true,JSON.stringify(failedStart));
  await expect.poll(async()=>(await row(failedRequest.requestId))?.status).toBe('failed');
  const failed=await row(failedRequest.requestId);assert.equal(failed.creation,'created');assert.equal(failed.delivery,'failed');
  await prominent(failedRequest.requestId);
- observations.historyBefore=await inspect();
- assert.equal(observations.historyBefore.sessions.length,10);assert.equal(observations.historyBefore.sent.length,8);
+ const contradictory=await propose('review-contradictory','Contradictory receipt','This request has no confirmed creation or initial-input acceptance.');
+ await post('/fixture/contradict',{requestId:contradictory.requestId});
+ await expect.poll(async()=>(await row(contradictory.requestId))?.status).toBe('accepted');
+ assert.equal((await row(contradictory.requestId)).creation,'not_started');assert.equal((await row(contradictory.requestId)).delivery,'unknown');
+ await prominent(contradictory.requestId);
+ observations.retainedBefore=await inspect();
+ assert.equal(observations.retainedBefore.sessions.length,10);assert.equal(observations.retainedBefore.sent.length,8);
  for(const receipt of [accepted,directReceipt,...extra,failed]){
-  assert.equal(observations.historyBefore.sent.filter(value=>value.inputId===receipt.inputId).length,1,'each exact opening input has one send attempt, including the refused input');
+  assert.equal(observations.retainedBefore.sent.filter(value=>value.inputId===receipt.inputId).length,1,'each exact opening input has one send attempt, including the refused input');
  }
- observations.historyFootprints=[];
+ const settledIds=[cancelled.requestId,accepted.requestId,direct.requestId,...extra.map(value=>value.requestId)];
+ observations.unresolvedViewports=[];
  for(const width of [1300,320]){
   await page.setViewportSize({width,height:width===320?844:1000});
-  await page.reload();await collapsed(8);await prominent(retainedReview.requestId);await prominent(failed.requestId);
-  await expect(card(failed.requestId).getByRole('button',{name:'Check delivery',exact:true})).toBeVisible();
+  await page.reload();await expect(composer).toBeVisible();await absent(settledIds);
+  for(const id of [retainedReview.requestId,failed.requestId,contradictory.requestId])await prominent(id);
+  for(const id of [failed.requestId,contradictory.requestId])await expect(card(id).getByRole('button',{name:'Check delivery',exact:true})).toBeEnabled();
+  await expect(card(failed.requestId).getByRole('button',{name:'Open chat',exact:true})).toBeEnabled();
+  await expect(card(contradictory.requestId).getByRole('button',{name:'Open chat',exact:true})).toHaveCount(0);
   await expect(card(retainedReview.requestId).locator('pre')).toHaveText(retainedReview.text);
   await expect(card(retainedReview.requestId).getByRole('button',{name:'Create and start',exact:true})).toBeEnabled();
   await expect(composer).toHaveDraft(draft);assert.equal((await state(page)).selectedSessionId,info.sourceId);
-  await summary().scrollIntoViewIfNeeded();
-  const box=await history().boundingBox();assert.ok(box&&box.height<=64,`collapsed history at ${width}px must fit one compact disclosure (<=64px), got ${JSON.stringify(box)}`);
-  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'history must not overflow the viewport');
-  observations.historyFootprints.push({width,height:box.height});
-  await page.screenshot({path:join(output,`history-collapsed-${width}.png`),animations:'disabled'});
-  const before=actions.length;await expand();
-  await expect(history().locator('[data-handoff-id]:visible')).toHaveCount(8);
-  await expect(history().locator('pre:visible')).toHaveCount(0);
-  await expect(history().getByText('Opening brief acceptance is not work completion.',{exact:true})).toBeVisible();
-  await details(directCard);await expect(directCard.locator('pre')).toHaveText(direct.text);
-  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'expanded history details must not overflow the viewport');
-  await expect(directCard.getByRole('button',{name:'Open chat',exact:true})).toBeVisible();
-  await summary().focus();await summary().press('Space');await collapsed(8);
-  assert.equal(actions.length,before,'history expansion/details/collapse must not change app state or send input');
+  const checkButton=card(contradictory.requestId).getByRole('button',{name:'Check delivery',exact:true});
+  await checkButton.focus();await checkButton.press('Enter');await expect(checkButton).toBeEnabled();
+  await prominent(contradictory.requestId);assert.equal((await row(contradictory.requestId)).delivery,'unknown');
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'unresolved requests must not overflow the viewport');
+  assert.equal((await state(page)).handoffs.some(value=>settledIds.includes(value.requestId)),false,'settled receipts are absent from the host projection, not merely hidden');
+  observations.unresolvedViewports.push({width,requestIds:(await state(page)).handoffs.map(value=>value.requestId)});
+  await page.screenshot({path:join(output,`settled-absent-unresolved-${width}.png`),animations:'disabled'});
   await expect(composer).toHaveDraft(draft);
  }
- const historyReads=actions.filter(value=>value.action==='session.handoff.read').length;
- await page.waitForTimeout(1700);
- assert.equal(actions.filter(value=>value.action==='session.handoff.read').length,historyReads,'collapsed history must not poll delivery');
- assert.deepEqual(await inspect(),observations.historyBefore,'history interaction/reload must not create chats or resend briefs');
+ assert.deepEqual(await inspect(),observations.retainedBefore,'reload and unresolved reads must not create chats or resend briefs');
+ // A late exact read may finish after its source is left. It must not restore
+ // a card, draft or selection in the other conversation.
+ phase='late-read-source-fence';let releaseRead,readEntered;
+ const readGate=new Promise(resolve=>releaseRead=resolve),readReady=new Promise(resolve=>readEntered=resolve);
+ const holdRead=async route=>{
+  const body=route.request().postDataJSON();
+  if(body?.action!=='session.handoff.read'||body.args?.requestId!==failed.requestId){await route.continue();return}
+  const response=await route.fetch();readEntered();await readGate;await route.fulfill({response});
+ };
+ await page.route('**/api/actions',holdRead);
+ await card(failed.requestId).getByRole('button',{name:'Check delivery',exact:true}).click();await readReady;
+ await action(page,'session.select',{id:info.otherSourceId});await expect.poll(async()=>(await state(page)).selectedSessionId).toBe(info.otherSourceId);
+ const lateReadResponse=page.waitForResponse(response=>{
+  const request=response.request();
+  return request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions'&&request.postDataJSON().action==='session.handoff.read'&&request.postDataJSON().args?.requestId===failed.requestId;
+ });
+ releaseRead();assert.equal((await (await lateReadResponse).json()).accepted,true);await page.unroute('**/api/actions',holdRead);
+ await noRequests();assert.equal((await state(page)).selectedSessionId,info.otherSourceId);await expect(composer).toHaveDraft('');
+ await action(page,'session.select',{id:info.sourceId});await prominent(failed.requestId);await expect(composer).toHaveDraft(draft);
+ // A created-but-failed request keeps explicit navigation. The real host's
+ // dirty Canvas guard must refuse it without destroying its recovery card.
+ phase='failed-open-guard';
+ await page.setViewportSize({width:1300,height:1000});
+ assert.equal((await action(page,'canvas.show',{kind:'text',content:'Unfinished source edit'})).accepted,true);
+ const views=await action(page,'canvas.views.inspect');
+ assert.equal(views.accepted,true);
+ const primary=views.result.views.find(value=>value.viewId==='primary');
+ assert.ok(primary);
+ const canvasTarget=Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,primary[key]]));
+ assert.equal((await action(page,'canvas.views.dirty',{...canvasTarget,dirty:true})).accepted,true);
+ const failedOpen=card(failed.requestId).getByRole('button',{name:'Open chat',exact:true});
+ await failedOpen.click();await expect(card(failed.requestId).getByRole('alert')).toContainText('primary viewer edit');
+ await expect(failedOpen).toBeEnabled();await prominent(failed.requestId);
+ assert.equal((await state(page)).selectedSessionId,info.sourceId);await expect(composer).toHaveDraft(draft);
+ assert.deepEqual(await inspect(),observations.retainedBefore,'guarded Open chat does not create or resend');
+ assert.equal((await action(page,'canvas.views.dirty',{...canvasTarget,dirty:false})).accepted,true);
+ await failedOpen.click();await expect.poll(async()=>(await state(page)).selectedSessionId).toBe(failed.targetSessionId);
+ await action(page,'session.select',{id:info.sourceId});await expect(composer).toHaveDraft(draft);await prominent(failed.requestId);
+ await absent(settledIds);
+ assert.deepEqual(await inspect(),observations.retainedBefore,'explicit navigation after clearing the guard does not replay the failed brief');
  await expect(otherComposer).toHaveDraft('Other browser private draft');
  assert.equal((await state(other)).selectedSessionId,info.otherSourceId);
  observations.final=await inspect();
  observations.directStartTransport={initialRequests:startRequests,replyLost:startReplyLost,identicalRequestRetry:true,confirmationRequests:0};
  assert.equal(startRequests,1);assert.deepEqual(errors,[]);
  await writeFile(join(output,'result.json'),JSON.stringify({passed:true,elapsedMs:Date.now()-started,timings,source:'real host + packaged UI; synthetic recipient',clientId,otherClientId,confirmRequests,idleReceiptObservationMs:1700,observations,errors,limits:['No model, provider, file-reading, host-restart, or native-device acceptance.','The brief is accepted once; its requested work is not claimed complete.']},null,2)+'\n');
- console.log('Cross-workspace handoff passed: exact host confirmation/read, unknown and late acceptance, retained read result, eight collapsed receipts, keyboard details, private review/shared direct ownership, replay-safe retry, preserved drafts, explicit navigation, narrow layout.');
+ console.log('Cross-workspace handoff passed: settled cards and empty shells absent, exact retained receipts, unknown/failed/contradictory recovery, delayed-stream and source fences, keyboard continuation, private review/shared direct ownership, replay-safe retry, preserved drafts, guarded explicit navigation, narrow layout.');
 }catch(error){
  const current=page?await state(page).catch(()=>null):null;
  await writeFile(join(output,'failure.json'),JSON.stringify({phase,message:error.message,elapsedMs:Date.now()-started,observations,actions,errors,state:current?{selectedSessionId:current.selectedSessionId,client:current.client,handoffs:current.handoffs,draft:current.view?.draft}:null},null,2)+'\n');
