@@ -295,12 +295,15 @@ class Feedback:
                     or failure.get('generationId') != context['generationId']
                     or context['inputId'] not in (failure.get('inputIds') or [failure.get('inputId')])):
                 raise ValueError('The selected request diagnosis is unavailable or changed. Select its recorded details again.')
+            latest = next((row.get('inputId') for row in reversed(session.get('messages', []))
+                           if row.get('role') == 'user' and row.get('inputId')), None)
+            identities = [context['inputId'], latest] if latest and latest != context['inputId'] else [context['inputId']]
             # Borrow only this request's retained observations. Newer runtime
             # versions, faults, activity and messages cannot explain old failure.
             selected = {'id': session['id'], 'status': 'error', 'error': failure.get('summary'),
                 'failure': failure, 'runtimeReport': failure.get('runtimeReport', {}),
                 'activity': {'phase': 'error'}, 'execution': {}, 'moduleFailures': [],
-                'messages': [{'role': 'user', 'inputId': context['inputId']}],
+                'messages': [{'role': 'user', 'inputId': exact} for exact in identities],
                 'collaborationGeneration': {'id': context['generationId']},
                 'generations': [row for row in session.get('generations', [])[-200:]
                                 if row.get('generation_id') == context['generationId']]

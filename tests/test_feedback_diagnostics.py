@@ -247,6 +247,7 @@ async def test_historical_report_resolves_exact_saved_annotation_and_freezes_bef
             'version': 1, 'inputId': context['inputId'], 'generationId': context['generationId'],
             'phase': 'failed', 'basis': 'generation_failed', 'failure': failure}}}
         session.update(failure={'category': 'authentication'}, activity={'phase': 'model'},
+            messages=[{'role': 'user', 'inputId': 'newer-input'}],
             generations=[{'event': 'generation.started', 'generation_id': 'newer'}],
             runtimeEvents=[{'type': 'runtime.error', 'generationId': 'newer', 'at': 20,
                            'exceptionChain': [{'errorType': 'TypeError', 'frames': []}]}])
@@ -254,6 +255,7 @@ async def test_historical_report_resolves_exact_saved_annotation_and_freezes_bef
         facts = preview['result']['diagnostics']
         assert preview['result']['snapshot'] == 'request'
         assert facts['troubleshooting']['recordedFailure']['category'] == 'invalid_request'
+        assert facts['troubleshooting']['recordedFailure']['inputRelation'] == 'earlier'
         assert facts['failureReport']['requestOutcome'] == 'generation.failed'
         assert facts['failureReport']['exceptionChain'][0]['errorType'] == 'ValueError'
         assert not facts['failureReport'].get('runtimeExceptionChain')

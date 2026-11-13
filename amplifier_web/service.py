@@ -2509,19 +2509,16 @@ class AppService:
                 prepared_workspace = str(await self.worktrees.finish_thread(_create_workspace_folder, args['workspace']))
         prepared_health = None
         if action == 'session.inspect':
-            from .session_health import inspect_session
+            from .session_health import inspect_session, causal_timeline
             async with self.lock:
                 snapshot = copy.deepcopy(self._session(args['id']))
                 captured_at = time.time()
             prepared_health = await asyncio.to_thread(inspect_session, self.data_dir, snapshot)
             bridge_events = await asyncio.to_thread(self.diagnostics.bridge_events, snapshot)
-            prepared_health['timeline'] = [row for row in prepared_health['timeline']
-                                          if row.get('type') != 'runtime.bridge'] + bridge_events
+            prepared_health['timeline'] = causal_timeline({
+                **snapshot, 'runtimeEvents': [*snapshot.get('runtimeEvents', []), *bridge_events]})
             prepared_health['capturedAt'] = captured_at
             prepared_health['host'] = {**getattr(self.update_manager, 'running_identity', {}), 'hostInstanceId': self.instance_id}
-            prepared_health['recentRequests'] = list(getattr(self, 'request_timings', []))[-30:]
-            prepared_health['performance'] = self.performance_diagnostics.snapshot()
-            prepared_health['capture']['limitations'].append('Request timings cover handler execution, not time before the server accepts a connection.')
         if action == 'session.plans':
             if args.get('includeItems') and len(args['ids']) != 1:
                 raise AppError('Inspect one chat at a time for plan details.')
@@ -5078,10 +5075,6 @@ class AppService:
                 if startup:
                     projected.update(startup_failure_details(payload))
                 existing = session.get('failure')
-                if not existing and not startup:
-                    from .session_health import request_call_failure
-                    current = session.get('execution', {}).get('currentTurnId')
-                    existing = request_call_failure(session, [current]) if current else None
                 if startup and projected['category'] == 'unknown':
                     error_type = 'RuntimeStartupError'
                     projected = failure_details(detail, error_type)
