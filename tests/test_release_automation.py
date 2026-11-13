@@ -533,6 +533,17 @@ print(prepare_metadata_for_build_editable(sys.argv[1]))
 '''
     result = subprocess.check_output([sys.executable, '-I', '-c', code, str(metadata)], cwd=source, text=True)
     assert (metadata / result.strip() / 'METADATA').is_file()
+    from email.parser import Parser
+    from packaging.requirements import Requirement
+    values = Parser().parsestr((metadata / result.strip() / 'METADATA').read_text()).get_all('Requires-Dist')
+    actual = {Requirement(value).name: Requirement(value).url for value in values
+              if not Requirement(value).marker}
+    base = 'git+https://github.com/microsoft/amplifier-foundation@main'
+    assert actual['amplifier-foundation'] == base
+    assert actual['amplifier-module-hooks-session-naming'] == base + '#subdirectory=modules/hooks-session-naming'
+    authored = tomllib.loads((root / 'pyproject.toml').read_text())['project']['dependencies']
+    assert {Requirement(value) for value in values if not Requirement(value).marker} == {
+        Requirement(value) for value in authored}
     assert not (source / 'amplifier_web/release-source.json').exists()
     assert not (source / 'amplifier_web/static').exists()
 

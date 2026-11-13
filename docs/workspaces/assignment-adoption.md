@@ -31,20 +31,33 @@ attribution; detachment retains charged usage and revokes manager control.
 Detached historical membership is not recycled into a new authority epoch:
 use a different assignment to establish a new relationship.
 
-## Finishing and reusing a member chat
+## Ending participation and reusing a member chat
 
-The assignment owner can use `assignment.retire` for a finished helper. This
+The assignment owner can use `assignment.retire` for a settled helper, including
+a stopped or superseded attempt whose objective remains active, blocked or paused. This
 releases its current member slot without archiving the chat, deleting files,
-forgetting its membership or subtracting any attributed usage. Running workers,
-unsettled inputs or checks, unfinished saved tasks and shared task claims prevent
-retirement. A native ownership check protects the transition. User Stop and
-unknown operation outcomes are not cleared.
+forgetting its membership or subtracting any attributed usage. Ending management
+is not task success: it never completes or abandons the saved objective, resets
+its budget, or repairs its settings. Running workers, active settings work,
+unsettled inputs, calls or checks, uncertain checkout handoffs and unfinished shared
+task claims still prevent retirement. A native ownership lease protects the
+transition through its durable save; a saved stopped status alone is not proof.
+Live or uncertain test environments must settle under their actual resource owner.
 
-Saved-task eligibility and the reuse binding read the canonical native control
-record under that ownership check; a lost reply or cached host projection cannot
-prove completion. Missing or malformed saved state stays unknown, while an
-available `task: null` proves no saved task; ordinary human/UI adoption remains
-unchanged.
+Failed settings records, including saved-but-not-mounted readback failures, are
+retained evidence rather than active writers. They do not by themselves prevent
+retirement once queued/applying settings, refreshes, pending management tasks and
+native writers have settled. Retirement neither mounts the old settings nor
+changes their files, failure details or admission fences. User Stop, interruption
+revisions, task/control bytes, messages and unknown operation outcomes stay intact.
+It does not cancel independent schedules or claim every future input is disabled.
+
+Retirement does not require readable task state. Only the optional standing-reuse
+binding reads the canonical native control record under the ownership lease.
+It is saved only for a completed or absent task; unavailable or unfinished state
+cannot borrow a cached completed projection. A lost task reply is not proof of
+completion. Missing or malformed state stays unknown, while an available
+`task: null` proves no saved task. Ordinary human/UI adoption remains unchanged.
 
 `maxMembers` counts current bound members and reservations. Retired, detached
 and never-created records remain available as history without occupying those
