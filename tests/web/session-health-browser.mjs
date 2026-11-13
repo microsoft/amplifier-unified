@@ -156,6 +156,7 @@ async function lifecycleCheck(page,ready,output){
   await expect.poll(async()=>(await facts()).runtimeFaults.length).toBe(1);
   await expect(page.locator('[data-part=conversation-trouble]')).toHaveCount(0);
   await expect(page.locator('[data-input-phase=failed]')).toHaveCount(0);
+  assert.equal((await facts()).interruptionRevision,0,'process close is not a human Stop');
  }else{
   const failed=input(before,'failed-input');
   assert.equal(failed.inputStatus.phase,'failed');
@@ -193,6 +194,13 @@ async function lifecycleCheck(page,ready,output){
  assert.equal(input(check,'completed-input').inputStatus.phase,'done');
  if(lifecycleMode==='request-failure')assert.equal(input(check,'failed-input').inputStatus.phase,'failed','older request outcome remains local history');
  assert.equal(check.sessions,1);assert.equal(check.selected,ready.sessionId);
+ if(lifecycleMode==='completed-runtime-fault'){
+  assert.equal((await page.request.post(ready.url+'/fixture/human-stop')).status(),200);
+  await expect.poll(async()=>(await facts()).status).toBe('stopped');
+  assert.equal((await facts()).interruptionRevision,1);
+  assert.equal((await facts()).calls.filter(row=>row.operation==='send').length,1,'late callbacks never revive actual Stop');
+  assert.equal(input(await facts(),'completed-input').inputStatus.phase,'done');
+ }
  if(lifecycleMode==='request-failure'){
   // A later, different failure must not replace the diagnosis selected from history.
   assert.equal((await page.request.post(ready.url+'/fixture/newer-failure')).status(),200);

@@ -152,11 +152,28 @@ async def lifecycle(app, home):
         if faulted:
             raise web.HTTPConflict(text='The one late fault was already injected.')
         faulted = True
+        # Match the original process-close ordering, not only a direct error.
+        await service.on_runtime_event('runtime.status', {
+            'sessionId': sid, 'status': 'stopped', 'event': 'session.closed'})
         await service.on_runtime_event('runtime.error', {
             'sessionId': sid, 'rootSessionId': sid, 'runtimeOwnerId': 'lifecycle-fixture-owner',
             'errorType': 'RuntimeError', 'phase': 'worker_idle',
             'error': 'PRIVATE idle callback failed /synthetic/workspace'})
+        await service.on_runtime_event('runtime.ended', {
+            'sessionId': sid, 'rootSessionId': sid, 'runtimeOwnerId': 'lifecycle-fixture-owner',
+            'status': 'interrupted'})
         return web.json_response({'injected': True})
+
+    async def human_stop(request):
+        authorized(request)
+        await service.dispatch('conversation.stop', {'sessionId': sid},
+                               command_id='lifecycle-explicit-human-stop')
+        await service.on_runtime_event('runtime.status', {
+            'sessionId': sid, 'status': 'stopped', 'event': 'session.closed'})
+        await service.on_runtime_event('runtime.error', {
+            'sessionId': sid, 'rootSessionId': sid, 'errorType': 'RuntimeError',
+            'error': 'PRIVATE callback after explicit human Stop'})
+        return web.json_response({'stopped': True})
 
     async def newer_failure(request):
         authorized(request)
@@ -178,6 +195,7 @@ async def lifecycle(app, home):
             'completedUnchanged': source['messages'][:len(completed_messages)] == completed_messages,
             'messages': [annotate(source, row) for row in source['messages']],
             'status': source['status'], 'failure': source.get('failure'),
+            'interruptionRevision': source.get('interruptionRevision', 0),
             'runtimeFaults': [row for row in source.get('runtimeEvents', [])
                               if row.get('type') == 'runtime.error' and row.get('scope') == 'runtime'],
             'calls': calls,
@@ -185,6 +203,7 @@ async def lifecycle(app, home):
 
     app.router.add_post('/fixture/late-runtime-fault', fault)
     app.router.add_post('/fixture/newer-failure', newer_failure)
+    app.router.add_post('/fixture/human-stop', human_stop)
     app.router.add_get('/fixture/check', check)
     service._publish()
     await serve(app, source)
