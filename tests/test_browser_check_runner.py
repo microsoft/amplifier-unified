@@ -1476,11 +1476,16 @@ def test_captured_message_delivery_plan_is_fixed_without_changing_default():
     before = copy.deepcopy(plan)
     focused = runner.captured_message_delivery_plan(plan)
     assert plan == before
-    assert focused == {'schemaVersion': 1, 'scenarios': [{
+    assert focused['scenarios'][0] == {
         'id': 'message-delivery',
         'command': ['node', 'tests/web/message-delivery-browser.mjs'],
         'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/message-delivery'},
-    }]}
+    }
+    assert [row['id'] for row in focused['scenarios']] == [
+        'message-delivery', 'message-outbox', 'delivery-reconciliation', 'delivery-new-chat']
+    assert focused['scenarios'][1:] == [
+        next(row for row in plan['scenarios'] if row['id'] == identity)
+        for identity in ('message-outbox', 'delivery-reconciliation', 'delivery-new-chat')]
     for mutation in ('missing', 'duplicate', 'command', 'environment', 'cwd'):
         broken = {'schemaVersion': 1, 'scenarios': [copy.deepcopy(next(
             row for row in plan['scenarios'] if row['id'] == 'message-delivery'))]}

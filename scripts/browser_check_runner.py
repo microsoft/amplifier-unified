@@ -1338,8 +1338,17 @@ def captured_message_delivery_plan(plan):
     rows = [row for row in validate_plan(plan) if row['id'] == expected['id']]
     if rows != [expected]:
         raise ValueError('Captured message delivery requires its exact registered owner')
+    adjacent = []
+    for identity in ('message-outbox', 'delivery-reconciliation', 'delivery-new-chat'):
+        wanted = {'id': identity, 'command': ['node', f'tests/{identity}-browser.mjs'],
+                  'cwd': '.build/web-client'}
+        if identity != 'message-outbox':
+            wanted['env'] = {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/' + identity}
+        if [row for row in validate_plan(plan) if row['id'] == identity] != [wanted]:
+            raise ValueError('Captured message delivery requires its fixed adjacent client owners')
+        adjacent.append(wanted)
     return {'schemaVersion': 1, 'scenarios': [
-        {**expected, 'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/message-delivery'}}]}
+        {**expected, 'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/message-delivery'}}, *adjacent]}
 
 
 def main():

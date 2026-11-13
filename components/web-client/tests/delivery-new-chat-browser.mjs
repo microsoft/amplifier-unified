@@ -351,6 +351,7 @@ async function runCase(kind){
    await reply(creation.route,{sessionId:createdId});
    await expect.poll(()=>!!send).toBe(true);
    assert.equal(send.body.args.sessionId,createdId);
+   assert.deepEqual(send.body.args.expectedSource,{workspace,nativeIdentity:nativeId});
    assert.equal(send.body.args.text,submitted);
    assert.equal(send.body.id,original.commandId);
    await expect.poll(async()=>(await outbox())[0]?.scope).toBe(createdScope);
@@ -358,6 +359,7 @@ async function runCase(kind){
    assert.equal(pending.length,1);
    assert.equal(pending[0].sessionId,createdId);
    assert.equal(pending[0].scope,createdScope);
+   assert.deepEqual(pending[0].expectedSource,send.body.args.expectedSource);
    assert.equal(pending[0].status,'sending');
    assert.equal(pending[0].text,submitted);
    await expect(page.locator(`[data-input-id="${send.body.id}"]`)).toHaveCount(1);

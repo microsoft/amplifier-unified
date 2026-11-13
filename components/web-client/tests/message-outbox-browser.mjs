@@ -204,7 +204,12 @@ try{
  assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lostRejection.body.id).length,1,'Opening uncertain-retry confirmation is not admission');
  await page.getByRole('button',{name:'Send this message again',exact:true}).click();
  const rejectionReceipt=await next();assert.equal(rejectionReceipt.body.action,'conversation.send');assert.equal(rejectionReceipt.body.id,lostRejection.body.id,'Original-submission retry keeps its deduplication identity');assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lostRejection.body.id).length,2,'Only the explicit click retries the original submission');await rejectionReceipt.route.fulfill({json:{accepted:false,duplicate:true,status:409,error:'Saved rejection',state:shell.state()}});
- await page.getByRole('button',{name:'Retry',exact:true}).click();const rejectedRetry=await next();assert.notEqual(rejectedRetry.body.id,lostRejection.body.id);await received(rejectedRetry);
+ await page.waitForFunction(id=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).find(row=>row.commandId===id)?.status==='unknown',lostRejection.body.id);
+ assert.deepEqual(rejectionReceipt.body,lostRejection.body,'Refused original replay preserves the complete original payload and witness');
+ assert.equal(await page.getByRole('button',{name:'Retry',exact:true}).count(),0,'A refused retry does not prove the earlier uncertain attempt never ran');
+ await page.getByRole('button',{name:'Retry original submission',exact:true}).click();
+ await page.getByRole('button',{name:'Send this message again',exact:true}).click();
+ const rejectedRetry=await next();assert.deepEqual(rejectedRetry.body,lostRejection.body);await received(rejectedRetry);
  const delayed=await send('Acknowledgement delayed');chat().status='working';chat().messages.push({id:'delayed',inputId:delayed.body.id,role:'user',text:delayed.body.args.text,delivery:{status:'sending'}});await emit();
  await composer().fill('Keep this next draft');await until(()=>state.view.draft==='Keep this next draft','Draft saves while acknowledgement waits');
  await delayed.route.fulfill({status:504,json:{error:'The runtime operation has not returned yet. It may still be running; do not automatically repeat it.',code:'runtime_pending',delivery:'unknown'}});
@@ -302,6 +307,12 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
  assert.equal(retried.body.args.allowNextTurn,true);assert.equal(retried.body.args.text,boundary.body.args.text);
  await received(retried);
  chat().status='idle';chat().collaborationGeneration.terminal=true;await emit();
+ chat().externalAgent={id:'fixture-acp',name:'External text fixture'};
+ await emit();
+ const external=await send('External text keeps its existing boundary');
+ assert.equal(Object.hasOwn(external.body.args,'expectedSource'),false,'ACP runtime identity is not a native send witness');
+ assert.equal(await page.getByRole('button',{name:'Add files and more',exact:true}).count(),0);
+ await received(external);delete chat().externalAgent;await emit();
  await page.screenshot({path:'/tmp/amplifier-optimistic-messages.png'});await page.setViewportSize({width:390,height:844});await page.evaluate(()=>{const save=Storage.prototype.setItem;Storage.prototype.setItem=function(key,value){if(key==='amplifier.messageOutbox.v1')throw new DOMException('Fixture quota','QuotaExceededError');return save.call(this,key,value)}});const mobile=await send('Mobile failed message');await mobile.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection'}});await page.getByRole('button',{name:'Retry',exact:true}).waitFor();await page.getByText('This browser could not save the pending message. Keep this tab open until delivery is confirmed.',{exact:true}).waitFor();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:'/tmp/amplifier-message-retry-mobile.png'});
  await page.addInitScript(()=>Object.defineProperty(window,'sessionStorage',{get(){throw new DOMException('Fixture storage blocked','SecurityError')}}));await page.reload();await composer().waitFor();
  const blockedStorage=await send('Storage unavailable');await blockedStorage.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection'}});

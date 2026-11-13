@@ -264,14 +264,15 @@ jobs:
           from pathlib import Path
           output = Path('output/browser-checks')
           report = json.loads((output / 'results.json').read_text())
-          row, = report['scenarios']
-          assert row['id'] == 'message-delivery'
-          passed = row['status'] == 'passed' and row['exitCode'] == 0
-          suite = ET.Element('testsuite', name='captured-message-delivery', tests='1', failures=str(int(not passed)))
-          case = ET.SubElement(suite, 'testcase', name=row['id'], classname='actual-host-browser')
-          if not passed:
-              log = output / 'message-delivery.log'
-              ET.SubElement(case, 'failure', message=row['status']).text = log.read_text() if log.exists() else json.dumps(row)
+          rows = report['scenarios']
+          assert [row['id'] for row in rows] == ['message-delivery', 'message-outbox', 'delivery-reconciliation', 'delivery-new-chat']
+          failed = [row for row in rows if row['status'] != 'passed' or row['exitCode'] != 0]
+          suite = ET.Element('testsuite', name='captured-message-delivery', tests=str(len(rows)), failures=str(len(failed)))
+          for row in rows:
+              case = ET.SubElement(suite, 'testcase', name=row['id'], classname='captured-delivery-browser')
+              if row in failed:
+                  log = output / (row['id'] + '.log')
+                  ET.SubElement(case, 'failure', message=row['status']).text = log.read_text() if log.exists() else json.dumps(row)
           ET.ElementTree(suite).write(output / 'captured-browser.xml', encoding='utf-8', xml_declaration=True)
           PY
       - name: Preserve failed attachment contracts

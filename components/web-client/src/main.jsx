@@ -42,7 +42,7 @@ import {homePatch} from './adaptive-work.js';
 import {SettingsExperience} from './settings-experience';
 import {useGuardedSettingsPanel,useGuardedSettingsSession} from './settings-drafts';
 import {useMessageOutbox,outboxMessages,outboxMatches} from './message-outbox';
-import {checkedDelivery,deliveryRecovery,deliveryScope} from './pending-delivery-checks';
+import {checkedDelivery,deliveryRecovery,deliveryScope,deliveryTargetMatches,nativeDeliverySource} from './pending-delivery-checks';
 import {clientId,clientUrl,attachClient,draftJournal} from './api';
 import {checkpointSurfaces} from './surface-checkpoint';
 import {useConversationDetail} from './conversation-detail';
@@ -232,14 +232,23 @@ function App(){
   });
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
+  if(action==='conversation.send'){
+   args={sessionId:latest.current?.selectedSessionId,...args};
+   if(!meta.preservePayload&&args.expectedSource===undefined){
+    const source=nativeDeliverySource(latest.current?.sessions?.find(row=>row.id===args.sessionId));
+    if(source)args={...args,expectedSource:source};
+   }
+  }
   const creatingConversation=action==='session.create'&&args.fromDraft;
-  const readDeliveryTarget=(frame=latest.current)=>creatingConversation?{scope:deliveryScope(frame,null),connection:frame?.client?.hostInstanceId}:deliveryRecovery(frame,frame?.sessions?.find(row=>row.id===args.sessionId));
-  const deliveryTarget=creatingConversation||['conversation.delivery','conversation.send'].includes(action)?readDeliveryTarget():null,deliveryAuthenticationAtStart=deliveryAuthentication.current;
-  const sameDeliveryTarget=()=>deliveryAuthenticationAtStart===deliveryAuthentication.current&&(!deliveryTarget||JSON.stringify(deliveryTarget)===JSON.stringify(readDeliveryTarget()));
+  const readDeliveryTarget=(frame=latest.current)=>creatingConversation?{scope:deliveryScope(frame,null),connection:frame?.client?.hostInstanceId}:deliveryRecovery(frame,frame?.sessions?.find(row=>row.id===args.sessionId)||(args.expectedSource?{id:args.sessionId,...args.expectedSource}:null));
+  const deliveryTarget=meta.capturedDelivery?.target??(creatingConversation||['conversation.delivery','conversation.send'].includes(action)?readDeliveryTarget():null),deliveryAuthenticationAtStart=meta.capturedDelivery?.authentication??deliveryAuthentication.current;
+  if(deliveryTarget&&!meta.capturedDelivery)meta={...meta,capturedDelivery:{target:deliveryTarget,authentication:deliveryAuthenticationAtStart}};
+  const matchesFrame=frame=>creatingConversation?JSON.stringify(readDeliveryTarget(frame))===JSON.stringify(deliveryTarget):deliveryTargetMatches(frame,deliveryTarget,args.sessionId);
+  const sameDeliveryTarget=()=>deliveryAuthenticationAtStart===deliveryAuthentication.current&&(!deliveryTarget||matchesFrame(latest.current));
   const validDeliveryState=frame=>!deliveryTarget||(sameDeliveryTarget()&&
    (!frame?.client?.hostInstanceId||frame.client.hostInstanceId===deliveryTarget.connection)&&
    (!frame?.client?.historyScope||!latest.current?.client?.historyScope||frame.client.historyScope===latest.current.client.historyScope)&&
-   (!frame||creatingConversation||JSON.stringify(readDeliveryTarget(frame))===JSON.stringify(deliveryTarget)));
+   (!frame||creatingConversation||matchesFrame(frame)));
   const capabilityCard=isCapabilityCardAction(action,args,meta);
   const capabilityRead=capabilityCard&&action==='capability.read'?capabilityStopFence.current.beginRead(args):null;
   // Capture eligibility BEFORE passive recovery: this preflight cannot become
@@ -325,7 +334,7 @@ function App(){
    ?capabilityStopFence.current.beginStop(args.sessionId,meta.id||crypto.randomUUID()):null;
   if(stop)meta={...meta,id:stop.commandId};
   let stopPostStarted=false;
-  if(action==='conversation.send'&&args.expectedConfigurationRevision===undefined){const target=latest.current?.sessions?.find(row=>row.id===args.sessionId);args={...args,expectedConfigurationRevision:target?.nextMessageRevision||0}}
+  if(action==='conversation.send'&&!meta.preservePayload&&args.expectedConfigurationRevision===undefined){const target=latest.current?.sessions?.find(row=>row.id===args.sessionId);args={...args,expectedConfigurationRevision:target?.nextMessageRevision||0}}
   if(action==='conversation.send'&&meta.outboxScope&&meta.outboxAuthentication===undefined)meta={...meta,outboxAuthentication:deliveryAuthentication.current};
   if(action==='conversation.send'&&!meta.checkpointed)return checkpointSurfaces(args.sessionId).then(()=>dispatch(action,args,{...meta,checkpointed:true}));
   if(action==='view.update'&&Object.keys(args.patch||{}).some(key=>key==='draft'||key.startsWith('canvas')))args={sessionId:latest.current?.selectedSessionId,...args};
@@ -345,9 +354,9 @@ function App(){
   const dirtyBarrier=canvasDirtyBarrier.current;
   const execute=async()=>{
    if(meta.before)await meta.before;
-   if(deliveryTarget&&!sameDeliveryTarget())throw Error('The delivery target changed. The original submission remains saved.');
-   if(action==='conversation.send'&&meta.outboxScope&&(meta.outboxAuthentication!==deliveryAuthentication.current||!outboxMatches({scope:meta.outboxScope},deliveryScope(latest.current,latest.current?.sessions?.find(row=>row.id===args.sessionId)))))
-    throw Error('The original message belongs to a different source. Nothing was sent again.');
+   if(deliveryTarget&&!sameDeliveryTarget())throw Object.assign(Error('The delivery target changed. The original submission remains saved.'),{accepted:false,beforePost:true});
+   if(action==='conversation.send'&&meta.outboxScope&&(meta.outboxAuthentication!==deliveryAuthentication.current||!deliveryTargetMatches(latest.current,{scope:meta.outboxScope},args.sessionId)))
+    throw Object.assign(Error('The original message belongs to a different source. Nothing was sent again.'),{accepted:false,beforePost:true});
    if(action==='conversation.delivery'&&(!sameDeliveryTarget()||meta.deliveryRecovery&&JSON.stringify(meta.deliveryRecovery)!==JSON.stringify(deliveryTarget)))
     throw Error('The delivery target changed. Nothing was sent again.');
    if(capabilityRecovery)await capabilityRecovery;
@@ -605,7 +614,7 @@ function App(){
   for(const entry of outbox.entries){
    if(entry.sessionId||!entry.creation?.id||!outboxMatches(entry,deliveryScope(state,null)))continue;
    const created=state?.sessions?.find(row=>row.creationCommandId===entry.creation.id);
-   if(created)outbox.update(entry.id,{sessionId:created.id,scope:deliveryScope(state,created)});
+   if(created)outbox.update(entry.id,{sessionId:created.id,scope:deliveryScope(state,created),...(entry.expectedSource===null?{expectedSource:nativeDeliverySource(created)}:{})});
   }
  },[state?.sessions,outbox.entries]);
  // Shell snapshots are server-scoped. An optimistic browse patch can arrive
@@ -906,18 +915,19 @@ function App(){
  }
  const chatDrop=useChatFileDrop({ownerKey:JSON.stringify([session?.id??null,state?.attachmentDraftId,state?.selectedWorkspaceId]),enabled:!!state&&workSurface(state)==='chat'&&!externalConversation&&!executionUnavailable&&!historyPending&&!referencingDraft,onFiles:addFiles,onError:setError});
  async function deliver(entry){
-  if(!outboxMatches(entry,deliveryScope(latest.current,latest.current?.sessions?.find(row=>row.id===entry.sessionId))))return;
   if(deliveries.current.has(entry.id))return;
+  const previouslyUncertain=entry.status==='unknown';
   deliveries.current.add(entry.id);outbox.update(entry.id,{status:'sending',error:''});
   try{
-   if(!entry.sessionId){const current=await ensureSession(entry.creation);if(!outboxMatches(entry,deliveryScope(latest.current,null)))return;entry=outbox.update(entry.id,{sessionId:current.id,scope:deliveryScope(latest.current,current)});}
-   const result=await dispatch('conversation.send',{sessionId:entry.sessionId,text:entry.text,...(entry.document?{document:entry.document}:{}),...(entry.allowNextTurn?{allowNextTurn:true}:{}),...(entry.expectedGenerationId?{expectedGenerationId:entry.expectedGenerationId}:{}),...(Number.isInteger(entry.expectedConfigurationRevision)?{expectedConfigurationRevision:entry.expectedConfigurationRevision}:{}),...(entry.replyTo?.id?{replyId:entry.replyTo.id}:{}),attachmentIds:entry.attachmentIds,via:entry.via,preserveDraft:true},{id:entry.commandId,feedback:false,outboxScope:entry.scope});
-   if(!outboxMatches(entry,deliveryScope(latest.current,latest.current?.sessions?.find(row=>row.id===entry.sessionId)))){outbox.update(entry.id,{status:'unknown',error:'The source changed before acknowledgement. The original submission remains saved.'});return;}
+   if(!entry.sessionId){const current=await ensureSession(entry.creation);if(!outboxMatches(entry,deliveryScope(latest.current,null)))throw Object.assign(Error('The delivery target changed. The original submission remains saved.'),{accepted:false,beforePost:true});entry=outbox.update(entry.id,{sessionId:current.id,scope:deliveryScope(latest.current,current),...(entry.expectedSource===null?{expectedSource:nativeDeliverySource(current)}:{})});}
+   if(!deliveryTargetMatches(latest.current,{scope:entry.scope},entry.sessionId))throw Object.assign(Error('The original message belongs to a different source. Nothing was sent again.'),{accepted:false,beforePost:true});
+   const result=await dispatch('conversation.send',{sessionId:entry.sessionId,text:entry.text,...(entry.expectedSource?{expectedSource:entry.expectedSource}:{}),...(entry.document?{document:entry.document}:{}),...(entry.allowNextTurn?{allowNextTurn:true}:{}),...(entry.expectedGenerationId?{expectedGenerationId:entry.expectedGenerationId}:{}),...(Number.isInteger(entry.expectedConfigurationRevision)?{expectedConfigurationRevision:entry.expectedConfigurationRevision}:{}),...(entry.replyTo?.id?{replyId:entry.replyTo.id}:{}),attachmentIds:entry.attachmentIds,via:entry.via,preserveDraft:true},{id:entry.commandId,feedback:false,outboxScope:entry.scope,preservePayload:true});
+   if(!deliveryTargetMatches(latest.current,{scope:entry.scope},entry.sessionId)){outbox.update(entry.id,{status:'unknown',error:'The source changed before acknowledgement. The original submission remains saved.'});return;}
    outbox.update(entry.id,['sending','unknown'].includes(result.delivery)?{status:'unknown',error:'Delivery has not been confirmed. Checking again will not run it twice.'}:null);
   }catch(error){
-   const received=outboxMatches(entry,deliveryScope(latest.current,latest.current?.sessions?.find(row=>row.id===entry.sessionId)))&&latest.current?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.some(row=>row.inputId===entry.commandId&&['accepted','queued_for_update','held'].includes(row.delivery?.status));
+   const received=deliveryTargetMatches(latest.current,{scope:entry.scope},entry.sessionId)&&latest.current?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.some(row=>row.inputId===entry.commandId&&['accepted','queued_for_update','held'].includes(row.delivery?.status));
    if(received&&error.code!=='session_busy')outbox.update(entry.id,null);
-   else outbox.update(entry.id,{status:error.receipt?.delivery==='failed'||error.status>=400&&error.status<500&&error.status!==408?'failed':'unknown',error:actionErrorMessage(error)});
+   else outbox.update(entry.id,{status:!previouslyUncertain&&!error.unconfirmed&&(error.beforePost||error.receipt?.delivery==='failed'||error.accepted===false)?'failed':'unknown',error:actionErrorMessage(error)});
   }finally{deliveries.current.delete(entry.id)}
  }
  function discardMessage(message){
@@ -929,12 +939,12 @@ function App(){
   if(latest.current?.view?.messageEdit?.messageId===message.id)act('view.update',{patch:{messageEdit:null}});
  }
  async function retryMessage(message,text){
-  const previous=outbox.current.current.find(row=>row.id===(message.localDelivery?.id||message.id));if(!previous||previous.status==='sending'||!outboxMatches(previous,deliveryScope(latest.current,latest.current?.sessions?.find(row=>row.id===previous.sessionId))))return;
+  const previous=outbox.current.current.find(row=>row.id===(message.localDelivery?.id||message.id));if(!previous||previous.status==='sending'||!deliveryTargetMatches(latest.current,{scope:previous.scope},previous.sessionId))return;
   if(previous.document&&text!==undefined){setError('Retry this quoted message unchanged, or discard it and compose a correction.');return;}
   if(previous.status==='unknown'&&text!==undefined)return;
   const creation=previous.status==='failed'&&!previous.sessionId?{id:crypto.randomUUID(),setup:creationSetup()}:previous.creation;
   const currentSession=latest.current?.sessions?.find(row=>row.id===previous.sessionId),currentGeneration=currentSession?.collaborationGeneration;
-  const next=outbox.update(previous.id,{creation,...(previous.status==='failed'?{commandId:crypto.randomUUID(),allowNextTurn:true,expectedGenerationId:currentGeneration&&!currentGeneration.terminal?currentGeneration.id:null,expectedConfigurationRevision:currentSession?.nextMessageRevision??0,...(text!==undefined?{text}:{})}:{}),status:'sending',error:''});
+  const next=outbox.update(previous.id,{creation,...(previous.status==='failed'?{commandId:crypto.randomUUID(),...(nativeDeliverySource(currentSession)?{expectedSource:nativeDeliverySource(currentSession)}:{}),allowNextTurn:true,expectedGenerationId:currentGeneration&&!currentGeneration.terminal?currentGeneration.id:null,expectedConfigurationRevision:currentSession?.nextMessageRevision??0,...(text!==undefined?{text}:{})}:{}),error:''});
   if(text!==undefined)act('view.update',{patch:{messageEdit:null}});
   await deliver(next);
  }
@@ -952,7 +962,7 @@ function App(){
   if(detail.focused)detail.latest(false);
   chatScroll.current?.submitted(id);setError('');setQuoteNotice(notice=>quoteNoticeAfterSend(notice,session?.id));editDraft('');clearTimeout(draftTimer.current);
   const blankToken=stagedDraft.current;
-  let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,scope:deliveryScope(latest.current,session),allowNextTurn:true,...(expectedGenerationId?{expectedGenerationId}:{}),...(session?{expectedConfigurationRevision:session.nextMessageRevision??0}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:creationSetup()}}:{}),text:submittedText,...(submittedDocument?{document:submittedDocument,replyTo:{version:2,segments:submittedDocument.segments}}:state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
+  let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,scope:deliveryScope(latest.current,session),...(!externalConversation?{expectedSource:nativeDeliverySource(session)}:{}),allowNextTurn:true,...(expectedGenerationId?{expectedGenerationId}:{}),...(session?{expectedConfigurationRevision:session.nextMessageRevision??0}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:creationSetup()}}:{}),text:submittedText,...(submittedDocument?{document:submittedDocument,replyTo:{version:2,segments:submittedDocument.segments}}:state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
   try{
    const clearingDraft=saveDraft(stagedDraftPayload.current,blankToken);
    // The outbox already owns this exact submitted text. A slow/ lost draft
@@ -961,7 +971,7 @@ function App(){
    if(session)clearingDraft.catch(error=>reportError(error));
    else await clearingDraft;
    if(!outboxMatches(entry,deliveryScope(latest.current,session)))throw Error('The delivery target changed. The original submission remains saved.');
-   const current=session||await ensureSession(entry.creation);if(!outboxMatches(entry,deliveryScope(latest.current,session)))throw Error('The delivery target changed. The original submission remains saved.');entry=outbox.update(id,{sessionId:current.id,scope:deliveryScope(latest.current,current)});
+   const current=session||await ensureSession(entry.creation);if(!outboxMatches(entry,deliveryScope(latest.current,session)))throw Error('The delivery target changed. The original submission remains saved.');entry=outbox.update(id,{sessionId:current.id,scope:deliveryScope(latest.current,current),...(entry.expectedSource===null?{expectedSource:nativeDeliverySource(current)}:{})});
    await deliver(entry);
   }catch(error){outbox.update(id,{status:error.receipt?.delivery==='failed'||error.status>=400&&error.status<500&&error.status!==408?'failed':'unknown',error:actionErrorMessage(error)});}
  }

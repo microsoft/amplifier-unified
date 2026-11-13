@@ -222,6 +222,10 @@ try{
  const queuedReply=await queuedResponse;
  causal.queuedReply={status:queuedReply.status(),receipt:await queuedReply.json()};await checkpoint();
  assert.equal(causal.queuedReply.receipt.accepted,true);
+ assert.deepEqual(firstSend.args.expectedSource,queued.expectedSource);
+ assert.ok(queued.expectedSource?.nativeIdentity,'New native submission carries its captured witness');
+ assert.equal(queued.expectedSource.workspace,JSON.parse(queued.scope)[1]);
+ assert.equal(queued.expectedSource.nativeIdentity,JSON.parse(queued.scope)[2]);
  const sent=(await inspect()).capturedSends;
  assert.deepEqual(sent.map(row=>row.sessionId),[sessionId,sessionId]);
  assert.equal(firstSend.args.sessionId,sessionId);

@@ -118,6 +118,77 @@ def post_receipt(app, identity):
     return json.loads(app.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()[0])
 
 
+@pytest.mark.parametrize('field', ['workspace', 'nativeIdentity'])
+async def test_captured_source_refuses_before_input_draft_attachment_mutation(held_post, field):
+    app, runtime, _ = held_post
+    root = app._session()
+    root.update(runtimeSessionId='execution-owner', nativeIdentity='alias-not-execution')
+    await app.dispatch('attachment.add', {'sessionId': root['id'], 'name': 'private.txt', 'base64': 'aGVsbG8='})
+    app.state['view']['draft'] = 'Private continuing draft'
+    attachments = copy.deepcopy(app.clients.attachments(root))
+    before = copy.deepcopy(root)
+    source = {'workspace': root['workspace'], 'nativeIdentity': 'execution-owner'}
+    source[field] = 'contradictory-source'
+    with pytest.raises(AppError) as refused:
+        await app.dispatch('conversation.send', {'sessionId': root['id'], 'text': 'Captured input',
+            'expectedSource': source, 'attachmentIds': [attachments[0]['id']]}, command_id='source-refused')
+    assert refused.value.status == 409 and refused.value.code == 'source_changed'
+    assert root == before and runtime.sent == []
+    assert app.state['view']['draft'] == 'Private continuing draft'
+    assert app.clients.attachments(root) == attachments
+    assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('source-refused',)).fetchone() is None
+
+
+@pytest.mark.parametrize('identity_field', ['runtimeSessionId', 'nativeIdentity', 'id'])
+async def test_source_receipt_replay_precedes_changed_identity_and_fresh_admission(held_post, identity_field):
+    app, runtime, _ = held_post
+    root = app._session()
+    root.pop('runtimeSessionId', None)
+    root.pop('nativeIdentity', None)
+    if identity_field != 'id':
+        root[identity_field] = 'captured-native'
+    source = {'workspace': root['workspace'], 'nativeIdentity': root.get(identity_field)}
+    args = {'sessionId': root['id'], 'text': 'Same original payload', 'expectedSource': source}
+    runtime.expect('source-replay')
+    runtime.release['source-replay'].set()
+    receipt = await app.dispatch('conversation.send', args, command_id='source-replay')
+    assert receipt['accepted'] and len(runtime.sent) == 1
+    root['runtimeSessionId'] = 'replacement-native'
+    def must_not_readmit():
+        pytest.fail('Exact saved receipt must precede fresh source and admission checks')
+    replay = await app.dispatch('conversation.send', args, command_id='source-replay', admission_check=must_not_readmit)
+    assert replay['duplicate'] and replay['inputId'] == 'source-replay'
+    with pytest.raises(AppError, match='different contents'):
+        await app.dispatch('conversation.send', {**args, 'expectedSource': {**source, 'nativeIdentity': 'replacement-native'}},
+                           command_id='source-replay', admission_check=must_not_readmit)
+    assert len(runtime.sent) == 1 and len(root['messages']) == 1
+
+
+async def test_source_is_rechecked_after_waiting_for_existing_action_lock(held_post, monkeypatch):
+    from contextlib import asynccontextmanager
+    app, runtime, _ = held_post
+    root = app._session()
+    source = {'workspace': root['workspace'], 'nativeIdentity': root.get('runtimeSessionId') or root.get('nativeIdentity') or root['id']}
+    entered = asyncio.Event()
+    original = app.shell.action_lock
+    @asynccontextmanager
+    async def observe(*args, **kwargs):
+        entered.set()
+        async with original(*args, **kwargs):
+            yield
+    monkeypatch.setattr(app.shell, 'action_lock', observe)
+    async with app.lock:
+        task = asyncio.create_task(app.dispatch('conversation.send', {'sessionId': root['id'],
+            'text': 'Waited input', 'expectedSource': source}, command_id='source-wait'))
+        await asyncio.wait_for(entered.wait(), 5)
+        root['runtimeSessionId'] = 'changed-while-waiting'
+    with pytest.raises(AppError) as refused:
+        await asyncio.wait_for(task, 5)
+    assert refused.value.code == 'source_changed' and runtime.sent == []
+    assert root['messages'] == []
+    assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('source-wait',)).fetchone() is None
+
+
 @pytest.mark.parametrize('text', [
     '    print("indented")\n    return 1\n',
     'First line  \nSecond line  ',
