@@ -69,25 +69,21 @@ class Worker:
         self.controls = None
         self.control_invocations = {}
         self.naming = None
-        self.naming_park_task = None
         self.workspace = None
         self.home = None
         self.shared_store = None
         self.shared_handle = None
         self.activation_gate = None
         self.activation = None
-        self.parked = False
-        self.parked_history_stamp = None
-        self.parked_config_stamp = None
         self.config_inputs = ()
         self.command_lock = asyncio.Lock()
         self.memory_task = None
         self.start_config = None
-        self.remounting = False
         self.context_bindings = {}
         self.context_inputs = []
         self.root_generation_outcome = None
         self.failed_generation = None
+        self.execution_failure = None
         if __package__:
             from .response_completion import ResponseBlocks
         else:
@@ -104,8 +100,6 @@ class Worker:
             from computer_episodes import ComputerEpisodes
         self.ownership = WorkerOwnership(self, lambda data: publish(data))
         self.computer_episodes = ComputerEpisodes(lambda event: publish(event))
-        self.computer_park_cancel = None
-        self.computer_park_key = None
 
     async def ask(self, prompt, options, identity=None):
         identity = identity or str(uuid.uuid4())
@@ -355,7 +349,7 @@ class Worker:
                     or self.runtime is not assigned_runtime or self.activation_gate is not assigned_gate
                     or not assigned_gate or not assigned_gate.current_valid
                     or self.stop_revision != assigned_stop or self.runtime.closed or self.runtime.stop_requested
-                    or coordinator.cancellation.is_cancelled or self.parked or self.remounting
+                    or coordinator.cancellation.is_cancelled
                     or self.ownership.yielding):
                 return None
             return {'rootSessionId': self.session.coordinator.session_id,
@@ -611,7 +605,7 @@ class Worker:
         def valid():
             return (self.session is session and self.runtime is runtime and self.activation_gate is gate
                 and self.activation is activation and gate.current_valid and self.stop_revision == epoch
-                and not self.parked and not self.remounting and not self.ownership.yielding
+                and not self.ownership.yielding
                 and not runtime.closed and not runtime.stop_requested
                 and not coordinator.cancellation.is_cancelled
                 and (child_origin() == child if child else session.coordinator is coordinator)
@@ -796,9 +790,6 @@ class Worker:
             finally:
                 if event.get("phase") == "finished":
                     self.operation_ids.discard(identity)
-                    task = asyncio.create_task(self.park())
-                    self.tasks.add(task)
-                    task.add_done_callback(self.tasks.discard)
         coordinator.register_capability("operations.observe", observe_operation)
         async def admit_questions(question_ids):
             return await self.bridge("questions.admit", {"questionIds": question_ids})
@@ -935,7 +926,6 @@ class Worker:
                 from amplifier_web.host.session import prepare_manager
                 from amplifier_web.execution_events import ExecutionEvents
                 from amplifier_web.runtime_controls import RuntimeControls
-                from amplifier_web.shared_state import configuration_stamp
                 from amplifier_module_loop_live.runtime import Runtime
             self.home = app_home()
             self.computer_episodes.restore_stop(self.home, config.get('ownerSessionId') or config["id"])
@@ -960,9 +950,8 @@ class Worker:
             # uses the same Foundation native-history reader for navigation.
             with startup_timing.phase('worker.ownership'):
                 if self.shared_store is None:
-                    from amplifier_foundation.session.shared_state import SharedSessionStore, file_stamp
+                    from amplifier_foundation.session.shared_state import SharedSessionStore
                     self.shared_store = SharedSessionStore(workspace, config["id"])
-                    self.shared_store_stamp = file_stamp
                     self.activation_gate = ActivationGate()
                 if self.shared_handle is None:
                     self.shared_handle = await self.shared_store.acquire_async(
@@ -1045,7 +1034,7 @@ class Worker:
                 return (self.session is policy_session and self.runtime is policy_runtime
                     and self.activation_gate is policy_gate and self.stop_revision == policy_epoch
                     and policy_gate.current_valid and not policy_runtime.closed
-                    and not policy_runtime.stop_requested and not self.parked and not self.remounting
+                    and not policy_runtime.stop_requested
                     and not self.ownership.yielding and not policy_session.coordinator.cancellation.is_cancelled
                     and read_mode(self.home, self.workspace, policy_session.session_id,
                         owner_session_id=(self.start_config or {}).get('ownerSessionId')) == source.config.access_mode)
@@ -1084,7 +1073,6 @@ class Worker:
             self.session.coordinator.register_capability("web.activity.install", self.install_activity)
             self.session.coordinator.register_capability("live.activation", self.activation_gate)
             self.session.coordinator.register_capability("web.context_recovery.epoch", lambda: self.stop_revision)
-            self.session.coordinator.register_capability("live.park", self.park)
             from amplifier_web.host.naming import LiveSessionNaming
             completed=[identity for event in config.get('generations',[]) if event.get('event')=='generation.finished' for identity in event.get('input_ids',[]) if identity in {t['id'] for t in config.get('execution',{}).get('turns',[])}]
             self.naming=LiveSessionNaming(self.session.coordinator,self.home,publish,completed)
@@ -1093,12 +1081,12 @@ class Worker:
             with startup_timing.phase('worker.ownership.register'):
                 await self.ownership.register()
             self.capture_manager_failures()
-            self.execution = asyncio.create_task(self.session.execute(""))
+            token = self.bind_activation()
+            try:
+                self.execution = asyncio.create_task(self.session.execute(""))
+            finally:
+                self.activation_gate.reset(token)
             self.execution.add_done_callback(self.executed)
-            self.parked_history_stamp = self.history_stamp()
-            self.parked_config_stamp = configuration_stamp(
-                workspace, config["id"], self.home, self.shared_store_stamp,
-                extra_paths=self.config_inputs)
             report["tools"] = list(self.session.coordinator.get("tools"))
             # Keep absolute module sources and full mount plans on disk. The UI
             # gets a compact capability report, not credentials or config blobs.
@@ -1118,6 +1106,8 @@ class Worker:
             public.update(self.preparation_report)
             with startup_timing.phase('worker.ready'):
                 publish({"type": "runtime.ready", "report": public,
+                         "configurationInputs": list(self.config_inputs),
+                         "configurationStamp": self.configuration_stamp(),
                          "workerIdentity": {"pid": os.getpid(), "sessionId": self.session.session_id}})
             outcome = "completed"
         except asyncio.CancelledError:
@@ -1168,125 +1158,78 @@ class Worker:
                 if startup_timing and report_directory is not None:
                     startup_timing.save(report_directory, outcome)
 
-    def defer_park_for_naming(self, activation, *, _computer_owner=None):
-        """Keep the writer until naming settles, without holding the live inbox."""
-        if self.naming_park_task and not self.naming_park_task.done():
-            return
-        session, naming = self.session, self.naming
-        pending = naming.pending
-        async def settled():
-            try:
-                # Worker shutdown owns naming cleanup. Cancelling this waiter
-                # must not cancel or replay an already admitted naming request.
-                await asyncio.gather(asyncio.shield(pending), return_exceptions=True)
-            finally:
-                if self.naming_park_task is asyncio.current_task():
-                    self.naming_park_task = None
-            if (not self.shutdown.is_set() and self.session is session
-                    and self.naming is naming and self.activation is activation):
-                # Recheck foreground admission under command_lock. Naming may
-                # also have scheduled a newer naming task while this one ended.
-                await self.park(activation=activation, _computer_owner=_computer_owner)
-        task = self.naming_park_task = asyncio.create_task(settled())
-        self.tasks.add(task)
-        def finished(task):
-            self.tasks.discard(task)
-            if not task.cancelled() and task.exception() is not None:
-                self.executed(task)
-        task.add_done_callback(finished)
+    def idle(self):
+        """Candidate only: the native writer remains held until worker exit."""
+        if not self.session or not self.runtime or self.shared_handle is None:
+            return False
+        loop = self.session.coordinator.get("orchestrator")
+        children = self.session.coordinator.get_capability("live.children")
+        kernels = getattr(self.controls, "kernels", None)
+        return bool(not self.ownership.yielding and not self.shutdown.is_set()
+            and not self.approvals and not self.bridges and not self.operation_ids
+            and not self.operation_controls and not self.runtime.queued_inputs
+            and self.runtime.inbox.empty() and not self.runtime.generation
+            and not (self.naming and self.naming.pending and not self.naming.pending.done())
+            and not (loop and (loop.pending or loop._active_jobs()))
+            and not (children and any(row.get("status") in {"starting", "running", "working", "idle"}
+                                     for row in children.rows.values()))
+            and not (kernels and kernels.records)
+            and self.computer_episodes.receipt()["settled"])
 
-    def clear_computer_park(self):
-        self.computer_park_key = None
-        if self.computer_park_cancel:
-            self.computer_park_cancel()
-            self.computer_park_cancel = None
+    def configuration_stamp(self):
+        """External mount inputs only; never inspect or reload native history."""
+        from amplifier_web.shared_state import mounted_configuration_stamp
+        return mounted_configuration_stamp(self.workspace, self.runtime.session_id,
+            self.home, extra_paths=self.config_inputs)
 
-    def defer_park_for_computer(self, activation):
-        """Retry once on confirmed settlement, never by polling native work."""
-        if self.computer_park_cancel:
-            return
-        session, runtime = self.session, self.runtime
-        registry, gate = self.computer_episodes, self.activation_gate
-        handle, epoch = self.shared_handle, self.stop_revision
-        key = self.computer_park_key = object()
-        def current():
-            return (self.computer_park_key is key and self.session is session and self.runtime is runtime
-                and self.computer_episodes is registry and self.activation_gate is gate
-                and self.shared_handle is handle and self.activation is activation
-                and self.stop_revision == epoch and not self.shutdown.is_set()
-                and not self.remounting and not self.ownership.yielding and gate.current_valid)
-        def settled():
-            if self.computer_park_key is key:
-                self.computer_park_cancel = None  # Registry consumed this one-shot observer.
-            if not current():
-                return
-            task = asyncio.create_task(self.park(activation=activation, _computer_owner=current))
-            self.tasks.add(task)
-            def finished(task):
-                self.tasks.discard(task)
-                if not task.cancelled() and task.exception() is not None:
-                    self.executed(task)
-            task.add_done_callback(finished)
-        self.computer_park_cancel = registry.on_settled(settled)
+    def persistence_failed(self, error):
+        """A failed save stays explicit even after a successful model response."""
+        try:
+            from amplifier_web.support_diagnostics import exception_chain
+            publish({"type": "runtime.error", "event": "persistence.failed",
+                "error": "The conversation could not be saved. Work was not replayed.",
+                "errorType": type(error).__name__, "executionFailure": {
+                    "runtimeSessionId": getattr(self.runtime, "session_id", None), "stage": "execution",
+                    "exceptionChain": exception_chain(error)}})
+        except Exception:
+            pass  # A diagnostic cannot replace the actual failed save.
 
-    async def park(self, *, activation=None, _computer_owner=None):
-        """Checkpoint then relinquish only a settled manager activation."""
-
-        async with self.command_lock:
-            if _computer_owner is not None and not _computer_owner():
-                return
-            if self.ownership.yielding or self.parked or self.shared_handle is None:
-                return
-            if not self.computer_episodes.receipt()["settled"]:
-                if _computer_owner is None:
-                    self.defer_park_for_computer(activation or self.activation)
-                return
-            loop = self.session.coordinator.get("orchestrator")
-            if (self.approvals or self.bridges or self.operation_ids or self.operation_controls or self.runtime.queued_inputs
-                    or not self.runtime.inbox.empty() or self.runtime.generation
-                    or (loop and (loop.pending or loop._active_jobs()))):
-                return
-            activation = activation or self.activation
+    async def checkpoint_idle(self):
+        """Save a settled owner, then recheck work admitted during the save."""
+        if not self.idle():
+            return False
+        runtime, session, activation = self.runtime, self.session, self.activation
+        epoch = self.stop_revision
+        checkpoint = self.session.coordinator.get_capability("live.checkpoint")
+        if checkpoint is None:
+            return False
+        token = self.bind_activation()
+        try:
+            await checkpoint(self.root_generation_outcome or "completed")
+            if (not self.idle() or self.runtime is not runtime or self.session is not session
+                    or self.activation is not activation or self.stop_revision != epoch):
+                return False
             self.activation_gate.check(activation)
-            if self.naming and self.naming.pending and not self.naming.pending.done():
-                self.defer_park_for_naming(activation, _computer_owner=_computer_owner)
-                return
-            token = self.activation_gate.bind(activation)
-            try:
-                checkpoint = self.session.coordinator.get_capability("live.checkpoint")
-                if checkpoint:
-                    await checkpoint(self.root_generation_outcome or "completed")
-                    if _computer_owner is not None and not _computer_owner():
-                        return
-                    from amplifier_web.handoff_boundary import checkpoint_configuration
-                    checkpoint_configuration(self)
-                if _computer_owner is not None and not _computer_owner():
-                    return
-                self.parked_history_stamp = self.history_stamp()
-                from amplifier_web.shared_state import configuration_stamp
-                self.parked_config_stamp = configuration_stamp(
-                    self.workspace, self.runtime.session_id, self.home, self.shared_store_stamp,
-                    extra_paths=self.config_inputs)
-                self.activation_gate.release(activation)
-                await asyncio.to_thread(self.shared_handle.release)
-                self.shared_handle = None
-                self.parked = True
-                self.clear_computer_park()
-            finally:
-                self.activation_gate.reset(token)
-        publish({"type": "runtime.parked", "session_id": self.runtime.session_id})
+            from amplifier_web.handoff_boundary import checkpoint_configuration
+            checkpoint_configuration(self)
+            return True
+        except Exception as error:
+            self.persistence_failed(error)
+            raise
+        finally:
+            self.activation_gate.reset(token)
 
     async def checkpoint_terminal_outcome(self):
         """Persist only an observed failed/detached root turn before teardown."""
         outcome = self.root_generation_outcome
         if (self.terminal_checkpointed or outcome not in {"error", "interrupted"}
-                or self.ownership.yielding or self.parked
+                or self.ownership.yielding
                 or self.shared_handle is None or self.session is None):
             return
         async with self.command_lock:
             outcome = self.root_generation_outcome
             if (self.terminal_checkpointed or outcome not in {"error", "interrupted"}
-                    or self.ownership.yielding or self.parked
+                    or self.ownership.yielding
                     or self.shared_handle is None or self.session is None):
                 return
             checkpoint = self.session.coordinator.get_capability("live.checkpoint")
@@ -1301,94 +1244,11 @@ class Worker:
             try:
                 await checkpoint(outcome)
                 self.terminal_checkpointed = True
+            except Exception as error:
+                self.persistence_failed(error)
+                raise
             finally:
                 self.activation_gate.reset(token)
-
-    def history_stamp(self):
-        """Cheap native invalidation; never parse events or consult checkpoints."""
-        from amplifier_web.session_files import sessions_dir
-        directory = sessions_dir(self.workspace) / self.runtime.session_id
-        return tuple(self.shared_store_stamp(directory / name) for name in
-                     ("transcript.jsonl", "transcript.jsonl.backup", "metadata.json", "metadata.json.backup"))
-
-    async def acquire_for_mutation(self):
-        """Acquire after a parked loop wakes, before it can accept an input."""
-
-        if not self.parked:
-            return
-        handle = await self.shared_store.acquire_async(
-            app="amplifier-unified", pid=os.getpid())
-        try:
-            history_stamp = self.history_stamp()
-            from amplifier_web.shared_state import configuration_stamp
-            config_stamp = configuration_stamp(
-                self.workspace, self.runtime.session_id, self.home, self.shared_store_stamp,
-                extra_paths=self.config_inputs)
-        except BaseException:
-            await asyncio.to_thread(handle.release)
-            raise
-        if (self.parked_history_stamp and any(self.parked_history_stamp[:2])
-                and not any(history_stamp[:2])):
-            await asyncio.to_thread(handle.release)
-            raise RuntimeError(
-                "The native session transcript and its backup disappeared while this runtime was "
-                "parked. Its previous context will not be replaced with legacy history.")
-        if history_stamp != self.parked_history_stamp or config_stamp != self.parked_config_stamp:
-            self.shared_handle = handle
-            self.parked = False
-            await self.remount()
-            return
-        self.shared_handle = handle
-        self.activation = self.activation_gate.activate()
-        self.parked = False
-        await self.ownership.register()
-        publish({"type": "runtime.reactivated", "session_id": self.runtime.session_id,
-                 "reused": True})
-
-    async def remount(self):
-        """Replace stale mounted state after lock+stamp validation."""
-
-        self.remounting = True
-        self.clear_computer_park()
-        self.computer_episodes.fence()
-        try:
-            if self.execution and not self.execution.done():
-                self.execution.cancel()
-                from amplifier_web.computer_episodes import wait_settlement, SettlementPending
-                await wait_settlement({self.execution})
-                if not self.execution.done():
-                    raise SettlementPending(self.computer_episodes.receipt())
-            receipt = await self.computer_episodes.close()
-            if not receipt["settled"]:
-                # Do not remount/clean the native backend over unresolved
-                # workers. The retained registry remains passively recoverable.
-                from amplifier_web.computer_episodes import SettlementPending
-                raise SettlementPending(receipt)
-            publish({"type": "computer.settlement", **receipt})
-            if self.controls:
-                await self.controls.close()
-            if self.session:
-                await self.session.cleanup()
-            self.session = self.controls = self.naming = self.execution = None
-            # All old sponsors are terminated/removed and custody is confirmed;
-            # the replacement mount is a fresh trusted registry, not a revival.
-            from amplifier_web.computer_episodes import ComputerEpisodes
-            self.computer_episodes = ComputerEpisodes(lambda event: publish(event))
-            try:
-                await self.start(self.start_config, raise_errors=True)
-            except Exception as exc:
-                from amplifier_web.runtime import RuntimeStartupError
-                failure = RuntimeStartupError('The conversation worker could not reload before accepting the message.')
-                from amplifier_web.host.model_selection import ProviderSelectionError
-                if isinstance(exc, ProviderSelectionError):
-                    from amplifier_web.session_health import failure_details
-                    detail = failure_details(exc)
-                    failure.args = (f"ProviderSelectionError: {detail['summary']} {detail['guidance']}",)
-                failure.diagnostic_path = getattr(exc, 'diagnostic_path', None)
-                failure.failures = getattr(exc, 'failures', [])
-                raise failure from exc
-        finally:
-            self.remounting = False
 
     def tool_invocation(self, controls, coordinator, name, tool, identity):
         """Bind an explicit control to its acquired owner, never a model actor."""
@@ -1407,7 +1267,7 @@ class Worker:
                 and asyncio.current_task() is task and self.activation_gate is gate
                 and gate is not None and gate.current_valid
                 and handle is not None and self.shared_handle is handle and self.activation is activation
-                and not self.parked and not self.ownership.yielding and not self.remounting
+                and not self.ownership.yielding
                 and self.stop_revision == epoch and runtime.generation is generation
                 and (generation or {}).get('input_ids') == inputs
                 and not runtime.closed and not runtime.stop_requested
@@ -1433,8 +1293,8 @@ class Worker:
     def bind_activation(self):
         """Bind the current capability to a command task, never to a global writer."""
 
-        if self.parked or self.shared_handle is None:
-            raise RuntimeError("The session is parked and has no active shared writer.")
+        if self.shared_handle is None or self.shutdown.is_set():
+            raise RuntimeError("The session has no active shared writer.")
         return self.activation_gate.bind(self.activation)
 
     def capture_manager_failures(self):
@@ -1460,6 +1320,14 @@ class Worker:
                     from amplifier_web.support_diagnostics import exception_chain, terminal_exception_capture
                     terminal = self.failed_generation or {}
                     generation = getattr(runtime, 'generation', None)
+                    if self.runtime is runtime and self.stop_revision == epoch and not runtime.stop_requested:
+                        active = generation or (terminal.get('_generation')
+                            if terminal.get('_runtime') is runtime and terminal.get('_stopRevision') == epoch else {}) or {}
+                        self.execution_failure = (runtime, epoch, {
+                            'runtimeSessionId': getattr(runtime, 'session_id', None),
+                            **({'generationId': active['id'], 'inputIds': list(active.get('input_ids', []))}
+                               if active.get('id') else {}),
+                            'stage': 'execution', 'exceptionChain': exception_chain(error)})
                     # Cleanup can replace the escaping wrapper. Only inspect the
                     # bounded actual exception chain, never flattened messages.
                     primary, secondary, seen = error, [], set()
@@ -1477,8 +1345,6 @@ class Worker:
                             and all(primary.failure.get(key) == terminal.get(key) for key in
                                     ('error_type', 'error_category', 'error_stage'))
                             and terminal is not previous_failure
-                            and terminal.get('error_category') == 'unknown'
-                            and terminal.get('error_stage') == 'manager_turn'
                             and primary.__cause__ is not None and self.stop_revision == epoch
                             and self.runtime is runtime and not runtime.stop_requested
                             and terminal.get('_runtime') is runtime and terminal.get('_stopRevision') == epoch
@@ -1487,7 +1353,7 @@ class Worker:
                             # The loop clears its generation after the terminal
                             # observation. A replacement is never this failure.
                             and (generation is None or generation is terminal.get('_generation'))
-                            and not self.remounting and not self.ownership.yielding):
+                            and not self.ownership.yielding):
                         capture = terminal_exception_capture({
                             'generationId': terminal.get('generation_id'), 'inputIds': terminal.get('input_ids'),
                             'errorType': terminal.get('error_type'), 'exceptionChain': exception_chain(primary),
@@ -1510,43 +1376,42 @@ class Worker:
             return
 
     def executed(self, task):
-        if self.remounting or self.ownership.yielding:
+        if self.ownership.yielding:
             return
         if not task.cancelled():
             error = task.exception()
             if error:
                 from amplifier_web.worker_diagnostics import command_failure_facts
+                original = self.execution_failure
+                capture = (original[2] if original and original[:2] == (self.runtime, self.stop_revision)
+                           else None)
                 publish({"type": "runtime.error", "error": f"{type(error).__name__}: {error}. Work was not replayed.",
                          "errorType": type(error).__name__, "failureSource": "execution",
-                         "failureFacts": command_failure_facts(error)})
+                         "failureFacts": command_failure_facts(error),
+                         **({'executionFailure': capture,
+                             **({'generationId': capture['generationId']} if capture.get('generationId') else {})}
+                            if capture else {})})
         self.shutdown.set()
 
     async def command(self, data):
-        """Serialize admission with parking and bind a per-work write token."""
+        """Serialize admission with retirement and bind a per-work write token."""
 
         op = data.get("op")
-        if op in {"send", "retry", "resume", "control", "worker.message", "worker.steer", "worker.stop"}:
-            # Foreground intent supersedes the quiet idle boundary even if it
-            # completes in the same activation while the retry is lock-queued.
-            self.clear_computer_park()
         if op in {"approval", "coordination.approval"}:
             # A control can await a human decision while owning command_lock.
             # Both the independent question and its UI answer must bypass it;
-            # neither reacquires a writer, remounts, or binds an activation.
+            # neither starts a worker nor binds an activation.
             await self._command_serial(data)
             return
         if op == "stop":
-            self.clear_computer_park()
             self.stop_revision += 1
             self.computer_episodes.fence()
         if op == "computer.stop":
-            self.clear_computer_park()
             # Independent input path: do not await a selector, native worker,
             # serialized control or the next model/tool hook.
             self.computer_episodes.fence(halt=True)
             return
         if op == "computer.resume":
-            self.clear_computer_park()
             self.computer_episodes.resume()
             return
         if op == "worker.stop" and self.session:
@@ -1568,58 +1433,37 @@ class Worker:
             # its source attempt is recorded interrupted and is not replayed.
             if self.memory_task and not self.memory_task.done():
                 self.memory_task.cancel()
-        if op == "park":
-            await self.park()
-            publish({"op": "reply", "id": data.get("id"), "result": {"parked": self.parked}})
-            return
         if op == "retire":
-            async with self.command_lock:
-                loop = self.session.coordinator.get("orchestrator") if self.session else None
-                settled = bool(self.parked and not self.ownership.yielding
-                    and not self.approvals and not self.bridges and not self.operation_ids and not self.operation_controls and not self.remounting
-                    and not self.runtime.queued_inputs and self.runtime.inbox.empty()
-                    and not self.runtime.generation
-                    and not (self.naming and self.naming.pending and not self.naming.pending.done())
-                    and not (loop and (loop.pending or loop._active_jobs())))
-                publish({"op": "reply", "id": data.get("id"), "result": {"retired": settled}})
-                if settled:
-                    self.shutdown.set()
+            try:
+                async with self.command_lock:
+                    settled = await self.checkpoint_idle()
+                    # No await between final recheck and closing admission.
+                    if settled:
+                        self.shutdown.set()
+                    publish({"op": "reply", "id": data.get("id"), "result": {"retired": settled}})
+            except Exception as error:
+                from amplifier_web.worker_diagnostics import command_failure_facts
+                publish({"op": "reply", "id": data.get("id"), "error": "Worker retirement could not save the conversation.",
+                         "failureFacts": command_failure_facts(error)})
             return
         if op not in {"send", "retry", "resume", "control", "worker.steer", "worker.stop", "worker.message", "approval"}:
             await self._command_serial(data)
             return
         try:
             async with self.command_lock:
-                if self.ownership.yielding:
+                if self.ownership.yielding or self.shutdown.is_set():
                     from amplifier_foundation.session import SessionBusyError
                     raise SessionBusyError(self.shared_handle.owner if self.shared_handle else None)
                 # A memory call can finish admission while a foreground command
                 # waits for this lock, so also cancel after acquiring it.
                 if op in {'send', 'retry', 'resume', 'worker.message', 'worker.steer', 'worker.stop'} and self.memory_task and not self.memory_task.done():
                     self.memory_task.cancel()
-                if steering_control and (self.parked or self.shared_handle is None):
-                    # A parked owner has no live generation to steer. Do not
-                    # reacquire/remount it just to discover that stale anchor.
+                if steering_control and self.shared_handle is None:
                     publish({"op": "reply", "id": data.get("id"), "result": {
                         "accepted": False, "supported": False, "effect": "none",
                         "reason": "No active native owner is available for anchored steering."}})
                     return
                 placement_control = op == 'control' and data.get('operation') == 'configuration.patchPlacement.bind'
-                if placement_control:
-                    # A parked worker may remount while acquiring its writer.
-                    # Preserve controls during that preparation too, not only
-                    # after acquisition or the explicit replacement startup.
-                    if self.parked:
-                        if not isinstance(self.start_config, dict):
-                            raise ValueError('The parked placement owner has no verified startup binding.')
-                        self.start_config['_preserveConfiguration'] = True
-                    if self.controls:
-                        self.controls.preserve_configuration = True
-                try:
-                    await self.acquire_for_mutation()
-                finally:
-                    if isinstance(self.start_config, dict):
-                        self.start_config.pop('_preserveConfiguration', None)
                 if self.controls:
                     # Placement controls and their settled checkpoint preserve
                     # unrelated saved controls. The next ordinary mutation
@@ -1644,10 +1488,6 @@ class Worker:
                     self.activation_gate.reset(token)
                     if memory_control and self.memory_task is asyncio.current_task():
                         self.memory_task = None
-            if op in {"control", "retry"}:
-                # A control-only action or duplicate retry does not wake the inbox.
-                # It must therefore schedule its own settled release.
-                await self.park(activation=self.activation)
         except asyncio.CancelledError:
             if not memory_control:
                 raise
@@ -1756,7 +1596,7 @@ class Worker:
     @contextmanager
     def write_policy_boundary(self):
         """Bind an existing writer for policy-only work; never acquire one."""
-        if (self.parked or self.remounting or self.shared_handle is None
+        if (self.shared_handle is None or self.shutdown.is_set()
                 or self.ownership.yielding or self.activation_gate is None):
             raise ValueError('The originating runtime is not active.')
         token = self.activation_gate.bind(self.activation)
@@ -1831,7 +1671,7 @@ class Worker:
                             if self.controls else {'status': 'unobserved', 'workingDirectory': None})
                     except Exception:
                         # Passive and secret-free: no arbitrary module exception
-                        # text, writer acquisition, checkpoint or remount.
+                        # text, writer acquisition, checkpoint or replacement.
                         result = {'status': 'unknown', 'workingDirectory': None}
                 elif data.get('resourceAccess') is True:
                     from amplifier_web.resource_access import observe
@@ -1861,7 +1701,7 @@ class Worker:
                 if 'patchPlacement' not in data and data.get('provenance') is not True and data.get('resourceAccess') is not True and data.get('integrationValidation') is not True:
                     result = await discover('worker', **({'verify': True} if data.get('verifyImports') is True else {}))
             elif op == 'file_access.refresh':
-                # No input, activation, unpark, remount or shared tool mutation.
+                # No input, new activation, replacement or shared tool mutation.
                 # The synchronous owner check and snapshot publication cannot
                 # interleave with Stop or a concurrently preparing child.
                 policy = self.session.coordinator.get_capability('web.write_policy') if self.session else None
@@ -2061,7 +1901,6 @@ class Worker:
         try:
             await self.shutdown.wait()
         finally:
-            self.clear_computer_park()
             self.computer_episodes.fence()
             for task in [read, self.start_task, self.execution, *self.tasks]:
                 if task and not task.done():
@@ -2091,6 +1930,8 @@ class Worker:
                     await self.session.cleanup()
                 if self.shared_handle is not None:
                     try:
+                        if self.activation_gate is not None and self.activation_gate.current_valid:
+                            self.activation_gate.release(self.activation)
                         await asyncio.to_thread(self.shared_handle.release)
                     finally:
                         self.shared_handle = None

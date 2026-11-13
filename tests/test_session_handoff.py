@@ -138,7 +138,7 @@ async def test_cli_unified_cli_preserves_native_history_and_fences_old_worker(
         assert [row["content"] for row in history] == ["from CLI", "from Unified"]
         await asyncio.sleep(0)
         assert any(e.get("status") == "yielded" for e in events)
-        assert not worker.shutdown.is_set()
+        assert worker.shutdown.is_set()
         with pytest.raises(RuntimeError, match="released or superseded"):
             worker.activation_gate.check(previous)
         await worker.command(
@@ -192,7 +192,7 @@ async def test_yielded_clients_keep_drafts_and_only_explicit_takeover_restarts(
         await app.close()
 
 
-async def test_takeover_checks_parked_worker_ownership_even_when_start_says_ready(
+async def test_takeover_checks_live_worker_ownership_even_when_start_says_ready(
     tmp_path, monkeypatch
 ):
     from amplifier_foundation.session import ReleaseResult
@@ -214,6 +214,28 @@ async def test_takeover_checks_parked_worker_ownership_even_when_start_says_read
         ("interop", "resume"),
     ]
     assert release.await_count == 1
+
+
+async def test_takeover_refuses_unsettled_computer_custody_before_writer_release(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMPLIFIER_SESSION_STATE_HOME", str(tmp_path / "locks"))
+    worker, events = await make_worker(tmp_path, monkeypatch, AsyncMock())
+    cleanup = asyncio.Event()
+    worker.computer_episodes.retain_cleanup(object(), "child", cleanup.wait)
+    try:
+        result = await request_release(worker.shared_store,
+            expected_owner=worker.shared_handle.owner,
+            request_id="desktop-takeover", requester_app="Other host")
+        assert result.status == "cannot_release"
+        assert worker.shared_handle.active and not worker.shutdown.is_set()
+        worker.session.cleanup.assert_not_awaited()
+        assert not any(event.get("status") == "yielded" for event in events)
+        with pytest.raises(SessionBusyError):
+            worker.shared_store.acquire(app="contender")
+    finally:
+        cleanup.set()
+        await worker.computer_episodes.join()
+        await worker.ownership.registration.close()
+        worker.shared_handle.release()
 
 
 async def test_takeover_does_not_retarget_new_owner(tmp_path, monkeypatch):

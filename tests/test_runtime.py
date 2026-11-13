@@ -323,9 +323,8 @@ class WorkerActivityTests(unittest.TestCase):
 
 
 @pytest.mark.asyncio
-async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unchanged(tmp_path):
+async def test_idle_checkpoint_retains_writer_and_rejects_competing_acquisition(tmp_path):
     shared = pytest.importorskip("amplifier_foundation.session.shared_state")
-    from amplifier_web.shared_state import configuration_stamp
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -336,7 +335,6 @@ async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unc
     worker.runtime = SimpleNamespace(session_id="warm-session", queued_inputs=0,
                                      inbox=asyncio.Queue(), generation=None)
     worker.shared_store = shared.SharedSessionStore(workspace, "warm-session", root=tmp_path / "shared")
-    worker.shared_store_stamp = shared.file_stamp
     worker.shared_handle = worker.shared_store.acquire(app="amplifier-unified", fixture=True)
     worker.activation_gate = ActivationGate()
     first = worker.activation_gate.activate()
@@ -345,10 +343,6 @@ async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unc
     native = sessions_dir(workspace) / "warm-session" / "transcript.jsonl"
     native.parent.mkdir(parents=True)
     native.write_text('{"role":"user","content":"before checkpoint"}\n')
-    worker.config_inputs = (str(native),)
-    worker.parked_history_stamp = worker.history_stamp()
-    worker.parked_config_stamp = configuration_stamp(
-        workspace, "warm-session", worker.home, shared.file_stamp, extra_paths=worker.config_inputs)
     checkpoint_calls = []
     async def checkpoint(status):
         checkpoint_calls.append(status)
@@ -360,16 +354,14 @@ async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unc
             if name == "live.checkpoint" else None)))
 
     with patch("amplifier_web.runtime_worker.publish"):
-        await worker.park(activation=first)
-        assert worker.parked
-        assert not worker.shared_handle
-        await worker.acquire_for_mutation()
+        assert await worker.checkpoint_idle()
+        with pytest.raises(shared.SessionBusyError):
+            worker.shared_store.acquire(app="contender")
 
     assert checkpoint_calls == ["completed"]
-    assert not worker.parked
     assert worker.shared_handle.active
-    with pytest.raises(RuntimeError, match="released or superseded"):
-        worker.activation_gate.check(first)
+    worker.activation_gate.check(first)
+    assert not hasattr(worker, 'park') and not hasattr(worker, 'acquire_for_mutation')
     worker.shared_handle.release()
 
 
@@ -378,7 +370,7 @@ async def test_worker_parking_releases_the_real_shared_handle_and_reacquires_unc
     ('generation.failed', 'error'),
     ('generation.detached', 'interrupted'),
 ])
-async def test_worker_parking_checkpoints_observed_root_generation_outcome(tmp_path, event, status):
+async def test_worker_retirement_checkpoints_observed_root_generation_outcome(tmp_path, event, status):
     shared = pytest.importorskip("amplifier_foundation.session.shared_state")
     worker = Worker()
     worker.workspace, worker.home = tmp_path / "workspace", tmp_path / "home"
@@ -387,13 +379,9 @@ async def test_worker_parking_checkpoints_observed_root_generation_outcome(tmp_p
     worker.runtime = SimpleNamespace(session_id="outcome-session", queued_inputs=0,
                                      inbox=asyncio.Queue(), generation=None)
     worker.shared_store = shared.SharedSessionStore(worker.workspace, "outcome-session", root=tmp_path / "shared")
-    worker.shared_store_stamp = shared.file_stamp
     worker.shared_handle = worker.shared_store.acquire(app="amplifier-unified", fixture=True)
     worker.activation_gate = ActivationGate()
     worker.activation = worker.activation_gate.activate()
-    worker.config_inputs = ()
-    worker.parked_history_stamp = worker.history_stamp()
-    worker.parked_config_stamp = None
     checkpoint_calls = []
     async def checkpoint(outcome):
         checkpoint_calls.append(outcome)
@@ -403,7 +391,7 @@ async def test_worker_parking_checkpoints_observed_root_generation_outcome(tmp_p
     try:
         with patch("amplifier_web.runtime_worker.publish"):
             worker.observe({'type': event})
-            await worker.park(activation=worker.activation)
+            assert await worker.checkpoint_idle()
         assert checkpoint_calls == [status]
     finally:
         if worker.shared_handle:
@@ -487,7 +475,7 @@ async def test_terminal_cleanup_does_not_checkpoint_completed_or_yielding_outcom
 
 
 @pytest.mark.asyncio
-async def test_parked_worker_rechecks_native_cli_change_before_admitting_input(tmp_path):
+async def test_late_observation_during_save_prevents_retirement_without_releasing_writer(tmp_path):
     shared = pytest.importorskip("amplifier_foundation.session.shared_state")
 
     workspace = tmp_path / "workspace"
@@ -498,7 +486,6 @@ async def test_parked_worker_rechecks_native_cli_change_before_admitting_input(t
     worker.runtime = SimpleNamespace(session_id="warm-session", queued_inputs=0,
                                      inbox=asyncio.Queue(), generation=None)
     worker.shared_store = shared.SharedSessionStore(workspace, "warm-session", root=tmp_path / "shared")
-    worker.shared_store_stamp = shared.file_stamp
     worker.shared_handle = worker.shared_store.acquire(app="amplifier-unified", fixture=True)
     worker.activation_gate = ActivationGate()
     worker.activation = worker.activation_gate.activate()
@@ -508,28 +495,19 @@ async def test_parked_worker_rechecks_native_cli_change_before_admitting_input(t
     native = sessions_dir(workspace) / "warm-session" / "transcript.jsonl"
     native.parent.mkdir(parents=True)
     native.write_text(json.dumps(messages[0]) + "\n")
-    worker.config_inputs = (str(native),)
-    checkpoint_calls, remount_calls = [], []
+    checkpoint_calls = []
     async def checkpoint(status):
         checkpoint_calls.append(status)
+        worker.runtime.inbox.put_nowait("late child status")
     worker.session = SimpleNamespace(coordinator=SimpleNamespace(
         get=lambda name: None,
         get_capability=lambda name: checkpoint if name == "live.checkpoint" else None))
-    async def remount():
-        from amplifier_foundation.session.history import SessionHistoryStore
-        remount_calls.append(SessionHistoryStore(native.parent).load_messages())
-    worker.remount = remount
     try:
         with patch("amplifier_web.runtime_worker.publish"):
-            await worker.park(activation=worker.activation)
-            native.write_text(native.read_text() + '{"role":"assistant","content":"new CLI turn"}\n')
-            after_cli = native.read_bytes()
-            await worker.acquire_for_mutation()
-        assert len(remount_calls) == 1
-        assert remount_calls[0] == messages + [{"role": "assistant", "content": "new CLI turn"}]
+            assert not await worker.checkpoint_idle()
         assert checkpoint_calls == ["completed"]
-        assert worker.runtime.inbox.empty()
-        assert native.read_bytes() == after_cli
+        assert worker.runtime.inbox.get_nowait() == "late child status"
+        assert worker.shared_handle.active and not worker.shutdown.is_set()
         assert worker.shared_handle.read()["messages"] == messages
     finally:
         if worker.shared_handle:
@@ -791,49 +769,34 @@ asyncio.run(Probe().run())
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('change', ['metadata', 'backup', 'removed', 'unreadable'])
-async def test_parked_native_history_invalidation_keeps_authority_and_releases_on_refusal(tmp_path, change):
+@pytest.mark.parametrize('change', ['metadata', 'backup', 'removed'])
+async def test_live_owner_never_hot_reloads_native_history(tmp_path, change):
     from amplifier_foundation.session.shared_state import SharedSessionStore, file_stamp
     from amplifier_web.session_files import sessions_dir
-    from amplifier_web.shared_state import configuration_stamp
     worker = Worker()
     worker.workspace = tmp_path
     worker.home = tmp_path / 'home'
     worker.home.mkdir()
     worker.runtime = SimpleNamespace(session_id='fixture')
     worker.shared_store = SharedSessionStore(tmp_path, 'fixture', root=tmp_path / 'locks')
-    worker.shared_store_stamp = file_stamp
     worker.activation_gate = ActivationGate()
+    worker.activation = worker.activation_gate.activate()
+    worker.shared_handle = worker.shared_store.acquire(app='owner')
     native = sessions_dir(tmp_path) / 'fixture'
     native.mkdir(parents=True)
     (native / 'transcript.jsonl').write_text('{"role":"user","content":"fixture"}\n')
     (native / 'metadata.json').write_text('{"bundle":"anchors"}')
-    worker.parked_history_stamp = worker.history_stamp()
-    worker.parked_config_stamp = configuration_stamp(tmp_path, 'fixture', worker.home, file_stamp)
-    worker.parked = True
-    remounted = []
-    async def remount():
-        remounted.append(True)
-    worker.remount = remount
     if change == 'metadata':
         (native / 'metadata.json').write_text('{"bundle":"new-native-bundle"}')
     elif change == 'backup':
         (native / 'transcript.jsonl').rename(native / 'transcript.jsonl.backup')
     elif change == 'removed':
         (native / 'transcript.jsonl').unlink()
-    else:
-        worker.history_stamp = Mock(side_effect=OSError('stat unavailable'))
     try:
-        if change in {'removed', 'unreadable'}:
-            with pytest.raises((RuntimeError, OSError)):
-                await worker.acquire_for_mutation()
-            assert not remounted
-            other = worker.shared_store.acquire(app='other')
-            other.release()
-        else:
-            await worker.acquire_for_mutation()
-            assert remounted == [True] and worker.shared_handle.active
-            assert worker.shared_store.read() is None
+        from amplifier_foundation.session import SessionBusyError
+        with pytest.raises(SessionBusyError):
+            worker.shared_store.acquire(app='other')
+        assert worker.shared_handle.active and not hasattr(worker, 'remount')
     finally:
         if worker.shared_handle:
             worker.shared_handle.release()
@@ -953,10 +916,8 @@ async def test_naming_does_not_hold_command_lock_or_require_idle(monkeypatch):
     from unittest.mock import AsyncMock
     worker = Worker()
     started, release, sent = asyncio.Event(), asyncio.Event(), asyncio.Event()
-    worker.acquire_for_mutation = AsyncMock()
     worker.bind_activation = lambda: None
     worker.activation_gate = SimpleNamespace(reset=lambda token: None)
-    worker.park = AsyncMock()
     worker.session = object()
     worker.execution = object()
     worker.controls = SimpleNamespace(require_idle=Mock(side_effect=AssertionError('Naming must run during work')))

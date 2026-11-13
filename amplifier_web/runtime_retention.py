@@ -53,25 +53,26 @@ class WorkerRetention:
 
     @staticmethod
     def eligible(row):
-        return (row.get("parked") and row["process"].returncode is None
+        return (row.get("idle") and row["process"].returncode is None
                 and not row.get("closing") and not row.get("yielding")
                 and not row.get("inflight") and not row.get("bridge_tasks"))
 
     async def sweep(self):
         async with self.sweep_lock:
             candidates = sorted(((sid, row) for sid, row in self.manager.workers.items()
-                                 if self.eligible(row)), key=lambda pair: pair[1]["parked_at"])
+                                 if self.eligible(row)), key=lambda pair: pair[1]["idle_at"])
             excess = max(0, len(candidates) - self.settings["max_warm_workers"])
             ttl = self.settings["idle_timeout_hours"] * 3600
             now = self.clock()
             for index, (sid, row) in enumerate(candidates):
-                if self.protected(sid):
+                if self.protected(sid) or sid in self.manager._ephemeral_mcp:
                     continue
-                if not row.get("update_pending") and index >= excess and now - row["parked_at"] < ttl:
+                if not row.get("update_pending") and index >= excess and now - row["idle_at"] < ttl:
                     continue
                 # Serialize the final idle check with command admission/start.
                 async with self.manager._locks.setdefault(sid, asyncio.Lock()):
-                    if self.manager.workers.get(sid) is not row or not self.eligible(row) or self.protected(sid):
+                    if (self.manager.workers.get(sid) is not row or not self.eligible(row)
+                            or self.protected(sid) or sid in self.manager._ephemeral_mcp):
                         continue
                     task = self.schedule(sid, row)
                 try:
@@ -102,7 +103,7 @@ class WorkerRetention:
             async with self.manager._locks.setdefault(sid, asyncio.Lock()):
                 if not self.manager._closed and self.manager.workers.get(sid) is row and not row.get('stop_task'):
                     row['closing'] = False
-                    row['parked'] = False
+                    row['idle'] = False
                     if row.get('stop_reason') == 'retention':
                         row.pop('stop_reason')
                     if row['process'].returncode is not None:
@@ -114,7 +115,6 @@ class WorkerRetention:
                 return
             if not result.get('retired'):
                 row['closing'] = False
-                row['parked'] = False
                 if row.get('stop_reason') == 'retention':
                     row.pop('stop_reason')
                 return

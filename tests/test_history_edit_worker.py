@@ -7,7 +7,7 @@ import subprocess
 import pytest
 
 
-def test_current_edit_parks_and_resumes_without_replaying(tmp_path):
+def test_current_edit_keeps_writer_and_resumes_without_replaying(tmp_path):
     if os.environ.get('RUN_HISTORY_EDIT_WORKER') != '1':
         pytest.skip('set RUN_HISTORY_EDIT_WORKER=1 for the isolated runtime proof')
     root=Path(__file__).resolve().parents[1]

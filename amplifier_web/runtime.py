@@ -13,6 +13,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import sys
@@ -451,7 +452,7 @@ class RuntimeManager:
     def promote_generation(self, generation, *, protected=None):
         """A host promotion changes future starts, never mounted code in place.
 
-        Old workers remain leased until their own park/retire handshake proves
+        Old workers remain leased until their own retire handshake proves
         there are no active jobs, approvals, queued inputs or uncertain effects.
         This boundary is usable by future host/agent protocol adapters as well.
         """
@@ -508,9 +509,34 @@ class RuntimeManager:
 
     async def start(self, session: dict, emit: Emitter, *, preserve_emit=False, guard=None, preserve_configuration=False):
         sid = session["id"]
-        async with self._admission(sid):
-            await self._start_locked(session, emit, preserve_emit=preserve_emit, guard=guard,
-                **({'preserve_configuration': True} if preserve_configuration else {}))
+        while True:
+            async with self._admission(sid):
+                if guard is not None: guard()
+                current = self.workers.get(sid)
+                if (current and current["process"].returncode is None
+                        and current["ready"].done() and not current["ready"].cancelled()
+                        and not current["ready"].exception()):
+                    from .shared_state import mounted_configuration_stamp
+                    baseline = current.get('configurationStamp')
+                    if baseline is not None and mounted_configuration_stamp(
+                            current['start_session']['workspace'], current['runtime_id'],
+                            self.home or os.environ.get("AMPLIFIER_WEB_HOME", Path.home() / ".amplifier-unified"),
+                            extra_paths=current.get('configurationInputs', ())) != baseline:
+                        if (not self.retention.eligible(current) or self.retention.protected(sid)
+                                or sid in self._ephemeral_mcp):
+                            raise RuntimeError("Saved configuration changed. Finish active work and held resources before replacing its worker; no input was sent.")
+                        pending = self.retention.schedule(sid, current)
+                    else:
+                        pending = None
+                else:
+                    pending = None
+                if pending is None:
+                    await self._start_locked(session, emit, preserve_emit=preserve_emit, guard=guard,
+                        **({'preserve_configuration': True} if preserve_configuration else {}))
+                    return
+            await asyncio.wait_for(asyncio.shield(pending), self.retention.reply_timeout)
+            if self.workers.get(sid) is current:
+                raise RuntimeError("Saved configuration changed, but the worker still owns pending work or resources. No input was sent.")
 
     @asynccontextmanager
     async def _admission(self, sid):
@@ -530,7 +556,8 @@ class RuntimeManager:
                     pending = stopping
                 elif retirement is not None and not retirement.done():
                     pending = retirement
-                elif row and row.get('update_pending') and self.retention.eligible(row) and not self.retention.protected(sid):
+                elif (row and row.get('update_pending') and self.retention.eligible(row)
+                        and not self.retention.protected(sid) and sid not in self._ephemeral_mcp):
                     # Admission wins races with the periodic retirement sweep.
                     # Wait for the same acknowledged handshake before new work.
                     pending = self.retention.schedule(sid, row)
@@ -795,7 +822,7 @@ class RuntimeManager:
         # private worker command receives this attachment's transient settings.
         if mcp_attachment is not None:
             config['ephemeralMcpServers'] = mcp_attachment[1]
-        row['parked'] = False
+        row['idle'] = False
         self.retention.wake()
         if session.get('forkContext'):
             config['messages'] = session.get('messages', [])
@@ -1143,14 +1170,6 @@ class RuntimeManager:
                         # The HTTP caller may already have timed out. Reconcile
                         # only this send's receipt, without changing turn state.
                         await row['emit']('runtime.delivery', {'sessionId': sid, 'inputId': input_id})
-                elif data.get("type") == "runtime.parked":
-                    row["parked"] = True
-                    row["parked_at"] = self.retention.clock()
-                    self.retention.wake()
-                    await row['emit']('runtime.warmth', {'sessionId': sid, 'status': 'warm'})
-                elif data.get("type") == "runtime.reactivated":
-                    row["parked"] = False
-                    await row['emit']('runtime.warmth', {'sessionId': sid, 'status': 'active'})
                 elif data.get("type") == "computer.settlement":
                     # This pipe belongs to the retained execution owner. Keep
                     # opaque custody facts even if Stop later reaps that process;
@@ -1200,6 +1219,13 @@ class RuntimeManager:
                                 and type(identity.get("pid")) is int and identity["pid"] > 0):
                             row["native_worker_pid"] = identity["pid"]
                         row["ready"].set_result(data.get("report", {}))
+                    # Private mount inputs never enter public readiness/state.
+                    if isinstance(data.get("configurationInputs"), list) and isinstance(data.get("configurationStamp"), list):
+                        row["configurationInputs"] = data["configurationInputs"]
+                        row["configurationStamp"] = data["configurationStamp"]
+                    row["idle"] = True
+                    row["idle_at"] = self.retention.clock()
+                    self.retention.wake()
                     await row["emit"]("runtime.status", {"sessionId": sid, "status": "ready", "phase": "ready",
                         "detail": "Amplifier is ready.", "elapsedSeconds": int(time.monotonic() - row["started_at"]),
                         "runtimeOwnerId": row['runtimeOwnerId'], "configurationRevision": row['configurationRevision'],
@@ -1284,10 +1310,31 @@ class RuntimeManager:
                         await row["emit"]("runtime.ownership", {"sessionId": sid, "status": "blocked", "owner": failure.owner})
                     else:
                         from .module_failures import ConfiguredModuleError
+                        from .support_diagnostics import public_exception_chain
+                        capture = data.get('executionFailure')
+                        execution_failure = None
+                        if (not startup and isinstance(capture, dict) and capture.get('stage') == 'execution'
+                                and capture.get('runtimeSessionId') == row['runtime_id']):
+                            chain = public_exception_chain(capture.get('exceptionChain'))
+                            if chain:
+                                execution_failure = {'runtimeSessionId': row['runtime_id'],
+                                    'stage': 'execution', 'exceptionChain': chain}
+                                generation = capture.get('generationId')
+                                if isinstance(generation, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}', generation):
+                                    execution_failure['generationId'] = generation
+                                inputs = capture.get('inputIds')
+                                if isinstance(inputs, list) and len(inputs) <= 128 and all(
+                                        isinstance(item, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}', item) for item in inputs):
+                                    execution_failure['inputIds'] = inputs
                         await row["emit"]("runtime.error", {"sessionId": sid, "error": error,
                             **({"errorType": "RuntimeStartupError"} if startup else
                                {"errorType": failure_details(error, data["errorType"])["errorType"]} if data.get("errorType") else {}),
                             **({'phase': 'worker_startup'} if startup else {}),
+                            **({'event': 'persistence.failed'} if data.get('event') == 'persistence.failed' else {}),
+                            **({'executionFailure': execution_failure,
+                                **({'generationId': execution_failure['generationId']}
+                                   if execution_failure.get('generationId') else {})}
+                               if execution_failure else {}),
                             **({'startupAttemptId': row['runtimeOwnerId'],
                                 **({'startupFailureFacts': startup_facts} if startup_facts is not None else {})}
                                if startup else {}),
@@ -1309,6 +1356,13 @@ class RuntimeManager:
                                 data['event'][key] = sid
                     emitter = data.get("sessionId") or data.get("session_id") or row["runtime_id"]
                     root_emitter = data.get("rootSessionId") or data.get("root_session_id") or row["runtime_id"]
+                    if emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
+                        if data.get("type") == "session.idle":
+                            row["idle"] = True
+                            row["idle_at"] = self.retention.clock()
+                            self.retention.wake()
+                        elif data.get("type") in {"generation.started", "input.delivered"}:
+                            row["idle"] = False
                     if data.get("type") == "input.delivered" and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
                         row["inputId"] = data.get("input_id")
                     if (data.get("type") == "input.delivered" or data.get("type", "").startswith("steering.")) and (emitter != row["runtime_id"] or root_emitter != row["runtime_id"]):
@@ -1476,7 +1530,7 @@ class RuntimeManager:
         # Handoff holds this same admission lock while releasing its writer.
         # The host fence persists until the durable execution-state commit, so
         # queued controls cannot resurrect the old checkout in the gap.
-        safe = op in {'approval', 'coordination.approval', 'worker.stop', 'park', 'retire', 'dependencies', 'desktop.readiness', 'handoff.boundary'} or (
+        safe = op in {'approval', 'coordination.approval', 'worker.stop', 'retire', 'dependencies', 'desktop.readiness', 'handoff.boundary'} or (
             op == 'control' and args.get('operation') in {
                 'operations.cancel', 'kernels.interrupt', 'kernels.close',
                 'task.pause', 'task.block', 'task.complete',
@@ -1509,8 +1563,9 @@ class RuntimeManager:
         # A caller timing out or disconnecting does not cancel work already
         # handed to the worker. Keep it busy until the reply or process exit.
         row["inflight"].add(identity)
-        if op not in {"park", "retire", "dependencies", "desktop.readiness", "delivery", "approval", "coordination.approval", "handoff.boundary"}:
-            row["parked"] = False
+        # In-flight receipt ownership protects admission. Only actual native
+        # delivery/generation changes the idle hint: duplicates and no-op
+        # controls need not wake the loop or emit another session.idle.
         try:
             # Capture host authority at admission, before execution can emit a
             # generation. Event arrival must never recapture a later Stop epoch.
@@ -1553,8 +1608,8 @@ class RuntimeManager:
     async def prewarm(self, session, emit):
         if self._closed or not self.retention.settings["max_warm_workers"] or not self.retention.settings["idle_timeout_hours"]:
             return
-        # Repeated explicit preparation neither reacquires a loaded chat’s writer
-        # lock nor extends its idle lifetime. Actual input still validates state on wake.
+        # Repeated explicit preparation neither restarts a loaded owner nor
+        # extends its idle lifetime. Reads never call this explicit operation.
         if self.workers.get(session["id"], {}).get("process") is not None:
             row = self.workers[session["id"]]
             if row["process"].returncode is None:
@@ -1568,7 +1623,6 @@ class RuntimeManager:
             if row and row["process"].returncode is None:
                 return
             await self.start(session, emit)
-            await self._request(session["id"], "park")
 
     async def send(self, session, text, input_id, emit, *, admission_check=None):
         if admission_check:
@@ -1888,7 +1942,6 @@ class RuntimeManager:
                     raise RuntimeError(f'Checkout handoff could not confirm saved writer release ({result.status}). {result.message}')
                 held = await asyncio.to_thread(store.acquire, app='amplifier-unified-handoff')
             try:
-                # Parked workers already saved before relinquishing their lock.
                 # A released worker cannot write while this proof handle is held.
                 await self.stop(sid)
                 from .host_identity import local_host_identity, require_local_host
@@ -1971,7 +2024,7 @@ class RuntimeManager:
             return {'status': 'unknown', 'sessionId': session_id, 'reason': 'Runtime inspection did not return. No work was started.'}
 
     async def provenance(self, session_id, modules=()):
-        """Inspect existing loaded origins; never start or unpark a worker."""
+        """Inspect existing loaded origins; never start a worker."""
         row = self.workers.get(session_id)
         if not row or row['process'].returncode is not None or not row['ready'].done() or row['ready'].cancelled():
             return {'status': 'unknown', 'sessionId': session_id, 'reason': 'No ready session runtime.'}
