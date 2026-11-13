@@ -2949,6 +2949,17 @@
         }
       ],
       "qualification": "docs/validation/performance.md"
+    },
+    {
+      "id": "delta.manual-resource-claims-retired",
+      "date": "2026-11-12",
+      "reason": "Retire manual cooperative resource claims rather than expose bookkeeping or reconciliation chores.",
+      "retiredWorkflows": ["workspace.reservations"],
+      "retiredOutcomeIndices": [0, 1, 2],
+      "removedControls": ["Reserve", "Refresh reservations", "Reconcile reservation", "Release reservation", "Cooperative reservation count limits"],
+      "qualification": "docs/workspaces/contracts/execution.v2-candidate.md#cooperative-resource-reservations--2026-10-13",
+      "evidenceOwners": ["tests/test_resource_reservations.py", "tests/web/resource-reservations-browser.mjs"],
+      "limits": ["Retired is not passed. Frozen baselines, counts and historical evidence are unchanged.", "Real inventory, allocations, machine/native admission and physical cleanup retain their separate guards."]
     }
   ]
 }

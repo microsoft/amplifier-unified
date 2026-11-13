@@ -59,7 +59,7 @@ test('empty is shown only after an authoritative successful page, and a new work
 });
 
 
-test('visited workspace resource forms keep private edits while hidden and stop picker reads',async()=>{
+test('visited inventory forms keep private edits while hidden without reservation controls or reads',async()=>{
  let root;const requests=[],calls=[],priorWindow=globalThis.window;
  globalThis.window={addEventListener(){},removeEventListener(){}};
  globalThis.fetch=async url=>{requests.push(url);return response([{id:'owner',title:'Owner'}])};
@@ -70,19 +70,59 @@ test('visited workspace resource forms keep private edits while hidden and stop 
  try{
   await act(async()=>{root=create(element(undefined))});assert.equal(calls.length,0);assert.equal(requests.length,0);
   await act(async()=>root.update(element(workspace.id)));
-  const panel=root.root.findByProps({'aria-label':'Resource reservations'}),details=panel.parent;
-  await act(async()=>details.props.onToggle({currentTarget:{open:true}}));
-  const input=panel.findByProps({placeholder:'preview:my-project'});
-  await act(async()=>input.props.onChange({target:{value:'Private reservation draft'}}));
+  const panel=()=>root.root.findByProps({'aria-label':'Workspace resources'});
+  await act(async()=>panel().findAllByType('button').find(button=>button.children.includes('Record resource')).props.onClick());
+  await act(async()=>panel().findAllByType('input')[1].props.onChange({target:{value:'Private inventory draft'}}));
+  assert.doesNotMatch(JSON.stringify(root.toJSON()),/Resource reservations|Reserve resource|Reconcile reservation/);
   const queries=requests.length,reads=calls.length;
   await act(async()=>root.update(element(undefined)));
-  assert.equal(root.root.findByProps({'aria-label':'Resource reservations'}).findByProps({placeholder:'preview:my-project'}).props.value,'Private reservation draft');
+  assert.equal(panel().findAllByType('input')[1].props.value,'Private inventory draft');
   assert.equal(requests.length,queries);assert.equal(calls.length,reads);
   assert.equal(root.root.findAll(node=>node.type==='div'&&node.props.hidden===true).length,1);
   await act(async()=>root.update(element(workspace.id)));
-  assert.equal(root.root.findByProps({'aria-label':'Resource reservations'}).findByProps({placeholder:'preview:my-project'}).props.value,'Private reservation draft');
-  assert.equal(requests.length,queries+1);
+  assert.equal(panel().findAllByType('input')[1].props.value,'Private inventory draft');
+  assert.equal(requests.length,queries);
+  assert.deepEqual(calls.map(([name])=>name),['workspace.resources.list'],'navigation never reads or mutates claims');
  }finally{await act(async()=>root?.unmount());globalThis.window=priorWindow}
+});
+
+test('resource navigation reads real inventory and lifecycle owners, never cooperative claims or mutations',async()=>{
+ let root;const calls=[];
+ globalThis.fetch=async()=>response([{id:'owner',title:'Owner'}]);
+ const state={workspaces:[workspace],selectedSessionId:'owner'};
+ const dispatch=async(name,args)=>{
+  calls.push([name,args]);
+  const results={
+   'workspace.resources.list':{resources:[{id:'external',kind:'database',resourceId:'db:owned',owner:'Owner',status:'active'}]},
+   'workspace.resources.managed':{
+    publishing:{items:[{id:'preview',kind:'preview',status:'active',port:8765}],nextCursor:null},
+    operations:{items:[{id:'unknown-operation',kind:'process',state:'outcome_unknown'}],nextCursor:null},
+    storage:{items:[],nextOffset:null}
+   },
+   'workspace.environments.read':{items:[],checks:[]}
+  };
+  assert.ok(Object.hasOwn(results,name),`unexpected resource action: ${name}`);
+  return {accepted:true,result:results[name]};
+ };
+ const element=id=>React.createElement(WorkspaceResources,{state,act:dispatch,workspaceId:id});
+ try{
+  await act(async()=>{root=create(element(workspace.id))});
+  assert.match(JSON.stringify(root.toJSON()),/db:owned/);
+  const managed=root.root.findByProps({'aria-label':'Managed resources'}).parent;
+  await act(async()=>managed.props.onToggle({currentTarget:{open:true}}));
+  assert.equal(root.root.findByProps({'data-managed-resource':'preview'}).findAllByType('p').find(node=>node.children.join('').startsWith('Bound port:')).children.join(''),'Bound port: 8765');
+  assert.match(JSON.stringify(root.toJSON()),/outcome unknown/,'uncertain real operations remain visible');
+  assert.equal(root.root.findByProps({'aria-label':'Task storage'}).type,'section');
+  assert.equal(root.root.findByProps({'aria-label':'Test environments'}).type,'section');
+  const reads=calls.length;
+  await act(async()=>root.update(element(undefined)));
+  assert.equal(calls.length,reads,'hidden lifecycle views stop reading');
+  await act(async()=>root.update(element(workspace.id)));
+  assert.ok(calls.length>reads,'returning to an open lifecycle view refreshes its owners');
+  assert.doesNotMatch(JSON.stringify(root.toJSON()),/Resource reservations|Reserve resource|Reconcile reservation|Cooperative reservations/i);
+  assert.ok(calls.every(([,args])=>args.workspaceId===workspace.id));
+  assert.deepEqual([...new Set(calls.map(([name])=>name))].sort(),['workspace.environments.read','workspace.resources.list','workspace.resources.managed']);
+ }finally{await act(async()=>root?.unmount())}
 });
 
 test('resource drafts and late save receipts stay with their registered workspace',async()=>{

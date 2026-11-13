@@ -238,29 +238,31 @@ mutations require root authority; a child cannot relocate its enclosing task.
 
 ### Cooperative resource reservations — 2026-10-13
 
-Explicit reservations extend the existing resource lifecycle owner. Inventory
-observations remain observations; they never acquire or release a reservation.
-An exact resource key has either one exclusive holder or explicitly shared
-holders. Admission is atomic across workspace registrations in the same app
-data home. Separate app installations and resources reached under different
-keys are outside that guarantee. A reservation neither provisions infrastructure
-nor fences arbitrary shell programs, external services or filesystem writers.
+**Retired — 2026-11-12.** This heading remains the stable historical promise
+anchor. User direction supersedes the former matching-key admission, sharing,
+reconciliation, pagination and count-limit promises: remove the unnecessary
+cooperative claim mechanism rather than adding TTLs or user release chores.
+Arbitrary keys never fenced shell programs, ports or external writers.
 
-The host binds an agent reservation to its actual root/child principal. An agent
-may release or mark uncertain only its own reservation; a user may explicitly
-reconcile any retained reservation. Peer messaging grants no resource control.
-Stop, disconnect, expiry and workspace removal never imply teardown or silently
-release a held resource. Uncertain reservations continue to block new holders,
-including shared holders, until explicitly reconciled. Release relinquishes a
-claim with evidence and does not claim physical teardown.
+`workspace.resources.reservations/reserve/release/uncertain` are unsupported,
+not compatibility no-ops or synthetic release successes. The claim engine and
+its two execution quota fields are removed. Coordination context, recap,
+startup and new admission never consult old claims. Legacy held, uncertain and
+malformed claim rows and command receipts remain inert and unchanged; retirement
+does not establish physical absence or rewrite unknown historical effects.
+Existing host command receipt recovery remains authoritative, never permission
+to recreate an old claim.
 
-Stable command IDs retain their exact results across restart, including release
-and later reacquisition. Retries cannot resurrect an old reservation. Updates
-require the observed revision. Admission uses global Advanced execution limits,
-defaulting to 0 (no count ceiling) both per root (including its children) and
-per app data home. Explicit positive limits gate new acquisitions; existing held or uncertain claims remain
-readable and releasable at the limit. Reads are paginated, passive and do not
-load or resume conversations. Shared actions serve both clients and agents.
+The existing ledger path also owns real task-storage allocations and mixed
+command receipts. It is not deleted, renamed or destructively migrated.
+Disk-policy decoding ignores only the two retired quota keys without rewriting
+the file or resetting other positive limits. New payloads reject those keys;
+ordinary revision/CAS and unknown-field validation remain intact.
+
+Real allocation/native leases, runner CPU/memory/disk/count admission, managed
+inventory, external-resource accountability and exact-owner cleanup guards keep
+their existing contracts. Future resource handling belongs to the automatic
+physical owners, not another arbitrary-key registry.
 
 ### Coherent commissioned-task operation — 2026-10-13
 
@@ -828,8 +830,7 @@ output and environment, and never provision, replay, stop or reassign resources.
 Each owner uses an indexed task-scoped page; inspecting one task must not load
 other tasks or all retained history. Browser and agents use the same read action;
 agents may inspect only their host-bound task, while users may select a workspace
-task. Cooperative reservations remain separately labelled, with no inferred link
-between a user-chosen key and a physical resource.
+task. No user-chosen claim key is inferred to own a physical resource.
 
 The initial managed inventory did not allocate dedicated scratch folders,
 databases or browser profiles; the owned-storage addition below supplies those
@@ -887,7 +888,7 @@ tools only; it does not certify custom tools, shell, browser or database access.
 
 Global execution settings accept zero for all work counts: outstanding task chats
 per source, environments per chat, pending checks per chat and installation,
-retained resources and cooperative reservations per chat and installation. Each
+retained resources per chat and installation. Each
 defaults to zero (no count ceiling), as do local and registered target backend
 running/retained instance counts. Queue wait also defaults to zero.
 Saved positive operator values are preserved. Wait zero means until Stop or

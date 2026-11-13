@@ -152,6 +152,40 @@ def appearance_record_hash(service):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+def reservation_retirement_records(home, *, seed=False):
+    """Upgrade canaries in this disposable fixture only, never a product API."""
+    import sqlite3
+    data = home / 'app'
+    target = data / 'workspace-resources/reservations.sqlite3'
+    if seed:
+        from amplifier_web import task_resources, test_execution_settings
+        from types import SimpleNamespace
+        row, fresh = task_resources.prepare(data, 'historical-workspace', 'historical-owner',
+            {'sessionId': 'historical-owner', 'principal': 'historical-owner'},
+            {'kind': 'scratch-directory'}, 'historical-allocation')
+        if fresh:
+            task_resources.allocate(data, row)
+        test_execution_settings.write(SimpleNamespace(data_dir=data), {
+            'version': 1, 'queue': {'maxPending': 19},
+            'profiles': {'browser-test': {'cpus': 3}},
+            'concurrency': {'maxOwnedResources': 21, 'maxEnvironmentsPerChat': 4,
+                'maxResourceReservations': 1, 'maxResourceReservationsPerChat': 1}})
+        with sqlite3.connect(target) as db:
+            db.execute('CREATE TABLE claims(id TEXT PRIMARY KEY, workspace TEXT, resource_key TEXT, root TEXT, status TEXT, body TEXT)')
+            for status in ('held', 'uncertain'):
+                db.execute('INSERT INTO claims VALUES(?,?,?,?,?,?)',
+                    (status, 'historical-workspace', status, 'closed-chat', status, 'private malformed historical body'))
+            db.execute('INSERT INTO commands VALUES(?,?,?)',
+                ('historical-claim', 'original-fingerprint', '{"outcome":"reserved"}'))
+    with sqlite3.connect(target) as db:
+        retained = {table: db.execute(query).fetchall() for table, query in (
+            ('claims', 'SELECT * FROM claims ORDER BY id'),
+            ('command', "SELECT * FROM commands WHERE id='historical-claim'"),
+            ('allocation', "SELECT * FROM allocations WHERE root='historical-owner'"))}
+    return {'sha256': hashlib.sha256(json.dumps(retained, sort_keys=True).encode()).hexdigest(),
+            'claims': len(retained['claims']), 'allocations': len(retained['allocation'])}
+
+
 async def main(home):
     from contextlib import nullcontext
     synthetic = '--synthetic-discovery' in sys.argv
@@ -274,6 +308,8 @@ async def serve(home, *, pre_import=None):
         # Settings exercise the actual manager policy without starting a model.
         runtime = RuntimeManager(command=[sys.executable, '-c', 'raise RuntimeError("Unexpected worker start in settings fixture")'])
     isolated_appearance = installed_mode and '--appearance-records' in sys.argv
+    retirement_before = (reservation_retirement_records(home, seed=True)
+                         if '--reservation-retirement' in sys.argv else None)
     app = await create_app(home / "app", workspace=str(workspace), runtime=runtime,
                            voice='--voice-settings' in sys.argv, background_updates=False,
                            **({'background_work': False, 'preload_providers': False}
@@ -334,6 +370,8 @@ async def serve(home, *, pre_import=None):
 
     async def inspect(request):
         return web.json_response({"installedIdentity": installed_identity,
+            "reservationRetirement": {'before': retirement_before,
+                'current': reservation_retirement_records(home)} if retirement_before else None,
             "foundationCachePresent": (home / "app/foundation").exists(),
             "installedPackageVerified": installed_package_verified, "staticSha256": static_identity,
             "storedCopyPath": str(stored_copy_path) if stored_copy_path else None,
