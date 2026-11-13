@@ -381,7 +381,7 @@ async def reconcile(manager, args, request_id):
             return copy.deepcopy(state[RESULTS][request_id])
 
 
-async def recovery_context(manager):
+async def recovery_context(manager, *, expected=None):
     """Revalidate the completed manual install only as an old app recovery target.
 
     This does not grant optional-feature archive eligibility or create a restart
@@ -395,9 +395,6 @@ async def recovery_context(manager):
     previous = proof['binding']
     _require(all(result.get(key) == previous[key] for key in ('version', 'revision')))
     if binding != previous:
-        # A normal side-by-side repair changes the package/prefix, not ownership
-        # of this physical data directory. Authenticate the NEW package; never
-        # relabel or rewrite the original manual receipt as proof of its bytes.
         from .app_updates import version_tuple
         _require(all(binding[key] == previous[key] for key in ('ownerSid', 'dataIdentity', 'extras')))
         _require(binding['directories'][0] == previous['directories'][0])
@@ -405,6 +402,23 @@ async def recovery_context(manager):
         _require(current_version and old_version and current_version >= old_version)
         if current_version == old_version:
             _require(binding['revision'] == previous['revision'])
+    if expected is not None:
+        # Promotion has changed the launch pointer, not this still-serving
+        # installation. Revalidate its captured proof without rediscovering the
+        # candidate as our current target or fetching another release.
+        _require(isinstance(expected, dict) and set(expected) == {'artifact', 'app', 'proof', 'receipt'}
+                 and isinstance(expected.get('proof'), dict)
+                 and {'binding', 'artifact', 'payload', 'tlsPin'} <= expected['proof'].keys())
+        _require(result == expected['receipt'] and binding == expected['proof']['binding'])
+        _require(expected['artifact'] == expected['proof']['artifact'])
+        current = copy.deepcopy(expected['proof'])
+        _require(await _offloop(_payload, current) == current['payload'])
+        _require(await _health(manager, binding) == current['tlsPin'] == proof['tlsPin'])
+        proof = current
+    elif binding != previous:
+        # A normal side-by-side repair changes the package/prefix, not ownership
+        # of this physical data directory. Authenticate the NEW package; never
+        # relabel or rewrite the original manual receipt as proof of its bytes.
         from .app_updates import installed_target
         target = await installed_target()
         _require(Path(target[2]).parent.parent == Path(sys.prefix)
@@ -417,13 +431,15 @@ async def recovery_context(manager):
     else:
         _require(await _offloop(_payload, proof) == proof['payload'])
     _require(await _offloop(_native_binding, manager) == binding)
+    await _offloop(_proof, manager, result)  # The immutable anchor still has its recorded digest.
     _require(manager.service.state['updates'].get('manualHandoff') == result)
     from .app_component_graph import validate_graph
     artifact = proof['artifact']
     app = {'name': 'amplifier-unified', 'url': 'https://github.com/microsoft/amplifier-unified',
            'version': binding['version'], 'revision': binding['revision'],
            'delivery': {key: artifact[key] for key in ('url', 'sha256')}}
-    return {'artifact': copy.deepcopy(artifact), 'app': validate_graph([app])[0]}
+    return {'artifact': copy.deepcopy(artifact), 'app': validate_graph([app])[0],
+            'proof': copy.deepcopy(proof), 'receipt': result}
 
 
 def continuing(manager):
