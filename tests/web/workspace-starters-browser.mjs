@@ -200,14 +200,14 @@ try{
  await expect(editor.getByLabel('Starter name',{exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'Save changes',exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'Save as new starter',exact:true})).toBeVisible();
- await page.addStyleTag({content:'html {font-size:200% !important}'});
+ const enlargedTextStyle=await page.addStyleTag({content:'html {font-size:200% !important}'});
  await page.getByRole('button',{name:'Save as new starter',exact:true}).focus();
  await expect(page.getByRole('button',{name:'Save as new starter',exact:true})).toBeFocused();
  await page.keyboard.press('Tab');
  await expect(page.getByRole('button',{name:'Cancel edits',exact:true})).toBeFocused();
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Enlarged text keeps actions reachable without horizontal page clipping');
  await page.screenshot({path:out+'/starters-mobile-enlarged.png'});
- await page.locator('style').filter({hasText:'html {font-size:200% !important}'}).evaluate(node=>node.remove());
+ await enlargedTextStyle.evaluate(node=>node.remove());
  await page.getByRole('button',{name:'Back to Workspace starters',exact:true}).click();
  await expect(mobileChoice).toBeVisible();
  await expect(settings.getByRole('button',{name:'Save changes',exact:true})).not.toBeVisible();
