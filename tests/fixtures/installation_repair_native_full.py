@@ -565,6 +565,9 @@ def run(root, evidence):
     receipt = native.wait_for(progress, seconds=4200, description='full-app repair terminal receipt')
     settled = native.wait_for(lambda: observe_helper(root, helper[0], env),
                               lambda row: row['settled'], seconds=120, description='full-app helper settled')
+    # The still-owned helper can supersede an uncertain launch observation.
+    # Inspect its canonical receipt after settlement, without another dispatch.
+    receipt = load(folder / 'operation.json')
     safe_receipt = {key: receipt.get(key) for key in
                     ('operationId', 'previewId', 'hostInstanceId', 'status', 'stage', 'reinstalled',
                      'doctorVerified', 'healthVerified', 'serviceState', 'errorType')}
