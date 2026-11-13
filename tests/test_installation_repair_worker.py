@@ -122,7 +122,7 @@ class RepairFixture(unittest.TestCase):
         self.events = []
         self.pid = 123
         self.active_locks = set()
-        self.fail = None
+        self.failure_mode = None
         self.doctor_ok = True
         self.health_override = None
         self.protocol = 1
@@ -177,7 +177,7 @@ class RepairFixture(unittest.TestCase):
     def repair_lock(self, path, **kwargs):
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.events.append(("lock", path))
-        if self.fail == "lease" and path == self.home:
+        if self.failure_mode == "lease" and path == self.home:
             raise RuntimeError("do-not-leak-fixture-secret")
         self.assertNotIn(path, self.active_locks)
         self.active_locks.add(path)
@@ -200,7 +200,7 @@ class RepairFixture(unittest.TestCase):
     def start(self, commands):
         self.assertNotIn(self.home, self.active_locks)
         self.events.append(("start", commands))
-        if self.fail == "start":
+        if self.failure_mode == "start":
             raise RuntimeError("do-not-leak-fixture-secret")
         self.pid = 456
 
@@ -253,9 +253,9 @@ class RepairFixture(unittest.TestCase):
                 self.assertTrue((self.tool_recovery_root(self.tools) / self.folder.name / "previous").is_dir())
                 self.launcher.unlink()
                 self.launcher.symlink_to(self.prefix / "bin/amplifier-unified")
-            if self.fail == event:
+            if self.failure_mode == event:
                 raise worker.CommandFailed()
-            if self.fail == "crash" and not is_candidate:
+            if self.failure_mode == "crash" and not is_candidate:
                 raise KeyboardInterrupt("do-not-leak-fixture-secret")
             return subprocess.CompletedProcess([], 0, "", "")
         if args[0] == str(self.uv) and args[1:3] == ["pip", "freeze"]:
@@ -280,7 +280,7 @@ class RepairFixture(unittest.TestCase):
             self.events.append((kind + "-" + probe, args))
             self.assertEqual(args[1:3], ["-I", "-c"])
             self.assertEqual(args[-len(self.plan["extras"]):], self.plan["extras"])
-            if self.fail == kind + "-" + probe:
+            if self.failure_mode == kind + "-" + probe:
                 raise ValueError("do-not-leak-fixture-secret")
             return subprocess.CompletedProcess([], 0, "AMPLIFIER_UPDATE_PROBE=" + json.dumps({
                 "ok": True, "isolated": True, "version": self.plan["target"]["version"],
@@ -335,7 +335,7 @@ class RepairFixture(unittest.TestCase):
         self.assertFalse(self.active_locks)
 
     def test_candidate_install_failure_never_stops(self):
-        self.fail = "candidate-install"
+        self.failure_mode = "candidate-install"
         result = self.run_worker()
         self.assertEqual((result["status"], result["stage"]), ("failed", "preflight-failed"))
         self.assertFalse(result["reinstalled"])
@@ -344,7 +344,7 @@ class RepairFixture(unittest.TestCase):
         self.assertEqual(self.pointer.read_bytes(), self.pointer_before)
 
     def test_candidate_package_and_dependency_failure_never_stop(self):
-        self.fail = "candidate-dependency"
+        self.failure_mode = "candidate-dependency"
         result = self.run_worker()
         self.assertEqual(result["stage"], "preflight-failed")
         self.assertNotIn("stop", self.names())
@@ -360,7 +360,7 @@ class RepairFixture(unittest.TestCase):
         self.assertEqual(browser[2]["PLAYWRIGHT_BROWSERS_PATH"], self.plan["env"]["PLAYWRIGHT_BROWSERS_PATH"])
 
     def test_rollback_restores_exact_paths_preserves_failed_candidate_and_restarts_after_lease(self):
-        self.fail = "fresh-dependency"
+        self.failure_mode = "fresh-dependency"
         result = self.run_worker()
         self.assertEqual(result["status"], "rolled-back")
         self.assertFalse(result["reinstalled"])
@@ -375,7 +375,7 @@ class RepairFixture(unittest.TestCase):
         self.assertNotIn("doctor", self.names())
 
     def test_rollback_incomplete_is_unknown_and_never_restarts(self):
-        self.fail = "fresh-install"
+        self.failure_mode = "fresh-install"
         real_move = worker._move
 
         def move(source, destination):
@@ -390,7 +390,7 @@ class RepairFixture(unittest.TestCase):
         self.assertEqual(result["serviceState"], "stopped")
 
     def test_lease_failure_leaves_service_stopped_without_claiming_install(self):
-        self.fail = "lease"
+        self.failure_mode = "lease"
         result = self.run_worker()
         self.assertEqual((result["status"], result["stage"]), ("failed", "left-stopped"))
         self.assertEqual(result["serviceState"], "stopped")
@@ -400,7 +400,7 @@ class RepairFixture(unittest.TestCase):
         self.assertNotIn("start", self.names())
 
     def test_start_failure_is_reinstalled_not_ready(self):
-        self.fail = "start"
+        self.failure_mode = "start"
         result = self.run_worker()
         self.assertEqual((result["status"], result["stage"]), ("reinstalled", "restart-incomplete"))
         self.assertTrue(result["reinstalled"])
@@ -720,7 +720,7 @@ class RepairFixture(unittest.TestCase):
                 failed_once = True
                 raise OSError("fixture receipt unavailable")
             return original(subject, status, stage, detail, **facts)
-        self.fail = "fresh-install"
+        self.failure_mode = "fresh-install"
         with patch.object(worker.Worker, "receipt", receipt):
             result = self.run_worker()
         self.assertEqual(result["status"], "unknown")
@@ -731,7 +731,7 @@ class RepairFixture(unittest.TestCase):
         self.assertEqual(len(self.events), count)
 
     def test_crash_preserves_unknown_and_no_replay_or_restart(self):
-        self.fail = "crash"
+        self.failure_mode = "crash"
         result = self.run_worker()
         self.assertEqual((result["status"], result["stage"]), ("unknown", "interrupted"))
         self.assertNotIn("start", self.names())
@@ -800,7 +800,7 @@ class RepairFixture(unittest.TestCase):
         self.pointer.unlink()
         self.plan["pointer"] = {"exists": False, "sha256": None}
         self.save_plan()
-        self.fail = "fresh-install"
+        self.failure_mode = "fresh-install"
         result = self.run_worker()
         self.assertEqual(result["status"], "rolled-back")
         self.assertFalse(self.pointer.exists())

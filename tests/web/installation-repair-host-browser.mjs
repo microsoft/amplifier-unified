@@ -12,6 +12,7 @@ import {finishFixture} from './fixture-lifecycle.mjs';
 import {fixturePython} from './fixture-python.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
+import {applyStateDelta} from '../../.build/web-client/src/state-transport.js';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const output=resolve(process.env.AMPLIFIER_TEST_ARTIFACTS||root+'output/browser-checks/installation-repair-host');
@@ -156,11 +157,14 @@ try{
    servedAssets[name]={sha256:sha(bytes),bytes:bytes.length};
   }).catch(error=>observerErrors.push(String(error))));
  });
+ // Use the selected client's canonical patch contract on a separate observer
+ // baseline. A delta can replace status alone, without repeating operation IDs.
+ await page.addInitScript({content:`window.repairObserverApplyDelta=${applyStateDelta.toString()};`});
  await page.addInitScript(()=>{
   const Native=window.EventSource;window.installationRepairStreams=[];
   window.EventSource=class extends Native{
    constructor(...args){
-    super(...args);const probe={opens:0,states:0,deltas:0,operations:[]};installationRepairStreams.push(probe);
+    super(...args);const probe={opens:0,states:0,deltas:0,operations:[],errors:[]};let baseline;installationRepairStreams.push(probe);
     this.addEventListener('open',()=>probe.opens++);
     for(const name of ['state','state-delta'])this.addEventListener(name,event=>{
      probe[name==='state'?'states':'deltas']++;
@@ -173,8 +177,10 @@ try{
         probe.operations.push({operationId:value.operationId,previewId:value.previewId,status:value.status});
        for(const child of Object.values(value))if(child&&typeof child==='object')walk(child);
       };
-      walk(JSON.parse(event.data));
-     }catch{}
+      const payload=JSON.parse(event.data);
+      baseline=name==='state'?payload:window.repairObserverApplyDelta(baseline,payload);
+      walk(baseline);
+     }catch(error){probe.errors.push(String(error))}
     });
    }
   };
