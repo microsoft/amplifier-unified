@@ -122,12 +122,29 @@ async def test_scripted_child_returns_result_after_root_only_refusal(app, tmp_pa
     worker.activation_gate = SimpleNamespace(current_valid=True)
     worker.context_inputs = ['incoming-peer']
     worker.context_bindings = {'incoming-peer': {'clientId': None, 'targets': []}}
+    # Use the real transport's private owner binding. Calling app.app_bridge
+    # directly would correctly reject a child before the collaboration refusal.
+    from amplifier_web.runtime import RuntimeManager
+    transport = RuntimeManager()
+    transport.app_bridge = app.app_bridge
+    owner = {'process': SimpleNamespace(returncode=None), 'runtimeOwnerId': 'guidance-fixture-owner'}
+    transport.workers[source['id']] = owner
+    monkeypatch.setattr(app.runtime, 'workers', transport.workers, raising=False)
+    replies = []
+    async def write(row, reply):
+        assert row is owner
+        replies.append(reply)
+    transport._write = write
     async def bridge(operation, args):
         if operation == 'work.effect.check':
             return {'allowed': True}  # Fixture admission, not a Work authorization claim.
         if operation in {'context.manifest', 'memory.context', 'coordination.current'}:
             return {}
-        return await app.app_bridge(operation, args, source['id'])
+        await transport._bridge(source['id'], owner, {'id': 'guidance-bridge', 'operation': operation, 'args': args})
+        reply = replies.pop()
+        if reply.get('error'):
+            raise RuntimeError(reply['error'])
+        return reply['result']
     worker.bridge = bridge
     await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator), execution_role='root')
     store = SessionStore(tmp_path / 'guidance-children')
@@ -167,6 +184,7 @@ async def test_scripted_child_returns_result_after_root_only_refusal(app, tmp_pa
                 'scriptedProvider': True, 'workAdmission': 'fixture', 'requests': requests,
                 'delegatedResult': returned, 'effects': effects, 'latePreparations': late_preparations}, indent=2))
     finally:
+        transport.workers.clear()
         await parent.cleanup()
 
 
