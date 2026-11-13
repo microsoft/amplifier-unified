@@ -1326,8 +1326,8 @@ async def test_stop_during_retirement_checkpoint_cannot_release_writer(parking_w
     controller.drained.set()
     await registry.join()
     saving = asyncio.create_task(worker.checkpoint_idle())
-    await entered.wait()
-    await worker.command({"op": "computer.stop"})
+    await asyncio.wait_for(entered.wait(), 1)
+    worker.stop_revision += 1  # Ordinary Stop is independent of command_lock.
     proceed.set()
     assert not await saving
     assert worker.shared_handle.active
@@ -1372,6 +1372,7 @@ async def test_replacement_close_retains_native_task_until_settlement(monkeypatc
     worker.controls = SimpleNamespace(close=AsyncMock())
     worker.session = SimpleNamespace(cleanup=AsyncMock())
     try:
+        operation.cancel()
         assert not (await asyncio.wait_for(registry.close(), .2))["settled"]
         assert registry.pending and registry.unresolved
         worker.session.cleanup.assert_not_awaited()
