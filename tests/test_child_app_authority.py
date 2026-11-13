@@ -18,7 +18,8 @@ from test_collaborative_workspaces import app
 
 
 @pytest.mark.parametrize('scenario', ['optional', 'essential', 'nested-reprepare'])
-async def test_scripted_child_returns_result_after_root_only_refusal(app, tmp_path, monkeypatch, scenario):
+@pytest.mark.parametrize('injection_mode', ['persist', 'tail'])
+async def test_scripted_child_returns_result_after_root_only_refusal(app, tmp_path, monkeypatch, scenario, injection_mode):
     """Actual Core/Live requests and delegated returns, NOT model compliance.
 
     The provider is scripted, local work admission is a fixture. Collaboration
@@ -103,7 +104,8 @@ async def test_scripted_child_returns_result_after_root_only_refusal(app, tmp_pa
             await session.coordinator.mount('tools', NextStep(session), name='independent_review')
             return session
 
-    plan = {'session': {'orchestrator': {'module': 'loop-live', 'config': {'use_streaming': False}},
+    plan = {'session': {'orchestrator': {'module': 'loop-live', 'config': {
+                        'use_streaming': False, 'ephemeral_injection_mode': injection_mode}},
                         'context': {'module': 'context-simple'}},
             'agents': {'worker': {'instruction': 'Complete two independent synthetic reviews.'}}}
     paths = {name: Path(importlib.util.find_spec('amplifier_module_' + name.replace('-', '_')).origin).parent
@@ -178,16 +180,26 @@ async def test_scripted_child_returns_result_after_root_only_refusal(app, tmp_pa
         assert not app.runtime.inputs, 'Denied sends must not deliver peer input'
         histories = {}
         for sid in effects or ['child']:
-            history = store.load(sid)[0]
-            histories[sid] = history
-            # JSON escapes newlines inside persisted strings. Compare the same
-            # encoded substring, not raw multiline text against serialized JSON.
-            assert json.dumps(COMMON_GUIDANCE)[1:-1] not in json.dumps(history), 'Guidance stays ephemeral'
+            histories[sid] = store.load(sid)[0]
         if artifacts := os.environ.get('AMPLIFIER_TEST_ARTIFACTS'):
-            Path(artifacts, f'child-guidance-{scenario}.json').write_text(json.dumps({
-                'scriptedProvider': True, 'workAdmission': 'fixture', 'requests': requests,
+            Path(artifacts, f'child-guidance-{scenario}-{injection_mode}.json').write_text(json.dumps({
+                'scriptedProvider': True, 'workAdmission': 'fixture', 'injectionMode': injection_mode, 'requests': requests,
                 'delegatedResult': returned, 'effects': effects, 'latePreparations': late_preparations,
                 'savedHistories': histories}, indent=2))
+        for history in histories.values():
+            encoded = json.dumps(history)
+            assert json.dumps(PLANNING_GUIDANCE)[1:-1] not in encoded
+            if injection_mode == 'tail':
+                assert json.dumps(COMMON_GUIDANCE)[1:-1] not in encoded
+                assert json.dumps(NATIVE_CHILD_GUIDANCE)[1:-1] not in encoded
+            else:
+                # Default native persist mode deliberately retains a marked,
+                # change-gated reminder, not one duplicate per provider call.
+                assert encoded.count(json.dumps(COMMON_GUIDANCE)[1:-1]) == 1
+                assert encoded.count(json.dumps(NATIVE_CHILD_GUIDANCE)[1:-1]) == 1
+                reminder, = [row for row in history if COMMON_GUIDANCE in str(row.get('content', ''))]
+                assert reminder['metadata']['ephemeral'] is True
+                assert reminder['metadata']['persisted'] is True
     finally:
         transport.workers.clear()
         await parent.cleanup()

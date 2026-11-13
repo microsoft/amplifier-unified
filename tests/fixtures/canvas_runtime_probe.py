@@ -1,4 +1,4 @@
-"""Real Core/Foundation/loop-live multimodal turn against a local stub provider."""
+"""Real Core/Live guidance in both native history modes, local stub provider."""
 import asyncio
 import base64
 import importlib.util
@@ -20,7 +20,10 @@ PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR
 
 
 async def run():
-    plan = {'session': {'orchestrator': {'module': 'loop-live', 'config': {'use_streaming': False}}, 'context': {'module': 'context-simple'}}}
+    injection_mode = sys.argv[1] if len(sys.argv) > 1 else 'persist'
+    plan = {'session': {'orchestrator': {'module': 'loop-live', 'config': {
+        'use_streaming': False, 'ephemeral_injection_mode': injection_mode}},
+        'context': {'module': 'context-simple'}}}
     paths = {name: Path(importlib.util.find_spec('amplifier_module_' + name.replace('-', '_')).origin).parent for name in ('loop-live', 'context-simple')}
     prepared = PreparedBundle(plan, BundleModuleResolver(paths), Bundle(name='attachment-fixture', session=plan['session']))
     session = await prepared.create_session(session_id='attachment-fixture')
@@ -80,10 +83,19 @@ async def run():
             assert 'resetPreview' not in serialized and 'window.BABYLON' not in serialized
             assert len(CANVAS_GUIDANCE.encode('utf-8')) < 9000
             context = await session.coordinator.get('context').get_messages()
-            assert json.dumps(CANVAS_GUIDANCE)[1:-1] not in json.dumps(context, default=str), 'Ephemeral host instructions must not pollute saved history'
             if artifacts := os.environ.get('AMPLIFIER_TEST_ARTIFACTS'):
-                (Path(artifacts) / 'canvas-provider-request.json').write_text(serialized, encoding='utf-8')
-                (Path(artifacts) / 'canvas-saved-history.json').write_text(json.dumps(context, default=str), encoding='utf-8')
+                (Path(artifacts) / f'canvas-provider-request-{injection_mode}.json').write_text(serialized, encoding='utf-8')
+                (Path(artifacts) / f'canvas-saved-history-{injection_mode}.json').write_text(json.dumps(context, default=str), encoding='utf-8')
+            # Native Streaming owns this policy: default persist deliberately
+            # saves change-gated machine reminders; explicit tail saves none.
+            encoded = json.dumps(CANVAS_GUIDANCE)[1:-1]
+            if injection_mode == 'tail':
+                assert encoded not in json.dumps(context, default=str)
+            else:
+                assert json.dumps(context, default=str).count(encoded) == 1
+                reminder, = [row for row in context if CANVAS_GUIDANCE in str(row.get('content', ''))]
+                assert reminder['metadata']['ephemeral'] is True
+                assert reminder['metadata']['persisted'] is True
 
             request = provider.requests[0]
             user = next(message for message in request.messages if message.role == 'user' and isinstance(message.content, list))
@@ -98,6 +110,10 @@ async def run():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         await session.cleanup()
-    print(json.dumps({'canvas_guidance_in_provider_request': True, 'app_control_mounted': True, 'instructions_ephemeral': True, 'public_events_contain_no_image_data': True, 'provider_network_calls': 0, 'provider_request_bytes': len(serialized.encode('utf-8')), 'recurring_guidance_bytes': len(CANVAS_GUIDANCE.encode('utf-8'))}))
+    print(json.dumps({'canvas_guidance_in_provider_request': True, 'app_control_mounted': True,
+        'native_guidance_history_contract': True, 'injection_mode': injection_mode,
+        'public_events_contain_no_image_data': True, 'provider_network_calls': 0,
+        'provider_request_bytes': len(serialized.encode('utf-8')),
+        'recurring_guidance_bytes': len(CANVAS_GUIDANCE.encode('utf-8'))}))
 
 asyncio.run(run())
