@@ -55,27 +55,37 @@ or shared Amplifier bundle default, without copying that choice into project
 settings. If neither is set, this starter uses its `work-amp-dev` workspace
 fallback. The currently selected workspace's override does not choose the default
 for a different new workspace. Blank and Development continue to inherit defaults.
+They have no separate specialized bundle policy: with explicit overrides cleared,
+both follow the installed release's **general** conversation fallback, just like
+No workspace and custom starters with an empty bundle. Amplifier development
+alone has a specialized release-default identity. A future change from inheritance
+to specialization is not retroactively promised by this policy; it would need
+its own provenance/migration design. No starter identity is guessed for attached
+folders or old empty Blank folders.
 
 **Settings → Workspaces** keeps ordinary placement settings approachable.
 Its **Manage starters** link opens a separate advanced list/detail editor,
 reusing the routing editor's collection primitives. Basics come first;
 repositories, guidance/working memory and resource tracking expand on demand.
-Built-ins are read-only. Create a custom starter or duplicate an existing one,
-then edit its description, instructions, optional bundle default, repository
-URLs/folders/branches and resource tracking. Deleting a definition never deletes
+Edit any starter's name, description, instructions, optional bundle default,
+repository URLs/folders/branches and resource tracking directly. For a built-in,
+**Save as new starter** creates a custom starter with those edits and leaves the shipped
+definition unchanged; no duplicate-before-edit step is needed. A custom starter
+offers **Save changes** or **Save as new starter**. Deleting a definition never deletes
 created workspaces. Edits apply to future plans; prepared plans retain their exact
-starter snapshot.
-Amplifier development revision 6 makes this choice when the plan is prepared.
-An inherited plan stays inherited if defaults later change; new chats use the
-then-current defaults. Already reviewed revision-5 plans keep their explicit
-bundle, as do saved custom starters. Duplicating a built-in copies its current
-choice when duplicated, including inheritance, from a fresh server snapshot.
-Revision 9 changes the built-in fallback from `anchors-amp-dev` to `work-amp-dev`
-for future plans only; existing workspaces, prepared plans and custom starters
-retain their saved choices.
-The returned copy is loaded into the editor; a previously displayed choice may
-be stale. Duplication does not create or change a workspace. Explicit chat choices
-and existing conversations are unchanged; no workspace settings are migrated.
+starter snapshot, but a built-in automatic bundle choice is not an explicit pin.
+Amplifier development revision 10 records release-default intent separately from
+`bundle.active`. Its workspace fallback follows the installed release, including
+after app/shared overrides are cleared. Explicit local/project, app and shared
+choices take precedence. Known older automatic built-in plans use the same
+policy when provisioned; custom plans keep their literal bundle. Saving an edited
+built-in as new preserves the choice shown in the editor, including inheritance,
+without carrying built-in default-tracking metadata into the custom definition.
+The saved custom starter is selected in the editor. Saving a starter does not
+create or change a workspace. Explicit chat choices
+and existing conversations are unchanged. Startup converts only proven,
+unchanged host-generated legacy project pins; ambiguous/manual settings remain.
+See [root bundle provenance and the direct-file ambiguity boundary](../SHARED-CONFIGURATION.md#root-bundle-defaults-in-unified).
 Bundle choices share the chat dropdown's catalog: the preconfigured `anchors`
 and `anchors-amp-dev` roots from Amplifier Foundation and `work` and `work-amp-dev` from
 amplifier-bundle-work, plus enabled standalone bundles added through Advanced
@@ -83,9 +93,9 @@ settings. Behaviors and stale cache entries do not become starter choices.
 These four roots are available on fresh installs and after upgrading Unified;
 sources and dependencies are prepared on use, not eagerly during package installation.
 Component updates prepare and qualify all currently offered roots. Existing
-bundle defaults, custom source bindings and explicitly disabled roots remain unchanged.
+explicit bundle defaults, custom source bindings and explicitly disabled roots remain unchanged.
 The default may instead remain inherited. Unregistered names and URLs are not
-accepted; existing conversations and workspace settings are not rewritten.
+accepted; existing conversations are not rewritten.
 Prepared definitions are retained unchanged, but allocation refuses a bundle
 that has since been removed or disabled. Review a new plan rather than silently
 substituting another bundle.
@@ -97,7 +107,7 @@ Development scaffolding creates root `AGENTS.md`, root `SCRATCH.md`, a small
 `.amplifier/AGENTS.md` entry point and optional `.amplifier/settings.yaml`, only
 when absent. The entry point loads root guidance, whose relative scratch include
 reloads working memory on each request. Existing instructions and memory are
-never overwritten; existing workspaces are not retrofitted on app updates.
+never overwritten; existing workspaces are not retrofitted with guidance on app updates.
 Provided Markdown prose is one source line per paragraph so plain-text viewers wrap naturally. Headings, tables and the indented workspace layout retain structural breaks. User-authored text and existing files are never reformatted.
 Custom starters can enable working memory separately. Blank stays empty and
 existing-folder attachment does not apply a starter.

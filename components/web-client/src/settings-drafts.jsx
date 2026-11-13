@@ -39,7 +39,11 @@ export function useSettingsDrafts(){
   <ul>{prompt.map(entry=><li key={entry.label}>{entry.label}</li>)}</ul>
   <div className="a-dialog-actions">
    <button type="button" className="a-primary" autoFocus onClick={()=>{prompt[0].review();settle(false)}}>Review and save</button>
-   <button type="button" className="a-soft a-danger" onClick={()=>{prompt.forEach(entry=>entry.discard());settle(true)}}>Discard changes</button>
+   <button type="button" className="a-soft a-danger" onClick={()=>{
+    // An in-flight or unconfirmed save can retain the only safe recovery token.
+    // Such an editor may refuse discard until its exact outcome is known.
+    const discarded=prompt.map(entry=>entry.discard());settle(discarded.every(value=>value!==false));
+   }}>Discard changes</button>
    <button type="button" className="a-soft" onClick={()=>settle(false)}>Keep settings open</button>
   </div>
  </div></div>;

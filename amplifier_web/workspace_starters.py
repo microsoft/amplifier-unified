@@ -11,6 +11,7 @@ from filelock import FileLock
 from amplifier_worktrees.git import atomic
 from .host.config import PRECONFIGURED_BUNDLES
 from .bundle_selection import catalog_entry, defaults
+from .bundle_defaults import shipped_bundle
 
 DEVELOPMENT_INSTRUCTIONS = """# Development workspace
 
@@ -93,7 +94,7 @@ BUILTINS = [
      'instructions': DEVELOPMENT_INSTRUCTIONS, 'bundle': '', 'repositories': [], 'trackResources': True, 'scratch': True, 'rootGit': False},
     {'id': 'amplifier-development', 'name': 'Amplifier development',
      'description': 'Amplifier, Core and Foundation as child repositories, with working memory and local workspace Git.',
-     'instructions': DEVELOPMENT_INSTRUCTIONS, 'bundle': 'work-amp-dev', 'trackResources': True, 'scratch': True, 'rootGit': True,
+     'instructions': DEVELOPMENT_INSTRUCTIONS, 'bundle': shipped_bundle('amplifier-development'), 'trackResources': True, 'scratch': True, 'rootGit': True,
      'repositories': [{'url': f'https://github.com/microsoft/{name}.git', 'directory': name, 'ref': ''}
                       for name in ('amplifier', 'amplifier-core', 'amplifier-foundation')]},
 ]
@@ -178,11 +179,11 @@ class StarterCatalog:
 
     def listing(self):
         value = self._read()
-        revisions = {'blank': 1, 'development': 7, 'amplifier-development': 9}
+        revisions = {'blank': 1, 'development': 7, 'amplifier-development': 10}
         builtins = [{**copy.deepcopy(row), 'builtIn': True, 'revision': revisions[row['id']]} for row in BUILTINS]
         if self.inherit_amplifier_default:
             # Inherit deliberately saved defaults, not the automatic Work fallback.
-            # Only future built-in snapshots change; saved custom choices do not.
+            # This is display only; snapshots retain automatic fallback intent.
             next(row for row in builtins if row['id'] == 'amplifier-development')['bundle'] = ''
         # Older custom definitions retain their behavior; no file migration.
         customs = [{**copy.deepcopy(row), 'scratch': row.get('scratch', False), 'rootGit': row.get('rootGit', False)} for row in value['items']]
@@ -194,6 +195,8 @@ class StarterCatalog:
         if row is None:
             raise ValueError('This starter is unavailable. Choose another starter.')
         definition({key: row[key] for key in FIELDS}, self.bundle_names)
+        if row.get('builtIn') and row['id'] == 'amplifier-development' and row['revision'] == 10:
+            row['bundleDefault'] = 'release'
         # A project/private standalone registration must remain resolvable from
         # the new workspace too. Retain only its chosen source, never providers.
         if row['bundle'] and row['bundle'] in self.sources:
