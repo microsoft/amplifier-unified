@@ -33,7 +33,7 @@ function outbox(entry){
 }
 const scope=(_state,session)=>`host/workspace/${session?.id||'draft'}`;
 const matches=(entry,value)=>entry.scope===value;
-const session={id:'captured-chat',nextMessageRevision:7,collaborationGeneration:{id:'stale-projection',terminal:false}};
+const session={id:'captured-chat',nextMessageRevision:7,interruptionRevision:3,collaborationGeneration:{id:'stale-projection',terminal:false}};
 const document={version:2,segments:[{type:'text',text:'Commentary'},{type:'quote',text:'Captured excerpt',source:{sessionId:'source-chat',messageId:'source-message'}}]};
 
 for(const quoted of [false,true])test(`composer captures destination/config/text/${quoted?'document':'reply'}/attachments without routing flags`,async()=>{
@@ -42,12 +42,13 @@ for(const quoted of [false,true])test(`composer captures destination/config/text
  const send=callback('send','\n async function submitWorker(',{
   dictationControl:{current:null},referenceDraftLock:{current:false},draft:'  Exact text\n',availableAttachments:attachments,uploadCount:{current:0},busy:false,newChatPending:false,historyPending:false,executionUnavailable:false,
   preserveOtherDraft(){},session,quoteApi:{current:{document:()=>quoted?document:null}},crypto:{randomUUID:()=> 'stable-input'},externalConversation:false,detail:{focused:false},chatScroll:{current:null},setError(){},setQuoteNotice(){},notice:undefined,quoteNoticeAfterSend(){},editDraft(){},clearTimeout(){},draftTimer:{current:null},stagedDraft:{current:'draft-token'},outbox:box,deliveryScope:scope,latest,state,mode:'text',Date,stagedDraftPayload:{current:{}},
-  saveDraft:async()=>{latest.current={...state,selectedSessionId:'other-chat',sessions:[{...session,nextMessageRevision:99,collaborationGeneration:{id:'newer-projection',terminal:false}},{id:'other-chat'}]};},
+  saveDraft:async()=>{latest.current={...state,selectedSessionId:'other-chat',sessions:[{...session,nextMessageRevision:99,interruptionRevision:4,collaborationGeneration:{id:'newer-projection',terminal:false}},{id:'other-chat'}]};},
   reportError(error){throw error},outboxMatches:matches,ensureSession(){throw Error('Existing target must not be recreated')},deliver:async entry=>delivered.push(entry),
  });
  await send({preventDefault(){}});
  assert.equal(delivered.length,1);const entry=delivered[0];ordinary(entry);
  assert.equal(entry.commandId,'stable-input');assert.equal(entry.sessionId,'captured-chat');assert.equal(entry.scope,'host/workspace/captured-chat');assert.equal(entry.expectedConfigurationRevision,7);
+ assert.equal(entry.expectedInterruptionRevision,3,'Stop epoch is captured before any draft/checkpoint/network await, not rebound on delivery');
  assert.equal(entry.text,'  Exact text\n');assert.deepEqual(entry.attachmentIds,['file']);assert.deepEqual(entry.attachments,attachments);assert.equal(entry.via,'text');
  if(quoted){assert.deepEqual(entry.document,document);assert.deepEqual(entry.replyTo,{version:2,segments:document.segments})}
  else assert.deepEqual(entry.replyTo,{id:'reply-message'});
@@ -55,30 +56,42 @@ for(const quoted of [false,true])test(`composer captures destination/config/text
 });
 
 test('delivery sends the exact captured payload and command once without choosing an execution route',async()=>{
- const entry={id:'local',commandId:'stable-input',sessionId:session.id,scope:scope(null,session),expectedConfigurationRevision:7,text:'Exact text',document,replyTo:{id:'reply-message'},attachmentIds:['file'],via:'chat',status:'unknown'};
- const box=outbox(entry),calls=[],deliveries={current:new Set()},latest={current:{sessions:[{...session,nextMessageRevision:99}],selectedSessionId:'other-chat'}};
+ const entry={id:'local',commandId:'stable-input',sessionId:session.id,scope:scope(null,session),expectedConfigurationRevision:7,expectedInterruptionRevision:3,text:'Exact text',document,replyTo:{id:'reply-message'},attachmentIds:['file'],via:'chat',status:'unknown'};
+ const box=outbox(entry),calls=[],deliveries={current:new Set()},latest={current:{sessions:[{...session,nextMessageRevision:99,interruptionRevision:4}],selectedSessionId:'other-chat'}};
  let finish;const pending=new Promise(resolve=>{finish=resolve});
  const deliver=callback('deliver','\n function discardMessage(',{outboxMatches:matches,deliveryScope:scope,latest,deliveries,outbox:box,dispatch:async(action,args,options)=>{calls.push({action,args,options});return pending},actionErrorMessage:error=>error.message});
  const running=deliver(entry);await deliver(entry);
  assert.equal(calls.length,1);ordinary(calls[0].args);
- assert.deepEqual(calls[0],{action:'conversation.send',args:{sessionId:session.id,text:entry.text,document,expectedConfigurationRevision:7,replyId:'reply-message',attachmentIds:['file'],via:'chat',preserveDraft:true},options:{id:'stable-input',feedback:false,outboxScope:entry.scope}});
+ assert.deepEqual(calls[0],{action:'conversation.send',args:{sessionId:session.id,text:entry.text,document,expectedConfigurationRevision:7,expectedInterruptionRevision:3,replyId:'reply-message',attachmentIds:['file'],via:'chat',preserveDraft:true},options:{id:'stable-input',feedback:false,outboxScope:entry.scope}});
  finish({delivery:'unknown'});await running;
  assert.equal(box.current.current[0].status,'unknown');assert.equal(box.current.current[0].commandId,'stable-input');assert.equal(deliveries.current.size,0);assert.equal(calls.length,1,'Uncertain receipt never automatically resubmits');
 });
 
 for(const status of ['unknown','failed'])test(`${status} retry preserves payload/target; only known rejection creates a new input/config expectation`,async()=>{
- const entry={id:'local',commandId:'original-input',sessionId:session.id,scope:scope(null,session),expectedConfigurationRevision:7,text:'Captured text',document,replyTo:{version:2,segments:document.segments},attachmentIds:['file'],status};
- const box=outbox(entry),delivered=[],latest={current:{sessions:[{...session,nextMessageRevision:8}],selectedSessionId:'other-chat'}};
+ const entry={id:'local',commandId:'original-input',sessionId:session.id,scope:scope(null,session),expectedConfigurationRevision:7,expectedInterruptionRevision:3,text:'Captured text',document,replyTo:{version:2,segments:document.segments},attachmentIds:['file'],status};
+ const box=outbox(entry),delivered=[],latest={current:{sessions:[{...session,nextMessageRevision:8,interruptionRevision:4}],selectedSessionId:'other-chat'}};
  const retry=callback('retryMessage','\n async function send(',{outbox:box,outboxMatches:matches,deliveryScope:scope,latest,crypto:{randomUUID:()=> 'new-input'},act(){throw Error('No draft/editor mutation for unchanged retry')},deliver:async value=>delivered.push(value),setError(error){throw Error(error)}});
  await retry({localDelivery:{id:'local'}});
  assert.equal(delivered.length,1);const value=delivered[0];ordinary(value);
  assert.equal(value.commandId,status==='unknown'?'original-input':'new-input');assert.equal(value.expectedConfigurationRevision,status==='unknown'?7:8);
+ assert.equal(value.expectedInterruptionRevision,status==='unknown'?3:4,'Unknown preserves original Stop epoch; definite rejection refreshes it with a new input ID');
  assert.equal(value.sessionId,entry.sessionId);assert.equal(value.scope,entry.scope);assert.equal(value.text,entry.text);assert.deepEqual(value.document,document);assert.deepEqual(value.replyTo,entry.replyTo);assert.deepEqual(value.attachmentIds,['file']);
 });
 
 test('ordinary callbacks contain no generation capture or execution-route plumbing',()=>{
  const callbacks=source.slice(source.indexOf(' async function deliver('),source.indexOf(' function discardMessage('))+source.slice(source.indexOf(' async function send('),source.indexOf(' async function submitWorker('));
  assert.doesNotMatch(callbacks,/expectedGenerationId|allowNextTurn|collaborationGeneration/);
+});
+
+test('an earlier unknown entry without a Stop epoch is never rebound to the current epoch at retry or delivery',async()=>{
+ const entry={id:'local',commandId:'earlier-input',sessionId:session.id,scope:scope(null,session),text:'Keep original arguments',attachmentIds:[],status:'unknown'};
+ const box=outbox(entry),calls=[],latest={current:{sessions:[{...session,interruptionRevision:99}]}};
+ const deliver=callback('deliver','\n function discardMessage(',{outboxMatches:matches,deliveryScope:scope,latest,deliveries:{current:new Set()},outbox:box,dispatch:async(action,args,options)=>{calls.push({action,args,options});return {delivery:'unknown'}},actionErrorMessage:error=>error.message});
+ const retry=callback('retryMessage','\n async function send(',{outbox:box,outboxMatches:matches,deliveryScope:scope,latest,deliver,setError(error){throw Error(error)}});
+ await retry({localDelivery:{id:'local'}});
+ assert.equal(calls.length,1);assert.equal(calls[0].options.id,'earlier-input');
+ assert.equal(Object.hasOwn(calls[0].args,'expectedInterruptionRevision'),false,'No current-epoch default in dispatch/delivery');
+ assert.equal(Object.hasOwn(box.current.current[0],'expectedInterruptionRevision'),false);
 });
 
 for(const fields of [{expectedGenerationId:'old-run',allowNextTurn:true},{allowNextTurn:true},{expectedGenerationId:null}]){

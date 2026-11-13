@@ -49,6 +49,7 @@ try{
    return deliveryReply(item,'unknown',{message:unknownDelivery});
   }
   if(['conversation.send','conversation.retry','message.edit'].includes(body.action)){waiting.push(item);return}
+  if(body.action==='conversation.stop'){chat().interruptionRevision=(chat().interruptionRevision??0)+1;chat().status='stopped';if(chat().collaborationGeneration)chat().collaborationGeneration.terminal=true;}
   if(body.action==='view.update'&&blockNextDraft&&body.args.patch?.draft===''){blockNextDraft=false;blockedDraft={route,body};return}
   if(body.action==='view.update')state.view={...state.view,...body.args.patch};
   state.revision++;return route.fulfill({json:{accepted:true,state:shell.state()}});
@@ -308,8 +309,8 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
  assert.equal(calls.filter(c=>c.id===correction.body.id).length,1,'Native phase changes do not replay Send');
  await page.screenshot({path:'/tmp/amplifier-steering-applied.png'});
 
- // A rejected send keeps its text. Explicit Retry refreshes only configuration,
- // never a generation or browser-selected execution route.
+ // A rejected send keeps its text. Explicit Retry refreshes captured config and
+ // Stop epoch, never a generation or browser-selected execution route.
  const boundary=await send('This is another message, not a correction.');
  assert.equal(boundary.body.args.expectedConfigurationRevision,7);
  chat().collaborationGeneration={id:'another-stale-run',terminal:false};chat().nextMessageRevision=8;await emit();
@@ -322,6 +323,30 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
  await received(retried);
  chat().messages.at(-1).steering={disposition:'next_turn'};await emit();await page.getByText('Received for the next turn',{exact:true}).waitFor();
  chat().status='idle';chat().collaborationGeneration.terminal=true;await emit();
+ // Normal completion changes the run, not the Stop epoch: held Send remains
+ // ordinary conversation intent with no generation anchor.
+ chat().status='working';chat().interruptionRevision=3;chat().collaborationGeneration={id:'completing-run',terminal:false};await emit();
+ const completing=await send('Cross normal completion without rebinding my intent');
+ assert.equal(completing.body.args.expectedInterruptionRevision,3);
+ chat().status='idle';chat().collaborationGeneration.terminal=true;await emit();await received(completing);
+ assert.equal(calls.filter(call=>call.id===completing.body.id).length,1);
+ // Hold the Send HTTP before any host receipt, then Stop through the real
+ // composer control. A late request must carry its old epoch, not start fresh.
+ chat().status='working';chat().collaborationGeneration={id:'stopping-run',terminal:false};await emit();
+ const beforeStop=await send('Held before Stop must not restart work');
+ assert.equal(beforeStop.body.args.expectedInterruptionRevision,3);
+ await page.getByRole('button',{name:'Stop response',exact:true}).click();
+ await until(()=>chat().interruptionRevision===4,'Synthetic Stop advances only the existing epoch');
+ const stoppedBubble=page.locator(`[data-input-id="${beforeStop.body.id}"]`);
+ assert.equal((await outbox()).find(row=>row.commandId===beforeStop.body.id).expectedInterruptionRevision,3);
+ await beforeStop.route.fulfill({status:409,json:{accepted:false,code:'input_stopped',error:'This message was submitted before Stop. It was not sent.',state:shell.state()}});
+ await stoppedBubble.getByText('This message was submitted before Stop. It was not sent.',{exact:true}).waitFor();
+ assert.equal(chat().messages.some(message=>message.inputId===beforeStop.body.id),false,'Stopped intent was not saved as newly admitted work');
+ assert.equal(calls.filter(call=>call.id===beforeStop.body.id).length,1,'Stop refusal does not replay');
+ const afterStop=await send('A fresh post-Stop message is new intent');
+ assert.equal(afterStop.body.args.expectedInterruptionRevision,4);assert.notEqual(afterStop.body.id,beforeStop.body.id);await received(afterStop);
+ await stoppedBubble.getByRole('button',{name:'Retry',exact:true}).click();
+ const stoppedRetry=await next();assert.notEqual(stoppedRetry.body.id,beforeStop.body.id);assert.equal(stoppedRetry.body.args.expectedInterruptionRevision,4);await received(stoppedRetry);
  // An explicit anchored API call remains distinct from the ordinary composer;
  // generic action dispatch must not strip or reinterpret its caller's fields.
  const strictArgs={sessionId:'chat',text:'Explicit anchored API input',expectedGenerationId:'explicit-run',expectedConfigurationRevision:8};
@@ -348,5 +373,5 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
  const blockedStorage=await send('Storage unavailable');await blockedStorage.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection'}});
  await page.getByRole('button',{name:'Retry',exact:true}).waitFor();await page.getByText('This browser could not save the pending message. Keep this tab open until delivery is confirmed.',{exact:true}).waitFor();
  assert.equal(deliveryWaiting.length,0,'All deliberately deferred passive reads were settled');assert.equal(deferredDelivery.size,0);
- assert.deepEqual(errors,[]);console.log('Outbox browser passed: conversation-addressed ordinary Send/retry without generation or route flags despite stale active state; captured config and exact unknown-retry payload/identity; historical unknown row retained byte-for-byte after passive read and refused confirmed resend; explicit strict anchored API preserved; native sent/accepted/pending/applied, request-boundary queued/applied and next-turn labels; scoped payload, immediate clear/bubble, late identical draft, server dedup, held current/fork locks typing/paste/mode/Escape/submit and direct handlers, pre-render double requestSubmit, closed pending retry with byte-exact outbox text across local/shared identities and explicit Edit after rejection, old rejection preserves newer editor without restoration writes, blocked editor guards, neighboring drafts/outbox, delayed504/late acknowledgement without replay, automatic passive mount/reload reads on an independent queue, exact-bound replies, confirmed original-identity retry, mobile, blocked storage. Controlled transport measures admission/saved/accepted states, not model execution.');
+ assert.deepEqual(errors,[]);console.log('Outbox browser passed: conversation-addressed ordinary Send/retry without generation or route flags despite stale active state; held HTTP crosses normal completion with unchanged Stop epoch, held pre-Stop HTTP retains old epoch and renders input_stopped without replay, fresh post-Stop Send and definite-failed retry capture new epoch; captured config and exact unknown-retry payload/identity; historical unknown row retained byte-for-byte after passive read and refused confirmed resend; explicit strict anchored API preserved; native sent/accepted/pending/applied, request-boundary queued/applied and next-turn labels; scoped payload, immediate clear/bubble, late identical draft, server dedup, held current/fork locks typing/paste/mode/Escape/submit and direct handlers, pre-render double requestSubmit, closed pending retry with byte-exact outbox text across local/shared identities and explicit Edit after rejection, old rejection preserves newer editor without restoration writes, blocked editor guards, neighboring drafts/outbox, delayed504/late acknowledgement without replay, automatic passive mount/reload reads on an independent queue, exact-bound replies, confirmed original-identity retry, mobile, blocked storage. Controlled transport measures admission/saved/accepted states, not model execution.');
 }finally{await browser?.close();await vite?.close()}
