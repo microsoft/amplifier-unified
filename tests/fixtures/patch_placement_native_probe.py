@@ -631,10 +631,32 @@ async def probe(root, variant):
                 'originalAttemptIds':[a['attemptId'] for a in original['attempts']],
                 'originalMountedObjectId':initial_object['objectId'],
                 'replacementObjectId':replacement_object['objectId']}
-            assert original['state']['phase'] == 'error' and original['state']['effect'] == 'unknown'
-            assert len(original['attempts']) == 1 and owner['configurationBusy']
+            # native_apply authenticates this new PID, then prepare rejects the
+            # old mounted object before either settings write. Its sealed
+            # terminal-none receipt lets configuration_error settle the fence
+            # automatically; this is NOT the foreign-PID retired-control case.
+            assert original['state']['phase'] == 'error' and original['state']['stage'] == 'reconciled'
+            assert original['state']['effect'] == 'none' and not original['state'].get('recoveryRequired')
+            assert len(original['attempts']) == 1 and not owner.get('configurationBusy')
+            assert owner.get('configurationOperationFence') is None
+            dispatches = [entry for entry in original['history'] if entry['stage'] == 'dispatching']
+            assert len(dispatches) == 1 and dispatches[0]['effect'] == 'unknown'
+            assert dispatches[0]['attemptId'] == original['attempts'][0]['attemptId']
+            assert all(entry['phase'] == 'error' and entry['stage'] == 'reconciled'
+                       and entry['effect'] == 'none' for entry in original['history']
+                       if entry['revision'] > dispatches[0]['revision'])
+            assert original['history'][-1]['revision'] == original['revision'] > dispatches[0]['revision']
             assert original['request']['config']['mounted']['objectId'] == initial_object['objectId']
             assert original['attempts'][0]['workerPid'] == processes[1].pid
+            from amplifier_web.configuration_recovery import evidence, latest_attempt
+            authenticated = evidence(latest_attempt(original), home=home)
+            assert authenticated and authenticated['effect'] == 'none' and authenticated.get('terminal') is True
+            assert authenticated['workerPid'] == proof['newPid'] != proof['oldPid']
+            assert authenticated['nativeSessionId'] == native
+            recovery_proof['nativeNoEffectReceipt'] = {
+                key:authenticated[key] for key in ('operationId','attemptId','workerPid','nativeSessionId',
+                                                   'requestHash','payloadHash','effect','terminal')}
+            recovery_proof['automaticNoneReleasedFence'] = True
             native_controls = report['placementControlAttempts']
             assert len(native_controls) == 1 and native_controls[0]['guardPresent']
             assert native_controls[0]['operationId'] == original['id']
@@ -647,19 +669,23 @@ async def probe(root, variant):
             assert duplicate['duplicate']
             assert app.management.configuration_record(sid, original['id']) == original
             assert len(processes) == 2 and calls.read_bytes() == before_calls
-            try:
-                await reconcile_proven_none(action, sid, original['id'], recovery_proof)
-            except BaseException:
-                # Missing, nonterminal, unknown, saved or conflicting evidence
-                # cannot silently become cancellation or another binding.
-                assert owner['configurationBusy']
-                raise
+            # Re-observe/reconcile the already proven none through the unchanged
+            # public helper. This adds only attributed history, never another
+            # native control or attempt, and never fabricates an unknown hold.
+            await reconcile_proven_none(action, sid, original['id'], recovery_proof)
+            assert recovery_proof['effectRead']['state'] == recovery_proof['reconciled']['state']
+            assert recovery_proof['effectRead']['revision'] == original['revision']
             reconciled_record = app.management.configuration_record(sid, original['id'])
             assert reconciled_record['request'] == original['request']
             assert reconciled_record['requestHash'] == original['requestHash']
             assert reconciled_record['attempts'] == original['attempts']
             assert reconciled_record['history'][:len(original['history'])] == original['history']
             assert len(reconciled_record['history']) == len(original['history']) + 1
+            assert reconciled_record['revision'] == original['revision'] + 1
+            assert reconciled_record['history'][-1]['recoverySource']['action'] == 'configuration.operation.reconcile'
+            assert len(native_controls) == 1 and not owner.get('configurationBusy')
+            assert evidence(latest_attempt(reconciled_record), home=home) == authenticated
+            assert await runtime._request(sid, 'dependencies', patchPlacement={'moduleId':MODULE}) == replacement_object
             assert stored.read_bytes() == plan_bytes and controls.read_bytes() == control_bytes
             assert calls.read_bytes() == before_calls and len(processes) == 2
             # Explicit synthetic UI/operator disposition, not an agent pin reset.
@@ -673,6 +699,7 @@ async def probe(root, variant):
             assert cancelled['requestHash'] == original['requestHash']
             assert cancelled['attempts'] == original['attempts']
             assert cancelled['history'][:-1] == reconciled_record['history']
+            assert len(native_controls) == 1 and evidence(latest_attempt(cancelled), home=home) == authenticated
             assert not owner.get('pendingConfiguration') and not owner.get('configurationBusy')
             recovery_proof['cancelledState'] = copy.deepcopy(cancelled['state'])
             recovery_proof['cancelledHistory'] = copy.deepcopy(cancelled['history'])

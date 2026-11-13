@@ -177,8 +177,21 @@ async def test_production_patch_placement_lifecycle(tmp_path, variant):
             assert original_control['workerPid'] == fresh_control['workerPid'] == proof['newPid']
             assert 'Mounted patch configuration changed before binding' in original_control['failure']['message']
             assert 'failure' not in fresh_control
-            assert recovery['originalState']['effect'] == 'unknown'
+            assert recovery['originalState']['phase'] == 'error'
+            assert recovery['originalState']['stage'] == 'reconciled'
+            assert recovery['originalState']['effect'] == 'none'
+            assert recovery['automaticNoneReleasedFence']
+            receipt = recovery['nativeNoEffectReceipt']
+            assert receipt['effect'] == 'none' and receipt['terminal'] is True
+            assert receipt['workerPid'] == proof['newPid'] != proof['oldPid']
+            assert receipt['operationId'] == recovery['originalOperationId']
+            assert receipt['attemptId'] == original_control['attemptId']
+            assert receipt['requestHash'] == recovery['originalRequestHash']
+            dispatches = [entry for entry in recovery['originalHistory'] if entry['stage'] == 'dispatching']
+            assert len(dispatches) == 1 and dispatches[0]['effect'] == 'unknown'
+            assert dispatches[0]['attemptId'] == receipt['attemptId']
             assert recovery['effectRead']['nativeEffect'] == 'none'
+            assert recovery['effectRead']['state'] == recovery['reconciled']['state']
             assert recovery['reconciled']['state']['effect'] == 'none'
             assert recovery['reconciled']['state']['stage'] == 'reconciled'
             assert recovery['cancelledState']['phase'] == 'cancelled'

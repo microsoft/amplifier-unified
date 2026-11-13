@@ -3,7 +3,7 @@ import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {openChatAdvancedPage} from './browser-chat-pages.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {mkdir,readFile} from 'node:fs/promises';
+import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 import {ownFixture,finishFixture} from './fixture-lifecycle.mjs';
@@ -156,6 +156,8 @@ async function lifecycleCheck(page,ready,output){
   await expect.poll(async()=>(await facts()).runtimeFaults.length).toBe(1);
   await expect(page.locator('[data-part=conversation-trouble]')).toHaveCount(0);
   await expect(page.locator('[data-input-phase=failed]')).toHaveCount(0);
+  await expect(page.getByText('Work stopped',{exact:true})).toHaveCount(0);
+  assert.notEqual((await facts()).status,'stopped','native close is not a human Stop');
   assert.equal((await facts()).interruptionRevision,0,'process close is not a human Stop');
  }else{
   const failed=input(before,'failed-input');
@@ -195,6 +197,13 @@ async function lifecycleCheck(page,ready,output){
  if(lifecycleMode==='request-failure')assert.equal(input(check,'failed-input').inputStatus.phase,'failed','older request outcome remains local history');
  assert.equal(check.sessions,1);assert.equal(check.selected,ready.sessionId);
  if(lifecycleMode==='completed-runtime-fault'){
+  assert.equal((await page.request.post(ready.url+'/fixture/failed-save')).status(),200);
+  await expect.poll(async()=>(await facts()).failure?.category).toBe('persistence');
+  await expect(page.locator('[data-part=conversation-trouble]')).toBeVisible();
+  assert.equal((await facts()).status,'error','closure must not suppress a failed save');
+  assert.equal((await facts()).interruptionRevision,0);
+  assert.equal(input(await facts(),'completed-input').inputStatus.phase,'done');
+  await page.screenshot({path:output+'lifecycle-detached-failed-save.png'});
   assert.equal((await page.request.post(ready.url+'/fixture/human-stop')).status(),200);
   await expect.poll(async()=>(await facts()).status).toBe('stopped');
   assert.equal((await facts()).interruptionRevision,1);
@@ -235,5 +244,6 @@ async function lifecycleCheck(page,ready,output){
   assert.doesNotMatch(await local.inputValue(),/authentication|PRIVATE|synthetic\/workspace/);
   assert.equal((await facts()).calls.filter(row=>row.operation==='send').length,1,'reporting never sends another input');
  }
+ await writeFile(output+`lifecycle-${lifecycleMode}-facts.json`,JSON.stringify(await facts(),null,2)+'\n');
  console.log(`Session health ${lifecycleMode} passed: truthful exact-input outcome, saved answer/draft retained, narrow/reload safe, no automatic work and one ordinary explicit send.`);
 }

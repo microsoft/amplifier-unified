@@ -90,6 +90,7 @@ async def lifecycle(app, home):
             'sessionId': sid, 'rootSessionId': sid, 'event': event,
             'generation_id': generation_id, 'initial_input_id': input_id,
             'input_ids': [input_id], 'observedAt': time.time(),
+            'interruptionRevision': source.get('interruptionRevision', 0),
             'runtimeOwnerId': 'lifecycle-fixture-owner', **values})
 
     async def complete(input_id, text):
@@ -153,8 +154,9 @@ async def lifecycle(app, home):
             raise web.HTTPConflict(text='The one late fault was already injected.')
         faulted = True
         # Match the original process-close ordering, not only a direct error.
-        await service.on_runtime_event('runtime.status', {
-            'sessionId': sid, 'status': 'stopped', 'event': 'session.closed'})
+        from amplifier_web.runtime import normalize_event
+        closed_kind, closed_payload = normalize_event({'type': 'session.closed'}, sid)
+        await service.on_runtime_event(closed_kind, closed_payload)
         await service.on_runtime_event('runtime.error', {
             'sessionId': sid, 'rootSessionId': sid, 'runtimeOwnerId': 'lifecycle-fixture-owner',
             'errorType': 'RuntimeError', 'phase': 'worker_idle',
@@ -174,6 +176,21 @@ async def lifecycle(app, home):
             'sessionId': sid, 'rootSessionId': sid, 'errorType': 'RuntimeError',
             'error': 'PRIVATE callback after explicit human Stop'})
         return web.json_response({'stopped': True})
+
+    async def failed_save(request):
+        authorized(request)
+        service._message(source, 'user', 'An interrupted unsaved request', inputId='unsaved-input')
+        await generation('generation.started', 'unsaved-input', 'unsaved-generation')
+        await generation('generation.detached', 'unsaved-input', 'unsaved-generation')
+        from amplifier_web.runtime import normalize_event
+        closed_kind, closed_payload = normalize_event({'type': 'session.closed'}, sid)
+        await service.on_runtime_event(closed_kind, closed_payload)
+        await service.on_runtime_event('runtime.error', {
+            'sessionId': sid, 'rootSessionId': sid, 'event': 'persistence.failed',
+            'errorType': 'OSError', 'error': 'PRIVATE failed-save path /synthetic/workspace'})
+        await service.on_runtime_event('runtime.ended', {
+            'sessionId': sid, 'rootSessionId': sid, 'status': 'interrupted'})
+        return web.json_response({'injected': True})
 
     async def newer_failure(request):
         authorized(request)
@@ -195,6 +212,7 @@ async def lifecycle(app, home):
             'completedUnchanged': source['messages'][:len(completed_messages)] == completed_messages,
             'messages': [annotate(source, row) for row in source['messages']],
             'status': source['status'], 'failure': source.get('failure'),
+            'attention': source.get('attention'), 'activity': source.get('activity'),
             'interruptionRevision': source.get('interruptionRevision', 0),
             'runtimeFaults': [row for row in source.get('runtimeEvents', [])
                               if row.get('type') == 'runtime.error' and row.get('scope') == 'runtime'],
@@ -204,6 +222,7 @@ async def lifecycle(app, home):
     app.router.add_post('/fixture/late-runtime-fault', fault)
     app.router.add_post('/fixture/newer-failure', newer_failure)
     app.router.add_post('/fixture/human-stop', human_stop)
+    app.router.add_post('/fixture/failed-save', failed_save)
     app.router.add_get('/fixture/check', check)
     service._publish()
     await serve(app, source)

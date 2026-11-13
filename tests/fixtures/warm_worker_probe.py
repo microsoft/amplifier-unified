@@ -7,6 +7,7 @@ network model request, real home, or existing session state.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -66,11 +67,18 @@ Reply with the fixture response.
     )
     # The fixture exercises worker lifecycle, not downloading optional community
     # behaviors. Keep its empty home and declared local provider deterministic.
-    from amplifier_web.builtin_behaviors import APPENDED_DEFAULTS
+    from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
+    modules = {}
+    for name, package in [('loop-live', 'amplifier_module_loop_live'),
+                          ('hook-context-intelligence', 'amplifier_module_hook_context_intelligence')]:
+        spec = importlib.util.find_spec(package)
+        assert spec and spec.origin, f'Missing prepared lifecycle dependency: {package}'
+        modules[name] = str(Path(spec.origin).parent)
     settings = root / "amplifier-home" / "settings.yaml"
     settings.parent.mkdir(parents=True)
     settings.write_text(json.dumps({"bundle": {"active": str(bundle), "app": []},
-                                   "web_bundles": {"excluded": list(APPENDED_DEFAULTS)}}))
+                                   "web_bundles": {"excluded": list(DEFAULT_BEHAVIORS)},
+                                   "sources": {"modules": modules}}))
     events = []
     import amplifier_web.runtime_worker as worker_module
 
