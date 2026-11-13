@@ -385,9 +385,11 @@ def helper_label(identity):
             else 'com.microsoft.amplifier-unified.repair.') + identity
 
 
-def helper_observation(label, env):
+def helper_observation(label, env, *, observer=None):
     if sys.platform == 'linux':
         value = properties(label + '.service', env)
+        if observer is not None:
+            observer(value)
         check(value.get('LoadState') in {'loaded', 'not-found'}, 'helper registration state is unknown')
         absent = value['LoadState'] == 'not-found'
         if not absent:
@@ -439,7 +441,7 @@ def checked_helper_plist(helper):
     return job
 
 
-def owned_helper_observation(helper, env, *, qualify=True):
+def owned_helper_observation(helper, env, *, qualify=True, observer=None):
     """A saved label alone does not authorize removing a replacement job."""
     folder = Path(helper['folder'])
     label = helper['label']
@@ -447,7 +449,8 @@ def owned_helper_observation(helper, env, *, qualify=True):
           and label == helper_label(folder.name), 'saved helper identity is ambiguous')
     expected = worker_command(helper, folder)
     if sys.platform == 'linux':
-        observed = helper_observation(label, env)
+        observed = (helper_observation(label, env, observer=observer) if observer is not None
+                    else helper_observation(label, env))
         if observed['LoadState'] != 'not-found':
             argv = re.findall(r'argv\[\]=(.*?)\s*;', observed.get('ExecStart', ''))
             check(len(argv) == 1 and shlex.split(argv[0]) == expected
@@ -456,7 +459,20 @@ def owned_helper_observation(helper, env, *, qualify=True):
     else:
         job = checked_helper_plist(helper)
         observed = {'label': label, 'domains': [], 'settled': True, 'helperJob': job}
-        for domain, text in launch_job(label, env):
+        rows = launch_job(label, env)
+        # Publish bounded parsed facts before ownership/count checks or a wait
+        # predicate can fail. Raw print output never leaves this function.
+        for domain, text in rows:
+            pids = re.findall(r'^\s*pid = (\d+)\s*$', text, re.M)
+            runs = re.findall(r'^\s*runs = (\d+)\s*$', text, re.M)
+            states = re.findall(r'^\s*state = (.+?)\s*$', text, re.M)
+            observed['settled'] = observed['settled'] and not pids and states in [['not running'], ['exited']]
+            observed['domains'].append({'domain': domain, 'pids': pids, 'runs': runs, 'states': states,
+                                        'oneShotQualified': len(runs) == 1 and int(runs[0]) <= 1,
+                                        'loadedDefinitionPathObserved': bool(re.search(r'^\s*path = ', text, re.M))})
+        if observer is not None:
+            observer(observed)
+        for domain, text in rows:
             programs = re.findall(r'^\s*program = (.+?)\s*$', text, re.M)
             argv = re.findall(r'^\s*arguments = \{\s*\n(.*?)^\s*\}', text, re.M | re.S)
             pids = re.findall(r'^\s*pid = (\d+)\s*$', text, re.M)
@@ -472,19 +488,87 @@ def owned_helper_observation(helper, env, *, qualify=True):
                 check(one_shot, 'one-shot helper automatically reran or run count is unobserved')
             # Cleanup may retire an exactly owned settled job after a failed
             # run-count qualification. It cannot turn that failure into a pass.
-            observed['settled'] = observed['settled'] and not pids and states in [['not running'], ['exited']]
-            observed['domains'].append({'domain': domain, 'pids': pids, 'runs': runs, 'states': states,
-                                        'oneShotQualified': one_shot,
-                                        'loadedDefinitionPathObserved': bool(loaded_paths)})
     return observed
 
 
-def retire_helper(helper, env):
+def safe_helper_observation(value):
+    """Closed diagnostic projection, never argv, paths, plist, env or raw print."""
+    def states(items):
+        return [item for item in items[:16] if isinstance(item, str)
+                and re.fullmatch(r'[A-Za-z -]{1,128}', item)]
+
+    def numbers(items):
+        return [int(str(item)) for item in items[:16]
+                if type(item) in {int, str} and re.fullmatch(r'[0-9]{1,10}', str(item))
+                and int(str(item)) <= 2**31 - 1]
+
+    result = {}
+    if type(value.get('settled')) is bool:
+        result['settled'] = value['settled']
+    if 'domains' in value:
+        result['domains'] = []
+        for row in value['domains'][:4]:
+            safe = {'states': states(row.get('states', [])), 'pids': numbers(row.get('pids', [])),
+                    'runs': numbers(row.get('runs', []))}
+            if re.fullmatch(r'(?:gui|user)/[0-9]{1,10}', str(row.get('domain', ''))):
+                safe['domain'] = row['domain']
+            for key in ('oneShotQualified', 'loadedDefinitionPathObserved'):
+                if type(row.get(key)) is bool:
+                    safe[key] = row[key]
+            result['domains'].append(safe)
+    else:
+        for key in ('LoadState', 'ActiveState', 'Restart'):
+            if key in value:
+                result[key] = states([value[key]])
+        for key in ('MainPID', 'NRestarts'):
+            if key in value:
+                result[key] = numbers([value[key]])
+    job = value.get('helperJob', {})
+    if re.fullmatch('[a-f0-9]{64}', str(job.get('plistSHA256', ''))):
+        result['plistSHA256'] = job['plistSHA256']
+    return result
+
+
+def recorded_helper_observation(helper, env, *, evidence, phase, qualify=True):
+    """Record the last observation even when validation raises before return."""
+    check(phase in {'run', 'cleanup'}, 'unknown helper observation phase')
+    record = {'schema': 1, 'observationOnly': True, 'phase': phase,
+              'operationId': Path(helper['folder']).name if re.fullmatch(
+                  '[a-f0-9]{32}', Path(helper['folder']).name) else None}
+
+    def publish(value):
+        record['observation'] = safe_helper_observation(value)
+        record['observationAvailable'] = True
+        save(evidence / 'helper-observation.json', record)
+        save(evidence / ('helper-observation-' + phase + '.json'), record)
+
+    try:
+        value = owned_helper_observation(helper, env, qualify=qualify, observer=publish)
+        publish(value)
+        return value
+    except Exception as error:
+        record.setdefault('observationAvailable', False)
+        record['observationErrorType'] = safe_error_type(error)
+        save(evidence / 'helper-observation.json', record)
+        save(evidence / ('helper-observation-' + phase + '.json'), record)
+        raise
+
+
+def safe_error_type(error):
+    name = type(error).__name__
+    return name if name in {'RuntimeError', 'ValueError', 'TypeError', 'KeyError', 'AssertionError',
+                            'OSError', 'FileNotFoundError', 'PermissionError', 'TimeoutExpired',
+                            'JSONDecodeError'} else 'Exception'
+
+
+def retire_helper(helper, env, *, observer=None):
     """Remove only exact settled ownership; never waive qualification to succeed."""
-    observed = wait_for(lambda: owned_helper_observation(helper, env, qualify=False),
+    read = (lambda: observer(helper, env, qualify=False)) if observer is not None else (
+        lambda: owned_helper_observation(helper, env, qualify=False))
+    observed = wait_for(read,
                         lambda row: row['settled'], seconds=120, description='cleanup helper settlement')
     child_settlement(Path(helper['folder']))
-    current = owned_helper_observation(helper, env, qualify=False)
+    current = read()
     check(current['settled'], 'saved helper became active during cleanup')
     label = helper['label']
     if sys.platform == 'darwin':
@@ -716,7 +800,10 @@ def run_case(root, evidence, name, fixture, transport):
         proof_host = request(config, '/api/health')['hostInstanceId']
         execute(*worker_command(fixture, folder, reconcile=True, host_instance=proof_host), env=env)
     if name == 'happy':
-        wait_for(lambda: (case / 'probe-waiting').exists(), description='candidate barrier')
+        def candidate_waiting():
+            recorded_helper_observation(owner['helpers'][-1], transport, evidence=evidence, phase='run')
+            return (case / 'probe-waiting').exists()
+        wait_for(candidate_waiting, description='candidate barrier')
         before = snapshot(config)
         same = execute(*worker_command(fixture, folder), env=env, check_result=False)
         check(same.returncode != 0, 'concurrent worker unexpectedly acquired operation lock')
@@ -728,7 +815,7 @@ def run_case(root, evidence, name, fixture, transport):
               'unadmitted competitor created installer/swap outputs')
         check(not (competing / 'child-boundary.json').exists(), 'unadmitted competitor spawned a repair child')
         check(snapshot(config) == before, 'competing workers produced installation/native effects')
-        observation = owned_helper_observation(owner['helpers'][-1], transport)
+        observation = recorded_helper_observation(owner['helpers'][-1], transport, evidence=evidence, phase='run')
         check(not observation['settled'], 'manager did not own active detached helper')
         probe_parent = next(row['parentPID'] for row in events(case) if row['kind'] == 'probe')
         if sys.platform == 'linux':
@@ -742,8 +829,12 @@ def run_case(root, evidence, name, fixture, transport):
                      'unadmittedBeforeCandidate': True,
                      'effectsUnchanged': True, 'helperWhileOldHostAlive': observation}
         (case / 'probe-release').touch(mode=0o600)
-    wait_for(lambda: terminal(folder), description=name + ' terminal receipt')
-    settled = wait_for(lambda: owned_helper_observation(owner['helpers'][-1], transport), lambda value: value['settled'],
+    def terminal_observed():
+        recorded_helper_observation(owner['helpers'][-1], transport, evidence=evidence, phase='run')
+        return terminal(folder)
+    wait_for(terminal_observed, description=name + ' terminal receipt')
+    settled = wait_for(lambda: recorded_helper_observation(owner['helpers'][-1], transport,
+                       evidence=evidence, phase='run'), lambda value: value['settled'],
                        description='one-shot helper settled')
     receipt = load(folder / 'operation.json')
     expected, stop_intent, stop_settled, mutation, starts, stops, candidate_probes, fresh_probes = EXPECTATIONS[name]
@@ -835,7 +926,8 @@ def run_case(root, evidence, name, fixture, transport):
           'exact settled operation replay produced effects')
     check(child_boundary_identity(folder) == saved_child, 'late worker replay wrote a child spawn-intent boundary')
     time.sleep(.6)
-    check(owned_helper_observation(owner['helpers'][-1], transport)['settled'], 'one-shot helper reran')
+    check(recorded_helper_observation(owner['helpers'][-1], transport,
+                                     evidence=evidence, phase='run')['settled'], 'one-shot helper reran')
     counters = effect_counts(case)
     check(counters.get('admit') == 1 and counters.get('dispatch', 0) == (0 if name == 'reconcile' else 1),
           'operation admission/dispatch checkpoint count changed')
@@ -869,7 +961,8 @@ def cleanup(root, evidence):
     # Never kill/remove a possibly running installer. Require its exact saved job
     # to settle. Timeout fails cleanup, retaining definitions/ownership for review.
     for helper in owner['helpers']:
-        results['helpers'].append(retire_helper(helper, env))
+        results['helpers'].append(retire_helper(helper, env, observer=lambda item, transport, **kwargs:
+            recorded_helper_observation(item, transport, evidence=evidence, phase='cleanup', **kwargs)))
     saved = owner['definition']
     pids, helper_pids, child_pids = [], [], []
     for case in owner['cases']:
@@ -919,6 +1012,13 @@ def run(root, evidence):
     for case in CASES:
         try:
             run_case(root, evidence, case, fixture, transport)
+        except Exception as error:
+            # Save the ORIGINAL case failure before finally-cleanup can raise.
+            # Exception strings may include private inputs: publish only a
+            # closed type and static detail, never str/repr/error arguments.
+            save(evidence / 'case-failure.json', {'case': case, 'passed': False,
+                 'errorType': safe_error_type(error), 'detail': 'Mechanics case failed before cleanup.'})
+            raise
         finally:
             cleanup(root, evidence)
     save(evidence / 'result.json', {'passed': True, 'cases': list(CASES), 'limits': LIMITS})
@@ -934,8 +1034,8 @@ def main():
         {'prepare': prepare, 'run': run, 'cleanup': cleanup}[args.action](root, evidence)
     except Exception as error:
         if evidence.is_dir():
-            save(evidence / (args.action + '-failure.json'), {'passed': False, 'errorType': type(error).__name__,
-                                                           'detail': str(error) if isinstance(error, RuntimeError) else 'fixture failed; private state retained'})
+            save(evidence / (args.action + '-failure.json'), {'passed': False, 'errorType': safe_error_type(error),
+                                                           'detail': 'Fixture action failed; private state retained.'})
         raise
 
 

@@ -623,6 +623,93 @@ class NativeRepairHarnessTests(unittest.TestCase):
         self.assertNotIn('plistlib.dumps', source)
         self.assertEqual(len(assignment.targets), 2)  # identical plan and operation helperJob
 
+    def test_timeout_publishes_actual_unknown_state_before_predicate_without_relaxing(self):
+        helper = self.mac_helper()
+        rows = [(f'gui/{os.getuid()}', self.mac_job_print(helper, state='waiting for something'))]
+        with patch.object(native.sys, 'platform', 'darwin'), patch.object(native, 'launch_job', return_value=rows), \
+                patch.object(native.time, 'monotonic', side_effect=[0, 121]), \
+                patch.object(native, 'execute') as execute:
+            with self.assertRaisesRegex(RuntimeError, 'cleanup helper settlement'):
+                native.retire_helper(helper, {}, observer=lambda item, env, **kwargs:
+                    native.recorded_helper_observation(item, env, evidence=self.root, phase='cleanup', **kwargs))
+        record = native.load(self.root / 'helper-observation.json')
+        self.assertTrue(record['observationOnly'])
+        self.assertFalse(record['observation']['settled'])
+        self.assertEqual(record['observation']['domains'][0]['states'], ['waiting for something'])
+        self.assertEqual(record['observation']['domains'][0]['runs'], [1])
+        self.assertNotIn('passed', record)
+        execute.assert_not_called()
+
+    def test_foreign_argv_failure_still_saves_parsed_state_but_not_foreign_argv(self):
+        helper = self.mac_helper()
+        text = self.mac_job_print(helper).replace('  -S\n', '  SECRET-TOKEN-DO-NOT-STORE\n')
+        with patch.object(native.sys, 'platform', 'darwin'), \
+                patch.object(native, 'launch_job', return_value=[(f'gui/{os.getuid()}', text)]):
+            with self.assertRaisesRegex(RuntimeError, 'foreign or unidentifiable'):
+                native.recorded_helper_observation(helper, {}, evidence=self.root, phase='run')
+        raw = (self.root / 'helper-observation-run.json').read_text()
+        record = json.loads(raw)
+        self.assertEqual(record['observationErrorType'], 'RuntimeError')
+        self.assertEqual(record['observation']['domains'][0]['states'], ['not running'])
+        self.assertNotIn('SECRET-TOKEN', raw)
+        self.assertNotIn(helper['basePython'], raw)
+        self.assertNotIn('plistPath', raw)
+
+    def test_missing_private_proof_records_unavailable_without_guessing_state(self):
+        helper = self.mac_helper()
+        (Path(helper['folder']) / 'helper.plist').unlink()
+        with patch.object(native.sys, 'platform', 'darwin'), patch.object(native, 'launch_job') as manager:
+            with self.assertRaises(FileNotFoundError):
+                native.recorded_helper_observation(helper, {}, evidence=self.root, phase='cleanup', qualify=False)
+        record = native.load(self.root / 'helper-observation-cleanup.json')
+        self.assertFalse(record['observationAvailable'])
+        self.assertEqual(record['observationErrorType'], 'FileNotFoundError')
+        self.assertNotIn('observation', record)
+        manager.assert_not_called()
+
+    def test_observation_projection_cannot_serialize_raw_manager_secrets_or_environment(self):
+        value = {'settled': False, 'ExecStart': 'SECRET-ARGV', 'rawPrint': 'SECRET-PRINT',
+                 'environment': {'TOKEN': 'SECRET-ENV'}, 'plist': 'SECRET-PLIST', 'helperJob': {
+                     'plistPath': '/private/SECRET-PATH', 'detail': 'SECRET-DETAIL', 'plistSHA256': 'a' * 64},
+                 'domains': [{'domain': 'gui/123', 'states': ['waiting', 'bad=SECRET', 'z' * 129, 'bad\nstate'],
+                              'pids': ['123', True, 'SECRET'], 'runs': ['2', '99999999999'],
+                              'raw': 'SECRET-RAW', 'loadedDefinitionPathObserved': True}]}
+        safe = native.safe_helper_observation(value)
+        raw = json.dumps(safe)
+        self.assertNotIn('SECRET', raw)
+        self.assertEqual(safe['domains'][0]['states'], ['waiting'])
+        self.assertEqual(safe['domains'][0]['pids'], [123])
+        self.assertEqual(safe['domains'][0]['runs'], [2])
+        self.assertEqual(safe['plistSHA256'], 'a' * 64)
+        self.assertEqual(set(safe), {'settled', 'domains', 'plistSHA256'})
+
+    def test_multirun_error_published_before_strict_qualification_failure(self):
+        helper = self.mac_helper()
+        rows = [(f'gui/{os.getuid()}', self.mac_job_print(helper, runs=3))]
+        with patch.object(native.sys, 'platform', 'darwin'), patch.object(native, 'launch_job', return_value=rows):
+            with self.assertRaisesRegex(RuntimeError, 'automatically reran'):
+                native.recorded_helper_observation(helper, {}, evidence=self.root, phase='run')
+        value = native.load(self.root / 'helper-observation-run.json')
+        self.assertEqual(value['observation']['domains'][0]['runs'], [3])
+        self.assertFalse(value['observation']['domains'][0]['oneShotQualified'])
+        self.assertEqual(value['observationErrorType'], 'RuntimeError')
+
+    def test_original_case_failure_saved_before_cleanup_error_without_private_exception(self):
+        fixture = {'sourceIndex': {}, 'uv': '/private/uv', 'basePython': '/private/python', 'executables': {}}
+        native.save(self.root / 'fixture.json', fixture)
+        with patch.object(native, 'source_index', return_value={}), \
+                patch.object(native, 'executable_selection', return_value={}), \
+                patch.object(native, 'manager_environment', return_value={}), \
+                patch.object(native, 'run_case', side_effect=ValueError('SECRET original private input')), \
+                patch.object(native, 'cleanup', side_effect=RuntimeError('SECRET cleanup input')):
+            with self.assertRaisesRegex(RuntimeError, 'cleanup input'):
+                native.run(self.root, self.root)
+        value = native.load(self.root / 'case-failure.json')
+        self.assertEqual(value['errorType'], 'ValueError')
+        self.assertFalse(value['passed'])
+        self.assertNotIn('SECRET', (self.root / 'case-failure.json').read_text())
+        self.assertFalse((self.root / 'result.json').exists())
+
 
 if __name__ == '__main__':
     unittest.main()
