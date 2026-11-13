@@ -396,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "amplifier-unified"
-version = "0.85.0"
+version = "0.85.1"
 source = { editable = "." }
 dependencies = [
     { name = "agent-client-protocol" },
