@@ -1886,7 +1886,8 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert any(s.get('with', {}).get('path') == 'amplifier_web/static/' for s in before)
     # The fixed attachment-only contracts are inactive for APP004/default.
     after = [step for step in steps[steps.index(contract) + 1:]
-             if step.get('if') != '${{ inputs.attachment_consumption }}']
+             if step.get('if') not in {'${{ inputs.attachment_consumption }}',
+                                       '${{ inputs.captured_message_delivery }}'}]
     next_step = after[0]
     assert next_step['name'] == 'Run all extended browser scenarios serially'
     # Multi-quote replaces only this explicitly selected run; default/APP004

@@ -23,6 +23,14 @@ export function nativeDeliverySource(session){
  return {workspace:session.workspace||null,nativeIdentity:session.runtimeSessionId||session.nativeIdentity||session.id};
 }
 
+export function retainedDeliveryTarget(state,scope){
+ return typeof scope==='string'&&scope?{scope,connection:state?.client?.hostInstanceId}:null;
+}
+
+export function freshRetrySource(session,creation){
+ return session?.externalAgent||creation?.setup?.externalAgentId?{}:{expectedSource:nativeDeliverySource(session)};
+}
+
 // A bounded frame may omit the captured conversation. Compare positive source
 // evidence, not membership; retain no identity cache and never expand the frame.
 export function deliveryTargetMatches(state,target,sessionId){

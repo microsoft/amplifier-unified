@@ -42,7 +42,7 @@ import {homePatch} from './adaptive-work.js';
 import {SettingsExperience} from './settings-experience';
 import {useGuardedSettingsPanel,useGuardedSettingsSession} from './settings-drafts';
 import {useMessageOutbox,outboxMessages,outboxMatches} from './message-outbox';
-import {checkedDelivery,deliveryRecovery,deliveryScope,deliveryTargetMatches,nativeDeliverySource} from './pending-delivery-checks';
+import {checkedDelivery,deliveryRecovery,deliveryScope,deliveryTargetMatches,nativeDeliverySource,retainedDeliveryTarget,freshRetrySource} from './pending-delivery-checks';
 import {clientId,clientUrl,attachClient,draftJournal} from './api';
 import {checkpointSurfaces} from './surface-checkpoint';
 import {useConversationDetail} from './conversation-detail';
@@ -241,7 +241,7 @@ function App(){
   }
   const creatingConversation=action==='session.create'&&args.fromDraft;
   const readDeliveryTarget=(frame=latest.current)=>creatingConversation?{scope:deliveryScope(frame,null),connection:frame?.client?.hostInstanceId}:deliveryRecovery(frame,frame?.sessions?.find(row=>row.id===args.sessionId)||(args.expectedSource?{id:args.sessionId,...args.expectedSource}:null));
-  const deliveryTarget=meta.capturedDelivery?.target??(creatingConversation||['conversation.delivery','conversation.send'].includes(action)?readDeliveryTarget():null),deliveryAuthenticationAtStart=meta.capturedDelivery?.authentication??deliveryAuthentication.current;
+  const deliveryTarget=meta.capturedDelivery?.target??(action==='conversation.send'&&meta.outboxScope?retainedDeliveryTarget(latest.current,meta.outboxScope):creatingConversation||['conversation.delivery','conversation.send'].includes(action)?readDeliveryTarget():null),deliveryAuthenticationAtStart=meta.capturedDelivery?.authentication??deliveryAuthentication.current;
   if(deliveryTarget&&!meta.capturedDelivery)meta={...meta,capturedDelivery:{target:deliveryTarget,authentication:deliveryAuthenticationAtStart}};
   const matchesFrame=frame=>creatingConversation?JSON.stringify(readDeliveryTarget(frame))===JSON.stringify(deliveryTarget):deliveryTargetMatches(frame,deliveryTarget,args.sessionId);
   const sameDeliveryTarget=()=>deliveryAuthenticationAtStart===deliveryAuthentication.current&&(!deliveryTarget||matchesFrame(latest.current));
@@ -944,7 +944,7 @@ function App(){
   if(previous.status==='unknown'&&text!==undefined)return;
   const creation=previous.status==='failed'&&!previous.sessionId?{id:crypto.randomUUID(),setup:creationSetup()}:previous.creation;
   const currentSession=latest.current?.sessions?.find(row=>row.id===previous.sessionId),currentGeneration=currentSession?.collaborationGeneration;
-  const next=outbox.update(previous.id,{creation,...(previous.status==='failed'?{commandId:crypto.randomUUID(),...(nativeDeliverySource(currentSession)?{expectedSource:nativeDeliverySource(currentSession)}:{}),allowNextTurn:true,expectedGenerationId:currentGeneration&&!currentGeneration.terminal?currentGeneration.id:null,expectedConfigurationRevision:currentSession?.nextMessageRevision??0,...(text!==undefined?{text}:{})}:{}),error:''});
+  const next=outbox.update(previous.id,{creation,...(previous.status==='failed'?{commandId:crypto.randomUUID(),...freshRetrySource(currentSession,creation),allowNextTurn:true,expectedGenerationId:currentGeneration&&!currentGeneration.terminal?currentGeneration.id:null,expectedConfigurationRevision:currentSession?.nextMessageRevision??0,...(text!==undefined?{text}:{})}:{}),error:''});
   if(text!==undefined)act('view.update',{patch:{messageEdit:null}});
   await deliver(next);
  }

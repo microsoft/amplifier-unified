@@ -8,7 +8,7 @@ import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {MessageDelivery}=await server.ssrLoadModule('/src/message-delivery.jsx');
 const {readOutbox,outboxMessages,useMessageOutbox}=await server.ssrLoadModule('/src/message-outbox.jsx');
-const {deliveryScope,nativeDeliverySource,deliveryTargetMatches}=await server.ssrLoadModule('/src/pending-delivery-checks.js');
+const {deliveryScope,nativeDeliverySource,deliveryTargetMatches,retainedDeliveryTarget,freshRetrySource}=await server.ssrLoadModule('/src/pending-delivery-checks.js');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
 
@@ -363,6 +363,28 @@ test('captured native witness survives omission but refuses positive source/host
  sessionStorage.setItem('amplifier.messageOutbox.v1',JSON.stringify(rows));
  assert.deepEqual(readOutbox(sessionStorage),rows,'Witness and legacy omission round-trip without migration');
  assert.equal(Object.hasOwn(readOutbox(sessionStorage)[1],'expectedSource'),false);
+});
+
+test('legacy omitted wire witness retains a connection/frame fence without enriching its payload',()=>{
+ const state={client:{historyScope:'account',hostInstanceId:'host'},sessions:[]};
+ const legacy={id:'old',commandId:'original',sessionId:'chat',scope:JSON.stringify(['account','/fixture','native']),status:'unknown'};
+ const original=JSON.stringify(legacy),target=retainedDeliveryTarget(state,legacy.scope);
+ assert.deepEqual(target,{scope:legacy.scope,connection:'host'});
+ assert.equal(deliveryTargetMatches(state,target,'chat'),true);
+ assert.equal(deliveryTargetMatches({...state,client:{...state.client,hostInstanceId:'replacement'}},target,'chat'),false);
+ assert.equal(deliveryTargetMatches({...state,sessions:[{id:'chat',workspace:'/other',nativeIdentity:'native'}]},target,'chat'),false);
+ assert.equal(deliveryTargetMatches({...state,sessions:[{id:'chat',workspace:'/fixture',nativeIdentity:'replacement'}]},target,'chat'),false);
+ assert.equal(JSON.stringify(legacy),original);
+ assert.equal(Object.hasOwn(legacy,'expectedSource'),false);
+ assert.equal(Object.hasOwn(legacy,'expectedConfigurationRevision'),false);
+});
+
+test('fresh failed native new-chat retry marks witness binding; external retry stays witness-free',()=>{
+ assert.deepEqual(freshRetrySource(undefined,{setup:{workspace:'/fixture'}}),{expectedSource:null});
+ assert.deepEqual(freshRetrySource({id:'chat',workspace:'/fixture',runtimeSessionId:'native'}),{
+  expectedSource:{workspace:'/fixture',nativeIdentity:'native'}});
+ assert.deepEqual(freshRetrySource(undefined,{setup:{externalAgentId:'external'}}),{});
+ assert.deepEqual(freshRetrySource({id:'chat',externalAgent:{id:'external'}}),{});
 });
 
 test('persisted outbox projects only exact source/workspace/native identity; legacy payload stays unbound',()=>{
