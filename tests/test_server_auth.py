@@ -69,6 +69,10 @@ async def test_health_identity_is_only_disclosed_to_control_bearer(aiohttp_clien
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
                            voice=False, background_updates=False)
     client = await aiohttp_client(app)
+    app['service'].state.setdefault('maintenance', {}).setdefault('installationRepair', {})['operation'] = {
+        'operationId': 'a' * 32, 'previewId': 'b' * 32,
+        'detail': 'PRIVATE_REPAIR_HEALTH_SENTINEL', 'plan': {'secret': 'PRIVATE_PLAN_SENTINEL'},
+    }
     cookie = new_session(app["session_secret"])
     for headers in ({}, {"Authorization": "Bearer invalid"},
                     {"Cookie": "amplifier_unified_session=" + cookie}):
@@ -78,12 +82,19 @@ async def test_health_identity_is_only_disclosed_to_control_bearer(aiohttp_clien
         assert "dataIdentity" not in body
         assert "runtime" not in body
         assert "revision" not in body and "instanceId" not in body
+        assert "installationRepair" not in body
     response = await client.get("/api/health", headers={"Authorization": "Bearer " + app["control_token"]})
     assert response.status == 200
     body = await response.json()
     assert body["dataIdentity"] == data_identity(tmp_path)
     assert body["instanceId"] == app['service'].update_manager.running_identity['instanceId']
     assert body['revision'] == app['service'].update_manager.running_identity['revision']
+    assert body['installationRepair'] == {'protocol': 1, 'operationId': 'a' * 32}
+    assert type(body['installationRepair']['protocol']) is int
+    assert 'PRIVATE_' not in str(body)
+    app['service'].state['maintenance']['installationRepair']['operation'] = None
+    response = await client.get("/api/health", headers={"Authorization": "Bearer " + app["control_token"]})
+    assert (await response.json())['installationRepair'] == {'protocol': 1, 'operationId': None}
 
 
 async def test_login_rejects_cross_origin_before_pam(aiohttp_client, tmp_path):

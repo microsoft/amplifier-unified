@@ -260,6 +260,19 @@ try{
  await wireOperation(operation.operationId,'unknown');
  phase='current host health is not repair health';
  const health=await page.request.get(base+'/api/health');assert.equal(health.status(),200);
+ assert.equal(Object.hasOwn(await health.json(),'installationRepair'),false,'Browser cookie does not disclose repair health identity');
+ for(const headers of [{},{Authorization:'Bearer invalid-fixture-token'}]){
+  const response=await fetch(base+'/api/health',{headers});assert.equal(response.status,200);
+  const body=await response.json();
+  for(const key of ['installationRepair','dataIdentity','revision','instanceId','runtime'])
+   assert.equal(Object.hasOwn(body,key),false,'Anonymous/invalid bearer health omits '+key);
+ }
+ const ownerHealth=await page.request.get(base+'/api/health',{headers:{Authorization:token}});
+ assert.equal(ownerHealth.status(),200);
+ const ownerHealthBody=await ownerHealth.json();
+ assert.deepEqual(ownerHealthBody.installationRepair,{protocol:1,operationId:operation.operationId});
+ assert.equal(Number.isInteger(ownerHealthBody.installationRepair.protocol),true);
+ assert.equal(JSON.stringify(ownerHealthBody).includes('INSTALLATION_REPAIR_FIXTURE_CREDENTIAL'),false);
  await expect(healthy()).toHaveCount(0);
  phase='reinstalled is not healthy';
  await advance('reinstalled',operation.operationId);
