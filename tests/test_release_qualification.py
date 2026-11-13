@@ -1650,13 +1650,14 @@ def test_browser_retains_only_the_successfully_built_public_web_payload():
     build = next(index for index, step in enumerate(steps) if step.get('id') == 'frontend-build')
     assert identity < build
     assert 'python scripts/web_client_build.py build' in steps[build]['run']
-    upload = steps[build + 1]
+    upload = next(step for step in steps if step.get('name') == 'Retain the successful production web build')
     assert upload['if'] == "${{ steps.frontend-build.outcome == 'success' }}"
     assert upload['uses'] == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
     assert upload['with'] == {
         'name': 'browser-static-${{ steps.build-source.outputs.revision }}-${{ github.run_attempt }}',
         'path': 'amplifier_web/static/', 'include-hidden-files': 'true', 'if-no-files-found': 'error'}
-    assert steps[build + 2]['name'] == 'Install browser dependencies'
+    assert steps.index(upload) > build
+    assert steps[steps.index(upload) + 1]['name'] == 'Install browser dependencies'
     # The artifact includes the builder's metadata and is retained before later
     # scenario failure; an unrun/failed build cannot upload the old tracked tree.
     selection = json.loads((ROOT / 'components/web-client.source.json').read_text())
@@ -1901,8 +1902,9 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     }
     # Opt-in can neither mask a failed step nor bypass the existing always upload.
     continued = [step for step in steps if 'continue-on-error' in step]
-    assert {step['id'] for step in continued} == {'attachment-contracts', 'attachment-client-contracts'}
-    assert all(step['if'] == '${{ inputs.attachment_consumption }}' for step in continued)
+    assert {step['id'] for step in continued} == {'attachment-contracts', 'attachment-client-contracts', 'captured-host', 'captured-client'}
+    assert all(step['if'] == ('${{ inputs.captured_message_delivery }}' if step['id'].startswith('captured-')
+                             else '${{ inputs.attachment_consumption }}') for step in continued)
     failures = next(step for step in steps if step.get('name') == 'Preserve failed attachment contracts')
     assert failures['run'] == 'exit 1' and 'always()' in failures['if']
     diagnostics = steps[-1]

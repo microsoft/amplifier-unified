@@ -493,11 +493,15 @@ def test_workflow_keeps_independent_artifacts_and_one_full_python_owner():
     steps = browser['jobs']['browser']['steps']
     assert any('browser_check_runner.py' in step.get('run', '') for step in steps)
     uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02']
-    assert len(uploads) == 2
+    assert len(uploads) == 3
     by_name = {step['with']['name']: step for step in uploads}
     diagnostics_name = 'extended-browser-evidence-${{ github.run_attempt }}'
     static_name = 'browser-static-${{ steps.build-source.outputs.revision }}-${{ github.run_attempt }}'
-    assert set(by_name) == {diagnostics_name, static_name}
+    captured_name = 'captured-frontend-build-${{ github.sha }}-${{ github.run_attempt }}'
+    assert set(by_name) == {diagnostics_name, static_name, captured_name}
+    assert by_name[captured_name]['if'] == "${{ inputs.captured_message_delivery && steps.frontend-build.outcome == 'success' }}"
+    assert by_name[captured_name]['with']['path'] == '${{ runner.temp }}/captured-frontend-build/'
+    assert by_name[captured_name]['with']['if-no-files-found'] == 'error'
     diagnostics, static = by_name[diagnostics_name], by_name[static_name]
     assert diagnostics['if'] == 'always()'
     assert diagnostics['with'] == {
