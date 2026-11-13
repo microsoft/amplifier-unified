@@ -7,7 +7,11 @@ data reset. It supports only the verified generated Linux/WSL systemd user servi
 or macOS launch agent running from its owning uv tool installation. Native Windows
 repair is unqualified and explicitly unsupported; the app offers no workaround.
 Foreground/development hosts and customized or ambiguous service launches are
-refused, not replaced.
+refused, not replaced. Repair requires a configured HTTPS loopback listener with
+the private leaf-certificate pin. Plain HTTP is unsupported for repair: loopback
+alone does not authenticate a listener. All health URLs/pins are validated before
+reading the control token; the TLS leaf is checked on the same connection before
+transmitting it. No plaintext fallback or redirect is followed.
 
 `maintenance.installationRepairPreview` returns the exact host instance and label,
 physical data directory, application-only scope, latest stable release version and
@@ -48,10 +52,18 @@ owns the operation's stage and outcome across browser disconnect and host
 replacement. `maintenance.installationRepairStatus` accepts **either** `operationId`
 or `previewId`; an exact unconsumed preview returns `{operation:null}`, never an
 unrelated operation. With neither ID it returns the latest receipt. The initial
-`maintenance.installationRepair` projection contains `{preview,operation}`.
+`maintenance.installationRepair` projection contains
+`{preview,operation,verifyTarget,reconcileTarget}`.
 The client saves the preview identity before confirming and reconnects by reading
 status, never by resending a confirmation. Duplicate consumed previews return
 their original operation without another helper dispatch.
+
+Private prepared plans/helpers/receipts precede the **single atomic admission
+commit** in `installation-repair/admissions.json`, which joins current identity
+and exact preview lookup. Orphaned preparation files neither authorize a helper
+nor hold the host. An uncertain admission write is read back; if it landed the
+operation remains inspectable and held, but no helper is automatically dispatched.
+Startup, Status and repeated confirmations never replay it.
 
 The receipt's `helperJob` records the exact OS job label and cleanup owner.
 Linux uses a transient user service with `Restart=no` and manager collection on
@@ -87,6 +99,40 @@ readiness releases that exact hold; failure retains `reinstalled`/unverified.
 Accepted, running and unknown operations cannot use verification to clear their
 outcomes. A passing manual check or a separate CLI reset does not rewrite or
 automatically clear the installation-repair receipt.
+
+### Explicit no-replacement reconciliation
+
+`maintenance.installationRepairReconcile` requires the exact current `operationId`,
+current `hostInstanceId` and `confirm:true`. The projected `reconcileTarget`
+offers only inspection eligibility; it is **not** evidence of no effect.
+This action never installs, stops, starts or restores an installation.
+Under the operation, repair-namespace and shared-tool leases it checks the
+committed admission, marker-aware plan, monotonic stop/mutation boundary,
+child-command settlement, absence of recovery/move paths, physical data identity,
+unchanged bootstrap/uv receipt/public launcher/pointer/service, selected
+installer/interpreter hashes, managed PID/start/owner and pinned authenticated
+health for the **original** version/revision. Only this positive proof records
+`failed / reconciled-no-effect` and releases that exact admission. A delayed
+original helper then sees the closed receipt and cannot run.
+
+An unsettled stop command, a possibly surviving child, any installation mutation
+intent, missing/legacy/corrupt boundary, changed path, backup or unverified health
+refuses reconciliation and preserves the hold. A free worker lock or missing PID
+is not proof that an installer's descendants settled. Child intent is persisted
+before spawn; a dead helper cannot silently overwrite that uncertainty with a
+later diagnostic command. Candidate-only downloaded files and browser preparation
+may remain: reconciliation proves **no live installation replacement**, not that
+no candidate/cache bytes were ever written.
+
+If stopping succeeded but a lease/process guard failed before any installation
+move, the receipt reports `unknown / left-stopped`, not released `failed`.
+Inspect the exact receipt and settle the reported process/lease condition first.
+The installation owner may explicitly run `amplifier-unified --data-dir PATH
+service start` for the unchanged managed entry. Reconcile then requires positive
+original-version health and unchanged-entry proof before releasing the hold.
+It never blindly restarts stragglers or uncertain/partially replaced state.
+Genuinely unknown replacement evidence still needs its original recovery owner;
+neither Reconcile nor CLI reset fabricates or erases its outcome.
 
 Focused synthetic checks establish admission, no-replay, ordering and rollback
 boundaries. They do not establish native Linux/macOS service-manager qualification

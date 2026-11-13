@@ -228,6 +228,7 @@ ACTION_DEFINITIONS = {
     "maintenance.repair": ("Repair runtime dependency installation while idle",schema()),
     "maintenance.installationRepairPreview": ("Preview an installation-only repair of this managed host, preserving user data, downloaded sources, optional features and unknown receipts.", schema()),
     "maintenance.installationRepairVerify": ("Explicitly recheck health of one exact known reinstalled repair. Does not install, stop, restart, replay or clear unknown outcomes.", schema({"operationId":{"type":"string","pattern":"^[a-f0-9]{32}$"},"hostInstanceId":string(200),"confirm":{"enum":[True]}}, ["operationId","hostInstanceId","confirm"])),
+    "maintenance.installationRepairReconcile": ("Explicitly inspect one exact unfinished repair for positive no-installation-replacement proof. Never installs, stops, restarts, replays, or clears an uncertain stop/mutation/child outcome.", schema({"operationId":{"type":"string","pattern":"^[a-f0-9]{32}$"},"hostInstanceId":string(200),"confirm":{"enum":[True]}}, ["operationId","hostInstanceId","confirm"])),
     "maintenance.installationRepairConfirm": ("Explicitly confirm one exact installation repair preview. A detached helper qualifies a fresh candidate before stopping the idle host. Never repeat an unknown operation; read status by previewId.", schema({"previewId": {"type":"string","pattern":"^[a-f0-9]{32}$"},"hostInstanceId":string(200),"confirm":{"enum":[True]}}, ["previewId","hostInstanceId","confirm"])),
     "maintenance.installationRepairStatus": ("Inspect the authoritative installation repair receipt without dispatching or replaying it. Choose an exact operationId or previewId; neither returns the latest operation.", schema({"operationId":{"type":"string","pattern":"^[a-f0-9]{32}$"},"previewId":{"type":"string","pattern":"^[a-f0-9]{32}$"}}, [])),
     "updates.app": ("Stage a published application release and restart when idle",schema()),
@@ -2254,7 +2255,12 @@ class AppService:
                 else:
                     if origin not in {'ui', 'user'}:
                         raise AppError('Installation repair requires an explicit user confirmation of its preview.', 403)
-                    result = await repair.verify(self, args) if action.endswith('Verify') else await repair.confirm(self, args)
+                    if action.endswith('Verify'):
+                        result = await repair.verify(self, args)
+                    elif action.endswith('Reconcile'):
+                        result = await repair.reconcile(self, args)
+                    else:
+                        result = await repair.confirm(self, args)
             except ValueError as exc:
                 raise AppError(str(exc), 409) from None
             except (OSError, subprocess.SubprocessError):

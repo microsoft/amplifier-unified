@@ -94,10 +94,13 @@ class RepairFixture(unittest.TestCase):
         info = self.home.stat()
         self.plan = {
             "operationId": self.folder.name, "previewId": "preview-1", "hostInstanceId": "service-uuid",
+            "recoverySchema": 1,
             "home": str(self.home), "uid": os.getuid(), "dataStat": [info.st_dev, info.st_ino],
             "runningIdentity": {"version": "1.2.2", "revision": "c" * 40, "instanceId": "d" * 32},
             "toolRoot": str(self.tools), "binRoot": str(self.bins), "uv": str(self.uv),
             "basePython": str(Path(sys.executable).resolve()),
+            "executables": {"uv": worker.executable_identity(self.uv),
+                            "basePython": worker.executable_identity(Path(sys.executable).resolve())},
             "service": {"commands": self.commands, "path": str(self.service_file),
                         "sha256": worker._digest(self.service_file), "pid": 123,
                         "processStart": "Mon Nov 16 11:22:33 2026"},
@@ -107,7 +110,7 @@ class RepairFixture(unittest.TestCase):
             "target": {"version": "1.2.3", "revision": "b" * 40, "source": self.artifact["url"]},
             "extras": ["native-desktop"], "artifact": self.artifact,
             "probe": "PACKAGE_PROBE", "dependencyProbe": "DEPENDENCY_PROBE",
-            "health": {"urls": ["http://127.0.0.1:12345/api/health"], "pin": None},
+            "health": {"urls": ["https://127.0.0.1:12345/api/health"], "pin": "a" * 64},
             "pointer": {"exists": True, "sha256": worker._digest(self.pointer)},
             "env": {"SENSITIVE": "do-not-leak-fixture-secret", "UV_NO_CACHE": "1",
                     "PLAYWRIGHT_BROWSERS_PATH": str(self.home / "browser-cache")},
@@ -115,10 +118,13 @@ class RepairFixture(unittest.TestCase):
         operation = {
             "operationId": self.folder.name, "previewId": "preview-1", "hostInstanceId": "service-uuid",
             "status": "accepted", "stage": "accepted", "reinstalled": False,
+            "effectBoundary": {"schema": 1, "stopIntent": False, "stopSettled": False, "mutationIntent": False},
             "serviceState": "not-checked", "healthVerified": False, "detail": "Accepted",
         }
         worker.write(self.folder / "operation.json", operation, exclusive=True)
         worker.write(self.folder / "plan.json", self.plan, exclusive=True)
+        worker.write(self.namespace / "admissions.json", {"schema": 1, "current": self.folder.name,
+            "previews": {"preview-1": self.folder.name}}, exclusive=True)
         self.events = []
         self.pid = 123
         self.active_locks = set()
@@ -231,7 +237,7 @@ class RepairFixture(unittest.TestCase):
                 return subprocess.CompletedProcess([], 0, self.process_start + "\n", "")
             if args[-1] == "uid=":
                 return subprocess.CompletedProcess([], 0, str(os.getuid()) + "\n", "")
-            output = f"123 {self.prefix}/bin/python -m amplifier_web\n"
+            output = f"{self.pid} {self.prefix}/bin/python -m amplifier_web\n"
             if self.other_process:
                 output += f"789 {self.prefix}/bin/python -m amplifier_web --data-dir /other-profile\n"
             return subprocess.CompletedProcess([], 0, output, "")
@@ -392,7 +398,7 @@ class RepairFixture(unittest.TestCase):
     def test_lease_failure_leaves_service_stopped_without_claiming_install(self):
         self.failure_mode = "lease"
         result = self.run_worker()
-        self.assertEqual((result["status"], result["stage"]), ("failed", "left-stopped"))
+        self.assertEqual((result["status"], result["stage"]), ("unknown", "left-stopped"))
         self.assertEqual(result["serviceState"], "stopped")
         self.assertFalse(result["reinstalled"])
         self.assertEqual(self.prefix.stat().st_ino, self.old_inode)
@@ -511,6 +517,19 @@ class RepairFixture(unittest.TestCase):
             (self.prefix / "uv-receipt.toml").write_text("foreign install receipt")
         with patch.object(worker, "candidate", side_effect=candidate):
             self.assertEqual(self.run_worker()["stage"], "preflight-failed")
+        self.assertNotIn("stop", self.names())
+
+    def test_changed_selected_uv_executable_rejected_before_candidate_or_stop(self):
+        self.uv.write_text("different installer")
+        self.assertEqual(self.run_worker()["status"], "failed")
+        self.assertNotIn("candidate-install", self.names())
+        self.assertNotIn("stop", self.names())
+
+    def test_changed_selected_base_interpreter_pin_rejected_before_stop(self):
+        self.plan["executables"]["basePython"]["sha256"] = "0" * 64
+        self.save_plan()
+        self.assertEqual(self.run_worker()["status"], "failed")
+        self.assertNotIn("candidate-install", self.names())
         self.assertNotIn("stop", self.names())
 
     def test_reused_pid_with_new_start_time_never_stops(self):
@@ -658,6 +677,138 @@ class RepairFixture(unittest.TestCase):
             worker.verify(self.folder)
         self.assertEqual(worker.read(self.folder / "operation.json")["status"], "unknown")
         self.assertFalse(self.events)
+
+    def test_reconcile_never_dispatched_admission_fences_late_helper_without_replay(self):
+        result = worker.reconcile(self.folder)
+        self.assertEqual((result["status"], result["stage"]), ("failed", "reconciled-no-effect"))
+        self.assertTrue(result["reconciliation"]["noReplacement"])
+        self.assertEqual(self.run_worker()["stage"], "reconciled-no-effect")
+        self.assertNotIn("stop", self.names())
+        self.assertNotIn("candidate-install", self.names())
+        self.assertNotIn("fresh-install", self.names())
+
+    def test_reconcile_interrupted_settled_preflight_keeps_candidate_evidence(self):
+        operation = worker.read(self.folder / "operation.json")
+        operation.update(status="unknown", stage="interrupted")
+        worker.write(self.folder / "operation.json", operation)
+        worker.write(self.folder / "child-boundary.json", {"schema": 1, "settled": True})
+        evidence = self.folder / "candidate-tools"
+        evidence.mkdir()
+        (evidence / "partial").write_text("retain candidate-only evidence")
+        self.assertEqual(worker.reconcile(self.folder)["stage"], "reconciled-no-effect")
+        self.assertEqual((evidence / "partial").read_text(), "retain candidate-only evidence")
+
+    def test_reconcile_unsettled_child_does_not_guess_from_missing_helper_pid(self):
+        worker.write(self.folder / "child-boundary.json", {"schema": 1, "settled": False})
+        with self.assertRaises(ValueError):
+            worker.reconcile(self.folder)
+        self.assertEqual(worker.read(self.folder / "operation.json")["status"], "accepted")
+        self.assertFalse(self.events)
+
+    def test_unsettled_preflight_child_never_releases_failure_or_replays(self):
+        original = self.command
+        def command(*args, **kwargs):
+            if list(args[:3]) == [str(self.uv), "tool", "install"]:
+                worker.write(self.folder / "child-boundary.json", {"schema": 1, "settled": False})
+                raise worker.CommandFailed()
+            return original(*args, **kwargs)
+        with patch.object(worker, "command", side_effect=command):
+            result = self.run_worker()
+        self.assertEqual(result["status"], "unknown")
+        self.assertEqual(result["stage"], "child-outcome-unknown")
+        self.assertNotIn("stop", self.names())
+        before = len(self.events)
+        self.run_worker()
+        self.assertEqual(len(self.events), before)
+
+    def test_unsettled_fresh_installer_never_rolls_back_or_restarts(self):
+        original = self.command
+        def command(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if ("tool" in args and "install" in args
+                    and kwargs.get("env", {}).get("UV_TOOL_DIR") == str(self.tools)):
+                worker.write(self.folder / "child-boundary.json", {"schema": 1, "settled": False})
+                raise worker.CommandFailed()
+            return result
+        with patch.object(worker, "command", side_effect=command):
+            result = self.run_worker()
+        self.assertEqual(result["status"], "unknown")
+        self.assertTrue((self.tool_recovery_root(self.tools) / self.folder.name / "previous").exists())
+        self.assertTrue((self.prefix / "new-marker").exists())
+        self.assertNotIn("start", self.names())
+
+    def test_unreadable_child_proof_never_publishes_released_outcome(self):
+        subject = worker.Worker(self.folder, self.receipt())
+        for raw in (b"not-json", b'{"schema":true,"settled":true}',
+                    b'{"schema":1,"settled":false}'):
+            with self.subTest(raw=raw):
+                boundary = self.folder / "child-boundary.json"
+                boundary.write_bytes(raw)
+                for requested in ("failed", "rolled-back", "ready"):
+                    self.assertEqual(subject.receipt(requested, "test", "test")["status"], "unknown")
+
+    def test_reconcile_refuses_mutation_stop_uncertainty_backup_and_legacy_evidence(self):
+        original = worker.read(self.folder / "operation.json")
+        for boundary in (
+            {"schema": 1, "stopIntent": True, "stopSettled": False, "mutationIntent": False},
+            {"schema": 1, "stopIntent": True, "stopSettled": True, "mutationIntent": True},
+            None,
+        ):
+            with self.subTest(boundary=boundary):
+                operation = {**original, "effectBoundary": boundary, "status": "unknown"}
+                worker.write(self.folder / "operation.json", operation)
+                with self.assertRaises(ValueError):
+                    worker.reconcile(self.folder)
+                self.assertEqual(worker.read(self.folder / "operation.json")["status"], "unknown")
+        worker.write(self.folder / "operation.json", original)
+        (self.folder / "backup").mkdir()
+        with self.assertRaises(ValueError):
+            worker.reconcile(self.folder)
+        self.assertNotIn("stop", self.names())
+
+    def test_reconcile_stopped_no_mutation_requires_explicit_start_then_original_health(self):
+        self.fail = "lease"
+        result = self.run_worker()
+        self.assertEqual((result["status"], result["stage"]), ("unknown", "left-stopped"))
+        with self.assertRaises(ValueError):
+            worker.reconcile(self.folder)
+        self.assertNotIn("start", self.names())
+        self.fail = None
+        self.pid = 456  # Owner explicitly started the unchanged old service.
+        self.health_override = {**self.plan["runningIdentity"], "instanceId": "f" * 32}
+        result = worker.reconcile(self.folder)
+        self.assertEqual(result["stage"], "reconciled-no-effect")
+        self.assertNotIn("start", self.names())  # Reconcile did not start it.
+        self.assertNotIn("fresh-install", self.names())
+
+    def test_reconcile_changed_installation_or_wrong_original_health_remains_held(self):
+        self.launcher.unlink()
+        self.launcher.symlink_to(self.prefix / "bin/python")
+        with self.assertRaises(ValueError):
+            worker.reconcile(self.folder)
+        self.assertEqual(worker.read(self.folder / "operation.json")["status"], "accepted")
+
+    def test_reconcile_cannot_race_original_worker_or_stale_admission(self):
+        with worker.lock(self.folder / "worker.lock"):
+            with self.assertRaises(BlockingIOError):
+                worker.reconcile(self.folder)
+        worker.write(self.namespace / "admissions.json",
+            {"schema": 1, "current": "another", "previews": {"preview-1": self.folder.name}})
+        with self.assertRaises(ValueError):
+            worker.reconcile(self.folder)
+        self.assertFalse(self.events)
+
+    def test_effect_boundary_write_failure_prevents_stop_and_install_moves(self):
+        original = worker.Worker.effect_boundary
+        def reject(subject, **values):
+            if values.get("stopIntent"):
+                raise OSError("fixture durable marker unavailable")
+            return original(subject, **values)
+        with patch.object(worker.Worker, "effect_boundary", reject):
+            result = self.run_worker()
+        self.assertEqual(result["status"], "failed")
+        self.assertNotIn("stop", self.names())
+        self.assertTrue((self.prefix / "old-marker").exists())
 
     def test_delegated_generation_host_in_other_profile_blocks_before_stop(self):
         original = self.command
@@ -868,6 +1019,45 @@ class RepairFixture(unittest.TestCase):
 
 
 class HealthTransportTests(unittest.TestCase):
+    def test_plaintext_or_mixed_listener_rejected_before_credential_read_or_request(self):
+        for urls in (["http://127.0.0.1:12345/api/health"],
+                     ["https://127.0.0.1:12345/api/health", "http://127.0.0.1:12345/api/health"]):
+            plan = {"home": "/unused/private", "health": {"urls": urls, "pin": "a" * 64}}
+            with self.subTest(urls=urls), patch.object(worker, "_bytes") as read_token, patch.object(
+                    worker, "_health_get") as request:
+                with self.assertRaises(ValueError):
+                    worker.authenticated_health(plan)
+                read_token.assert_not_called()
+                request.assert_not_called()
+
+    def test_child_spawn_intent_prevents_reconciliation_after_helper_death(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary).resolve()
+            folder.chmod(0o700)
+            with patch.object(worker, "_COMMAND_FOLDER", folder), patch.object(
+                    worker.subprocess, "Popen", side_effect=OSError("spawn result unknown")) as spawn:
+                with self.assertRaises(OSError):
+                    worker.command("/fixture/installer")
+                self.assertEqual(worker.read(folder / "child-boundary.json"),
+                                 {"schema": 1, "settled": False})
+                with self.assertRaises(ValueError):
+                    worker.command("/fixture/diagnostic")
+                self.assertEqual(spawn.call_count, 1)
+
+    def test_live_descendant_group_never_gets_settled_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary).resolve()
+            folder.chmod(0o700)
+            boundary = folder / "child-boundary.json"
+            worker.write(boundary, {"schema": 1, "settled": False})
+            with patch.object(worker.os, "killpg", return_value=None):
+                with self.assertRaises(ValueError):
+                    worker._settle_child(boundary, 123)
+            self.assertFalse(worker.read(boundary)["settled"])
+            with patch.object(worker.os, "killpg", side_effect=ProcessLookupError):
+                worker._settle_child(boundary, 123)
+            self.assertTrue(worker.read(boundary)["settled"])
+
     def test_loaded_service_rejects_overrides_or_stale_definition(self):
         plan = {"service": {"path": "/unit", "pid": 123, "processStart": "original"}, "env": {},
                 "uid": os.getuid()}

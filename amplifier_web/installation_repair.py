@@ -100,11 +100,28 @@ def _folder(service, identity):
 
 
 def _latest(service):
-    path = root(service) / 'latest.json'
+    identity = _admissions(service)['current']
+    return _operation(service, identity) if identity else None
+
+
+def _admissions(service):
+    """One atomic admission owns both current identity and exact preview lookup."""
+    path = root(service) / 'admissions.json'
     if not path.exists() and not path.is_symlink():
-        return None
-    identity = _read(path, service.data_dir)['operationId']
-    return _operation(service, identity)
+        legacy = root(service) / 'latest.json'
+        if legacy.exists() or legacy.is_symlink():
+            raise ValueError('An older repair admission needs explicit owner review; it was not cleared.')
+        return {'schema': 1, 'current': None, 'previews': {}}
+    value = _read(path, service.data_dir)
+    if (not isinstance(value, dict) or set(value) != {'schema', 'current', 'previews'}
+            or type(value['schema']) is not int or value['schema'] != 1
+            or not isinstance(value['previews'], dict)
+            or any(not isinstance(key, str) or not IDENTITY.fullmatch(key)
+                   or not isinstance(identity, str) or not IDENTITY.fullmatch(identity)
+                   for key, identity in value['previews'].items())
+            or value['current'] is not None and value['current'] not in value['previews'].values()):
+        raise ValueError('The installation repair admission is unrecognized.')
+    return value
 
 
 def _operation(service, identity):
@@ -137,7 +154,8 @@ def initialize(service):
                          'detail': 'The saved installation repair could not be read. Do not repeat it.',
                          'reinstalled': False, 'healthVerified': False, 'serviceState': 'unknown'}
     service.state.setdefault('maintenance', {})['installationRepair'] = {
-        'preview': None, 'operation': operation, 'verifyTarget': _verify_target(service, operation)}
+        'preview': None, 'operation': operation, 'verifyTarget': _verify_target(service, operation),
+        'reconcileTarget': _reconcile_target(service, operation)}
     service._installation_repair_gate = (
         operation.get('operationId') or 'receipt-unreadable'
         if operation and operation.get('status') in ACTIVE else None)
@@ -312,6 +330,9 @@ async def binding(service):
     from .application_generations import bootstrap_identity
     bootstrap = await asyncio.to_thread(bootstrap_identity, prefix)
     launcher_identity = await asyncio.to_thread(_file_identity, launcher)
+    from .installation_repair_worker import executable_identity
+    executables = await asyncio.to_thread(lambda: {
+        'uv': executable_identity(uv), 'basePython': executable_identity(base)})
     info = home.stat()
     env = reset.environment()
     env.update(UV_TOOL_DIR=str(tool_root), UV_TOOL_BIN_DIR=str(bin_root))
@@ -320,14 +341,16 @@ async def binding(service):
         env['PLAYWRIGHT_BROWSERS_PATH'] = str(managed_browser_cache(home))
     from .update_readiness import probe_targets
     urls, pin = await asyncio.to_thread(probe_targets, manager)
-    urls = [url for url in urls if ipaddress.ip_address(urlsplit(url).hostname).is_loopback]
-    if not urls:
-        raise ValueError('Repair requires an authenticated local loopback listener.')
+    urls = [url for url in urls if urlsplit(url).scheme == 'https'
+            and ipaddress.ip_address(urlsplit(url).hostname).is_loopback]
+    if not urls or pin is None:
+        raise ValueError('Repair requires a pinned HTTPS loopback listener. Configure TLS before repair; no control credential was sent.')
     return {'home': str(home), 'dataStat': [info.st_dev, info.st_ino],
             'dataIdentity': data_identity(home), 'uid': os.getuid(),
             'hostInstanceId': service.instance_id, 'runningIdentity': copy.deepcopy(manager.running_identity),
             'toolRoot': str(tool_root), 'binRoot': str(bin_root), 'uv': str(uv),
             'basePython': str(base), 'service': owner, 'extras': extras,
+            'executables': executables,
             'bootstrap': bootstrap, 'uvReceiptDigest': receipt_digest,
             'launcher': launcher_identity,
             'pointer': await asyncio.to_thread(_pointer, home),
@@ -377,6 +400,7 @@ def _publish(service, *, preview=None, operation=None, replace_preview=False):
         projection['preview'] = preview
     projection['operation'] = copy.deepcopy(operation)
     projection['verifyTarget'] = _verify_target(service, operation)
+    projection['reconcileTarget'] = _reconcile_target(service, operation)
     service._publish_changes(globals={'maintenance'})
     return copy.deepcopy(projection)
 
@@ -384,6 +408,17 @@ def _publish(service, *, preview=None, operation=None, replace_preview=False):
 def _verify_target(service, operation):
     if (operation and operation.get('status') == 'reinstalled'
             and operation.get('reinstalled') is True and operation.get('healthVerified') is False):
+        return {'operationId': operation['operationId'],
+                'hostInstanceId': service.instance_id, 'confirm': True}
+    return None
+
+
+def _reconcile_target(service, operation):
+    # This is eligibility to inspect, never assertion that unknown work had no
+    # effect. The locked worker must positively prove that before releasing.
+    if (operation and operation.get('operationId')
+            and operation.get('status') in {'accepted', 'running', 'unknown'}
+            and operation.get('reinstalled') is False):
         return {'operationId': operation['operationId'],
                 'hostInstanceId': service.instance_id, 'confirm': True}
     return None
@@ -433,6 +468,7 @@ async def preview(service):
 
 def launch(folder, plan):
     """Manager-owned job, not a child in the host service's kill group."""
+    _check_base_python(plan)
     command = [plan['basePython'], '-I', '-S', str(folder / 'installation_repair_worker.py'), str(folder)]
     # Environment values (possibly index credentials) stay in private plan.json.
     # Pass only manager transport variables to the dispatch command itself.
@@ -471,6 +507,12 @@ def helper_job(operation_id):
              'detail': 'The one-shot registration may remain after exit. Remove only this exact settled job after reviewing its receipt; do not relaunch it.'})
 
 
+def _check_base_python(plan):
+    from .installation_repair_worker import executable_identity
+    if executable_identity(plan['basePython']) != plan['executables']['basePython']:
+        raise ValueError('The selected repair interpreter changed; nothing was dispatched.')
+
+
 async def confirm(service, args):
     async with service._installation_repair_lock:
         identity = args['previewId']
@@ -481,9 +523,9 @@ async def confirm(service, args):
         # retries after a disconnect return the operation, never dispatch twice.
         with _admission(service):
             previous = _latest(service)
-            mapping = root(service) / ('confirmed-' + identity + '.json')
-            if mapping.exists():
-                operation_id = _read(mapping, service.data_dir)['operationId']
+            admissions = _admissions(service)
+            if identity in admissions['previews']:
+                operation_id = admissions['previews'][identity]
                 return _operation(service, operation_id)
             if previous and previous.get('status') in ACTIVE:
                 raise ValueError('An installation repair is unfinished or unknown. Inspect its receipt; do not repeat it.')
@@ -511,12 +553,13 @@ async def confirm(service, args):
             write_private(folder / name, source.read_bytes())
         operation = {'operationId': operation_id, 'previewId': identity,
             'hostInstanceId': service.instance_id, 'status': 'accepted', 'stage': 'accepted',
+            'effectBoundary': {'schema': 1, 'stopIntent': False, 'stopSettled': False, 'mutationIntent': False},
             'reinstalled': False, 'serviceState': 'not-checked', 'healthVerified': False,
             'detail': 'Repair accepted. A detached helper will qualify a fresh candidate before stopping this host.',
             'updatedAt': time.time(), 'helperJob': helper_job(operation_id)}
         plan = {**expected, 'operationId': operation_id, 'previewId': identity,
                 'target': view['target'], 'artifact': artifact, 'probe': app_updates.PROBE,
-                'dependencyProbe': DEPENDENCY_PROBE}
+                'dependencyProbe': DEPENDENCY_PROBE, 'recoverySchema': 1}
         # The final no-await gate closes races across preparation/downloads.
         async with service.lock:
             require_idle(service)
@@ -525,14 +568,29 @@ async def confirm(service, args):
             with _admission(service):
                 if _latest(service) and _latest(service).get('status') in ACTIVE:
                     raise ValueError('Another repair owns the installation.')
-                # An I/O failure after any durable admission fragment must not
-                # leave this old host accepting work. Restart reads the exact
-                # canonical receipt; this generation retains its local hold.
-                service._installation_repair_gate = operation_id
+                admissions = _admissions(service)
+                # All inputs exist before the sole admission commit. Orphaned
+                # preparation files neither fence this host nor authorize a
+                # helper. Current/preview lookup become visible together.
                 _write(folder / 'plan.json', plan, service.data_dir)
                 _write(folder / 'operation.json', operation, service.data_dir)
-                _write(root(service) / 'latest.json', {'operationId': operation_id}, service.data_dir)
-                _write(mapping, {'operationId': operation_id}, service.data_dir)
+                committed = {**admissions, 'current': operation_id,
+                    'previews': {**admissions['previews'], identity: operation_id}}
+                try:
+                    _write(root(service) / 'admissions.json', committed, service.data_dir)
+                except BaseException:
+                    # Atomic replace may have landed before fsync/report failed.
+                    # Inspect it; never dispatch from an uncertain commit.
+                    try:
+                        landed = _admissions(service) == committed
+                    except (OSError, ValueError, KeyError, TypeError):
+                        landed = True  # Unknown disk state is conservatively held.
+                    if landed:
+                        service._installation_repair_gate = operation_id
+                    raise
+                service._installation_repair_gate = operation_id
+            # Projection failure cannot authorize another helper. Exact reads
+            # still resolve through the committed admission, never redispatch.
             _publish(service, operation=operation)
         try:
             await asyncio.to_thread(launch, folder, plan)
@@ -561,11 +619,9 @@ async def status(service, args):
         if args.get('previewId'):
             identity = args['previewId']
             _folder(service, identity)
-            mapping = root(service) / ('confirmed-' + identity + '.json')
-            if not mapping.exists():
-                latest = _latest(service)
-                return latest if latest and latest.get('previewId') == identity else None
-            operation_id = _read(mapping, service.data_dir)['operationId']
+            operation_id = _admissions(service)['previews'].get(identity)
+            if not operation_id:
+                return None
         else:
             operation_id = args.get('operationId')
         return (_operation(service, operation_id)
@@ -595,6 +651,7 @@ async def verify(service, args):
             raise ValueError('Only the exact current known reinstalled operation can be verified. Unknown repairs remain held.')
         folder = _folder(service, identity)
         plan = _read(folder / 'plan.json', service.data_dir)
+        _check_base_python(plan)
         _private(folder / 'installation_repair_worker.py', service.data_dir)
         command = [plan['basePython'], '-I', '-S', str(folder / 'installation_repair_worker.py'),
                    '--verify', str(folder)]
@@ -606,5 +663,31 @@ async def verify(service, args):
             # Verification is read-only until its exact result write. Read the
             # sole receipt; never convert a lost response into installation replay.
             pass
+        result = await status(service, {'operationId': identity})
+        return result['operation']
+
+
+async def reconcile(service, args):
+    """Explicit positive no-effect reconciliation; never starts/stops/installs."""
+    async with service._installation_repair_lock:
+        if args.get('confirm') is not True or args.get('hostInstanceId') != service.instance_id:
+            raise ValueError('Review and confirm reconciliation on this exact host.')
+        identity = args['operationId']
+        operation = _operation(service, identity)
+        if (_latest(service).get('operationId') != identity
+                or _reconcile_target(service, operation) is None):
+            raise ValueError('Only the exact current unfinished non-reinstalled repair can be inspected for no-effect proof.')
+        folder = _folder(service, identity)
+        plan = _read(folder / 'plan.json', service.data_dir)
+        _check_base_python(plan)
+        _private(folder / 'installation_repair_worker.py', service.data_dir)
+        command = [plan['basePython'], '-I', '-S', str(folder / 'installation_repair_worker.py'),
+                   '--reconcile', str(folder)]
+        try:
+            await asyncio.to_thread(subprocess.run, command, cwd=folder,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=45, check=True)
+        except (OSError, subprocess.SubprocessError):
+            pass  # Missing/unknown proof retains the canonical hold.
         result = await status(service, {'operationId': identity})
         return result['operation']

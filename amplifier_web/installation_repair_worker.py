@@ -34,6 +34,7 @@ EXTRAS = frozenset({
 })
 HEALTH_WAIT = 60
 _FAILURE_POLICY = None
+_COMMAND_FOLDER = None
 
 # Run inside the installed interpreter, in isolated mode. No app imports or
 # third-party graph reader are needed to observe the resolved environment.
@@ -223,6 +224,13 @@ def command(*args, env=None, capture=True, check=True, timeout=120):
     In particular, CalledProcessError/TimeoutExpired must never escape carrying
     a command line, proxy setting, token, or installer stderr into a receipt.
     """
+    boundary = _COMMAND_FOLDER / "child-boundary.json" if _COMMAND_FOLDER else None
+    if boundary is not None:
+        if boundary.exists() and read(boundary).get("settled") is not True:
+            raise ValueError("A prior repair child has no settlement proof")
+        # Mark intent BEFORE spawn. Missing PID or helper death never means the
+        # child settled, and later diagnostic commands cannot overwrite it.
+        write(boundary, {"schema": 1, "settled": False})
     process = subprocess.Popen(
         [str(arg) for arg in args], env=env, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -241,11 +249,39 @@ def command(*args, env=None, capture=True, check=True, timeout=120):
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
             process.wait()
+        if boundary is not None:
+            _settle_child(boundary, process.pid)
         raise
+    if boundary is not None:
+        _settle_child(boundary, process.pid)
     result = subprocess.CompletedProcess([], process.returncode, stdout, stderr)
     if check and result.returncode:
         raise _installer_failure(stdout, stderr)
     return result
+
+
+def _settle_child(boundary, group):
+    try:
+        os.killpg(group, 0)
+    except ProcessLookupError:
+        write(boundary, {"schema": 1, "settled": True})
+        return
+    # The parent exited, but an independent descendant can still mutate an
+    # installation or browser cache. Do not infer containment from PID absence.
+    raise ValueError("Repair descendants have not settled")
+
+
+def children_settled(folder):
+    boundary = folder / "child-boundary.json"
+    if not boundary.exists() and not boundary.is_symlink():
+        return True  # No spawn-intent record was ever committed.
+    try:
+        proof = read(boundary)
+        return (isinstance(proof, dict) and set(proof) == {"schema", "settled"}
+                and type(proof["schema"]) is int and proof["schema"] == 1
+                and proof["settled"] is True)
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 def error_type(error):
@@ -259,6 +295,19 @@ def error_type(error):
 
 def _digest(path):
     return hashlib.sha256(_bytes(path, limit=64_000_000)).hexdigest()
+
+
+def executable_identity(path):
+    """Pin a selected installer/interpreter without restricting normal symlinks."""
+    resolved = Path(path).resolve(strict=True)
+    info = resolved.stat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid not in {0, os.getuid()}
+            or info.st_mode & 0o022 or not os.access(resolved, os.X_OK)):
+        raise ValueError("Repair executable has an untrusted owner or writable mode")
+    with resolved.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    return {"resolved": str(resolved), "stat": [info.st_dev, info.st_ino],
+            "sha256": digest}
 
 
 def _exists(path):
@@ -399,7 +448,7 @@ def _serving_invocation(arguments):
     return True  # No subcommand: CLI foreground/default launch may own a host.
 
 
-def _assert_other_processes(plan):
+def _assert_other_processes(plan, *, settled=False):
     """Ignore this helper and the authenticated old host, not other profiles."""
     prefix, home = Path(plan["toolRoot"]) / "amplifier-unified", Path(plan["home"])
     # Idle workers in this data directory retire through the normal generated
@@ -407,6 +456,8 @@ def _assert_other_processes(plan):
     # lease still require every one gone before moving a path. Here detect a
     # different profile using the shared bootstrap before interrupting our host.
     roots = (str(prefix) + "/",)
+    if settled:
+        roots += (str(home / "runtime") + "/", str(home / "updates/applications") + "/")
     output = command("ps", "-axo", "pid=,command=", env=plan["env"]).stdout
     for line in output.splitlines():
         parts = line.strip().split(None, 1)
@@ -470,10 +521,10 @@ def service_state(plan):
 
 def _health_url(url, pin):
     value = urlsplit(url)
-    if (value.scheme not in {"https", "http"} or value.hostname not in {"127.0.0.1", "::1"}
+    if (value.scheme != "https" or value.hostname not in {"127.0.0.1", "::1"}
             or value.username is not None or value.password is not None
             or value.path != "/api/health" or value.query or value.fragment
-            or value.scheme == "https" and not re.fullmatch("[a-f0-9]{64}", pin or "")):
+            or not re.fullmatch("[a-f0-9]{64}", pin or "")):
         raise ValueError("Health requires a local pinned listener")
     # Accessing port also rejects malformed/out-of-range port text.
     return value, value.port or (443 if value.scheme == "https" else 80)
@@ -481,19 +532,15 @@ def _health_url(url, pin):
 
 def _health_get(url, pin, token):
     value, port = _health_url(url, pin)
-    if value.scheme == "https":
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE  # exact leaf pin, checked BEFORE auth
-        connection = http.client.HTTPSConnection(value.hostname, port, timeout=2, context=context)
-    else:
-        connection = http.client.HTTPConnection(value.hostname, port, timeout=2)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE  # exact leaf pin, checked BEFORE auth
+    connection = http.client.HTTPSConnection(value.hostname, port, timeout=2, context=context)
     try:
         connection.connect()
-        if value.scheme == "https":
-            observed = hashlib.sha256(connection.sock.getpeercert(binary_form=True)).hexdigest()
-            if not hmac.compare_digest(observed, pin):
-                raise ValueError("Listener pin mismatch")
+        observed = hashlib.sha256(connection.sock.getpeercert(binary_form=True)).hexdigest()
+        if not hmac.compare_digest(observed, pin):
+            raise ValueError("Listener pin mismatch")
         connection.request("GET", "/api/health", headers={"Authorization": "Bearer " + token})
         response = connection.getresponse()
         raw = response.read(65_537)
@@ -505,6 +552,10 @@ def _health_get(url, pin, token):
 
 
 def authenticated_health(plan, *, successor=False, wait=0):
+    # Authenticate the transport BEFORE even reading the credential. Reject a
+    # mixed plaintext list instead of treating HTTPS as an optional fallback.
+    for url in plan["health"]["urls"]:
+        _health_url(url, plan["health"]["pin"])
     token = _bytes(Path(plan["home"]) / "config/auth/control-token", private=True, limit=4096).decode().strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", token):
         raise ValueError("Owner credential is not valid")
@@ -548,6 +599,9 @@ def _check_pointer(plan):
 
 
 def _check_live(plan, reset):
+    if any(executable_identity(plan[key]) != plan["executables"][key]
+           for key in ("uv", "basePython")):
+        raise ValueError("Repair executable selection changed")
     home = directory(plan["home"])
     info = home.stat()
     if (plan["uid"] != os.getuid() or [info.st_dev, info.st_ino] != plan["dataStat"]):
@@ -570,6 +624,8 @@ def _check_live(plan, reset):
 
 
 def validate_plan(plan, operation, folder):
+    if type(plan.get("recoverySchema")) is not int or plan["recoverySchema"] != 1:
+        raise ValueError("Repair plan has no marker-aware recovery protocol")
     for key in ("operationId", "previewId", "hostInstanceId"):
         if (not isinstance(plan[key], str) or not re.fullmatch("[A-Za-z0-9_-]{1,128}", plan[key])
                 or operation[key] != plan[key]):
@@ -593,6 +649,8 @@ def validate_plan(plan, operation, folder):
             raise ValueError("Repair executable is unavailable")
         if key == "basePython" and (path.is_relative_to(prefix) or path.is_relative_to(home)):
             raise ValueError("Base Python is inside the repair target")
+        if executable_identity(plan[key]) != plan["executables"][key]:
+            raise ValueError("Selected repair executable changed")
     extras = plan["extras"]
     if (not isinstance(extras, list) or any(not isinstance(item, str) for item in extras)
             or len(extras) != len(set(extras)) or not set(extras) <= EXTRAS):
@@ -765,6 +823,10 @@ class Worker:
         self.mutation_started = False
 
     def receipt(self, status, stage, detail, *, error=None, **facts):
+        if status in {"failed", "rolled-back", "ready"} and not children_settled(self.folder):
+            status, stage = "unknown", "child-outcome-unknown"
+            detail = "Repair child settlement is unverified. Inspect the saved operation; no work was replayed."
+            facts["healthVerified"] = False
         if error is not None:
             facts["errorType"] = error_type(error)
             if isinstance(error, CommandFailed):
@@ -779,6 +841,17 @@ class Worker:
                               updatedAt=time.time(), **facts)
         write(self.folder / "operation.json", self.operation)
         return dict(self.operation)
+
+    def effect_boundary(self, **values):
+        boundary = self.operation.get("effectBoundary")
+        if (not isinstance(boundary, dict) or boundary.get("schema") != 1
+                or any(type(boundary.get(key)) is not bool
+                       for key in ("stopIntent", "stopSettled", "mutationIntent"))):
+            raise ValueError("Repair effect boundary is unrecognized")
+        if any(boundary[key] and value is False for key, value in values.items()):
+            raise ValueError("Repair effect boundary cannot be rewound")
+        self.operation["effectBoundary"] = {**boundary, **values}
+        write(self.folder / "operation.json", self.operation)
 
     def swap(self, plan, reset, artifacts):
         """Caller owns home and tool leases. Never remove failed or old copies."""
@@ -813,6 +886,7 @@ class Worker:
             # Conservatively retain unknown if rename or any subsequent durable
             # progress write escapes before a positively established outcome.
             self.mutation_started = True
+            self.effect_boundary(mutationIntent=True)
             prefix.rename(previous)
             prefix_moved = True
             sync_directory(tools)
@@ -840,6 +914,8 @@ class Worker:
             finally:
                 # The child is settled/reaped before these snapshots. A foreign
                 # or unidentifiable partial prefix cannot become ours by naming.
+                if not children_settled(self.folder):
+                    raise ValueError("Installer descendants have not settled")
                 settled = _settled_paths(plan, prefix, launcher, pointer, old_launcher)
             qualify(plan, prefix / "bin/python", env)
             graph = installed_graph(plan, prefix / "bin/python", env)
@@ -857,13 +933,15 @@ class Worker:
             return "reinstalled"
         except Exception as error:
             if not prefix_moved:
-                self.receipt("failed", "left-stopped",
+                self.receipt("unknown", "left-stopped",
                              "The service is stopped; no installation paths were moved.",
                              serviceState="stopped", reinstalled=False, error=error)
-                return "failed"
+                return "unknown"
             self.receipt("running", "rolling-back", "Restoring the previous installation.",
                          error=error, reinstalled=False)
             try:
+                if not children_settled(self.folder):
+                    raise ValueError("Cannot restore paths while child outcome is unsettled")
                 if installing and settled is None:
                     raise ValueError("Installer output ownership could not be verified")
                 # Prove every backup and every destination before restoring any
@@ -948,12 +1026,14 @@ class Worker:
                 _assert_other_processes(plan)
                 _check_live(plan, reset)  # last check, immediately before stop
                 self.receipt("running", "stopping", "Stopping the managed service.")
+                self.effect_boundary(stopIntent=True)
                 stopping = True
                 if reset.stop_service(plan["service"]["commands"]) is False:
                     raise ValueError("Managed service disappeared before stop")
                 if _service_pid(plan) != 0:
                     raise ValueError("Managed service did not stop")
                 stopped = True
+                self.effect_boundary(stopSettled=True)
                 self.receipt("running", "stopped", "The managed service is stopped.", serviceState="stopped")
                 prefix, home = Path(plan["toolRoot"]) / "amplifier-unified", Path(plan["home"])
                 reset.assert_no_processes(prefix, home)
@@ -985,7 +1065,7 @@ class Worker:
                                     error=error)
             state = "stopped" if stopped and outcome is None else service_state(plan)
             return self.receipt(
-                "unknown" if outcome or self.mutation_started else "failed",
+                "unknown",
                 "interrupted" if outcome or self.mutation_started else
                 "left-stopped" if state == "stopped" else "stop-incomplete",
                 "Repair did not complete. Inspect the saved operation before further action.",
@@ -1020,7 +1100,15 @@ class Worker:
             serviceState=state, **({"errorType": error} if error else {}))
 
 
+def _admitted(folder, plan, operation):
+    admission = read(Path(plan["home"]) / "installation-repair/admissions.json")
+    if (admission.get("schema") != 1 or admission.get("current") != folder.name
+            or admission.get("previews", {}).get(operation.get("previewId")) != folder.name):
+        raise ValueError("Repair is not the current committed admission")
+
+
 def run(operation_folder):
+    global _COMMAND_FOLDER
     folder = directory(operation_folder, private=True)
     with lock(folder / "worker.lock"):
         operation = read(folder / "operation.json")
@@ -1030,12 +1118,17 @@ def run(operation_folder):
         executing = False
         try:
             plan = read(folder / "plan.json")
+            _admitted(folder, plan, operation)
             reset, artifacts = siblings()
             # This namespace lease spans preflight, replacement and restart.
             namespace = directory(directory(plan["home"]) / "installation-repair", private=True)
             with reset.repair_lock(namespace):
                 executing = True
-                return worker.execute(plan, reset, artifacts)
+                previous, _COMMAND_FOLDER = _COMMAND_FOLDER, folder
+                try:
+                    return worker.execute(plan, reset, artifacts)
+                finally:
+                    _COMMAND_FOLDER = previous
         except Exception as error:
             return worker.receipt(
                 "unknown" if executing else "failed",
@@ -1060,6 +1153,7 @@ def verify(operation_folder):
                 or operation.get("healthVerified") is not False):
             raise ValueError("Only a known reinstalled operation can be verified")
         plan = read(folder / "plan.json")
+        _admitted(folder, plan, operation)
         reset, artifacts = siblings()
         namespace = directory(directory(plan["home"]) / "installation-repair", private=True)
         with reset.repair_lock(namespace):
@@ -1108,14 +1202,80 @@ def verify(operation_folder):
                     reinstalled=True, healthVerified=False, serviceState=service_state(plan), error=error)
 
 
+def reconcile(operation_folder):
+    """Fence a late helper and release ONLY positively proven pre-mutation work.
+
+    This function cannot install, stop, start or restore paths. A stopped but
+    unchanged old service must first be started explicitly by its owner; the
+    subsequent authenticated original-version host is proved here.
+    """
+    folder = directory(operation_folder, private=True)
+    with lock(folder / "worker.lock"):
+        operation = read(folder / "operation.json")
+        if (operation.get("status") not in {"accepted", "running", "unknown"}
+                or operation.get("reinstalled") is not False):
+            raise ValueError("Repair has no reconcilable unfinished pre-effect state")
+        plan = read(folder / "plan.json")
+        _admitted(folder, plan, operation)
+        validate_plan(plan, operation, folder)
+        boundary = operation.get("effectBoundary")
+        if (not isinstance(boundary, dict) or boundary.get("schema") != 1
+                or any(type(boundary.get(key)) is not bool
+                       for key in ("stopIntent", "stopSettled", "mutationIntent"))
+                or boundary["mutationIntent"]
+                or boundary["stopIntent"] and not boundary["stopSettled"]):
+            raise ValueError("Stop or installation mutation remains uncertain")
+        if not children_settled(folder):
+            raise ValueError("Repair child settlement is not proven")
+        reset, _ = siblings()
+        namespace = directory(directory(plan["home"]) / "installation-repair", private=True)
+        with reset.repair_lock(namespace), reset.repair_lock(reset.tool_recovery_root(Path(plan["toolRoot"]))):
+            # Re-read all authority while the locks exclude a delayed helper.
+            _admitted(folder, plan, operation)
+            if read(folder / "operation.json") != operation:
+                raise ValueError("Repair changed during reconciliation")
+            if ((folder / "backup").exists()
+                    or (reset.tool_recovery_root(Path(plan["toolRoot"])) / folder.name).exists()):
+                raise ValueError("Recovery paths exist; no-effect proof is unavailable")
+            pid = _service_pid(plan)
+            if not pid:
+                raise ValueError("The unchanged old service is stopped. Explicitly start it and inspect health before reconciling; no automatic restart was attempted.")
+            current = {**plan, "service": {**plan["service"], "pid": pid,
+                "processStart": command("ps", "-p", str(pid), "-o", "lstart=", env=plan["env"]).stdout.strip()}}
+            # A deliberate normal start may have a new lifetime, but it must
+            # still serve the unchanged ORIGINAL version/revision. A pending
+            # stop command cannot reach this branch (checked above).
+            _check_live(current, reset)
+            _assert_other_processes(current, settled=True)
+            original_lifetime = (pid == plan["service"]["pid"]
+                                 and current["service"]["processStart"] == plan["service"]["processStart"])
+            health = authenticated_health(plan, wait=0) if original_lifetime else None
+            if not original_lifetime:
+                expected = {**plan, "target": plan["runningIdentity"]}
+                health = authenticated_health(expected, successor=True, wait=0)
+            _check_live(current, reset)
+            if _service_pid(plan) != pid:
+                raise ValueError("Service changed during no-effect proof")
+            # No writes to plans, sources, update outcomes, or Stop. This one
+            # receipt irrevocably refuses a future late run() of this admission.
+            return Worker(folder, operation).receipt("failed", "reconciled-no-effect",
+                "The unfinished repair was closed after proving no installation replacement. No install, stop, restart or message was replayed.",
+                reinstalled=False, healthVerified=False, serviceState="running",
+                reconciliation={"noReplacement": True, "verifiedAt": time.time(),
+                                "hostInstanceId": health["instanceId"]})
+
+
 def main():
     os.umask(0o077)
-    verification = len(sys.argv) == 3 and sys.argv[1] == "--verify"
-    if ((len(sys.argv) != 2 and not verification) or not sys.flags.isolated or not sys.flags.no_site
+    inspection = len(sys.argv) == 3 and sys.argv[1] in {"--verify", "--reconcile"}
+    if ((len(sys.argv) != 2 and not inspection) or not sys.flags.isolated or not sys.flags.no_site
             or os.name != "posix"):
         return 2
     try:
-        verify(sys.argv[2]) if verification else run(sys.argv[1])
+        if inspection:
+            (verify if sys.argv[1] == "--verify" else reconcile)(sys.argv[2])
+        else:
+            run(sys.argv[1])
         return 0
     except BaseException:
         # No traceback: its arguments, child output and private plan can contain

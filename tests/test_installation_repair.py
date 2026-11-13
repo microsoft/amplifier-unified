@@ -23,10 +23,15 @@ async def host(tmp_path, monkeypatch):
     service.runtime.workers = {}
     service.runtime._preparations = {}
     service.runtime.has_pending_operations = lambda: False
+    base_python = tmp_path / 'fixture-base-python'
+    base_python.write_text('synthetic interpreter; all launches are mocked')
+    base_python.chmod(0o700)
     expected = {'home': str(tmp_path), 'uid': os.getuid(),
         'hostInstanceId': service.instance_id, 'extras': ['native-desktop'],
-        'basePython': '/qualified/base/python', 'env': {'UV_INDEX_PASSWORD': 'private-secret'},
+        'basePython': str(base_python), 'env': {'UV_INDEX_PASSWORD': 'private-secret'},
         'pointer': {'exists': False, 'sha256': None}}
+    from amplifier_web.installation_repair_worker import executable_identity
+    expected['executables'] = {'basePython': executable_identity(expected['basePython'])}
     monkeypatch.setattr(repair, 'binding', AsyncMock(side_effect=lambda _: copy.deepcopy(expected)))
     from amplifier_web import reset, app_release_artifacts
     monkeypatch.setattr(reset, 'release_metadata', lambda env: {'tag_name': 'v99.0.0'})
@@ -156,7 +161,10 @@ async def test_initial_projection_recovers_only_authoritative_receipt_no_replay(
     view, args = await prepared(host)
     operation = (await host.service.dispatch('maintenance.installationRepairConfirm', args))['result']
     repair.initialize(host.service)
-    assert host.service.state['maintenance']['installationRepair'] == {'preview': None, 'operation': operation, 'verifyTarget': None}
+    assert host.service.state['maintenance']['installationRepair'] == {
+        'preview': None, 'operation': operation, 'verifyTarget': None,
+        'reconcileTarget': {'operationId': operation['operationId'],
+                            'hostInstanceId': host.service.instance_id, 'confirm': True}}
     assert repair.held(host.service)
     assert len(host.launched) == 1
     operation.update(status='failed', stage='preflight-failed')
@@ -207,8 +215,9 @@ async def test_malformed_receipt_initializes_unknown_fence_instead_of_crashing(h
         folder = repair._folder(host.service, 'a' * 32)
         folder.mkdir(mode=0o700)
         repair._write(folder / 'operation.json', broken, host.service.data_dir)
-        repair._write(repair.root(host.service) / 'latest.json',
-                      {'operationId': 'a' * 32}, host.service.data_dir)
+        repair._write(repair.root(host.service) / 'admissions.json',
+                      {'schema': 1, 'current': 'a' * 32, 'previews': {'b' * 32: 'a' * 32}},
+                      host.service.data_dir)
     repair.initialize(host.service)
     operation = host.service.state['maintenance']['installationRepair']['operation']
     assert operation['status'] == 'unknown' and repair.held(host.service)
@@ -281,6 +290,7 @@ def test_declared_extras_preserve_missing_optional_distribution(tmp_path, monkey
 
 def test_detached_dispatch_is_manager_owned_and_credentials_never_in_args(tmp_path, monkeypatch):
     calls = []
+    monkeypatch.setattr(repair, '_check_base_python', lambda plan: None)
     monkeypatch.setattr(repair.subprocess, 'run', lambda *a, **kw: calls.append((a, kw)))
     plan = {'basePython': '/stable/python', 'operationId': 'a' * 32,
             'env': {'UV_INDEX_PASSWORD': 'private-secret'}}
