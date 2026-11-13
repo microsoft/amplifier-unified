@@ -114,6 +114,12 @@ installer/interpreter hashes, managed PID/start/owner and pinned authenticated
 health for the **original** version/revision. Only this positive proof records
 `failed / reconciled-no-effect` and releases that exact admission. A delayed
 original helper then sees the closed receipt and cannot run.
+Its `reconciliation` proof has `noReplacement:true`, a finite positive
+`verifiedAt`, and `hostInstanceId` equal to the current serving **service**
+identity explicitly confirmed—not the updater's separate `instanceId`.
+The service identity is checked in the pinned authenticated health response
+before the terminal receipt. These no-replacement fields are distinct from an
+independently completed `ready` installation result.
 
 An unsettled stop command, a possibly surviving child, any installation mutation
 intent, missing/legacy/corrupt boundary, changed path, backup or unverified health
@@ -123,6 +129,24 @@ before spawn; a dead helper cannot silently overwrite that uncertainty with a
 later diagnostic command. Candidate-only downloaded files and browser preparation
 may remain: reconciliation proves **no live installation replacement**, not that
 no candidate/cache bytes were ever written.
+Before the mutation-intent boundary, an exact private preparation manifest may
+classify only an empty recovery directory and an empty backup or exact copied
+launcher as preparation. It is retained, not deleted. Any moved member, unknown
+entry or conflicting copy still refuses proof. Read-only identity checks happen
+before creating these preparation directories.
+
+Unobserved child creation remains deliberately fail-closed. Bounded post-kill
+polling can prove an owned process group disappeared after this helper reaped
+its child, but a missing PID, reboot or reused PGID alone cannot prove escaped
+descendants never wrote. No universal SIGKILL/reboot escape hatch is provided.
+The selected uv/base-interpreter hashes also intentionally gate read-only Verify
+and Reconcile; a changed executable requires owner review, not silent substitution.
+Private recovery plans intentionally retain their captured package-auth/network
+environment at owner-only `0600` beneath `0700` evidence for exact diagnosis.
+This is not encryption or indefinite-credential-safety assurance: treat the whole
+retained recovery set as sensitive, do not export it, and rotate exposed credentials.
+Automatic credential pruning or a replacement execution policy is outside this
+repair's proven recovery boundary.
 
 If stopping succeeded but a lease/process guard failed before any installation
 move, the receipt reports `unknown / left-stopped`, not released `failed`.

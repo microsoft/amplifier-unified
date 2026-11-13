@@ -480,6 +480,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         authorization = request.headers.get("Authorization", "")
         if authorization.lower().startswith("bearer ") and hmac.compare_digest(authorization[7:], app["control_token"]):
             response["dataIdentity"] = data_identity(service.data_dir)
+            response["hostInstanceId"] = service.instance_id
             response.update({key: service.update_manager.running_identity[key] for key in ('revision', 'instanceId')})
             from .installation_repair import PROTOCOL
             repair = service.state.get('maintenance', {}).get('installationRepair', {}).get('operation') or {}

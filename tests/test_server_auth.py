@@ -82,13 +82,15 @@ async def test_health_identity_is_only_disclosed_to_control_bearer(aiohttp_clien
         assert "dataIdentity" not in body
         assert "runtime" not in body
         assert "revision" not in body and "instanceId" not in body
-        assert "installationRepair" not in body
+        assert "hostInstanceId" not in body and "installationRepair" not in body
     response = await client.get("/api/health", headers={"Authorization": "Bearer " + app["control_token"]})
     assert response.status == 200
     body = await response.json()
     assert body["dataIdentity"] == data_identity(tmp_path)
     assert body["instanceId"] == app['service'].update_manager.running_identity['instanceId']
     assert body['revision'] == app['service'].update_manager.running_identity['revision']
+    assert body['hostInstanceId'] == app['service'].instance_id
+    assert body['hostInstanceId'] != body['instanceId']
     assert body['installationRepair'] == {'protocol': 1, 'operationId': 'a' * 32}
     assert type(body['installationRepair']['protocol']) is int
     assert 'PRIVATE_' not in str(body)

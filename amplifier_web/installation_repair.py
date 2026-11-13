@@ -160,12 +160,27 @@ def initialize(service):
         operation.get('operationId') or 'receipt-unreadable'
         if operation and operation.get('status') in ACTIVE else None)
     service._installation_repair_lock = asyncio.Lock()
+    service._installation_repair_uncommitted = None
 
 
 def held(service):
     identity = getattr(service, '_installation_repair_gate', None)
     if not identity:
         return False
+    uncommitted = getattr(service, '_installation_repair_uncommitted', None)
+    if uncommitted and uncommitted['operationId'] == identity:
+        try:
+            # An existing, readable, byte-logically identical PRIOR admission
+            # plus this generation's no-dispatch witness proves no admission.
+            # Missing/empty/unreadable index is NOT proof and cannot clear.
+            path = root(service) / 'admissions.json'
+            if (path.is_file() and _admissions(service) == uncommitted['prior']
+                    and identity not in uncommitted['prior']['previews'].values()):
+                service._installation_repair_gate = None
+                service._installation_repair_uncommitted = None
+                return False
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
     try:
         operation = _latest(service)
         if (operation and operation.get('operationId') == identity
@@ -587,6 +602,8 @@ async def confirm(service, args):
                         landed = True  # Unknown disk state is conservatively held.
                     if landed:
                         service._installation_repair_gate = operation_id
+                        service._installation_repair_uncommitted = {
+                            'operationId': operation_id, 'prior': admissions}
                     raise
                 service._installation_repair_gate = operation_id
             # Projection failure cannot authorize another helper. Exact reads
@@ -682,7 +699,7 @@ async def reconcile(service, args):
         _check_base_python(plan)
         _private(folder / 'installation_repair_worker.py', service.data_dir)
         command = [plan['basePython'], '-I', '-S', str(folder / 'installation_repair_worker.py'),
-                   '--reconcile', str(folder)]
+                   '--reconcile', str(folder), service.instance_id]
         try:
             await asyncio.to_thread(subprocess.run, command, cwd=folder,
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

@@ -157,6 +157,61 @@ async def test_index_directory_fsync_failure_retains_exact_admission_without_dis
     assert repair.held(host.service) and not host.launched
 
 
+async def test_index_write_and_readback_double_fault_releases_only_readable_exact_prior_index(host, monkeypatch):
+    _, first_args = await prepared(host)
+    previous = (await host.service.dispatch(CONFIRM, first_args))['result']
+    save_operation(host, previous, status='failed', stage='preflight-failed')
+    assert not repair.held(host.service)
+    prior = admission(host.service)
+    view, args = await prepared(host)
+    original_write, original_read = repair._write, repair._admissions
+    fail_read = False
+    def failed_write(path, value, home):
+        nonlocal fail_read
+        if Path(path).name == 'admissions.json':
+            fail_read = True
+            raise OSError('injected before index replacement')
+        return original_write(path, value, home)
+    def failed_read(service):
+        if fail_read:
+            raise OSError('injected unavailable readback')
+        return original_read(service)
+    with monkeypatch.context() as patch:
+        patch.setattr(repair, '_write', failed_write)
+        patch.setattr(repair, '_admissions', failed_read)
+        with pytest.raises(AppError):
+            await host.service.dispatch(CONFIRM, args)
+        assert repair.held(host.service)
+    assert admission(host.service) == prior
+    assert not repair.held(host.service)
+    assert (await repair.status(host.service, {'previewId': view['previewId']}))['operation'] is None
+    assert len(host.launched) == 1
+
+
+async def test_missing_index_after_double_fault_is_not_positive_no_admission_proof(host, monkeypatch):
+    _, args = await prepared(host)
+    original_write, original_read = repair._write, repair._admissions
+    fail_read = False
+    def failed_write(path, value, home):
+        nonlocal fail_read
+        if Path(path).name == 'admissions.json':
+            fail_read = True
+            raise OSError('no index commit')
+        return original_write(path, value, home)
+    def failed_read(service):
+        if fail_read:
+            raise OSError('readback unknown')
+        return original_read(service)
+    with monkeypatch.context() as patch:
+        patch.setattr(repair, '_write', failed_write)
+        patch.setattr(repair, '_admissions', failed_read)
+        with pytest.raises(AppError):
+            await host.service.dispatch(CONFIRM, args)
+    assert not (repair.root(host.service) / 'admissions.json').exists()
+    assert repair.held(host.service)
+    assert not host.launched
+
+
 async def test_dispatch_sees_complete_committed_inputs_and_local_gate(host, monkeypatch):
     view, args = await prepared(host)
     calls = []
@@ -205,7 +260,8 @@ async def test_projection_loss_reconciles_exact_operation_without_late_confirm_r
 
     def reconciled(command, **kwargs):
         assert command == [host.expected['basePython'], '-I', '-S',
-                           str(folder / 'installation_repair_worker.py'), '--reconcile', str(folder)]
+                           str(folder / 'installation_repair_worker.py'), '--reconcile', str(folder),
+                           host.service.instance_id]
         assert kwargs == {'cwd': folder, 'stdin': subprocess.DEVNULL,
                           'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL,
                           'timeout': 45, 'check': True}
@@ -254,7 +310,8 @@ async def test_reconcile_eligible_states_require_worker_proof(host, monkeypatch,
 
     def inspected(command, **kwargs):
         assert command == [host.expected['basePython'], '-I', '-S',
-                           str(folder / 'installation_repair_worker.py'), '--reconcile', str(folder)]
+                           str(folder / 'installation_repair_worker.py'), '--reconcile', str(folder),
+                           host.service.instance_id]
         calls.append(command)
         if not proof:
             raise subprocess.CalledProcessError(1, command)

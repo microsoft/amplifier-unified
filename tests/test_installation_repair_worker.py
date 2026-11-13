@@ -221,6 +221,7 @@ class RepairFixture(unittest.TestCase):
         self.events.append(("successor-health" if successor else "old-health",))
         value = {
             "ok": True, "app": "amplifier-unified",
+            "hostInstanceId": self.plan["hostInstanceId"],
             "dataIdentity": hashlib.sha256(str(self.home).encode()).hexdigest(),
             **(self.plan["target"] if successor else self.plan["runningIdentity"]),
         }
@@ -687,10 +688,38 @@ class RepairFixture(unittest.TestCase):
         result = worker.reconcile(self.folder)
         self.assertEqual((result["status"], result["stage"]), ("failed", "reconciled-no-effect"))
         self.assertTrue(result["reconciliation"]["noReplacement"])
+        self.assertEqual(result["reconciliation"]["hostInstanceId"], self.plan["hostInstanceId"])
+        self.assertNotEqual(result["reconciliation"]["hostInstanceId"],
+                            self.plan["runningIdentity"]["instanceId"])
+        self.assertGreater(result["reconciliation"]["verifiedAt"], 0)
         self.assertEqual(self.run_worker()["stage"], "reconciled-no-effect")
         self.assertNotIn("stop", self.names())
         self.assertNotIn("candidate-install", self.names())
         self.assertNotIn("fresh-install", self.names())
+
+    def test_reconcile_requires_authenticated_current_service_identity_not_updater_identity(self):
+        operation = self.receipt()
+        for wrong in (None, "different-service", self.plan["runningIdentity"]["instanceId"]):
+            with self.subTest(wrong=wrong), patch.object(
+                    worker, "_health_get", return_value={
+                        **self.health(None, None, "a" * 64), "hostInstanceId": wrong}):
+                with self.assertRaises(ValueError):
+                    worker.reconcile(self.folder, self.plan["hostInstanceId"])
+                self.assertEqual(self.receipt(), operation)
+        self.assertNotIn("candidate-install", self.names())
+        self.assertNotIn("stop", self.names())
+
+    def test_reconcile_restarted_original_version_uses_confirmed_new_service_identity(self):
+        self.pid = 456
+        current_host = "confirmed-new-service"
+        self.health_override = {**self.plan["runningIdentity"], "instanceId": "f" * 32,
+                                "hostInstanceId": current_host}
+        result = worker.reconcile(self.folder, current_host)
+        self.assertEqual(result["reconciliation"]["hostInstanceId"], current_host)
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(result["reinstalled"])
+        self.assertFalse(result["healthVerified"])
+        self.assertEqual(result["serviceState"], "running")
 
     def test_reconcile_interrupted_settled_preflight_keeps_candidate_evidence(self):
         operation = worker.read(self.folder / "operation.json")
@@ -767,9 +796,39 @@ class RepairFixture(unittest.TestCase):
                 self.assertEqual(worker.read(self.folder / "operation.json")["status"], "unknown")
         worker.write(self.folder / "operation.json", original)
         (self.folder / "backup").mkdir()
-        with self.assertRaises(ValueError):
+        with self.assertRaises((ValueError, OSError)):
             worker.reconcile(self.folder)
         self.assertNotIn("stop", self.names())
+
+    def test_pre_rename_launcher_copy_failure_can_reconcile_owned_preparation_after_explicit_start(self):
+        with patch.object(worker.shutil, "copy2", side_effect=OSError("fixture preparation copy failure")):
+            result = self.run_worker()
+        self.assertEqual((result["status"], result["stage"]), ("unknown", "left-stopped"))
+        self.assertFalse(result["effectBoundary"]["mutationIntent"])
+        self.assertTrue((self.prefix / "old-marker").exists())
+        self.pid = 456  # Explicit owner service start, not reconciliation.
+        self.health_override = {**self.plan["runningIdentity"], "instanceId": "f" * 32}
+        result = worker.reconcile(self.folder)
+        self.assertEqual(result["stage"], "reconciled-no-effect")
+        self.assertTrue((self.folder / "backup").exists())
+        self.assertNotIn("fresh-install", self.names())
+        self.assertNotIn("start", self.names())
+
+    def test_pre_rename_failure_after_launcher_copy_preserves_exact_owned_copy_for_reconcile(self):
+        original = worker.shutil.copy2
+        def failing_copy(*args, **kwargs):
+            original(*args, **kwargs)
+            raise OSError("fixture after copy failure")
+        with patch.object(worker.shutil, "copy2", side_effect=failing_copy):
+            result = self.run_worker()
+        self.assertEqual(result["status"], "unknown")
+        self.assertFalse(result["effectBoundary"]["mutationIntent"])
+        self.pid = 456
+        self.health_override = {**self.plan["runningIdentity"], "instanceId": "f" * 32}
+        result = worker.reconcile(self.folder)
+        self.assertEqual(result["stage"], "reconciled-no-effect")
+        self.assertTrue((self.folder / "backup/launcher").is_symlink())
+        self.assertNotIn("start", self.names())
 
     def test_reconcile_stopped_no_mutation_requires_explicit_start_then_original_health(self):
         self.failure_mode = "lease"

@@ -13,6 +13,7 @@ import hmac
 import http.client
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -260,12 +261,17 @@ def command(*args, env=None, capture=True, check=True, timeout=120):
     return result
 
 
-def _settle_child(boundary, group):
-    try:
-        os.killpg(group, 0)
-    except ProcessLookupError:
-        write(boundary, {"schema": 1, "settled": True})
-        return
+def _settle_child(boundary, group, *, wait=1):
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            os.killpg(group, 0)
+        except ProcessLookupError:
+            write(boundary, {"schema": 1, "settled": True})
+            return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(min(.05, max(0, deadline - time.monotonic())))
     # The parent exited, but an independent descendant can still mutate an
     # installation or browser cache. Do not infer containment from PID absence.
     raise ValueError("Repair descendants have not settled")
@@ -860,8 +866,6 @@ class Worker:
         pointer = home / "updates/application-active.json"
         backup = self.folder / "backup"
         recovery = reset.tool_recovery_root(tools) / plan["operationId"]
-        _mkdir(backup)
-        _mkdir(recovery)
         previous = recovery / "previous"
         if (file_identity(launcher) != plan["launcher"]
                 or bootstrap_identity(prefix) != plan["bootstrap"]
@@ -871,6 +875,15 @@ class Worker:
         old_launcher = _path_snapshot(launcher)
         old_pointer = _path_snapshot(pointer)
         launcher_identity = _launcher_identity(launcher)
+        _check_pointer(plan)
+        # All read-only identity/snapshot checks precede recovery preparation.
+        # This durable manifest classifies ONLY empty directories or an exact
+        # copied launcher while mutationIntent is still false; no moved backup
+        # is ever inferred disposable and no recovery member is deleted.
+        write(self.folder / "preparation.json",
+              {"schema": 1, "backup": str(backup), "recovery": str(recovery)}, exclusive=True)
+        _mkdir(backup)
+        _mkdir(recovery)
         saved_launcher = saved_pointer = None
         if launcher_identity is not None:
             shutil.copy2(launcher, backup / "launcher", follow_symlinks=False)
@@ -1202,7 +1215,7 @@ def verify(operation_folder):
                     reinstalled=True, healthVerified=False, serviceState=service_state(plan), error=error)
 
 
-def reconcile(operation_folder):
+def reconcile(operation_folder, expected_host_instance=None):
     """Fence a late helper and release ONLY positively proven pre-mutation work.
 
     This function cannot install, stop, start or restore paths. A stopped but
@@ -1216,6 +1229,10 @@ def reconcile(operation_folder):
                 or operation.get("reinstalled") is not False):
             raise ValueError("Repair has no reconcilable unfinished pre-effect state")
         plan = read(folder / "plan.json")
+        expected_host_instance = expected_host_instance or plan["hostInstanceId"]
+        if (not isinstance(expected_host_instance, str) or not expected_host_instance
+                or len(expected_host_instance) > 200):
+            raise ValueError("The confirmed serving host identity is invalid")
         _admitted(folder, plan, operation)
         validate_plan(plan, operation, folder)
         boundary = operation.get("effectBoundary")
@@ -1234,9 +1251,22 @@ def reconcile(operation_folder):
             _admitted(folder, plan, operation)
             if read(folder / "operation.json") != operation:
                 raise ValueError("Repair changed during reconciliation")
-            if ((folder / "backup").exists()
-                    or (reset.tool_recovery_root(Path(plan["toolRoot"])) / folder.name).exists()):
-                raise ValueError("Recovery paths exist; no-effect proof is unavailable")
+            backup = folder / "backup"
+            recovery = reset.tool_recovery_root(Path(plan["toolRoot"])) / folder.name
+            if _exists(backup) or _exists(recovery):
+                manifest = read(folder / "preparation.json")
+                if manifest != {"schema": 1, "backup": str(backup), "recovery": str(recovery)}:
+                    raise ValueError("Recovery preparation ownership is unverified")
+                if _exists(recovery) and list(directory(recovery, private=True).iterdir()):
+                    raise ValueError("Recovery has moved installation members")
+                if _exists(backup):
+                    names = {path.name for path in directory(backup, private=True).iterdir()}
+                    if names - {"launcher"}:
+                        raise ValueError("Recovery has moved backup members")
+                    if "launcher" in names:
+                        expected_launcher = Path(plan["binRoot"]) / "amplifier-unified"
+                        if _launcher_identity(backup / "launcher") != _launcher_identity(expected_launcher):
+                            raise ValueError("The preparatory launcher copy differs from the unchanged entry")
             pid = _service_pid(plan)
             if not pid:
                 raise ValueError("The unchanged old service is stopped. Explicitly start it and inspect health before reconciling; no automatic restart was attempted.")
@@ -1253,27 +1283,37 @@ def reconcile(operation_folder):
             if not original_lifetime:
                 expected = {**plan, "target": plan["runningIdentity"]}
                 health = authenticated_health(expected, successor=True, wait=0)
+            # Health instanceId belongs to the updater, NOT the service UUID
+            # used by confirmation targets. Bind the same authenticated current
+            # service identity the user explicitly confirmed.
+            if health.get("hostInstanceId") != expected_host_instance:
+                raise ValueError("The authenticated serving host differs from the confirmed host")
             _check_live(current, reset)
             if _service_pid(plan) != pid:
                 raise ValueError("Service changed during no-effect proof")
             # No writes to plans, sources, update outcomes, or Stop. This one
             # receipt irrevocably refuses a future late run() of this admission.
+            verified_at = time.time()
+            if not math.isfinite(verified_at) or verified_at <= 0:
+                raise ValueError("The reconciliation proof time is unavailable")
             return Worker(folder, operation).receipt("failed", "reconciled-no-effect",
                 "The unfinished repair was closed after proving no installation replacement. No install, stop, restart or message was replayed.",
                 reinstalled=False, healthVerified=False, serviceState="running",
-                reconciliation={"noReplacement": True, "verifiedAt": time.time(),
-                                "hostInstanceId": health["instanceId"]})
+                reconciliation={"noReplacement": True, "verifiedAt": verified_at,
+                                "hostInstanceId": health["hostInstanceId"]})
 
 
 def main():
     os.umask(0o077)
-    inspection = len(sys.argv) == 3 and sys.argv[1] in {"--verify", "--reconcile"}
+    verification = len(sys.argv) == 3 and sys.argv[1] == "--verify"
+    reconciliation = len(sys.argv) == 4 and sys.argv[1] == "--reconcile"
+    inspection = verification or reconciliation
     if ((len(sys.argv) != 2 and not inspection) or not sys.flags.isolated or not sys.flags.no_site
             or os.name != "posix"):
         return 2
     try:
         if inspection:
-            (verify if sys.argv[1] == "--verify" else reconcile)(sys.argv[2])
+            verify(sys.argv[2]) if verification else reconcile(sys.argv[2], sys.argv[3])
         else:
             run(sys.argv[1])
         return 0
