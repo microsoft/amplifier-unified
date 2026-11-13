@@ -84,25 +84,25 @@ state. Stop and ordinary runtime permissions apply once work is accepted.
 
 ## Interaction
 
-Direct requests show a receipt without a confirmation prompt.
+Direct requests show unresolved creation/delivery feedback without a confirmation prompt.
 Suggestions show a review. **Not now** cancels
 the pending proposal without starting work. Both direct execution and **Create and start** leave the
 current selection and unsent text unchanged. **Open chat** is a separate explicit
 navigation action after creation is confirmed, using ordinary navigation guards.
 Other clients keep their own selection, draft and attachments throughout.
 
-Known accepted and cancelled receipts share one **Past handoffs (N)** disclosure,
-collapsed by default, rather than a stack of full cards in the conversation.
-Expanding it shows compact entries with **Open chat** when creation is confirmed
-and **Details** for the exact opening brief, destination and configuration.
-Both disclosures are keyboard-operable. Pending reviews, in-progress delivery,
-unknown or failed outcomes, and unconfirmed interactions remain outside this
-history, visibly actionable. An accepted receipt means only that the opening
-brief was accepted, not that the requested work finished.
+Known accepted and cancelled handoffs leave the conversation controls entirely.
+There is no past-handoff list, compact settled card or settled-only details control.
+Pending reviews, in-progress delivery, unknown or failed outcomes, contradictory
+receipts and unconfirmed interactions remain visibly actionable. Settlement uses
+the exact receipt's status, creation and delivery, not generic action acceptance
+or a missing stream row. An accepted receipt means only that the opening brief
+was accepted, not that the requested work finished. Removing a focused card keeps
+keyboard focus in the application.
 
-Collapsing history is presentation only. It does not delete the journal, change
-receipt identities, submit input, change a draft or select another chat. Reload
-or a visit to another source chat restores the default collapsed presentation.
+This removes presentation/history plumbing, not the durable request journal.
+Exact receipt reads, immutable identities, duplicate-effect guards and provenance
+remain available; no dismissal state, migration or automatic retry is introduced.
 
 Direct receipts are read by their calling conversation using the stable request ID,
 and shown to clients viewing that source chat. An optional client ID does not own
@@ -114,10 +114,11 @@ its brief. Exact retries preserve the original actor and never replay uncertaint
 Receipt updates use the existing state stream. **Check delivery** reads the exact
 saved handoff and reconciles known creation and initial-input receipts; it does
 not check whether the recipient completed its work or resend the brief. The
-control remains available with receipt details after acceptance. A newer exact
-read result is retained while an older stream update catches up; uncertainty or
-an unconfirmed interaction is not silently presented as settled history.
-Rendering, expanding history, reopening or reconnecting does not poll receipts,
+control remains available for unresolved delivery. A newer exact
+read result is retained while an older stream update catches up, so a stale
+pending row cannot resurrect a settled card. Uncertainty or an unconfirmed
+interaction is not silently treated as settled.
+Rendering, reopening or reconnecting does not poll receipts,
 create a chat or replay input. The host returns only a bounded set
 of reviews for the originating client and selected source conversation. Reload
 restores references to exact existing reviews across chats, preserving their
@@ -127,9 +128,16 @@ to their intended client. Resume capture is bounded, and never scans session
 history or copies another client’s writable view. Up to eight unfinished reviews
 remain visible per source chat; up to 64 unfinished owned/restored reviews are
 retained across chats. New proposals are refused at those limits until existing
-reviews are resolved. A bounded recent completed tail fills unused display slots.
-Conversation-owned starts have a separate bounded eight-receipt display window,
+reviews are resolved. Failed outcomes remain actionable without changing those
+existing proposal quotas. No recent completed tail fills unused display slots.
+Conversation-owned starts have a separate bounded eight-unresolved-receipt display window,
 not an execution-count ceiling. Older receipts remain readable by exact request ID.
+Filtering occurs before the bounded queries, so successful history cannot crowd
+out unresolved work. Resume capture adds only unfinished/unresolved owned reviews;
+previously captured exact ID/hash references remain authorized after settlement
+for lost-response reconciliation, within the existing reference bound. At
+saturation, unfinished reviews keep the existing priority and older settled
+references may be evicted by that cap; the journal itself is not deleted.
 Uncertain direct work is retained without blocking unrelated new starts or being
 replayed. Ordinary runtime capacity and deliberately configured limits still apply.
 
