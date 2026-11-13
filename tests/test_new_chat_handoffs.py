@@ -115,6 +115,7 @@ async def test_direct_request_creates_and_starts_once_without_confirmation(hando
     assert len(app.state['sessions']) == 3 and runtime.sent == [(target['id'], args['text'], result['inputId'])]
     assert len([m for m in target['messages'] if m.get('role') == 'user']) == 1
     assert snapshot(app, 'other')['handoffs'] == []
+    assert snapshot(app, 'owner')['handoffs'] == []
     for client in before:
         assert private_view(app, client) == before[client]
     with pytest.raises(AppError, match='different handoff'):
@@ -212,7 +213,7 @@ async def test_direct_work_is_not_limited_by_reviews_or_unrelated_unknowns(hando
     assert read['status'] == 'unknown' and len(runtime.sent) == 10
     visible = snapshot(app, 'owner')['handoffs']
     assert {row['requestId'] for row in reviews} <= {row['requestId'] for row in visible}
-    assert fresh['requestId'] in {row['requestId'] for row in visible}
+    assert fresh['requestId'] not in {row['requestId'] for row in visible}
     assert len(visible) <= 10  # Two private reviews plus an independent bounded window.
     for client in before:
         assert private_view(app, client) == before[client]
@@ -229,7 +230,7 @@ async def test_direct_receipt_follows_source_view_without_granting_review_author
     row = await finish(app, await start(app, source, args))
     app.clients.attach('new-viewer')
     await command(app, 'new-viewer', 'session.select', {'id': source})
-    assert snapshot(app, 'new-viewer')['handoffs'][0]['requestId'] == row['requestId']
+    assert snapshot(app, 'new-viewer')['handoffs'] == []
     read = (await command(app, 'new-viewer', PREFIX + 'read', {'requestId': row['requestId']}))['result']
     assert read['status'] == 'accepted'
     for action in ('confirm', 'cancel'):
@@ -598,7 +599,7 @@ async def test_pending_reviews_remain_bounded_and_visible_ahead_of_new_terminal_
         row = await propose(app, source, {**args, 'requestId': f'cancel-{index}'})
         await command(app, 'owner', PREFIX + 'cancel', {'requestId': row['requestId']})
     rows = snapshot(app, 'owner')['handoffs']
-    assert len(rows) == 8 and rows[0]['requestId'] == first['requestId']
+    assert rows == [first]
     for index in range(7):
         await propose(app, source, {**args, 'requestId': f'pending-{index}'})
     with pytest.raises(AppError, match='Review or cancel'):
@@ -728,12 +729,10 @@ async def test_main_and_source_streams_receive_private_review_and_late_receipt(h
             queue.get_nowait()
     await app.on_runtime_event('runtime.delivery', {'sessionId': result['targetSessionId'], 'inputId': result['inputId'], 'delivery': 'accepted'})
     for client in visible:
-        received = queues[client].get_nowait()['handoffs'][0]
-        assert received['requestId'] == row['requestId']
-        assert received['status'] == received['delivery'] == 'accepted'
-        assert received['revision'] > result['revision']
+        assert queues[client].get_nowait()['handoffs'] == []
         read = (await command(app, client, PREFIX + 'read', {'requestId': row['requestId']}))['result']
         assert read['status'] == 'accepted'
+        assert read['revision'] > result['revision']
     for client in hidden:
         assert snapshot(app, client)['handoffs'] == []
         if not queues[client].empty():
@@ -779,7 +778,8 @@ async def test_resume_captures_exact_existing_reviews_without_future_cross_clien
     await confirm(app, first)  # The old document only observes the same operation.
     assert len(runtime.sent) == 1
     app.clients.attach('again', resume='resumed')
-    assert snapshot(app, 'again')['handoffs'][0]['status'] == 'accepted'
+    assert snapshot(app, 'again')['handoffs'] == []
+    assert (await command(app, 'again', PREFIX + 'read', {'requestId': first['requestId']}))['result']['status'] == 'accepted'
     assert len(runtime.sent) == 1
 
 
@@ -797,7 +797,7 @@ async def test_resume_during_delivery_keeps_same_receipt_and_execution_binding(h
     assert result['reviewHash'] == row['reviewHash'] and result['creation'] == 'created'
     release.set(); completed = await finish(app, row)
     assert completed['executionClientId'] == 'owner' and completed['status'] == 'accepted'
-    assert snapshot(app, 'resumed-active')['handoffs'][0]['status'] == 'accepted'
+    assert snapshot(app, 'resumed-active')['handoffs'] == []
     await command(app, 'resumed-active', PREFIX + 'confirm', {'requestId': row['requestId'], 'reviewHash': row['reviewHash']})
     assert len(runtime.sent) == 1
 
@@ -871,3 +871,132 @@ async def test_confirm_publication_failure_retains_inspectable_receipt_without_s
     await confirm(app, row)
     await asyncio.sleep(0)
     assert len(app.state['sessions']) == 2 and not runtime.sent
+
+
+@pytest.mark.parametrize('owner_kind', ['review', 'direct'])
+async def test_settled_tail_cannot_displace_failed_unknown_or_contradictory_receipts(handoff, owner_kind):
+    app, runtime, source, _, args = handoff
+    row = await propose(app, source, args)
+    template = app.handoffs.load(row['requestId'])
+    owner = 'owner' if owner_kind == 'review' else 'conversation:' + source
+    app.db.execute('DELETE FROM new_chat_handoffs')
+    unresolved = [
+        ('pending', 'not_started', 'not_started'),
+        ('failed', 'created', 'failed'),
+        ('unknown', 'unknown', 'not_started'),
+        ('accepted', 'created', 'unknown'),
+        ('cancelled', 'created', 'not_started'),
+        ('accepted', None, 'accepted'),
+        ('cancelled', 'not_started', None),
+    ]
+    expected = set()
+    for index, (status, creation, delivery) in enumerate(unresolved):
+        saved = {**template, 'owner': owner, 'requestId': f'unresolved-{index}',
+                 'status': status, 'creation': creation, 'delivery': delivery}
+        app.handoffs.save(saved)
+        expected.add(saved['requestId'])
+    for index in range(100):
+        saved = {**template, 'owner': owner, 'requestId': f'settled-{index}',
+                 'status': 'accepted' if index % 2 else 'cancelled',
+                 'creation': 'created' if index % 2 else 'not_started',
+                 'delivery': 'accepted' if index % 2 else 'not_started'}
+        app.handoffs.save(saved)
+    assert {row['requestId'] for row in snapshot(app, 'owner')['handoffs']} == expected
+    app.clients.attach('restored', resume='owner')
+    references = app.clients.records['restored']['handoffReviews']
+    assert {ref['requestId'] for ref in references} == (expected if owner_kind == 'review' else set())
+    assert app.db.execute('SELECT count(*) FROM new_chat_handoffs').fetchone()[0] == 100 + len(unresolved)
+    assert len(app.state['sessions']) == 2 and not runtime.sent
+
+
+async def test_resume_preserves_existing_settled_exact_authority_without_capturing_new_history(handoff):
+    app, runtime, source, _, args = handoff
+    first = await propose(app, source, args)
+    app.clients.attach('restored', resume='owner')
+    await command(app, 'owner', PREFIX + 'cancel', {'requestId': first['requestId']})
+    second = await propose(app, source, {**args, 'requestId': 'uncaptured-cancelled'})
+    await command(app, 'owner', PREFIX + 'cancel', {'requestId': second['requestId']})
+    app.clients.attach('again', resume='restored')
+    refs = app.clients.records['again']['handoffReviews']
+    assert refs == [{'requestId': first['requestId'], 'reviewHash': first['reviewHash']}]
+    assert snapshot(app, 'again')['handoffs'] == []
+    read = (await command(app, 'again', PREFIX + 'read', {'requestId': first['requestId']}))['result']
+    assert read['status'] == 'cancelled' and read['reviewHash'] == first['reviewHash']
+    with pytest.raises(AppError, match='another client'):
+        await command(app, 'again', PREFIX + 'read', {'requestId': second['requestId']})
+    # Retained references are exact payload authority, not just request IDs.
+    app.clients.records['again']['handoffReviews'][0]['reviewHash'] = '0' * 64
+    assert app.handoffs.captured('again') == []
+    with pytest.raises(AppError, match='another client'):
+        await command(app, 'again', PREFIX + 'read', {'requestId': first['requestId']})
+    assert len(app.state['sessions']) == 2 and not runtime.sent
+
+
+async def test_resume_at_reference_cap_prioritizes_new_pending_without_deleting_journal(handoff, monkeypatch):
+    import amplifier_web.new_chat_handoffs as module
+    monkeypatch.setattr(module, 'MAX_REVIEW_REFERENCES', 2)
+    app, runtime, source, _, args = handoff
+    reviews = [await propose(app, source, {**args, 'requestId': f'captured-{index}'}) for index in range(2)]
+    app.clients.attach('restored', resume='owner')
+    for row in reviews:
+        await command(app, 'restored', PREFIX + 'cancel', {'requestId': row['requestId']})
+    app.clients.attach('settled-restore', resume='restored')
+    assert {ref['requestId'] for ref in app.clients.records['settled-restore']['handoffReviews']} == {
+        row['requestId'] for row in reviews}
+    # An ordinary restore keeps settled exact reads. Only cap saturation can
+    # evict one when a new unfinished review must be carried to the next client.
+    assert (await command(app, 'settled-restore', PREFIX + 'read', {
+        'requestId': reviews[0]['requestId']}))['result']['status'] == 'cancelled'
+    pending = (await command(app, 'settled-restore', PREFIX + 'propose', {
+        **args, 'requestId': 'new-review', 'clientId': 'settled-restore'}))['result']
+    app.clients.attach('next-restore', resume='settled-restore')
+    refs = app.clients.records['next-restore']['handoffReviews']
+    assert len(refs) == 2 and pending['requestId'] in {ref['requestId'] for ref in refs}
+    assert snapshot(app, 'next-restore')['handoffs'] == [pending]
+    assert (await command(app, 'next-restore', PREFIX + 'read', {
+        'requestId': pending['requestId']}))['result'] == pending
+    for row in reviews:
+        assert (await command(app, 'owner', PREFIX + 'read', {
+            'requestId': row['requestId']}))['result']['status'] == 'cancelled'
+    assert app.db.execute('SELECT count(*) FROM new_chat_handoffs').fetchone()[0] == 3
+    assert not runtime.sent
+
+
+async def test_projection_and_resume_query_work_do_not_grow_with_success_history(handoff):
+    import sqlite3
+
+    app, runtime, source, _, args = handoff
+    first = await propose(app, source, args)
+    template = app.handoffs.load(first['requestId'])
+    def measure():
+        instructions = 0
+        def step():
+            nonlocal instructions
+            instructions += 1
+            return 0
+        app.db.set_progress_handler(step, 1)
+        try:
+            private = app.handoffs.visible('owner', source)
+            direct = app.handoffs.unresolved('conversation:' + source, source)
+            record = {}
+            app.handoffs.capture_on_attach('owner', {}, record)
+        finally:
+            app.db.set_progress_handler(None, 0)
+        assert [row['requestId'] for row in private] == [first['requestId']]
+        assert direct == [] and record['handoffReviews'] == [
+            {'requestId': first['requestId'], 'reviewHash': first['reviewHash']}]
+        return instructions
+    before = measure()
+    for owner in ('owner', 'conversation:' + source):
+        rows = []
+        for index in range(2000):
+            identity = owner + f'-settled-{index}'
+            value = {**template, 'requestId': identity, 'owner': owner, 'status': 'accepted',
+                     'creation': 'created', 'delivery': 'accepted', 'text': 'Large brief ' * 1000}
+            rows.append((identity, owner, source, 'accepted', index + 1e12, json.dumps(value)))
+        app.db.executemany('INSERT INTO new_chat_handoffs VALUES (?,?,?,?,?,?)', rows)
+    app.db.commit()
+    after = measure()
+    # Fixed unresolved set; only indexed bounded reads and exact references.
+    assert after <= before + 100, (sqlite3.sqlite_version, before, after)
+    assert not runtime.sent

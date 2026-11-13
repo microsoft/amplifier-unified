@@ -12,7 +12,7 @@ let state={revision:1,settings:{workspace:'/existing'},runtime:{available:true},
  workspaces:[{id:'project',name:'Existing',path:'/existing',available:true}],selectedSessionId:null,selectedWorkspaceId:'project',
  setup:{providers:[{id:'fixture',module:'provider-fixture',config:{model:'fixture-model'}}],providersLoadedAt:1,providersWorkspace:'/existing'},
  registeredBundles:[{value:'work',label:'Work'}],draftDefaults:Object.fromEntries(['/missing','/existing'].map(workspace=>[JSON.stringify([workspace,'']),{phase:'ready',bundle:'work',effective:{instance:'fixture',model:'fixture-model'},providers:[{id:'fixture'}]}])),canvas:{open:false}};
-const calls=[],workers=[],folders=[],errors=[],handoffReads=[],handoffNavigations=[],externalRequests=[],heldStateReads=[];let browser,vite,page,holdHandoffNavigation=false,holdStateReads=false;
+const calls=[],workers=[],folders=[],errors=[],handoffReads=[],handoffMutations=[],handoffNavigations=[],externalRequests=[],heldStateReads=[];let browser,vite,page,holdHandoffNavigation=false,holdStateReads=false;
 const shell=createShellHttpFixture(()=>state);
 const draftScope=JSON.stringify([shell.state().client.historyScope||shell.state().client.hostInstanceId,null,null]);
 const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
@@ -42,6 +42,7 @@ try{
   const original=route.request().postDataJSON();calls.push(original);
   const body=original.action==='shell.command'?{...original,action:original.args.action,args:original.args.args}:original.action==='shell.view.update'?{...original,action:'view.update'}:original;
   if(body.action==='session.handoff.read'){handoffReads.push({route,body});return}
+  if(['session.handoff.confirm','session.handoff.cancel'].includes(body.action)){handoffMutations.push({route,body});return}
   if(body.action==='session.select'){
    if(holdHandoffNavigation){handoffNavigations.push({route,body});return}
    state.selectedSessionId=body.args.id;
@@ -83,7 +84,7 @@ try{
  await page.getByRole('button',{name:'Choose workspace',exact:true}).click();
  await page.getByRole('button',{name:'Existing · /existing',exact:true}).click();
  await expect(page.getByRole('dialog',{name:'Choose a workspace',exact:true})).toHaveCount(0);
- await page.getByRole('button',{name:'Retry',exact:true}).click();
+ await page.getByRole('article',{name:'Your message',exact:true}).getByRole('button',{name:'Retry',exact:true}).click();
  await expect(page.getByText('Start fresh',{exact:true})).toHaveCount(1);
  await expect(page.getByRole('banner')).toContainText('Created conversation');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),'created');
@@ -135,7 +136,7 @@ try{
  await page.getByRole('button',{name:'Use this folder',exact:true}).click();
  await expect(page.getByRole('textbox',{name:/Folder on/})).toHaveValue(createdPath);
  assert.equal(calls.filter(row=>row.action==='conversation.send').length,1,'Folder selection does not send a new message');
- // Saved handoff receipts use the same real client and synthetic peer. No login,
+ // Handoff receipts use the same real client and synthetic peer. No login,
  // runtime, live-control, or model actions are needed to inspect their delivery.
  const baseline={requestId:'past-0',sourceSessionId:'old',workspace:'/existing',bundle:'work',
   title:'Accepted chat 0',text:'Exact saved opening brief. <script>plain text only</script>',selection:{},
@@ -147,6 +148,15 @@ try{
   ...['pending','unknown','failed','creating','created','delivering','future-status'].map(status=>({...baseline,
    requestId:status,title:`Needs attention: ${status}`,status,delivery:status==='pending'?'not_started':'unknown',
    revision:2,message:`Visible ${status} delivery`,...(status==='pending'?{creation:'not_started',targetSessionId:null,reviewHash:'exact-review'}:{})})),
+  {...baseline,requestId:'cancel-proposal',title:'Cancel this proposal',status:'pending',creation:'not_started',delivery:'not_started',revision:2,reviewHash:'cancel-review',targetSessionId:null},
+  ...['rejected','unknown','guard'].map(outcome=>({...baseline,requestId:`navigation-${outcome}`,title:`Created with failed input: ${outcome}`,status:'failed',delivery:'failed'})),
+  {...baseline,requestId:'contradictory',status:'cancelled',creation:'unknown',delivery:'not_started',targetSessionId:null},
+  ...['accepted','cancelled'].flatMap(status=>['creation','delivery','both'].map(missing=>{
+   const receipt={...baseline,requestId:`${status}-missing-${missing}`,title:`Incomplete ${status} phases`,
+    status,...(status==='cancelled'?{creation:'not_started',delivery:'not_started',targetSessionId:null}:{})};
+   if(missing==='both'){delete receipt.creation;delete receipt.delivery}else delete receipt[missing];
+   return receipt;
+  })),
   {...baseline,requestId:'foreign',sourceSessionId:'another-source',title:'Private other-source receipt'},
  ];
  state.selectedSessionId='old';state.view={...state.view,panel:null,navPinned:false,draft:'Keep this source draft'};
@@ -155,7 +165,6 @@ try{
  const startHandoffCalls=calls.length;
  await page.reload();await expect(composer).toHaveDraft('Keep this source draft');
  const handoffs=page.getByRole('region',{name:'New chat requests',exact:true});
- const past=handoffs.locator('details.a-handoffs-past'),summary=past.locator(':scope > summary');
  const receipt=id=>handoffs.locator(`[data-handoff-id="${id}"]`);
  const emit=async()=>{
   const revision=++state.revision;
@@ -168,28 +177,25 @@ try{
   await page.screenshot({path:`${process.env.AMPLIFIER_TEST_ARTIFACTS}/handoffs-${name}.png`});
  };
  await expect(page.getByText('Saved conversation answer.',{exact:true})).toBeVisible();
- await expect(past).toHaveCount(1);await expect(summary).toHaveText('Past handoffs (7)');
- await expect(past).not.toHaveAttribute('open','');
- await expect(receipt('past-0')).not.toBeVisible();await expect(receipt('foreign')).toHaveCount(0);
+ await expect(page.getByText(/Past handoffs/)).toHaveCount(0);
+ await expect(handoffs.locator('.a-handoff--settled,.a-handoffs-past,.a-handoffs-history')).toHaveCount(0);
+ for(const id of [...acceptedRows.map(row=>row.requestId),'cancelled','foreign'])await expect(receipt(id)).toHaveCount(0);
  for(const status of ['pending','unknown','failed','creating','created','delivering','future-status']){
   await expect(handoffs.locator(`:scope > [data-handoff-id="${status}"]`)).toBeVisible();
  }
  await expect(receipt('pending').getByRole('button',{name:'Create and start',exact:true})).toBeVisible();
  await expect(receipt('unknown').getByRole('button',{name:'Check delivery',exact:true})).toBeVisible();
+ await expect(receipt('contradictory').getByRole('button',{name:'Check delivery',exact:true})).toBeVisible();
+ for(const status of ['accepted','cancelled'])for(const missing of ['creation','delivery','both'])
+  await expect(receipt(`${status}-missing-${missing}`).getByRole('button',{name:'Check delivery',exact:true})).toBeVisible();
  await expect(handoffs.getByRole('button',{name:'Check status',exact:true})).toHaveCount(0);
  for(const width of [1280,320]){
   await page.setViewportSize({width,height:900});
-  await summary.scrollIntoViewIfNeeded();
-  assert.ok((await past.boundingBox()).height<=64,'Settled receipts occupy one compact collapsed line, not a stack of cards');
-  await screenshot(`${width}-collapsed`);
-  await summary.focus();await page.keyboard.press('Enter');
-  await expect(past).toHaveAttribute('open','');
-  await expect(receipt('past-0').getByText('Opening brief accepted',{exact:true})).toBeVisible();
-  await expect(receipt('cancelled').getByText('Cancelled',{exact:true})).toBeVisible();
-  await expect(past.getByText('Opening brief acceptance is not work completion.',{exact:true})).toBeVisible();
+  const confirm=receipt('pending').getByRole('button',{name:'Create and start',exact:true});
+  await confirm.scrollIntoViewIfNeeded();await confirm.focus();
   await page.keyboard.press('Tab');
-  await expect(receipt('past-0').getByRole('button',{name:'Open chat',exact:true})).toBeFocused();
-  const detail=receipt('past-5').locator(':scope > details');
+  await expect(receipt('pending').getByRole('button',{name:'Not now',exact:true})).toBeFocused();
+  const detail=receipt('future-status').locator(':scope > details');
   if(!await detail.evaluate(node=>node.open)){await detail.locator('summary').focus();await page.keyboard.press('Space')}
   await expect(detail).toHaveAttribute('open','');
   await expect(detail.locator('pre')).toBeVisible();
@@ -201,11 +207,10 @@ try{
   }));
   assert.ok(layout.scroll<=layout.width+1,`Handoffs overflow at ${width}px: ${JSON.stringify(layout)}`);
   assert.ok(layout.page<=layout.viewport+1,`Page overflows at ${width}px: ${JSON.stringify(layout)}`);
-  await screenshot(`${width}-expanded`);
-  await summary.focus();await page.keyboard.press('Space');await expect(past).not.toHaveAttribute('open','');
-  await expect(summary).toBeFocused();
+  await screenshot(`${width}-unresolved-only`);
+  await detail.locator('summary').focus();await page.keyboard.press('Space');await expect(detail).not.toHaveAttribute('open','');
  }
- assert.equal(handoffReads.length,0,'Rendering, disclosure and resize do not poll delivery');
+ assert.equal(handoffReads.length,0,'Rendering, unresolved details and resize do not poll delivery');
  await expect(composer).toHaveDraft('Keep this source draft');
  // A compact exact read with a future stateRevision must settle without the
  // stream or awaitState's 1500ms recovery GET. Hold any GET so that recovery
@@ -217,8 +222,7 @@ try{
  const readStateRevision=state.revision+1;
  await localRead.route.fulfill({json:{accepted:true,hostInstanceId:shell.state().client.hostInstanceId,
   stateRevision:readStateRevision,result:{...baseline,requestId:'unknown'}}});
- await expect(summary).toHaveText('Past handoffs (8)');
- await expect(receipt('unknown')).not.toBeVisible();await expect(summary).toBeFocused();
+ await expect(receipt('unknown')).toHaveCount(0);await expect(composer).toBeFocused();
  const afterRead=await page.evaluate(()=>window.amplifier.getState());
  assert.ok(afterRead.revision<readStateRevision,'Exact read does not advance the authoritative stream baseline');
  assert.equal(afterRead.handoffs.find(row=>row.requestId==='unknown').status,'unknown');
@@ -234,36 +238,55 @@ try{
  state.handoffs[unknownIndex]={...state.handoffs[unknownIndex],revision:6,message:'Newer stream still cannot confirm delivery.'};await emit();
  await handoffReads.shift().route.fulfill({json:{accepted:true,result:{...baseline,requestId:'unknown',revision:5}}});
  await expect(receipt('unknown')).toContainText('Newer stream still cannot confirm delivery.');
- await expect(summary).toHaveText('Past handoffs (7)');
  await expect(receipt('unknown').getByRole('button',{name:'Check delivery',exact:true})).toBeEnabled();
- // An error after a streamed acceptance remains visible outside the disclosure.
+ // A pending check and its error remain visible even after streamed acceptance.
  await receipt('unknown').getByRole('button',{name:'Check delivery',exact:true}).click();
  await expect.poll(()=>handoffReads.length).toBe(1);
  state.handoffs[unknownIndex]={...baseline,requestId:'unknown',revision:7};await emit();
+ await expect(receipt('unknown').getByRole('button',{name:'Check delivery',exact:true})).toBeDisabled();
  await handoffReads.shift().route.fulfill({status:503,json:{accepted:false,error:'Delivery read unavailable'}});
  await expect(handoffs.locator(':scope > [data-handoff-id="unknown"]').getByRole('alert')).toContainText('Delivery read unavailable');
- await expect(summary).toHaveText('Past handoffs (7)');await screenshot('read-error-visible');
+ await screenshot('read-error-visible');
  await expect(composer).toHaveDraft('Keep this source draft');
  // Moving focus away during a read supersedes the component's focus restoration.
  await receipt('unknown').getByRole('button',{name:'Check delivery',exact:true}).click();
  await expect.poll(()=>handoffReads.length).toBe(1);
  await composer.focus();await expect(composer).toBeFocused();
  await handoffReads.shift().route.fulfill({json:{accepted:true,result:{...baseline,requestId:'unknown',revision:7}}});
- await expect(summary).toHaveText('Past handoffs (8)');
- await expect(receipt('unknown')).not.toBeVisible();
+ await expect(receipt('unknown')).toHaveCount(0);
  await expect(composer).toBeFocused();await expect(composer).toHaveDraft('Keep this source draft');
  const handoffActions=()=>calls.slice(startHandoffCalls).map(raw=>raw.action==='shell.command'?{...raw,action:raw.args.action,args:raw.args.args}:raw);
  assert.deepEqual(handoffActions().filter(row=>row.action.startsWith('session.handoff.')).map(row=>row.action),
   ['session.handoff.read','session.handoff.read','session.handoff.read','session.handoff.read']);
  assert.equal(handoffActions().filter(row=>/^(conversation\.(send|retry)|session\.(create|select)|worker\.spawn)$/.test(row.action)).length,0);
+ // Confirm/cancel must use their exact receipts too, without waiting for a
+ // future stateRevision or turning an accepted action envelope into settlement.
+ holdStateReads=true;
+ for(const [id,verb] of [['pending','confirm'],['cancel-proposal','cancel']]){
+  const control=receipt(id).getByRole('button',{name:verb==='confirm'?'Create and start':'Not now',exact:true});
+  await control.focus();await page.keyboard.press('Enter');
+  await expect.poll(()=>handoffMutations.length).toBe(1);
+  await expect(control).toBeDisabled();await control.evaluate(node=>node.click());
+  const mutation=handoffMutations.shift();
+  assert.equal(mutation.body.action,`session.handoff.${verb}`);
+  assert.deepEqual(mutation.body.args,{requestId:id,...(verb==='confirm'?{reviewHash:'exact-review'}:{})});
+  const futureRevision=state.revision+10;
+  await mutation.route.fulfill({json:{accepted:true,stateRevision:futureRevision,result:{...baseline,requestId:id,
+   ...(verb==='cancel'?{status:'cancelled',creation:'not_started',delivery:'not_started',targetSessionId:null}:{})}}});
+  await expect(receipt(id)).toHaveCount(0);await expect(composer).toBeFocused();
+  assert.ok((await page.evaluate(()=>window.amplifier.getState())).revision<futureRevision);
+  assert.equal(heldStateReads.length,0,'Exact mutation receipts do not recover unrelated state frames');
+  assert.equal(handoffMutations.length,0,'Duplicate activation did not post twice');
+  await emit();await expect(receipt(id),'Older pending stream cannot resurrect a settled request').toHaveCount(0);
+ }
+ holdStateReads=false;
  // The target is already in the real client's session list: optimistic selection
  // would unmount the source card before these delayed failures could show.
  await page.setViewportSize({width:1280,height:900});
- await summary.focus();await page.keyboard.press('Enter');
  assert.ok((await page.evaluate(()=>window.amplifier.getState())).sessions.some(row=>row.id==='created'));
  const navigationCount=()=>handoffActions().filter(row=>row.action==='session.select').length;
  holdHandoffNavigation=true;
- for(const [id,outcome] of [['past-0','rejected'],['past-1','unknown']]){
+ for(const [id,outcome] of [['navigation-rejected','rejected'],['navigation-unknown','unknown']]){
   const openChat=receipt(id).getByRole('button',{name:'Open chat',exact:true}),before=navigationCount();
   await openChat.click();await expect.poll(()=>handoffNavigations.length).toBe(1);
   await expect(page.getByRole('banner')).toContainText('Previous conversation');
@@ -279,7 +302,11 @@ try{
   await expect(prominent.getByRole('alert')).toBeVisible();
   if(outcome==='rejected')await expect(prominent.getByRole('alert')).toContainText('Navigation blocked for fixture');
   await expect(prominent.getByRole('button',{name:'Open chat',exact:true})).toBeEnabled();
-  await expect(prominent.locator(':scope > details > summary')).toBeFocused();
+  // Disabling a retained button can blur it; only card removal promises focus
+  // continuation. Verify the enabled recovery remains reachable by keyboard.
+  await prominent.getByRole('button',{name:'Check delivery',exact:true}).focus();
+  await page.keyboard.press('Tab');
+  await expect(prominent.getByRole('button',{name:'Open chat',exact:true})).toBeFocused();
   await emit();
   await expect(prominent.getByRole('alert')).toBeVisible();
   await expect(page.getByRole('banner')).toContainText('Previous conversation');
@@ -297,14 +324,14 @@ try{
  const settings=page.locator('.a-settings-canvas'),voiceKey=settings.locator('#voice-api-key');
  await expect(voiceKey).toBeVisible();await voiceKey.fill('synthetic-unsaved-key');
  await expect(settings.getByText('You have unsaved settings changes. They are kept while Settings stays open.',{exact:true})).toBeVisible();
- const beforeGuard=navigationCount(),guardOpen=receipt('past-2').getByRole('button',{name:'Open chat',exact:true});
+ const beforeGuard=navigationCount(),guardOpen=receipt('navigation-guard').getByRole('button',{name:'Open chat',exact:true});
  await guardOpen.click();
  const guard=page.getByRole('alertdialog',{name:'Unsaved settings changes',exact:true});
  await expect(guard).toBeVisible();await expect(guardOpen).toBeDisabled();
  await guardOpen.evaluate(node=>node.click());
  await guard.getByRole('button',{name:'Keep settings open',exact:true}).click();
  await expect(guard).toHaveCount(0);
- await expect(handoffs.locator(':scope > [data-handoff-id="past-2"]').getByRole('alert')).toHaveText('Settings changes were kept.');
+ await expect(handoffs.locator(':scope > [data-handoff-id="navigation-guard"]').getByRole('alert')).toHaveText('Settings changes were kept.');
  await expect(voiceKey).toHaveValue('synthetic-unsaved-key');
  await expect(composer).toHaveDraft('Keep this source draft');
  assert.equal(navigationCount(),beforeGuard,'Declining the actual dirty guard sends no selection');
@@ -313,13 +340,16 @@ try{
  await voiceKey.fill('');
  await expect(settings.getByText('You have unsaved settings changes. They are kept while Settings stays open.',{exact:true})).toHaveCount(0);
  state.canvas={open:false};await emit();
+ const unresolved=state.handoffs;state.handoffs=acceptedRows;await emit();
+ await expect(handoffs,'Settled-only streams leave no empty section, card or history shell').toHaveCount(0);
+ state.handoffs=unresolved;await emit();
  // A fresh explicit click may navigate after failure; no retry was automatic.
- await receipt('past-0').getByRole('button',{name:'Open chat',exact:true}).click();
+ await receipt('navigation-rejected').getByRole('button',{name:'Open chat',exact:true}).click();
  await expect(page.getByRole('banner')).toContainText('Created conversation');
  assert.deepEqual(handoffActions().filter(row=>row.action==='session.select').map(row=>row.args),[{id:'created'},{id:'created'},{id:'created'}]);
  assert.equal(handoffActions().filter(row=>/^(conversation\.(send|retry)|session\.create)$/.test(row.action)).length,0);
  assert.deepEqual(externalRequests,[]);
  assert.deepEqual(errors,[]);
- console.log('New chat recovery passed: truthful new-chat header; scoped persisted failed-message discard; inline creation error; corrected-path retry with canonical created-chat identity sends once; worker success persists reset; failure/local and shared newer drafts retained; modal error dismissal; compact past handoffs and visible details at 320/1280px; native disclosure and moved-away focus; local delivery regroup; stale read ordering; known-target delayed rejection/unknown and actual dirty-guard decline keep errors and drafts; explicit navigation only. Zero model calls.');
+ console.log('New chat recovery passed: truthful new-chat header; scoped persisted failed-message discard; inline creation error; corrected-path retry sends once; worker reset and newer drafts retained; modal error dismissal; no settled handoff UI or shell at 320/1280px; unresolved review/details and keyboard continuation; exact read/confirm/cancel settle ahead of older stream without recovery GETs or replay; stale read ordering; known-target delayed rejection/unknown and actual dirty-guard decline keep errors and drafts; explicit navigation only. Zero model calls.');
 }catch(error){console.error('Recovery fixture evidence:',JSON.stringify({errors,body:await page?.locator('body').innerText().catch(()=>''),actions:calls.map(row=>({action:row.action,id:row.id}))}));throw error}
 finally{await browser?.close();await vite?.close()}
