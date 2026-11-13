@@ -7,6 +7,7 @@ import subprocess
 import sys
 import venv
 
+import filelock
 import pytest
 import yaml
 
@@ -87,9 +88,12 @@ def isolated_catalog(tmp_path):
     venv.EnvBuilder(with_pip=False, symlinks=True).create(prefix)
     python = prefix / 'bin/python'
     site = prefix / f'lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages'
-    # Only the parent's account caller imports YAML; do not expose the prepared
-    # environment's unrelated decision entrypoints to this isolated catalog.
-    (site / 'yaml').symlink_to(Path(yaml.__file__).parent, target_is_directory=True)
+    # The account caller's source import closure includes YAML and session_files'
+    # filelock. Expose only these packages, not the prepared environment's
+    # unrelated decision entrypoints or its entire site-packages.
+    for dependency in (yaml, filelock):
+        (site / dependency.__name__).symlink_to(
+            Path(dependency.__file__).parent, target_is_directory=True)
     metadata = site / 'catalog_fixture-1.0.dist-info'
     metadata.mkdir()
     (metadata / 'METADATA').write_text('Metadata-Version: 2.1\nName: catalog-fixture\nVersion: 1.0\n')

@@ -165,30 +165,13 @@ jobs:
       - name: Select the prepared native-controls interpreter
         if: ${{ env.CHECK_SUITE == 'patch-placement-native' }}
         run: echo "UNIFIED_RUNTIME_PYTHON=$GITHUB_WORKSPACE/.venv/bin/python" >> "$GITHUB_ENV"
-      - name: Prepare pinned native receipt dependencies
+      - name: Verify locked native receipt dependencies
         if: ${{ env.CHECK_SUITE == 'full' || env.CHECK_SUITE == 'shared-work-native' }}
         run: |
-          uv pip install --python .venv/bin/python \
-            'amplifier-module-provider-openai[native] @ git+https://github.com/microsoft/amplifier-module-provider-openai@2b35fa334fb2fb2c5c948842e8c7bd691ce5e834' \
-            'amplifier-module-tool-exec @ git+https://github.com/microsoft/amplifier-module-tool-exec@f267548ccd1b38a236a46afb96252bb6dd474dcd' \
-            'openai==3.29.0' 'websockets==15.0.1' 'hatchling==1.27.0' 'amplifier-core==2.0.2'
-          uv run --no-sync python - <<'PY'
-          import hashlib, importlib.metadata as m, json, subprocess
-          from pathlib import Path
-          from amplifier_module_provider_openai.native import NativeSendAdmission, NativeOutboundEnvelope
-          from amplifier_module_loop_live.scope import LIVE_OWNER, NATIVE_REQUEST
-          import amplifier_module_provider_openai.native as native
-          expected = '304a78c2036c6dfe0bf60017844ffec3a0e8b556ad67e3fac20db4b613d276b1'
-          assert hashlib.sha256(Path(native.__file__).read_bytes()).hexdigest() == expected
-          names = ['amplifier-core', 'amplifier-module-provider-openai', 'amplifier-module-loop-live',
-                   'amplifier-module-loop-streaming', 'amplifier-module-tool-exec', 'openai', 'websockets']
-          record = {name: {'version': m.version(name),
-                          'source': json.loads(m.distribution(name).read_text('direct_url.json') or 'null')}
-                    for name in names}
-          record['loopCheckout'] = subprocess.check_output(['git', '-C', '.ci/loop-live', 'rev-parse', 'HEAD'], text=True).strip()
-          record['providerNativeSha256'] = expected
-          Path('output/python-checks/native-readiness.json').write_text(json.dumps(record, indent=2))
-          PY
+          # The dev group already selects provider[native], tool-exec and their
+          # SDK closure in uv.lock. Do not replace it with an older receipt pin.
+          uv run --no-sync python scripts/native_dependency_preflight.py \
+            --output output/python-checks/native-readiness.json
       - name: Run the complete Python suite
         if: ${{ env.CHECK_SUITE == 'full' }}
         run: python -u scripts/browser_check_runner.py --python-suite --output output/python-checks
