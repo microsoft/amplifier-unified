@@ -210,7 +210,12 @@ try{
  assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lostRejection.body.id).length,1,'Opening uncertain-retry confirmation is not admission');
  await page.getByRole('button',{name:'Send this message again',exact:true}).click();
  const rejectionReceipt=await next();assert.equal(rejectionReceipt.body.action,'conversation.send');assert.equal(rejectionReceipt.body.id,lostRejection.body.id,'Original-submission retry keeps its deduplication identity');assert.deepEqual(rejectionReceipt.body.args,lostRejection.body.args,'Unknown retry preserves the exact captured payload');assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lostRejection.body.id).length,2,'Only the explicit click retries the original submission');await rejectionReceipt.route.fulfill({json:{accepted:false,duplicate:true,status:409,error:'Saved rejection',state:shell.state()}});
- await page.getByRole('button',{name:'Retry',exact:true}).click();const rejectedRetry=await next();assert.notEqual(rejectedRetry.body.id,lostRejection.body.id);await received(rejectedRetry);
+ await page.waitForFunction(id=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).find(row=>row.commandId===id)?.status==='unknown',lostRejection.body.id);
+ assert.deepEqual(rejectionReceipt.body,lostRejection.body,'Refused original replay preserves the complete original payload and witness');
+ assert.equal(await page.getByRole('button',{name:'Retry',exact:true}).count(),0,'A refused retry does not prove the earlier uncertain attempt never ran');
+ await page.getByRole('button',{name:'Retry original submission',exact:true}).click();
+ await page.getByRole('button',{name:'Send this message again',exact:true}).click();
+ const rejectedRetry=await next();assert.deepEqual(rejectedRetry.body,lostRejection.body);await received(rejectedRetry);
  const delayed=await send('Acknowledgement delayed');chat().status='working';chat().messages.push({id:'delayed',inputId:delayed.body.id,role:'user',text:delayed.body.args.text,delivery:{status:'sending'}});await emit();
  await composer().fill('Keep this next draft');await until(()=>state.view.draft==='Keep this next draft','Draft saves while acknowledgement waits');
  await delayed.route.fulfill({status:504,json:{error:'The runtime operation has not returned yet. It may still be running; do not automatically repeat it.',code:'runtime_pending',delivery:'unknown'}});
@@ -349,7 +354,7 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
  const stoppedRetry=await next();assert.notEqual(stoppedRetry.body.id,beforeStop.body.id);assert.equal(stoppedRetry.body.args.expectedInterruptionRevision,4);await received(stoppedRetry);
  // An explicit anchored API call remains distinct from the ordinary composer;
  // generic action dispatch must not strip or reinterpret its caller's fields.
- const strictArgs={sessionId:'chat',text:'Explicit anchored API input',expectedGenerationId:'explicit-run',expectedConfigurationRevision:8};
+ const strictArgs={sessionId:'chat',text:'Explicit anchored API input',expectedGenerationId:'explicit-run',expectedConfigurationRevision:8,expectedSource:{workspace:'/fixture',nativeIdentity:'chat'}};
  const strictCall=page.evaluate(args=>window.amplifier.dispatch('conversation.send',args,{id:'strict-api-input',feedback:false}),strictArgs);
  strictCall.catch(()=>{}); // Cleanup must not mask an earlier assertion failure.
  const strict=await next(true);assert.deepEqual(strict.body.args,strictArgs);assert.equal(strict.body.id,'strict-api-input');
@@ -367,6 +372,68 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
  await page.getByText('This earlier submission is still uncertain and cannot be sent again here. Use Check delivery for its original receipt. The saved message was kept.',{exact:true}).waitFor();
  assert.deepEqual(await outbox(),[historical]);assert.equal(calls.filter(call=>call.action==='conversation.send'&&call.id==='historical-input').length,0);
  // The synthetic fixture now removes its seed, not a production recovery path.
+ await page.evaluate(()=>sessionStorage.setItem('amplifier.messageOutbox.v1','[]'));await page.reload();await composer().waitFor();
+ chat().externalAgent={id:'fixture-acp',name:'External text fixture'};
+ await emit();
+ const external=await send('External text keeps its existing boundary');
+ assert.equal(Object.hasOwn(external.body.args,'expectedSource'),false,'ACP runtime identity is not a native send witness');
+ assert.equal(await page.getByRole('button',{name:'Add files and more',exact:true}).count(),0);
+ await received(external);delete chat().externalAgent;await emit();
+ // A retained unknown request can outlive its row and mounted callback. Keep
+ // payload omission distinct from the local connection/returned-frame fence.
+ const originalChat=chat(),originalSelection=state.selectedSessionId;
+ const legacy={id:'legacy-omitted',commandId:'legacy-original',sessionId:'chat',
+  scope:JSON.stringify([shell.state().client.historyScope||shell.state().client.hostInstanceId,'/fixture','chat']),
+  text:'Legacy original without a new witness',attachmentIds:[],via:'chat',status:'unknown'};
+ await page.evaluate(({key,entry})=>sessionStorage.setItem(key,JSON.stringify([entry])),
+  {key:'amplifier.messageOutbox.v1',entry:legacy});
+ await page.reload();await composer().waitFor();
+ for(const contradiction of [true,false]){
+  await page.getByRole('button',{name:'Retry original submission',exact:true}).click();
+  await page.getByRole('button',{name:'Send this message again',exact:true}).evaluate(node=>{
+   const propsKey=Object.keys(node).find(key=>key.startsWith('__reactProps$'));
+   window.retainedLegacyRetry=node[propsKey].onClick;
+  });
+  state.sessions=[{id:'other',title:'Other selected chat',sessionKind:'root',workspace:'/fixture',workspaceId:'project',
+   status:'idle',historyManaged:true,historyLoaded:true,messages:[],workers:[]}];state.selectedSessionId='other';await emit();
+  await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId==='other'&&!window.amplifier.getState().sessions.some(row=>row.id==='chat'));
+  await page.evaluate(()=>{void window.retainedLegacyRetry()});
+  const replay=await next();
+  assert.equal(replay.body.id,legacy.commandId);assert.equal(replay.body.args.sessionId,'chat');
+  assert.equal(Object.hasOwn(replay.body.args,'expectedSource'),false);
+  assert.equal(Object.hasOwn(replay.body.args,'expectedConfigurationRevision'),false);
+  assert.deepEqual(replay.body.args,{sessionId:'chat',text:legacy.text,attachmentIds:[],via:'chat',preserveDraft:true});
+  if(contradiction){
+   const response=shell.state();
+   response.sessions.push({...originalChat,workspace:'/contradictory-source',messages:[]});response.revision+=100;
+   await replay.route.fulfill({json:{accepted:true,delivery:'accepted',state:response}});
+   await page.waitForFunction(id=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).find(row=>row.id===id)?.status==='unknown',legacy.id);
+   assert.equal(await page.evaluate(()=>window.amplifier.getState().sessions.some(row=>row.id==='chat')),false,'Contradictory HTTP target frame is never adopted');
+   const retained=(await outbox()).find(row=>row.id===legacy.id);
+   assert.equal(retained.text,legacy.text);assert.equal(Object.hasOwn(retained,'expectedSource'),false);
+  }else{
+   await replay.route.fulfill({json:{accepted:true,delivery:'accepted',state:shell.state()}});
+   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);
+  }
+  state.sessions=[originalChat];state.selectedSessionId=originalSelection;await emit();await composer().waitFor();
+ }
+ assert.equal(calls.filter(row=>row.action==='conversation.send'&&row.id===legacy.commandId).length,2,'Only two explicit retained callbacks submit, without automatic resend');
+ // Omission tolerance is for replaying an unknown original, not constructing
+ // fresh intent from a known rejection with defaulted source/config/Stop.
+ const omittedFailed={...legacy,id:'omitted-failed',commandId:'rejected-original',status:'failed',expectedSource:{workspace:'/fixture',nativeIdentity:'chat'},expectedConfigurationRevision:8,expectedInterruptionRevision:4};
+ await page.evaluate(entry=>sessionStorage.setItem('amplifier.messageOutbox.v1',JSON.stringify([entry])),omittedFailed);
+ await page.reload();await composer().waitFor();
+ await page.locator('[data-input-id="rejected-original"]').getByRole('button',{name:'Retry',exact:true}).evaluate(node=>{
+  const propsKey=Object.keys(node).find(key=>key.startsWith('__reactProps$'));window.retainedFailedRetry=node[propsKey].onClick;
+ });
+ state.sessions=[{id:'other',title:'Other selected chat',sessionKind:'root',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[],workers:[]}];state.selectedSessionId='other';await emit();
+ await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId==='other'&&!window.amplifier.getState().sessions.some(row=>row.id==='chat'));
+ const sendsBefore=calls.filter(call=>call.action==='conversation.send').length;
+ await page.evaluate(()=>window.retainedFailedRetry());
+ await page.getByText('Open the original chat before retrying this unsent message. Its saved submission was kept.',{exact:true}).waitFor();
+ assert.equal(calls.filter(call=>call.action==='conversation.send').length,sendsBefore,'Retained failed callback cannot send a new unwitnessed command');
+ assert.deepEqual(await outbox(),[omittedFailed],'Rejected payload/identity/preconditions remain exact');
+ state.sessions=[originalChat];state.selectedSessionId=originalSelection;await emit();
  await page.evaluate(()=>sessionStorage.setItem('amplifier.messageOutbox.v1','[]'));await page.reload();await composer().waitFor();
  await page.screenshot({path:'/tmp/amplifier-optimistic-messages.png'});await page.setViewportSize({width:390,height:844});await page.evaluate(()=>{const save=Storage.prototype.setItem;Storage.prototype.setItem=function(key,value){if(key==='amplifier.messageOutbox.v1')throw new DOMException('Fixture quota','QuotaExceededError');return save.call(this,key,value)}});const mobile=await send('Mobile failed message');await mobile.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection'}});await page.getByRole('button',{name:'Retry',exact:true}).waitFor();await page.getByText('This browser could not save the pending message. Keep this tab open until delivery is confirmed.',{exact:true}).waitFor();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:'/tmp/amplifier-message-retry-mobile.png'});
  await page.addInitScript(()=>Object.defineProperty(window,'sessionStorage',{get(){throw new DOMException('Fixture storage blocked','SecurityError')}}));await page.reload();await composer().waitFor();

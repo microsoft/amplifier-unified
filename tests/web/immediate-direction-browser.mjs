@@ -143,6 +143,9 @@ for(const scenario of (process.argv.length>2?process.argv.slice(2):['native','or
   assert.equal(Object.hasOwn(submissions[1].args,'expectedGenerationId'),false);
   assert.equal(Object.hasOwn(submissions[1].args,'allowNextTurn'),false);
   assert.equal(submissions[1].args.expectedInterruptionRevision,originalEpoch);
+  assert.deepEqual(submissions[1].args.expectedSource,{workspace:original.session.workspace,
+   nativeIdentity:original.session.runtimeSessionId||original.session.nativeIdentity||original.session.id},
+   'Captured native source survives live/idle completion and Stop without generation routing');
   assert.equal(submissions[1].args.expectedConfigurationRevision,0);
   assert.equal(final.session.messages.filter(m=>m.text==='DIRECTION_FROM_NORMAL_COMPOSER').length,stale?0:1);
   if(scenario==='ordinary'){

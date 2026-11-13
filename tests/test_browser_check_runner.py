@@ -501,11 +501,15 @@ def test_workflow_keeps_independent_artifacts_and_one_full_python_owner():
     steps = browser['jobs']['browser']['steps']
     assert any('browser_check_runner.py' in step.get('run', '') for step in steps)
     uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02']
-    assert len(uploads) == 2
+    assert len(uploads) == 3
     by_name = {step['with']['name']: step for step in uploads}
     diagnostics_name = 'extended-browser-evidence-${{ github.run_attempt }}'
     static_name = 'browser-static-${{ steps.build-source.outputs.revision }}-${{ github.run_attempt }}'
-    assert set(by_name) == {diagnostics_name, static_name}
+    captured_name = 'captured-frontend-build-${{ github.sha }}-${{ github.run_attempt }}'
+    assert set(by_name) == {diagnostics_name, static_name, captured_name}
+    assert by_name[captured_name]['if'] == "${{ inputs.captured_message_delivery && steps.frontend-build.outcome == 'success' }}"
+    assert by_name[captured_name]['with']['path'] == '${{ runner.temp }}/captured-frontend-build/'
+    assert by_name[captured_name]['with']['if-no-files-found'] == 'error'
     diagnostics, static = by_name[diagnostics_name], by_name[static_name]
     assert diagnostics['if'] == 'always()'
     assert diagnostics['with'] == {
@@ -1478,6 +1482,82 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
                for step in coordination['jobs']['contracts']['steps'])
 
 
+def test_captured_message_delivery_plan_is_fixed_without_changing_default():
+    import copy
+    plan = current_plan()
+    before = copy.deepcopy(plan)
+    focused = runner.captured_message_delivery_plan(plan)
+    assert plan == before
+    assert focused['scenarios'][0] == {
+        'id': 'message-delivery',
+        'command': ['node', 'tests/web/message-delivery-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/message-delivery'},
+    }
+    assert [row['id'] for row in focused['scenarios']] == [
+        'message-delivery', 'message-outbox', 'delivery-reconciliation', 'delivery-new-chat']
+    assert focused['scenarios'][1:] == [
+        next(row for row in plan['scenarios'] if row['id'] == identity)
+        for identity in ('message-outbox', 'delivery-reconciliation', 'delivery-new-chat')]
+    for mutation in ('missing', 'duplicate', 'command', 'environment', 'cwd'):
+        broken = {'schemaVersion': 1, 'scenarios': [copy.deepcopy(next(
+            row for row in plan['scenarios'] if row['id'] == 'message-delivery'))]}
+        if mutation == 'missing':
+            broken['scenarios'] = []
+        elif mutation == 'duplicate':
+            broken['scenarios'] *= 2
+        elif mutation == 'command':
+            broken['scenarios'][0]['command'] = ['node', 'tests/other.mjs']
+        elif mutation == 'environment':
+            broken['scenarios'][0]['env'] = {'UNEXPECTED': 'value'}
+        else:
+            broken['scenarios'][0]['cwd'] = '.build/web-client'
+        with pytest.raises(ValueError):
+            runner.captured_message_delivery_plan(broken)
+
+
+def test_captured_message_delivery_workflow_is_manual_fixed_and_retains_failures():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    inputs = workflow['on']['workflow_dispatch']['inputs']
+    option = inputs['captured_message_delivery']
+    assert option['type'] == 'boolean' and option['default'] == 'false'
+    assert 'captured_message_delivery' not in workflow['on']['workflow_call']['inputs']
+    assert workflow['permissions'] == {'contents': 'read'}
+    job = workflow['jobs']['browser']
+    steps = job['steps']
+    mixed = next(step for step in steps if step.get('name') == 'Reject mixed captured delivery selections')
+    for name, value in inputs.items():
+        if name != 'captured_message_delivery' and value['type'] == 'boolean':
+            assert f'inputs.{name}' in mixed['if']
+    assert mixed['run'] == 'exit 1'
+    for name, other in workflow['jobs'].items():
+        if name != 'browser':
+            assert other['steps'][0] == {
+                'name': 'Reject mixed captured delivery selection',
+                'if': '${{ inputs.captured_message_delivery }}', 'run': 'exit 1'}
+    runs = [step for step in steps if 'python scripts/browser_check_runner.py --plan' in step.get('run', '')]
+    flag = "${{ inputs.captured_message_delivery && '--captured-message-delivery' || '' }}"
+    assert len(runs) == 2 and all(flag in step['run'] for step in runs)
+    assert '--budget-seconds 1500' in runs[1]['run']
+    full = next(step for step in steps if step.get('name') == 'Run full frontend units for unfiltered nightly/manual coverage')
+    assert '!inputs.captured_message_delivery' in full['if']
+    for identity in ('captured-host', 'captured-client'):
+        step = next(step for step in steps if step.get('id') == identity)
+        assert step['if'] == '${{ inputs.captured_message_delivery }}'
+        assert step['continue-on-error'] == 'true'
+        assert 'tee output/browser-checks/' in step['run'] and 'pipefail' in step['run']
+    final = next(step for step in steps if step.get('name') == 'Preserve failed captured delivery contracts')
+    assert 'always()' in final['if'] and "steps.captured-host.outcome != 'success'" in final['if']
+    assert "steps.captured-client.outcome != 'success'" in final['if'] and final['run'] == 'exit 1'
+    assert any(step.get('if') == 'always()' and 'upload-artifact@' in step.get('uses', '') for step in steps)
+    source = next(step for step in steps if step.get('name') == 'Bind captured delivery source before setup')
+    assert 'HEAD^{tree}' in source['run'] and 'selected-client.json' in source['run']
+    assert steps.index(source) < next(i for i, step in enumerate(steps) if 'setup-python@' in step.get('uses', ''))
+    capture = next(step for step in steps if step.get('name') == 'Capture verified captured-delivery build output')
+    assert 'mv output/browser-checks "$RUNNER_TEMP/captured-delivery-evidence"' in capture['run']
+    assert 'trap ' in capture['run'] and '--destination "$RUNNER_TEMP/captured-frontend-build"' in capture['run']
+    assert 'gitignore' not in capture['run'] and 'info/exclude' not in capture['run']
+
+
 def test_attachment_focus_selects_exact_existing_owner_without_changing_plan():
     import copy
     plan = current_plan()
@@ -1509,7 +1589,7 @@ def test_attachment_focus_workflow_retains_failures_and_default_coverage():
     assert 'attachment_consumption' not in workflow['on']['workflow_call']['inputs']
     job = workflow['jobs']['browser']
     assert job['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
-    runs = [step for step in job['steps'] if 'scripts/browser_check_runner.py' in step.get('run', '')]
+    runs = [step for step in job['steps'] if 'python scripts/browser_check_runner.py --plan' in step.get('run', '')]
     assert len(runs) == 2
     flag = "${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}"
     assert all(flag in step['run'] for step in runs)

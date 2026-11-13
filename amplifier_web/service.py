@@ -140,7 +140,7 @@ ACTION_DEFINITIONS = {
     "message.copy": ("Copy the entire message text as Markdown on the connected browser",schema({"sessionId":string(200),"messageId":string(200)})),
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
     "message.edit": ("Edit a user message and regenerate in the current conversation (mode current), or fork a new conversation (mode fork, also the legacy default). Later active context is replaced; original events and external tool effects remain.",schema({"sessionId":string(200),"messageId":string(200),"text":string(100000),"mode":{"enum":["current","fork"]}},["sessionId","messageId","text"])),
-    "conversation.send": ("Send a message to this conversation. Its native owner chooses live provider steering first when ready, otherwise the next model-request boundary within the current turn, or a new turn when idle. expectedInterruptionRevision fences intent captured before Stop; it never chooses a route. expectedGenerationId explicitly requests strict steering of only that run; an ended or changed run is refused, never converted into new work.", schema({"sessionId":string(200),"text": string(100000), "document":{"type":"object"}, "expectedGenerationId":{**string(128),"minLength":1}, "expectedInterruptionRevision":{"type":"integer","minimum":0}, "preserveDraft":{"type":"boolean"}, "replyId":string(64), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
+    "conversation.send": ("Send a message to this conversation. Its native owner chooses live provider steering first when ready, otherwise the next model-request boundary within the current turn, or a new turn when idle. expectedInterruptionRevision fences intent captured before Stop; it never chooses a route. expectedGenerationId explicitly requests strict steering of only that run; an ended or changed run is refused, never converted into new work.", schema({"sessionId":string(200),"text": string(100000), "expectedSource":schema({"workspace":{"type":["string","null"],"minLength":1,"maxLength":4000},"nativeIdentity":{**string(200),"minLength":1}},["workspace","nativeIdentity"]), "document":{"type":"object"}, "expectedGenerationId":{**string(128),"minLength":1}, "expectedInterruptionRevision":{"type":"integer","minimum":0}, "preserveDraft":{"type":"boolean"}, "replyId":string(64), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
     "attachment.add": ("Attach a file or image up to 32 MB to a conversation draft. Provider-specific image limits still apply. expectedDraftId binds an upload admitted from an unnamed browser draft, including its exact creation handoff.", schema({"sessionId":{"type":["string","null"],"maxLength":200},"expectedDraftId":{"type":"string","pattern":"^[a-f0-9]{32}$"},"name":string(200),"base64":string(MAX_ENCODED_BYTES),"source":{"type":"string","enum":["clipboard-text"]}},["name","base64"])),
     "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":{"type":["string","null"],"maxLength":200},"id":string(32)},["id"])),
     "conversation.delivery": ("Check a saved input's delivery without sending or starting work. Missing evidence remains uncertain.", schema({"sessionId": string(200), "inputId": string(200)}, ["sessionId", "inputId"])),
@@ -3440,6 +3440,15 @@ class AppService:
                         and args['expectedInterruptionRevision'] != session.get('interruptionRevision', 0)):
                     raise AppError('This message was prepared before Stop. Nothing was sent. Send a new message to continue.',
                                    409, code='input_stopped')
+                # Receipt replay and fresh admission have already been checked
+                # under this same action lock, after all pre-admission waits.
+                # Missing browser rows are not authority to retarget fresh input.
+                if 'expectedSource' in args:
+                    source = {'workspace': session.get('workspace'),
+                              'nativeIdentity': session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']}
+                    if session.get('externalAgent') or args['expectedSource'] != source:
+                        raise AppError('The conversation source changed. Nothing was sent. The original submission remains saved.',
+                                       409, code='source_changed')
                 if ('expectedConfigurationRevision' in args
                         and args['expectedConfigurationRevision'] != session.get('nextMessageRevision', 0)):
                     raise AppError('Next message settings changed. Review them before sending.', 409)

@@ -30,6 +30,7 @@ on:
           - question-answer-resume
           - question-answer-installed
           - live-first-send
+          - live-first-accepted-graph
       core_wheels:
         description: Qualify published Core wheels and real runtime on both Linux architectures
         type: boolean
@@ -82,6 +83,7 @@ jobs:
               'question-answer-resume': ['tests/test_question_peer_resume.py', 'tests/test_peer_resume.py', 'tests/test_peer_resume_native.py', 'tests/test_failed_peer_recovery.py', 'tests/test_retained_failure_recovery.py', 'tests/test_questions.py', 'tests/test_question_handoffs.py'],
               'question-answer-installed': ['tests/test_question_peer_resume.py', 'tests/test_peer_resume_native.py'],
               'live-first-send': ['tests/test_conversation_steering.py', 'tests/test_steering_runtime.py', 'tests/test_native_provider.py', 'tests/test_message_delivery.py', 'tests/test_queued_configuration_boundary.py', 'tests/test_service.py::test_failed_direct_send_settles_activity_without_replay_or_lost_input'],
+              'live-first-accepted-graph': ['tests/test_message_delivery.py::test_captured_source_refuses_before_input_draft_attachment_mutation', 'tests/test_message_delivery.py::test_source_receipt_replay_precedes_changed_identity_and_fresh_admission', 'tests/test_message_delivery.py::test_source_is_rechecked_after_waiting_for_existing_action_lock', 'tests/test_conversation_steering.py::test_manager_stop_epoch_rechecks_after_preparation_without_routing', 'tests/test_steering_runtime.py::test_outer_worker_stop_fences_waiting_ordinary_input', 'tests/test_steering_runtime.py::test_pending_configuration_is_decided_by_actual_worker_before_admission', 'tests/test_steering_runtime.py::test_manager_pending_configuration_uses_finite_owner_admission_only', 'tests/test_assignment_retirement_recovery.py::test_unfinished_task_warm_retirement_preserves_task_stop_and_input'],
           }
           selection = os.environ['CHECK_SUITE']
           if selection not in suites:
@@ -134,7 +136,7 @@ jobs:
           p = tomllib.load(open("amplifier_web/runtime_deps/pyproject.toml", "rb"))
           locked = tomllib.load(open("uv.lock", "rb"))
           loop, = [row for row in locked["package"] if row["name"] == "amplifier-module-loop-live"]
-          revision = (loop["source"]["git"].rsplit("#", 1)[1] if os.environ["CHECK_SUITE"] == "live-first-send"
+          revision = (loop["source"]["git"].rsplit("#", 1)[1] if os.environ["CHECK_SUITE"] in {"live-first-send", "live-first-accepted-graph"}
                       else "76073827ba6742ae026a12b524f596120cd2b314" if os.environ["CHECK_SUITE"] == "manager-exception-boundary"
                       else p["tool"]["uv"]["sources"]["amplifier-module-loop-live"]["rev"])
           print("revision=" + revision)
@@ -147,7 +149,7 @@ jobs:
           ssh-key: ${{ secrets.LOOP_LIVE_CI_READ_KEY }}
           persist-credentials: false
       - name: Install runtime prerequisites for host and child tests
-        if: ${{ env.CHECK_SUITE != 'live-first-send' }}
+        if: ${{ env.CHECK_SUITE != 'live-first-send' && env.CHECK_SUITE != 'live-first-accepted-graph' }}
         run: >-
           uv pip install --python .venv/bin/python
           .ci/loop-live
@@ -198,7 +200,7 @@ jobs:
           print(json.dumps(result, indent=2))
           PY
       - name: Run the selected repair suite
-        if: ${{ env.CHECK_SUITE != 'full' && env.CHECK_SUITE != 'native-child-fixtures' && env.CHECK_SUITE != 'question-answer-installed' && env.CHECK_SUITE != 'live-first-send' }}
+        if: ${{ env.CHECK_SUITE != 'full' && env.CHECK_SUITE != 'native-child-fixtures' && env.CHECK_SUITE != 'question-answer-installed' && env.CHECK_SUITE != 'live-first-send' && env.CHECK_SUITE != 'live-first-accepted-graph' }}
         shell: bash
         run: |
           mapfile -t targets < output/python-checks/targets.txt
@@ -365,7 +367,7 @@ jobs:
           assert len([row for row in rows if 'test_peer_resume_native' in row.get('classname', '')]) == 9
           PY
       - name: Qualify live-first Send from the installed wheel with scripted external transports
-        if: ${{ env.CHECK_SUITE == 'live-first-send' }}
+        if: ${{ env.CHECK_SUITE == 'live-first-send' || env.CHECK_SUITE == 'live-first-accepted-graph' }}
         timeout-minutes: 15
         shell: bash
         run: |
@@ -445,10 +447,18 @@ jobs:
             # Preserve independent browser evidence even when a Python oracle
             # fails; neither phase may turn the combined result green alone.
             browser_status=0
-            for mode in native ordinary tool completion stale-config stop native-unknown native-stop; do
+            modes="native ordinary tool completion stale-config stop native-unknown native-stop"
+            if [ "$CHECK_SUITE" = live-first-accepted-graph ]; then modes="native ordinary completion stop"; fi
+            for mode in $modes; do
               node tests/web/immediate-direction-browser.mjs "$mode" \
                 > "$GITHUB_WORKSPACE/output/python-checks/immediate-direction-$mode.log" 2>&1 || browser_status=1
             done
+            if [ "$CHECK_SUITE" = live-first-accepted-graph ]; then
+              AMPLIFIER_TEST_INSTALLED_PACKAGE="$DIRECTION_INSTALLED_HOST" \
+                AMPLIFIER_TEST_ARTIFACTS="$GITHUB_WORKSPACE/output/python-checks/captured-source" \
+                node tests/web/message-delivery-browser.mjs \
+                > "$GITHUB_WORKSPACE/output/python-checks/captured-source.log" 2>&1 || browser_status=1
+            fi
             printf '%s\n' "$browser_status" > "$GITHUB_WORKSPACE/output/python-checks/browser-exit.txt"
             mapfile -t targets < "$GITHUB_WORKSPACE/output/python-checks/targets.txt"
             set +e
@@ -460,18 +470,21 @@ jobs:
             printf '%s\n' "$test_status" > "$GITHUB_WORKSPACE/output/python-checks/tests-exit.txt"
           )
           python - <<'PY'
-          import json, xml.etree.ElementTree as ET
+          import json, os, xml.etree.ElementTree as ET
           from pathlib import Path
           output = Path('output/python-checks')
           cases = list(ET.parse(output / 'installed-junit.xml').getroot().iter('testcase'))
           assert cases and not any(row.find(tag) is not None for row in cases for tag in ('failure', 'error', 'skipped'))
           modes = ['native', 'ordinary', 'tool', 'completion', 'stale-config', 'stop', 'native-unknown', 'native-stop']
+          if os.environ['CHECK_SUITE'] == 'live-first-accepted-graph':
+              modes = ['native', 'ordinary', 'completion', 'stop']
+              assert (output / 'browser-exit.txt').read_text().strip() == '0'
           for mode in modes:
               row = json.loads((output / 'immediate-direction' / (mode + '.json')).read_text())
               assert row['passed'] and row['scenario'] == mode and row['host'] and row['cleanupConfirmed'], mode
           (output / 'live-first-qualified.json').write_text(json.dumps({
               'installedCases': len(cases), 'skips': 0, 'browserModes': modes,
-              'scope': 'Candidate graph, scripted external transports; not paid-provider parity or release'}, indent=2) + '\n')
+              'scope': os.environ['CHECK_SUITE'] + ': scripted external transports; not paid-provider parity or release'}, indent=2) + '\n')
           PY
       - name: Run and retain exact native child fixture evidence
         if: ${{ env.CHECK_SUITE == 'native-child-fixtures' }}

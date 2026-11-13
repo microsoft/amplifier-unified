@@ -125,6 +125,23 @@ A changed command with the same ID is rejected. Command acceptance is distinct
 from a completed model/tool operation. Interrupted or uncertain work is never
 automatically rerun by attachment, reload, or SSE reconnection.
 
+`conversation.send` optionally accepts `expectedSource: {workspace, nativeIdentity}`
+for native conversations. It binds fresh input to the captured workspace and
+effective native execution identity (`runtimeSessionId`, then `nativeIdentity`,
+then conversation ID). The host compares it under the existing mutation lock,
+after exact receipt replay and fresh admission rechecks but before input/draft
+mutation. A contradiction refuses fresh input with `source_changed`; it never
+retargets or resends. Changing the witness under the same command ID is a
+fingerprint conflict. An exact saved receipt still replays after the current
+source changes. Public clients may omit this optional field unchanged; external
+ACP text sends do not supply a native witness.
+
+New bundled native submissions retain this witness before queue/checkpoint
+waits. Navigation or omission of their row from a selected-only frame is not a
+source contradiction. Previously uncertain submissions retain their original
+payload and witness presence/absence; a refused retry cannot prove that the
+earlier attempt never ran.
+
 The bundled browser can dismiss a settled failed/uncertain delivery warning into
 reversible **Delivery details**. This stores only the exact chat/input identities
 in that browser tab's session storage; it neither deletes the original message,

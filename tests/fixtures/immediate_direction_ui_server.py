@@ -269,7 +269,7 @@ async def mount(coordinator, config=None):
         path = root / 'wire.jsonl'
         return web.json_response({'wire': [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else [],
             'session': {key: service._session().get(key) for key in (
-                'id', 'status', 'collaborationGeneration', 'messages', 'error', 'failure',
+                'id', 'workspace', 'runtimeSessionId', 'nativeIdentity', 'status', 'collaborationGeneration', 'messages', 'error', 'failure',
                 'interruptionRevision', 'nextMessageRevision', 'pendingModelSelection', 'execution')},
             'toolRunning': stage('tool-running'), 'workers': len(runtime.workers)})
     async def release(request):
