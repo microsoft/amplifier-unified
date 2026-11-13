@@ -9,6 +9,7 @@ import re
 import sqlite3
 import time
 import uuid
+from .reset import INSTALLER_REASONS, installer_failure_facts, installer_failure_guidance, installer_requirement
 
 PROBE_PREFIX = 'AMPLIFIER_UPDATE_PROBE='
 MAX_ACTIVE_FAILURES = 32
@@ -23,7 +24,7 @@ STORAGE_REASONS = {getattr(errno, name): reason for name, reason in {
     'ENOSPC': 'disk-full', 'EDQUOT': 'disk-quota-exceeded',
     'EACCES': 'storage-permission-denied', 'EPERM': 'storage-permission-denied',
     'EROFS': 'read-only-storage'}.items() if hasattr(errno, name)}
-RECOVERY_REASONS = {'smart-tool-startup-failed', 'smart-tool-update-failed', 'missing-configured-environment', 'incompatible-conversation-loop', 'protected-runtime-source', 'runtime-source-constraint', 'runtime-source-unbound', 'runtime-source-conflict', 'runtime-source-changed', 'runtime-resolution-mismatch', 'runtime-installed-source-mismatch', *PREPARATION_REASONS.values(), *STORAGE_REASONS.values()}
+RECOVERY_REASONS = {'smart-tool-startup-failed', 'smart-tool-update-failed', 'missing-configured-environment', 'incompatible-conversation-loop', 'protected-runtime-source', 'runtime-source-constraint', 'runtime-source-unbound', 'runtime-source-conflict', 'runtime-source-changed', 'runtime-resolution-mismatch', 'runtime-installed-source-mismatch', *PREPARATION_REASONS.values(), *STORAGE_REASONS.values(), *INSTALLER_REASONS}
 RUNTIME_SOURCE_REASONS = {'protected-runtime-source', 'runtime-source-constraint', 'runtime-source-unbound',
                         'runtime-source-conflict', 'runtime-source-changed', 'runtime-resolution-mismatch',
                         'runtime-installed-source-mismatch'}
@@ -86,6 +87,10 @@ def exception_facts(error):
 
 
 def failure_guidance(event):
+    if event.get('reason') in INSTALLER_REASONS:
+        return installer_failure_guidance(event)
+    if event.get('probe', {}).get('reason') in INSTALLER_REASONS:
+        return installer_failure_guidance(event['probe'])
     return {
         'runtime-source-unbound': 'A selected component has no matching source binding for its declared ref and commit. The current components remain active. This does not establish local edits. Share the update diagnostics; do not change refs or remove caches to bypass this check.',
         'runtime-source-conflict': 'Selected declarations name conflicting refs for one component repository. The current components remain active. This does not establish local edits. Share the update diagnostics before changing source configuration.',
@@ -104,9 +109,7 @@ def probe_failure(error, stage):
     detail = getattr(error, 'diagnostic_facts', {})
     if detail.get('reason') in RECOVERY_REASONS:
         facts['reason'] = detail['reason']
-    if (isinstance(detail.get('package'), str) and len(detail['package']) <= 128
-            and re.fullmatch(r'amplifier-[a-z0-9]+(?:-[a-z0-9]+)*', detail['package'])):
-        facts['package'] = detail['package']
+    facts.update(installer_requirement(detail.get('package'), detail.get('constraint')))
     from .reset import repository_auth_failure
     current, seen = error, set()
     while current is not None and id(current) not in seen:
@@ -114,6 +117,10 @@ def probe_failure(error, stage):
         detail = "\n".join(str(value or "") for value in (current, getattr(current, "stderr", None), getattr(current, "stdout", None)))
         if 'github.com' in detail.lower() and repository_auth_failure(detail):
             facts['repositoryAccessFailure'] = True
+        command = getattr(current, 'cmd', ())
+        if (isinstance(command, (list, tuple)) and command
+                and str(command[0]).replace('\\', '/').rsplit('/', 1)[-1] in {'uv', 'uv.exe'}):
+            facts.update(installer_failure_facts(getattr(current, 'stderr', None), getattr(current, 'stdout', None)))
         current = current.__cause__ or current.__context__
     reason=PREPARATION_REASONS.get(type(error).__name__) if stage=='prepare' else None
     traceback = error.__traceback__
@@ -146,7 +153,7 @@ def probe_record(output):
         if isinstance(value.get('stage'),str) and value['stage'] in PROBE_STAGES:safe['stage']=value['stage']
         if isinstance(value.get('errorType'),str) and value['errorType'] in ERROR_TYPES:safe['errorType']=value['errorType']
         if isinstance(value.get('reason'),str) and value['reason'] in RECOVERY_REASONS:safe['reason']=value['reason']
-        if isinstance(value.get('package'),str) and len(value['package']) <= 128 and re.fullmatch(r'amplifier-[a-z0-9]+(?:-[a-z0-9]+)*',value['package']):safe['package']=value['package']
+        safe.update(installer_requirement(value.get('package'), value.get('constraint')))
         if failure_location(value.get('failureLocation')):safe['failureLocation']=value['failureLocation']
         if value.get('osError') in errno.errorcode.values():safe['osError']=value['osError']
         for key in ('version','pythonVersion'):
@@ -157,8 +164,10 @@ def probe_record(output):
     return records[-1] if records else None
 
 
-def command_facts(stdout,stderr,returncode,duration):
+def command_facts(stdout,stderr,returncode,duration,*,installer=False):
     facts={'exitCode':returncode,'durationMs':round(duration*1000),'stdoutBytes':len(stdout),'stderrBytes':len(stderr)}
+    if returncode and installer:
+        facts.update(installer_failure_facts(stderr, stdout))
     probe=probe_record(stdout)
     if probe:facts['probe']=probe
     # Only a fixed exception class, never the following message or traceback.
@@ -223,7 +232,7 @@ class UpdateDiagnostics:
         # Attempt/command IDs, elapsed time and byte counts are occurrences, not
         # causes. Retain every original receipt in the existing diagnostic sink.
         cause = {key: event[key] for key in (
-            'phase', 'reason', 'component', 'package', 'errorType', 'osError',
+            'phase', 'reason', 'component', 'package', 'constraint', 'errorType', 'osError',
             'expectedRevision', 'observedRevision', 'resolutionMismatches',
             'expectedVersion', 'observedVersion', 'failureLocation', 'probe') if key in event}
         if 'probe' in cause:
@@ -433,8 +442,7 @@ class UpdateDiagnostics:
         for key in ('component', 'installationId', 'targetInstallationId'):
             value = facts.get(key)
             if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', value):event[key] = value
-        if isinstance(facts.get('package'),str) and re.fullmatch(r'amplifier-[a-z0-9]+(?:-[a-z0-9]+)*',facts['package']) and len(facts['package'])<=128:
-            event['package']=facts['package']
+        event.update(installer_requirement(facts.get('package'), facts.get('constraint')))
         for key in ('durationMs','exitCode','stdoutBytes','stderrBytes'):
             if type(facts.get(key)) is int:event[key]=facts[key]
         if isinstance(facts.get('errorType'),str) and facts['errorType'] in ERROR_TYPES:event['errorType']=facts['errorType']

@@ -89,13 +89,23 @@ wheel="amplifier_unified-${version}-py3-none-any.whl"
 echo "Installing Amplifier $version…"
 run curl --proto '=https' --tlsv1.2 -fsSL "$release_base/download/v$version/$wheel" -o "$install_work/$wheel"
 run curl --proto '=https' --tlsv1.2 -fsSL "$release_base/download/v$version/SHA256SUMS" -o "$install_work/SHA256SUMS"
+# Match reset.package_environment: uv owns index/auth/network configuration.
+# Discard only Python/project injection, not approved feeds or TLS/proxy settings.
+for install_env_var in ${!PYTHON@}; do
+  if [ "$install_env_var" != PYTHON_KEYRING_BACKEND ]; then unset "$install_env_var"; fi
+done
+unset VIRTUAL_ENV AMPLIFIER_UNIFIED_RELEASE AMPLIFIER_APP_GENERATION_EXEC
+unset UV_PROJECT UV_PROJECT_ENVIRONMENT UV_CONSTRAINT UV_BUILD_CONSTRAINT UV_OVERRIDE UV_ENV_FILE UV_PYTHON UV_WORKING_DIRECTORY
 # Python and Unified live in uv-managed environments; system Python is unchanged.
 run "$uv_command" python install 3.13
 run "$uv_command" run --no-project --python 3.13 python -c 'import hashlib,pathlib,sys; p=pathlib.Path(sys.argv[1]); name=sys.argv[2]; rows=[line.split() for line in (p/"SHA256SUMS").read_text().splitlines()]; expected=next((r[0] for r in rows if len(r)==2 and r[1].lstrip("*")==name),None); actual=hashlib.sha256((p/name).read_bytes()).hexdigest(); sys.exit(0 if expected==actual else "Release checksum verification failed")' "$install_work" "$wheel"
 if ! run "$uv_command" tool install --upgrade --python 3.13 "$install_work/$wheel"; then
+  echo 'Package installation failed. This installer honors your uv package indexes, credentials, proxy and TLS configuration; it does not select an alternate public feed. Check required package versions and feed access before retrying. App data and caches do not need a reset for a missing feed package.' >&2
   # A verified public release may have public Git dependencies blocked by a
-  # signed-in account. Retry only installation, once, with child-only policy.
-  if [ "${AMPLIFIER_GITHUB_ACCESS:-}" = anonymous ]; then exit 1; fi
+  # signed-in account. Retry only a classified GitHub auth failure, once.
+  if [ "${AMPLIFIER_GITHUB_ACCESS:-}" = anonymous ] ||
+     ! grep -qi 'github.com' "$install_log" ||
+     ! grep -Eqi 'saml|single sign-on|sso enforcement|authentication failed|could not read username|could not read password|invalid username or token|permission denied \(publickey\)|repository not found|requested URL returned error: (401|403)' "$install_log"; then exit 1; fi
   echo 'Retrying public dependencies without GitHub sign-in…'
   (anonymous_downloads
    run "$uv_command" tool install --upgrade --python 3.13 "$install_work/$wheel")

@@ -213,6 +213,71 @@ repeat an unknown installation.
 
 ## Current implementation and operational behavior
 
+### Package indexes and installer failures
+
+Application staging, final replacement and CLI installation repair use **uv's
+existing configuration as the package-source authority**. Normal shell bootstrap
+inherits the same policy. There is no separate Unified package-index setting.
+User/system `uv.toml`, an explicit `UV_CONFIG_FILE`, index environment variables
+(including named-index credentials), keyring, proxy and TLS/CA settings remain
+available to installer children. A deliberate `UV_NO_CONFIG` remains effective;
+Unified does not set it on the operator's behalf. uv's normal precedence and
+index-selection rules apply. The app wheel still comes from the exact verified
+GitHub release; its registry dependencies come from the configured package
+locations. GitHub repository sign-in is not package-feed authentication.
+
+For a corporate feed, configure uv for the account running Unified, for example
+in that account's user `uv.toml`:
+
+```toml
+[[index]]
+name = "corporate"
+url = "https://packages.example.invalid/simple"
+default = true
+```
+
+Use your organization's approved URL and credential/keyring/CA setup, not the
+illustrative address above. Environment-only choices must also reach the managed
+service; a variable exported in a separate terminal does not change an already
+running host. User configuration avoids that shell/service environment mismatch.
+Any adoption or restart remains a separate deliberate operation. uv tool installs
+use user/system configuration rather than an unrelated working directory's
+project configuration; development project resolution retains its own policy.
+
+If a required version is not visible through the configured locations, installation
+fails there. Unified neither silently adds public PyPI nor changes global uv
+configuration, credentials, index strategy or trust. Ask the feed administrator
+to mirror/approve the requirement, or explicitly select another approved source.
+In particular, a feed with only prereleases cannot satisfy a stable exact version
+by pretending those releases are equivalent. Removing a pin, clearing a cache or
+resetting app data is not a remedy for missing feed content.
+
+**CLI reset behavior change:** repair no longer silently disables uv configuration
+or drops index/authentication settings. Its fresh-download/no-cache choice is
+independent of source policy. Update and repair discard worker Python/generation
+and project constraint/override injection, but retain tool ownership and approved
+source/network settings. The normal Windows bootstrap also no longer forces
+`UV_NO_CONFIG`; frozen/offline experimental Windows prototype environments retain
+their explicit isolated fixture policy and are not qualified native installation.
+
+Installer failures publish closed categories for package-feed access, unavailable
+feed content, dependency resolution, TLS and network failures. Where a known
+resolver clause can be parsed safely, diagnostics include a normalized package
+name and bounded numeric version constraint, including non-Amplifier dependencies.
+`package-not-found` means unavailable **through the configured locations**, not
+nonexistent globally. Unknown output stays unclassified. Public events, support
+reports and update guidance never include raw installer output, URLs, credentials,
+configuration values or private paths. Existing private CLI repair/installer logs
+remain technical local records and should be inspected before sharing. A failed
+candidate leaves the running installation intact; a failed or uncertain final
+replacement retains its existing paused-work and recovery guards.
+
+Current health identifies the selected unresolved failure's domain, attempt and
+phase using bounded code identities. A verified successful application update
+does not settle an earlier component failure. In that case the status explains
+**Application updated; component update needs review**, while retaining attention,
+the original component receipt and its existing retry/recovery requirements.
+
 Available updates are listed immediately at the top of Settings. The application has its own card showing the installed version even before the first check, plus the latest published release after a successful check. The complete source inventory is behind **Show all sources**; failed checks are called out separately. Successfully installed application releases are removed from the pending count on restart. An installation newer than the published release is identified explicitly; application updates follow stable GitHub Releases, not every commit on main.
 
 Automatic update checks default to every **4 hours**. Under **Update preferences**, choose every **1 hour**, **4 hours**, **8 hours**, or **daily**. Existing saved schedules remain unchanged on upgrade, including the previous daily default and older 6-hour or weekly choices. Older choices are shown with an explanation until replaced. Resetting app settings restores the 4-hour check interval while leaving automatic installation off.

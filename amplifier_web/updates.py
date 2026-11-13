@@ -291,7 +291,8 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False):
                 result.diagnostic_facts['anonymousRetry'] = True
             return result
         from .update_diagnostics import CommandFailure,command_facts
-        raise CommandFailure(command_facts(stdout,stderr,proc.returncode,time.monotonic()-started))
+        installer = str(args[0]).replace('\\', '/').rsplit('/', 1)[-1].lower() in {'uv', 'uv.exe'}
+        raise CommandFailure(command_facts(stdout,stderr,proc.returncode,time.monotonic()-started,installer=installer))
     if raw:return stdout
     from .update_diagnostics import CommandOutput,command_facts
     return CommandOutput(stdout.decode(errors='replace').strip(),command_facts(stdout,stderr,proc.returncode,time.monotonic()-started))

@@ -235,6 +235,8 @@ def anonymous_retry_environment(argv, env, stdout=b"", stderr=b""):
     args = [str(arg) for arg in argv]
     executable = Path(args[0]).name
     details = b"\n".join(value if isinstance(value, bytes) else str(value or "").encode() for value in (stdout, stderr))
+    if installer_failure_facts(details).get("reason") in {"package-index-auth-failed", "package-not-found"}:
+        return None  # A feed failure is not evidence that GitHub sign-in failed.
     github = "github.com/" in " ".join(args).lower() or b"github.com" in details.lower()
     read = executable == "git" and any(arg in {"ls-remote", "fetch", "clone"} for arg in args[1:]) and not any(arg in {"push", "send-pack"} for arg in args[1:])
     install = executable in {"uv", "uv.exe"} and any(arg in {"install", "sync", "lock"} for arg in args[1:])
@@ -269,20 +271,141 @@ def download_command(*args, env, timeout=120, **kwargs):
         return command(*args, env=retry, capture=True, timeout=remaining, **kwargs)
 
 
-def environment(*, anonymous=False):
-    env = os.environ.copy()
+def package_environment(env=None, *, no_cache=False):
+    """Use uv's source/network policy, without a worker's Python/project scope.
+
+    uv remains the authority for indexes, credentials, TLS and proxy settings.
+    In particular UV_CONFIG_FILE and a deliberate UV_NO_CONFIG are preserved.
+    Cache bypass is an independent repair choice, never an index-policy reset.
+    """
+    env = dict(os.environ if env is None else env)
     # Never inherit a worker's generation, a development Python path, or uv's
     # project overrides into a recovery installation. Keep tool/bin ownership.
     for key in list(env):
-        if key.startswith(("PYTHON", "UV_")) and key not in {
-            "UV_TOOL_DIR", "UV_TOOL_BIN_DIR", "UV_PYTHON_INSTALL_DIR", "UV_NATIVE_TLS",
+        if (key.startswith("PYTHON") and key != "PYTHON_KEYRING_BACKEND") or key in {
+            "UV_PROJECT", "UV_PROJECT_ENVIRONMENT", "UV_CONSTRAINT", "UV_BUILD_CONSTRAINT",
+            "UV_OVERRIDE", "UV_ENV_FILE", "UV_PYTHON", "UV_WORKING_DIRECTORY",
         }:
             env.pop(key, None)
     for key in ("VIRTUAL_ENV", "AMPLIFIER_UNIFIED_RELEASE", "AMPLIFIER_APP_GENERATION_EXEC"):
         env.pop(key, None)
-    env["UV_NO_CONFIG"] = "1"
-    env["UV_NO_CACHE"] = "1"
-    return repository_environment(env, anonymous=anonymous)
+    if no_cache:
+        env["UV_NO_CACHE"] = "1"
+    return env
+
+
+def environment(*, anonymous=False):
+    return repository_environment(package_environment(no_cache=True), anonymous=anonymous)
+
+
+INSTALLER_REASONS = {
+    "package-index-auth-failed", "package-index-unavailable", "package-not-found",
+    "dependency-resolution-failed", "package-tls-failed", "package-network-failed",
+}
+_PACKAGE = r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?"
+_VERSION = r"[0-9]+(?:\.[0-9]+)*(?:(?:a|b|rc|\.post|\.dev)[0-9]+)?(?:\.\*)?"
+_CONSTRAINT = rf"(?:===|==|!=|~=|<=|>=|<|>){_VERSION}(?:,(?:===|==|!=|~=|<=|>=|<|>){_VERSION})*"
+
+
+def installer_requirement(package, constraint=None):
+    """Bounded public package identity, never URLs, paths or free-form text."""
+    if not isinstance(package, str) or not re.fullmatch(_PACKAGE, package):
+        return {}
+    facts = {"package": re.sub(r"[-_.]+", "-", package).lower()}
+    if (isinstance(constraint, str) and len(constraint) <= 128
+            and re.fullmatch(_CONSTRAINT, constraint)):
+        facts["constraint"] = constraint
+    return facts
+
+
+def installer_failure_facts(*details):
+    """Classify installer output in memory; return only closed, sanitized facts.
+
+    Missing means unavailable through the configured locations, not nonexistent
+    globally. Unknown formats stay unknown; never retain a redacted stderr dump.
+    """
+    text = "\n".join((value.decode(errors="replace") if isinstance(value, bytes)
+                     else str(value or ""))[-262144:] for value in details)
+    lower = text.lower()
+    facts = {}
+    if any(marker in lower for marker in ("no space left on device", "disk quota exceeded")):
+        return {"reason": "disk-quota-exceeded" if "disk quota exceeded" in lower else "disk-full"}
+    if any(marker in lower for marker in ("certificate verify failed", "invalid peer certificate",
+                                         "unknown issuer", "certificate verification failed")):
+        reason = "package-tls-failed"
+    elif (any(marker in lower for marker in ("index", "registry", "/simple/"))
+          and any(marker in lower for marker in ("401 unauthorized", "403 forbidden",
+                                                 "401 (unauthorized)", "403 (forbidden)",
+                                                 "authentication failed", "credentials not found"))):
+        reason = "package-index-auth-failed"
+    elif any(marker in lower for marker in ("dns error", "name or service not known",
+                                           "failed to lookup address", "connection refused",
+                                           "connection timed out", "operation timed out",
+                                           "network is unreachable", "connect error")):
+        reason = "package-network-failed"
+    elif (any(marker in lower for marker in ("index", "registry", "/simple/"))
+          and any(marker in lower for marker in ("failed to fetch", "failed to download",
+                                                 "503 service unavailable", "502 bad gateway"))):
+        reason = "package-index-unavailable"
+    elif any(marker in lower for marker in ("was not found in the package registry",
+                                           "was not found in the provided package locations",
+                                           "no matching distribution found for",
+                                           "there is no version of", "there are no versions of")):
+        reason = "package-not-found"
+    elif "no solution found" in lower or "requirements are unsatisfiable" in lower:
+        reason = "dependency-resolution-failed"
+    else:
+        return facts
+    facts["reason"] = reason
+    # Capture a complete requirement before validating. A package-looking suffix
+    # inside a URL/path, or the valid prefix of a malformed constraint, is not
+    # evidence of a public package requirement.
+    requirement = r"([^\r\n`]+?)(?=`|\r?\n|$|\s+(?:and|but|we|which)\b)"
+    patterns = (
+        rf"\b(?:there is no version of|there are no versions of)\s+`?{requirement}",
+        r"(?<!\S)`?([^\s`]+)`?\s+was not found in the (?:package registry|provided package locations)",
+        rf"\bno matching distribution found for\s+`?{requirement}",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            token = re.sub(r"\s+", "", match[1])
+            parsed = re.fullmatch(rf"({_PACKAGE})({_CONSTRAINT})?", token, re.IGNORECASE)
+            if parsed:
+                facts.update(installer_requirement(parsed[1], parsed[2]))
+            break
+    if facts.get("package") and "constraint" not in facts:
+        match = re.search(rf"\b(?:you require|depends on)\s+`?{requirement}", text, re.IGNORECASE)
+        if match:
+            token = re.sub(r"\s+", "", match[1])
+            parsed = re.fullmatch(rf"({_PACKAGE})({_CONSTRAINT})", token, re.IGNORECASE)
+            if parsed and installer_requirement(parsed[1]).get("package") == facts["package"]:
+                facts.update(installer_requirement(parsed[1], parsed[2]))
+    return facts
+
+
+def installer_failure_guidance(facts):
+    requirement = installer_requirement(facts.get("package"), facts.get("constraint"))
+    subject = requirement.get("package", "A required package")
+    if requirement.get("constraint"):
+        subject += " " + requirement["constraint"]
+    return {
+        "package-not-found": subject + " is not available through the configured package indexes or locations. "
+            "Ask your feed administrator to make the required version available, or explicitly select an approved source in uv configuration. "
+            "Unified will not fall back to another index. Clearing caches or resetting app data will not fix feed availability.",
+        "dependency-resolution-failed": "The packages could not be resolved with the selected requirements and package sources. "
+            "Review dependency compatibility, required versions and approved uv package-source configuration before retrying. "
+            "This does not establish cache corruption; resetting app data will not resolve the conflict.",
+        "package-index-auth-failed": "Access to a configured package index was rejected. "
+            "Check that the account running Unified has the feed credentials and permissions required by your organization, then retry. "
+            "GitHub sign-in and package-feed authentication are separate.",
+        "package-index-unavailable": "A configured package index could not serve the installation. "
+            "Check the feed's availability and approved uv configuration before retrying; no alternate public index was selected.",
+        "package-tls-failed": "The package download failed certificate verification. "
+            "Check your organization's CA certificates and uv TLS configuration. Do not disable certificate verification.",
+        "package-network-failed": "The package download could not connect. "
+            "Check network access, VPN, proxy and the configured feed's availability, then retry.",
+    }.get(facts.get("reason"))
 
 
 def release_link_metadata(url):
@@ -858,7 +981,9 @@ def run(args):
             message = "Unified's files could not be accessed. Run reset using the account that installed Unified. See the repair report for details."
         elif isinstance(error, subprocess.SubprocessError):
             executable = Path(str(error.cmd[0])).name if getattr(error, 'cmd', None) else ''
-            message = ("GitHub access could not be confirmed. Run gh auth login with an account that can access Amplifier Unified, then try again."
+            guidance = installer_failure_guidance(installer_failure_facts(
+                getattr(error, 'stderr', None), getattr(error, 'stdout', None))) if executable in {'uv', 'uv.exe'} else None
+            message = guidance or ("GitHub access could not be confirmed. Run gh auth login with an account that can access Amplifier Unified, then try again."
                        if executable == 'gh' else "A repair step could not finish. Check your internet connection and GitHub access, then try again. Technical details are in the repair report.")
         raise SystemExit("\nRepair needs attention. " + message) from None
     finally:

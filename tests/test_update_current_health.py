@@ -150,6 +150,39 @@ def test_unknown_component_failure_keeps_app_ack_and_history_without_transient_c
     assert state==before
 
 
+@pytest.mark.parametrize('case', ['prior-component', 'later-component', 'application', 'unverified-app'])
+def test_verified_app_and_prior_component_failure_have_distinct_safe_context(case):
+    failure = {'kind': 'application' if case == 'application' else 'ecosystem', 'status': 'failed',
+               'at': 400 if case == 'later-component' else 150, 'attemptId': 'b' * 32,
+               'phase': 'ecosystem-runtime-prepare', 'errorType': 'CommandFailure'}
+    state = {'phase': 'checked', 'error': None,
+             'application': {'current': '0.88.0', 'runningRevision': 'a' * 40, 'status': 'current'},
+             'applicationResult': {'phase': 'restart-ack', 'revision': 'a' * 40, 'version': '0.88.0',
+                                   'attemptId': 'c' * 32, 'verifiedAt': 300},
+             'diagnostics': {'lastFailure': failure, 'activeFailures': {'old': {'latest': failure}},
+                             'completedBatches': [{'kind': 'application', 'phase': 'restart-ack',
+                                 'attemptId': 'c' * 32, 'revision': 'a' * 40,
+                                 'startedAt': 200, 'completedAt': 300, 'applicationExtras': []}]}}
+    if case == 'unverified-app':
+        state['diagnostics']['completedBatches'] = []
+    before = copy.deepcopy(state)
+    projected = health.current(state, {'startedAt': 100, 'packages': []})
+    assert projected['status'] == 'action-required' and projected['actionRequired']
+    assert projected['failureKind'] == failure['kind']
+    assert projected['failureAttemptId'] == 'b' * 32
+    assert projected['failurePhase'] == 'ecosystem-runtime-prepare'
+    if case == 'prior-component':
+        assert projected['title'] == 'Application updated; component update needs review'
+        assert 'prior component update still needs review' in projected['detail']
+    else:
+        assert projected['title'] == 'Update could not finish'
+        assert 'verified successfully' not in projected['detail']
+    assert state == before
+    failure.update(attemptId='private-secret', phase='/private/path', kind='private-domain')
+    projected = health.current(state)
+    assert all(key not in projected for key in ('failureKind', 'failureAttemptId', 'failurePhase'))
+
+
 @pytest.mark.parametrize('phase,pending,status', [
     ('validating', {}, 'working'),
     ('staged', {'pendingRelease': 'b'*32}, 'waiting'),

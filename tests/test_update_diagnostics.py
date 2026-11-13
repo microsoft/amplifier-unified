@@ -13,6 +13,58 @@ from test_app_updates import prepared_activation, synthetic_release_artifact
 from test_runtime_ref_identity import normalized_runtime
 
 
+@pytest.mark.parametrize('text, expected', [
+    ('Because there is no version of agent-client-protocol==1.0.0 and you require agent-client-protocol==1.0.0',
+     {'reason': 'package-not-found', 'package': 'agent-client-protocol', 'constraint': '==1.0.0'}),
+    ('Because cryptography was not found in the provided package locations and you require cryptography>=44,<51',
+     {'reason': 'package-not-found', 'package': 'cryptography', 'constraint': '>=44,<51'}),
+    ('Failed to fetch https://credentialuser:secret@synthetic-feed.invalid/simple/pkg: 401 Unauthorized',
+     {'reason': 'package-index-auth-failed'}),
+    ('Failed to fetch https://credentialuser:secret@synthetic-feed.invalid/simple/pkg: 503 Service Unavailable',
+     {'reason': 'package-index-unavailable'}),
+    ('invalid peer certificate: UnknownIssuer credentialuser:secret', {'reason': 'package-tls-failed'}),
+    ('dns error for synthetic-feed.invalid credentialuser:secret', {'reason': 'package-network-failed'}),
+    ('No solution found when resolving dependencies credentialuser:secret', {'reason': 'dependency-resolution-failed'}),
+    ('Unrecognized private error credentialuser:secret', {}),
+    ('https://synthetic-feed.invalid/synthetic-secret was not found in the package registry',
+     {'reason': 'package-not-found'}),
+    ('/private/synthetic-secret was not found in the provided package locations',
+     {'reason': 'package-not-found'}),
+    ('there is no version of cryptography>=44,<broken', {'reason': 'package-not-found'}),
+    ('cryptography was not found in the package registry and you require cryptography>=44, <51',
+     {'reason': 'package-not-found', 'package': 'cryptography', 'constraint': '>=44,<51'}),
+])
+def test_installer_failures_have_only_fixed_facts_and_actionable_guidance(text, expected):
+    from amplifier_web.reset import installer_failure_facts, installer_failure_guidance
+    from amplifier_web.update_diagnostics import command_facts
+    facts = installer_failure_facts(text)
+    assert facts == expected
+    receipt = command_facts(b'', text.encode(), 1, .1, installer=True)
+    assert {key: receipt[key] for key in expected} == expected
+    public = json.dumps(receipt) + str(installer_failure_guidance(facts))
+    assert all(value not in public for value in ('credentialuser', 'secret', 'synthetic-feed.invalid'))
+    # A non-installer's arbitrary output cannot invent a resolver diagnosis.
+    assert 'reason' not in command_facts(b'', text.encode(), 1, .1)
+
+
+def test_installer_requirement_allowlist_rejects_private_values_in_every_export():
+    from amplifier_web.reset import installer_requirement
+    from amplifier_web.update_report import event
+    assert installer_requirement('Agent_Client.Protocol', '>=1.0,<2') == {
+        'package': 'agent-client-protocol', 'constraint': '>=1.0,<2'}
+    for package, constraint in [('https://user:secret@synthetic.invalid/a', '==1'),
+                                ('/private/path', '==1'), ('x' * 129, '==1'),
+                                ('agent-client-protocol', '@https://secret.invalid/a')]:
+        facts = installer_requirement(package, constraint)
+        assert 'secret' not in json.dumps(facts) and '/private' not in json.dumps(facts)
+        assert 'constraint' not in event({'package': package, 'constraint': constraint})
+    original = {'ok': False, 'reason': 'package-not-found', 'package': 'agent-client-protocol',
+                'constraint': '==1.0.0', 'stderr': 'secret'}
+    assert probe_record(PROBE_PREFIX + json.dumps(original)) == {
+        key: value for key, value in original.items() if key != 'stderr'}
+    assert event(original)['constraint'] == '==1.0.0'
+
+
 @pytest.mark.parametrize('code, reason', [(errno.ENOSPC, 'disk-full'), (errno.EDQUOT, 'disk-quota-exceeded'),
                                           (errno.EACCES, 'storage-permission-denied')])
 async def test_background_os_failure_identifies_cause_without_private_text(tmp_path, monkeypatch, code, reason):
@@ -168,6 +220,39 @@ async def test_candidate_install_failure_cannot_replace_host_or_become_generic(t
     assert service.state['updates']['diagnostics']['lastFailure']['phase']=='candidate-install'
     assert 'candidate install' in service.state['updates']['error']
     assert not (manager.directory/'previous-app.json').exists()
+    await service.close()
+
+async def test_candidate_feed_failure_preserves_policy_and_reaches_public_guidance(tmp_path, monkeypatch):
+    from amplifier_web.update_diagnostics import command_facts
+    from amplifier_web.update_report import collect
+    monkeypatch.setattr(app_updates.components, 'installed_graph', lambda: [])
+    monkeypatch.setattr(app_updates.artifacts, 'prepare', synthetic_release_artifact)
+    monkeypatch.setattr(app_updates.shutil, 'which', lambda name: '/fixture/uv')
+    monkeypatch.setenv('UV_CONFIG_FILE', '/approved/uv.toml')
+    monkeypatch.setenv('UV_INDEX_CORPORATE_PASSWORD', 'synthetic-secret')
+    monkeypatch.setenv('UV_CONSTRAINT', '/unrelated/project.txt')
+    monkeypatch.delenv('UV_NO_CONFIG', raising=False)
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    manager = service.update_manager = UpdateManager(service)
+    service.state['updates']['application'] = {'status': 'update', 'revision': 'a' * 40, 'latest': '99.0.0'}
+    async def command(*args, **kwargs):
+        env = kwargs['env']
+        assert env['UV_CONFIG_FILE'] == '/approved/uv.toml'
+        assert env['UV_INDEX_CORPORATE_PASSWORD'] == 'synthetic-secret'
+        assert 'UV_CONSTRAINT' not in env and 'UV_NO_CONFIG' not in env
+        raise CommandFailure(command_facts(b'', b'Because there is no version of agent-client-protocol==1.0.0', 1, .1, installer=True))
+    monkeypatch.setattr(app_updates, 'process', command)
+    monkeypatch.setattr(app_updates, 'installed_target', lambda: pytest.fail('no replacement'))
+    await manager.command('app')
+    failure = manager.diagnostics.state['lastFailure']
+    assert failure['reason'] == 'package-not-found'
+    assert failure['constraint'] == '==1.0.0'
+    assert 'agent-client-protocol ==1.0.0' in service.state['updates']['error']
+    assert 'configured package indexes' in service.state['updates']['error']
+    report = await collect(manager)
+    assert report['lastFailure']['package'] == 'agent-client-protocol'
+    assert all(value not in json.dumps(report) for value in ('synthetic-secret', '/approved/uv.toml'))
+    assert not (manager.directory / 'previous-app.json').exists()
     await service.close()
 
 

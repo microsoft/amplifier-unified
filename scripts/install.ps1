@@ -673,6 +673,16 @@ function Invoke-InstallChild([string] $Executable, [string[]] $Arguments, [hasht
     $info.RedirectStandardError = $true
     $info.StandardOutputEncoding = New-Object Text.UTF8Encoding($false)
     $info.StandardErrorEncoding = New-Object Text.UTF8Encoding($false)
+    # Match reset.package_environment for normal bootstrap: remove execution
+    # injection, never approved uv feed credentials, keyring, proxy or CA policy.
+    foreach ($key in @($info.EnvironmentVariables.Keys)) {
+        if (($key -like 'PYTHON*' -and $key -ne 'PYTHON_KEYRING_BACKEND') -or
+            $key -in @('VIRTUAL_ENV', 'AMPLIFIER_UNIFIED_RELEASE', 'AMPLIFIER_APP_GENERATION_EXEC',
+                'UV_PROJECT', 'UV_PROJECT_ENVIRONMENT', 'UV_CONSTRAINT', 'UV_BUILD_CONSTRAINT',
+                'UV_OVERRIDE', 'UV_ENV_FILE', 'UV_PYTHON', 'UV_WORKING_DIRECTORY')) {
+            $info.EnvironmentVariables.Remove($key)
+        }
+    }
     # All environment changes belong to this child; no process/global auth edits.
     if ($script:UseAnonymous) {
         foreach ($key in @($info.EnvironmentVariables.Keys)) {
@@ -852,7 +862,9 @@ function Invoke-UnifiedInstall([string] $RequestedVersion, [bool] $SkipOpen, [bo
         # Reviewed installation path; unreachable until the owner integrates the
         # closed handoff above. Fixtures may replace functions, never production flags.
         $script:InstallStage = 'verified helpers'
-        $childEnv = @{ PYTHONUTF8 = '1'; UV_NO_PROGRESS = '1'; UV_NO_CONFIG = '1' }
+        # uv owns approved user/system feed, authentication and network policy.
+        # Do not silently bypass it during normal bootstrap.
+        $childEnv = @{ PYTHONUTF8 = '1'; UV_NO_PROGRESS = '1' }
         $uv = Find-InstallHelper 'uv' $childEnv
         if (-not $uv) { $uv = Install-VerifiedHelper 'uv' }
         $git = Find-InstallHelper 'git' $childEnv
