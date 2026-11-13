@@ -1,6 +1,6 @@
 [project]
 name = "amplifier-unified"
-version = "0.89.2"
+version = "0.90.0"
 description = "A local voice-first Amplifier workspace with a shared user and agent interface"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -9,8 +9,8 @@ dependencies = [
     "agent-client-protocol==1.0.0",
     "amplifier-memory @ git+https://github.com/microsoft/amplifier-bundle-memory@main",
     "amplifier-core>=2.0.2",
-    "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@05082c89a171758f8d0fb9d8df630ea581e5bdb5",
-    "amplifier-module-hooks-session-naming @ git+https://github.com/microsoft/amplifier-foundation@05082c89a171758f8d0fb9d8df630ea581e5bdb5#subdirectory=modules/hooks-session-naming",
+    "amplifier-foundation @ git+https://github.com/microsoft/amplifier-foundation@main",
+    "amplifier-module-hooks-session-naming @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=modules/hooks-session-naming",
     "aiohttp>=3.12,<4",
     "packaging>=24",
     "cryptography>=44,<51",

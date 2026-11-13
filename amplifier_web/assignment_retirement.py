@@ -1,4 +1,4 @@
-"""Close finished participation without dropping history or assignment spend."""
+"""End settled participation without claiming task success or dropping history."""
 import copy
 import time
 import uuid
@@ -6,7 +6,6 @@ from contextlib import ExitStack, closing
 
 from amplifier_operations.coordination import fingerprint
 from .capacity import LIVE, usage_snapshot
-from .management import Management
 from .task_continuity import _load_control
 from . import task_environments as environments
 
@@ -19,22 +18,18 @@ def checked(app, source, target, args, origin):
         app.collaboration.active_binding(source)
     if (not value or value['status'] != 'active'
             or value['ownerSessionId'] != source['id']):
-        error('Only the owner of an active assignment can retire a finished member.', 409)
+        error('Only the owner of an active assignment can retire a member.', 409)
     if value['revision'] != args['expectedRevision']:
         error('The assignment revision changed; inspect it before retiring a member.', 409)
     if (target['id'] == source['id'] or value['members'].get(target['id'], {}).get('status') != 'bound'
             or (assignments.current(target) or {}).get('id') != value['id']):
         error('Choose a current helper member, not the assignment owner.', 409)
-    try:
-        task = _load_control(app, target, current_only=True)['task'] or {}
-    except ValueError as exc:
-        error(str(exc), 409)
-    require_finished(app, target, value, task)
-    return value, task
+    require_settled(app, target, value)
+    return value
 
 
-def require_finished(app, target, value, task):
-    """Check the same canonical task used by the retirement reuse binding."""
+def require_settled(app, target, value):
+    """Ending participation requires settled effects, not a successful objective."""
     error = app.collaboration.error
     active = target.get('collaborationGeneration') or {}
     if (target.get('status') not in {'idle', 'stopped'}
@@ -45,12 +40,21 @@ def require_finished(app, target, value, task):
             or any(row.get('status') in {'queued', 'starting', 'running', 'working', 'idle', 'stopping'}
                    for row in target.get('workers', []))):
         error('Wait for this member and its helpers to finish; uncertain work must be reconciled before retirement.', 409)
+    pending = target.get('pendingConfiguration') or {}
+    management = app.management
+    task = getattr(management, 'pending_config_tasks', {}).get(target['id'])
+    lock = getattr(management, 'lock', None)
     if (any(target.get(key) for key in ('configurationBusy', 'configurationPending', 'fileAccessPending'))
-            or (target.get('pendingConfiguration') or {}).get('phase') in {'queued', 'applying'}
-            or Management.unresolved_configuration(target)):
+                and pending.get('phase') != 'error'
+            or pending.get('phase') in {'queued', 'applying'}
+            or (target.get('configurationRefresh') or {}).get('phase') in {'queued', 'applying'}
+            or task is not None and not task.done()
+            or lock is not None and lock.locked()):
         error('Wait for this member’s settings change to finish before retiring it.', 409)
-    if task.get('id') and task.get('status') != 'completed':
-        error('Complete this member’s saved task before retiring its participation.', 409)
+    # A failed saved/mounted readback is retained evidence, not a live writer.
+    # Do not clear its admission fence or mount it merely to end participation.
+    if any(row.get('phase') in {'pending', 'unknown'} for row in target.get('worktreeHandoffs', [])):
+        error('Reconcile this member’s pending or uncertain checkout handoff before retirement.', 409)
     if app.assignments.tasks.unfinished_claims(value, target['id']):
         error('Complete, release or reassign this member’s unfinished shared tasks before retiring it.', 409)
     if app.db.execute("""SELECT 1 FROM commands
@@ -133,9 +137,16 @@ async def dispatch(assignments, action, args, origin, command_id, caller):
                 boundary.enter_context(prove(target))
             except (OSError, RuntimeError, ValueError) as exc:
                 collaboration.error(f'Could not confirm that this chat has stopped. {exc}', 409)
-            # A native writer could have changed its task after preflight. This
-            # observation owns both eligibility and the saved reuse fingerprint.
-            value, task = checked(app, source, target, args, origin)
+            value = checked(app, source, target, args, origin)
+            # Optional proof for later standing readmission, never an eligibility
+            # gate for ending participation. Unknown/unfinished native task state
+            # stays intact and cannot authorize standing reuse from a host cache.
+            try:
+                task = _load_control(app, target, current_only=True)['task'] or {}
+            except ValueError:
+                task = None
+            binding = (reuse_binding(app, source, target, task)
+                       if task is not None and (not task or task.get('status') == 'completed') else None)
             async with assignments.mutation(source, identity, additional=(target['id'],)):
                 previous = copy.deepcopy(value['members'][target['id']])
                 value['members'][target['id']] = {**previous, 'status': 'retired',
@@ -150,7 +161,7 @@ async def dispatch(assignments, action, args, origin, command_id, caller):
                 receipt = {'accepted': True, 'commandAction': action, 'assignmentId': value['id'],
                     'senderSessionId': source['id'], 'targetSessionId': target['id'],
                     'previousMembership': previous,
-                    'reuseBinding': reuse_binding(app, source, target, task),
+                    'reuseBinding': binding,
                     'result': {'assignment': assignments.project(value, session_id=source['id']), 'inputSent': False,
                                'activeMemberCount': assignments.active_member_count(value)}}
                 collaboration.insert(identity, digest, receipt)

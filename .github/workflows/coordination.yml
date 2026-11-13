@@ -20,6 +20,12 @@ on:
       - 'amplifier_web/collaboration*.py'
       - 'amplifier_web/app_guidance.py'
       - 'amplifier_web/assignments.py'
+      - 'amplifier_web/assignment_retirement.py'
+      - 'amplifier_web/assignment_adoption.py'
+      - 'tests/test_assignment_retirement.py'
+      - 'tests/test_assignment_retirement_recovery.py'
+      - 'tests/test_assignment_adoption.py'
+      - 'tests/test_assignment_readmission_native.py'
       - 'amplifier_web/assignment_brief.py'
       - 'tests/test_assignment_brief.py'
       - 'amplifier_web/workspace_awareness.py'
@@ -189,6 +195,23 @@ jobs:
           output.write_text(json.dumps(record, indent=2) + '\n')
           print(json.dumps(record))
           PY
+      - name: Verify settled retirement and separate standing readmission
+        run: |
+          uv run --no-sync pytest -q tests/test_assignment_retirement.py \
+            tests/test_assignment_retirement_recovery.py tests/test_assignment_adoption.py \
+            tests/test_assignment_readmission_native.py --junitxml=output/assignment-retirement.xml
+          uv run --no-sync python - <<'PY'
+          import xml.etree.ElementTree as ET
+          rows = ET.parse('output/assignment-retirement.xml').getroot().findall('.//testcase')
+          assert rows and all(not any(row.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for row in rows)
+          PY
+      - name: Retain retirement and readmission evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: assignment-retirement-evidence
+          path: output/assignment-retirement.xml
+          if-no-files-found: warn
       - run: >-
           uv run --no-sync pytest
           tests/test_coordination.py tests/test_coordination_generation.py
