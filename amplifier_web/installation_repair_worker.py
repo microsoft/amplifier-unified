@@ -362,6 +362,43 @@ def _check_service_process(plan):
         raise ValueError("Service process lifetime or owner changed")
 
 
+def _serving_invocation(arguments):
+    """Recognize explicit and default serving without importing the CLI.
+
+    Generation delegation preserves arguments, including a foreground launch
+    with only top-level connection options and no literal ``serve`` command.
+    Unknown options are conservatively treated as a possible serving owner.
+    """
+    if not arguments:
+        return False
+    if Path(arguments[0]).name == "amplifier-unified":
+        tail = arguments[1:]
+    else:
+        try:
+            module = arguments.index("-m")
+        except ValueError:
+            return False
+        if arguments[module + 1:module + 2] != ["amplifier_web"]:
+            return False
+        tail = arguments[module + 2:]
+    valued = {"--port", "--workspace", "--data-dir", "--bind", "--host",
+              "--public-origin", "--tls-cert", "--tls-key", "--session-ttl"}
+    index = 0
+    while index < len(tail):
+        argument = tail[index]
+        if argument == "--no-open":
+            index += 1
+        elif argument.partition("=")[0] in valued:
+            index += 1 if "=" in argument else 2
+        elif argument in {"--help", "-h", "--version"}:
+            return False
+        else:
+            return argument not in {
+                "open", "acp", "run", "continue", "tool", "access", "runtime",
+                "tui", "completion", "config", "doctor", "setup-tls", "service", "reset"}
+    return True  # No subcommand: CLI foreground/default launch may own a host.
+
+
 def _assert_other_processes(plan):
     """Ignore this helper and the authenticated old host, not other profiles."""
     prefix, home = Path(plan["toolRoot"]) / "amplifier-unified", Path(plan["home"])
@@ -385,12 +422,10 @@ def _assert_other_processes(plan):
         try:
             arguments = shlex.split(text)
         except ValueError:
-            if "amplifier" in text and "serve" in text:
+            if "amplifier_web" in text or "amplifier-unified" in text:
                 raise ValueError("Another serving profile cannot be identified")
             arguments = []
-        serving = ('serve' in arguments and any(
-            arg == 'amplifier_web' or Path(arg).name == 'amplifier-unified' for arg in arguments))
-        if serving:
+        if _serving_invocation(arguments):
             raise ValueError("Another Unified serving profile may share this bootstrap")
         if any(root in text for root in roots):
             raise ValueError("The installation is used by another process")

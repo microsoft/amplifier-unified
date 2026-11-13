@@ -672,6 +672,32 @@ class RepairFixture(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertNotIn("stop", self.names())
 
+    def test_default_foreground_sibling_without_serve_blocks_before_stop(self):
+        original = self.command
+        def command(*args, **kwargs):
+            if list(args[:2]) == ["ps", "-axo"]:
+                return subprocess.CompletedProcess([], 0,
+                    "789 /other-data/updates/applications/rev/gen/tools/amplifier-unified/bin/python "
+                    "-I -m amplifier_web --data-dir /profiles/B --port 9876\n", "")
+            return original(*args, **kwargs)
+        with patch.object(worker, "command", side_effect=command):
+            result = self.run_worker()
+        self.assertEqual(result["status"], "failed")
+        self.assertNotIn("stop", self.names())
+
+    def test_serving_invocation_distinguishes_default_launch_from_passive_cli(self):
+        for tail in ([], ["--port", "9876"], ["--data-dir=/profiles/B", "--port=9876"],
+                     ["--no-open", "--data-dir", "/profiles/B", "serve"]):
+            with self.subTest(tail=tail):
+                self.assertTrue(worker._serving_invocation(
+                    ["/generation/bin/python", "-I", "-m", "amplifier_web", *tail]))
+                self.assertTrue(worker._serving_invocation(["/bin/amplifier-unified", *tail]))
+        self.assertFalse(worker._serving_invocation(
+            ["/generation/bin/python", "-I", "-m", "amplifier_web",
+             "--data-dir", "/profiles/B", "doctor", "--json"]))
+        self.assertFalse(worker._serving_invocation(
+            ["/generation/bin/python", "-I", "-m", "amplifier_web.runtime_worker"]))
+
     def test_health_only_verify_changed_final_launcher_remains_held_without_effects(self):
         self.doctor_ok = False
         self.assertEqual(self.run_worker()["status"], "reinstalled")
