@@ -4,6 +4,7 @@ import './composer-test-helpers.mjs';
 import {startFixture} from './fixture-readiness.mjs';
 import {finishFixture} from './fixture-lifecycle.mjs';
 import {existsSync,statSync} from 'node:fs';
+import {mkdir,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
@@ -24,8 +25,9 @@ try{
   const action=request.postDataJSON()?.action;
   if(action==='conversation.send'||action==='conversation.retry')inputActions.push(action);
  });
- const artifacts=existsSync('/artifacts')&&statSync('/artifacts').isDirectory();
- const screenshot=async name=>{if(artifacts)await page.screenshot({path:`/artifacts/${name}.png`})};
+ const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS||(existsSync('/artifacts')&&statSync('/artifacts').isDirectory()?'/artifacts':null);
+ if(artifacts)await mkdir(artifacts,{recursive:true});
+ const screenshot=async name=>{if(artifacts)await page.screenshot({path:`${artifacts}/${name}.png`})};
  const isActionResponse=(response,action)=>{const request=response.request();return new URL(request.url()).pathname==='/api/actions'&&request.method()==='POST'&&request.postDataJSON()?.action===action};
  // Observe the real service's automatic passive check; do not suppress it or
  // replace its response merely to preserve the former manual-check sequence.
@@ -191,6 +193,11 @@ try{
   settlement={sent,local};
   return sent.some(row=>row.inputId===queued.commandId)?'posted':local?.status!=='sending'?'refused':'pending';
  },{timeout:5000,message:'Finite queued-send settlement after releasing first POST'}).not.toBe('pending');
+ if(artifacts)await writeFile(`${artifacts}/captured-target-settlement.json`,JSON.stringify({
+  targetA:sessionId,targetB:targets.targetB,firstSend,queued,selectedSessionId:selected.selectedSessionId,
+  selectedFrameSessionIds:selected.sessions.map(row=>row.id),settlement,
+ },null,2));
+ await screenshot('message-delivery-captured-target-settlement');
  assert.ok(settlement.sent.some(row=>row.inputId===queued.commandId),
   `CAPTURED TARGET CAUSAL REGRESSION: selected-only omission refused queued A: ${JSON.stringify(settlement)}`);
  assert.deepEqual(settlement.sent.map(row=>row.sessionId),[sessionId,sessionId]);

@@ -1331,6 +1331,17 @@ def attachment_consumption_plan(plan):
     return {'schemaVersion': 1, 'scenarios': rows}
 
 
+def captured_message_delivery_plan(plan):
+    """Fixed actual-host journey; never accept arbitrary workflow commands."""
+    expected = {'id': 'message-delivery',
+                'command': ['node', 'tests/web/message-delivery-browser.mjs']}
+    rows = [row for row in validate_plan(plan) if row['id'] == expected['id']]
+    if rows != [expected]:
+        raise ValueError('Captured message delivery requires its exact registered owner')
+    return {'schemaVersion': 1, 'scenarios': [
+        {**expected, 'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/message-delivery'}}]}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--plan', type=Path)
@@ -1343,14 +1354,18 @@ def main():
                         help='Append fixed APP004 units and reload control, without reducing normal coverage')
     parser.add_argument('--attachment-consumption', action='store_true',
                         help='Run only the fixed registered attachment consumption diagnostic')
+    parser.add_argument('--captured-message-delivery', action='store_true',
+                        help='Run only the fixed actual-host captured message delivery journey')
     args = parser.parse_args()
     if args.python_suite:
-        if args.plan or args.app004_qualification or args.attachment_consumption or args.initialize and args.finalize:
+        if args.plan or args.app004_qualification or args.attachment_consumption or args.captured_message_delivery or args.initialize and args.finalize:
             parser.error('Full Python uses its fixed plan, separately from browser modes')
     elif not args.plan or args.finalize:
         parser.error('Browser modes require --plan; --finalize is Python-only')
     if args.attachment_consumption and args.app004_qualification:
         parser.error('Attachment consumption and APP004 are separate selections')
+    if args.captured_message_delivery and (args.attachment_consumption or args.app004_qualification):
+        parser.error('Captured message delivery is a separate fixed selection')
     root = Path(__file__).resolve().parents[1]
     plan, plan_provenance = (load_plan(root, args.plan) if not args.python_suite else
                              (None, {'planSha256': hashlib.sha256(json.dumps(python_plan(), sort_keys=True).encode()).hexdigest()}))
@@ -1370,6 +1385,9 @@ def main():
     if args.attachment_consumption:
         plan = attachment_consumption_plan(plan)
         provenance['selection'] = 'attachment-consumption-only'
+    if args.captured_message_delivery:
+        plan = captured_message_delivery_plan(plan)
+        provenance['selection'] = 'captured-message-delivery-only'
     if args.initialize:
         ensure_evidence_directory(args.output)
         save(args.output, initial_report(plan, provenance))

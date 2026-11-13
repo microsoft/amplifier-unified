@@ -1470,6 +1470,73 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
                for step in coordination['jobs']['contracts']['steps'])
 
 
+def test_captured_message_delivery_plan_is_fixed_without_changing_default():
+    import copy
+    plan = current_plan()
+    before = copy.deepcopy(plan)
+    focused = runner.captured_message_delivery_plan(plan)
+    assert plan == before
+    assert focused == {'schemaVersion': 1, 'scenarios': [{
+        'id': 'message-delivery',
+        'command': ['node', 'tests/web/message-delivery-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/message-delivery'},
+    }]}
+    for mutation in ('missing', 'duplicate', 'command', 'environment', 'cwd'):
+        broken = {'schemaVersion': 1, 'scenarios': [copy.deepcopy(next(
+            row for row in plan['scenarios'] if row['id'] == 'message-delivery'))]}
+        if mutation == 'missing':
+            broken['scenarios'] = []
+        elif mutation == 'duplicate':
+            broken['scenarios'] *= 2
+        elif mutation == 'command':
+            broken['scenarios'][0]['command'] = ['node', 'tests/other.mjs']
+        elif mutation == 'environment':
+            broken['scenarios'][0]['env'] = {'UNEXPECTED': 'value'}
+        else:
+            broken['scenarios'][0]['cwd'] = '.build/web-client'
+        with pytest.raises(ValueError):
+            runner.captured_message_delivery_plan(broken)
+
+
+def test_captured_message_delivery_workflow_is_manual_fixed_and_retains_failures():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    inputs = workflow['on']['workflow_dispatch']['inputs']
+    option = inputs['captured_message_delivery']
+    assert option['type'] == 'boolean' and option['default'] == 'false'
+    assert 'captured_message_delivery' not in workflow['on']['workflow_call']['inputs']
+    assert workflow['permissions'] == {'contents': 'read'}
+    job = workflow['jobs']['browser']
+    steps = job['steps']
+    mixed = next(step for step in steps if step.get('name') == 'Reject mixed captured delivery selections')
+    for name, value in inputs.items():
+        if name != 'captured_message_delivery' and value['type'] == 'boolean':
+            assert f'inputs.{name}' in mixed['if']
+    assert mixed['run'] == 'exit 1'
+    for name, other in workflow['jobs'].items():
+        if name != 'browser':
+            assert other['steps'][0] == {
+                'name': 'Reject mixed captured delivery selection',
+                'if': '${{ inputs.captured_message_delivery }}', 'run': 'exit 1'}
+    runs = [step for step in steps if 'scripts/browser_check_runner.py' in step.get('run', '')]
+    flag = "${{ inputs.captured_message_delivery && '--captured-message-delivery' || '' }}"
+    assert len(runs) == 2 and all(flag in step['run'] for step in runs)
+    assert '--budget-seconds 1500' in runs[1]['run']
+    full = next(step for step in steps if step.get('name') == 'Run full frontend units for unfiltered nightly/manual coverage')
+    assert '!inputs.captured_message_delivery' in full['if']
+    for identity in ('captured-host', 'captured-client'):
+        step = next(step for step in steps if step.get('id') == identity)
+        assert step['if'] == '${{ inputs.captured_message_delivery }}'
+        assert step['continue-on-error'] == 'true'
+        assert 'tee output/browser-checks/' in step['run'] and 'pipefail' in step['run']
+    final = next(step for step in steps if step.get('name') == 'Preserve failed captured delivery contracts')
+    assert 'always()' in final['if'] and "steps.captured-host.outcome != 'success'" in final['if']
+    assert "steps.captured-client.outcome != 'success'" in final['if'] and final['run'] == 'exit 1'
+    assert any(step.get('if') == 'always()' and 'upload-artifact@' in step.get('uses', '') for step in steps)
+    source = next(step for step in steps if step.get('name') == 'Bind captured delivery source before setup')
+    assert 'HEAD^{tree}' in source['run'] and 'selected-client.json' in source['run']
+    assert steps.index(source) < next(i for i, step in enumerate(steps) if 'setup-python@' in step.get('uses', ''))
+
+
 def test_attachment_focus_selects_exact_existing_owner_without_changing_plan():
     import copy
     plan = current_plan()
