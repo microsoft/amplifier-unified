@@ -52,6 +52,7 @@ jobs:
           mkdir "$RUNNER_TEMP/scheduling-source"
           git archive "$SELECTED_REVISION" components/scheduling | tar -x -C "$RUNNER_TEMP/scheduling-source"
           uv build --sdist --wheel --out-dir "$RUNNER_TEMP/scheduling-dist" "$RUNNER_TEMP/scheduling-source/components/scheduling"
+          rm -f "$RUNNER_TEMP/scheduling-dist/.gitignore" # uv output sentinel, not a release asset.
           flags=()
           if [ "$EVENT_NAME" = pull_request ]; then flags+=(--qualification); fi
           python scripts/scheduling_release.py seal --revision "$SELECTED_REVISION" --dist "$RUNNER_TEMP/scheduling-dist" "${flags[@]}"
