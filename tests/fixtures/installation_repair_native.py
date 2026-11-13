@@ -53,7 +53,20 @@ TEST_PATHS = ('tests/fixtures/installation_repair_native.py',
 WORKFLOW = '.github/workflows/installation-repair-native.yml'
 UNIT = 'amplifier-unified.service'
 LABEL = 'com.microsoft.amplifier-unified'
-CASES = ('happy', 'preflight', 'rollback', 'verify', 'data-lease')
+# Frozen admission/recovery protocol 1. These expectations are fixture cases,
+# not an assertion that every repair succeeds (data-lease deliberately holds).
+EXPECTATIONS = {
+    'happy': ('ready', True, True, True, 2, 1, 1, 1),
+    'preflight': ('failed', False, False, False, 1, 0, 1, 0),
+    'rollback': ('rolled-back', True, True, True, 2, 1, 1, 1),
+    'verify': ('reinstalled', True, True, True, 2, 1, 1, 2),
+    'data-lease': ('unknown', True, True, False, 1, 1, 1, 0),
+    'namespace-lease': ('failed', False, False, False, 1, 0, 0, 0),
+    'reconcile': ('failed', False, False, False, 1, 0, 0, 0),
+}
+# status, stopIntent, stopSettled, mutationIntent, service starts/stops,
+# candidate/fresh probe checkpoints (verify includes its health-only probe).
+CASES = tuple(EXPECTATIONS)
 PROBE = 'from amplifier_web._native_fixture import probe; probe()'
 DEPENDENCY = 'import importlib.metadata as m,sys; assert sys.flags.isolated; assert len(list(m.distributions())) == 1'
 LIMITS = {'officialPublishedTrust': False, 'fullAppHealthDoctor': False,
@@ -296,6 +309,23 @@ def source_index():
                                if re.fullmatch('[a-f0-9]{40}', os.environ.get(key, ''))}}
 
 
+def executable_selection(uv, base_python):
+    """Use the joined production guard; never chmod installed runner tools."""
+    worker = module(SOURCE / 'amplifier_web/installation_repair_worker.py')
+    check(callable(getattr(worker, 'executable_identity', None))
+          and callable(getattr(worker, 'children_settled', None))
+          and callable(getattr(worker, 'reconcile', None)),
+          'joined production source lacks frozen admission/recovery protocol 1')
+    result = {}
+    for key, path in (('uv', uv), ('basePython', base_python)):
+        try:
+            result[key] = worker.executable_identity(path)
+        except (OSError, ValueError):
+            raise RuntimeError('runner ' + key + ' fails production executable ownership/mode guard; '
+                               'use a supported owned executable, do not chmod the installed base') from None
+    return result
+
+
 def prepare(root, evidence):
     check(not root.exists() and not evidence.exists(), 'fixture/evidence destination already exists; inspect, do not replay')
     root.mkdir(mode=0o700)
@@ -312,6 +342,8 @@ def prepare(root, evidence):
     check(uv is not None, 'uv must be provided by workflow PATH')
     index = source_index()
     revision = index['revision']
+    base_python = str(Path(sys.executable).resolve())
+    executables = executable_selection(uv, base_python)
     version = tomllib.loads((SOURCE / 'pyproject.toml').read_text())['project']['version']
     artifacts = module(SOURCE / 'amplifier_web/app_release_artifacts.py')
     artifact = root / artifacts.filename(version)
@@ -321,9 +353,10 @@ def prepare(root, evidence):
     artifacts.verify(descriptor, version, revision)
     save(root / 'fixture.json', {'revision': revision, 'version': version, 'artifact': descriptor,
                                'sourceIndex': index, 'tls': tls_leaf(root),
-                               'uv': uv, 'basePython': str(Path(sys.executable).resolve())})
+                               'uv': uv, 'basePython': base_python, 'executables': executables})
     save(evidence / 'inputs.json', {'revision': revision, 'version': version, 'artifactSHA256': descriptor['sha256'],
                                   'sourceIndex': index,
+                                  'executables': executables,
                                   'productionSHA256': {name: digest(SOURCE / 'amplifier_web' / name) for name in PRODUCTION},
                                   'fixtureSHA256': {name: digest(Path(__file__).with_name(name)) for name in
                                                    ('installation_repair_native.py', 'installation_repair_native_app.py')},
@@ -443,6 +476,21 @@ def terminal(folder):
     return value if value['status'] in {'ready', 'failed', 'rolled-back', 'reinstalled', 'unknown'} else None
 
 
+def child_settlement(folder):
+    worker = module(folder / 'installation_repair_worker.py')
+    check(worker.children_settled(folder), 'repair child settlement is unproven; retain owned registrations')
+    boundary = folder / 'child-boundary.json'
+    return load(boundary) if boundary.exists() else {'spawnIntentRecorded': False}
+
+
+def child_boundary_identity(folder):
+    path = folder / 'child-boundary.json'
+    if not path.exists():
+        return None
+    info = path.stat()
+    return (info.st_dev, info.st_ino, info.st_mtime_ns, path.read_bytes())
+
+
 def new_operation(config, fixture, env):
     identity = uuid.uuid4().hex
     folder = Path(config['home']) / 'installation-repair' / identity
@@ -457,6 +505,7 @@ def new_operation(config, fixture, env):
     descriptor = {**fixture['artifact'], 'path': str(artifact)}
     artifacts.verify(descriptor, fixture['version'], fixture['revision'])
     plan = {'operationId': identity, 'previewId': uuid.uuid4().hex, 'hostInstanceId': 'pending-service-binding',
+            'recoverySchema': 1, 'executables': fixture['executables'],
             'home': config['home'], 'toolRoot': config['toolRoot'], 'binRoot': config['binRoot'],
             'basePython': fixture['basePython'], 'uv': fixture['uv'], 'extras': [],
             'pointer': {'exists': False, 'sha256': None}, 'artifact': descriptor,
@@ -466,15 +515,17 @@ def new_operation(config, fixture, env):
             'env': env}
     operation = {'operationId': identity, 'previewId': plan['previewId'], 'hostInstanceId': plan['hostInstanceId'],
                  'status': 'accepted', 'stage': 'accepted', 'reinstalled': False,
+                 'effectBoundary': {'schema': 1, 'stopIntent': False, 'stopSettled': False, 'mutationIntent': False},
                  'healthVerified': False, 'serviceState': 'not-checked'}
     save(folder / 'plan.json', plan)
     save(folder / 'operation.json', operation)
     return folder
 
 
-def worker_command(fixture, folder, *, verify=False):
+def worker_command(fixture, folder, *, verify=False, reconcile=False):
+    check(not (verify and reconcile), 'choose one worker inspection mode')
     return [fixture['basePython'], '-I', '-S', str(folder / 'installation_repair_worker.py'),
-            *(['--verify'] if verify else []), str(folder)]
+            *(['--verify'] if verify else ['--reconcile'] if reconcile else []), str(folder)]
 
 
 def snapshot(config):
@@ -565,8 +616,9 @@ def run_case(root, evidence, name, fixture, transport):
     if name == 'verify':
         (case / 'doctor-fail').touch(mode=0o600)
     holder = None
-    if name == 'data-lease':
-        holder, release = lease_process(root, case, fixture, home, env)
+    if name in {'data-lease', 'namespace-lease'}:
+        target = home if name == 'data-lease' else home / 'installation-repair'
+        holder, release = lease_process(root, case, fixture, target, env)
     folder = new_operation(config, fixture, env)
     label = helper_label(folder.name)
     check(helper_observation(label, transport)['settled'], 'helper label already active')
@@ -579,11 +631,16 @@ def run_case(root, evidence, name, fixture, transport):
     owner['helpers'].append({'label': label, 'folder': str(folder), 'basePython': fixture['basePython']})
     save(root / 'owner.json', owner)
     try:
-        request(config, '/fixture-dispatch', {'operationId': folder.name})
+        request(config, '/fixture-admit' if name == 'reconcile' else '/fixture-dispatch',
+                {'operationId': folder.name})
     except (OSError, http.client.HTTPException):
         # Dispatch may kill its own HTTP host. Never retry the request.
         pass
     exclusion = None
+    if name == 'reconcile':
+        # A real accepted admission was never dispatched. Reconcile proves the
+        # original live host and closes it before a late run can have effects.
+        execute(*worker_command(fixture, folder, reconcile=True), env=env)
     if name == 'happy':
         wait_for(lambda: (case / 'probe-waiting').exists(), description='candidate barrier')
         before = snapshot(config)
@@ -592,9 +649,10 @@ def run_case(root, evidence, name, fixture, transport):
         competing = new_operation(config, fixture, env)
         execute(*worker_command(fixture, competing), env=env)
         refused = load(competing / 'operation.json')
-        check(refused['status'] == 'failed' and refused['stage'] == 'preflight-failed', 'namespace competitor was not refused')
+        check(refused['status'] == 'failed' and refused['stage'] == 'preflight-failed', 'unadmitted competitor was not refused')
         check(not (competing / 'candidate-tools').exists() and not (competing / 'backup').exists(),
-              'namespace competitor created installer/swap outputs')
+              'unadmitted competitor created installer/swap outputs')
+        check(not (competing / 'child-boundary.json').exists(), 'unadmitted competitor spawned a repair child')
         check(snapshot(config) == before, 'competing workers produced installation/native effects')
         observation = helper_observation(label, transport)
         check(not observation['settled'], 'manager did not own active detached helper')
@@ -606,15 +664,15 @@ def run_case(root, evidence, name, fixture, transport):
         else:
             check(any(str(probe_parent) in row['pids'] for row in observation['domains']),
                   'launchd does not own the isolated worker PID')
-        exclusion = {'sameOperationExit': same.returncode, 'namespaceReceipt': refused,
+        exclusion = {'sameOperationExit': same.returncode, 'unadmittedReceipt': refused,
+                     'unadmittedBeforeCandidate': True,
                      'effectsUnchanged': True, 'helperWhileOldHostAlive': observation}
         (case / 'probe-release').touch(mode=0o600)
     wait_for(lambda: terminal(folder), description=name + ' terminal receipt')
     settled = wait_for(lambda: helper_observation(label, transport), lambda value: value['settled'],
                        description='one-shot helper settled')
     receipt = load(folder / 'operation.json')
-    expected = {'happy': 'ready', 'preflight': 'failed', 'rollback': 'rolled-back',
-                'verify': 'reinstalled', 'data-lease': 'failed'}[name]
+    expected, stop_intent, stop_settled, mutation, starts, stops, candidate_probes, fresh_probes = EXPECTATIONS[name]
     # Save sanitized failure evidence BEFORE assertions, including unknown results.
     plan = load(folder / 'plan.json')
     report = {'case': name, 'operationId': folder.name, 'receipt': receipt, 'helper': settled,
@@ -623,19 +681,33 @@ def run_case(root, evidence, name, fixture, transport):
               'installedProductionSHA256': installed_sources,
               'sourceSHA256': {item: digest(folder / item) for item in SIBLINGS},
               'planSHA256': digest(folder / 'plan.json'), 'artifactSHA256': digest(plan['artifact']['path']),
-              'planPublic': {key: plan[key] for key in ('operationId', 'previewId', 'target', 'extras', 'service', 'pointer')},
+              'planPublic': {key: plan[key] for key in ('operationId', 'previewId', 'target', 'extras', 'service',
+                                                      'pointer', 'recoverySchema', 'executables')},
               'tlsLeafSHA256': config['tls']['pin'],
               'exclusion': exclusion, 'effects': events(case), 'observedEffectCounts': effect_counts(case),
               'limits': LIMITS}
     save(evidence / (name + '.json'), report)
     check(receipt['status'] == expected, name + ': unexpected terminal status (see sanitized evidence)')
+    check(receipt['effectBoundary'] == {'schema': 1, 'stopIntent': stop_intent,
+                                      'stopSettled': stop_settled, 'mutationIntent': mutation},
+          'repair durable effect boundary does not match case')
+    report['childSettlement'] = child_settlement(folder)
+    check((folder / 'child-boundary.json').exists() == (name not in {'namespace-lease', 'reconcile'}),
+          'repair child spawn-intent evidence does not match case')
+    if name == 'reconcile':
+        check(receipt['stage'] == 'reconciled-no-effect' and receipt['reconciliation']['noReplacement'] is True,
+              'pre-effect reconciliation did not close the exact admission')
+    if name == 'namespace-lease':
+        check(receipt['stage'] == 'preflight-failed' and receipt.get('errorType') == 'RuntimeError'
+              and holder.poll() is None and not (folder / 'candidate-tools').exists()
+              and not (folder / 'child-boundary.json').exists(), 'live namespace lease did not refuse preflight')
     check(digest(draft) == draft_hash, 'retained draft bytes changed')
     after_stat = [prefix.stat().st_dev, prefix.stat().st_ino]
     recovery = reset.tool_recovery_root(tools) / folder.name
-    if name in {'preflight', 'data-lease'}:
+    if not mutation:
         check(after_stat == old_stat and (prefix / 'old-prefix-sentinel').is_file(), 'refused repair changed original prefix')
         check(not recovery.exists(), 'refused repair created swap recovery')
-    if name == 'preflight':
+    if not stop_intent:
         check(pid_start(old_pid, transport) == old_start, 'preflight failure interrupted original service')
     else:
         check(not pid_start(old_pid, transport), 'old service PID survived native stop')
@@ -652,14 +724,15 @@ def run_case(root, evidence, name, fixture, transport):
         check(receipt['stage'] == 'left-stopped' and not receipt['reinstalled']
               and receipt.get('errorType') == 'RuntimeError' and holder.poll() is None,
               'live shared data lease did not prevent swap')
+    if holder:
         release.touch(mode=0o600)
         holder.wait(timeout=15)
     if name != 'data-lease':
-        successor = (load(case / 'host.json') if name == 'preflight' else
+        successor = (load(case / 'host.json') if not stop_intent else
                      wait_for(lambda: load(case / 'host.json'),
                               lambda value: value['pid'] != old_pid, description='managed successor startup'))
         report['newManager'] = service_observation(transport)
-        if name != 'preflight':
+        if stop_intent:
             check(successor['pid'] != old_pid and pid_start(successor['pid'], transport), 'new manager host PID missing')
             worker = module(folder / 'installation_repair_worker.py')
             check(worker._service_pid(plan) == successor['pid'], 'successor is not exact manager PID')
@@ -680,16 +753,22 @@ def run_case(root, evidence, name, fixture, transport):
             report['verification'] = verified
     stable = snapshot(config)
     saved_receipt = (folder / 'operation.json').read_bytes()
+    saved_child = child_boundary_identity(folder)
     execute(*worker_command(fixture, folder), env=env)
     check(snapshot(config) == stable and (folder / 'operation.json').read_bytes() == saved_receipt,
           'exact settled operation replay produced effects')
+    check(child_boundary_identity(folder) == saved_child, 'late worker replay wrote a child spawn-intent boundary')
     time.sleep(.6)
     check(helper_observation(label, transport)['settled'], 'one-shot helper reran')
     counters = effect_counts(case)
-    check(counters.get('dispatch') == 1, 'operation was dispatched more than once')
-    check(counters.get('service-start') == (1 if name in {'preflight', 'data-lease'} else 2)
-          and counters.get('service-stop', 0) == (0 if name == 'preflight' else 1),
+    check(counters.get('admit') == 1 and counters.get('dispatch', 0) == (0 if name == 'reconcile' else 1),
+          'operation admission/dispatch checkpoint count changed')
+    check(counters.get('service-start') == starts and counters.get('service-stop', 0) == stops,
           'unexpected native service stop/start checkpoint count')
+    check(counters.get('probe:candidate', 0) == candidate_probes
+          and counters.get('probe:fresh', 0) == fresh_probes, 'unexpected independent probe checkpoint count')
+    check(counters.get('doctor', 0) == (2 if name == 'verify' else 1 if name == 'happy' else 0),
+          'unexpected doctor checkpoint count')
     report.update(effects=events(case), draftSHA256=digest(draft), effectsUnchangedOnReplay=True,
                   observedEffectCounts=counters,
                   finalPrefixStat=after_stat, newHost=load(case / 'host.json'), passed=True)
@@ -716,6 +795,7 @@ def cleanup(root, evidence):
         label = helper['label']
         observed = wait_for(lambda: owned_helper_observation(helper, env), lambda row: row['settled'],
                             seconds=120, description='cleanup helper settlement')
+        child_settlement(Path(helper['folder']))
         if sys.platform == 'darwin':
             for row in observed['domains']:
                 current = owned_helper_observation(helper, env)
@@ -774,6 +854,8 @@ def cleanup(root, evidence):
 def run(root, evidence):
     fixture = load(root / 'fixture.json')
     check(source_index() == fixture['sourceIndex'], 'source/fixture/workflow inputs changed after prepare')
+    check(executable_selection(fixture['uv'], fixture['basePython']) == fixture['executables'],
+          'frozen repair executable identities changed after prepare')
     transport = manager_environment()
     for case in CASES:
         try:

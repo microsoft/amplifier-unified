@@ -109,6 +109,9 @@ class NativeRepairHarnessTests(unittest.TestCase):
         self.assertEqual(ordinary[:3], ['/outside/python3.13', '-I', '-S'])
         self.assertEqual(ordinary[3:], [str(folder / 'installation_repair_worker.py'), str(folder)])
         self.assertEqual(native.worker_command(fixture, folder, verify=True)[-2:], ['--verify', str(folder)])
+        self.assertEqual(native.worker_command(fixture, folder, reconcile=True)[-2:], ['--reconcile', str(folder)])
+        with self.assertRaisesRegex(RuntimeError, 'one worker inspection'):
+            native.worker_command(fixture, folder, verify=True, reconcile=True)
 
     def test_controller_dispatch_is_not_reimplemented_or_patched(self):
         tree = ast.parse((FIXTURES / 'installation_repair_native_app.py').read_text())
@@ -123,7 +126,8 @@ class NativeRepairHarnessTests(unittest.TestCase):
                                      and target.value.id in {'controller', 'worker', 'reset'})
 
     def test_evidence_limits_and_all_required_cases_are_explicit(self):
-        self.assertEqual(set(native.CASES), {'happy', 'preflight', 'rollback', 'verify', 'data-lease'})
+        self.assertEqual(set(native.CASES), {'happy', 'preflight', 'rollback', 'verify', 'data-lease',
+                                           'namespace-lease', 'reconcile'})
         self.assertGreaterEqual(len(native.LIMITS['substitutions']), 3)
         self.assertNotIn('env', native.LIMITS)
 
@@ -259,11 +263,18 @@ class NativeRepairHarnessTests(unittest.TestCase):
         config = {'home': str(home), 'toolRoot': '/tools', 'binRoot': '/bins', 'port': 12345,
                   'tls': {'pin': 'b' * 64}}
         fixture = {'artifact': descriptor, 'version': self.version, 'revision': self.revision,
-                   'basePython': '/outside/python3.13', 'uv': '/outside/uv'}
+                   'basePython': '/outside/python3.13', 'uv': '/outside/uv',
+                   'executables': {key: {'resolved': '/outside/' + key, 'stat': [1, 2], 'sha256': 'c' * 64}
+                                   for key in ('uv', 'basePython')}}
         with patch.object(native, 'execute') as execute:
             folder = native.new_operation(config, fixture, {})
         self.assertEqual(native.load(folder / 'plan.json')['health'], {
             'urls': ['https://127.0.0.1:12345/api/health'], 'pin': 'b' * 64})
+        self.assertEqual(native.load(folder / 'plan.json')['recoverySchema'], 1)
+        self.assertEqual(native.load(folder / 'plan.json')['executables'], fixture['executables'])
+        self.assertEqual(native.load(folder / 'operation.json')['effectBoundary'], {
+            'schema': 1, 'stopIntent': False, 'stopSettled': False, 'mutationIntent': False})
+        self.assertFalse((home / 'installation-repair/admissions.json').exists())
         execute.assert_not_called()
 
     def test_manager_environment_platform_paths_do_not_probe_linux_on_macos(self):
@@ -385,6 +396,70 @@ class NativeRepairHarnessTests(unittest.TestCase):
             self.assertTrue(native.owned_child_exited(123, {}))
         reap.assert_called_once_with(123, native.os.WNOHANG)
         kill.assert_not_called()
+
+    def test_fixture_health_reads_single_atomic_admission_not_legacy_records(self):
+        app = native.module(FIXTURES / 'installation_repair_native_app.py')
+        namespace = self.root / 'installation-repair'
+        namespace.mkdir()
+        self.assertIsNone(app.current_admission(self.root))
+        operation, preview = 'a' * 32, 'b' * 32
+        native.save(namespace / 'admissions.json', {'schema': 1, 'current': operation,
+                                                   'previews': {preview: operation}})
+        self.assertEqual(app.current_admission(self.root), operation)
+        native.save(namespace / 'admissions.json', {'schema': 1, 'current': operation, 'previews': {}})
+        with self.assertRaises(AssertionError):
+            app.current_admission(self.root)
+        source = (FIXTURES / 'installation_repair_native_app.py').read_text()
+        self.assertNotIn('latest.json', source)
+        self.assertNotIn('confirmed-', source)
+
+    def test_frozen_case_map_distinguishes_refusal_unknown_and_no_effect_close(self):
+        self.assertEqual(native.EXPECTATIONS['data-lease'][:4], ('unknown', True, True, False))
+        self.assertEqual(native.EXPECTATIONS['namespace-lease'], ('failed', False, False, False, 1, 0, 0, 0))
+        self.assertEqual(native.EXPECTATIONS['reconcile'], ('failed', False, False, False, 1, 0, 0, 0))
+        self.assertEqual(native.EXPECTATIONS['verify'][-2:], (1, 2))
+        for values in native.EXPECTATIONS.values():
+            self.assertEqual(len(values), 8)
+
+    def test_executable_selection_delegates_to_production_guard_without_chmod(self):
+        tree = ast.parse((FIXTURES / 'installation_repair_native.py').read_text())
+        selection = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                         and node.name == 'executable_selection')
+        calls = [node for node in ast.walk(selection) if isinstance(node, ast.Call)]
+        identities = [node for node in calls if isinstance(node.func, ast.Attribute)
+                      and node.func.attr == 'executable_identity']
+        self.assertEqual(len(identities), 1)  # loop covers uv and basePython
+        self.assertFalse(any(isinstance(node.func, ast.Attribute) and node.func.attr == 'chmod' for node in calls))
+        app_tree = ast.parse((FIXTURES / 'installation_repair_native_app.py').read_text())
+        dispatch = next(node for node in app_tree.body if isinstance(node, ast.FunctionDef)
+                        and node.name == 'dispatch')
+        self.assertTrue(any(isinstance(node, ast.Assert) for node in dispatch.body))
+
+    def test_cleanup_requires_child_settlement_before_manager_mutation(self):
+        root, evidence = self.root / 'run', self.root / 'evidence'
+        root.mkdir()
+        evidence.mkdir()
+        helper = {'label': 'saved', 'folder': '/saved', 'basePython': '/outside/python'}
+        native.save(root / 'owner.json', {'definition': None, 'helpers': [helper], 'processes': [], 'cases': []})
+        with patch.object(native, 'manager_environment', return_value={}), \
+                patch.object(native, 'manager_capability'), \
+                patch.object(native, 'owned_helper_observation', return_value={'settled': True}), \
+                patch.object(native, 'child_settlement', side_effect=RuntimeError('child settlement unproven')), \
+                patch.object(native, 'execute') as execute:
+            with self.assertRaisesRegex(RuntimeError, 'child settlement unproven'):
+                native.cleanup(root, evidence)
+        execute.assert_not_called()
+        self.assertEqual(native.load(root / 'owner.json')['helpers'], [helper])
+        self.assertFalse(native.load(evidence / 'cleanup.json')['passed'])
+
+    def test_no_replay_boundary_witness_detects_identical_content_replacement(self):
+        self.assertIsNone(native.child_boundary_identity(self.root))
+        boundary = self.root / 'child-boundary.json'
+        native.save(boundary, {'schema': 1, 'settled': True})
+        before = native.child_boundary_identity(self.root)
+        native.save(boundary, {'schema': 1, 'settled': True})
+        self.assertNotEqual(native.child_boundary_identity(self.root), before)
+        self.assertEqual(boundary.read_bytes(), before[-1])
 
 
 if __name__ == '__main__':

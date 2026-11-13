@@ -64,13 +64,25 @@ def probe():
         'ok': True, 'isolated': bool(sys.flags.isolated), 'version': config['version']}))
 
 
-def dispatch(home, instance, folder):
+def current_admission(home):
+    path = home / 'installation-repair/admissions.json'
+    if not path.exists():
+        return None
+    value = json.loads(path.read_text())
+    assert value['schema'] == 1 and value['current'] in value['previews'].values()
+    return value['current']
+
+
+def dispatch(home, instance, folder, *, launch=True):
     from . import installation_repair as controller, installation_repair_worker as worker, reset
     plan = worker.read(folder / 'plan.json')
     config = json.loads((home / 'fixture.json').read_text())
     definition = Path(config['definition'])
     info = home.stat()
+    assert all(worker.executable_identity(plan[key]) == plan['executables'][key]
+               for key in ('uv', 'basePython'))
     plan.update(
+        recoverySchema=1,
         home=str(home), dataStat=[info.st_dev, info.st_ino], uid=os.getuid(),
         hostInstanceId=instance,
         runningIdentity={'version': config['version'], 'revision': config['revision'], 'instanceId': instance},
@@ -85,11 +97,16 @@ def dispatch(home, instance, folder):
     operation['hostInstanceId'] = instance
     worker.write(folder / 'plan.json', plan)
     worker.write(folder / 'operation.json', operation)
-    worker.write(home / 'installation-repair/latest.json', {'operationId': plan['operationId']})
+    # This is a controlled fixture admission, NOT production confirm/binding.
+    # Mirror the exact atomic admission format, not the retired split records.
+    worker.write(home / 'installation-repair/admissions.json', {
+        'schema': 1, 'current': plan['operationId'], 'previews': {plan['previewId']: plan['operationId']}})
+    event(config['caseRoot'], 'admit', operationId=plan['operationId'])
     # Ownership of this exact one-shot label was saved by the harness BEFORE
     # this request. Never retry this dispatch if the response is lost.
-    event(config['caseRoot'], 'dispatch', operationId=plan['operationId'])
-    controller.launch(folder, plan)
+    if launch:
+        event(config['caseRoot'], 'dispatch', operationId=plan['operationId'])
+        controller.launch(folder, plan)
 
 
 def tls_server(config, handler):
@@ -148,22 +165,22 @@ def main():
         def do_GET(self):
             if not self.authorized() or self.path != '/api/health':
                 return self.reply(403, {})
-            latest = home / 'installation-repair/latest.json'
-            operation = json.loads(latest.read_text())['operationId'] if latest.exists() else None
+            operation = current_admission(home)
             self.reply(200, {'ok': True, 'app': 'amplifier-unified', 'instanceId': instance,
                             'dataIdentity': hashlib.sha256(str(home).encode()).hexdigest(),
                             'version': stamp['version'], 'revision': stamp['revision'],
                             'installationRepair': {'protocol': 1, 'operationId': operation}})
 
         def do_POST(self):
-            if not self.authorized() or self.path != '/fixture-dispatch':
+            if not self.authorized() or self.path not in {'/fixture-dispatch', '/fixture-admit'}:
                 return self.reply(403, {})
             # Single purpose local fixture interface: never exposed by production.
             raw = self.rfile.read(min(int(self.headers.get('Content-Length', 0)), 1024))
             identity = json.loads(raw)['operationId']
             assert len(identity) == 32 and all(c in '0123456789abcdef' for c in identity)
-            dispatch(home, instance, home / 'installation-repair' / identity)
-            self.reply(200, {'dispatched': identity})
+            dispatch(home, instance, home / 'installation-repair' / identity,
+                     launch=self.path == '/fixture-dispatch')
+            self.reply(200, {'admitted': identity})
 
     with reset.repair_lock(home, shared=True):
         server = tls_server(config, Handler)
