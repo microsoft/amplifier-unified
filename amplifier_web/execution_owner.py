@@ -70,6 +70,30 @@ class Projection:
         self.failed.cancel()
 
 
+class ExecutionObservers:
+    """One service-lifetime tap, including callbacks held by resident workers."""
+    def __init__(self, service):
+        self.service = service
+        self.original = service.on_runtime_event
+        self.attachments = set()
+        self.sink = EventSink(self.event, self.events)
+        service.on_runtime_event = self.sink
+
+    def remove(self, attachment):
+        self.attachments.discard(attachment)
+
+    async def event(self, kind, payload):
+        await self.original(kind, payload)
+        for attachment in tuple(self.attachments):
+            await attachment.observe(kind, payload)
+
+    async def events(self, rows):
+        await self.original.batch(rows)
+        for kind, payload in rows:
+            for attachment in tuple(self.attachments):
+                await attachment.observe(kind, payload)
+
+
 class ExecutionOwner:
     def __init__(self, service, *, workspace, bundle, origin, enable_mcp=False):
         self.service = service
@@ -81,10 +105,29 @@ class ExecutionOwner:
         self._attachment_id = str(uuid.uuid4())
         self.attached = set()
         self.pending = {}
-        self.original_events = service.on_runtime_event
-        service.on_runtime_event = EventSink(self.event, self.events)
+        self._disconnected = False
+        observers = getattr(service, "_execution_observers", None)
+        if observers is None:
+            observers = service._execution_observers = ExecutionObservers(service)
+        self._observers = observers
+        observers.attachments.add(self)
+
+    def require_connection(self):
+        if self._disconnected:
+            raise ValueError("Execution attachment is disconnected")
+
+    async def _attach_session(self, identity, mcp_servers):
+        self.require_connection()
+        if self.mcp_capabilities is not None:
+            await self.service.runtime.bind_ephemeral_mcp(identity, self._attachment_id, mcp_servers or {})
+            if self._disconnected:
+                self.service.runtime.release_ephemeral_mcp(identity, self._attachment_id)
+                self.require_connection()
+        self.attached.add(identity)
+        return identity
 
     async def create(self, cwd, *, mcp_servers=None):
+        self.require_connection()
         if mcp_servers is not None and self.mcp_capabilities is None:
             raise ValueError("MCP attachment is not enabled by this trusted launcher")
         if mcp_servers is not None and not isinstance(mcp_servers, dict):
@@ -95,10 +138,7 @@ class ExecutionOwner:
             "workspace": str(self.workspace), "bundle": self.bundle, "select": False,
         }, origin=self.origin, include_state=False)
         identity = receipt["result"]["sessionId"]
-        if self.mcp_capabilities is not None:
-            await self.service.runtime.bind_ephemeral_mcp(identity, self._attachment_id, mcp_servers or {})
-        self.attached.add(identity)
-        return identity
+        return await self._attach_session(identity, mcp_servers)
 
     async def attach(self, identity, cwd, *, mcp_servers=None):
         """Attach to saved metadata; prompt admission still owns native resume.
@@ -106,6 +146,7 @@ class ExecutionOwner:
         Reading an attachment must not hydrate history, select a browser chat,
         start a runtime or imply that its exclusive writer has been acquired.
         """
+        self.require_connection()
         if mcp_servers is not None and self.mcp_capabilities is None:
             raise ValueError("MCP attachment is not enabled by this trusted launcher")
         if mcp_servers is not None and not isinstance(mcp_servers, dict):
@@ -126,12 +167,10 @@ class ExecutionOwner:
             location = source.get("workingDirectory") or workspace
             if requested != Path(location).resolve(strict=True):
                 raise ValueError("cwd does not match the saved execution location")
-        if self.mcp_capabilities is not None:
-            await self.service.runtime.bind_ephemeral_mcp(identity, self._attachment_id, mcp_servers or {})
-        self.attached.add(identity)
-        return identity
+        return await self._attach_session(identity, mcp_servers)
 
     def require_attachment(self, identity):
+        self.require_connection()
         if identity not in self.attached:
             raise ValueError("Execution is not attached to this connection")
 
@@ -215,15 +254,6 @@ class ExecutionOwner:
         if identity in self.pending:
             self.pending[identity]["delivery"].fail("Observation detached; native work may continue. Inspect retained owner state.")
 
-    async def event(self, kind, payload):
-        await self.original_events(kind, payload)
-        await self.observe(kind, payload)
-
-    async def events(self, rows):
-        await self.original_events.batch(rows)
-        for kind, payload in rows:
-            await self.observe(kind, payload)
-
     async def approvals(self, identity, row):
         try:
             while row["approval_ids"]:
@@ -291,8 +321,21 @@ class ExecutionOwner:
         row["delivery"].offer(event)
 
     async def close(self):
-        """Owned service shutdown, distinct from releasing one attachment."""
-        await self.service.close()
-        for row in self.pending.values():
-            row["delivery"].fail("Execution owner closed; inspect retained state before retrying")
-        self.service.on_runtime_event = self.original_events
+        """Standalone launcher shutdown; shared clients must use disconnect()."""
+        try:
+            await self.service.close()
+        finally:
+            await self.disconnect()
+
+    async def disconnect(self):
+        """Retire this connection's observations without stopping accepted work."""
+        self._disconnected = True
+        rows = list(self.pending.values())
+        try:
+            for identity in tuple(self.attached):
+                await self.release(identity)
+        finally:
+            self._observers.remove(self)
+            for row in rows:
+                row["delivery"].fail("Observation detached; native work may continue. Inspect retained owner state.")
+            await asyncio.gather(*(row["delivery"].close() for row in rows))

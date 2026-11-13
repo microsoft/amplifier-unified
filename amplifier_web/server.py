@@ -123,6 +123,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     if hasattr(runtime, 'retention'):
         service.state['runtime']['retention'] = dict(runtime.retention.settings)
     app["service"] = service
+    from .acp_server import setup_routes as setup_acp
+    setup_acp(app)
     browser_entry.initialize(app)
 
     async def mcp_oauth_callback(request):

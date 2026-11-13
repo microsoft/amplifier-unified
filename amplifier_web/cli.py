@@ -43,6 +43,11 @@ def _parse() -> argparse.Namespace:
     subcommands = parser.add_subparsers(dest="command")
     subcommands.add_parser("serve", help="Run the authenticated web host")
     subcommands.add_parser("open", help="Open an already running owned web host")
+    acp = subcommands.add_parser("acp", help="Attach ACP stdio to an already running Unified host")
+    acp.add_argument("--server", help="Existing host HTTP(S) origin; defaults to this installation")
+    acp.add_argument("--token-file", help="Private file containing the existing host owner credential")
+    acp.add_argument("--ca-file", help="Trusted CA for the host, when not in the system trust store")
+    acp.add_argument("--bundle", help="Bundle for new conversations; defaults to the host selection")
     for name in ("run", "continue"):
         command = subcommands.add_parser(name, help="Run one task using the shared Amplifier host")
         command.add_argument("prompt", nargs="?", default="")
@@ -140,13 +145,13 @@ def _server_overrides(args: argparse.Namespace) -> dict:
 
 
 def _print_completion(shell: str) -> None:
-    words = "serve open tui run continue tool access doctor reset config service setup-tls completion --port --workspace --data-dir --no-open --bind --host --public-origin --tls-cert --tls-key --session-ttl --version"
+    words = "serve open tui acp run continue tool access doctor reset config service setup-tls completion --port --workspace --data-dir --no-open --bind --host --public-origin --tls-cert --tls-key --session-ttl --version"
     if shell == "bash":
         print('complete -W "' + words + '" amplifier-unified')
     elif shell == "zsh":
-        print('#compdef amplifier-unified\n_arguments "1:command:(serve open tui run continue tool access doctor reset config service setup-tls)"')
+        print('#compdef amplifier-unified\n_arguments "1:command:(serve open tui acp run continue tool access doctor reset config service setup-tls)"')
     else:
-        print('complete -c amplifier-unified -f -a "serve open tui run continue tool access doctor reset config service setup-tls"')
+        print('complete -c amplifier-unified -f -a "serve open tui acp run continue tool access doctor reset config service setup-tls"')
 
 
 def _config(args, data_dir: Path) -> None:
@@ -447,6 +452,13 @@ def main():
     args = _parse()
     from .deployment import load_server_config
     data_dir = _data_dir(args.data_dir)
+    if args.command == "acp":
+        from .acp_stdio import run
+        try:
+            return asyncio.run(run(args, data_dir))
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(str(exc) or "ACP attachment ended; inspect retained work before retrying.", file=sys.stderr)
+            raise SystemExit(1) from None
     if args.command == "runtime":
         from .installation_runtime import prepare, status
         os.environ["AMPLIFIER_WEB_HOME"] = str(data_dir)

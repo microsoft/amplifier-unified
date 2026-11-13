@@ -146,7 +146,8 @@ async def test_admitted_stop_observes_canonical_terminal_state(attached, outcome
     assert receipt(app, 'input')['delivery'] == 'accepted'
 
 
-@pytest.mark.parametrize('detach', ['ask', 'release', 'release-then-error'])
+@pytest.mark.parametrize('detach', ['ask', 'release', 'release-then-error',
+                                   'disconnect', 'disconnect-then-error'])
 async def test_observer_detaches_before_send_ack_without_cancelling_admission(attached, detach):
     app, owner, runtime, sid, prompt = attached
     task = await prompt()
@@ -158,6 +159,8 @@ async def test_observer_detaches_before_send_ack_without_cancelling_admission(at
         await app.on_runtime_event('approval.requested', {
             'sessionId': sid, 'id': 'approval', 'options': ['allow', 'deny'],
         })
+    elif detach.startswith('disconnect'):
+        await owner.disconnect()
     else:
         await owner.release(sid)
     await bounded(row['delivery'].failed)
@@ -171,7 +174,7 @@ async def test_observer_detaches_before_send_ack_without_cancelling_admission(at
     if detach == 'ask':
         assert next(a for a in app._session(sid)['approvals'] if a['id'] == 'approval')['status'] == 'pending'
 
-    if detach == 'release-then-error':
+    if detach in {'release-then-error', 'disconnect-then-error'}:
         runtime.send_error = RuntimeError('Late send acknowledgment failed')
     runtime.send_ack.set()
     # Observe completion without retrieving its exception: the adapter must
