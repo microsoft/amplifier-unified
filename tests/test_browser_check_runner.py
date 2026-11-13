@@ -3712,10 +3712,18 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
     responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
     notices_ids = shared_notices_motion_browser_addition(plan['scenarios'])
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids]
+    lifecycle_additions = [
+        {'id': 'session-health-request-failure',
+         'command': ['node', 'tests/web/session-health-browser.mjs', '--request-failure']},
+        {'id': 'session-health-completed-runtime-fault',
+         'command': ['node', 'tests/web/session-health-browser.mjs', '--completed-runtime-fault']},
+    ]
+    lifecycle_ids = {row['id'] for row in lifecycle_additions}
+    assert [row for row in plan['scenarios'] if row['id'] in lifecycle_ids] == lifecycle_additions
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | lifecycle_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
-    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(lifecycle_ids)
+    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(lifecycle_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
     assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
