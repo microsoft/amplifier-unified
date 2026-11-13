@@ -137,7 +137,8 @@ class SessionStore:
         return SessionHistoryStore(self.directory(session_id), events_path=events_path,
                                    session_id=session_id)
 
-    def media(self, session_id, *, policy_verifier=None):
+    def media(self, session_id, *, policy_verifier=None, read_only=False, source_read_verifier=None,
+              request_only_verifier=None):
         """Open a fresh owner-bound store; callers must close its lifetime lock."""
         from amplifier_foundation.session.media import MediaPolicy, SessionMediaStore
         from amplifier_foundation.session.checkpoint import verified_checkpoint_refs
@@ -147,7 +148,9 @@ class SessionStore:
                                  policy=MediaPolicy(max_bytes=MAX_BYTES, max_pixels=MAX_PIXELS,
                                                     max_images=MAX_FILES),
                                  checkpoint_verifier=verified_checkpoint_refs,
-                                 policy_verifier=policy_verifier)
+                                 policy_verifier=policy_verifier, read_only=read_only,
+                                 source_read_verifier=source_read_verifier,
+                                 request_only_verifier=request_only_verifier)
 
     def acknowledge_media(self, session_id, canonical, media_store):
         """ACK only an exact primary saved prefix, never a report or backup."""
