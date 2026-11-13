@@ -1,5 +1,4 @@
 import copy
-from types import SimpleNamespace
 from urllib.parse import quote
 
 import pytest
@@ -30,7 +29,7 @@ def test_safe_source_filename(canvas, expected):
 
 
 @pytest.fixture
-def metadata_service(monkeypatch):
+def metadata_service(app, monkeypatch):
     from amplifier_web import canvas_library, state_storage
 
     def no_body_read(*args, **kwargs):
@@ -46,7 +45,12 @@ def metadata_service(monkeypatch):
     row = {**second, 'id': 'saved', 'sessionId': 'chat', 'revision': 2, 'versions': [first, second]}
     state = {'sessions': [owner], 'selectedSessionId': 'chat', 'canvasArtifacts': [row],
              'canvas': {'id': 'unrelated', 'open': False}, 'view': {'draft': 'Keep draft'}}
-    return SimpleNamespace(state=state, db=object(), _session=lambda sid, hydrate=False: owner)
+    # Reuse the maintained service's real client binding and saved-feedback path.
+    # Only the synthetic conversation lookup remains local to these metadata tests.
+    monkeypatch.setattr(app, '_session', lambda sid, hydrate=False: owner)
+    with app.clients.bind('one'):
+        app.state.update(state)
+        yield app
 
 
 def test_inspect_exact_metadata_preserves_history_and_never_loads_body(metadata_service):
@@ -66,6 +70,26 @@ def test_inspect_exact_metadata_preserves_history_and_never_loads_body(metadata_
             'base': '/worktrees/current', 'workspace': '/project'})
     # Version 1 has no recorded path: it must not inherit version 2's metadata.
     assert service.state == before
+
+
+@pytest.mark.parametrize('client_id', [None, 'one', 'two'])
+def test_inspect_metadata_readback_keeps_exact_client_context(metadata_service, client_id):
+    service = metadata_service
+    with service.clients.bind(client_id):
+        before = copy.deepcopy(service.state)
+        before_clients = copy.deepcopy(service.clients.records)
+        result = versions_command(service, 'canvas.versions.inspect',
+                                  {'id': 'saved', 'sessionId': 'chat', 'version': 2}, 'app')
+        assert result['saved']
+        assert result['readback'] == {
+            'action': 'canvas.versions.inspect',
+            'args': {'id': 'saved', 'sessionId': 'chat', 'version': 2,
+                     **({'clientId': client_id} if client_id is not None else {})}}
+        assert result['quality']['status'] == 'not_checked'
+        assert result['quality']['version'] == 2
+        assert result['quality']['coverage'] == 'none'
+        assert service.state == before
+        assert service.clients.records == before_clients
 
 
 def test_inspect_historical_path_and_filename_do_not_inherit_latest_metadata(metadata_service):
