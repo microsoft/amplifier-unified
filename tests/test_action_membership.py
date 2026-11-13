@@ -9,7 +9,7 @@ from test_configuration_authority import app
 
 
 FACTORIES = (
-    'resource_reservation_definitions', 'environment_definitions',
+    'workspace_resource_definitions', 'environment_definitions',
     'test_capacity_definitions', 'test_runner_definitions',
     'test_execution_definitions', 'test_queue_definitions',
 )
@@ -44,7 +44,7 @@ def observe_domains(app, monkeypatch):
         ('execution', test_execution_settings, 'dispatch', 1),
         ('queue', app.test_queue, 'dispatch', 0),
         ('environment', task_environments, 'dispatch', 1),
-        ('resource', workspace_resources, 'dispatch_reservation', 1),
+        ('resource', workspace_resources, 'dispatch', 1),
     ):
         original = getattr(owner, attribute)
 
@@ -75,7 +75,7 @@ async def test_repeated_view_dispatch_does_not_build_unrelated_domain_schemas(ap
     ('testing.execution.read', 'execution', ()),
     ('workspace.tests.read', 'queue', ('workspaceId', 'sessionId')),
     ('workspace.environments.read', 'environment', ('workspaceId', 'sessionId')),
-    ('workspace.resources.reservations', 'resource', ('workspaceId',)),
+    ('workspace.resources.read', 'resource', ('workspaceId', 'sessionId')),
 ])
 async def test_registered_passive_action_keeps_its_domain_and_authority_order(app, monkeypatch, action, domain, fields):
     counts = schema_build_counts(monkeypatch)

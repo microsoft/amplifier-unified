@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from amplifier_web.service import AppError
-from amplifier_web.workspace_resources import reservation_command
+from test_resource_reservations import seed_legacy_claims, retained_rows
 from test_assignment_task_limits import limited, read
 from test_assignments import app, agent_action, generation
 from test_task_continuity import controls
@@ -34,11 +34,8 @@ async def test_owner_completes_exact_contribution_without_model_turn_or_custody_
             **({'reason': 'Waiting for final integration'} if status == 'blocked' else {})})
     ctx.target.update(status='stopped', interruptionRevision=3,
                       lastInterruption={'kind': 'user_stop', 'at': 1})
-    actor = {'sessionId': ctx.target['id'], 'principal': ctx.target['id']}
-    held = reservation_command(ctx.app.data_dir, ctx.target['workspace'],
-        'workspace.resources.reserve', {'resourceKey': 'retained-old-evidence'}, actor, 'held-resource')
-    resource_view = lambda: reservation_command(ctx.app.data_dir, ctx.target['workspace'],
-        'workspace.resources.reservations', {}, actor)
+    ledger = seed_legacy_claims(ctx.app.data_dir, ctx.target['workspace'], ctx.target['id'])
+    resource_view = lambda: retained_rows(ledger)
     resources_before = resource_view()
     ctx.app.collaboration.insert('unknown-external-operation', 'unchanged', {
         'status': 'unknown', 'senderSessionId': ctx.target['id'], 'commandAction': 'prior-operation'})
@@ -66,7 +63,7 @@ async def test_owner_completes_exact_contribution_without_model_turn_or_custody_
     assert ctx.app.assignments.current(ctx.source) == assignment_before
     assert ctx.target['status'] == 'stopped' and ctx.target['interruptionRevision'] == 3
     assert ctx.target['lastInterruption'] == stop_before and not ctx.app.runtime.inputs
-    assert resource_view() == resources_before and held
+    assert resource_view() == resources_before
     assert ctx.app.collaboration.receipt('unknown-external-operation') == operation_before
     assert result['result']['inputSent'] is False
     receipt = result['result']['receipt']

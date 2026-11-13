@@ -30,6 +30,62 @@ async def test_passive_private_global_policy_and_stale_writer(app, monkeypatch):
         await app.dispatch('testing.execution.save', {'expectedRevision': first['revision'], 'queue': {}, 'profiles': {}})
     assert settings.load(app)['queue']['maxPending'] == 100
 
+
+async def test_retired_disk_limits_are_ignored_without_reset_rewrite_or_revived_api(app):
+    from amplifier_web.service import ACTION_DEFINITIONS
+    policy = {'version': 1, 'queue': {'maxPending': 19, 'defaultWaitSeconds': 123},
+        'profiles': {'browser-test': {'cpus': 3}},
+        'concurrency': {'maxOwnedResources': 21, 'maxEnvironmentsPerChat': 4,
+            'maxPendingPeerInputs': 17, 'maxResourceReservations': 2,
+            'maxResourceReservationsPerChat': 1}}
+    settings.write(app, policy)
+    path = app.data_dir / 'test-execution.json'
+    before = path.read_bytes()
+    first = (await app.dispatch('testing.execution.read', {}))['result']
+    assert path.read_bytes() == before
+    assert first['queue'] == policy['queue'] and first['profiles'] == policy['profiles']
+    assert first['concurrency'] == {'maxOwnedResources': 21, 'maxEnvironmentsPerChat': 4,
+                                   'maxPendingPeerInputs': 17}
+    assert not settings.RETIRED_CONCURRENCY_FIELDS & first['effectiveConcurrency'].keys()
+    properties = ACTION_DEFINITIONS['testing.execution.save'][1]['properties']['concurrency']['properties']
+    assert not settings.RETIRED_CONCURRENCY_FIELDS & properties.keys()
+    # Incoming saves remain strict, including the internal validator path.
+    for key in (*settings.RETIRED_CONCURRENCY_FIELDS, 'unknownConcurrency'):
+        with pytest.raises(ValueError, match='supported work concurrency'):
+            settings.validate({**policy, 'concurrency': {key: 1}})
+        with pytest.raises(AppError):
+            await app.dispatch('testing.execution.save', {'expectedRevision': first['revision'],
+                'queue': first['queue'], 'profiles': first['profiles'], 'concurrency': {key: 1}})
+        assert path.read_bytes() == before
+    # Non-retired policy changes still invalidate a previously observed revision.
+    settings.write(app, {**policy, 'queue': {'maxPending': 23}})
+    with pytest.raises(AppError, match='changed'):
+        await app.dispatch('testing.execution.save', {'expectedRevision': first['revision'],
+            'queue': first['queue'], 'profiles': first['profiles']})
+    current = (await app.dispatch('testing.execution.read', {}))['result']
+    result = await app.dispatch('testing.execution.save', {'expectedRevision': current['revision'],
+        'queue': current['queue'], 'profiles': current['profiles']})
+    assert result['result']['concurrency'] == first['concurrency']
+    assert settings.load(app)['queue'] == {'maxPending': 23}
+    assert not settings.RETIRED_CONCURRENCY_FIELDS & json.loads(path.read_bytes())['concurrency'].keys()
+
+
+def test_retired_disk_decode_does_not_hide_other_unknown_fields(tmp_path):
+    app = SimpleNamespace(data_dir=tmp_path)
+    settings.write(app, {'version': 1, 'queue': {}, 'profiles': {},
+        'concurrency': {'maxResourceReservations': 2, 'unknownConcurrency': 3}})
+    with pytest.raises(ValueError, match='supported work concurrency'):
+        settings.load(app)
+
+
+@pytest.mark.parametrize('value', [-1, True, '1', None])
+def test_retired_disk_decode_still_validates_legacy_format(tmp_path, value):
+    app = SimpleNamespace(data_dir=tmp_path)
+    settings.write(app, {'version': 1, 'queue': {}, 'profiles': {},
+        'concurrency': {'maxResourceReservations': value}})
+    with pytest.raises(ValueError, match='Legacy work concurrency'):
+        settings.load(app)
+
 async def test_agent_needs_global_settings_authority_but_routine_check_does_not(app, queue, backend):
     source = app.state['sessions'][0]
     current = (await app.dispatch('testing.execution.read', {}))['result']

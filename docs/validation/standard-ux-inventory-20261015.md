@@ -262,6 +262,15 @@ new integration workflows are recorded separately in
 The first delta covers #635's controlled per-tool Retry/Skip flow at its exact
 integration source, including the narrower evidence limits of that browser test.
 
+On 2026-11-12, user-directed retirement superseded `workspace.reservations`
+outcomes 0–2 and its Reserve/Reconcile controls. The maintained
+[completion policy](../../tests/web/standard-ux-completion-policy.json) and
+[delta ledger](../../tests/web/standard-ux-inventory-deltas.json) record that
+disposition; frozen counts, hashes and historical results remain unchanged.
+The maintained retirement journey checks absent controls/requests and preserved
+real inventory. Retirement is not a pass of the removed outcomes or proof of
+physical teardown.
+
 The functional execution ledger maps unchanged original browser assertions to
 zero-based expected-result indices, exact script hashes, layout/input contexts,
 and retained run logs. A result can be covered in one context while its other
