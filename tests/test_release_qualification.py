@@ -1855,13 +1855,15 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert len(commands) == 2
     flag = "${{ inputs.app004_qualification && '--app004-qualification' || '' }}"
     attachment_flag = "${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}"
+    captured_flag = "${{ inputs.captured_message_delivery && '--captured-message-delivery' || '' }}"
     assert all(command.count(flag) == 1 for command in commands)
     assert all(command.count(attachment_flag) == 1 for command in commands)
+    assert all(command.count(captured_flag) == 1 for command in commands)
     # Empty/default selection executes exactly the preexisting plan and budget.
-    assert commands[0].replace(flag, '').replace(attachment_flag, '').strip() == (
+    assert commands[0].replace(flag, '').replace(attachment_flag, '').replace(captured_flag, '').strip() == (
         'python scripts/browser_check_runner.py --plan tests/web/browser-checks.json '
         '--output output/browser-checks --initialize')
-    assert commands[1].replace(flag, '').replace(attachment_flag, '').strip() == (
+    assert commands[1].replace(flag, '').replace(attachment_flag, '').replace(captured_flag, '').strip() == (
         'uv run --no-sync python scripts/browser_check_runner.py '
         '--plan tests/web/browser-checks.json --output output/browser-checks --budget-seconds 1500')
     assert next(i for i, s in enumerate(steps) if '--initialize' in s.get('run', '')) < next(
