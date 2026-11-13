@@ -8,6 +8,7 @@ export function ComposerOptions({state,session,act,working,detail}){
  // External client revisions still cannot replace a touched form's captured one.
  const nextMessageControl=useNextMessageConfiguration(session,act);
  if(session?.externalAgent)return <span className="a-caption" data-external-agent>{session.externalAgent.label||session.externalAgent.id}</span>;
+ if(!session&&state?.view?.newSessionDraft?.externalAgentId)return <span className="a-caption" data-external-agent>Model and tools are managed by the external agent.</span>;
  const props={state,session,act,working,nextMessageControl};
  return <ModelControl {...props} compact detail={detail}>
   <BundleControl {...props} compact embedded/>
