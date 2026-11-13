@@ -100,6 +100,9 @@ for(const scenario of (process.argv.length>2?process.argv.slice(2):['native','or
    await expect(message).not.toContainText('Live direction applied');
    if(output)await page.screenshot({path:output+'/native-accepted.png'});
    if(scenario==='native-stop'){
+    await release('pending');
+    await expect(message).toContainText('queued at the provider');
+    await expect.poll(async()=>(await inspect()).toolRunning).toBe(true);
     await page.getByRole('button',{name:'Stop response',exact:true}).click();
     await expect.poll(async()=>(await inspect()).session.collaborationGeneration.terminal).toBe(true);
     await expect(message).not.toContainText('Live direction applied');
@@ -137,6 +140,27 @@ for(const scenario of (process.argv.length>2?process.argv.slice(2):['native','or
   assert.equal(submissions[1].args.expectedInterruptionRevision,originalEpoch);
   assert.equal(submissions[1].args.expectedConfigurationRevision,0);
   assert.equal(final.session.messages.filter(m=>m.text==='DIRECTION_FROM_NORMAL_COMPOSER').length,stale?0:1);
+  if(scenario==='ordinary'){
+   const requests=final.wire.filter(r=>r.kind==='ordinary-request');
+   assert.equal(requests.length,2,'Boundary guidance continues without a tool or a third request');
+   const payload=JSON.stringify(requests[1].payload);
+   assert.equal(payload.split('DIRECTION_FROM_NORMAL_COMPOSER').length-1,1);
+   assert.equal(payload.split('ORIGINAL_HELD_MODEL').length-1,1);
+  }
+  if(scenario==='tool'){
+   const requests=final.wire.filter(r=>r.kind==='wire'&&r.payload.type==='response.create');
+   assert.equal(requests.length,2);
+   const payload=JSON.stringify(requests[1].payload);
+   assert.equal(payload.split('DIRECTION_FROM_NORMAL_COMPOSER').length-1,1);
+   assert.match(payload,/call-tool/,'The completed tool result is retained');
+  }
+  if(!stale){
+   const duplicate=await page.request.post(ready.url+'/api/actions',{data:submissions[1]});
+   const receipt=await duplicate.json();assert.equal(receipt.duplicate,true,'Same identity returns its recorded outcome');
+   const afterDuplicate=await inspect();
+   assert.equal(afterDuplicate.session.messages.filter(m=>m.inputId===submissions[1].id).length,1);
+   assert.equal(afterDuplicate.wire.length,final.wire.length,'Duplicate Send cannot replay any provider transport');
+  }
   await composer.fill('KEEP_NEW_PRIVATE_DRAFT');
   await page.reload();await showFixtureConversation(page);await expect(composer).toHaveDraft('KEEP_NEW_PRIVATE_DRAFT');
   assert.equal((await inspect()).wire.length,final.wire.length,'Reload must not replay unknown or held input');

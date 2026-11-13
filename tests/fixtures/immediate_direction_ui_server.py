@@ -51,22 +51,25 @@ class Socket:
         self.state = State.OPEN
         self.frames = asyncio.Queue()
         self.tasks = []
+        self.creates = 0
 
     async def send(self, wire):
         value = json.loads(wire)
         log('wire', payload=value)
         if value['type'] == 'response.create':
-            await self.frames.put(json.dumps({'type': 'response.created', 'response': {'id': 'parent'}}))
+            self.creates += 1
+            identity = 'parent' if self.creates == 1 else 'boundary-' + str(self.creates)
+            await self.frames.put(json.dumps({'type': 'response.created', 'response': {'id': identity}}))
             if os.environ.get('DIRECTION_SCENARIO') == 'tool':
                 await self.frames.put(json.dumps({'type': 'response.completed', 'response':
-                    terminal('parent', 'TOOL_BOUNDARY_FINAL') if stage('tool-release')
-                    else terminal('parent', tool=True)}))
+                    terminal(identity, 'TOOL_BOUNDARY_FINAL') if stage('tool-release')
+                    else terminal(identity, tool=True)}))
             elif os.environ.get('DIRECTION_SCENARIO') in {'completion', 'stale-config'}:
                 next_turn = stage('complete')
                 async def complete():
                     await wait_stage('complete')
                     await self.frames.put(json.dumps({'type': 'response.completed', 'response':
-                        terminal('parent', 'NEXT_TURN_FINAL' if next_turn else 'ORIGINAL_FINAL')}))
+                        terminal(identity, 'NEXT_TURN_FINAL' if next_turn else 'ORIGINAL_FINAL')}))
                 self.tasks.append(asyncio.create_task(complete()))
         elif value['type'] == 'response.steer':
             if os.environ.get('DIRECTION_SCENARIO') == 'native-unknown':
@@ -76,6 +79,14 @@ class Socket:
             async def phases():
                 await wait_stage('accept')
                 await self.frames.put(json.dumps({'type': 'response.steer.accepted', 'steer': {'id': 'steer-one'}}))
+                if os.environ.get('DIRECTION_SCENARIO') == 'native-stop':
+                    await wait_stage('pending')
+                    await self.frames.put(json.dumps({'type': 'response.steer.pending',
+                        'steer': {'id': 'steer-one'},
+                        'required_input': [{'type': 'function_call_output', 'call_id': 'call-tool'}]}))
+                    await self.frames.put(json.dumps({'type': 'response.completed',
+                        'response': terminal('parent', tool=True)}))
+                    return
                 await wait_stage('apply')
                 parent = terminal('parent')
                 parent.update(status='incomplete', incomplete_details={'reason': 'steered'})
@@ -200,7 +211,7 @@ async def serve(root):
                 'min_delay_between_calls_ms': 0}}, 'context': {'module': 'context-simple', 'source': sources['context-simple']}},
             'providers': [{'module': 'provider-openai', 'source': sources['provider-openai'],
                            'config': {'api_key': 'fixture-not-an-account', 'default_model': model}}]}
-    if os.environ.get('DIRECTION_SCENARIO') == 'tool':
+    if os.environ.get('DIRECTION_SCENARIO') in {'tool', 'native-stop'}:
         module = root / 'tool' / 'amplifier_module_tool_fixture_hold' / '__init__.py'
         module.parent.mkdir(parents=True)
         module.write_text('''import asyncio, os
@@ -260,7 +271,7 @@ async def mount(coordinator, config=None):
             'toolRunning': stage('tool-running'), 'workers': len(runtime.workers)})
     async def release(request):
         name = (await request.json())['stage']
-        assert name in {'accept', 'apply', 'finish', 'ordinary-release', 'tool-release', 'complete'}
+        assert name in {'accept', 'apply', 'finish', 'pending', 'ordinary-release', 'tool-release', 'complete'}
         (root / name).touch()
         return web.json_response({'released': name})
     app.router.add_get('/fixture', inspect)
