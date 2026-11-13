@@ -44,9 +44,10 @@ def coverage_plan():
     appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
     responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
     notices_ids = shared_notices_motion_browser_addition(plan['scenarios'])
+    multiparty_ids = external_multiparty_browser_addition(plan['scenarios'])
     rows = []
     for row in plan['scenarios']:
-        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids:
+        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | multiparty_ids:
             continue
         row = {**row, 'command': [coverage_paths(part) for part in row['command']]}
         row.pop('cwd', None)
@@ -1036,6 +1037,36 @@ def shared_notices_motion_browser_addition(rows, readiness_scripts=()):
     return selected_client_browser_addition(rows, readiness_scripts, 'shared-notices-motion', current=True)
 
 
+def external_multiparty_browser_addition(rows, readiness_scripts=()):
+    """Validate the new host journey before subtracting it from frozen counts."""
+    script = 'tests/web/external-multiparty-browser.mjs'
+    expected = {'id': 'external-multiparty', 'command': ['node', script],
+                'env': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python',
+                        'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/external-multiparty'}}
+    owners = [row for row in rows if row['id'] == expected['id']
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [expected], 'external-multiparty: expected one exact host owner'
+    assert coverage_paths(script) not in readiness_scripts, 'external-multiparty: duplicate readiness owner'
+    return {expected['id']}
+
+
+def test_external_multiparty_is_composed_once_from_host_owner():
+    host = json.loads((ROOT / 'tests/web/browser-checks.json').read_text())
+    client = json.loads(source_test('tests/input-status-browser.mjs').with_name('browser-checks.json').read_text())
+    name = 'external-multiparty'
+    assert external_multiparty_browser_addition(host['scenarios']) == {name}
+    assert host['scenarioOrder'].count(name) == 1
+    assert not any(row['id'] == name or any(Path(part).name == name + '-browser.mjs'
+                   for part in row['command']) for row in client['scenarios'])
+    plan = current_plan()
+    assert external_multiparty_browser_addition(plan['scenarios']) == {name}
+    owner = next(row for row in plan['scenarios'] if row['id'] == name)
+    assert (ROOT / owner['command'][1]).is_file()
+    assert (ROOT / 'tests/fixtures/external_multiparty_ui_server.py').is_file()
+    with pytest.raises(AssertionError, match='host owner'):
+        external_multiparty_browser_addition([{**owner, 'cwd': '.build/web-client'}])
+
+
 def test_shared_notices_motion_is_composed_once_from_selected_client_owner():
     name = 'shared-notices-motion'
     script = f'tests/{name}-browser.mjs'
@@ -1308,6 +1339,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     appearance_lifecycle_browser_addition(current_plan()['scenarios'], readiness_scripts)
     sidebar_responsive_browser_addition(current_plan()['scenarios'], readiness_scripts)
     shared_notices_motion_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    external_multiparty_browser_addition(current_plan()['scenarios'], readiness_scripts)
     plan = coverage_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], readiness_scripts)
     sidebar_ids = sidebar_controls_browser_addition(plan['scenarios'], readiness_scripts)
@@ -3704,10 +3736,11 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
     responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
     notices_ids = shared_notices_motion_browser_addition(plan['scenarios'])
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids]
+    multiparty_ids = external_multiparty_browser_addition(plan['scenarios'])
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | multiparty_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
-    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids)
+    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
     assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
