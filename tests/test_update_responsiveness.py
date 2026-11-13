@@ -297,6 +297,10 @@ async def test_held_preparation_transition_and_external_wake_burst_remain_cooper
         if len(calls) == 1:
             state['sequence']['stage'] = 'application'
             asyncio.get_running_loop().call_soon(heartbeat.append, len(calls))
+        elif len(calls) == 2:
+            asyncio.get_running_loop().call_soon(heartbeat.append, len(calls))
+        elif len(calls) == 3:
+            assert heartbeat == [1, 2], 'External wake burst starved an event-loop peer'
         await tick()
         if 2 <= len(calls) <= 4:
             manager.wakeup.set()  # Finite external notifications, not new intent.
