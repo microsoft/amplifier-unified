@@ -60,7 +60,7 @@ async def main(home):
     await service.dispatch('session.select', {'id': target_a})
     await service.dispatch('session.rename', {'id': service._session()['id'], 'title': 'Delivery recovery fixture'})
     attachment = await service.dispatch('attachment.add', {'name': 'reference.txt', 'base64': 'UmV0YWluIHRoaXMgYXR0YWNobWVudC4='})
-    attachment_id = attachment['state']['sessions'][0]['draftAttachments'][0]['id']
+    attachment_id = service.clients.attachments(service._session(target_a))[0]['id']
     try:
         await service.dispatch('conversation.send', {'text': 'Recover this synthetic message with its attachment.', 'attachmentIds': [attachment_id]}, command_id='original-fixture-input')
     except RuntimeError:

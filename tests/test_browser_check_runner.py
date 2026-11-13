@@ -1517,7 +1517,7 @@ def test_captured_message_delivery_workflow_is_manual_fixed_and_retains_failures
             assert other['steps'][0] == {
                 'name': 'Reject mixed captured delivery selection',
                 'if': '${{ inputs.captured_message_delivery }}', 'run': 'exit 1'}
-    runs = [step for step in steps if 'scripts/browser_check_runner.py' in step.get('run', '')]
+    runs = [step for step in steps if 'python scripts/browser_check_runner.py --plan' in step.get('run', '')]
     flag = "${{ inputs.captured_message_delivery && '--captured-message-delivery' || '' }}"
     assert len(runs) == 2 and all(flag in step['run'] for step in runs)
     assert '--budget-seconds 1500' in runs[1]['run']
@@ -1568,7 +1568,7 @@ def test_attachment_focus_workflow_retains_failures_and_default_coverage():
     assert 'attachment_consumption' not in workflow['on']['workflow_call']['inputs']
     job = workflow['jobs']['browser']
     assert job['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
-    runs = [step for step in job['steps'] if 'scripts/browser_check_runner.py' in step.get('run', '')]
+    runs = [step for step in job['steps'] if 'python scripts/browser_check_runner.py --plan' in step.get('run', '')]
     assert len(runs) == 2
     flag = "${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}"
     assert all(flag in step['run'] for step in runs)
