@@ -384,6 +384,75 @@ for line in sys.stdin:
         await asyncio.wait_for(manager.close(), 5)
 
 
+@pytest.mark.parametrize('callback,identity', [
+    ('input', {'input_id': 'original-input'}),
+    ('child_report', {'child_session_id': 'original-child', 'call_id': 'original-call', 'report_index': 0}),
+    ('child_event', {'child_session_id': 'original-child', 'call_id': 'original-call', 'report_index': 2**31 - 1}),
+    ('bundle_turn', {}),
+    ('bundle_job', {'job_id': 'original-job', 'call_id': 'original-call'}),
+])
+def test_callback_rejection_retains_only_closed_metadata(callback, identity):
+    from amplifier_web.support_diagnostics import event_detail
+    metadata = {'callback_kind': callback, 'reason': 'invalid_activation',
+                'delivery': 'not_admitted', 'outcome': 'unknown', **identity}
+    raw = {'type': 'command.rejected', 'session_id': 'native', **metadata,
+           'payload': {'secret': 'PRIVATE'}, 'exception': 'PRIVATE', 'text': 'PRIVATE',
+           'unexpected': 'PRIVATE', 'error_type': 'PRIVATE'}
+    kind, payload = normalize_event(raw, 'host', 'unrelated-current-input')
+    assert kind == 'runtime.error'
+    assert payload == {'sessionId': 'host', 'event': 'command.rejected', 'errorType': None,
+                       'error': 'invalid_activation', **metadata}
+    assert event_detail(payload) == {'sessionId': 'host', 'event': 'command.rejected', **metadata}
+    assert 'PRIVATE' not in json.dumps(payload)
+    assert 'generationId' not in payload and 'inputId' not in payload
+
+
+@pytest.mark.parametrize('callback,key,value', [
+    ('input', 'input_id', None), ('input', 'input_id', 42),
+    ('input', 'input_id', {'secret': 'PRIVATE'}), ('input', 'input_id', 'x' * 201),
+    ('input', 'input_id', ''), ('input', 'input_id', 'PRIVATE\nvalue'),
+    ('bundle_job', 'job_id', ['PRIVATE']), ('bundle_job', 'job_id', '/PRIVATE/path'),
+    ('bundle_job', 'call_id', True), ('child_report', 'child_session_id', 'x' * 201),
+    ('child_event', 'call_id', 'PRIVATE value'),
+    ('bundle_turn', 'call_id', 'unexpected-call'),
+    *[('child_report', 'report_index', value) for value in (True, False, -1, 2**31, 1.5, '1', None)],
+])
+def test_callback_rejection_revalidates_bad_identity_fields(callback, key, value):
+    from amplifier_web.support_diagnostics import event_detail
+    raw = {'type': 'command.rejected', 'callback_kind': callback, 'reason': 'invalid_activation',
+           'delivery': 'not_admitted', 'outcome': 'unknown', key: value,
+           'input_id': value if key == 'input_id' else 'unexpected-input',
+           'private_payload': 'PRIVATE'}
+    _, payload = normalize_event(raw, 'host')
+    assert key not in payload and key not in event_detail(raw)
+    assert key not in event_detail({**payload, key: value})
+    if callback != 'input':
+        assert 'input_id' not in payload and 'input_id' not in event_detail(raw)
+    assert 'PRIVATE' not in json.dumps(payload)
+
+
+@pytest.mark.parametrize('patch', [
+    {'callback_kind': 'unexpected'}, {'callback_kind': ['input']},
+    {'reason': 'PRIVATE'}, {'delivery': 'admitted'}, {'outcome': 'none'},
+])
+def test_callback_rejection_requires_fixed_envelope(patch):
+    from amplifier_web.support_diagnostics import event_detail
+    raw = {'type': 'command.rejected', 'callback_kind': 'input', 'reason': 'invalid_activation',
+           'delivery': 'not_admitted', 'outcome': 'unknown', 'input_id': 'original-input', **patch}
+    _, payload = normalize_event(raw, 'host')
+    assert payload == {'sessionId': 'host', 'event': 'command.rejected',
+                       'errorType': None, 'error': 'command.rejected'}
+    assert event_detail(raw) == {'type': 'command.rejected'}
+
+
+def test_generic_command_rejection_is_unchanged():
+    assert normalize_event({'type': 'command.rejected', 'reason': 'no_active_job',
+        'input_id': 'original-input', 'delivery': 'not_admitted', 'outcome': 'unknown',
+        'job_id': 'not-a-callback', 'payload': 'PRIVATE'}, 'host', 'current-input') == (
+        'runtime.error', {'sessionId': 'host', 'error': 'no_active_job',
+                          'event': 'command.rejected', 'errorType': None})
+
+
 class NormalizationTests(unittest.TestCase):
     def test_child_identity_remains_distinct_from_parent(self):
         kind,payload=normalize_event({'type':'child.updated','sessionId':'child','status':'idle','agent':'foundation:explorer'},'parent')

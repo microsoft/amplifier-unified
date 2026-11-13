@@ -110,6 +110,198 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result,{'costType':'unavailable'})
 
 
+class TruncationFailureTests(unittest.IsolatedAsyncioTestCase):
+    """Offline typed provider boundary, not a reproduction of paid inference."""
+
+    async def test_certified_call_projects_terminal_and_sanitized_report(self):
+        import json
+        from amplifier_module_provider_openai._response_handling import FunctionCallTruncationError
+        from amplifier_module_loop_live.failures import ManagerTurnError, turn_failure
+        from amplifier_web.feedback_diagnostics import failure_report
+        from amplifier_web.session_health import generation_failure, terminal_exception_failure
+        from amplifier_web.support_diagnostics import exception_chain
+        error = FunctionCallTruncationError('PRIVATE arguments /private/path', provider='fixture')
+        events = ExecutionEvents('root', lambda _: None)
+        events.lifecycle({'type': 'generation.started', 'generation_id': 'g', 'initial_input_id': 'i'})
+        events.lifecycle({'type': 'input.delivered', 'input_id': 'i'})
+        class Provider:
+            def get_info(self):
+                return SimpleNamespace(id='fixture', defaults={})
+            async def complete(self, request):
+                raise error
+        provider = events.instrument_provider('root', Provider())
+        with self.assertRaises(FunctionCallTruncationError):
+            await provider.complete(SimpleNamespace(model='fixture'))
+        row = next(iter(events.nodes.values()))
+        self.assertEqual((row['generationId'], row['admissionInputId'], row['phase']), ('g', 'i', 'error'))
+        self.assertEqual(row['failure']['code'], 'function_call_truncated')
+        native = turn_failure(error)
+        wrapper = ManagerTurnError(native)
+        wrapper.__cause__ = error
+        session = {'id': 'root', 'status': 'error',
+            'failure': {**generation_failure(native), 'generationId': 'g', 'inputIds': ['i'], 'recordedAt': 2},
+            'generations': [{'event': 'generation.failed', 'generation_id': 'g', 'input_ids': ['i'], **native}]}
+        capture = {'generationId': 'g', 'inputIds': ['i'], 'errorType': native['error_type'],
+                   'exceptionChain': exception_chain(wrapper)}
+        session['failure'] = terminal_exception_failure(session, capture)
+        report = failure_report(session)
+        self.assertEqual(report['code'], 'function_call_truncated')
+        self.assertEqual(report['stage'], 'provider_request')
+        self.assertEqual(report['nativeFailure'], {'category': 'unknown', 'errorType': 'LLMError',
+                         'stage': 'provider_request', 'retryable': False})
+        self.assertIs(report['retryable'], False)
+        self.assertEqual(report['exceptionChain'][1]['errorType'], 'FunctionCallTruncationError')
+        self.assertEqual(report['exceptionChain'][1]['providerFailure'], {'code': 'function_call_truncated'})
+        self.assertNotIn('PRIVATE', json.dumps([row['failure'], session['failure'], report]))
+        self.assertNotIn('/private/path', json.dumps(report))
+
+    async def test_typed_call_failure_reaches_exact_terminal_and_opt_in_report(self):
+        import json
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from amplifier_module_provider_openai._response_handling import FunctionCallTruncationError
+        from amplifier_module_loop_live.failures import ManagerTurnError, turn_failure
+        from amplifier_web.service import AppService
+        from amplifier_web.support_diagnostics import exception_chain
+
+        private = 'PRIVATE_PROVIDER_BODY_TOOL_ARGUMENTS_AND_PATH'
+        error = FunctionCallTruncationError(private, provider='fixture', model=private)
+        class Provider:
+            calls = 0
+            def get_info(self):
+                return SimpleNamespace(id='fixture', defaults={'model': 'fixture'})
+            async def complete(self, request):
+                self.calls += 1
+                raise error
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {
+            key: str(Path(folder) / key) for key in (
+                'AMPLIFIER_WEB_HOME', 'AMPLIFIER_HOME', 'AMPLIFIER_SESSION_STATE_HOME', 'AMPLIFIER_TERMINAL_HOME')
+        }):
+            app = AppService(Path(folder) / 'app', workspace=folder)
+            try:
+                await app.dispatch('session.create', {})
+                session = app._session()
+                app._message(session, 'user', 'Offline fixture', inputId='i')
+                emitted = []
+                events = ExecutionEvents(session['id'], emitted.append)
+                start = {'type': 'generation.started', 'generation_id': 'g',
+                         'initial_input_id': 'i', 'input_ids': ['i'], 'observedAt': 1}
+                events.lifecycle(start)
+                events.lifecycle({'type': 'input.delivered', 'input_id': 'i'})
+                await app.on_runtime_event(*normalize_event(start, session['id']))
+                provider = events.instrument_provider(session['id'], Provider())
+                with self.assertRaises(FunctionCallTruncationError):
+                    await provider.complete(SimpleNamespace(model='fixture'))
+                for event in emitted:
+                    await app.on_runtime_event(*normalize_event(event, session['id']))
+                observed = next(row['event']['failure'] for row in emitted if row['event'].get('failure'))
+                self.assertEqual(observed['code'], 'function_call_truncated')
+                self.assertFalse(session.get('failure'))  # A failed call alone is not a failed turn.
+
+                native = turn_failure(error)
+                self.assertEqual((native['error_type'], native['error_category'], native['error_stage']),
+                                 ('LLMError', 'unknown', 'provider_request'))
+                terminal = {'type': 'generation.failed', 'generation_id': 'g',
+                            'input_ids': ['i'], 'observedAt': 2, **native}
+                await app.on_runtime_event(*normalize_event(terminal, session['id']))
+                self.assertEqual(session['failure']['category'], 'unknown')
+                recorded = session['failure']['recordedAt']
+                wrapper = ManagerTurnError(native)
+                wrapper.__cause__ = error
+                supplement = {'type': 'runtime.error', 'terminalFailure': {
+                    'generationId': 'g', 'inputIds': ['i'], 'errorType': native['error_type'],
+                    'exceptionChain': exception_chain(wrapper)}}
+                await app.on_runtime_event(*normalize_event(supplement, session['id']))
+                # A later generic worker exit must not overwrite this exact diagnosis.
+                await app.on_runtime_event('runtime.error', {'sessionId': session['id'],
+                    'errorType': 'RuntimeError', 'error': 'The worker failed.'})
+                failure = session['failure']
+                self.assertEqual((failure['category'], failure['code'], failure['stage']),
+                                 ('invalid_request', 'function_call_truncated', 'provider_request'))
+                self.assertEqual(failure['errorType'], 'LLMError')
+                self.assertEqual(failure['nativeFailure'], {'category': 'unknown', 'errorType': 'LLMError',
+                    'stage': 'provider_request', 'retryable': False})
+                self.assertEqual(failure['recordedAt'], recorded)
+                self.assertEqual(failure['effects'], 'not_rolled_back')
+                self.assertIs(failure['retryable'], False)
+                self.assertIn('This incomplete call was not run.', failure['guidance'])
+                self.assertIn('Earlier actions may already have had effects.', failure['guidance'])
+                self.assertIn('explicitly ask for a smaller step or chunked output', failure['guidance'])
+                self.assertNotIn('not sent', failure['guidance'])
+                self.assertNotIn('recovery copy', failure['guidance'])
+
+                context = {'sessionId': session['id'], 'generationId': 'g', 'inputId': 'i'}
+                preview = await app.dispatch('feedback.diagnostics', {'failureContext': context})
+                facts = preview['result']['diagnostics']
+                report = facts['failureReport']
+                self.assertEqual(report['code'], 'function_call_truncated')
+                self.assertEqual(report['stage'], 'provider_request')
+                self.assertIs(report['retryable'], False)
+                self.assertEqual(report['nativeFailure'], failure['nativeFailure'])
+                self.assertEqual(report['exceptionChain'][1]['errorType'], 'FunctionCallTruncationError')
+                self.assertNotIn(private, json.dumps([failure, facts]))
+                args = {'requestId': 'truncation-report', 'title': 'Fixture', 'body': 'Offline test',
+                        'category': 'bug', 'includeDiagnostics': True, 'failureContext': context}
+                app.feedback.accept(args)
+                frozen = app.feedback.diagnostics({'requestId': args['requestId']})['diagnostics']
+                session['failure'] = {'category': 'authentication'}
+                self.assertEqual(app.feedback.diagnostics({'requestId': args['requestId']})['diagnostics'], frozen)
+                self.assertEqual(provider.calls, 1)
+                self.assertEqual(len(app.state['sessions']), 1)
+                self.assertFalse(any(row.get('kind') == 'tool' for row in events.nodes.values()))
+            finally:
+                await app.close()
+
+    def test_truncation_cannot_be_inferred_from_names_text_handled_cause_or_other_scope(self):
+        import copy
+        from amplifier_core.llm_errors import LLMError
+        from amplifier_module_provider_openai._response_handling import FunctionCallTruncationError
+        from amplifier_module_loop_live.failures import ManagerTurnError, turn_failure
+        from amplifier_web.session_health import (
+            exception_details, failure_details, generation_failure, request_call_failure, terminal_exception_failure)
+        from amplifier_web.support_diagnostics import exception_chain, terminal_exception_capture
+        error = FunctionCallTruncationError('PRIVATE', provider='fixture')
+        native = turn_failure(error)
+        wrapper = ManagerTurnError(native)
+        wrapper.__cause__ = error
+        capture = {'generationId': 'g', 'inputIds': ['i'], 'errorType': 'LLMError',
+                   'exceptionChain': exception_chain(wrapper)}
+        session = {'id': 'root', 'status': 'error',
+            'generations': [{'event': 'generation.failed', 'generation_id': 'g',
+                             'input_ids': ['i'], **native}],
+            'failure': {**generation_failure(native), 'generationId': 'g', 'inputIds': ['i'], 'recordedAt': 2}}
+        spoof = type('FunctionCallTruncationError', (Exception,), {
+            '__module__': FunctionCallTruncationError.__module__})('function call output limit')
+        handled = LLMError('unclassified', provider='fixture')
+        handled.__context__ = error
+        for unknown in (spoof, handled, LLMError('FunctionCallTruncationError: max output tokens')):
+            with self.subTest(unknown=type(unknown).__name__):
+                self.assertEqual(exception_details(unknown)['category'], 'unknown')
+        self.assertEqual(failure_details('function call output limit', 'FunctionCallTruncationError')['category'], 'unknown')
+        wrapper.__cause__ = handled  # The real truncation is deeper, previously handled.
+        stale = {**capture, 'exceptionChain': exception_chain(wrapper)}
+        self.assertEqual(terminal_exception_failure(session, stale)['category'], 'unknown')
+        for change in ({'generationId': 'other'}, {'inputIds': ['other']}, {'errorType': 'ValueError'}):
+            with self.subTest(change=change):
+                self.assertIsNone(terminal_exception_failure(session, {**capture, **change}))
+        stopped = {**session, 'status': 'stopped'}
+        self.assertIsNone(terminal_exception_failure(stopped, capture))
+        uncertified = copy.deepcopy(capture)
+        uncertified['exceptionChain'][1].pop('providerFailure')
+        self.assertIsNone(terminal_exception_capture(uncertified))
+        row = {'sessionId': 'root', 'generationId': 'g', 'admissionInputId': 'i',
+               'failure': exception_details(error)}
+        for change in ({}, {'sessionId': 'child'}, {'generationId': 'other'},
+                       {'admissionInputId': 'other'}, {'lifecycle': 'background'}, {'purpose': 'context_compaction'}):
+            with self.subTest(scope=change):
+                # Even a same-input observed subtype cannot explain a generic
+                # native LLMError without its exact certified terminal capture.
+                current = {**session, 'execution': {'nodes': [{**row, **change}]}}
+                self.assertIsNone(request_call_failure(current, ['i'], 'g', 'LLMError'))
+
+
 def test_worker_report_and_tool_failure_have_metadata_without_payload_copies():
     events=ExecutionEvents('root',lambda event:None)
     events.hook('root','tool:pre',{'tool_call_id':'call','tool_name':'bash','tool_input':{'command':'ls -la','token':'user data'}})

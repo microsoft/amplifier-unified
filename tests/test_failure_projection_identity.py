@@ -327,3 +327,60 @@ async def test_delayed_final_message_uses_first_accepted_terminal(app, late):
     assert target['messages'][-1]['response']['status'] == 'completed'
     await app.on_runtime_event('assistant.message', message)
     assert target['messages'][-1]['response']['status'] == 'completed'
+
+
+@pytest.mark.parametrize('state', ['active', 'finished', 'stopped'])
+@pytest.mark.parametrize('callback,identity', [
+    ('input', {'input_id': 'rejected-original-input'}),
+    ('child_report', {'child_session_id': 'rejected-child', 'call_id': 'rejected-call', 'report_index': 3}),
+    ('child_event', {'child_session_id': 'rejected-child', 'call_id': 'rejected-call', 'report_index': 0}),
+    ('bundle_turn', {}),
+    ('bundle_job', {'job_id': 'rejected-job', 'call_id': 'rejected-call'}),
+])
+async def test_callback_rejection_reaches_local_inspection_without_replaying_or_relabeling(app, state, callback, identity):
+    import json
+    from amplifier_web.execution import ensure_turn
+    from amplifier_web.feedback_diagnostics import failure_report
+    from amplifier_web.input_status import annotate
+    from test_collaborative_workspaces import until
+
+    target = app.state['sessions'][1]
+    ensure_turn(target, 'saved-input')
+    await observed(app, target, 'started')
+    if state == 'finished':
+        await observed(app, target, 'finished')
+    elif state == 'stopped':
+        await app.dispatch('conversation.stop', {'sessionId': target['id']}, command_id='actual-stop')
+        await until(lambda: target['status'] == 'stopped')
+    before = copy.deepcopy(annotate(target, {'role': 'user', 'inputId': 'saved-input'})['inputStatus'])
+    commands = app.db.execute('SELECT id, receipt FROM commands ORDER BY id').fetchall()
+    metadata = {'callback_kind': callback, 'reason': 'invalid_activation',
+                'delivery': 'not_admitted', 'outcome': 'unknown', **identity}
+    # Real Runtime.emit attaches session provenance, not a command generation.
+    event = normalize_event({'type': 'command.rejected', 'session_id': target['id'],
+                             **metadata, 'payload': 'PRIVATE'}, target['id'], 'saved-input')
+    assert 'generationId' not in event[1]
+    await app.on_runtime_event(*event)
+    stored = target['runtimeEvents'][-1]
+    assert {key: stored[key] for key in metadata} == metadata
+    assert stored['generationId'] == 'saved-generation'  # Existing host store correlation.
+    if state == 'active':
+        assert target['status'] == 'error' and target.get('failure')
+        status = annotate(target, {'role': 'user', 'inputId': 'saved-input'})['inputStatus']
+        assert status['phase'] == 'unknown'  # Not_admitted is not proof of no earlier effects.
+    else:
+        assert not target.get('failure') and not target.get('error')
+        assert target['status'] == ('stopped' if state == 'stopped' else 'idle')
+        assert annotate(target, {'role': 'user', 'inputId': 'saved-input'})['inputStatus'] == before
+        assert stored['scope'] == 'runtime'
+    report = (await app.dispatch('session.inspect', {'id': target['id']}))['result']
+    for rows in (report['timeline'], report['runtimeFaults']):
+        detail, = [row for row in rows if row.get('event') == 'command.rejected']
+        assert {key: detail[key] for key in metadata} == metadata
+    assert report['workReplayed'] is False
+    assert 'PRIVATE' not in json.dumps(report)
+    shared = json.dumps(failure_report(target))
+    assert all(value not in shared for value in identity.values() if isinstance(value, str))
+    assert 'callback_kind' not in shared and 'report_index' not in shared
+    assert app.db.execute('SELECT id, receipt FROM commands ORDER BY id').fetchall() == commands
+    assert not app.runtime.inputs
