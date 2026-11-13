@@ -525,6 +525,9 @@ def no_resume_dispatch(monkeypatch):
     import socket
     import subprocess
 
+    # Metadata discovery itself intentionally uses a subprocess. Supply synthetic
+    # package metadata here; decision-account tests replace it with their catalog.
+    monkeypatch.setattr("amplifier_web.decision_accounts.catalogs", lambda: {})
     attempts = []
 
     def block(name):
