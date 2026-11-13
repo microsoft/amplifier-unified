@@ -256,6 +256,24 @@ jobs:
       - name: Run fixed multi-quote source and installed proof
         if: ${{ inputs.multi_quote }}
         run: uv run --no-sync python scripts/multi_quote_checks.py --output output/multi-quote --installed
+      - name: Retain captured browser outcome as JUnit without changing its verdict
+        if: ${{ always() && inputs.captured_message_delivery }}
+        run: |
+          python - <<'PY'
+          import json, xml.etree.ElementTree as ET
+          from pathlib import Path
+          output = Path('output/browser-checks')
+          report = json.loads((output / 'results.json').read_text())
+          row, = report['scenarios']
+          assert row['id'] == 'message-delivery'
+          passed = row['status'] == 'passed' and row['exitCode'] == 0
+          suite = ET.Element('testsuite', name='captured-message-delivery', tests='1', failures=str(int(not passed)))
+          case = ET.SubElement(suite, 'testcase', name=row['id'], classname='actual-host-browser')
+          if not passed:
+              log = output / 'message-delivery.log'
+              ET.SubElement(case, 'failure', message=row['status']).text = log.read_text() if log.exists() else json.dumps(row)
+          ET.ElementTree(suite).write(output / 'captured-browser.xml', encoding='utf-8', xml_declaration=True)
+          PY
       - name: Preserve failed attachment contracts
         if: ${{ always() && inputs.attachment_consumption && (steps.attachment-contracts.outcome != 'success' || steps.attachment-client-contracts.outcome != 'success') }}
         run: exit 1
