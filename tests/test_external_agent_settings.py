@@ -188,3 +188,42 @@ async def test_external_creation_never_allocates_a_new_folder(app_factory, tmp_p
     with pytest.raises(AppError, match='existing workspace'):
         await service.dispatch('session.create', args)
     assert not path.exists() and not service.state['sessions']
+
+
+async def test_add_recovers_saved_config_after_command_receipt_failure(app_factory, tmp_path, monkeypatch):
+    service = app_factory()
+    row = peer(tmp_path)
+    row.pop('id')
+    args = {'agent': row}
+    writes = []
+    original_save = external_agent_settings.save_server_config
+
+    def record_save(*values, **kwargs):
+        result = original_save(*values, **kwargs)
+        writes.append(copy.deepcopy(result['externalAgents']))
+        return result
+
+    def fail_receipt():
+        raise RuntimeError('injected post-config receipt failure')
+
+    monkeypatch.setattr(external_agent_settings, 'save_server_config', record_save)
+    monkeypatch.setattr(service.shell, 'stage_action_receipt', fail_receipt)
+    with pytest.raises(RuntimeError, match='post-config receipt failure'):
+        await service.dispatch('externalAgents.save', args, command_id='recover-external-add')
+    published = load_server_config(service.data_dir)['externalAgents']
+    assert len(published) == 1 and len(writes) == 1
+    assert service.db.execute('SELECT 1 FROM commands WHERE id=?', ('recover-external-add',)).fetchone() is None
+    await service.close()
+    reopened = app_factory()
+    with pytest.raises(AppError, match='changed') as conflict:
+        await reopened.dispatch('externalAgents.save', {'agent': {**row, 'label': 'Different'}},
+                                command_id='recover-external-add')
+    assert conflict.value.status == 409
+    receipt = await reopened.dispatch('externalAgents.save', args, command_id='recover-external-add')
+    assert receipt['accepted'] and receipt['result']['recovered']
+    assert receipt['result']['savedId'] == published[0]['id']
+    assert load_server_config(reopened.data_dir)['externalAgents'] == published
+    assert reopened.server_config['externalAgents'] == published and len(writes) == 1
+    assert (await reopened.dispatch('externalAgents.save', args, command_id='recover-external-add'))['duplicate']
+    assert reopened.db.execute('SELECT 1 FROM commands WHERE id=?', ('recover-external-add',)).fetchone()
+    assert not (tmp_path / 'peer').exists() and not reopened.runtime.started

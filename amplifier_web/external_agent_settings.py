@@ -59,12 +59,15 @@ def read(service, identity):
             ('id', 'label', 'command', 'args', 'cwd', 'sessionCwd') if key in row})}
 
 
-def mutate(service, action, args):
+def mutate(service, action, args, command_id=None):
     """Called under the host action lock; save before changing the live selection."""
     selected = None
+    generated = False
     if action == 'externalAgents.save':
         selected = copy.deepcopy(args['agent'])
-        selected.setdefault('id', str(uuid.uuid4()))
+        generated = 'id' not in selected
+        selected.setdefault('id', str(uuid.uuid5(uuid.NAMESPACE_URL,
+            'amplifier-external-agent:' + command_id) if command_id else uuid.uuid4()))
         try:
             selected = endpoint({'externalAgents': [selected]}, selected['id'])
         except ValueError as exc:
@@ -78,7 +81,11 @@ def mutate(service, action, args):
     rows = list(_rows(config))
     index = next((index for index, row in enumerate(rows)
                   if isinstance(row, dict) and row.get('id') == identity), None)
-    if index is not None and args.get('expectedRevision') != revision(rows[index]):
+    # The private file can commit before the ordinary command receipt. Recover
+    # that exact creation without publishing a second row or replaying a write.
+    recovered = bool(generated and command_id and index is not None
+                     and args.get('expectedRevision') is None and rows[index] == selected)
+    if index is not None and not recovered and args.get('expectedRevision') != revision(rows[index]):
         raise AppError('This external agent changed. Reload its settings before saving or removing it.', 409)
     if index is None and args.get('expectedRevision') is not None:
         raise AppError('This external agent was removed. Reload its settings before saving it.', 409)
@@ -86,6 +93,8 @@ def mutate(service, action, args):
         if index is None:
             raise AppError('This external agent is not configured on this host.', 404)
         rows.pop(index)
+    elif recovered:
+        pass
     elif index is None:
         rows.append(selected)
     else:
@@ -98,11 +107,12 @@ def mutate(service, action, args):
                    if key not in {'id', 'label', 'command', 'args', 'cwd', 'sessionCwd'}}
         rows[index] = {**unknown, **selected}
     try:
-        saved = save_server_config(service.data_dir, {**config, 'externalAgents': rows})
+        saved = config if recovered else save_server_config(service.data_dir, {**config, 'externalAgents': rows})
     except OSError:
         raise AppError('The host could not save external agent settings. Check its configuration storage.', 500) from None
     if getattr(service, 'server_config', None) is None:
         service.server_config = saved
     else:
         service.server_config['externalAgents'] = saved['externalAgents']
-    return {**catalog(service), **({'savedId': identity} if selected is not None else {})}
+    return {**catalog(service), **({'savedId': identity} if selected is not None else {}),
+            **({'recovered': True} if recovered else {})}

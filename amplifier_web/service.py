@@ -3184,7 +3184,7 @@ class AppService:
                 self.state['runtime']['retention'] = dict(policy)
             elif action in {'externalAgents.save', 'externalAgents.remove'}:
                 from .external_agent_settings import mutate
-                diagnostic_result = mutate(self, action, args)
+                diagnostic_result = mutate(self, action, args, command_id)
             elif action == "session.naming.backfill":
                 backfill = getattr(self, 'naming_backfill', None)
                 if backfill is None:

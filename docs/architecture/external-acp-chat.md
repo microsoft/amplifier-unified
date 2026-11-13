@@ -24,7 +24,10 @@ one private launch configuration only when editing it; that read is not stored i
 shared command receipts. Authenticated users and agents with existing global
 `connections` authority (including standing Full access) use the same actions:
 `externalAgents.list`, `.get`, `.save` and `.remove`. Adding an entry may omit its
-ID; the host returns a stable `savedId`. Editing and removing require the current
+ID; the host derives a stable `savedId` from the command identity. If the private
+file was saved but its command receipt was not, retrying that same command
+recovers the identical saved entry without another write; different contents
+conflict. Editing and removing require the current
 `expectedRevision` from the list or detail. Removing a connection preserves its
 chats, history and already accepted work; it prevents a later new send through
 that removed entry.
