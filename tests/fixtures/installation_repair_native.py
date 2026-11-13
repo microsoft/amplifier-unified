@@ -522,10 +522,14 @@ def new_operation(config, fixture, env):
     return folder
 
 
-def worker_command(fixture, folder, *, verify=False, reconcile=False):
+def worker_command(fixture, folder, *, verify=False, reconcile=False, host_instance=None):
     check(not (verify and reconcile), 'choose one worker inspection mode')
+    if reconcile:
+        check(isinstance(host_instance, str) and str(uuid.UUID(host_instance)) == host_instance,
+              'reconciliation requires the exact current service UUID')
     return [fixture['basePython'], '-I', '-S', str(folder / 'installation_repair_worker.py'),
-            *(['--verify'] if verify else ['--reconcile'] if reconcile else []), str(folder)]
+            *(['--verify'] if verify else ['--reconcile'] if reconcile else []), str(folder),
+            *([host_instance] if reconcile else [])]
 
 
 def snapshot(config):
@@ -640,7 +644,8 @@ def run_case(root, evidence, name, fixture, transport):
     if name == 'reconcile':
         # A real accepted admission was never dispatched. Reconcile proves the
         # original live host and closes it before a late run can have effects.
-        execute(*worker_command(fixture, folder, reconcile=True), env=env)
+        proof_host = request(config, '/api/health')['hostInstanceId']
+        execute(*worker_command(fixture, folder, reconcile=True, host_instance=proof_host), env=env)
     if name == 'happy':
         wait_for(lambda: (case / 'probe-waiting').exists(), description='candidate barrier')
         before = snapshot(config)
@@ -695,7 +700,8 @@ def run_case(root, evidence, name, fixture, transport):
     check((folder / 'child-boundary.json').exists() == (name not in {'namespace-lease', 'reconcile'}),
           'repair child spawn-intent evidence does not match case')
     if name == 'reconcile':
-        check(receipt['stage'] == 'reconciled-no-effect' and receipt['reconciliation']['noReplacement'] is True,
+        check(receipt['stage'] == 'reconciled-no-effect' and receipt['reconciliation']['noReplacement'] is True
+              and receipt['reconciliation']['hostInstanceId'] == proof_host,
               'pre-effect reconciliation did not close the exact admission')
     if name == 'namespace-lease':
         check(receipt['stage'] == 'preflight-failed' and receipt.get('errorType') == 'RuntimeError'

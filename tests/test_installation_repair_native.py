@@ -109,7 +109,11 @@ class NativeRepairHarnessTests(unittest.TestCase):
         self.assertEqual(ordinary[:3], ['/outside/python3.13', '-I', '-S'])
         self.assertEqual(ordinary[3:], [str(folder / 'installation_repair_worker.py'), str(folder)])
         self.assertEqual(native.worker_command(fixture, folder, verify=True)[-2:], ['--verify', str(folder)])
-        self.assertEqual(native.worker_command(fixture, folder, reconcile=True)[-2:], ['--reconcile', str(folder)])
+        host = '12345678-1234-4234-8234-123456789abc'
+        self.assertEqual(native.worker_command(fixture, folder, reconcile=True, host_instance=host)[-3:],
+                         ['--reconcile', str(folder), host])
+        with self.assertRaisesRegex(RuntimeError, 'exact current service UUID'):
+            native.worker_command(fixture, folder, reconcile=True)
         with self.assertRaisesRegex(RuntimeError, 'one worker inspection'):
             native.worker_command(fixture, folder, verify=True, reconcile=True)
 

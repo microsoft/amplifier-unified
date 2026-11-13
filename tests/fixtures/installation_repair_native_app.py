@@ -73,7 +73,7 @@ def current_admission(home):
     return value['current']
 
 
-def dispatch(home, instance, folder, *, launch=True):
+def dispatch(home, instance, host_instance, folder, *, launch=True):
     from . import installation_repair as controller, installation_repair_worker as worker, reset
     plan = worker.read(folder / 'plan.json')
     config = json.loads((home / 'fixture.json').read_text())
@@ -84,7 +84,7 @@ def dispatch(home, instance, folder, *, launch=True):
     plan.update(
         recoverySchema=1,
         home=str(home), dataStat=[info.st_dev, info.st_ino], uid=os.getuid(),
-        hostInstanceId=instance,
+        hostInstanceId=host_instance,
         runningIdentity={'version': config['version'], 'revision': config['revision'], 'instanceId': instance},
         bootstrap=worker.bootstrap_identity(Path(plan['toolRoot']) / 'amplifier-unified'),
         launcher=worker.file_identity(Path(plan['binRoot']) / 'amplifier-unified'),
@@ -94,7 +94,7 @@ def dispatch(home, instance, folder, *, launch=True):
                  'processStart': subprocess.check_output(
                      ['ps', '-p', str(os.getpid()), '-o', 'lstart='], text=True).strip()})
     operation = worker.read(folder / 'operation.json')
-    operation['hostInstanceId'] = instance
+    operation['hostInstanceId'] = host_instance
     worker.write(folder / 'plan.json', plan)
     worker.write(folder / 'operation.json', operation)
     # This is a controlled fixture admission, NOT production confirm/binding.
@@ -135,6 +135,7 @@ def main():
     from . import reset
     token = (home / 'config/auth/control-token').read_text().strip()
     instance = uuid.uuid4().hex
+    host_instance = str(uuid.uuid4())
     stamp = json.loads(Path(__file__).with_name('release-source.json').read_text())
     stopping = False
 
@@ -167,6 +168,7 @@ def main():
                 return self.reply(403, {})
             operation = current_admission(home)
             self.reply(200, {'ok': True, 'app': 'amplifier-unified', 'instanceId': instance,
+                            'hostInstanceId': host_instance,
                             'dataIdentity': hashlib.sha256(str(home).encode()).hexdigest(),
                             'version': stamp['version'], 'revision': stamp['revision'],
                             'installationRepair': {'protocol': 1, 'operationId': operation}})
@@ -178,7 +180,7 @@ def main():
             raw = self.rfile.read(min(int(self.headers.get('Content-Length', 0)), 1024))
             identity = json.loads(raw)['operationId']
             assert len(identity) == 32 and all(c in '0123456789abcdef' for c in identity)
-            dispatch(home, instance, home / 'installation-repair' / identity,
+            dispatch(home, instance, host_instance, home / 'installation-repair' / identity,
                      launch=self.path == '/fixture-dispatch')
             self.reply(200, {'admitted': identity})
 
