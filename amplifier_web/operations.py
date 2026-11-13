@@ -444,6 +444,8 @@ class Operations:
                 if not callable(supports) or await supports(sid) is not True:
                     return self.requests.finish(receipt, 'rejected', error={
                         'message': 'This runtime cannot enforce integration admission. No validation command was submitted.'})
+            from .installation_repair import guard as repair_guard
+            repair_guard(self.service)
             response = await runtime.control(sid, action, {**payload, "actor": origin})
             result = response.get("result", response)
             if result.get("success") is False:

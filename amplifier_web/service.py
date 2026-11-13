@@ -226,6 +226,9 @@ ACTION_DEFINITIONS = {
     "maintenance.reset": ("Preview or reset selected app data; success replaces the previous reset recovery point",schema({"parts":{"type":"array","items":{"enum":["runtime","cache","settings","conversations"]}},"apply":{"type":"boolean"},"confirmation":string(20)},["parts"])),
     "maintenance.resetCleanup": ("Retry older successful reset recovery cleanup without repeating the reset",schema({},[])),
     "maintenance.repair": ("Repair runtime dependency installation while idle",schema()),
+    "maintenance.installationRepairPreview": ("Preview an installation-only repair of this managed host, preserving user data, downloaded sources, optional features and unknown receipts.", schema()),
+    "maintenance.installationRepairConfirm": ("Explicitly confirm one exact installation repair preview. A detached helper qualifies a fresh candidate before stopping the idle host. Never repeat an unknown operation; read status by previewId.", schema({"previewId": {"type":"string","pattern":"^[a-f0-9]{32}$"},"hostInstanceId":string(200),"confirm":{"enum":[True]}}, ["previewId","hostInstanceId","confirm"])),
+    "maintenance.installationRepairStatus": ("Inspect the authoritative installation repair receipt without dispatching or replaying it. Choose an exact operationId or previewId; neither returns the latest operation.", schema({"operationId":{"type":"string","pattern":"^[a-f0-9]{32}$"},"previewId":{"type":"string","pattern":"^[a-f0-9]{32}$"}}, [])),
     "updates.app": ("Stage a published application release and restart when idle",schema()),
     "updates.featureInstall": ("Explicitly add optional browser, decision-provider or native observation support to the same serving app revision, preserving installed dependencies and extras. Qualifies an isolated candidate, installs and restarts through existing idle/queue guards. Does not configure a model, grant OS permission or grant control. Inspect updates.featureResults for the durable outcome; do not replay an unknown result.", schema({"feature":{"enum":["native-desktop","managed-browser","decisions-openai","decisions-azure","decisions-jev","decisions-local"]},"hostInstanceId":string(200)})),
     "updates.smartToolRollback": ("Restore the previous installed Smart Tool revision when idle; preserves conversation history.", schema({"id":string(200)},["id"])),
@@ -656,6 +659,8 @@ class AppService:
         upgrade(self)
         from .cold_display import compact_execution_references
         compact_execution_references(self._state, self.db)
+        from .installation_repair import initialize as initialize_installation_repair
+        initialize_installation_repair(self)
         from .chat_navigation import initialize as initialize_chat_navigation
         initialize_chat_navigation(self.state)
         from .conversation_library import ConversationLibrary
@@ -1787,6 +1792,8 @@ class AppService:
     @asynccontextmanager
     async def runtime_lifecycle(self):
         """Serialize and track a runtime-retiring operation during host shutdown."""
+        from .installation_repair import guard as repair_guard
+        repair_guard(self)
         if self.closed:
             raise RuntimeError("The runtime host is closing.")
         task = asyncio.current_task()
@@ -1800,6 +1807,7 @@ class AppService:
                 # it owns the exclusion, before it can mutate state or run work.
                 if self.closed:
                     raise RuntimeError("The runtime host is closing.")
+                repair_guard(self)
                 yield
         finally:
             self._runtime_lifecycle_tasks.discard(task)
@@ -2027,6 +2035,12 @@ class AppService:
             raise AppError(str(exc)) from None
         from .workspace_work_effects import guard as work_effect_guard
         work_effect_guard(self, action, args, origin, caller_session_id)
+        from .installation_repair import blocks_action as repair_blocks_action, guard as repair_guard
+        if repair_blocks_action(action, args):
+            try:
+                repair_guard(self)
+            except ValueError as exc:
+                raise AppError(str(exc), 409) from None
         recovery_operator = None
         if (action in {'configuration.operation.read', 'configuration.operation.reconcile', 'configuration.operation.resume', 'configuration.operation.cancel'}
                 and origin not in {'ui', 'user'}
@@ -2227,6 +2241,23 @@ class AppService:
                 raise AppError('Update service is unavailable.')
             from .update_report import collect
             result = await collect(self.update_manager)
+            return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
+        if action.startswith('maintenance.installationRepair'):
+            from . import installation_repair as repair
+            import subprocess
+            try:
+                if action.endswith('Preview'):
+                    result = await repair.preview(self)
+                elif action.endswith('Status'):
+                    result = await repair.status(self, args)
+                else:
+                    if origin not in {'ui', 'user'}:
+                        raise AppError('Installation repair requires an explicit user confirmation of its preview.', 403)
+                    result = await repair.confirm(self, args)
+            except ValueError as exc:
+                raise AppError(str(exc), 409) from None
+            except (OSError, subprocess.SubprocessError):
+                raise AppError('Installation repair could not verify its private evidence. Inspect the saved operation before continuing.', 409) from None
             return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
         if action == 'smartTools.readResult':
             if not self.smart_tools:
@@ -2718,6 +2749,11 @@ class AppService:
                 if external_target and self._session(external_target, hydrate=False).get('externalAgent'):
                     self.external_conversations.guard(self._session(external_target), action, args)
             from .update_drain import held as update_held, new_work as update_new_work
+            if repair_blocks_action(action, args):
+                try:
+                    repair_guard(self)
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from None
             update_message = action == 'conversation.send' and update_held(self) and (args.get('allowNextTurn') is True or not args.get('expectedGenerationId'))
             if work_paused(self.state) and not update_message and update_new_work(action, args):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)

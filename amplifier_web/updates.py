@@ -548,6 +548,9 @@ class UpdateManager:
         return await confirm_readiness(self, health, expected=expected)
 
     def awaiting_restart(self):
+        from .installation_repair import held as repair_held
+        if repair_held(self.service):
+            return True
         from .update_readiness import recovery_candidate
         # A legacy erased-marker receipt must not permanently prevent repairs
         # after an unrelated manual upgrade. Only its active health check gates

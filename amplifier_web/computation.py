@@ -237,6 +237,9 @@ async def dispatch(service, action, args, origin):
                 # generation actions must never restart/replay a lost kernel.
                 await service.management.ensure_runtime(session)
             payload = {key: value for key, value in args.items() if key != "sessionId"}
+            if verb in {'create', 'execute', 'reset'}:
+                from .installation_repair import guard as repair_guard
+                repair_guard(service)
             response = await service.runtime.control(
                 sid, action, {**payload, "actor": origin}
             )
