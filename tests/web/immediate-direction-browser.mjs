@@ -13,7 +13,7 @@ const output=process.env.AMPLIFIER_DIRECTION_EVIDENCE;
 if(output)mkdirSync(output,{recursive:true});
 const results=[];
 for(const scenario of (process.argv.length>2?process.argv.slice(2):['native','ordinary','tool','stale-config','stop'])){
- const fixture=spawn(fixturePython(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),[fileURLToPath(new URL('../../tests/fixtures/immediate_direction_ui_server.py',import.meta.url))],{env:{...process.env,DIRECTION_SCENARIO:scenario},stdio:['ignore','pipe','inherit']});
+ const fixture=spawn(fixturePython(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),['-I',fileURLToPath(new URL('../../tests/fixtures/immediate_direction_ui_server.py',import.meta.url))],{env:{...process.env,DIRECTION_SCENARIO:scenario},stdio:['ignore','pipe','inherit']});
  let browser,page,inspect,ready,stdout='';fixture.stdout.on('data',data=>stdout+=data);
  try{
   ready=await new Promise((resolve,reject)=>{
