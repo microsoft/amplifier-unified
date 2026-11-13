@@ -656,7 +656,7 @@ async def test_public_save_confirm_actual_writer_managed_native_scope(app, tmp_p
         await c.mount('tools', ProgrammaticTool(c), name='tool_exec')
         work_check = AsyncMock(return_value={'allowed': True})
         c.register_capability('web.work_effect_check', work_check)
-        await install_app_access(c, AsyncMock(side_effect=AssertionError('No provider/bridge input expected')))
+        await install_app_access(c, AsyncMock(side_effect=AssertionError('No provider/bridge input expected')), execution_role='root')
         tools = c.get('tools')
         wrapped = tools['apply_patch']
         inspect_tool = c.get_capability('web.work_inspect_tool')

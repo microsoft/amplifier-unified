@@ -42,8 +42,8 @@ async def run():
     await session.coordinator.mount('providers', provider, name='fixture')
     async def bridge(operation, args):
         return {'canvas': {'open': True}, 'operation': operation}
-    await install_app_access(session.coordinator, bridge)
-    await install_app_access(session.coordinator, bridge)  # idempotent
+    await install_app_access(session.coordinator, bridge, execution_role='root')
+    await install_app_access(session.coordinator, bridge, execution_role='root')  # idempotent
     tool = session.coordinator.get('tools')['app_control']
     result = await tool.execute({'operation':'get_state'})
     assert result.success and result.output['canvas']['open']

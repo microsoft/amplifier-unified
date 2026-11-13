@@ -413,7 +413,7 @@ class DirectNativeHost:
             self.bridges.append({"sessionId": row["id"], "operation": operation, "args": copy.deepcopy(args)})
             return await self.app.app_bridge(operation, args, row["id"])
         worker.bridge = bridge
-        await install_app_access(coordinator, worker.app_access_bridge(coordinator))
+        await install_app_access(coordinator, worker.app_access_bridge(coordinator), execution_role='root')
         transform = coordinator.get_capability("web.provider_transform")
         await coordinator.mount("providers", transform(provider), name=provider.name)
         # Deliberately shift context indexes from canonical indexes. The wrapper

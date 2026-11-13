@@ -923,7 +923,7 @@ async def test_direct_script_sponsor_keeps_native_tool_inspection_after_app_boot
     coordinator = Coordinator(Controller())
     coordinator.hooks = HookRegistry()
     coordinator.register_capability("web.work_effect_check", AsyncMock(return_value={"allowed": True}))
-    await install_app_access(coordinator, AsyncMock(return_value={}))
+    await install_app_access(coordinator, AsyncMock(return_value={}), execution_role='root')
     registry = direct.ComputerEpisodes()
     registry.install(coordinator, lambda: ("turn", lambda: True))
     native = SimpleNamespace(name="computer", execute=AsyncMock())
@@ -950,7 +950,7 @@ async def test_host_stop_hook_allows_only_desktop_non_acquiring_routes(name, arg
     coordinator = Coordinator()
     coordinator.hooks = HookRegistry()
     bridge = AsyncMock(return_value={"stopped": True})
-    await install_app_access(coordinator, bridge)
+    await install_app_access(coordinator, bridge, execution_role='root')
     result = await coordinator.hooks.emit("tool:pre", {"tool_name": name, "tool_input": arguments})
     assert (result.action != "deny") is allowed
     if allowed:
@@ -964,7 +964,7 @@ async def test_passive_route_still_runs_work_check_and_preserves_native_inspecti
     coordinator.hooks = HookRegistry()
     check = AsyncMock(return_value={"allowed": False})
     coordinator.register_capability("web.work_effect_check", check)
-    await install_app_access(coordinator, AsyncMock(return_value={}))
+    await install_app_access(coordinator, AsyncMock(return_value={}), execution_role='root')
     registry = ComputerEpisodes()
     sponsor = registry.install(coordinator, lambda: None)
     native = SimpleNamespace(name="desktop", execute=AsyncMock(return_value=ToolResult(success=True)))

@@ -58,7 +58,7 @@ class Probe(Worker):
         self.telemetry = ExecutionEvents(data['id'], publish)
         self.install_activity(c)
         await c.mount('tools', LocalCommand(), name='local_command')
-        await install_app_access(c, self.app_access_bridge(c))
+        await install_app_access(c, self.app_access_bridge(c), execution_role='root')
         self.results = {}
 
         async def observe(event, value):

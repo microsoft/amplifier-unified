@@ -1,6 +1,10 @@
 """Real Core/Foundation mounting must not lend a child its root's identity."""
 import importlib.util
 import asyncio
+import ast
+import json
+import os
+from dataclasses import dataclass
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -10,6 +14,160 @@ import pytest
 
 pytest.importorskip('amplifier_module_loop_live')
 pytest.importorskip('amplifier_module_context_simple')
+from test_collaborative_workspaces import app
+
+
+@pytest.mark.parametrize('scenario', ['optional', 'essential', 'nested-reprepare'])
+async def test_scripted_child_returns_result_after_root_only_refusal(app, tmp_path, monkeypatch, scenario):
+    """Actual Core/Live requests and delegated returns, NOT model compliance.
+
+    The provider is scripted, local work admission is a fixture. Collaboration
+    principal rejection, child installation, nested spawn and results are real.
+    Stop/stale producer coverage remains in test_child_app_assignment_capture.
+    """
+    from amplifier_core import ToolResult
+    from amplifier_core.message_models import ChatResponse, ToolCall, Usage
+    from amplifier_foundation.bundle import Bundle, PreparedBundle, BundleModuleResolver
+    from amplifier_module_loop_live.runtime import Runtime
+    from amplifier_web import runtime_worker
+    from amplifier_web.app_guidance import install_app_access, COMMON_GUIDANCE
+    from amplifier_web.coordination_guidance import PLANNING_GUIDANCE, NATIVE_CHILD_GUIDANCE, ROOT_SCOPE_MESSAGE
+    from amplifier_web.host.children import install_children
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web.host.approvals import Approvals
+    from fixtures.collaboration_native_probe import ScriptedProvider, message_text, tool_output
+
+    providers, effects, requests, late_preparations = {}, [], {}, []
+    registry = None
+
+    class NextStep:
+        name = 'independent_review'
+        description = 'Run the independently authorized synthetic review.'
+        input_schema = {'type': 'object', 'properties': {}, 'additionalProperties': False}
+        def __init__(self, session):
+            self.session = session
+        async def execute(self, args):
+            sid = self.session.session_id
+            effects.append(sid)
+            result = {'review': 'two plus two is four'}
+            if scenario == 'nested-reprepare' and sid == 'child':
+                # Exercise the same host preparation path twice, preserving the
+                # captured child bridge rather than recapturing root inputs.
+                c = self.session.coordinator
+                await registry.host_adapter.prepare_execution(c.get('orchestrator'), c, c.get('providers'))
+                nested = await registry.spawn('worker', 'Independent nested review', self.session,
+                                               sub_session_id='grandchild')
+                result['nested'] = json.loads(nested['output'])
+            return ToolResult(success=True, output=result)
+
+    class Provider(ScriptedProvider):
+        def __init__(self, sid):
+            super().__init__()
+            self.sid = sid
+        async def complete(self, request, **kwargs):
+            self.calls += 1
+            requests.setdefault(self.sid, []).append(request.model_dump_json())
+            # Core may place ephemeral system guidance at the request tail;
+            # inspect the actual composed request, not a presumed role.
+            system = '\n'.join(message_text(m) for m in request.messages)
+            assert system.count(COMMON_GUIDANCE) == 1
+            assert system.count(NATIVE_CHILD_GUIDANCE) == 1
+            assert PLANNING_GUIDANCE not in system
+            for forbidden in ('coordination.send mode:auto', 'coordination.create in the inherited workspace',
+                              'session.handoff.start for independent work', 'Commission complete deliverables'):
+                assert forbidden not in system
+            if self.calls == 1:
+                return self.dispatch('optional-report', 'coordination.send', {
+                    'sessionId': app.state['sessions'][1]['id'], 'mode': 'auto', 'text': 'Review A complete'})
+            if self.calls == 2:
+                row = next(m for m in request.messages if m.role == 'tool' and m.tool_call_id == 'optional-report')
+                assert ROOT_SCOPE_MESSAGE in message_text(row)
+                assert 'End this delegated attempt' not in message_text(row)
+                if scenario == 'essential':
+                    return self.final(json.dumps({'status': 'blocked', 'refusal': ROOT_SCOPE_MESSAGE,
+                        'requestedAction': 'coordination.send', 'effects': []}))
+                return ChatResponse(content=[], tool_calls=[
+                    ToolCall(id='independent-step', name='independent_review', arguments={})],
+                    usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2))
+            assert self.calls == 3
+            review = tool_output(request, 'independent-step')
+            return self.final(json.dumps({'status': 'completed', 'refusal': ROOT_SCOPE_MESSAGE,
+                'requestedAction': 'coordination.send', 'effects': [review]}))
+
+    @dataclass
+    class Prepared(PreparedBundle):
+        async def create_session(self, **kwargs):
+            session = await super().create_session(**kwargs)
+            provider = providers[session.session_id] = Provider(session.session_id)
+            await session.coordinator.mount('providers', provider, name=provider.name)
+            await session.coordinator.mount('tools', NextStep(session), name='independent_review')
+            return session
+
+    plan = {'session': {'orchestrator': {'module': 'loop-live', 'config': {'use_streaming': False}},
+                        'context': {'module': 'context-simple'}},
+            'agents': {'worker': {'instruction': 'Complete two independent synthetic reviews.'}}}
+    paths = {name: Path(importlib.util.find_spec('amplifier_module_' + name.replace('-', '_')).origin).parent
+             for name in ('loop-live', 'context-simple')}
+    prepared = Prepared(plan, BundleModuleResolver(paths),
+                        Bundle(name='guidance-fixture', session=plan['session'], agents=plan['agents']))
+    approvals = Approvals(None, AsyncMock(return_value='deny'))
+    parent = await prepared.create_session(session_id='root', approval_system=approvals)
+    parent.coordinator.register_capability('session.working_dir', str(tmp_path))
+    source = app.state['sessions'][0]
+    source['runtimeSessionId'] = 'root'
+    worker = runtime_worker.Worker()
+    worker.session = parent
+    worker.runtime = SimpleNamespace(generation={'id': 'source-generation', 'input_ids': ['incoming-peer']},
+                                     closed=False, stop_requested=False)
+    worker.activation_gate = SimpleNamespace(current_valid=True)
+    worker.context_inputs = ['incoming-peer']
+    worker.context_bindings = {'incoming-peer': {'clientId': None, 'targets': []}}
+    async def bridge(operation, args):
+        if operation == 'work.effect.check':
+            return {'allowed': True}  # Fixture admission, not a Work authorization claim.
+        if operation in {'context.manifest', 'memory.context', 'coordination.current'}:
+            return {}
+        return await app.app_bridge(operation, args, source['id'])
+    worker.bridge = bridge
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator), execution_role='root')
+    store = SessionStore(tmp_path / 'guidance-children')
+    registry = await install_children(parent, prepared, Runtime('root'), store, approvals)
+    # As in test_provider_capture_live, execute the exact production late
+    # installer, with only its unrelated external activity IO replaced.
+    worker.install_activity = lambda c: late_preparations.append(c.session_id)
+    worker.install_collaboration_checkpoint = lambda c: None
+    original_host = registry.host_adapter
+    tree = ast.parse(Path(runtime_worker.__file__).read_text())
+    node = next(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == 'ObservedHost')
+    scope = {'original_host': original_host, 'host': worker, 'install_app_access': install_app_access}
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])),
+                 runtime_worker.__file__, 'exec'), scope)
+    registry.host_adapter = scope['ObservedHost']()
+    monkeypatch.setattr(runtime_worker, 'publish', lambda value: None)
+    try:
+        async with asyncio.timeout(30):
+            returned = await registry.spawn('worker', 'Review A and B', parent, sub_session_id='child')
+        report = json.loads(returned['output'])
+        assert report['refusal'] == ROOT_SCOPE_MESSAGE
+        assert report['requestedAction'] == 'coordination.send'
+        assert returned['session_id'] == 'child'
+        assert report['status'] == ('blocked' if scenario == 'essential' else 'completed')
+        assert effects == ([] if scenario == 'essential' else
+                           ['child', 'grandchild'] if scenario == 'nested-reprepare' else ['child'])
+        assert late_preparations.count('child') == (2 if scenario == 'nested-reprepare' else 1)
+        if scenario == 'nested-reprepare':
+            assert report['effects'][0]['nested']['status'] == 'completed'
+            assert late_preparations.count('grandchild') == 1
+        assert not app.runtime.inputs, 'Denied sends must not deliver peer input'
+        for sid in effects or ['child']:
+            history = store.load(sid)[0]
+            assert COMMON_GUIDANCE not in json.dumps(history), 'Guidance stays ephemeral'
+        if artifacts := os.environ.get('AMPLIFIER_TEST_ARTIFACTS'):
+            Path(artifacts, f'child-guidance-{scenario}.json').write_text(json.dumps({
+                'scriptedProvider': True, 'workAdmission': 'fixture', 'requests': requests,
+                'delegatedResult': returned, 'effects': effects, 'latePreparations': late_preparations}, indent=2))
+    finally:
+        await parent.cleanup()
 
 
 @pytest.mark.parametrize('mode', ['finite', 'resumed', 'persistent', 'nested', 'nested-reprepare'])
@@ -44,7 +202,7 @@ async def test_mounted_child_app_access_has_own_principal(tmp_path, monkeypatch,
     worker.context_inputs = ['original-input']
     worker.context_bindings = {'original-input': {'clientId': 'original-client', 'targets': []}}
     worker.bridge = AsyncMock(return_value={'accepted': True})
-    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator), execution_role='root')
     registry = await install_children(parent, prepared, Runtime('root'), SessionStore(tmp_path / 'children'), approvals)
     tools_seen = []
 
@@ -67,7 +225,7 @@ async def test_mounted_child_app_access_has_own_principal(tmp_path, monkeypatch,
             if mode == 'nested-reprepare':
                 # Native loop preparation evaluates bridge construction even
                 # when install_app_access subsequently sees an existing tool.
-                await install_app_access(coordinator, worker.app_access_bridge(coordinator))
+                await install_app_access(coordinator, worker.app_access_bridge(coordinator), execution_role='native_child')
             await registry.spawn('worker', 'nested', registry.sessions['child'], sub_session_id='grandchild')
         return 'done'
 
@@ -158,7 +316,7 @@ async def test_mounted_child_cannot_borrow_configuration_grant(tmp_path, monkeyp
         if replies[0].get('error'): raise RuntimeError(replies[0]['error'])
         return replies[0]['result']
     worker.bridge = bridge
-    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator), execution_role='root')
     registry = await install_children(parent, prepared, Runtime('root'), SessionStore(tmp_path/'children'), approvals)
     observed = []
     workspace = next(row for row in app.state['workspaces'] if row['path']==root['workspace'])
@@ -251,7 +409,7 @@ async def test_native_configuration_request_waits_for_human_without_replaying_ef
             await asyncio.sleep(0)  # Decision can arrive before bridge response.
         return result
     worker.bridge = bridge
-    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator), execution_role='root')
     control = parent.coordinator.get('tools')['app_control']
     task = asyncio.create_task(control.execute({'operation':'dispatch','args':{'action':'capability.request','id':'native-request',
         'args':{'sessionId':root['id'],'effects':['file_access'],'scopes':['global'],'reason':'User requested setup'}}}))
