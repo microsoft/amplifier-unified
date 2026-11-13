@@ -628,11 +628,12 @@ class Worker:
             # This is lifecycle evidence, not optimistic host send admission.
             event['observedAt'] = time.time()
         root_generation = event_session_id == root_session_id and event_root_id == root_session_id
-        if root_generation and self.session:
+        episode_terminal = event.get('type') in {'generation.finished', 'generation.failed', 'generation.detached'}
+        if episode_terminal and root_session_id and root_generation and self.session:
             sponsor = self.session.coordinator.get_capability('web.computer_episodes')
             if sponsor:
                 sponsor.observe(event)
-        elif event_root_id == root_session_id and self.session:
+        elif episode_terminal and root_session_id and event_root_id == root_session_id and self.session:
             children = self.session.coordinator.get_capability('live.children')
             child = children.sessions.get(event_session_id) if children else None
             sponsor = child.coordinator.get_capability('web.computer_episodes') if child else None
