@@ -44,12 +44,17 @@ def build_facts():
 # raw errors, correlation IDs and module/source configuration never leave here.
 FAILURE_CATEGORIES = {'unknown', 'invalid_image', 'context_limit', 'tool_configuration',
     'authentication', 'rate_limit', 'worker_startup', 'worker_communication',
-    'worker_exit', 'computer_capture_stop', 'request_preparation'}
+    'worker_exit', 'computer_capture_stop', 'request_preparation', 'context_compaction',
+    'context_measurement', 'provider_timeout', 'provider_unavailable', 'content_filter',
+    'invalid_request', 'bundle_configuration', 'runtime_dependency', 'provider_selection',
+    'execution_interrupted', 'app_bridge_timeout', 'persistence'}
 ERROR_TYPES = {'Error', 'RuntimeError', 'RuntimeStartupError', 'ConfiguredModuleError',
     'WorkerCommunicationError', 'WorkerExitedError',
     'ContextLengthError', 'InvalidRequestError', 'AuthenticationError', 'RateLimitError',
     'BadRequestError', 'APIConnectionError', 'APITimeoutError', 'TimeoutError',
-    'PermissionError', 'FileNotFoundError', 'ValueError', 'ModuleNotFoundError', 'ImportError'}
+    'PermissionError', 'FileNotFoundError', 'ValueError', 'ModuleNotFoundError', 'ImportError',
+    'ManagerTurnError', 'RequestFitChanged', 'OSError', 'ConnectionError', 'TypeError',
+    'KeyError', 'AttributeError', 'CompactionError', 'LLMError'}
 ACTIVITY_PHASES = {'idle', 'starting', 'preparing', 'model', 'tools', 'retrying',
     'compacting', 'stopping', 'stopped', 'error', 'completed', 'waiting', 'approval'}
 MODULE_TYPES = {'tool', 'hook', 'provider', 'orchestrator', 'context', 'resolver'}
@@ -102,12 +107,13 @@ def troubleshooting(state, session, now):
     failure = _object(session.get('failure'))
     latest = next((row for row in reversed(_rows(session.get('messages')))
                    if isinstance(row, dict) and row.get('role') == 'user'), {})
-    failure_input, latest_input = failure.get('inputId'), latest.get('inputId')
+    failure_inputs = failure.get('inputIds') or [failure.get('inputId')]
+    latest_input = latest.get('inputId')
     relation = 'unknown'
-    if isinstance(failure_input, str) and failure_input and isinstance(latest_input, str) and latest_input:
-        if failure_input == latest_input:
+    if isinstance(failure_inputs, list) and any(isinstance(value, str) and value for value in failure_inputs) and isinstance(latest_input, str) and latest_input:
+        if latest_input in failure_inputs:
             relation = 'latest'
-        elif any(isinstance(row, dict) and row.get('role') == 'user' and row.get('inputId') == failure_input
+        elif any(isinstance(row, dict) and row.get('role') == 'user' and row.get('inputId') in failure_inputs
                  for row in _rows(session.get('messages'))):
             relation = 'earlier'
     modules = _rows(session.get('moduleFailures'))
@@ -139,6 +145,61 @@ def troubleshooting(state, session, now):
     }
 
 
+def failure_report(session):
+    """Share only causal facts from the existing report, never local identities."""
+    from .session_health import causal_timeline, latest_root_event
+    from .support_diagnostics import public_exception_chain
+    failure = _object(session.get('failure'))
+    def correlation(value):
+        return hashlib.sha256(value.encode()).hexdigest()[:16] if isinstance(value, str) and 0 < len(value) <= 200 else None
+    # Names from private hooks/files are not shareable even if syntactically valid.
+    files = {'runtime.py', 'runtime_worker.py', 'service.py', 'loop.py', 'streaming.py',
+             'provider.py', 'context.py', 'request_refit.py', 'session.py', 'core.py',
+             'execution.py', 'execution_events.py', 'storage.py', 'session_store.py', 'orchestrator.py'}
+    def chain(value):
+        rows = []
+        for row in public_exception_chain(value):
+            item = {'errorType': _enum(row['errorType'], ERROR_TYPES, 'other'),
+                    'frames': [{'file': frame['file'], 'line': frame['line']}
+                               for frame in row['frames'] if frame['file'] in files]}
+            item.update({key: row[key] for key in ('errno', 'winerror', 'requestFit') if key in row})
+            rows.append(item)
+        return rows
+    latest = latest_root_event(session)
+    events = {'generation.started', 'generation.finished', 'generation.failed', 'generation.detached',
+              'runtime.error', 'runtime.ended'}
+    timeline = []
+    for row in causal_timeline(session):
+        timeline.append({'event': _enum(row.get('event') or row.get('type'), events),
+                         'scope': _enum(row.get('scope'), {'runtime', 'persistence', 'request'}),
+                         'generation': correlation(row.get('generation_id')),
+                         'errorType': _enum(row.get('error_type') or row.get('errorType'), ERROR_TYPES, 'other'),
+                         'at': row.get('at') if type(row.get('at')) in (int, float) and math.isfinite(row['at']) else None})
+    support = _object(_object(session.get('runtimeReport')).get('support'))
+    versions = {key: _identity(value, r'[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.+-]{0,40}')
+                for key, value in _object(support.get('packages')).items()
+                if key in {'amplifier-core', 'amplifier-foundation', 'amplifier-module-loop-live',
+                           'amplifier-module-provider-openai', 'amplifier-module-provider-anthropic'}}
+    result = {'requestOutcome': _enum(latest.get('event'), events),
+              'generation': correlation(failure.get('generationId') or latest.get('generation_id')),
+              'inputs': [value for raw in (_rows(failure.get('inputIds')) or [failure.get('inputId')])[:128]
+                         if (value := correlation(raw))],
+              'exceptionChain': chain(failure.get('exceptionChain')),
+              'runtime': {'applicationVersion': _identity(_object(support.get('environment')).get('applicationVersion'),
+                         r'[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.+-]{0,40}'), 'packages': versions},
+              'timeline': timeline}
+    secondary = _object(failure.get('secondaryFailure'))
+    if secondary.get('stage') == 'loop_exit':
+        result['secondaryFailure'] = {'stage': 'loop_exit', 'exceptionChain': chain(secondary.get('exceptionChain'))}
+    # Post-request runtime failures are evidence, not a replacement request outcome.
+    faults = [row for row in _rows(session.get('runtimeEvents'))[-100:]
+              if isinstance(row, dict) and row.get('type') == 'runtime.error'
+              and row.get('generationId') == latest.get('generation_id')]
+    if faults:
+        result['runtimeExceptionChain'] = chain(faults[-1].get('exceptionChain'))
+    return result
+
+
 def snapshot(state, device=None, *, now=None):
     session = next((row for row in _rows(state.get('sessions'))
                     if isinstance(row, dict) and row.get('id') == state.get('selectedSessionId')), {})
@@ -167,6 +228,8 @@ def snapshot(state, device=None, *, now=None):
         'reportedOnlineViews': sum(_object(row).get('online') is True for row in _object(state.get('devices')).values())}
     if device:
         result['device'] = device
+    if session.get('failure') or session.get('generations') or session.get('runtimeEvents'):
+        result['failureReport'] = failure_report(session)
     return result
 
 

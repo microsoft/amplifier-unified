@@ -191,3 +191,86 @@ async def test_on_demand_preview_and_saved_receipt_share_action_without_broadcas
         assert (await reopened.dispatch('feedback.diagnostics', {'requestId': 'saved-fixture'}))['result']['diagnostics'] == frozen
     finally:
         await reopened.close()
+
+
+def test_causal_report_retains_known_original_cause_but_not_private_frame_names_or_noise():
+    state = example()
+    session = state['sessions'][0]
+    session.update(
+        runtimeReport={'support': {'environment': {'applicationVersion': '0.88.0', 'path': '/PRIVATE'},
+            'packages': {'amplifier-core': '1.2.3', 'PRIVATE-extension': 'PRIVATE'}}},
+        generations=[
+            {'event': 'generation.started', 'generation_id': 'PRIVATE-gen', 'at': 80},
+            {'event': 'generation.failed', 'generation_id': 'PRIVATE-gen', 'at': 90}],
+        runtimeEvents=[
+            {'type': 'runtime.tool', 'tool': 'PRIVATE', 'at': 87},
+            {'type': 'runtime.error', 'errorType': 'RuntimeError', 'at': 89, 'error': 'PRIVATE body'}],
+        execution={'nodes': [{'startedAt': 1, 'endedAt': 67.86 * 3600, 'error': 'PRIVATE stale'}]})
+    session['failure'].update(generationId='PRIVATE-gen', inputIds=['PRIVATE LATEST'],
+        exceptionChain=[{'errorType': 'ManagerTurnError', 'frames': []},
+            {'errorType': 'TypeError', 'message': 'PRIVATE sdk', 'frames': [
+                {'file': 'runtime.py', 'function': 'PRIVATE_customer_function', 'line': 42},
+                {'file': 'PRIVATE_customer.py', 'function': 'private', 'line': 10}]}])
+    result = diagnostics.snapshot(state, now=100)
+    report = result['failureReport']
+    assert report['requestOutcome'] == 'generation.failed'
+    assert report['exceptionChain'][1] == {'errorType': 'TypeError', 'frames': [{'file': 'runtime.py', 'line': 42}]}
+    assert report['runtime']['applicationVersion'] == '0.88.0'
+    assert report['runtime']['packages'] == {'amplifier-core': '1.2.3'}
+    assert [row['event'] for row in report['timeline']] == [
+        'generation.started', 'runtime.error', 'generation.failed']
+    assert report['generation'] and report['inputs']
+    assert 'PRIVATE' not in json.dumps(result)
+    assert 'recentExecution' not in report
+
+
+@pytest.mark.parametrize('value', [{}, {'exceptionChain': ['PRIVATE']},
+    {'exceptionChain': [{'errorType': 'PRIVATE_customer', 'frames': [{'file': '/PRIVATE', 'line': 42}]}]}])
+def test_malformed_original_cause_cannot_leak_into_shareable_feedback(value):
+    state = example()
+    state['sessions'][0]['failure'].update(value)
+    assert 'PRIVATE' not in json.dumps(diagnostics.snapshot(state, now=100))
+
+
+async def test_historical_report_resolves_exact_saved_annotation_and_freezes_before_newer_fault(tmp_path):
+    from amplifier_web.input_status import PREFIX
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        session = app._session()
+        context = {'sessionId': session['id'], 'inputId': 'original-input', 'generationId': 'original-generation'}
+        failure = {'category': 'invalid_request', 'errorType': 'ValueError',
+            'generationId': context['generationId'], 'inputIds': [context['inputId']], 'recordedAt': 10,
+            'exceptionChain': [{'errorType': 'ValueError', 'frames': [
+                {'file': 'runtime.py', 'function': 'execute', 'line': 42}]}]}
+        session['messageAnnotations'] = {PREFIX + context['inputId']: {'inputStatus': {
+            'version': 1, 'inputId': context['inputId'], 'generationId': context['generationId'],
+            'phase': 'failed', 'basis': 'generation_failed', 'failure': failure}}}
+        session.update(failure={'category': 'authentication'}, activity={'phase': 'model'},
+            generations=[{'event': 'generation.started', 'generation_id': 'newer'}],
+            runtimeEvents=[{'type': 'runtime.error', 'generationId': 'newer', 'at': 20,
+                           'exceptionChain': [{'errorType': 'TypeError', 'frames': []}]}])
+        preview = await app.dispatch('feedback.diagnostics', {'failureContext': context})
+        facts = preview['result']['diagnostics']
+        assert preview['result']['snapshot'] == 'request'
+        assert facts['troubleshooting']['recordedFailure']['category'] == 'invalid_request'
+        assert facts['failureReport']['requestOutcome'] == 'generation.failed'
+        assert facts['failureReport']['exceptionChain'][0]['errorType'] == 'ValueError'
+        assert not facts['failureReport'].get('runtimeExceptionChain')
+        assert 'TypeError' not in json.dumps(facts)
+        args = {'requestId': 'historical-report', 'title': 'Reviewed', 'body': 'Reproduction', 'category': 'bug',
+                'failureContext': context, 'includeDiagnostics': True}
+        app.feedback.accept(args)
+        frozen = app.feedback.diagnostics({'requestId': args['requestId']})['diagnostics']
+        assert frozen['failureReport'] == facts['failureReport']
+        session['messageAnnotations'].clear()
+        assert app.feedback.diagnostics({'requestId': args['requestId']})['diagnostics'] == frozen
+        with pytest.raises(AppError, match='unavailable or changed'):
+            await app.dispatch('feedback.diagnostics', {'failureContext': context})
+        with pytest.raises(AppError, match='unavailable or changed'):
+            await app.dispatch('feedback.report', {key: value for key, value in args.items() if key != 'requestId'})
+        # Opt-out never needs or publishes diagnosis bytes, even if source expired.
+        assert app.feedback.accept({**args, 'requestId': 'historical-optout', 'includeDiagnostics': False})
+        assert app.feedback.diagnostics({'requestId': 'historical-optout'})['diagnostics'] is None
+    finally:
+        await app.close()

@@ -83,7 +83,7 @@ def public_exception_chain(value):
 
 
 def terminal_exception_capture(value):
-    """Only correlated generic manager failures may carry supplemental frames."""
+    """Only correlated manager failures may carry supplemental original frames."""
     if not isinstance(value, dict):
         return None
     def identity(raw):
@@ -111,6 +111,26 @@ def terminal_exception_capture(value):
     return result
 
 
+def public_execution_failure(value):
+    """Original loop exception metadata; no messages, SDK bodies or locals."""
+    if not isinstance(value, dict) or value.get('stage') != 'execution':
+        return None
+    def identity(raw):
+        return isinstance(raw, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}', raw)
+    if not identity(value.get('runtimeSessionId')):
+        return None
+    chain = public_exception_chain(value.get('exceptionChain'))
+    if not chain:
+        return None
+    result = {'runtimeSessionId': value['runtimeSessionId'], 'stage': 'execution', 'exceptionChain': chain}
+    if identity(value.get('generationId')):
+        result['generationId'] = value['generationId']
+    inputs = value.get('inputIds')
+    if isinstance(inputs, list) and len(inputs) <= 128 and all(identity(item) for item in inputs):
+        result['inputIds'] = list(inputs)
+    return result
+
+
 def terminal_request_refusal(chain):
     """Do not promote an earlier handled refusal over the actual failure."""
     if not chain:
@@ -124,9 +144,9 @@ def terminal_request_refusal(chain):
 def event_detail(row):
     result = {}
     for key in ('event', 'timestamp', 'ts', 'at', 'generation_id', 'session_id', 'sessionId',
-                'rootSessionId', 'runtimeSessionId', 'request_id', 'response_id', 'tool_call_id', 'provider', 'model',
+                'rootSessionId', 'runtimeSessionId', 'generationId', 'request_id', 'response_id', 'tool_call_id', 'provider', 'model',
                 'error_type', 'error_stage', 'error_category', 'disposition', 'operation',
-                'bridgeId', 'action', 'errorType', 'phase', 'type', 'id', 'turnId', 'parentId', 'kind', 'startedAt', 'endedAt'):
+                'bridgeId', 'action', 'errorType', 'phase', 'type', 'id', 'turnId', 'parentId', 'kind', 'startedAt', 'endedAt', 'scope'):
         value = row.get(key)
         if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9_.:/+ -]{1,200}', value):
             result[key] = value
