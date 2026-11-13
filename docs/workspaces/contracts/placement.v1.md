@@ -57,6 +57,11 @@ The following action names describe the proposed surface, not today's API.
    Explicit workspace/project, app, shared and conversation/draft choices survive
    updates, including choices equal to an old shipped default. Custom starters
    remain literal. Existing conversations never change roots on upgrade.
+   Blank, Development and custom starters with an empty bundle inherit the
+   general conversation fallback; Amplifier development owns a specialized
+   fallback identity. Following changes within those policies does not imply
+   retroactive inheritance-to-specialization without an explicit policy and
+   provenance/migration change.
    Legacy automatic settings require matching host-generated provenance and
    unchanged owned file shape; unknown/manual settings are preserved. The
    [configuration guide](../../SHARED-CONFIGURATION.md#root-bundle-defaults-in-unified)
