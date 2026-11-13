@@ -22,6 +22,7 @@ for line in sys.stdin:
     if op=='stop': break
     if op=='send':
         idle=False;result={'accepted':True}
+        print(json.dumps({'type':'input.delivered','input_id':data['input_id']}),flush=True)
     if op=='control':
         if data['operation']=='held':continue
         result={'ok':True}
