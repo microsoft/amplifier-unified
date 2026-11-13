@@ -1,0 +1,64 @@
+name: Native installation repair
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/installation-repair-native.yml
+      - tests/fixtures/installation_repair_native.py
+      - tests/test_installation_repair_native.py
+      - amplifier_web/installation_repair.py
+      - amplifier_web/installation_repair_worker.py
+      - amplifier_web/reset.py
+      - amplifier_web/reset_retention.py
+      - amplifier_web/app_release_artifacts.py
+      - amplifier_web/deployment_service.py
+
+permissions:
+  contents: read
+
+# One qualification runner at a time per PR. Never cancel an in-flight native
+# transaction to replace its source; cleanup and its original receipt must settle.
+concurrency:
+  group: native-installation-repair-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-manager:
+    name: Repair transaction (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        os: [ubuntu-latest, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      UV_PYTHON_DOWNLOADS: never
+      UV_LINK_MODE: copy
+      INSTALLATION_REPAIR_NATIVE_CI: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+      - name: Prepare owned native fixture and retain exact source
+        run: python -I -B tests/fixtures/installation_repair_native.py prepare
+      - name: Exercise real native service manager and installation transaction
+        run: python -I -B tests/fixtures/installation_repair_native.py run
+      - name: Settle only owned services, jobs and installation fixture
+        if: always()
+        run: python -I -B tests/fixtures/installation_repair_native.py cleanup
+      - name: Retain source, trust-boundary, native effects and cleanup receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installation-repair-native-${{ matrix.os }}
+          path: ${{ runner.temp }}/installation-repair-evidence/
+          if-no-files-found: error
+          retention-days: 14
