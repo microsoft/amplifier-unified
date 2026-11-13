@@ -41,7 +41,8 @@ for new conversations; otherwise they use Unified's default selection.
 Remote attachment uses `acp --server https://unified.example --token-file
 /private/unified-owner-token`, plus `--ca-file` for a private CA. Remote HTTP and
 redirects are refused. Local attachment reads the selected installation's existing
-owner credential and TLS settings; it never creates a credential. This credential
+owner credential and configured local listener, using the host's existing leaf
+certificate pin for HTTPS; it never creates a credential. This credential
 provides owner access: keep it private and give it only to an authorized launcher.
 Never place its contents in arguments, URLs or Instance settings.
 

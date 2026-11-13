@@ -1,6 +1,7 @@
 """The installed ACP launcher attaches once and preserves uncertain delivery."""
 import asyncio
 import json
+import sys
 from types import SimpleNamespace
 
 import aiohttp
@@ -86,3 +87,69 @@ def test_cli_acp_is_attachment_command(monkeypatch):
     args = cli._parse()
     assert (args.command, args.workspace, args.server, args.token_file) == (
         'acp', '/project', 'https://host.test', '/private/token')
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='Windows owner attachment requires its fixed private TLS layout')
+async def test_local_custom_certificate_uses_existing_leaf_pin(aiohttp_server, tmp_path):
+    """A DNS-only private certificate must work on the configured local bind."""
+    import datetime
+    import ssl
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+    from amplifier_web.deployment import save_server_config
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'backend.example')])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    certificate = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+        .public_key(key.public_key()).serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName('backend.example')]), critical=False)
+        .sign(key, hashes.SHA256()))
+    cert_file, key_file = tmp_path/'leaf.crt', tmp_path/'leaf.key'
+    cert_file.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    key_file.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert_file, key_file)
+    received = []
+    async def endpoint(request):
+        received.append((request.headers['Authorization'], request.headers['Host']))
+        socket = web.WebSocketResponse()
+        await socket.prepare(request)
+        await socket.send_json({'connected': True})
+        await socket.close()
+        return socket
+    app = web.Application()
+    app.router.add_get('/api/acp', endpoint)
+    server = await aiohttp_server(app, ssl=context)
+    home = tmp_path/'app'
+    save_server_config(home, {'bind': ['127.0.0.1'], 'port': server.port,
+        'tls': {'method': 'ca', 'cert': str(cert_file), 'key': str(key_file)}})
+    token = home/'config/auth/control-token'
+    token.parent.mkdir()
+    token.write_text('synthetic-local-owner')
+    args = SimpleNamespace(server=None, token_file=None, ca_file=None)
+    url, secret, pin, host = acp_stdio.connection_options(args, home)
+    assert isinstance(pin, aiohttp.Fingerprint)
+    async with aiohttp.ClientSession() as client:
+        async with client.ws_connect(url+'/api/acp', ssl=pin,
+                headers={'Authorization': 'Bearer '+secret, 'Host': host}) as socket:
+            assert await socket.receive_json() == {'connected': True}
+    assert received == [('Bearer synthetic-local-owner', f'localhost:{server.port}')]
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='Windows owner attachment requires private HTTPS')
+def test_local_options_follow_ipv6_only_bind(tmp_path):
+    from amplifier_web.deployment import save_server_config
+    save_server_config(tmp_path, {'bind': ['::1'], 'port': 23456})
+    token = tmp_path/'config/auth/control-token'
+    token.parent.mkdir()
+    token.write_text('synthetic-owner')
+    args = SimpleNamespace(server=None, token_file=None, ca_file=None)
+    url, _, _, host = acp_stdio.connection_options(args, tmp_path)
+    assert url == 'http://[::1]:23456'
+    assert host == 'localhost:23456'

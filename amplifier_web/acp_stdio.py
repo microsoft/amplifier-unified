@@ -5,6 +5,7 @@ import asyncio
 import json
 from pathlib import Path
 import ssl
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -16,14 +17,22 @@ from .runtime_protocol import MAX_MESSAGE_BYTES
 def connection_options(args, data_dir):
     """Use an explicit remote connection or this installation's private settings."""
     server, token_file, ca_file = args.server, args.token_file, args.ca_file
+    pin, host = None, None
     if not server:
         config = load_server_config(data_dir)
-        secure = config['tls']['method'] != 'none'
-        server = f"{'https' if secure else 'http'}://127.0.0.1:{config['port']}"
+        from .browser_entry import is_windows, _owner_probe_targets
+        from .update_readiness import probe_targets
+        if is_windows():
+            urls, pin = _owner_probe_targets(data_dir, config)
+        else:
+            manager = SimpleNamespace(home=data_dir, service=SimpleNamespace(
+                server_config=config, port=config['port']))
+            urls, pin = probe_targets(manager)
+        if not urls:
+            raise ValueError('No configured local listener is available. Specify --server explicitly.')
+        server = urls[0].removesuffix('/api/health')
+        host = f"localhost:{config['port']}"
         token_file = token_file or str(data_dir / 'config/auth/control-token')
-        ca = data_dir / 'config/tls/ca.crt'
-        if secure and not ca_file and ca.is_file():
-            ca_file = str(ca)
     server = validate_origin(server)
     if urlsplit(server).scheme != 'https' and not is_loopback(urlsplit(server).hostname):
         raise ValueError('Use verified HTTPS for a remote Unified host.')
@@ -36,8 +45,9 @@ def connection_options(args, data_dir):
         token = Path(token_file).expanduser().read_text().strip()
     if not token:
         raise ValueError('The existing owner credential is empty.')
-    context = ssl.create_default_context(cafile=str(Path(ca_file).expanduser()) if ca_file else None)
-    return server, token, context
+    context = pin if pin is not None else ssl.create_default_context(
+        cafile=str(Path(ca_file).expanduser()) if ca_file else None)
+    return server, token, context, host
 
 
 async def relay(ws, reader, writer):
@@ -74,7 +84,7 @@ async def relay(ws, reader, writer):
 async def run(args, data_dir):
     from acp.stdio import stdio_streams
 
-    server, token, context = connection_options(args, data_dir)
+    server, token, context, host = connection_options(args, data_dir)
     params = {'workspace': args.workspace}
     if args.bundle:
         params['bundle'] = args.bundle
@@ -86,7 +96,7 @@ async def run(args, data_dir):
     try:
         async with aiohttp.ClientSession(timeout=timeout, trace_configs=[trace]) as http:
             async with http.ws_connect(server + '/api/acp', params=params, ssl=context,
-                    headers={'Authorization': 'Bearer ' + token},
+                    headers={'Authorization': 'Bearer ' + token, **({'Host': host} if host else {})},
                     max_msg_size=MAX_MESSAGE_BYTES) as ws:
                 reader, writer = await stdio_streams(limit=MAX_MESSAGE_BYTES)
                 await relay(ws, reader, writer)
