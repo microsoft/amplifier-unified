@@ -21,7 +21,7 @@ from acp.schema import (AgentCapabilities, AgentMessageChunk, InitializeResponse
                         ToolCallProgress, ToolCallStart)
 from aiohttp import WSMsgType, web
 
-from .execution_owner import ExecutionOwner
+from .execution_owner import ExecutionOwner, ensure_observers
 from .errors import AppError
 from .runtime_protocol import MAX_MESSAGE_BYTES
 
@@ -265,6 +265,7 @@ async def attach(request):
 
 
 def setup_routes(app):
+    ensure_observers(app['service'])
     app['acp_connections'] = {}
     app.router.add_get('/api/acp', attach)
 

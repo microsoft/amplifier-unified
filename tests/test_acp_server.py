@@ -248,3 +248,38 @@ async def test_host_shutdown_drains_connection_observers_before_service_close(ho
     assert not app['service']._execution_observers.attachments
     assert runtime.closed == 0  # The normal app cleanup remains the sole owner.
     await peer.socket.close()
+
+
+async def test_first_attachment_observes_callback_captured_by_existing_ui_worker(host):
+    app, _, runtime, path = host
+    service = app['service']
+    created = await service.dispatch('session.create', {'workspace': str(path), 'bundle': 'foundation'},
+                                     origin='ui', include_state=False)
+    sid = created['result']['sessionId']
+    source_plan(service, service._session(sid))
+    captured = []
+    start = runtime.start
+    async def capture_start(session, emit):
+        captured.append(emit)
+        await start(session, emit)
+    runtime.start = capture_start
+    # Ordinary UI/native startup happens before any ACP attachment. A live
+    # worker may retain this callback when input later takes the steering path.
+    await runtime.start(service._session(sid), service.on_runtime_event)
+    assert not app['acp_connections']
+    peer = await connect(host)
+    assert (await peer.call('session/resume', sessionId=sid, cwd=str(path), mcpServers=[]))['result'] == {}
+    pending = asyncio.create_task(peer.prompt(sid, 'New explicit input'))
+    await until(lambda: len(runtime.sent) == 1)
+    input_id = runtime.sent[0][2]
+    await captured[0]('assistant.delta', {'sessionId': sid, 'inputId': input_id, 'text': 'Captured callback'})
+    await captured[0]('execution.event', {'sessionId': sid, 'turnId': input_id, 'kind': 'tool',
+        'phase': 'completed', 'id': 'captured-tool', 'label': 'Existing worker', 'output': {'value': 42}})
+    await finish(service, sid, input_id, 'Captured callback')
+    assert (await pending)['result']['stopReason'] == 'end_turn'
+    projected = [row['params']['update'] for row in peer.updates]
+    assert [row['sessionUpdate'] for row in projected] == ['agent_message_chunk', 'tool_call']
+    assert projected[0]['content']['text'] == 'Captured callback'
+    assert projected[1]['rawOutput'] == {'value': 42}
+    assert runtime.stopped == [] and len(runtime.sent) == 1
+    await peer.socket.close()

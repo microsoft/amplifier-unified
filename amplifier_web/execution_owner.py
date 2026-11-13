@@ -94,6 +94,14 @@ class ExecutionObservers:
                 await attachment.observe(kind, payload)
 
 
+def ensure_observers(service):
+    """Install the shared tap before a worker can capture its event callback."""
+    observers = getattr(service, "_execution_observers", None)
+    if observers is None:
+        observers = service._execution_observers = ExecutionObservers(service)
+    return observers
+
+
 class ExecutionOwner:
     def __init__(self, service, *, workspace, bundle, origin, enable_mcp=False):
         self.service = service
@@ -106,11 +114,8 @@ class ExecutionOwner:
         self.attached = set()
         self.pending = {}
         self._disconnected = False
-        observers = getattr(service, "_execution_observers", None)
-        if observers is None:
-            observers = service._execution_observers = ExecutionObservers(service)
-        self._observers = observers
-        observers.attachments.add(self)
+        self._observers = ensure_observers(service)
+        self._observers.attachments.add(self)
 
     def require_connection(self):
         if self._disconnected:
