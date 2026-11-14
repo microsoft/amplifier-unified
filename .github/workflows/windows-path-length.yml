@@ -24,6 +24,7 @@ on:
       - scripts/windows_bootstrap_native.cs
       - docs/design/native-windows-installation.md
       - tests/test_chat_project_names.py
+      - tests/test_chat_project_names_service.py
       - tests/test_windows_path_budget.py
       - tests/test_windows_long_paths_off.py
       # A dependency change can lengthen a store path (Foundation, loop-live).
@@ -115,3 +116,6 @@ jobs:
       # The budget reads names from the locked Foundation, loop-live and capture hook.
       - name: Check the path budget and the naming rule (other platforms keep the shared name)
         run: uv run --no-sync pytest -q -ra tests/test_windows_path_budget.py tests/test_chat_project_names.py
+      # Through the real app service: existing chats stay where they are and still open.
+      - name: Check that chats keep their history and still open under the naming rule
+        run: uv run --no-sync pytest -q -ra tests/test_chat_project_names_service.py
