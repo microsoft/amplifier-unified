@@ -240,3 +240,119 @@ test('closing does not wait for a passive check or let its late reply reopen the
  assert.equal(root.toJSON(),null);assert.deepEqual(calls,['check']);
  await act(async()=>root.unmount());
 });
+
+for(const [status,disposition] of [['failed','held'],['held','held'],['unknown','unknown']]){
+ test(`historical steering ${status}/${disposition} uses the existing dismiss/restore envelope during unrelated work`,async()=>{
+  globalThis.sessionStorage=storage();
+  const message={inputId:'old-direction',role:'user',text:'  Keep this request\n',attachments:[{id:'file',name:'reference.txt'}],
+   delivery:{status},steering:{generationId:'old-run',disposition,reason:'No active native owner is available for anchored steering.'}};
+  const session={id:'steering-chat',status:'working',execution:{currentTurnId:'new-input'},messages:[message]},before=structuredClone(session),calls=[];
+  const props={message,session,delivery:message.delivery,dispatch:async action=>calls.push(action)};
+  let root;await act(async()=>{root=create(React.createElement(MessageDelivery,props))});
+  assert.ok(button(root,'Dismiss warning'));
+  await act(async()=>button(root,'Dismiss warning').props.onClick());
+  assert.equal(root.root.findByType('details').props.open,false);
+  await act(async()=>root.unmount());
+  await act(async()=>{root=create(React.createElement(MessageDelivery,props))});
+  assert.equal(root.root.findByType('details').props.open,false);
+  await act(async()=>button(root,'Show warning').props.onClick());
+  assert.equal(root.root.findByType('details').props.open,true);
+  assert.match(text(root.toJSON()),/No active native owner/);
+  assert.doesNotMatch(text(root.toJSON()),/Retry|Send again/);
+  assert.deepEqual(session,before);assert.deepEqual(calls,[]);
+  await act(async()=>root.unmount());delete globalThis.sessionStorage;
+ });
+}
+for(const disposition of ['applied','next_turn']){
+test(`a closed steering overlay hides only unresolved warnings, not late ${disposition} evidence`,async()=>{
+ const message={inputId:'closed-steering',steering:{disposition:'held',reason:'No active native owner'}};
+ const props={message,session:{id:'closed-chat',status:'idle'},delivery:{status:'unknown'},
+  localDelivery:{commandId:message.inputId,status:'unknown',closed:true}};
+ let root;await act(async()=>{root=create(React.createElement(MessageDelivery,props))});
+ assert.equal(root.toJSON(),null);
+ await act(async()=>root.update(React.createElement(MessageDelivery,{...props,message:{...message,steering:{disposition}}})));
+ assert.match(text(root.toJSON()),disposition==='applied'?/Added to the active run/:/Received for the next turn/);
+ await act(async()=>root.unmount());
+});
+}
+test('steering active identities and all queued states cannot be dismissed or closed',async()=>{
+ const base={message:{inputId:'active-steering',steering:{disposition:'held'}},session:{id:'active-chat',status:'working',execution:{currentTurnId:'active-steering'}},delivery:{status:'unknown'}};
+ const variants=[base,...['sending','queued','queued_for_update'].map(status=>({...base,session:{id:'active-chat'},delivery:{status}})),
+  ...['sending','queued'].map(disposition=>({...base,session:{id:'active-chat'},message:{...base.message,steering:{disposition}}}))];
+ for(const props of variants){
+  for(const localDelivery of [null,{commandId:'active-steering',status:'unknown',closed:true}]){
+   let root;await act(async()=>{root=create(React.createElement(MessageDelivery,{...props,localDelivery}))});
+   assert.notEqual(root.toJSON(),null);
+   assert.equal(button(root,'Dismiss warning'),undefined);assert.equal(button(root,'Close delivery item'),undefined);
+   assert.doesNotMatch(text(root.toJSON()),/Retry|Send again/);
+   await act(async()=>root.unmount());
+  }
+ }
+});
+for(const disposition of ['applied','next_turn']){
+test(`an explicit steering check supersedes stale warning with ${disposition} evidence without replay`,async()=>{
+ globalThis.sessionStorage=storage();
+ const calls=[],message={inputId:'checked-steering',steering:{disposition:'unknown'}};
+ const props={message,session:{id:'checked-chat',messages:[message]},delivery:{status:'unknown'},
+  dispatch:async(action,args)=>{calls.push({action,args});return {accepted:true,result:{...args,delivery:'accepted',steering:{disposition},message:'Received. Nothing resent.'}}}};
+ let root;await act(async()=>{root=create(React.createElement(MessageDelivery,props))});
+ await act(async()=>button(root,'Check delivery').props.onClick());
+ assert.match(text(root.toJSON()),disposition==='applied'?/Added to the active run/:/Received for the next turn/);
+ assert.doesNotMatch(text(root.toJSON()),/could not be confirmed|Dismiss warning|Retry|Send again/);
+ assert.deepEqual(calls,[{action:'conversation.delivery',args:{sessionId:'checked-chat',inputId:'checked-steering'}}]);
+ await act(async()=>root.unmount());delete globalThis.sessionStorage;
+});
+}
+test('steering dismissal and restoration still work when browser preference writes fail',async()=>{
+ globalThis.sessionStorage={getItem:()=>null,setItem:()=>{throw Error('Blocked')},removeItem:()=>{throw Error('Blocked')}};
+ const message={inputId:'storage-steering',steering:{disposition:'held'}};
+ let root;await act(async()=>{root=create(React.createElement(MessageDelivery,{message,session:{id:'storage-chat'},delivery:{status:'failed'}}))});
+ await act(async()=>button(root,'Dismiss warning').props.onClick());
+ assert.equal(root.root.findByType('details').props.open,false);
+ await act(async()=>button(root,'Show warning').props.onClick());
+ assert.equal(root.root.findByType('details').props.open,true);
+ assert.match(text(root.toJSON()),/Warning preference could not be saved/);
+ await act(async()=>root.unmount());delete globalThis.sessionStorage;
+});
+for(const checkedDisposition of ['unknown','queued']){
+ for(const disposition of ['applied','next_turn','held']){
+ test(`new ${disposition} source evidence supersedes a retained ${checkedDisposition} check without remount`,async()=>{
+  const message={inputId:'newer-steering',steering:{disposition:'unknown',reason:'Old evidence'}},calls=[];
+  const props={message,session:{id:'newer-chat'},delivery:{status:'unknown'},
+   dispatch:async(action,args)=>{calls.push({action,args});return {accepted:true,result:{...args,delivery:checkedDisposition,steering:{disposition:checkedDisposition,reason:'Checked evidence'}}}}};
+  let root;await act(async()=>{root=create(React.createElement(MessageDelivery,props))});
+  await act(async()=>button(root,'Check delivery').props.onClick());
+  assert.match(text(root.toJSON()),/Checked evidence/);
+  await act(async()=>root.update(React.createElement(MessageDelivery,{...props,message:{...message,steering:{disposition,reason:'New evidence'}}})));
+  assert.match(text(root.toJSON()),/New evidence/);assert.doesNotMatch(text(root.toJSON()),/Checked evidence/);
+  if(disposition==='held')assert.ok(button(root,'Dismiss warning'));
+  else {assert.equal(button(root,'Dismiss warning'),undefined);assert.equal(button(root,'Check delivery'),undefined)}
+  assert.equal(calls.length,1);await act(async()=>root.unmount());
+ });
+ }
+}
+for(const disposition of ['sending','queued']){
+ for(const checkedDisposition of ['unknown','held']){
+ test(`an explicit ${checkedDisposition} check cannot hide source steering ${disposition}`,async()=>{
+  for(const localDelivery of [null,{commandId:'guarded-steering',status:'unknown',closed:true}]){
+   const message={inputId:'guarded-steering',steering:{disposition}};
+   const props={message,session:{id:'guarded-chat'},delivery:{status:'unknown'},localDelivery,
+    dispatch:async(action,args)=>({accepted:true,result:{...args,delivery:checkedDisposition,steering:{disposition:checkedDisposition}}})};
+   let root;await act(async()=>{root=create(React.createElement(MessageDelivery,props))});
+   await act(async()=>button(root,'Check delivery').props.onClick());
+   assert.notEqual(root.toJSON(),null);
+   assert.equal(button(root,'Dismiss warning'),undefined);assert.equal(button(root,'Close delivery item'),undefined);
+   await act(async()=>root.unmount());
+  }
+ });
+ }
+}
+test('a generic accepted check cannot hide an exact active steering input',async()=>{
+ const props={message:{inputId:'active-accepted',steering:{disposition:'unknown'}},
+  session:{id:'active-accepted-chat',status:'working',execution:{currentTurnId:'active-accepted'}},delivery:{status:'unknown'},
+  dispatch:async(action,args)=>({accepted:true,result:{...args,delivery:'accepted'}})};
+ let root;await act(async()=>{root=create(React.createElement(MessageDelivery,props))});
+ await act(async()=>button(root,'Check delivery').props.onClick());
+ assert.notEqual(root.toJSON(),null);assert.equal(button(root,'Dismiss warning'),undefined);
+ await act(async()=>root.unmount());
+});
