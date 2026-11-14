@@ -404,39 +404,70 @@ def desktop():
     return user, windows, pump
 
 
-RAW_MESSAGE = ('import ctypes; ctypes.WinDLL("user32").MessageBoxW('
-               'None, "Measurement of the message-box flags alone.", "Amplifier Unified", 0x50040)')
-LAUNCHER_MESSAGE = ('import sys; from amplifier_web import windows_installation as launcher; '
-                    'sys.exit(0 if launcher.owner_notice("Test of the launcher message.") else 1)')
+SHOW_AFTER_A_PAUSE = """
+import ctypes, sys, threading, time
+time.sleep(4)   # The person clicks another program's window during this pause.
+result = []
+def show():
+    if sys.argv[1] == "flags-alone":
+        result.append(ctypes.WinDLL("user32").MessageBoxW(
+            None, "Measurement of the message-box flags alone.", "Amplifier Unified", 0x50040) == 1)
+    else:
+        from amplifier_web import windows_installation as launcher
+        result.append(launcher.owner_notice("Test of the launcher message."))
+worker = threading.Thread(target=show)   # The launcher shows its messages from a worker thread.
+worker.start()
+worker.join()
+sys.exit(0 if result == [True] else 1)
+"""
 
 
-def show_message(code, other):
-    """Run one message box in ANOTHER process; report its place among the windows."""
+def show_message(kind, other):
+    """Show one message box from ANOTHER, windowless process; report its place.
+
+    The person's situation is reproduced with real input: after that process
+    has started, a mouse click goes to this test's window. Windows then no
+    longer lets the new process come to the front on its own.
+    """
     import sys
     import time
     user, windows, pump = desktop()
+    user.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+    user.mouse_event.argtypes = [ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_size_t]
+    windowless = Path(sys.executable).with_name("pythonw.exe")
     before = {row[0] for row in windows()}
-    child = subprocess.Popen([sys.executable, "-B", "-c", code], cwd=Path(__file__).resolve().parents[1])
-    facts = {"appeared": False}
+    child = subprocess.Popen([str(windowless if windowless.is_file() else sys.executable), "-B", "-c",
+                              SHOW_AFTER_A_PAUSE, kind], cwd=Path(__file__).resolve().parents[1])
+    facts = {"appeared": False, "windowless": windowless.is_file()}
     try:
+        time.sleep(1.5)
+        user.SetCursorPos(200, 200)
+        user.mouse_event(0x0002, 0, 0, 0, 0)  # Left button down, then up, on the other window.
+        user.mouse_event(0x0004, 0, 0, 0, 0)
+        clicked = time.monotonic() + 0.5
+        while time.monotonic() < clicked:
+            pump()
+            time.sleep(0.02)
+        facts["otherWindowIsForegroundAfterClick"] = user.GetForegroundWindow() == other
         deadline = time.monotonic() + 45
         message = None
         while message is None and time.monotonic() < deadline and child.poll() is None:
             pump()
             message = next((row[0] for row in windows() if row[0] not in before
                             and row[1:] == ("#32770", "Amplifier Unified")), None)
-            time.sleep(0.02)
+            time.sleep(0.01)
         if message is None:
             return facts
         topmost = lambda: bool(user.GetWindowLongPtrW(message, -20) & 0x8)
-        facts.update(appeared=True, topmostAtFirstSight=topmost())
+        def in_front():
+            order = [row[0] for row in windows()]
+            return order.index(message) < order.index(other)
+        facts.update(appeared=True, topmostAtFirstSight=topmost(), inFrontAtFirstSight=in_front())
         settled = time.monotonic() + 2  # The launcher's helper looks five times per second.
         while time.monotonic() < settled:
             pump()
             time.sleep(0.05)
-        order = [row[0] for row in windows()]
-        facts.update(topmost=topmost(), inFrontOfOtherWindow=order.index(message) < order.index(other),
-                     foreground=user.GetForegroundWindow() == message)
+        facts.update(topmost=topmost(), inFront=in_front(), foreground=user.GetForegroundWindow() == message)
         user.PostMessageW(message, 0x0010, 0, 0)  # WM_CLOSE: the same as the OK button of this box.
         facts["exit"] = child.wait(20)
         return facts
@@ -447,44 +478,40 @@ def show_message(code, other):
 
 
 @native
-def test_native_launcher_message_comes_in_front_of_another_programs_window():
-    """The real launcher message, shown by another process, on a real desktop.
+def test_native_launcher_message_comes_in_front_of_the_window_the_person_is_using():
+    """The real launcher message, from a windowless process, on a real desktop.
 
     On a real PC the message opened BEHIND the browser although the launcher
-    passed the topmost and foreground flags. Here this test process plays the
-    browser: it owns an ordinary window in the middle of the screen and, when
-    Windows permits, holds the foreground with foreground changes locked. The
-    message-box flags alone are measured and printed. The launcher's own
-    message must be topmost and in front of that window.
+    passed the topmost and foreground flags. This test process plays the
+    browser: it owns an ordinary window and receives a real mouse click after
+    the message's process has started. The message-box flags alone are
+    measured and printed, not required. The launcher's own message must end
+    topmost and in front of that window, and must still wait for its answer.
     """
     def unavailable(reason):
         if os.environ.get("AMPLIFIER_REQUIRE_WINDOWS_TRUST_CHECKS") == "1":
             pytest.fail("This lane must show a real message box: " + reason)
         pytest.skip(reason)
     user, windows, pump = desktop()
-    other = user.CreateWindowExW(0, "STATIC", "Another program", 0x80000000 | 0x10000000,
-                                 0, 0, 1600, 1200, None, None, None, None)  # Popup, visible.
+    # A visible popup that receives clicks (SS_NOTIFY), like any program's window.
+    other = user.CreateWindowExW(0, "STATIC", "Another program", 0x80000000 | 0x10000000 | 0x100,
+                                 0, 0, 1600, 1200, None, None, None, None)
     if not other:
         unavailable(f"no interactive desktop (error {ctypes.get_last_error()})")
-    locked = False
     try:
         user.SetForegroundWindow(other)
         pump()
-        holds = user.GetForegroundWindow() == other
-        locked = bool(holds and user.LockSetForegroundWindow(1))
-        print("this test process holds the foreground:", holds, "| foreground changes locked:", locked)
-        flags_alone = show_message(RAW_MESSAGE, other)
+        print("this test's window is the foreground window at the start:", user.GetForegroundWindow() == other)
+        flags_alone = show_message("flags-alone", other)
         print("message-box flags alone (measured, not required):", flags_alone)
-        launcher = show_message(LAUNCHER_MESSAGE, other)
+        launcher = show_message("launcher", other)
         print("launcher message:", launcher)
     finally:
-        if locked:
-            user.LockSetForegroundWindow(2)
         user.DestroyWindow(other)
     if not flags_alone["appeared"] or not launcher["appeared"]:
         unavailable("the message box did not appear")
-    assert launcher["topmost"] and launcher["inFrontOfOtherWindow"]
-    assert launcher["exit"] == 0  # Closing the box is its OK answer.
+    assert launcher["topmost"] and launcher["inFront"]
+    assert launcher["exit"] == 0  # It waited; closing the box is its OK answer.
 
 
 @native
