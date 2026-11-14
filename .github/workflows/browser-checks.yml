@@ -3,6 +3,10 @@ name: Extended browser checks
 on:
   workflow_dispatch:
     inputs:
+      captured_message_delivery:
+        description: Only fixed captured native send, delivery producer and client contracts; no other scope
+        type: boolean
+        default: false
       permissions_history:
         description: Only fixed permissions history source and installed-wheel qualification
         type: boolean
@@ -79,6 +83,9 @@ jobs:
       - name: Reject mixed attachment selections
         if: ${{ inputs.attachment_consumption && inputs.app004_qualification }}
         run: exit 1
+      - name: Reject mixed captured delivery selections
+        if: ${{ inputs.captured_message_delivery && (inputs.permissions_history || inputs.readiness_trio || inputs.canvas_qualification || inputs.peer_messages || inputs.mcp_boundary || inputs.compact_composer || inputs.destination_history || inputs.settings_close_diagnostic || inputs.attachment_experience || inputs.attachment_consumption || inputs.app004_qualification || inputs.multi_quote) }}
+        run: exit 1
       - name: Reject mixed multi-quote selections
         if: ${{ inputs.multi_quote && (inputs.attachment_consumption || inputs.app004_qualification || inputs.mcp_boundary) }}
         run: exit 1
@@ -86,11 +93,19 @@ jobs:
         if: ${{ !inputs.multi_quote }}
         run: |
           if test -f tests/web/package.json; then
-            python scripts/browser_check_runner.py --plan tests/web/browser-checks.json --output output/browser-checks --initialize ${{ inputs.app004_qualification && '--app004-qualification' || '' }} ${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}
+            python scripts/browser_check_runner.py --plan tests/web/browser-checks.json --output output/browser-checks --initialize ${{ inputs.app004_qualification && '--app004-qualification' || '' }} ${{ inputs.attachment_consumption && '--attachment-consumption' || '' }} ${{ inputs.captured_message_delivery && '--captured-message-delivery' || '' }}
           else
             # Historical selected checkout keeps its authored web layout.
             python scripts/browser_check_runner.py --plan frontend/tests/browser-checks.json --output output/browser-checks --initialize ${{ inputs.app004_qualification && '--app004-qualification' || '' }} ${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}
           fi
+      - name: Bind captured delivery source before setup
+        if: ${{ inputs.captured_message_delivery }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git rev-parse HEAD HEAD^{tree} > output/browser-checks/source.txt
+          git diff --exit-code
+          sha256sum tests/fixtures/message_delivery_ui_server.py tests/web/message-delivery-browser.mjs scripts/browser_check_runner.py .github/workflows/browser-checks.yml uv.lock tests/web/package-lock.json components/web-client.source.json > output/browser-checks/inputs.sha256
+          cp components/web-client.source.json output/browser-checks/selected-client.json
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
@@ -146,7 +161,7 @@ jobs:
             npm ci --prefix frontend
           fi
       - name: Run full frontend units for unfiltered nightly/manual coverage
-        if: ${{ !inputs.multi_quote && !inputs.attachment_consumption && !inputs.app004_qualification && !inputs.mcp_boundary }}
+        if: ${{ !inputs.multi_quote && !inputs.attachment_consumption && !inputs.app004_qualification && !inputs.mcp_boundary && !inputs.captured_message_delivery }}
         run: |
           set -o pipefail
           if test -f tests/web/package.json; then
@@ -166,6 +181,22 @@ jobs:
             npm run build --prefix frontend
           fi
         id: frontend-build
+      - name: Capture verified captured-delivery build output
+        if: ${{ inputs.captured_message_delivery && steps.frontend-build.outcome == 'success' }}
+        run: |
+          # Evidence is not an authored build input. Preserve it outside the
+          # source while the strict existing source-identity guard inspects Git.
+          mv output/browser-checks "$RUNNER_TEMP/captured-delivery-evidence"
+          trap 'mv "$RUNNER_TEMP/captured-delivery-evidence" output/browser-checks' EXIT
+          python scripts/frontend_build_artifact.py create --destination "$RUNNER_TEMP/captured-frontend-build"
+      - name: Retain importable captured-delivery build output
+        if: ${{ inputs.captured_message_delivery && steps.frontend-build.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: captured-frontend-build-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/captured-frontend-build/
+          include-hidden-files: true
+          if-no-files-found: error
       - name: Retain the successful production web build
         if: ${{ steps.frontend-build.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -212,11 +243,28 @@ jobs:
             # Historical selected checkout keeps its authored web layout.
             node --test frontend/tests/connection-notice.test.mjs 2>&1 | tee output/browser-checks/attachment-client.tap
           fi
+      - name: Verify captured delivery producer and selection contracts
+        if: ${{ inputs.captured_message_delivery }}
+        id: captured-host
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          uv run --no-sync pytest -v --tb=short tests/test_message_delivery.py tests/test_delivery_reconciliation.py tests/test_delivery_reconciliation_http.py tests/test_companion_queued_revocation.py tests/test_browser_check_runner.py::test_captured_message_delivery_plan_is_fixed_without_changing_default tests/test_browser_check_runner.py::test_captured_message_delivery_workflow_is_manual_fixed_and_retains_failures --junitxml=output/browser-checks/captured-host.xml 2>&1 | tee output/browser-checks/captured-host.log
+      - name: Verify captured delivery client contracts
+        if: ${{ inputs.captured_message_delivery }}
+        id: captured-client
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          (cd .build/web-client && node --test tests/api.test.mjs tests/message-delivery.test.mjs tests/delivery-reconciliation.test.mjs tests/new-chat-handoffs.test.mjs tests/legacy-outbox-notice.test.mjs) 2>&1 | tee output/browser-checks/captured-client.tap
+      - name: Verify captured delivery build provenance
+        if: ${{ inputs.captured_message_delivery }}
+        run: python scripts/web_client_build.py verify
       - name: Run all extended browser scenarios serially
         if: ${{ !inputs.multi_quote }}
         run: |
           if test -f tests/web/package.json; then
-            uv run --no-sync python scripts/browser_check_runner.py --plan tests/web/browser-checks.json --output output/browser-checks --budget-seconds 1500 ${{ inputs.app004_qualification && '--app004-qualification' || '' }} ${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}
+            uv run --no-sync python scripts/browser_check_runner.py --plan tests/web/browser-checks.json --output output/browser-checks --budget-seconds 1500 ${{ inputs.app004_qualification && '--app004-qualification' || '' }} ${{ inputs.attachment_consumption && '--attachment-consumption' || '' }} ${{ inputs.captured_message_delivery && '--captured-message-delivery' || '' }}
           else
             # Historical selected checkout keeps its authored web layout.
             uv run --no-sync python scripts/browser_check_runner.py --plan frontend/tests/browser-checks.json --output output/browser-checks --budget-seconds 1500 ${{ inputs.app004_qualification && '--app004-qualification' || '' }} ${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}
@@ -224,8 +272,30 @@ jobs:
       - name: Run fixed multi-quote source and installed proof
         if: ${{ inputs.multi_quote }}
         run: uv run --no-sync python scripts/multi_quote_checks.py --output output/multi-quote --installed
+      - name: Retain captured browser outcome as JUnit without changing its verdict
+        if: ${{ always() && inputs.captured_message_delivery }}
+        run: |
+          python - <<'PY'
+          import json, xml.etree.ElementTree as ET
+          from pathlib import Path
+          output = Path('output/browser-checks')
+          report = json.loads((output / 'results.json').read_text())
+          rows = report['scenarios']
+          assert [row['id'] for row in rows] == ['message-delivery', 'message-outbox', 'delivery-reconciliation', 'delivery-new-chat']
+          failed = [row for row in rows if row['status'] != 'passed' or row['exitCode'] != 0]
+          suite = ET.Element('testsuite', name='captured-message-delivery', tests=str(len(rows)), failures=str(len(failed)))
+          for row in rows:
+              case = ET.SubElement(suite, 'testcase', name=row['id'], classname='captured-delivery-browser')
+              if row in failed:
+                  log = output / (row['id'] + '.log')
+                  ET.SubElement(case, 'failure', message=row['status']).text = log.read_text() if log.exists() else json.dumps(row)
+          ET.ElementTree(suite).write(output / 'captured-browser.xml', encoding='utf-8', xml_declaration=True)
+          PY
       - name: Preserve failed attachment contracts
         if: ${{ always() && inputs.attachment_consumption && (steps.attachment-contracts.outcome != 'success' || steps.attachment-client-contracts.outcome != 'success') }}
+        run: exit 1
+      - name: Preserve failed captured delivery contracts
+        if: ${{ always() && inputs.captured_message_delivery && (steps.captured-host.outcome != 'success' || steps.captured-client.outcome != 'success') }}
         run: exit 1
       - name: Retain scenario coverage and diagnostics
         if: always()
@@ -245,6 +315,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Reject mixed captured delivery selection
+        if: ${{ inputs.captured_message_delivery }}
+        run: exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
@@ -392,6 +465,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Reject mixed captured delivery selection
+        if: ${{ inputs.captured_message_delivery }}
+        run: exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
@@ -545,6 +621,9 @@ jobs:
     env:
       CANVAS_QUALIFICATION_SCOPE: ${{ inputs.canvas_scope || 'full' }}
     steps:
+      - name: Reject mixed captured delivery selection
+        if: ${{ inputs.captured_message_delivery }}
+        run: exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
@@ -594,6 +673,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Reject mixed captured delivery selection
+        if: ${{ inputs.captured_message_delivery }}
+        run: exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
@@ -659,6 +741,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Reject mixed captured delivery selection
+        if: ${{ inputs.captured_message_delivery }}
+        run: exit 1
       - name: Require the fixed navigation selection for diagnostic mode
         if: ${{ inputs.settings_close_diagnostic && !inputs.destination_history }}
         run: exit 1
@@ -888,6 +973,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Reject mixed captured delivery selection
+        if: ${{ inputs.captured_message_delivery }}
+        run: exit 1
       - name: Reject incompatible peer selections
         if: ${{ inputs.canvas_qualification || inputs.multi_quote || inputs.attachment_experience || inputs.compact_composer || inputs.destination_history || inputs.settings_close_diagnostic || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption }}
         run: exit 1
@@ -932,6 +1020,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15 # Includes tool setup and evidence upload; checks themselves cap at 600s.
     steps:
+      - name: Reject mixed captured delivery selection
+        if: ${{ inputs.captured_message_delivery }}
+        run: exit 1
       - name: Reject mixed readiness trio selections before setup
         if: ${{ inputs.attachment_experience || inputs.peer_messages || inputs.destination_history || inputs.settings_close_diagnostic || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.canvas_qualification || inputs.multi_quote || inputs.compact_composer }}
         run: |
@@ -1001,6 +1092,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15 # Tool setup/upload surround the fixed 600s qualification ceiling.
     steps:
+      - name: Reject mixed captured delivery selection
+        if: ${{ inputs.captured_message_delivery }}
+        run: exit 1
       - name: Reject mixed permissions history selections before setup
         if: ${{ inputs.readiness_trio || inputs.attachment_experience || inputs.peer_messages || inputs.destination_history || inputs.settings_close_diagnostic || inputs.mcp_boundary || inputs.app004_qualification || inputs.attachment_consumption || inputs.canvas_qualification || inputs.multi_quote || inputs.compact_composer }}
         run: |

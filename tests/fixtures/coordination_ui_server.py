@@ -72,8 +72,22 @@ class Runtime:
         return self.task_ids[index] if index is not None and index < len(self.task_ids) else None
 
     async def send(self, session, text, input_id, emit):
-        self.sent.append({"sessionId": session["id"], "text": text, "inputId": input_id, "kind": "human"})
-        await self.begin(session, input_id, emit)
+        context = self.contexts.get(session["id"])
+        active = context and context["active"]
+        self.sent.append({"sessionId": session["id"], "text": text, "inputId": input_id,
+                          "kind": "human-context" if active else "human"})
+        if active:
+            # Script the actual ordinary-input event shape, not the retired
+            # browser generation anchor or a second synthetic generation.
+            context["inputIds"].append(input_id)
+            await self.event("runtime.status", {
+                "sessionId": session["id"], "event": "input.delivered",
+                "inputId": input_id, "input_id": input_id,
+                "generation_id": context["generationId"], "delivery": "request_boundary",
+                "interruptionRevision": session.get("interruptionRevision", 0),
+            }, emit)
+        else:
+            await self.begin(session, input_id, emit)
         return {"accepted": True, "inputId": input_id, "completed": False}
 
     async def steer(self, session, text, input_id, emit):

@@ -605,8 +605,16 @@ async def install_native(loop, coordinator, providers):
         async def _emit(self, kind, **data):
             runtime = getattr(self.owner, "runtime", None)
             command = getattr(runtime, "accepted", {}).get(data.get("input_id"))
-            if command and command.target_generation_id:
-                data["target_generation_id"] = command.target_generation_id
+            if command:
+                if command.target_generation_id:
+                    data["target_generation_id"] = command.target_generation_id
+                # Ordinary input stays unanchored. Its observed delivery uses
+                # the generation captured by this actual provider send.
+                binding = next((b for b in host.send_bindings.values()
+                    if b['record'].get('operation') == 'response.steer'
+                    and b['record'].get('input_id') == command.id), None)
+                if binding:
+                    data["generation_id"] = binding['generationId']
                 data["delivery"] = "native"
             await super()._emit(kind, **data)
             outcome = getattr(runtime, "steering_outcomes", {}).get(data.get("input_id"))
@@ -647,7 +655,9 @@ async def install_native(loop, coordinator, providers):
             attempt = delivery.begin_steer()
             token = WORK_ATTEMPT.set((delivery, attempt))
             steer_token = _STEER_INPUT.set(getattr(command, 'id', None))
-            generation_token = _STEER_GENERATION.set(getattr(command, 'target_generation_id', None))
+            generation_token = _STEER_GENERATION.set(
+                getattr(command, 'target_generation_id', None)
+                or (getattr(coordinator.get_capability('live.runtime'), 'generation', None) or {}).get('id'))
             try:
                 invoke = super().steer_live
                 return await observe(self, SimpleNamespace(model=host.identity['model']),

@@ -48,8 +48,9 @@ sidebar. Worker histories stay in the same native files and remain accessible
 through their parent conversation; independent forks are top-level chats.
 Browsing them reads a page of their native transcript without starting a worker;
 the displayed history refreshes after CLI changes. The next worker activation
-reads the latest native transcript under the shared lock. Warm workers reuse
-unchanged mounts; native transcript/metadata/backup changes force a remount.
+reads the latest native transcript under the shared lock. Live workers retain
+that lock while idle; another cooperating writer must request retirement first.
+Replacement starts a fresh worker, never a hot reload of ownerless live context.
 An external transcript/backup write during an active turn is rejected before Unified saves,
 preserving the older CLI compatibility guard.
 

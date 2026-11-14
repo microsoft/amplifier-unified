@@ -107,11 +107,40 @@ conflicts with the URL is rejected. The SPA uses the same service dispatch throu
 `/api/actions`; session operations capture their target before awaiting history or
 runtime admission.
 
+Ordinary `conversation.send` is conversation-addressed. Do not supply a displayed
+generation: the native owner chooses live provider steering when ready, otherwise
+the next request boundary within the current turn, or a new turn when idle.
+Explicit `expectedGenerationId` remains strict and refuses an ended/changed run;
+the former `allowNextTurn` option is removed. See
+[message delivery](../MESSAGE-DELIVERY-EDIT.md#ordinary-messages-follow-the-conversation)
+for receipt phases and the no-replay boundary.
+Optional `expectedInterruptionRevision` captures the conversation's existing Stop
+revision at submission. A stale value refuses fresh admission with `input_stopped`;
+it is not a generation/route choice. Exact duplicate receipts still reconcile after
+Stop. The bundled browser preserves this value across uncertain delivery.
+
 Keep the same command ID and arguments after an uncertain transport failure.
 Persisted receipts deduplicate retries by client, action, arguments, and origin.
 A changed command with the same ID is rejected. Command acceptance is distinct
 from a completed model/tool operation. Interrupted or uncertain work is never
 automatically rerun by attachment, reload, or SSE reconnection.
+
+`conversation.send` optionally accepts `expectedSource: {workspace, nativeIdentity}`
+for native conversations. It binds fresh input to the captured workspace and
+effective native execution identity (`runtimeSessionId`, then `nativeIdentity`,
+then conversation ID). The host compares it under the existing mutation lock,
+after exact receipt replay and fresh admission rechecks but before input/draft
+mutation. A contradiction refuses fresh input with `source_changed`; it never
+retargets or resends. Changing the witness under the same command ID is a
+fingerprint conflict. An exact saved receipt still replays after the current
+source changes. Public clients may omit this optional field unchanged; external
+ACP text sends do not supply a native witness.
+
+New bundled native submissions retain this witness before queue/checkpoint
+waits. Navigation or omission of their row from a selected-only frame is not a
+source contradiction. Previously uncertain submissions retain their original
+payload and witness presence/absence; a refused retry cannot prove that the
+earlier attempt never ran.
 
 The bundled browser can dismiss a settled failed/uncertain delivery warning into
 reversible **Delivery details**. This stores only the exact chat/input identities
@@ -203,6 +232,35 @@ Waiting for a human requires exact input/generation question or approval
 evidence; ambient pending questions/approvals do not qualify. Current native
 approval events without that binding do not produce `human_decision`.
 
+A failed exact input may also carry `inputStatus.failure`: the existing bounded
+diagnosis (`category`, `errorType`, `summary`, `guidance`, generation/input binding,
+and sanitized exception frames when recorded). It stays beside that input when
+a newer generation clears the current `session.failure`. Merely accepting a send
+or reporting ready does not erase a failed request; successful startup can clear
+its own startup failure. A failed provider/tool/naming call stays on that operation
+unless terminal request evidence confirms the request failed.
+
+A checkpointed completed response remains completed after a later runtime fault.
+That fault is retained in bounded runtime diagnostics, not relabelled as a stopped
+turn or a reason to resend the prior input. Explicit `persistence.failed` remains
+a saving-operation failure: response completion does not promise that later job
+evidence or state was saved. Pending/unknown operations and actual Stop remain
+truthful. An ordinary new human send may start an absent runtime, never replaying
+the earlier request as a side effect of viewing or reconnecting.
+
+`session.inspect` is a private on-demand report; its ordered causal timeline and
+loaded runtime versions do not borrow unrelated current performance/call history.
+Shareable `feedback.diagnostics` uses the existing feedback pipeline with a closed
+failure report: fixed categories/types, approved source-file/line frames, hashed
+input/generation correlations, loaded versions and a bounded causal tail. It
+excludes prompts, titles, paths, arbitrary hook/file names, credentials and SDK
+payloads. Optional `failureContext: {sessionId, inputId, generationId}` on
+`feedback.diagnostics`, `feedback.report` and `feedback.submit` resolves only that
+exact retained failed-input annotation. Missing/mismatched context fails rather
+than substituting the latest fault. Accepted feedback freezes these sanitized
+facts in its existing receipt; opting out still excludes diagnostic bytes.
+Missing original frames/versions remain unavailable rather than inferred.
+
 These small receipts use existing durable annotations and are joined by exact
 input identity after message-history/window overlays; they survive reload and
 generation-tail eviction without storing another transcript or platform ledger.
@@ -263,7 +321,9 @@ is advisory: a worker can retire or another host can acquire ownership before
 the next command. Send through the normal command API regardless of warmth.
 Preparation never requests takeover, submits input, or replays earlier work.
 The host defaults to 32 idle workers for 12 hours, with two simultaneous
-background starts. Idle workers release the Foundation writer lock. Client
+background starts. Idle live workers retain the Foundation writer lock until
+acknowledged retirement and cleanup. Retirement rechecks pending work after saving;
+the next ordinary input starts a fresh worker from native history. Client
 disconnect does not stop active work or reset the idle-retention clock.
 
 ## Reconnect and lifetime

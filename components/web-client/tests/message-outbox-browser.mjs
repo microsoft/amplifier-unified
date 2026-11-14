@@ -11,7 +11,12 @@ const waiting=[],deliveryWaiting=[],deferredDelivery=new Set(),calls=[],errors=[
 const unknownDelivery='Delivery is still uncertain. Nothing was sent again.';
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(check,label){for(let i=0;i<150&&!check();i++)await sleep(10);assert.ok(check(),label)}
-async function next(){await until(()=>waiting.length,'Expected pending operation');return waiting.shift()}
+function ordinarySend(item){
+ assert.equal(item.body.action,'conversation.send');
+ assert.equal(Object.hasOwn(item.body.args,'expectedGenerationId'),false,'Ordinary Send does not bind execution to a browser-observed run');
+ assert.equal(Object.hasOwn(item.body.args,'allowNextTurn'),false,'The owner, not the browser, chooses live/boundary/idle admission');
+}
+async function next(strict=false){await until(()=>waiting.length,'Expected pending operation');const item=waiting.shift();if(!strict&&item.body.action==='conversation.send')ordinarySend(item);return item}
 async function nextDelivery(inputId){await until(()=>deliveryWaiting.some(item=>item.body.args.inputId===inputId),'Expected pending delivery read for '+inputId);return deliveryWaiting.splice(deliveryWaiting.findIndex(item=>item.body.args.inputId===inputId),1)[0]}
 function deliveryReply(item,delivery,extra={}){
  const {sessionId,inputId}=item.body.args;
@@ -44,6 +49,7 @@ try{
    return deliveryReply(item,'unknown',{message:unknownDelivery});
   }
   if(['conversation.send','conversation.retry','message.edit'].includes(body.action)){waiting.push(item);return}
+  if(body.action==='conversation.stop'){chat().interruptionRevision=(chat().interruptionRevision??0)+1;chat().status='stopped';if(chat().collaborationGeneration)chat().collaborationGeneration.terminal=true;}
   if(body.action==='view.update'&&blockNextDraft&&body.args.patch?.draft===''){blockNextDraft=false;blockedDraft={route,body};return}
   if(body.action==='view.update')state.view={...state.view,...body.args.patch};
   state.revision++;return route.fulfill({json:{accepted:true,state:shell.state()}});
@@ -203,8 +209,13 @@ try{
  await page.getByText(/Sending again could repeat that work/).waitFor();
  assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lostRejection.body.id).length,1,'Opening uncertain-retry confirmation is not admission');
  await page.getByRole('button',{name:'Send this message again',exact:true}).click();
- const rejectionReceipt=await next();assert.equal(rejectionReceipt.body.action,'conversation.send');assert.equal(rejectionReceipt.body.id,lostRejection.body.id,'Original-submission retry keeps its deduplication identity');assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lostRejection.body.id).length,2,'Only the explicit click retries the original submission');await rejectionReceipt.route.fulfill({json:{accepted:false,duplicate:true,status:409,error:'Saved rejection',state:shell.state()}});
- await page.getByRole('button',{name:'Retry',exact:true}).click();const rejectedRetry=await next();assert.notEqual(rejectedRetry.body.id,lostRejection.body.id);await received(rejectedRetry);
+ const rejectionReceipt=await next();assert.equal(rejectionReceipt.body.action,'conversation.send');assert.equal(rejectionReceipt.body.id,lostRejection.body.id,'Original-submission retry keeps its deduplication identity');assert.deepEqual(rejectionReceipt.body.args,lostRejection.body.args,'Unknown retry preserves the exact captured payload');assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lostRejection.body.id).length,2,'Only the explicit click retries the original submission');await rejectionReceipt.route.fulfill({json:{accepted:false,duplicate:true,status:409,error:'Saved rejection',state:shell.state()}});
+ await page.waitForFunction(id=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).find(row=>row.commandId===id)?.status==='unknown',lostRejection.body.id);
+ assert.deepEqual(rejectionReceipt.body,lostRejection.body,'Refused original replay preserves the complete original payload and witness');
+ assert.equal(await page.getByRole('button',{name:'Retry',exact:true}).count(),0,'A refused retry does not prove the earlier uncertain attempt never ran');
+ await page.getByRole('button',{name:'Retry original submission',exact:true}).click();
+ await page.getByRole('button',{name:'Send this message again',exact:true}).click();
+ const rejectedRetry=await next();assert.deepEqual(rejectedRetry.body,lostRejection.body);await received(rejectedRetry);
  const delayed=await send('Acknowledgement delayed');chat().status='working';chat().messages.push({id:'delayed',inputId:delayed.body.id,role:'user',text:delayed.body.args.text,delivery:{status:'sending'}});await emit();
  await composer().fill('Keep this next draft');await until(()=>state.view.draft==='Keep this next draft','Draft saves while acknowledgement waits');
  await delayed.route.fulfill({status:504,json:{error:'The runtime operation has not returned yet. It may still be running; do not automatically repeat it.',code:'runtime_pending',delivery:'unknown'}});
@@ -278,9 +289,12 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
   assert.equal(JSON.stringify(chat().messages),historyBefore);assert.deepEqual(await outbox(),[]);assert.equal(calls.filter(c=>c.id===oldEdit.body.id).length,1);assert.equal(waiting.length,0);
   await page.locator('.a-message-editor').getByRole('button',{name:'Cancel',exact:true}).click();await editor().waitFor({state:'detached'});await until(()=>state.view.messageEdit===null,'Settled editor can be canceled');
  }
- chat().status='working';chat().collaborationGeneration={id:'original-run',terminal:false};await emit();
+ // A stale active projection must not choose the execution route or pin the run.
+ chat().status='working';chat().collaborationGeneration={id:'stale-browser-run',terminal:false};chat().nextMessageRevision=7;await emit();
  await composer().fill('Please find a good pause point.');await page.getByRole('button',{name:'Send message',exact:true}).click();
- const correction=await next();assert.equal(correction.body.args.expectedGenerationId,'original-run','Composer binds steering to the observed run');assert.equal(correction.body.args.allowNextTurn,true,'Ordinary messages may cross normal completion');
+ const correction=await next();assert.equal(correction.body.args.sessionId,'chat');assert.equal(correction.body.args.expectedConfigurationRevision,7);
+ const capturedCorrection=(await outbox()).find(row=>row.commandId===correction.body.id);
+ assert.equal(Object.hasOwn(capturedCorrection,'expectedGenerationId'),false);assert.equal(Object.hasOwn(capturedCorrection,'allowNextTurn'),false);
  const steered={id:'steered',inputId:correction.body.id,role:'user',text:correction.body.args.text,delivery:{status:'accepted'},steering:{generationId:'original-run',disposition:'queued'}};
  chat().messages.push(steered);state.revision++;await correction.route.fulfill({json:{accepted:true,delivery:'accepted',steering:steered.steering,state:shell.state()}});
  await page.getByText('Received by the active run; waiting for its next step…',{exact:true}).waitFor();
@@ -288,24 +302,143 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
  deferredDelivery.delete(correction.body.id);await deliveryReply(steeringCheck,'accepted',{steering:steered.steering});
  steered.steering.disposition='applied';await emit();await page.getByText('Added to the active run’s context',{exact:true}).waitFor();
  assert.equal(calls.filter(c=>c.id===correction.body.id).length,1,'Steering updates and checks never resend');
+ // The same ordinary Send also renders native receipts without treating host
+ // acceptance or provider pending as successor application.
+ steered.steering={generationId:'actual-owner-run',mode:'native',phase:'sent',disposition:'sending'};await emit();
+ await page.getByText('Sending live direction…',{exact:true}).waitFor();
+ steered.steering.disposition='queued';steered.steering.phase='accepted';await emit();
+ await page.getByText('Accepted; applying live direction…',{exact:true}).waitFor();
+ assert.equal(await page.getByText('Live direction applied to the successor response',{exact:true}).count(),0);
+ steered.steering.phase='pending';await emit();await page.getByText('Accepted; queued at the provider until a successor response can start…',{exact:true}).waitFor();
+ steered.steering.phase='applied';steered.steering.disposition='applied';await emit();await page.getByText('Live direction applied to the successor response',{exact:true}).waitFor();
+ assert.equal(calls.filter(c=>c.id===correction.body.id).length,1,'Native phase changes do not replay Send');
  await page.screenshot({path:'/tmp/amplifier-steering-applied.png'});
 
- // A rejected send keeps its text, but an explicit Retry must not reuse the expired run.
+ // A rejected send keeps its text. Explicit Retry refreshes captured config and
+ // Stop epoch, never a generation or browser-selected execution route.
  const boundary=await send('This is another message, not a correction.');
- assert.equal(boundary.body.args.expectedGenerationId,'original-run');
- chat().status='idle';chat().collaborationGeneration.terminal=true;await emit();
- await boundary.route.fulfill({status:409,json:{accepted:false,code:'steering_target_changed',error:'The run changed. Your message was not sent.'}});
+ assert.equal(boundary.body.args.expectedConfigurationRevision,7);
+ chat().collaborationGeneration={id:'another-stale-run',terminal:false};chat().nextMessageRevision=8;await emit();
+ await boundary.route.fulfill({status:409,json:{accepted:false,code:'configuration_changed',error:'The configuration changed. Your message was not sent.'}});
  const boundaryRejected=page.locator(`[data-input-id="${boundary.body.id}"]`);
  await boundaryRejected.getByRole('button',{name:'Retry',exact:true}).click();
  const retried=await next();assert.notEqual(retried.body.id,boundary.body.id);
- assert.equal(retried.body.args.expectedGenerationId,undefined,'Explicit retry refreshes the expired generation');
- assert.equal(retried.body.args.allowNextTurn,true);assert.equal(retried.body.args.text,boundary.body.args.text);
+ assert.equal(retried.body.args.expectedConfigurationRevision,8);assert.equal(retried.body.args.text,boundary.body.args.text);
+ assert.equal(retried.body.args.sessionId,boundary.body.args.sessionId);assert.deepEqual(retried.body.args.attachmentIds,boundary.body.args.attachmentIds);
  await received(retried);
+ chat().messages.at(-1).steering={disposition:'next_turn'};await emit();await page.getByText('Received for the next turn',{exact:true}).waitFor();
  chat().status='idle';chat().collaborationGeneration.terminal=true;await emit();
+ // Normal completion changes the run, not the Stop epoch: held Send remains
+ // ordinary conversation intent with no generation anchor.
+ chat().status='working';chat().interruptionRevision=3;chat().collaborationGeneration={id:'completing-run',terminal:false};await emit();
+ const completing=await send('Cross normal completion without rebinding my intent');
+ assert.equal(completing.body.args.expectedInterruptionRevision,3);
+ chat().status='idle';chat().collaborationGeneration.terminal=true;await emit();await received(completing);
+ assert.equal(calls.filter(call=>call.id===completing.body.id).length,1);
+ // Hold the Send HTTP before any host receipt, then Stop through the real
+ // composer control. A late request must carry its old epoch, not start fresh.
+ chat().status='working';chat().collaborationGeneration={id:'stopping-run',terminal:false};await emit();
+ const beforeStop=await send('Held before Stop must not restart work');
+ assert.equal(beforeStop.body.args.expectedInterruptionRevision,3);
+ await page.getByRole('button',{name:'Stop response',exact:true}).click();
+ await until(()=>chat().interruptionRevision===4,'Synthetic Stop advances only the existing epoch');
+ const stoppedBubble=page.locator(`[data-input-id="${beforeStop.body.id}"]`);
+ assert.equal((await outbox()).find(row=>row.commandId===beforeStop.body.id).expectedInterruptionRevision,3);
+ await beforeStop.route.fulfill({status:409,json:{accepted:false,code:'input_stopped',error:'This message was submitted before Stop. It was not sent.',state:shell.state()}});
+ await stoppedBubble.getByText('This message was submitted before Stop. It was not sent.',{exact:true}).waitFor();
+ assert.equal(chat().messages.some(message=>message.inputId===beforeStop.body.id),false,'Stopped intent was not saved as newly admitted work');
+ assert.equal(calls.filter(call=>call.id===beforeStop.body.id).length,1,'Stop refusal does not replay');
+ const afterStop=await send('A fresh post-Stop message is new intent');
+ assert.equal(afterStop.body.args.expectedInterruptionRevision,4);assert.notEqual(afterStop.body.id,beforeStop.body.id);await received(afterStop);
+ await stoppedBubble.getByRole('button',{name:'Retry',exact:true}).click();
+ const stoppedRetry=await next();assert.notEqual(stoppedRetry.body.id,beforeStop.body.id);assert.equal(stoppedRetry.body.args.expectedInterruptionRevision,4);await received(stoppedRetry);
+ // An explicit anchored API call remains distinct from the ordinary composer;
+ // generic action dispatch must not strip or reinterpret its caller's fields.
+ const strictArgs={sessionId:'chat',text:'Explicit anchored API input',expectedGenerationId:'explicit-run',expectedConfigurationRevision:8,expectedSource:{workspace:'/fixture',nativeIdentity:'chat'}};
+ const strictCall=page.evaluate(args=>window.amplifier.dispatch('conversation.send',args,{id:'strict-api-input',feedback:false}),strictArgs);
+ strictCall.catch(()=>{}); // Cleanup must not mask an earlier assertion failure.
+ const strict=await next(true);assert.deepEqual(strict.body.args,strictArgs);assert.equal(strict.body.id,'strict-api-input');
+ await strict.route.fulfill({json:{accepted:true,delivery:'accepted',state:shell.state()}});await strictCall;
+ // Reload an uncertain submission captured before route removal. Its old wire
+ // intent stays intact; even explicit confirmation cannot send it unanchored.
+ const historical={id:'historical-local',commandId:'historical-input',sessionId:'chat',scope:capturedCorrection.scope,text:'Retained historical route intent',attachmentIds:[],status:'unknown',expectedGenerationId:'old-run',allowNextTurn:true,expectedConfigurationRevision:7};
+ await page.evaluate(entry=>sessionStorage.setItem('amplifier.messageOutbox.v1',JSON.stringify([entry])),historical);
+ await page.reload();await composer().waitFor();
+ const historicalBubble=page.locator('[data-input-id="historical-input"]');
+ await historicalBubble.getByText(unknownDelivery,{exact:true}).waitFor();
+ assert.ok(calls.some(call=>call.action==='conversation.delivery'&&call.args.inputId==='historical-input'),'Historical recovery reads only its original receipt');
+ await historicalBubble.getByRole('button',{name:'Retry original submission',exact:true}).click();
+ await historicalBubble.getByRole('button',{name:'Send this message again',exact:true}).click();
+ await page.getByText('This earlier submission is still uncertain and cannot be sent again here. Use Check delivery for its original receipt. The saved message was kept.',{exact:true}).waitFor();
+ assert.deepEqual(await outbox(),[historical]);assert.equal(calls.filter(call=>call.action==='conversation.send'&&call.id==='historical-input').length,0);
+ // The synthetic fixture now removes its seed, not a production recovery path.
+ await page.evaluate(()=>sessionStorage.setItem('amplifier.messageOutbox.v1','[]'));await page.reload();await composer().waitFor();
+ chat().externalAgent={id:'fixture-acp',name:'External text fixture'};
+ await emit();
+ const external=await send('External text keeps its existing boundary');
+ assert.equal(Object.hasOwn(external.body.args,'expectedSource'),false,'ACP runtime identity is not a native send witness');
+ assert.equal(await page.getByRole('button',{name:'Add files and more',exact:true}).count(),0);
+ await received(external);delete chat().externalAgent;await emit();
+ // A retained unknown request can outlive its row and mounted callback. Keep
+ // payload omission distinct from the local connection/returned-frame fence.
+ const originalChat=chat(),originalSelection=state.selectedSessionId;
+ const legacy={id:'legacy-omitted',commandId:'legacy-original',sessionId:'chat',
+  scope:JSON.stringify([shell.state().client.historyScope||shell.state().client.hostInstanceId,'/fixture','chat']),
+  text:'Legacy original without a new witness',attachmentIds:[],via:'chat',status:'unknown'};
+ await page.evaluate(({key,entry})=>sessionStorage.setItem(key,JSON.stringify([entry])),
+  {key:'amplifier.messageOutbox.v1',entry:legacy});
+ await page.reload();await composer().waitFor();
+ for(const contradiction of [true,false]){
+  await page.getByRole('button',{name:'Retry original submission',exact:true}).click();
+  await page.getByRole('button',{name:'Send this message again',exact:true}).evaluate(node=>{
+   const propsKey=Object.keys(node).find(key=>key.startsWith('__reactProps$'));
+   window.retainedLegacyRetry=node[propsKey].onClick;
+  });
+  state.sessions=[{id:'other',title:'Other selected chat',sessionKind:'root',workspace:'/fixture',workspaceId:'project',
+   status:'idle',historyManaged:true,historyLoaded:true,messages:[],workers:[]}];state.selectedSessionId='other';await emit();
+  await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId==='other'&&!window.amplifier.getState().sessions.some(row=>row.id==='chat'));
+  await page.evaluate(()=>{void window.retainedLegacyRetry()});
+  const replay=await next();
+  assert.equal(replay.body.id,legacy.commandId);assert.equal(replay.body.args.sessionId,'chat');
+  assert.equal(Object.hasOwn(replay.body.args,'expectedSource'),false);
+  assert.equal(Object.hasOwn(replay.body.args,'expectedConfigurationRevision'),false);
+  assert.deepEqual(replay.body.args,{sessionId:'chat',text:legacy.text,attachmentIds:[],via:'chat',preserveDraft:true});
+  if(contradiction){
+   const response=shell.state();
+   response.sessions.push({...originalChat,workspace:'/contradictory-source',messages:[]});response.revision+=100;
+   await replay.route.fulfill({json:{accepted:true,delivery:'accepted',state:response}});
+   await page.waitForFunction(id=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).find(row=>row.id===id)?.status==='unknown',legacy.id);
+   assert.equal(await page.evaluate(()=>window.amplifier.getState().sessions.some(row=>row.id==='chat')),false,'Contradictory HTTP target frame is never adopted');
+   const retained=(await outbox()).find(row=>row.id===legacy.id);
+   assert.equal(retained.text,legacy.text);assert.equal(Object.hasOwn(retained,'expectedSource'),false);
+  }else{
+   await replay.route.fulfill({json:{accepted:true,delivery:'accepted',state:shell.state()}});
+   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);
+  }
+  state.sessions=[originalChat];state.selectedSessionId=originalSelection;await emit();await composer().waitFor();
+ }
+ assert.equal(calls.filter(row=>row.action==='conversation.send'&&row.id===legacy.commandId).length,2,'Only two explicit retained callbacks submit, without automatic resend');
+ // Omission tolerance is for replaying an unknown original, not constructing
+ // fresh intent from a known rejection with defaulted source/config/Stop.
+ const omittedFailed={...legacy,id:'omitted-failed',commandId:'rejected-original',status:'failed',expectedSource:{workspace:'/fixture',nativeIdentity:'chat'},expectedConfigurationRevision:8,expectedInterruptionRevision:4};
+ await page.evaluate(entry=>sessionStorage.setItem('amplifier.messageOutbox.v1',JSON.stringify([entry])),omittedFailed);
+ await page.reload();await composer().waitFor();
+ await page.locator('[data-input-id="rejected-original"]').getByRole('button',{name:'Retry',exact:true}).evaluate(node=>{
+  const propsKey=Object.keys(node).find(key=>key.startsWith('__reactProps$'));window.retainedFailedRetry=node[propsKey].onClick;
+ });
+ state.sessions=[{id:'other',title:'Other selected chat',sessionKind:'root',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[],workers:[]}];state.selectedSessionId='other';await emit();
+ await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId==='other'&&!window.amplifier.getState().sessions.some(row=>row.id==='chat'));
+ const sendsBefore=calls.filter(call=>call.action==='conversation.send').length;
+ await page.evaluate(()=>window.retainedFailedRetry());
+ await page.getByText('Open the original chat before retrying this unsent message. Its saved submission was kept.',{exact:true}).waitFor();
+ assert.equal(calls.filter(call=>call.action==='conversation.send').length,sendsBefore,'Retained failed callback cannot send a new unwitnessed command');
+ assert.deepEqual(await outbox(),[omittedFailed],'Rejected payload/identity/preconditions remain exact');
+ state.sessions=[originalChat];state.selectedSessionId=originalSelection;await emit();
+ await page.evaluate(()=>sessionStorage.setItem('amplifier.messageOutbox.v1','[]'));await page.reload();await composer().waitFor();
  await page.screenshot({path:'/tmp/amplifier-optimistic-messages.png'});await page.setViewportSize({width:390,height:844});await page.evaluate(()=>{const save=Storage.prototype.setItem;Storage.prototype.setItem=function(key,value){if(key==='amplifier.messageOutbox.v1')throw new DOMException('Fixture quota','QuotaExceededError');return save.call(this,key,value)}});const mobile=await send('Mobile failed message');await mobile.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection'}});await page.getByRole('button',{name:'Retry',exact:true}).waitFor();await page.getByText('This browser could not save the pending message. Keep this tab open until delivery is confirmed.',{exact:true}).waitFor();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:'/tmp/amplifier-message-retry-mobile.png'});
  await page.addInitScript(()=>Object.defineProperty(window,'sessionStorage',{get(){throw new DOMException('Fixture storage blocked','SecurityError')}}));await page.reload();await composer().waitFor();
  const blockedStorage=await send('Storage unavailable');await blockedStorage.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection'}});
  await page.getByRole('button',{name:'Retry',exact:true}).waitFor();await page.getByText('This browser could not save the pending message. Keep this tab open until delivery is confirmed.',{exact:true}).waitFor();
  assert.equal(deliveryWaiting.length,0,'All deliberately deferred passive reads were settled');assert.equal(deferredDelivery.size,0);
- assert.deepEqual(errors,[]);console.log('Outbox browser passed: scoped payload, immediate clear/bubble, late identical draft, server dedup, held current/fork locks typing/paste/mode/Escape/submit and direct handlers, pre-render double requestSubmit, closed pending retry with byte-exact outbox text across local/shared identities and explicit Edit after rejection, old rejection preserves newer editor without restoration writes, blocked editor guards, neighboring drafts/outbox, delayed504/late acknowledgement without replay, automatic passive mount/reload reads on an independent queue, exact-bound replies, confirmed original-identity retry, mobile, blocked storage. Controlled transport measures admission/saved/accepted states, not model execution.');
+ assert.deepEqual(errors,[]);console.log('Outbox browser passed: conversation-addressed ordinary Send/retry without generation or route flags despite stale active state; held HTTP crosses normal completion with unchanged Stop epoch, held pre-Stop HTTP retains old epoch and renders input_stopped without replay, fresh post-Stop Send and definite-failed retry capture new epoch; captured config and exact unknown-retry payload/identity; historical unknown row retained byte-for-byte after passive read and refused confirmed resend; explicit strict anchored API preserved; native sent/accepted/pending/applied, request-boundary queued/applied and next-turn labels; scoped payload, immediate clear/bubble, late identical draft, server dedup, held current/fork locks typing/paste/mode/Escape/submit and direct handlers, pre-render double requestSubmit, closed pending retry with byte-exact outbox text across local/shared identities and explicit Edit after rejection, old rejection preserves newer editor without restoration writes, blocked editor guards, neighboring drafts/outbox, delayed504/late acknowledgement without replay, automatic passive mount/reload reads on an independent queue, exact-bound replies, confirmed original-identity retry, mobile, blocked storage. Controlled transport measures admission/saved/accepted states, not model execution.');
 }finally{await browser?.close();await vite?.close()}

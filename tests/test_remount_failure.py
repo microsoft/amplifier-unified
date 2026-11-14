@@ -19,7 +19,7 @@ FAILURES = [{'module': 'tool-fixture', 'type': 'tool', 'reason_code': 'validatio
 
 
 @pytest.mark.parametrize('op', ['send', 'retry'])
-async def test_real_command_rejects_failed_remount_before_submitting_input(tmp_path, monkeypatch, op):
+async def test_command_without_writer_never_hot_remounts_or_submits_input(tmp_path, monkeypatch, op):
     home = tmp_path / 'app'
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(home))
     monkeypatch.setattr('amplifier_web.runtime_bootstrap.bootstrap_app_package', lambda: None)
@@ -41,11 +41,7 @@ async def test_real_command_rejects_failed_remount_before_submitting_input(tmp_p
     worker = Worker()
     worker.home, worker.workspace, worker.runtime = home, tmp_path, runtime
     worker.shared_store = SimpleNamespace(acquire=lambda **kwargs: SimpleNamespace(release=lambda: None))
-    worker.shared_store_stamp = lambda path: None
     worker.activation_gate = ActivationGate()
-    worker.parked = True
-    worker.parked_config_stamp = ('old',)
-    worker.history_stamp = lambda: ()
     worker.start_config = {'id': 'fixture', 'workspace': str(tmp_path)}
     old_session = SimpleNamespace(cleanup=AsyncMock())
     worker.session = old_session
@@ -53,18 +49,18 @@ async def test_real_command_rejects_failed_remount_before_submitting_input(tmp_p
     old_execution = asyncio.create_task(asyncio.Event().wait())
     worker.execution = old_execution
 
-    await worker.command({'op': op, 'id': 'command', 'input_id': 'input', 'text': 'Keep this input'})
-
-    reply = next(event for event in events if event.get('op') == 'reply')
-    assert reply['code'] == 'worker_preparation_failed'
-    assert reply['moduleFailures'][0]['module'] == 'tool-fixture'
-    assert 'private synthetic mount detail' not in json.dumps(events)
-    assert 'private synthetic mount detail' in (home / 'logs/workers' / reply['diagnosticReceipt']).read_text()
-    assert worker.shutdown.is_set() and old_execution.cancelled()
-    old_session.cleanup.assert_awaited_once()
-    submitted.assert_not_awaited()
-    assert not worker.remounting
-    assert not any(event.get('type') in {'runtime.ready', 'generation.started', 'input.delivered'} for event in events)
+    try:
+        await worker.command({'op': op, 'id': 'command', 'input_id': 'input', 'text': 'Keep this input'})
+        reply = next(event for event in events if event.get('op') == 'reply')
+        assert 'no active shared writer' in reply['error']
+        assert not worker.shutdown.is_set() and not old_execution.done()
+        old_session.cleanup.assert_not_awaited()
+        submitted.assert_not_awaited()
+        assert not hasattr(worker, 'remount')
+        assert not any(event.get('type') in {'runtime.ready', 'generation.started', 'input.delivered'} for event in events)
+    finally:
+        old_execution.cancel()
+        await asyncio.gather(old_execution, return_exceptions=True)
 
 
 @pytest.mark.parametrize('late', [False, True])

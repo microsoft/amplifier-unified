@@ -39,12 +39,15 @@ test('populated viewport annotation cache preserves a streamed correction during
   assert.equal(pending.length,1);
   await act(async()=>pending.shift()(response({sessionId:'chat',revision:1,items:{input:{reactions:['like'],inputStatus:working}}})));
   assert.equal(result.messages[0].inputStatus.phase,'working');
-  value={...value,messageAnnotationRevision:2,messages:[{...value.messages[0],inputStatus:{...working,phase:'failed',updatedAt:20}}]};
+  const failure={category:'authentication',summary:'This exact request failed',generationId:'generation-one'};
+  value={...value,messageAnnotationRevision:2,messages:[{...value.messages[0],inputStatus:{...working,phase:'failed',updatedAt:20,failure}}]};
   await act(async()=>{root.update(React.createElement(Probe))});
   assert.equal(result.messages[0].inputStatus.phase,'failed');
+  assert.deepEqual(result.messages[0].inputStatus.failure,failure);
   await act(async()=>new Promise(resolve=>setTimeout(resolve,60)));
   await act(async()=>pending.shift()(new Response('{"error":"Unavailable"}',{status:503})));
   assert.equal(result.messages[0].inputStatus.phase,'failed');
+  assert.deepEqual(result.messages[0].inputStatus.failure,failure);
  }finally{
   await act(async()=>root?.unmount());
   globalThis.fetch=original.fetch;globalThis.document=original.document;globalThis.IntersectionObserver=original.observer;

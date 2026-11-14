@@ -1,11 +1,14 @@
-import React,{useEffect,useState} from 'react';
+import React,{useEffect,useRef,useState} from 'react';
 import {inputStatus,statusLabel,workingDuration} from './input-status.js';
 import {messageTime} from './message-time';
 import {hostNow} from './api';
+import {ConversationFailure} from './conversation-controls';
+import {openProblemReport} from './feedback';
 
-export function InputStatus({message,connected=true,current=true}){
+export function InputStatus({message,connected=true,current=true,act,sessionId,state}){
  const status=inputStatus(message),saved=message.displayOnly||!current,live=status?.phase==='working'&&connected&&!saved;
  const [now,setNow]=useState(hostNow);
+ const [reporting,setReporting]=useState(false),[reportError,setReportError]=useState(''),reportFlight=useRef(false);
  useEffect(()=>{
   if(!live)return;
   setNow(hostNow());
@@ -13,6 +16,16 @@ export function InputStatus({message,connected=true,current=true}){
   return()=>clearInterval(timer);
  },[live,status?.inputId,status?.startedAt]);
  if(!status)return null;
+ const generationId=status.generationId||status.failure?.generationId;
+ const canReport=!!(sessionId&&status.inputId&&generationId&&!state?.view?.feedbackDraft?.pending);
+ async function report(){
+  if(!canReport||reportFlight.current)return;
+  reportFlight.current=true;setReporting(true);setReportError('');
+  try{
+   await openProblemReport(state,act,{sessionId,inputId:status.inputId,generationId});
+  }catch{setReportError('Could not open the report. Nothing was submitted.')}
+  finally{reportFlight.current=false;setReporting(false)}
+ }
  const duration=workingDuration(status,now,connected&&!saved);
  const label=status.phase==='working'&&saved?'Working last observed · saved history':statusLabel(status,connected);
  const observed=messageTime(status.startedAt||status.updatedAt);
@@ -30,5 +43,7 @@ export function InputStatus({message,connected=true,current=true}){
   {observed&&<time dateTime={observed.iso} aria-label={`Status observed ${observed.full}`}> · {observed.text}</time>}
   </summary>
   <span className="a-input-status-detail">{status.reason&&<>{status.reason} </>}{explanation}</span>
+  {status.phase==='failed'&&status.failure&&<ConversationFailure session={{}} failure={status.failure}/>}
+  {status.phase==='failed'&&act&&<><button type="button" className="a-link" data-action="view.update" disabled={reporting||!canReport} onClick={report}>{reporting?'Opening report…':'Report this problem'}</button>{!canReport&&<p className="a-caption">{state?.view?.feedbackDraft?.pending?'Finish checking the existing report before starting another.':'This saved request has no exact report reference. Its recorded details remain available above.'}</p>}{reportError&&<p role="alert">{reportError}</p>}</>}
  </details>;
 }

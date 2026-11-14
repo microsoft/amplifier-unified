@@ -123,16 +123,16 @@ def mutate(f, fault):
     elif fault == 'handle': w.shared_handle = object()
     elif fault == 'activation': w.activation = object()
     elif fault == 'gate': w.activation_gate = SimpleNamespace(current_valid=True)
-    elif fault == 'parked': w.parked = True
+    elif fault == 'released-handle': w.shared_handle = None
     elif fault == 'yielding': w.ownership.yielding = True
-    elif fault == 'remounting': w.remounting = True
+    elif fault == 'released-activation': w.activation_gate.current_valid = False
     elif fault == 'generation': w.runtime.generation = {'id': 'new', 'input_ids': []}
     elif fault == 'mount': f.tools['control_probe'] = object()
 
 
 @pytest.mark.parametrize('phase', ['approval', 'host'])
 @pytest.mark.parametrize('fault', ['stop', 'stop-requested', 'cancelled', 'closed', 'controls',
-    'root', 'root-coordinator', 'runtime', 'handle', 'activation', 'gate', 'parked', 'yielding', 'remounting', 'generation', 'mount'])
+    'root', 'root-coordinator', 'runtime', 'handle', 'activation', 'gate', 'released-handle', 'yielding', 'released-activation', 'generation', 'mount'])
 async def test_current_owner_is_retained_across_approval_and_host_await(app, phase, fault):
     f = await controlled(app)
     if phase == 'approval':

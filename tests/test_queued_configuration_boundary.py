@@ -11,6 +11,7 @@ import asyncio
 import copy
 import json
 import time
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -36,7 +37,11 @@ class ControlsTransport:
     """Only process creation/loading is simulated; mutation and idle checks aren't."""
 
     def __init__(self, home, sid):
+        from amplifier_web.runtime import RuntimeManager
         self.home, self.sid = home, sid
+        # No process is launched by this transport. Reuse the real stopped-root
+        # ownership boundary rather than inventing an absent-worker receipt.
+        self.absent_owner = RuntimeManager(retention={'prewarm_on_select': False})
         self.native = SimpleNamespace(generation=None, queued_inputs=0)
         self.loop = SimpleNamespace(root_provider=None, jobs={})
         capabilities = {}
@@ -120,9 +125,20 @@ class ControlsTransport:
         # the host's projection. This is not an all-success fake control.
         return {"accepted": True}
 
+    @contextmanager
+    def stopped_boundary(self, session):
+        assert session['id'] == self.sid
+        if self.native.generation is not None or self.native.queued_inputs:
+            raise RuntimeError('Wait for the fixture generation and queued inputs to settle.')
+        with self.absent_owner.stopped_boundary(session) as observation:
+            yield observation
+
     async def close(self):
         self.release.set()
-        await self.controls.close()
+        try:
+            await self.controls.close()
+        finally:
+            await self.absent_owner.close()
 
 
 @pytest.fixture
@@ -149,6 +165,30 @@ async def boundary(tmp_path, monkeypatch):
         if runtime is not None:
             runtime.release.set()
         await app.close()
+
+
+@pytest.mark.parametrize('busy', ['generation', 'queued', 'foreign-writer'])
+async def test_controls_transport_stopped_boundary_keeps_owner_guards(boundary, busy):
+    from amplifier_foundation.session import SessionBusyError, SharedSessionStore
+    runtime, owner = boundary.runtime, boundary.owner
+    if busy == 'generation':
+        runtime.native.generation = {'id': 'still-running'}
+    elif busy == 'queued':
+        runtime.native.queued_inputs = 1
+    held = None
+    try:
+        if busy == 'foreign-writer':
+            held = SharedSessionStore(owner['workspace'], owner['id']).acquire(app='fixture-other-owner')
+        with pytest.raises((RuntimeError, SessionBusyError)):
+            with runtime.stopped_boundary(owner):
+                pytest.fail('An occupied boundary must not yield an absence witness')
+    finally:
+        if held is not None:
+            held.release()
+        runtime.native.generation, runtime.native.queued_inputs = None, 0
+    with runtime.stopped_boundary(owner) as observation:
+        assert observation['workerAbsent'] and observation['ownershipAcquisitionId']
+    assert not runtime.absent_owner.workers and not runtime.calls
 
 
 async def queue(boundary, identity="original-apply"):
@@ -2046,7 +2086,7 @@ async def test_real_native_recovery_and_deliberately_regressed_save_witness(tmp_
         assert process.returncode == 0, stderr.decode(errors="replace")[-3000:]
         assert report["mountedPlanVerified"] and report["nextInputUsable"]
         assert report["originalInputCount"] == report["originalToolResultCount"] == 1
-        assert report["duplicateResumePassive"] and report["writerReleasedWhileParked"]
+        assert report["duplicateResumePassive"] and report["writerRetainedWhileIdle"]
 
 
 @pytest.mark.parametrize("exit_signal", ["SIGTERM", "SIGKILL"])

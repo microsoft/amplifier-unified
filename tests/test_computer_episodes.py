@@ -1015,7 +1015,7 @@ async def test_close_has_bounded_unconfirmed_receipt_and_keeps_recoverable_custo
         await registry.close()
 
 
-async def test_remount_refuses_with_bounded_unconfirmed_receipt_without_closing_backend(monkeypatch):
+async def test_replacement_cleanup_refuses_with_bounded_unconfirmed_receipt(monkeypatch):
     from amplifier_web import computer_episodes
     monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .02, raising=False)
     controller, _, registry, sponsor, _, _ = fixture()
@@ -1026,19 +1026,18 @@ async def test_remount_refuses_with_bounded_unconfirmed_receipt_without_closing_
     worker.session = SimpleNamespace(cleanup=AsyncMock())
     worker.controls = SimpleNamespace(close=AsyncMock())
     monkeypatch.setattr(worker, "start", AsyncMock())
-    remounting = asyncio.create_task(worker.remount())
+    closing = asyncio.create_task(registry.close())
     try:
-        done, _ = await asyncio.wait({remounting}, timeout=.15)
-        assert done, "remount blocked forever instead of refusing unresolved desktop custody"
-        error = remounting.exception()
-        assert error is not None and error.receipt["settled"] is False
+        done, _ = await asyncio.wait({closing}, timeout=.15)
+        assert done, "cleanup blocked forever instead of retaining unresolved desktop custody"
+        assert closing.result()["settled"] is False
         worker.session.cleanup.assert_not_awaited()
         worker.controls.close.assert_not_awaited()
         worker.start.assert_not_awaited()
-        assert registry.pending and registry.unresolved and not worker.remounting
+        assert registry.pending and registry.unresolved
     finally:
         controller.drained.set()
-        await asyncio.gather(remounting, return_exceptions=True)
+        await asyncio.gather(closing, return_exceptions=True)
         await registry.close()
 
 
@@ -1158,7 +1157,6 @@ async def parking_worker(tmp_path, monkeypatch):
         yield worker
     finally:
         worker.shutdown.set()
-        worker.clear_computer_park()
         for task in tuple(worker.tasks):
             task.cancel()
         await asyncio.gather(*tuple(worker.tasks), return_exceptions=True)
@@ -1166,31 +1164,28 @@ async def parking_worker(tmp_path, monkeypatch):
             worker.shared_handle.release()
 
 
-async def test_quiet_desktop_settlement_retries_parking_exactly_once(parking_worker):
+async def test_quiet_desktop_settlement_allows_retirement_without_idle_release(parking_worker):
     worker = parking_worker
     controller, _, registry, sponsor, _, _ = fixture()
     worker.computer_episodes = registry
     controller.drained.clear()
     await sponsor.invoke("computer", {}, AsyncMock())
     sponsor.finish()
-    await worker.park()
-    await worker.park()  # Repeated idle notifications must not add observers.
-    assert len(registry._settled_callbacks) == 1 and not worker.tasks
-    assert worker.shared_handle.active and not worker.parked
+    assert not await worker.checkpoint_idle()
+    assert not await worker.checkpoint_idle()
+    assert not registry._settled_callbacks and not worker.tasks
+    assert worker.shared_handle.active
     worker.checkpoint.assert_not_awaited()
     controller.drained.set()
     await registry.join()
-    for _ in range(50):
-        if worker.parked:
-            break
-        await asyncio.sleep(.005)
-    assert worker.parked and worker.shared_handle is None
+    assert worker.shared_handle.active and not worker.shutdown.is_set()
+    assert await worker.checkpoint_idle()
+    assert worker.shared_handle.active
     worker.checkpoint.assert_awaited_once_with("completed")
 
 
-@pytest.mark.parametrize("change", ["session", "runtime", "activation", "registry", "shutdown",
-                                   "remount", "yielding", "stop", "invalid_gate", "new_input"])
-async def test_desktop_park_retry_ignores_stale_owner_after_waiting_for_command_lock(
+@pytest.mark.parametrize("change", ["session", "runtime", "activation", "shutdown", "stop", "new_input"])
+async def test_desktop_retirement_rechecks_owner_after_awaited_save(
         parking_worker, change):
     worker = parking_worker
     controller, _, registry, sponsor, _, _ = fixture()
@@ -1198,84 +1193,71 @@ async def test_desktop_park_retry_ignores_stale_owner_after_waiting_for_command_
     controller.drained.clear()
     await sponsor.invoke("computer", {}, AsyncMock())
     sponsor.finish()
-    await worker.park()
-    async with worker.command_lock:
-        controller.drained.set()
-        await registry.join()
-        await tick()  # The one retry is now queued behind foreground admission.
+    controller.drained.set()
+    await registry.join()
+    async def checkpoint(*_):
         if change == "session":
             worker.session = SimpleNamespace(coordinator=worker.session.coordinator)
         elif change == "runtime":
             worker.runtime = SimpleNamespace(**vars(worker.runtime))
         elif change == "activation":
             worker.activation = object()
-        elif change == "registry":
-            worker.computer_episodes = ComputerEpisodes()
         elif change == "shutdown":
             worker.shutdown.set()
-        elif change == "remount":
-            worker.remounting = True
-        elif change == "yielding":
-            worker.ownership.yielding = True
         elif change == "stop":
-            await worker.command({"op": "computer.stop"})
-            await worker.command({"op": "computer.resume"})
+            worker.stop_revision += 1
         elif change == "new_input":
-            command = asyncio.create_task(worker.command({"op": "send", "text": "new foreground"}))
-            await tick()  # Invalidates before it can acquire the same lock.
-            command.cancel()
-            await asyncio.gather(command, return_exceptions=True)
-        else:
-            worker.activation_gate.release(worker.activation)
-    await asyncio.gather(*tuple(worker.tasks), return_exceptions=True)
-    assert worker.shared_handle.active and not worker.parked
-    worker.checkpoint.assert_not_awaited()
+            worker.runtime.inbox.put_nowait("late observation")
+    worker.checkpoint.side_effect = checkpoint
+    assert not await worker.checkpoint_idle()
+    assert worker.shared_handle.active
     assert not registry._settled_callbacks
 
 
-async def test_desktop_park_retry_rechecks_foreground_input_and_all_ordinary_predicates(parking_worker):
+async def test_desktop_retirement_rechecks_foreground_input(parking_worker):
     worker = parking_worker
     controller, _, registry, sponsor, _, _ = fixture()
     worker.computer_episodes = registry
     controller.drained.clear()
     await sponsor.invoke("computer", {}, AsyncMock())
     sponsor.finish()
-    await worker.park()
+    assert not await worker.checkpoint_idle()
     async with worker.command_lock:
         controller.drained.set()
         await registry.join()
         worker.runtime.queued_inputs = 1
         worker.runtime.inbox.put_nowait("new input")
     await asyncio.gather(*tuple(worker.tasks), return_exceptions=True)
-    assert worker.shared_handle.active and not worker.parked
+    assert worker.shared_handle.active
     worker.checkpoint.assert_not_awaited()
     worker.runtime.queued_inputs = 0
     worker.runtime.inbox.get_nowait()
-    await worker.park()
-    assert worker.parked  # The ordinary idle boundary still works later.
+    assert await worker.checkpoint_idle()
+    assert worker.shared_handle.active
 
 
-async def test_unconfirmed_settlement_cannot_park_but_passive_confirmation_can(parking_worker):
+async def test_unconfirmed_settlement_blocks_retirement_until_passive_confirmation(parking_worker):
     worker = parking_worker
     controller, _, registry, sponsor, _, _ = fixture()
     worker.computer_episodes = registry
     controller.release = False
     await sponsor.invoke("computer", {}, AsyncMock())
     sponsor.finish()
-    await worker.park()
+    assert not await worker.checkpoint_idle()
     await asyncio.gather(*tuple(registry.pending), return_exceptions=True)
     await tick()
     assert registry.unresolved and worker.shared_handle.active and not worker.tasks
-    assert len(registry._settled_callbacks) == 1
+    assert not registry._settled_callbacks
     controller.release = True
     registry.reconcile(controller, controller.state(workers=0, admission_open=False,
                        release_confirmed=True, indicator_settled=True))
     await asyncio.gather(*tuple(worker.tasks), return_exceptions=True)
-    assert worker.parked and worker.shared_handle is None
+    assert await worker.checkpoint_idle()
+    assert worker.shared_handle.active
     worker.checkpoint.assert_awaited_once()
 
 
-async def test_failed_child_cleanup_completion_never_wakes_desktop_parking(parking_worker):
+async def test_failed_child_cleanup_completion_never_allows_retirement(parking_worker):
     worker = parking_worker
     registry = worker.computer_episodes
     proceed = asyncio.Event()
@@ -1283,16 +1265,17 @@ async def test_failed_child_cleanup_completion_never_wakes_desktop_parking(parki
         await proceed.wait()
         raise OSError("inert child backend cleanup uncertainty")
     cleanup = registry.retain_cleanup(object(), "child", failed_cleanup)
-    await worker.park()
+    assert not await worker.checkpoint_idle()
     proceed.set()
     await asyncio.gather(cleanup, return_exceptions=True)
     await tick()
     assert registry.cleanups and not registry.pending and not worker.tasks
-    assert worker.shared_handle.active and not worker.parked
+    assert not await worker.checkpoint_idle()
+    assert worker.shared_handle.active
     worker.checkpoint.assert_not_awaited()
 
 
-async def test_desktop_settlement_with_other_active_sponsor_cannot_park(parking_worker):
+async def test_desktop_settlement_with_other_active_sponsor_blocks_retirement(parking_worker):
     worker = parking_worker
     controller, _, registry, sponsor, _, _ = fixture()
     worker.computer_episodes = registry
@@ -1300,32 +1283,35 @@ async def test_desktop_settlement_with_other_active_sponsor_cannot_park(parking_
     await sponsor.invoke("computer", {}, AsyncMock())
     await other.invoke("computer", {}, AsyncMock())
     sponsor.finish()
-    await worker.park()
+    assert not await worker.checkpoint_idle()
     await asyncio.gather(*tuple(registry.pending), return_exceptions=True)
     await tick()
-    assert worker.shared_handle.active and not worker.parked and not worker.tasks
+    assert worker.shared_handle.active and not worker.tasks
     other.finish()
     await registry.join()
     await asyncio.gather(*tuple(worker.tasks), return_exceptions=True)
-    assert worker.parked
+    assert await worker.checkpoint_idle()
+    assert worker.shared_handle.active
 
 
-async def test_desktop_settlement_retry_checkpoint_failure_retains_writer(parking_worker):
+async def test_desktop_retirement_checkpoint_failure_retains_writer(parking_worker):
     worker = parking_worker
     registry = worker.computer_episodes
     proceed = asyncio.Event()
     registry.retain(proceed.wait())
     worker.checkpoint.side_effect = OSError("inert checkpoint failure")
-    await worker.park()
+    assert not await worker.checkpoint_idle()
     proceed.set()
     await registry.join()
     await asyncio.gather(*tuple(worker.tasks), return_exceptions=True)
     await tick()
-    assert worker.shutdown.is_set() and worker.shared_handle.active and not worker.parked
+    with pytest.raises(OSError, match="checkpoint failure"):
+        await worker.checkpoint_idle()
+    assert not worker.shutdown.is_set() and worker.shared_handle.active
     assert not registry.pending and registry.receipt()["settled"]
 
 
-async def test_stop_during_settlement_park_checkpoint_cannot_release_writer(parking_worker):
+async def test_stop_during_retirement_checkpoint_cannot_release_writer(parking_worker):
     worker = parking_worker
     controller, _, registry, sponsor, _, _ = fixture()
     worker.computer_episodes = registry
@@ -1337,37 +1323,39 @@ async def test_stop_during_settlement_park_checkpoint_cannot_release_writer(park
     worker.checkpoint.side_effect = checkpoint
     await sponsor.invoke("computer", {}, AsyncMock())
     sponsor.finish()
-    await worker.park()
     controller.drained.set()
-    await entered.wait()
-    await worker.command({"op": "computer.stop"})
+    await registry.join()
+    saving = asyncio.create_task(worker.checkpoint_idle())
+    await asyncio.wait_for(entered.wait(), 1)
+    worker.stop_revision += 1  # Ordinary Stop is independent of command_lock.
     proceed.set()
-    await asyncio.gather(*tuple(worker.tasks), return_exceptions=True)
-    assert worker.shared_handle.active and not worker.parked
+    assert not await saving
+    assert worker.shared_handle.active
 
 
-async def test_desktop_park_retry_keeps_owner_guard_through_pending_naming(parking_worker):
+async def test_desktop_retirement_waits_for_pending_naming(parking_worker):
     worker = parking_worker
     registry = worker.computer_episodes
     proceed, named = asyncio.Event(), asyncio.Event()
     cleanup = registry.retain(proceed.wait())
     worker.naming = SimpleNamespace(pending=asyncio.create_task(named.wait()))
     try:
-        await worker.park()
+        assert not await worker.checkpoint_idle()
         proceed.set()
         await cleanup
-        await tick()  # Desktop retry delegates waiting to existing naming service.
-        assert worker.naming_park_task is not None
+        await tick()
+        assert not await worker.checkpoint_idle()
+        assert not worker.tasks
         await worker.command({"op": "computer.stop"})
         named.set()
         await asyncio.gather(*tuple(worker.tasks), return_exceptions=True)
-        assert worker.shared_handle.active and not worker.parked
+        assert worker.shared_handle.active
         worker.checkpoint.assert_not_awaited()
     finally:
         named.set()
         await worker.naming.pending
 
-async def test_remount_cancels_model_once_then_returns_pending_without_losing_native_task(monkeypatch):
+async def test_replacement_close_retains_native_task_until_settlement(monkeypatch):
     from amplifier_web import computer_episodes
     monkeypatch.setattr(computer_episodes, "SETTLEMENT_WAIT_SECONDS", .02)
     controller, _, registry, sponsor, _, _ = fixture()
@@ -1384,11 +1372,11 @@ async def test_remount_cancels_model_once_then_returns_pending_without_losing_na
     worker.controls = SimpleNamespace(close=AsyncMock())
     worker.session = SimpleNamespace(cleanup=AsyncMock())
     try:
-        with pytest.raises(computer_episodes.SettlementPending):
-            await asyncio.wait_for(worker.remount(), .2)
+        operation.cancel()
+        assert not (await asyncio.wait_for(registry.close(), .2))["settled"]
         assert registry.pending and registry.unresolved
         worker.session.cleanup.assert_not_awaited()
-        assert operation.cancelling() == 1
+        assert operation.cancelling() <= 1
     finally:
         controller.drained.set()
         await asyncio.gather(operation, return_exceptions=True)
@@ -1476,7 +1464,7 @@ async def test_queued_call_cannot_acquire_over_cancelled_readiness(monkeypatch):
         await registry.close()
 
 
-async def test_confirmed_remount_uses_fresh_registry_without_reviving_old_sponsor(monkeypatch):
+async def test_confirmed_replacement_uses_fresh_worker_without_reviving_old_sponsor(monkeypatch):
     from amplifier_web import runtime_worker
     monkeypatch.setattr(runtime_worker, "publish", lambda event: None)
     controller, _, registry, sponsor, _, _ = fixture()
@@ -1487,9 +1475,10 @@ async def test_confirmed_remount_uses_fresh_registry_without_reviving_old_sponso
     worker.controls = SimpleNamespace(close=AsyncMock())
     worker.start_config = {}
     worker.start = AsyncMock()
-    await worker.remount()
-    assert worker.computer_episodes is not registry
-    assert not worker.computer_episodes.terminated
+    assert (await registry.close())["settled"]
+    replacement = Worker()
+    assert replacement.computer_episodes is not registry
+    assert not replacement.computer_episodes.terminated
     assert sponsor.terminated and not registry.sponsors and not registry.unresolved
 
 

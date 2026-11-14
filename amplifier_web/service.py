@@ -140,7 +140,7 @@ ACTION_DEFINITIONS = {
     "message.copy": ("Copy the entire message text as Markdown on the connected browser",schema({"sessionId":string(200),"messageId":string(200)})),
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
     "message.edit": ("Edit a user message and regenerate in the current conversation (mode current), or fork a new conversation (mode fork, also the legacy default). Later active context is replaced; original events and external tool effects remain.",schema({"sessionId":string(200),"messageId":string(200),"text":string(100000),"mode":{"enum":["current","fork"]}},["sessionId","messageId","text"])),
-    "conversation.send": ("Send to the main Amplifier session. During a live run, steer that run without creating a new turn. expectedGenerationId binds a message to the observed run. Explicit steering stays bound; allowNextTurn lets an ordinary message start the next turn only after that exact run completes normally.", schema({"sessionId":string(200),"text": string(100000), "document":{"type":"object"}, "expectedGenerationId":{**string(128),"minLength":1}, "allowNextTurn":{"type":"boolean"}, "preserveDraft":{"type":"boolean"}, "replyId":string(64), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
+    "conversation.send": ("Send a message to this conversation. Its native owner chooses live provider steering first when ready, otherwise the next model-request boundary within the current turn, or a new turn when idle. expectedInterruptionRevision fences intent captured before Stop; it never chooses a route. expectedGenerationId explicitly requests strict steering of only that run; an ended or changed run is refused, never converted into new work.", schema({"sessionId":string(200),"text": string(100000), "expectedSource":schema({"workspace":{"type":["string","null"],"minLength":1,"maxLength":4000},"nativeIdentity":{**string(200),"minLength":1}},["workspace","nativeIdentity"]), "document":{"type":"object"}, "expectedGenerationId":{**string(128),"minLength":1}, "expectedInterruptionRevision":{"type":"integer","minimum":0}, "preserveDraft":{"type":"boolean"}, "replyId":string(64), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
     "attachment.add": ("Attach a file or image up to 32 MB to a conversation draft. Provider-specific image limits still apply. expectedDraftId binds an upload admitted from an unnamed browser draft, including its exact creation handoff.", schema({"sessionId":{"type":["string","null"],"maxLength":200},"expectedDraftId":{"type":"string","pattern":"^[a-f0-9]{32}$"},"name":string(200),"base64":string(MAX_ENCODED_BYTES),"source":{"type":"string","enum":["clipboard-text"]}},["name","base64"])),
     "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":{"type":["string","null"],"maxLength":200},"id":string(32)},["id"])),
     "conversation.delivery": ("Check a saved input's delivery without sending or starting work. Missing evidence remains uncertain.", schema({"sessionId": string(200), "inputId": string(200)}, ["sessionId", "inputId"])),
@@ -2509,19 +2509,16 @@ class AppService:
                 prepared_workspace = str(await self.worktrees.finish_thread(_create_workspace_folder, args['workspace']))
         prepared_health = None
         if action == 'session.inspect':
-            from .session_health import inspect_session
+            from .session_health import inspect_session, causal_timeline
             async with self.lock:
                 snapshot = copy.deepcopy(self._session(args['id']))
                 captured_at = time.time()
             prepared_health = await asyncio.to_thread(inspect_session, self.data_dir, snapshot)
             bridge_events = await asyncio.to_thread(self.diagnostics.bridge_events, snapshot)
-            prepared_health['timeline'] = [row for row in prepared_health['timeline']
-                                          if row.get('type') != 'runtime.bridge'] + bridge_events
+            prepared_health['timeline'] = causal_timeline({
+                **snapshot, 'runtimeEvents': [*snapshot.get('runtimeEvents', []), *bridge_events]})
             prepared_health['capturedAt'] = captured_at
             prepared_health['host'] = {**getattr(self.update_manager, 'running_identity', {}), 'hostInstanceId': self.instance_id}
-            prepared_health['recentRequests'] = list(getattr(self, 'request_timings', []))[-30:]
-            prepared_health['performance'] = self.performance_diagnostics.snapshot()
-            prepared_health['capture']['limitations'].append('Request timings cover handler execution, not time before the server accepts a connection.')
         if action == 'session.plans':
             if args.get('includeItems') and len(args['ids']) != 1:
                 raise AppError('Inspect one chat at a time for plan details.')
@@ -2718,7 +2715,7 @@ class AppService:
                 if external_target and self._session(external_target, hydrate=False).get('externalAgent'):
                     self.external_conversations.guard(self._session(external_target), action, args)
             from .update_drain import held as update_held, new_work as update_new_work
-            update_message = action == 'conversation.send' and update_held(self) and (args.get('allowNextTurn') is True or not args.get('expectedGenerationId'))
+            update_message = action == 'conversation.send' and update_held(self) and not args.get('expectedGenerationId')
             if work_paused(self.state) and not update_message and update_new_work(action, args):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
             if update_held(self) and update_new_work(action, args) and action not in {'question.answer', 'conversation.send', 'worker.steer'}:
@@ -2730,13 +2727,15 @@ class AppService:
                 if (current.get('configurationBusy') or self.management and self.management.unresolved_configuration(current)) and action != 'question.answer':
                     raise AppError('Applying or reconciling conversation settings; new input must wait.',409)
                 if action != 'question.answer' and current.get('fileAccessPending'):
-                    generation = current.get('collaborationGeneration') or {}
                     # Existing work retains its mounted policy until it settles.
-                    # Let the human guide that work without starting another run.
+                    # Only the native owner may decide whether this input can
+                    # guide active work; idle application still refuses below.
                     steering_existing = (
                         origin == 'ui' and action == 'conversation.send'
-                        and current.get('status') in {'working', 'starting', 'running'}
-                        and generation.get('id') and not generation.get('terminal')
+                        and (args.get('expectedGenerationId') is None or (
+                            current.get('status') in {'working', 'starting', 'running'}
+                            and (current.get('collaborationGeneration') or {}).get('id')
+                            and not (current.get('collaborationGeneration') or {}).get('terminal')))
                     )
                     if not steering_existing:
                         from .chat_permissions import PENDING_DETAIL
@@ -3437,13 +3436,23 @@ class AppService:
                 diagnostic_result = save(self, args, configuration_authority)
             elif action == "conversation.send":
                 session = self._session(args.get("sessionId"))
+                if ('expectedInterruptionRevision' in args
+                        and args['expectedInterruptionRevision'] != session.get('interruptionRevision', 0)):
+                    raise AppError('This message was prepared before Stop. Nothing was sent. Send a new message to continue.',
+                                   409, code='input_stopped')
+                # Receipt replay and fresh admission have already been checked
+                # under this same action lock, after all pre-admission waits.
+                # Missing browser rows are not authority to retarget fresh input.
+                if 'expectedSource' in args:
+                    source = {'workspace': session.get('workspace'),
+                              'nativeIdentity': session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']}
+                    if session.get('externalAgent') or args['expectedSource'] != source:
+                        raise AppError('The conversation source changed. Nothing was sent. The original submission remains saved.',
+                                       409, code='source_changed')
                 if ('expectedConfigurationRevision' in args
                         and args['expectedConfigurationRevision'] != session.get('nextMessageRevision', 0)):
                     raise AppError('Next message settings changed. Review them before sending.', 409)
                 from .conversation_steering import target as steering_target, recover_failed_generation
-                # A run ending before delivery must not turn this correction
-                # into new work under a policy that is awaiting replacement.
-                allow_next_turn = args.get('allowNextTurn') is True and not session.get('fileAccessPending')
                 # Whitespace can carry Markdown meaning; validate blank input
                 # separately without changing the saved or delivered message.
                 text = args["text"]
@@ -3467,7 +3476,10 @@ class AppService:
                     raise AppError("The Amplifier runtime is unavailable.")
                 stopped_generation = (recover_failed_generation(self, session, recovery_boundary)
                     if not session.get('externalAgent') and origin == 'ui' and not update_message and args.get('expectedGenerationId') is None else None)
-                target_generation = None if update_message or session.get('externalAgent') else steering_target(session, args.get('expectedGenerationId'), allow_next_turn)
+                # Ordinary input is conversation-addressed. Only explicit
+                # anchored callers consult the host's observed generation.
+                target_generation = (steering_target(session, args['expectedGenerationId'])
+                    if not session.get('externalAgent') and args.get('expectedGenerationId') is not None else None)
                 input_id = command_id or str(uuid.uuid4())
                 from .chat_navigation import recent_activity, prepare_human_post, promote_human_post
                 # Origin is chosen by the host adapter, never role/via/action args.
@@ -3477,7 +3489,8 @@ class AppService:
                 session.setdefault('surfaceInputs', {})[input_id] = self.surface_context.bind_input(session['id'])
                 self.computer_visual.bind_input(session['id'], input_id)
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
-                message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), human_post=post_previous is not None,inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending', 'allowNextTurn': allow_next_turn}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
+                message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), human_post=post_previous is not None,inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending'}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
+                message['interruptionRevision'] = session.get('interruptionRevision', 0)
                 handoff = self.handoffs.execution(action, args, origin, command_id, caller_session_id)
                 if handoff is not None:
                     message['handoffOrigin'] = self.handoffs.lineage(handoff)
@@ -3500,8 +3513,8 @@ class AppService:
                         reset=session["status"] not in {"working", "starting"})
                     session["status"] = "working"
                     session.pop("error", None)
-                    ensure_turn(session,input_id,text)
                     if session.get('externalAgent'):
+                        ensure_turn(session,input_id,text)
                         session['externalAgent']['activeInputId'] = input_id
                 if not update_message:
                     pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity, args.get('preserveDraft', False))))
@@ -4129,7 +4142,7 @@ class AppService:
                             self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), command_id))
                             self.db.commit()
                     raise
-                if action == 'conversation.send' and isinstance(acknowledged, dict) and (acknowledged.get('steering') or acknowledged.get('delivery') == 'queued_for_update' or session.get('externalAgent')):
+                if action == 'conversation.send' and isinstance(acknowledged, dict):
                     result.update(acknowledged)
                 if action in {'conversation.delivery', 'conversation.retry'}:
                     result['result'] = acknowledged
@@ -4162,8 +4175,6 @@ class AppService:
                     self.smart_tool_requests[command_id] = task
                     task.add_done_callback(lambda finished, identity=command_id: self.smart_tool_requests.pop(identity, None))
         if action == 'conversation.send':
-            if not session.get('externalAgent') and not result.get('steering') and result.get('delivery') != 'queued_for_update':
-                result['delivery'] = 'accepted'
             if result.get('delivery') == 'accepted':
                 saved = self.db.execute('SELECT receipt FROM commands WHERE id=?', (result['inputId'],)).fetchone()
                 # Capture before returning to the HTTP task. Its later resumption
@@ -4523,7 +4534,7 @@ class AppService:
         from .message_delivery import find_message
         from .update_drain import UpdateDeferred, held, defer_send
         original = find_message(session, input_id) or {}
-        if not retry and held(self) and (not original.get('steering') or original['steering'].get('allowNextTurn')):
+        if not retry and held(self) and not original.get('steering'):
             from .update_drain import input_gate
             try:
                 input_gate(self, session['id'], input_id)
@@ -4615,7 +4626,7 @@ class AppService:
                     # transport refusal; it cannot erase an admitted human post.
                     self._clear_sent_draft(current, rejected, text, preserve_draft)
                     self._publish_changes(sessions={session['id']}, globals={'view'})
-                    return {'accepted': True, 'duplicate': True}
+                    return {'accepted': True, 'delivery': 'accepted', 'duplicate': True}
                 self._post_disposition(current, rejected, 'rejected')
                 current["messages"] = [
                     row for row in current["messages"] if row.get("inputId") != input_id
@@ -4655,7 +4666,18 @@ class AppService:
         with measure(self, 'input.delivery.publish', session_id=session['id']):
             async with self.lock:
                 current = self._session(session["id"])
-                self._delivery(current, input_id, 'accepted')
+                observed = find_message(current, input_id) or {}
+                if observed.get('steering'):
+                    # Inbox admission cannot erase an earlier native
+                    # pending/applied/held/unknown observation.
+                    send_result = {**(send_result if isinstance(send_result, dict) else {}), 'delivery': observed['delivery']['status'],
+                                   'steering': copy.deepcopy(observed['steering'])}
+                else:
+                    self._delivery(current, input_id,
+                        'failed' if isinstance(send_result, dict) and send_result.get('accepted') is False
+                            and send_result.get('effect') == 'none' else 'accepted')
+                    send_result = {**(send_result if isinstance(send_result, dict) else {}),
+                                   'delivery': (find_message(current, input_id) or {})['delivery']['status']}
                 sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
                 self._clear_sent_draft(current, sent, text, preserve_draft)
                 current.pop("lockOwner", None)
@@ -4791,12 +4813,9 @@ class AppService:
             ingest_execution(session,payload)
         if getattr(self, 'status_emitter', None):
             self.status_emitter.execution(session, payload)
-        if payload.get('failure') and payload.get('sessionId') in {session['id'], session.get('runtimeSessionId')} and payload.get('lifecycle') != 'background' and payload.get('purpose') != 'context_compaction':
-            # Auxiliary preparation failures stay on their call. The
-            # manager's terminal generation.failed event owns whether
-            # this turn stopped; a successful recovery is not an app fault.
-            session['failure'] = {**payload['failure'], 'inputId': payload.get('turnId'), 'recordedAt': payload.get('endedAt')}
-            session.pop('health', None)
+        # Call failures remain on the operation that failed. Only terminal
+        # request evidence (or an actual runtime loss) can fail the request.
+        session.pop('health', None)
 
     def _apply_runtime_receipt(self, session, kind, payload):
         """Shared synchronous reducer for eligible single and batched receipts."""
@@ -4962,11 +4981,6 @@ class AppService:
                     finish_execution(session, 'interrupted')
             elif kind == "runtime.warmth":
                 session['preparation'] = {'status': payload['status']}
-                if payload['status'] == 'warm' and session['status'] == 'ready':
-                    session['status'] = 'idle'
-                    # Parking a prepared worker releases the same idle boundary
-                    # as session.idle. Only retained guarded input may run.
-                    self._task(self.collaboration.drain(session["id"]))
             elif kind == "runtime.status":
                 if payload.get('event') == 'input.delivered' and payload.get('inputId'):
                     self._delivery(session, payload['inputId'], 'accepted')
@@ -4997,17 +5011,21 @@ class AppService:
                 if session["status"] == "ready":
                     from .session_health import current_terminal_failure
                     retained_failure = current_terminal_failure(session)
-                    if (session.get('failure', {}).get('category') != 'execution_interrupted'
-                            and not retained_failure):
+                    startup_recovered = (session.get('failure', {}).get('category') == 'worker_startup'
+                                         or session.get('failure', {}).get('startupAttemptId'))
+                    if startup_recovered and not retained_failure:
                         session.pop("error", None)
                         session.pop("failure", None)
-                    if not retained_failure:
+                    if startup_recovered and not retained_failure:
                         session.pop("errorType", None)
                         session.pop("turnErrorType", None)
                     session.pop("moduleFailures", None)
                     if isinstance(session.get("health"), dict):
                         session["health"].pop("moduleFailures", None)
                     session['preparation'] = {'status': 'ready'}
+                    # Boot idle may arrive before readiness. Reconsider only
+                    # retained guarded input; readiness never manufactures work.
+                    self._task(self.collaboration.drain(session["id"]))
                 labels = {"starting": "Preparing your Amplifier session…", "working": "Waiting for the model response…", "ready": "Ready to work", "idle": "Ready", "stopped": "Stopped", "stopping": "Stopping work…"}
                 activity = self._activity(session, payload.get("phase", session["status"]), payload.get("detail") or labels.get(session["status"], session["status"]))
                 if session["status"] in {"idle", "stopped"}:
@@ -5027,6 +5045,30 @@ class AppService:
                 if payload.get("runtimeSessionId"):
                     session["runtimeSessionId"] = payload["runtimeSessionId"]
             elif kind == "runtime.error":
+                from .support_diagnostics import event_detail, public_execution_failure
+                capture = public_execution_failure(payload.get('executionFailure'))
+                native = session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']
+                if capture and capture['runtimeSessionId'] != native:
+                    capture = None
+                event = {**event_detail(payload), 'type': kind, 'at': time.time(),
+                         'generationId': payload.get('generationId') or (capture or {}).get('generationId') or
+                             (session.get('collaborationGeneration') or {}).get('id'),
+                         **({'exceptionChain': capture['exceptionChain']} if capture else {})}
+                session.setdefault('runtimeEvents', []).append(event)
+                session['runtimeEvents'] = session['runtimeEvents'][-100:]
+                from .session_health import runtime_fault_is_current
+                if not runtime_fault_is_current(session, payload):
+                    event['scope'] = 'runtime'
+                    from .session_health import latest_root_event
+                    latest = latest_root_event(session)
+                    if (session.get('status') not in {'stopped', 'stopping'}
+                            and latest.get('event') == 'generation.finished'
+                            and event.get('generationId') == latest.get('generation_id')):
+                        session['status'] = 'idle'
+                        self._activity(session, 'idle', 'Response saved; runtime details are available.')
+                    session.pop('health', None)
+                    self._publish(session_ids={session['id']}, record_only=True)
+                    return
                 if 'terminalFailure' in payload:
                     from .session_health import terminal_exception_failure
                     enriched = terminal_exception_failure(session, payload['terminalFailure'])
@@ -5051,6 +5093,10 @@ class AppService:
                 error_type = payload.get('errorType') or (None if startup else session.get('turnErrorType'))
                 from .session_health import current_terminal_failure, failure_details, startup_failure_details
                 projected = failure_details(detail, error_type)
+                if payload.get('event') == 'persistence.failed':
+                    projected = {**projected, 'category': 'persistence', 'stage': 'persistence',
+                        'summary': 'Conversation progress could not be saved.',
+                        'guidance': 'Inspect saved results and restore storage before continuing. The completed response is not proof that later progress was saved; no work was replayed.'}
                 if startup:
                     projected.update(startup_failure_details(payload))
                 existing = session.get('failure')
@@ -5061,7 +5107,8 @@ class AppService:
                 failure_inputs = (existing.get('inputIds') or [existing.get('inputId')]) if isinstance(existing, dict) else []
                 same_input = (current_terminal_failure(session) or not current_input
                     or not any(failure_inputs) or current_input in failure_inputs)
-                if (not startup and same_input and isinstance(existing, dict)
+                if (not startup and payload.get('event') != 'persistence.failed'
+                        and same_input and isinstance(existing, dict)
                         and (existing.get('stage') or projected['category'] == 'unknown'
                              and existing.get('category') != 'unknown')):
                     # A later generic process-exit error must not replace the
@@ -5074,7 +5121,13 @@ class AppService:
                 session['error'] = ('This turn exceeded the model context limit. Your conversation and saved surfaces are kept. '
                     'Inspect the current state and continue with a smaller, focused request; completed actions were not replayed.'
                     if projected['category'] == 'context_limit' and not projected.get('stage') else detail)
+                if payload.get('event') == 'persistence.failed':
+                    session['error'] = projected['summary'] + ' ' + projected['guidance']
                 session['failure'] = {**projected, 'recordedAt': session['errorAt']}
+                if capture and not session['failure'].get('exceptionChain'):
+                    session['failure']['exceptionChain'] = capture['exceptionChain']
+                from .input_status import record_failure
+                record_failure(session, session['failure'])
                 if projected['category']=='authentication' and self.management is not None:
                     # Recheck current connections outside the event lock. A late
                     # failure from an old worker must not label a newly signed-in account.
@@ -5086,35 +5139,22 @@ class AppService:
                 event = {**payload, "at": time.time()}
                 session.setdefault("generations", []).append(event)
                 session["generations"] = session["generations"][-200:]
-                from .input_status import generation as observe_input_generation, PREFIX
-                input_annotation = PREFIX + str(payload.get('initial_input_id', ''))
-                before_input = session.get('messageAnnotations', {}).get(input_annotation)
-                observe_input_generation(session, payload)
-                if (payload.get('event') == 'generation.started'
-                        and session.get('messageAnnotations', {}).get(input_annotation) is not before_input):
-                    from .execution import bind_runtime_turn
-                    bind_runtime_turn(session, payload)
-                from .response_completion import apply as apply_response_completion
-                apply_response_completion(session, payload)
+                active_before = session.get('collaborationGeneration') or {}
+                before_generation = (active_before.get('id'), active_before.get('terminal'))
+                current_generation = (not active_before.get('id') or
+                    active_before.get('id') == payload.get('generation_id') and not active_before.get('terminal'))
                 root_generation = (payload.get('sessionId', session['id']) == session['id']
                     and payload.get('rootSessionId', session['id']) == session['id'])
-                if root_generation and payload.get('event') == 'generation.started':
-                    session.pop('modelAdmission', None)
-                    session.pop('diagnosticReceipt', None)
-                    session.pop('turnErrorType', None)
-                    session.pop('errorType', None)
-                    session.pop('error', None)
-                    session.pop('failure', None)
-                    session.pop('health', None)
-                    session.pop('errorAt', None)
-                elif root_generation and payload.get('event') == 'generation.failed':
+                if root_generation and current_generation and payload.get('event') == 'generation.failed':
                     from .execution import fail_generation
                     fail_generation(session, payload.get('input_ids', []))
                     session['turnErrorType'] = payload.get('error_type')
                     from .session_health import generation_failure
                     from .model_admission import failure as admission_failure
                     failure = admission_failure(session, payload) or generation_failure(payload)
-                    existing = session.get('failure')
+                    from .session_health import request_call_failure
+                    existing = request_call_failure(session, payload.get('input_ids', []),
+                                                    payload.get('generation_id'), payload.get('error_type'))
                     safety_categories = {'content_filter', 'computer_capture_stop'}
                     explicit_change = (failure and failure.get('category') != 'unknown'
                         and isinstance(existing, dict) and failure['category'] != existing.get('category'))
@@ -5131,18 +5171,17 @@ class AppService:
                         session['failure'] = {**failure, 'recordedAt': event['at'],
                             'generationId': payload.get('generation_id'), 'inputIds': payload.get('input_ids', [])}
                     elif isinstance(existing, dict):
-                        active = session.get('collaborationGeneration') or {}
-                        # A classified provider cause precedes the terminal
-                        # event. Bind it only to its observed admitted input
-                        # and generation, never to an unrelated later failure.
-                        if (active.get('id') == payload.get('generation_id') and not active.get('terminal')
-                                and existing.get('generationId') in {None, active.get('id')}
-                                and existing.get('inputId')
-                                and existing['inputId'] in active.get('inputIds', [])
-                                and existing['inputId'] in payload.get('input_ids', [])):
-                            session['failure'] = {**existing, 'generationId': active['id'],
-                                'inputIds': payload['input_ids']}
-                if root_generation and payload.get("event") == "generation.finished":
+                        session['failure'] = {**existing, 'generationId': payload.get('generation_id'),
+                            'inputIds': payload.get('input_ids', []),
+                            'stage': (failure or {}).get('stage', 'manager_turn')}
+                    from .input_status import record_failure
+                    record_failure(session, session.get('failure') or {})
+                if root_generation and current_generation and payload.get("event") == "generation.finished":
+                    if not payload.get('active_job_ids'):
+                        for turn in session.get('execution', {}).get('turns', []):
+                            if (turn.get('inputId', turn['id']) in payload.get('input_ids', [])
+                                    and turn.get('generationId') in {None, payload.get('generation_id')}):
+                                turn.update(phase='completed', endedAt=event['at'])
                     if not scheduled_generation:
                         from .attention import completed
                         completed(session,event)
@@ -5164,8 +5203,10 @@ class AppService:
                     session.pop("streamingId", None)
                     session.pop("streamingInputId", None)
                 # Transport may deliver completion before its saved message.
-                terminal = next((event for event in reversed(session.get("generations", []))
+                terminal = next((event for event in session.get("generations", [])
                                  if event.get("generation_id") == generation_id
+                                 and event.get("sessionId", session['id']) == session['id']
+                                 and event.get("rootSessionId", session['id']) == session['id']
                                  and event.get("event") in {"generation.finished", "generation.failed", "generation.detached"}), None)
                 if terminal:
                     from .response_completion import apply as apply_response_completion
@@ -5239,7 +5280,34 @@ class AppService:
                 kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
             collaboration_changed = (set() if kind == 'runtime.ended' and not ended_foreground
                                      else self.collaboration.observe(session, kind, payload))
-            if (kind == 'runtime.generation' and root_generation
+            if kind == 'runtime.generation':
+                admitted_start = (payload.get('event') == 'generation.started'
+                    and (session.get('collaborationGeneration') or {}).get('id') == payload.get('generation_id')
+                    and before_generation[0] != payload.get('generation_id'))
+                if current_generation or admitted_start:
+                    if admitted_start:
+                        initial = payload.get('initial_input_id')
+                        message = next((m for m in session['messages'] if m.get('inputId') == initial), {})
+                        ensure_turn(session, initial, message.get('text', ''))
+                    from .input_status import generation as observe_input_generation, PREFIX, record_failure
+                    input_annotation = PREFIX + str(payload.get('initial_input_id', ''))
+                    before_input = session.get('messageAnnotations', {}).get(input_annotation)
+                    observe_input_generation(session, payload)
+                    if admitted_start and session.get('messageAnnotations', {}).get(input_annotation) is not before_input:
+                        from .execution import bind_runtime_turn
+                        bind_runtime_turn(session, payload)
+                    from .response_completion import apply as apply_response_completion
+                    apply_response_completion(session, payload)
+                    if payload.get('event') == 'generation.failed':
+                        record_failure(session, session.get('failure') or {})
+            if (kind == 'runtime.generation' and root_generation and payload.get('event') == 'generation.started'
+                    and (session.get('collaborationGeneration') or {}).get('id') == payload.get('generation_id')
+                    and before_generation[0] != payload.get('generation_id')):
+                # Clear only on admission accepted by the canonical reducer.
+                for key in ('modelAdmission', 'diagnosticReceipt', 'turnErrorType', 'errorType',
+                            'error', 'failure', 'health', 'errorAt'):
+                    session.pop(key, None)
+            if (kind == 'runtime.generation' and root_generation and current_generation
                     and payload.get('event') == 'generation.failed'
                     and session.get('status') not in {'stopped', 'stopping'}):
                 from .session_health import current_terminal_failure

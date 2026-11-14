@@ -18,6 +18,31 @@ export function deliveryRecovery(state,session){
   connection:state.client.hostInstanceId};
 }
 
+export function nativeDeliverySource(session){
+ if(!session?.id||session.externalAgent)return null;
+ return {workspace:session.workspace||null,nativeIdentity:session.runtimeSessionId||session.nativeIdentity||session.id};
+}
+
+export function retainedDeliveryTarget(state,scope){
+ return typeof scope==='string'&&scope?{scope,connection:state?.client?.hostInstanceId}:null;
+}
+
+export function freshRetrySource(session,creation){
+ return session?.externalAgent||creation?.setup?.externalAgentId?{}:{expectedSource:nativeDeliverySource(session)};
+}
+
+// A bounded frame may omit the captured conversation. Compare positive source
+// evidence, not membership; retain no identity cache and never expand the frame.
+export function deliveryTargetMatches(state,target,sessionId){
+ if(!target?.scope)return false;
+ if(target.connection&&state?.client?.hostInstanceId!==target.connection)return false;
+ let source;try{source=JSON.parse(target.scope)}catch{return false}
+ const origin=state?.client?.historyScope||state?.client?.hostInstanceId;
+ if(!Array.isArray(source)||source.length!==3||origin!==source[0])return false;
+ const row=state?.sessions?.find(row=>row.id===sessionId);
+ return !row||deliveryScope(state,row)===target.scope;
+}
+
 export function checkedDelivery(result,sessionId,inputId){
  const report=result?.result;
  if(result?.accepted!==true||!report||Array.isArray(report)||
