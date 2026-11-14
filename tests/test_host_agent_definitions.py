@@ -500,6 +500,174 @@ async def test_real_preparation_and_fresh_native_child_expose_specialist_only_to
         await parent.cleanup()
 
 
+@pytest.fixture
+async def delegate_specialists(specialist, tmp_path):
+    """Real file loading, preparation, DelegateTool, Core mounts and host children."""
+    import asyncio
+    from dataclasses import fields
+    import hashlib
+    from amplifier_foundation.bundle import PreparedBundle
+    from amplifier_module_loop_live.runtime import Runtime
+    from amplifier_module_tool_delegate import DelegateTool
+    from amplifier_web.host.children import install_children, PersistentDelegate
+    from amplifier_web.host.storage import SessionStore
+
+    suffix = hashlib.sha256(str(tmp_path).encode()).hexdigest()[:12]
+    state = {"fail": set(), "events": [], "executed": [], "cleaned": [],
+             "constructed": [], "block": False, "mounting": asyncio.Event()}
+    sources = {}
+    names = ("alpha", "beta")
+    for name in names:
+        module = f"tool-{name}-{suffix}"
+        folder = specialist.root / "modules" / module
+        folder.mkdir(parents=True)
+        source = TOOL.replace("specialist_probe", name + "_probe")
+        source = source.replace(
+            '    await coordinator.mount("tools", Specialist(), name="',
+            '''    state = coordinator.get_capability("test.specialist")
+    if coordinator.session_id != "parent":
+        if state["block"]:
+            import asyncio
+            state["mounting"].set()
+            await asyncio.Future()
+        if "''' + name + '''" in state["fail"]:
+            raise RuntimeError("fixture-secret /private/fixture-path")
+    await coordinator.mount("tools", Specialist(), name="''')
+        (folder / "__init__.py").write_text(source)
+        sources[name] = {"module": module, "source": str(folder)}
+        (specialist.root / "agents" / (name + ".md")).write_text(
+            "---\n" + yaml.safe_dump({"model_role": [name, "general"],
+                                      "tools": [sources[name]]}) +
+            "---\n" + name + " instructions.\n")
+    specialist.behavior.write_text(yaml.safe_dump({
+        "bundle": {"name": "specialists", "namespace_root": ".."},
+        "agents": {"include": ["specialists:" + name for name in names]},
+    }))
+    loop_id = "loop-delegate-probe-" + suffix
+    loop_path = specialist.root / "modules" / loop_id
+    loop_path.mkdir()
+    (loop_path / "__init__.py").write_text('''__amplifier_module_type__ = "orchestrator"
+class Probe:
+    async def execute(self, prompt, context, providers, tools, hooks, coordinator):
+        state = coordinator.get_capability("test.specialist")
+        state["executed"].append(coordinator.session_id)
+        name = coordinator.config["instruction"].split()[0]
+        assert coordinator.config["instruction"] == name + " instructions."
+        assert coordinator.config["model_role"] == [name, "general"]
+        result = await tools[name + "_probe"].execute({})
+        assert result.success and result.output == {"specialist": True}
+        await context.add_message({"role": "user", "content": prompt})
+        await context.add_message({"role": "assistant", "content": name + " verified"})
+        return name + " verified"
+async def mount(coordinator, config):
+    await coordinator.mount("orchestrator", Probe())
+''')
+    loaded = await compose(specialist)
+    loaded.hooks = []
+    context = Path(importlib.util.find_spec("amplifier_module_context_simple").origin).parent
+    loaded.session = {
+        "orchestrator": {"module": loop_id, "source": str(loop_path)},
+        "context": {"module": "context-simple", "source": str(context)},
+    }
+    prepared = await loaded.prepare(install_deps=False, strict=True, cache_dir=tmp_path / "cache")
+    for row in sources.values():
+        assert prepared.resolver.resolve(row["module"]).resolve() == Path(row["source"])
+
+    class ObservedPrepared(PreparedBundle):
+        async def create_session(self, **kwargs):
+            supplied = kwargs.pop("before_initialize", None)
+            async def observe(session):
+                state["constructed"].append(session)
+                coordinator = session.coordinator
+                coordinator.register_capability("test.specialist", state)
+                async def cleanup():
+                    state["cleaned"].append(session.session_id)
+                coordinator.register_cleanup(cleanup)
+                async def failed(event, data):
+                    from amplifier_core import HookResult
+                    state["events"].append((session.session_id, data["module_id"],
+                                             data["module_type"], data.get("reason_code")))
+                    return HookResult()
+                coordinator.hooks.register("module:load_failed", failed, name="fixture-observe-failure")
+                if supplied:
+                    await supplied(session)
+            return await super().create_session(before_initialize=observe, **kwargs)
+
+    prepared = ObservedPrepared(**{field.name: getattr(prepared, field.name)
+                                  for field in fields(prepared)})
+    parent = await prepared.create_session(session_id="parent")
+    store = SessionStore(tmp_path / "sessions")
+    runtime = Runtime("parent")
+    children = await install_children(parent, prepared, runtime, store, None)
+    await parent.coordinator.mount("tools", DelegateTool(parent.coordinator, {}), name="delegate")
+    await children.install(parent, prepared)
+    delegate = parent.coordinator.get("tools")["delegate"]
+    assert isinstance(delegate, PersistentDelegate)
+    assert isinstance(delegate.original, DelegateTool)
+    try:
+        yield SimpleNamespace(state=state, parent=parent, prepared=prepared, children=children,
+                              delegate=delegate, store=store, runtime=runtime, sources=sources)
+    finally:
+        await parent.cleanup()
+
+
+async def test_real_delegate_file_specialists_preserve_full_declarations(delegate_specialists):
+    fixture = delegate_specialists
+    for name in ("alpha", "beta"):
+        assert name + "_probe" not in fixture.parent.coordinator.get("tools")
+        result = await fixture.delegate.execute({"agent": "specialists:" + name, "instruction": "inspect"})
+        assert result.success, result.error
+        child = fixture.state["constructed"][-1]
+        plan = child.coordinator.config
+        assert plan["instruction"] == name + " instructions."
+        assert plan["model_role"] == [name, "general"]
+        assert fixture.sources[name] in plan["tools"]
+        assert name + "_probe" in child.coordinator.get("tools")
+        assert not hasattr(child.coordinator.get("orchestrator"), "load_failures")
+        assert fixture.state["executed"][-1] == child.session_id
+        assert fixture.state["cleaned"].count(child.session_id) == 1
+        _, metadata = fixture.store.load(child.session_id)
+        assert metadata["agent_overlay"]["tools"] == [fixture.sources[name]]
+        assert metadata["agent_overlay"]["instruction"] == name + " instructions."
+        assert fixture.children.rows[child.session_id]["status"] == "completed"
+    assert len(fixture.state["executed"]) == 2
+    assert not fixture.state["events"]
+    assert set(fixture.children.sessions) == {"parent"}
+
+
+@pytest.mark.parametrize("inherited", [False, True])
+@pytest.mark.parametrize("persistent", [False, True])
+async def test_real_delegate_refuses_failed_child_tool_mount(delegate_specialists, inherited, persistent):
+    fixture = delegate_specialists
+    fixture.state["fail"].add("alpha")
+    if inherited:
+        # Parent mount succeeded; the same configured inherited tool fails only
+        # in the child. Root-equivalent policy must not inspect just the overlay.
+        fixture.parent.coordinator.config["tools"].append(copy.deepcopy(fixture.sources["alpha"]))
+        fixture.parent.coordinator.config["agents"]["specialists:alpha"]["tools"] = []
+    result = await fixture.delegate.execute({
+        "agent": "specialists:alpha", "instruction": "must not execute", "persistent": persistent})
+    child = fixture.state["constructed"][-1]
+    assert fixture.state["events"] == [
+        (child.session_id, fixture.sources["alpha"]["module"], "tool", "unknown")]
+    assert not result.success, "A child with an actual Core tool-mount failure must not report success"
+    public = str(result.error)
+    assert fixture.sources["alpha"]["module"] in public
+    assert "could not be loaded" in public
+    assert "fixture-secret" not in public and "/private/fixture-path" not in public
+    assert not fixture.state["executed"]
+    assert fixture.state["cleaned"].count(child.session_id) == 1
+    row = fixture.children.rows[child.session_id]
+    assert row["status"] == "error" and row["reports"] == 0
+    assert not any(key in row for key in ("task", "runtime", "_owner"))
+    assert set(fixture.children.sessions) == {"parent"}
+    assert not fixture.children.admissions and fixture.children.reserved == 0
+    assert fixture.store.load(child.session_id) is None
+    # Failed persistent startup is not a resumable successful checkpoint.
+    with pytest.raises(FileNotFoundError, match="No saved child"):
+        await fixture.children.resume(child.session_id, "not a replay", fixture.parent)
+
+
 DRIVER = '''__amplifier_module_type__ = "orchestrator"
 class Driver:
     async def execute(self, prompt, context, providers, tools, hooks, coordinator):
