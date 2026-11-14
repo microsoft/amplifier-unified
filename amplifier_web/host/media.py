@@ -226,7 +226,11 @@ def enable_media(coordinator):
                      and type(facts.get("contract")) is int and facts["contract"] == 1
                      and facts.get("ready") is True
                      for facts in consumers.values())
-    capability.enabled = bool(loop_ready and _durable_media_supported() and
+    # The composition owner records this only after qualifying the exact
+    # post-hook carrier/registration graph. Readiness names alone cannot prove
+    # that an unobserved raw/native hook did not replace or redact a result.
+    graph = coordinator.get_capability("web.media.graph_qualified") is True
+    capability.enabled = bool(graph and loop_ready and _durable_media_supported() and
                               callable(coordinator.get_capability("session.durable_checkpoint")))
 
 

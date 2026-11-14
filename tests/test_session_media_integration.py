@@ -47,6 +47,11 @@ async def test_readiness_requires_positive_loop_report_and_actual_checkpoint(ses
     from amplifier_web.host.media import enable_media
     cap = session.caps[NAMESPACE]
     session.caps["session.durable_checkpoint"] = lambda: None
+    cap.report("fixture-loop", event="consumer-ready", outcome="ready",
+               details={"role": "loop", "contract": 1})
+    enable_media(session.coordinator)
+    assert cap.enabled is False  # Handler names/readiness cannot qualify a graph.
+    session.caps["web.media.graph_qualified"] = True
     for outcome in ("failed", "rejected", "ready"):
         cap.report("fixture-loop", event="consumer-ready", outcome=outcome,
                    details={"role": "loop", "contract": 1})
