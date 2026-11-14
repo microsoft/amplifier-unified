@@ -97,13 +97,14 @@ Reply with the fixture response.
             owner = next(worker for worker in workers if event['id'] in worker.bridges)
             operation = event['operation']
             if operation == 'context.prepare':
-                # Match the ordinary combined bridge without real user context.
-                result = {name: {'available': True, 'value': value} for name, value in {
+                from amplifier_web.preparation_context import OPERATIONS
+                values = {
                     'context.manifest': {'surfaces': [], 'inputIds': event['args'].get('_contextInputs', [])},
+                    'message.reactions.context': {'items': []},
                     'coordination.current': {'sessionId': owner.session.session_id, 'grants': [], 'requests': [], 'bounded': True},
                     'memory.context': {'items': []},
-                    'message.reactions.context': {},
-                }.items()}
+                }
+                result = {name: {'available': True, 'value': values[name]} for name in OPERATIONS}
             elif operation == 'coordination.current':
                 result = {'sessionId': owner.session.session_id, 'grants': [], 'requests': [], 'bounded': True}
             elif operation == 'context.manifest':
@@ -130,6 +131,11 @@ Reply with the fixture response.
             break
         await asyncio.sleep(0.02)
     assert worker.idle() and worker.shared_handle.active, events
+    assert not worker.bridges
+    assert any(event.get('type') == 'runtime.bridge' and event.get('operation') == 'context.prepare'
+               and event.get('phase') == 'completed' for event in events), events
+    assert not any(event.get('type') == 'runtime.bridge' and event.get('phase') == 'failed'
+                   for event in events), events
     warm_started = time.monotonic()
     await worker.command({"op": "send", "id": "two-request", "input_id": "two", "text": "two"})
     for _ in range(200):

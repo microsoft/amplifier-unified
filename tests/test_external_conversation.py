@@ -195,7 +195,7 @@ async def test_durable_stop_revokes_full_permission_before_async_cancellation(ap
     stopping = asyncio.create_task(app.dispatch('conversation.stop', {'sessionId': session['id']}))
     try:
         await asyncio.wait_for(entered.wait(), 5)
-        result = await app.external_conversations._permission(session['id'],
+        result = await app.external_conversations._permission(session['id'], 'fixture',
             [PermissionOption(option_id='allow-this', name='Allow', kind='allow_once')])
         assert result == {'outcome': {'outcome': 'cancelled'}}
     finally:
