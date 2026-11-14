@@ -3,6 +3,7 @@ import copy
 import importlib.util
 import io
 import json
+import shutil
 from pathlib import Path
 import subprocess
 import tarfile
@@ -513,3 +514,28 @@ def test_workspace_metadata_changed_asset_remains_an_immutable_conflict(tmp_path
     with pytest.raises(ValueError, match="bytes differ"):
         release.publish(*candidate[:3], component="workspace-metadata")
     assert remote.mutations == []
+
+
+
+def test_operations_author_relocation_preserves_original_release_verification(tmp_path):
+    root, revision, dist, git = make_candidate(tmp_path, "operations")
+    before = (dist / "operations-source.json").read_bytes()
+    historical = release.verify(root, revision, dist, component="operations")
+    (root / "components").mkdir()
+    git("mv", "amplifier_operations", "components/operations")
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Relocate author only")
+    current_revision = git("rev-parse", "HEAD")
+    git("update-ref", "refs/remotes/origin/main", current_revision)
+    current = release.selection(root, current_revision, component="operations")
+    assert current["subdirectory"] == "components/operations"
+    assert current["tree"] == historical["tree"]
+    assert current["sourceFiles"] == historical["sourceFiles"]
+    assert release.verify(root, revision, dist, component="operations") == historical
+    assert (dist / "operations-source.json").read_bytes() == before
+    assert release.artifact_names(current) == release.artifact_names(historical)
+    # Two simultaneous author projects are ambiguous, never chosen by path order.
+    shutil.copytree(root / "components/operations", root / "amplifier_operations")
+    git("add", ".")
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Ambiguous author fixture")
+    with pytest.raises(ValueError, match="one operations author"):
+        release.selection(root, git("rev-parse", "HEAD"), qualification=True, component="operations")
