@@ -387,6 +387,32 @@ class Folder:
         """The exact names directly in the folder, read from its handle."""
         return sorted(name for name, _ in self._api.children(self._handle))
 
+    def holding(self, names):
+        """Which of these entries of the folder still hold something.
+
+        An absent entry holds nothing, and neither does a real folder with
+        nothing in it: Windows keeps such a folder while a program uses it as
+        its current folder. A file, a link, a folder with an entry, and an
+        entry that cannot be examined all count. A link is never entered.
+        """
+        wanted, held = set(names), []
+        for name, attributes in self._api.children(self._handle):
+            if name not in wanted:  # Exact spelling.
+                continue
+            handle, empty = None, False
+            try:
+                if attributes & _DIRECTORY and not attributes & _LINK:
+                    handle = self._api.open(self._handle, name, enter=True, delete=False)
+                    empty = self._api.kind(handle) == "folder" and not self._api.children(handle)
+            except OSError:
+                pass
+            finally:
+                if handle is not None:
+                    self._api.close(handle)
+            if not empty:
+                held.append(name)
+        return sorted(held)
+
     def _each(self, names):
         tally, wanted = _Tally(), set(names)
         for name, attributes in self._api.children(self._handle):
