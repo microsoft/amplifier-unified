@@ -69,7 +69,8 @@ required. These tests create synthetic repositories in temporary directories.
 Current packaging qualification covers Linux ARM64 with Python 3.13; it does not
 establish Windows or macOS acceptance.
 
-Version `0.1.0` identifies package preparation, not a separate published release.
+The package version alone does not identify published or qualified bytes; use the
+actual release source receipt and artifact hashes.
 Unified already includes this same runtime source in its normal install; do not
 coinstall the standalone distribution into that environment. A separate repository
 and dependency-delivery transition require their own reviewed handoff.
