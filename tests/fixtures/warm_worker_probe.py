@@ -198,6 +198,7 @@ def require_media(worker, selection):
     if capability is not None and capability.enabled is True:
         return
     graph = coordinator.get_capability("web.media.hook_graph")
+    bridge = coordinator.get_capability("web.media.hook_bridge")
     rejected = []
     if graph is not None:
         evidence = graph.participants_evidence()
@@ -248,21 +249,9 @@ def require_media(worker, selection):
         "media_enabled": False, "expected_plan_matches": selection.accepts_plan(coordinator.config),
         "actual_plan_keys": sorted(coordinator.config), "has_graph": graph is not None,
         "rejected_callbacks": rejected,
-        "bridge": (coordinator.get_capability("web.media.hook_bridge").receipt_status(
-            coordinator.get_capability("web.media.hook_bridge").graph_receipt) if graph else None),
+        "bridge": bridge.receipt_status(bridge.graph_receipt) if bridge else None,
         "readiness": coordinator.get_capability("session.media.readiness"),
         "source_join": coordinator.get_capability("web.media.source_join") is not None,
-        # Failure diagnosis only, never a selection or activation input.
-        "issuer_debug": ({"mounts_owned": graph._mounts_owned(),
-                          "plan_complete": graph._plan_complete(),
-                          "state": graph._state,
-                          "reason": graph._reason,
-                          "unowned": [(kind, name, type(module).__module__+"."+type(module).__qualname__)
-                              for kind, slots in graph._mounts()
-                              for name, module in (slots if kind in ("providers", "tools") else [(None, slots)])
-                              if module is not None and not any(
-                                  slot == (kind, name) and recorded is module
-                                  for slot, recorded, _ in graph._mount_records)]} if graph else None),
     }, sort_keys=True))
 
 
@@ -496,6 +485,7 @@ Reply with the fixture response.
                         break
                     await asyncio.sleep(.02)
                 require_media(worker, selection)
+                assert not worker.session.coordinator.get_capability("live.host").registrations
             first_input = {"op": "send", "id": "one-request", "input_id": "one", "text": "one"}
             if use_media:
                 first_input["attachments"] = [upload]

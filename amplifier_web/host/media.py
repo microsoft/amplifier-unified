@@ -21,12 +21,54 @@ _REQUEST_ONLY = ContextVar("unified_request_only_images", default=None)
 _CONSTRUCTIONS = {}
 
 
+class HostRegistrationView:
+    """Apply owned host decorators before the issuer records the mounted object."""
+    def __init__(self, coordinator, bridge):
+        self.native, self.bridge = coordinator, bridge
+        self.participant = bridge.participant(_HOST_PARTICIPANT)
+
+    def __getattr__(self, name):
+        return getattr(self.participant, name)
+
+    def _prepared(self, kind, module, name):
+        if kind == "tools":
+            guard = self.native.get_capability("web.work_guard_tools")
+            if callable(guard):
+                module = guard((name or getattr(module, "name", None), module))
+            sponsor = self.native.get_capability("web.computer_episodes")
+            if sponsor is not None:
+                module = sponsor.wrap(name or getattr(module, "name", None), module)
+        if kind == "providers" and self.native.get_capability("live.child_mode") == "finite":
+            transform = self.native.get_capability("web.provider_transform")
+            if callable(transform):
+                module = transform(module)
+        return module
+
+    async def mount(self, kind, module, name=None):
+        return await self.participant.mount(kind, self._prepared(kind, module, name), name=name)
+
+    async def mount_adapter(self, kind, module, *, previous, name=None):
+        return await self.participant.mount_adapter(
+            kind, self._prepared(kind, module, name), previous=previous, name=name)
+
+
 def registration_coordinator(coordinator):
     """An explicit registration view; execution keeps the real coordinator."""
     getter = getattr(coordinator, "get_capability", None)
     bridge = getter(_HOOK_BRIDGE) if callable(getter) else None
     if bridge is not None:
-        return bridge.participant(_HOST_PARTICIPANT)
+        existing = getter("web.media.host_registration")
+        if (type(existing) is HostRegistrationView and existing.native is coordinator
+                and existing.bridge is bridge):
+            return existing
+        # Structural callers retain the public Foundation registration view.
+        if id(coordinator) not in _CONSTRUCTIONS:
+            return bridge.participant(_HOST_PARTICIPANT)
+        view = HostRegistrationView(coordinator, bridge)
+        coordinator.register_capability("web.media.host_registration", view)
+        selection = getter("web.media.graph_selection")
+        selection.bind_registration_view(coordinator, bridge, view)
+        return view
     return coordinator
 
 
@@ -38,7 +80,8 @@ def registration_hooks(coordinator):
 def mint_graph_owner(coordinator, obj, *, kind, associations=()):
     selection = coordinator.get_capability("web.media.graph_selection")
     if selection is not None:
-        return selection.mint_owner(obj, kind=kind, associations=associations)
+        return selection.mint_owner(obj, kind=kind, associations=associations,
+                                    construction=coordinator)
     return False
 
 class RequestGraphLifetime:
@@ -70,6 +113,12 @@ def request_graph_lifetime(coordinator):
         return None
     state = _CONSTRUCTIONS.get(id(coordinator))
     if state is None or state[0] is not coordinator:
+        return None
+    # An unqualified composition remains a neutral/text host. Only an already
+    # admitted private candidate owns a generation lease; disabling admission
+    # must not turn ordinary unsupported text into a graph-scope failure.
+    capability = coordinator.get_capability(NAMESPACE)
+    if capability is None or capability.enabled is not True:
         return None
     bridge = state[1]
     return RequestGraphLifetime(bridge.request_scope)
@@ -120,9 +169,19 @@ def begin_hook_graph(session, *, selection=None):
     coordinator.register_capability(_HOOK_BRIDGE, bridge)
     coordinator.register_capability(_HOOK_GRAPH, graph)
     coordinator.register_capability("web.media.graph_selection", selection)
+    from functools import partial
+    coordinator.register_capability("session.media.graph_transition",
+                                    partial(hook_configuration, coordinator))
     _CONSTRUCTIONS[id(coordinator)] = [coordinator, bridge, graph, selection, None]
+    async def release_construction():
+        state = _CONSTRUCTIONS.get(id(coordinator))
+        if state is not None and state[0] is coordinator:
+            _CONSTRUCTIONS.pop(id(coordinator), None)
+            state[3].release_construction(coordinator)
+    coordinator.register_cleanup(release_construction)
     selection.mint_owner(coordinator, kind="coordinator",
-                         associations=((session, "coordinator", coordinator),))
+                         associations=((session, "coordinator", coordinator),),
+                         construction=coordinator)
 
 
 def seal_hook_graph(coordinator):
@@ -186,7 +245,7 @@ async def mount_media_adapter(coordinator, kind, value, *, previous, name):
     bridge = coordinator.get_capability(_HOOK_BRIDGE)
     if bridge is None:
         return
-    view = bridge.participant(_HOST_PARTICIPANT)
+    view = registration_coordinator(coordinator)
     await view.mount_adapter(kind, value, previous=previous, name=name)
 
 
@@ -421,6 +480,11 @@ def bind_media(session, store, *, selection=None):
         coordinator.register_capability("web.media.unavailable", True)
         return
     begin_hook_graph(session, selection=selection)
+    media = None
+    async def close_opening_store():
+        if media is not None:
+            media.close()
+    coordinator.register_cleanup(close_opening_store)
     policy = SourcePolicy(coordinator)
     request_only = RequestOnlyRegistry()
     coordinator.register_capability("web.media.request_only", request_only)
@@ -494,12 +558,9 @@ def bind_media(session, store, *, selection=None):
             capability.enabled = False
             if coordinator.get_capability(_HOOK_BRIDGE) is not None:
                 coordinator.register_capability("session.media.tool_post", None)
+                coordinator.register_capability("session.media.graph_transition", None)
             request_only.requests.clear()
             projected.clear()
-            media.close()
-            state = _CONSTRUCTIONS.get(id(coordinator))
-            if state is not None and state[0] is coordinator:
-                _CONSTRUCTIONS.pop(id(coordinator), None)
         cleanup(close)
 
 

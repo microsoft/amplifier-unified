@@ -37,6 +37,28 @@ def policy_with_config(config):
 async def policy_positional_and_keyword(event, data, deny=True, *, audit=False):
     return HookResult(action="deny" if deny else "continue", reason="audit" if audit else None)
 
+def test_external_constructor_bindings_are_exact_and_released_with_their_construction():
+    from amplifier_web.host.media_graph import NamedMediaGraph
+    class Owner:
+        delegate = None
+        async def __call__(self, event, data):
+            return HookResult()
+    first = Owner()
+    values = {"selected.owner": first}
+    coordinator = SimpleNamespace(get_capability=values.get)
+    selected = NamedMediaGraph("receiver", plans=[{}],
+        sources={__file__: hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
+        dependencies=(HookResult,), owner_rules=(("external", Owner, ("delegate",)),),
+        capability_owners=(("external", "selected.owner", ()),))
+    assert selected.bind_capability_owners(coordinator)
+    assert selected.accepts_callable(first)
+    values["selected.owner"] = Owner()
+    assert not selected.accepts_callable(first)
+    assert not selected.bind_capability_owners(coordinator)
+    selected.release_construction(coordinator)
+    assert not selected.accepts_callable(first)
+    assert not selected._owners and not selected._capability_bindings
+
 @pytest.mark.parametrize("alternatives", [False, True])
 def test_environments_are_recursive_type_exact_and_defaults_keep_parameter_kinds(alternatives):
     from amplifier_web.host.media_graph import NamedMediaGraph
@@ -81,6 +103,26 @@ def test_registration_view_is_explicit_and_keeps_execution_coordinator_identity(
     assert coordinator.hooks is raw
     assert calls == ["unified-host", "unified-host"]
     assert registration_hooks(SimpleNamespace(hooks=raw)) is raw
+
+@pytest.mark.asyncio
+async def test_failed_store_binding_releases_original_construction_on_session_cleanup():
+    from amplifier_core import AmplifierSession
+    from amplifier_web.host import media
+    from amplifier_web.host.media_graph import NamedMediaGraph
+    class Store:
+        def media(self, *args, **kwargs):
+            raise OSError("fixture opening failure")
+    plan = {"session": {"orchestrator": "fixture-loop", "context": "fixture-context"}}
+    selection = NamedMediaGraph("failed-opening", plans=[plan],
+        sources={__file__: hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
+        owner_rules=(("coordinator", ModuleCoordinator, ("session_id",)),))
+    session = AmplifierSession(plan, session_id="failed-open")
+    with pytest.raises(OSError, match="opening failure"):
+        media.bind_media(session, Store(), selection=selection)
+    assert id(session.coordinator) in media._CONSTRUCTIONS
+    await session.cleanup()
+    assert id(session.coordinator) not in media._CONSTRUCTIONS
+    assert not selection._owners
 
 
 @pytest.mark.asyncio

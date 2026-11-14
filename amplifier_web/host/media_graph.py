@@ -64,7 +64,7 @@ class NamedMediaGraph:
     def accepts_plan(self, config):
         return json.dumps(config, sort_keys=True, separators=(",", ":")) in self._plans
 
-    def mint_owner(self, obj, *, kind, associations=()):
+    def mint_owner(self, obj, *, kind, associations=(), construction=None):
         """Called only by the selected actual host constructor, not hook evidence.
 
         A rule is (literal factory kind, exact class, protected field names).
@@ -76,7 +76,7 @@ class NamedMediaGraph:
         if rule is None:
             return False
         protected = tuple((name, getattr(obj, name)) for name in rule[2])
-        self._owners.append((obj, type(obj), protected, tuple(associations)))
+        self._owners.append((obj, type(obj), protected, tuple(associations), construction))
         return True
 
     def bind_capability_owners(self, coordinator):
@@ -88,17 +88,25 @@ class NamedMediaGraph:
         for kind, capability, keys in self._capability_owners:
             previous = next((row for row in self._capability_bindings
                              if row[0] is coordinator and row[1:3] == (capability, keys)), None)
-            value = coordinator.get_capability(capability)
-            for key in keys:
-                value = value[key]
+            try:
+                value = coordinator.get_capability(capability)
+                for key in keys:
+                    value = value[key]
+            except (KeyError, TypeError, AttributeError):
+                return False
             if previous is not None:
                 if previous[3] is not value:
                     return False
                 continue
-            if not self.mint_owner(value, kind=kind):
+            if not self.mint_owner(value, kind=kind, construction=coordinator):
                 return False
             self._capability_bindings.append((coordinator, capability, keys, value))
         return True
+
+    def release_construction(self, coordinator):
+        self._owners = [row for row in self._owners if row[4] is not coordinator]
+        self._capability_bindings = [row for row in self._capability_bindings if row[0] is not coordinator]
+        self._registration_views = [row for row in self._registration_views if row[0] is not coordinator]
 
     @property
     def name(self):
@@ -127,8 +135,10 @@ class NamedMediaGraph:
     def _binding_valid(self, obj):
         for native, bridge, view in self._registration_views:
             if obj is view:
+                from .media import HostRegistrationView
+                actual = view.participant if type(view) is HostRegistrationView else view
                 return (native.get_capability("web.media.hook_bridge") is bridge
-                        and bridge.participant("unified-host") is view)
+                        and bridge.participant("unified-host") is actual)
         for coordinator, capability, keys, selected in self._capability_bindings:
             if selected is obj:
                 current = coordinator.get_capability(capability)
@@ -136,7 +146,7 @@ class NamedMediaGraph:
                     current = current[key]
                 if current is not selected:
                     return False
-        for original, cls, protected, associations in self._owners:
+        for original, cls, protected, associations, _ in self._owners:
             if original is obj:
                 return (type(obj) is cls and
                         all((type(getattr(obj, name, None)) is type(value) and
@@ -165,7 +175,9 @@ class NamedMediaGraph:
         return False
 
     def bind_registration_view(self, native, bridge, view):
-        if bridge.participant("unified-host") is not view:
+        from .media import HostRegistrationView
+        actual = view.participant if type(view) is HostRegistrationView else view
+        if bridge.participant("unified-host") is not actual:
             raise ValueError("Foreign registration view")
         self._registration_views.append((native, bridge, view))
 

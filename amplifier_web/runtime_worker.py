@@ -1092,16 +1092,21 @@ class Worker:
                     @contextmanager
                     def construction():
                         native = coordinator
-                        with hook_configuration(native):
-                            view = registration_coordinator(native)
-                            self.registrations[id(view)] = (view, native)
-                            bridge = native.get_capability("web.media.hook_bridge")
-                            selection = native.get_capability("web.media.graph_selection")
-                            if bridge is not None and selection is not None:
-                                selection.bind_registration_view(native, bridge, view)
-                            yield view, view.hooks
-                        from amplifier_web.host.media import seal_hook_graph
-                        seal_hook_graph(native)
+                        view = None
+                        try:
+                            with hook_configuration(native):
+                                view = registration_coordinator(native)
+                                self.registrations[id(view)] = (view, native)
+                                bridge = native.get_capability("web.media.hook_bridge")
+                                selection = native.get_capability("web.media.graph_selection")
+                                if bridge is not None and selection is not None:
+                                    selection.bind_registration_view(native, bridge, view)
+                                yield view, view.hooks
+                            from amplifier_web.host.media import seal_hook_graph
+                            seal_hook_graph(native)
+                        finally:
+                            if view is not None:
+                                self.registrations.pop(id(view), None)
                     return construction()
                 async def prepare_execution(self, loop, coordinator, providers):
                     entry = self.registrations.get(id(coordinator))
