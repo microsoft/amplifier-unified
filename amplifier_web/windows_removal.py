@@ -45,12 +45,17 @@ $ErrorActionPreference = 'Stop'
 $p = $null
 $passes = 0
 $removed = $false
+$started = Get-Date
 $script:left = @()
 $script:leftCount = 0
+$script:seen = @{}
 $reason = ''
 function Keep($path) {
-    $script:leftCount++
-    if ($script:left.Count -lt 20) { $script:left += $path }
+    if (-not $script:seen[$path]) {
+        $script:seen[$path] = $true
+        $script:leftCount++
+        if ($script:left.Count -lt 20) { $script:left += $path }
+    }
 }
 function Real-Folder($item) {
     return ($item.PSIsContainer -and "$($item.Attributes)" -notmatch 'ReparsePoint')
@@ -73,16 +78,28 @@ function Clear-Link($entry) {
     # can refuse this call; then the link stays and prevents root removal.
     try { $entry.Delete() } catch { Keep $entry.FullName }
 }
-function Clear-Entry($path) {
+function Clear-Entry($entry) {
+    # Type and attributes come from the parent's listing, not a per-file stat.
+    if ("$($entry.Attributes)" -match 'ReparsePoint') { Clear-Link $entry; return }
+    $path = $entry.FullName
     try {
-        $entry = Get-Item -LiteralPath $path -Force
-        if ("$($entry.Attributes)" -match 'ReparsePoint') { Clear-Link $entry; return }
         if ($entry.PSIsContainer) {
             $children = @(Get-ChildItem -LiteralPath $path -Force)
-            foreach ($child in $children) { Clear-Entry $child.FullName }
-            $entry = Get-Item -LiteralPath $path -Force
-            if (-not (Real-Folder $entry)) { Keep $path; return }
-            if (@(Get-ChildItem -LiteralPath $path -Force).Count) { Keep $path; return }
+            $plain = @($children | Where-Object {
+                -not $_.PSIsContainer -and "$($_.Attributes)" -notmatch 'ReparsePoint'
+            })
+            if ($plain.Count) {
+                # One cmdlet call per folder, even for thousands of plain files.
+                Remove-Item -LiteralPath $plain.FullName -Force -ErrorAction SilentlyContinue
+            }
+            foreach ($child in $children) {
+                if ($child.PSIsContainer -or "$($child.Attributes)" -match 'ReparsePoint') {
+                    Clear-Entry $child
+                }
+            }
+            $remaining = @(Get-ChildItem -LiteralPath $path -Force)
+            foreach ($child in $remaining) { Keep $child.FullName }
+            if ($remaining.Count) { return }
         }
         Remove-Item -LiteralPath $path -Force
     } catch { Keep $path }
@@ -116,9 +133,10 @@ try {
         $passes++
         $script:left = @()
         $script:leftCount = 0
+        $script:seen = @{}
         $entries = @(Get-ChildItem -LiteralPath $p.root -Force)
         foreach ($entry in $entries) {
-            if (@($p.contents) -ccontains $entry.Name) { Clear-Entry $entry.FullName }
+            if (@($p.contents) -ccontains $entry.Name) { Clear-Entry $entry }
         }
         foreach ($entry in @(Get-ChildItem -LiteralPath $p.root -Force)) {
             if (@($p.folders) -ccontains $entry.Name) {
@@ -160,6 +178,7 @@ try {
 finally {
     if ($p.report) {
         @{ passes = $passes; left = @($script:left); leftCount = $script:leftCount
+           elapsed = [double]('{0:F1}' -f ((Get-Date) - $started).TotalSeconds)
            folderRemoved = $removed; reason = $reason } |
             ConvertTo-Json -Compress -Depth 4 |
             Set-Content -LiteralPath $p.report -Encoding UTF8

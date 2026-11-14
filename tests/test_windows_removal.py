@@ -651,3 +651,48 @@ def test_native_finish_leaves_a_file_held_without_delete_sharing(finish_tree):
         assert sorted(path.name for path in (root / "tools").iterdir()) == ["held.txt"]
         assert json.loads((root / "unified-uninstall.json").read_text())["token"] == "Exact-TOKEN"
     _assert_outside_unchanged(tree)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real PowerShell installation-sized removal")
+def test_native_finish_removes_ten_thousand_files_within_four_minutes(finish_tree):
+    import _winapi
+
+    tree, root = finish_tree, finish_tree["root"]
+    # Leave exactly the real caller's three named folders and journal.
+    with removal.folder(root) as owned:
+        assert owned.remove(["app", "shared", "cache", "receipt.json"])["leftCount"] == 0
+    python = root / "python"
+    target = python / "cpython-3.13.17-windows-x86_64-none"
+    # Four levels beneath python: target / package / group / leaf.
+    # 1 + 10 + 100 + 500 = 611 real folders, with 20 files per leaf.
+    for index in range(500):
+        leaf = target / f"package-{index // 50:02}" / f"group-{index // 5:03}" / f"leaf-{index:03}"
+        leaf.mkdir(parents=True)
+        for number in range(20):
+            (leaf / f"file[{number:02}].txt").write_bytes(b"installation-sized proof\n")
+    entries = list(python.rglob("*"))
+    assert sum(path.is_file() for path in entries) == 10_000
+    assert sum(path.is_dir() for path in entries) == 611
+    assert max(len(path.relative_to(python).parts) for path in entries if path.is_dir()) == 4
+    alias = python / "cpython-3.13-windows-x86_64-none"
+    _winapi.CreateJunction(str(target), str(alias))
+    tree["links"].append(alias)
+    assert (alias / "package-00" / "group-000" / "leaf-000" / "file[00].txt").is_file()
+    started = time.monotonic()
+    removal.finish_after_exit(
+        root, "Exact-TOKEN", contents=("python", "tools"),
+        folders=("python", "tools", "workspace"), files=(), seconds=300, report=tree["report"],
+    )
+    result = _finish_report(tree["report"], timeout=max(0, 240 - (time.monotonic() - started)))
+    wall_elapsed = time.monotonic() - started
+    print("AFTER_EXIT_CAPACITY " + json.dumps({
+        "files": 10_000, "folders": 611, "depth": 4, "elapsed": result["elapsed"],
+        "wallElapsed": round(wall_elapsed, 1), "insideJunctionRemoved": not os.path.lexists(alias),
+    }, separators=(",", ":")))
+    assert result["reason"] == "", result
+    assert 0 <= result["elapsed"] < 240, result
+    assert round(result["elapsed"], 1) == result["elapsed"], result
+    assert wall_elapsed < 240, wall_elapsed
+    assert result["folderRemoved"] and result["passes"] >= 1 and not root.exists(), result
+    assert not os.path.lexists(alias) and not result["left"] and result["leftCount"] == 0
+    _assert_outside_unchanged(tree)
