@@ -206,7 +206,7 @@ test('automatic pending read survives remount and manual Check shares its owner'
  await act(async()=>{checkButton(f.root).props.onClick()});
  await f.remount();
  assert.equal(checkButton(f.root).props.disabled,true);
- assert.equal(f.root.root.findByType('details').props.open,true);
+ assert.match(serialized(f.root),/Checking/,'The pending read stays visible after remount');
  await act(async()=>{checkButton(f.root).props.onClick()});
  assert.equal(f.calls.length,1,'Remount and manual Check must join the original operation');
  await act(async()=>pending.resolve(receipt('unknown')));

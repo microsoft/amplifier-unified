@@ -1,4 +1,4 @@
-import {useCallback,useRef,useState} from 'react';
+import React,{useCallback,useRef,useState} from 'react';
 const key='amplifier.messageOutbox.v1';
 export function readOutbox(storage){
  try{return JSON.parse(storage?.getItem(key)||'[]').filter(row=>row&&typeof row.id==='string'&&typeof row.commandId==='string'&&(row.sessionId===null||typeof row.sessionId==='string')&&typeof row.text==='string'&&Array.isArray(row.attachmentIds)&&row.attachmentIds.every(id=>typeof id==='string')&&['sending','failed','unknown'].includes(row.status)).map(row=>({...row,status:row.status==='sending'?'unknown':row.status}));}catch{return []}
@@ -7,7 +7,18 @@ export function outboxMatches(entry,scope){return typeof scope==='string'&&!!sco
 export function outboxMessages(messages,entries,sessionId,scope){
  const pending=entries.filter(row=>row.sessionId===(sessionId??null)&&outboxMatches(row,scope));
  const confirmed=messages.map(message=>{const entry=pending.find(row=>row.commandId===message.inputId);return entry&&!['accepted','queued_for_update','held'].includes(message.delivery?.status)?{...message,localDelivery:{...entry,...(['failed','sending','queued'].includes(message.delivery?.status)?{status:message.delivery.status}:{})}}:message});
- return [...confirmed,...pending.filter(row=>!messages.some(message=>message.inputId===row.commandId)).map(row=>({id:row.id,inputId:row.commandId,role:'user',text:row.text,recipientAgentId:row.recipientAgentId,recipientAgentLabel:row.recipientAgentLabel,via:row.via,createdAt:row.createdAt,attachments:row.attachments,replyTo:row.replyTo,localDelivery:row}))];
+ return [...confirmed,...pending.filter(row=>!row.closed&&!messages.some(message=>message.inputId===row.commandId)).map(row=>({id:row.id,inputId:row.commandId,role:'user',text:row.text,recipientAgentId:row.recipientAgentId,recipientAgentLabel:row.recipientAgentLabel,via:row.via,createdAt:row.createdAt,attachments:row.attachments,replyTo:row.replyTo,localDelivery:row}))];
+}
+export function ClosedDeliveryItems({entries,sessionId,scope,reopen}){
+ const closed=entries.filter(row=>row.closed&&row.sessionId===(sessionId??null)&&outboxMatches(row,scope));
+ return !!closed.length&&<details className="a-delivery-warning"><summary>Closed delivery items ({closed.length})</summary>
+  <p>Kept in this browser tab. Closing does not confirm delivery or cancel work. Reopening does not resend.</p>
+  {closed.map(row=><div key={row.id}><p style={{whiteSpace:'pre-wrap'}}>{row.text}</p>
+   {!!row.attachments?.length&&<ul>{row.attachments.map(file=><li key={file.id}>{file.name}</li>)}</ul>}
+   <p>{row.status==='failed'?'Not sent':'Delivery unconfirmed'} · Closed by you</p>
+   <button type="button" className="a-link" onClick={()=>reopen(row.id)}>Reopen delivery item</button>
+  </div>)}
+ </details>;
 }
 export function useMessageOutbox(){
  const [entries,setEntries]=useState(()=>{try{return readOutbox(sessionStorage)}catch{return []}}),current=useRef(entries),[storageError,setStorageError]=useState(false);

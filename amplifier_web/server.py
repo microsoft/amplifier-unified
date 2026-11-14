@@ -125,6 +125,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app["service"] = service
     from .acp_server import setup_routes as setup_acp
     setup_acp(app)
+    from .room_context import setup_routes as setup_room_context
+    setup_room_context(app)
     browser_entry.initialize(app)
 
     async def mcp_oauth_callback(request):

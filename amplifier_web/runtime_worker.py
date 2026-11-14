@@ -729,7 +729,7 @@ class Worker:
             # these rows; context indexes are not necessarily native indexes.
             rows = result if isinstance(result, list) else []
             if rows and rows[-1].get("role") == "assistant" and not rows[-1].get("tool_calls"):
-                from amplifier_web.automatic_history import display_message
+                from amplifier_web.native_message_projection import display_message
                 from amplifier_operations.coordination import fingerprint
                 native = display_message(rows[-1], len(rows) - 1, {"id": coordinator.session_id})
                 generation = self.runtime.generation or {}

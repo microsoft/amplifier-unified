@@ -35,7 +35,8 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
  const authoritativeActive=working&&session.execution?.currentTurnId===inputId||
   [delivery,localDelivery,message.delivery].some(row=>['sending','queued','queued_for_update'].includes(row?.status));
  const active=authoritativeActive||['sending','queued','queued_for_update'].includes(report?.delivery);
- const dismissible=!!storageKey&&!active&&['failed','unknown'].includes(delivery?.status);
+ const closeable=!!localDelivery&&!active&&['failed','unknown'].includes(delivery?.status);
+ const dismissible=!localDelivery&&!!storageKey&&!active&&['failed','unknown'].includes(delivery?.status);
  const check=async()=>{
   if(pending)return;setReport(null);setError('');setConfirm(false);
   try{
@@ -53,14 +54,14 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
  // inference. The existing in-flight owner spans row remounts and manual checks.
  const automatic=useRef(null),attempted=useRef(false);
  automatic.current=()=>{if(recovery?.scope&&inputId&&session.id&&delivery?.status==='unknown'&&
-  !authoritativeActive&&!message.steering&&report?.delivery!=='accepted'&&globalThis.navigator?.onLine!==false)void check()};
+  !localDelivery?.closed&&!authoritativeActive&&!message.steering&&report?.delivery!=='accepted'&&globalThis.navigator?.onLine!==false)void check()};
  useEffect(()=>{
-  if(!recovery?.scope||!inputId||!session.id||delivery?.status!=='unknown'||authoritativeActive||message.steering)return;
+  if(localDelivery?.closed||!recovery?.scope||!inputId||!session.id||delivery?.status!=='unknown'||authoritativeActive||message.steering)return;
   if(!attempted.current){attempted.current=true;automatic.current()}
   const reconnect=()=>automatic.current();
   globalThis.window?.addEventListener('amplifier-reconnected',reconnect);
   return()=>globalThis.window?.removeEventListener('amplifier-reconnected',reconnect);
- },[recovery?.scope,recovery?.connection,inputId,session.id,delivery?.status,authoritativeActive,!!message.steering]);
+ },[recovery?.scope,recovery?.connection,inputId,session.id,delivery?.status,authoritativeActive,!!message.steering,localDelivery?.closed]);
  const resend=async()=>{
   if(pending)return;setPending(true);setError('');
   try{
@@ -84,7 +85,7 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
    {error&&<span role="alert">{error}</span>}
   </span>;
  }
- if(!delivery||delivery.status==='accepted'||report?.delivery==='accepted')return null;
+ if(!delivery||delivery.status==='accepted'||report?.delivery==='accepted'||localDelivery?.closed&&!active)return null;
  if(delivery.status==='queued_for_update')return <span className="a-message-delivery" role="status">Saved · waiting for the app update. You do not need to send it again.</span>;
  if(delivery.status==='held')return <span className="a-message-delivery" role="status">{delivery.reason||'Message retained without sending.'}</span>;
  const sending=['sending','queued'].includes(delivery.status);
@@ -94,7 +95,7 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
    {delivery.status==='failed'?<button type="button" className="a-link" data-action="conversation.send" disabled={pending||blocked} onClick={()=>session.messages?.some(row=>row.inputId===inputId)?resend():retry(message)}><RotateCcw/>Retry</button>:<button type="button" className="a-link" data-action="conversation.delivery" disabled={pending||!inputId} onClick={check}><RotateCcw/>{pending?'Checking…':'Check delivery'}</button>}
   </>}</span>
   {!sending&&delivery.error&&<p role="alert" className="a-delivery-detail">{delivery.error}</p>}
-  {localDelivery&&delivery.status==='failed'&&!session.messages?.some(row=>row.inputId===inputId)&&<button type="button" className="a-link" disabled={pending} onClick={()=>discard?.(message)}>Discard unsent message</button>}
+  {closeable&&<button type="button" className="a-link" disabled={submitting} title="Keep the original submission in Chat info without resending or confirming delivery." onClick={()=>{if(!submitting)discard?.(message)}}>Close delivery item</button>}
   {report?.message&&<p role="status" className="a-delivery-detail">{report.message}</p>}
   {error&&<p role="alert" className="a-delivery-detail">{error}</p>}
   {!sending&&report&&!['accepted','sending','held','queued_for_update'].includes(report.delivery)&&!confirm&&

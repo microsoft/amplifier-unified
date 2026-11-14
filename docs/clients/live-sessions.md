@@ -142,7 +142,19 @@ source contradiction. Previously uncertain submissions retain their original
 payload and witness presence/absence; a refused retry cannot prove that the
 earlier attempt never ran.
 
-The bundled browser can dismiss a settled failed/uncertain delivery warning into
+The bundled browser can **Close delivery item** for an inactive failed/uncertain
+local submission. Closing removes its active warning and automatic checks, while
+keeping the exact original input identity, text and attachment references in the
+existing tab-scoped outbox. **Chat info → Closed delivery items** lets the user
+inspect or reopen it without sending. Reload and reconnect preserve closure;
+late negative replies cannot reopen it, and exact positive acceptance still
+retires it. Closing is neither delivery confirmation nor cancellation. It does
+not change drafts, selection, uploaded attachment ownership or shared history.
+Active sends cannot be closed. A passive check may finish after closure, but
+cannot reopen the item or resend it. Existing collapsed warnings
+are not silently converted to closed items.
+
+For a server-only message, the browser can dismiss its delivery warning into
 reversible **Delivery details**. This stores only the exact chat/input identities
 in that browser tab's session storage; it neither deletes the original message,
 attachments or uncertain outbox nor claims delivery. **Show warning** restores
@@ -163,7 +175,7 @@ cannot recreate it. Missing evidence remains uncertain/not saved, not proven
 non-delivery. Dismissal leaves drafts, selection and shared history unchanged.
 
 The bundled client automatically performs that same passive reconciliation when
-an unresolved input becomes visible and after a connection is restored. Manual
+an unclosed unresolved input becomes visible and after a connection is restored. Manual
 and automatic checks share one in-flight owner for the exact host/account source,
 conversation and input. They do not poll on a timer, send the message, start a
 worker or relax Stop. A source/authentication change invalidates an outstanding
@@ -173,6 +185,12 @@ Both that source and any returned target-session frame must match the original
 scope before acknowledgement or state adoption. A generic, malformed or
 conflicting acknowledgement cannot retire the outbox.
 Passive checks do not occupy the mutation queue, so they cannot delay Stop.
+For an admitted chat the host skips full history refresh and a separate
+command-journal row for each check. Dormant chats retain the existing keyed
+admission and recovery rules. Checks read message/receipt/runtime evidence without copying unrelated
+execution history. Newly confirmed acceptance still uses the existing delivery
+owner to reconcile the original receipt and attachment disposition; this is not
+a new send. Missing evidence triggers no projection save.
 New outbox entries retain their original nonsecret host/account and native-source
 namespace. Projection and acknowledgement require that exact namespace. Legacy
 entries without it remain stored and inert, without being presented as a current
