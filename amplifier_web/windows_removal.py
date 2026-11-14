@@ -18,6 +18,10 @@ this walk never trusts a path twice:
   forced, and the walk continues.
 
 Requires Windows 10 1809 or later on local NTFS. There is no fallback.
+
+An installation must never be made in a folder holding unified-uninstall.json.
+Setup installs only into an absent or empty folder. The after-exit step checks
+the journal before every named top-level entry.
 """
 from __future__ import annotations
 
@@ -68,8 +72,12 @@ function Authorized {
         if ($journal.PSIsContainer -or "$($journal.Attributes)" -match 'ReparsePoint') {
             return $false
         }
-        $record = Get-Content -LiteralPath $journal.FullName -Raw | ConvertFrom-Json
-        return ($record.token -is [string] -and $record.token -ceq $p.token)
+        $text = Get-Content -LiteralPath $journal.FullName -Raw
+        if ($text -notmatch '^\s*\{') { return $false }
+        $record = ConvertFrom-Json -InputObject $text
+        return ($record -is [pscustomobject] -and $record.schema -eq 1 -and
+            $record.choice -ceq $p.choice -and $record.token -is [string] -and
+            $record.token -ceq $p.token -and $record.token -cmatch '^[0-9a-f]{32}$')
     } catch { return $false }
 }
 function Clear-Link($entry) {
@@ -109,7 +117,8 @@ try {
     $text = $input | Out-String
     $p = ConvertFrom-Json -InputObject $text
     if ($p.root -isnot [string] -or -not $p.root -or
-        $p.token -isnot [string] -or -not $p.token) { throw 'Invalid root or token' }
+        $p.token -isnot [string] -or $p.token -cnotmatch '^[0-9a-f]{32}$' -or
+        $p.choice -cnotin @('delete', 'keep')) { throw 'Invalid root, token or choice' }
     $names = @($p.contents) + @($p.folders) + @($p.files)
     foreach ($name in $names) {
         if ($name -isnot [string] -or -not $name -or $name -in @('.', '..') -or
@@ -187,16 +196,27 @@ finally {
 """
 
 
-def finish_after_exit(root, token, *, contents, folders, files, wait_for=(), seconds=60, report=None):
+def finish_after_exit(root, token, *, contents, folders, files, wait_for=(), seconds=60, report=None,
+                      choice="delete"):
     """Start the token-guarded last step outside the installation and its Job.
 
     A successful return means only that the payload was written, not that the
     folder was removed. Failure to escape a Job retries process creation alone;
     no already-started helper is replayed. Links are deleted as links; unnamed
     entries and links whose nonrecursive deletion is refused stay.
+
+    If Windows refuses Job breakaway, the helper may end with the launcher,
+    leaving program files. The process wait ends after 30 seconds even if the
+    processes still run. Paths longer than 260 characters may stay.
     """
     from .windows_service import WindowsServiceError, _powershell
 
+    root = os.fspath(root)
+    drive, _ = ntpath.splitdrive(root)
+    if (not ntpath.isabs(root) or len(drive) != 2 or drive[1] != ":"
+            or drive[0] not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"):
+        raise ValueError("Root must be an absolute local drive path.")
+    root = ntpath.normpath(root)
     groups = [list(group) for group in (contents, folders, files)]
     for group in groups:
         for name in group:
@@ -204,15 +224,18 @@ def finish_after_exit(root, token, *, contents, folders, files, wait_for=(), sec
                     or any(mark in name for mark in "\\/:\0")
                     or name.casefold() == "unified-uninstall.json"):
                 raise ValueError("Not a single entry name.")
-    if not isinstance(token, str) or not token:
-        raise ValueError("A nonempty token is required.")
+    if (not isinstance(token, str) or len(token) != 32
+            or any(char not in "0123456789abcdef" for char in token)):
+        raise ValueError("Token must be exactly 32 lowercase hex characters.")
+    if choice not in ("delete", "keep"):
+        raise ValueError("Choice must be delete or keep.")
     if type(seconds) not in (int, float) or not 0 <= seconds <= 3600:
         raise ValueError("Duration must be between zero and 3600 seconds.")
     wait_for = list(wait_for)
     if any(type(pid) is not int or pid <= 0 for pid in wait_for):
         raise ValueError("Wait targets must be positive process IDs.")
     payload = json.dumps({
-        "root": os.fspath(root), "token": token,
+        "root": root, "token": token, "choice": choice,
         "contents": groups[0], "folders": groups[1], "files": groups[2],
         "wait_for": wait_for, "seconds": seconds,
         "report": os.fspath(report) if report is not None else None,
@@ -300,7 +323,7 @@ class _Native(_ReadAPI):
         text = C.create_unicode_buffer(name)
         size = len(name.encode("utf-16-le", "surrogatepass"))
         unicode = _Unicode(size, size + 2, C.cast(text, C.c_wchar_p))
-        # Exact name, relative to the parent handle. No OBJ_CASE_INSENSITIVE.
+        # The name comes from the parent's own listing, relative to its handle.
         attributes = _Attributes(C.sizeof(_Attributes), parent, C.pointer(unicode), 0, None, None)
         handle, status = HANDLE(), _Status()
         # SYNCHRONIZE | FILE_READ_ATTRIBUTES, plus DELETE and/or FILE_LIST_DIRECTORY.

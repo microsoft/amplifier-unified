@@ -17,6 +17,8 @@ import pytest
 
 from amplifier_web import windows_removal as removal
 
+TOKEN = "0123456789abcdef0123456789abcdef"
+
 
 class Tree:
     """An in-memory folder with the five native steps of the walk.
@@ -236,7 +238,7 @@ def finish_start(monkeypatch):
 
 def test_finish_static_program_and_stdin_only_payload(finish_start):
     calls, process, _ = finish_start
-    token = "data, not code: ' ` $(&exit); \u2603"
+    token = TOKEN
     assert removal.finish_after_exit(
         r"C:\My [private]\Amplifier", token, contents=["tools"], folders=["workspace"],
         files=["receipt.json"], wait_for=(12, 34), seconds=3, report=r"C:\proof.json",
@@ -256,10 +258,53 @@ def test_finish_static_program_and_stdin_only_payload(finish_start):
     assert options["stdout"] == options["stderr"] == subprocess.DEVNULL
     assert process.stdin.closed
     assert process.stdin.payload == {
-        "root": r"C:\My [private]\Amplifier", "token": token, "contents": ["tools"],
+        "root": r"C:\My [private]\Amplifier", "token": token, "choice": "delete", "contents": ["tools"],
         "folders": ["workspace"], "files": ["receipt.json"], "wait_for": [12, 34],
         "seconds": 3, "report": r"C:\proof.json",
     }
+
+
+@pytest.mark.parametrize("root", [
+    "relative", r"C:relative", r"\rooted", r"\\server\share\Amplifier",
+    r"\\?\C:\Amplifier", r"1:\Amplifier",
+])
+def test_finish_refuses_nonlocal_or_nonabsolute_roots(finish_start, root):
+    calls, _, _ = finish_start
+    with pytest.raises(ValueError, match="absolute local drive"):
+        removal.finish_after_exit(root, TOKEN, contents=[], folders=[], files=[])
+    assert not calls
+
+
+@pytest.mark.parametrize("token", [
+    "", None, 32, "a" * 31, "a" * 33, "A" * 32, "g" * 32,
+    "data, not code: ' ` $(&exit); \u2603",
+])
+def test_finish_refuses_tokens_other_than_lowercase_32_hex(finish_start, token):
+    calls, _, _ = finish_start
+    with pytest.raises(ValueError, match="32 lowercase hex"):
+        removal.finish_after_exit(r"C:\Amplifier", token, contents=[], folders=[], files=[])
+    assert not calls
+
+
+@pytest.mark.parametrize("choice", ["DELETE", "Keep", "", None])
+def test_finish_refuses_unknown_choices(finish_start, choice):
+    calls, _, _ = finish_start
+    with pytest.raises(ValueError, match="Choice"):
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, contents=[], folders=[], files=[], choice=choice)
+    assert not calls
+
+
+def test_finish_normalizes_the_absolute_root_and_sends_keep_choice(finish_start):
+    _, process, _ = finish_start
+    name = "data, not code: ' ` $(&exit); \u2603".replace(":", "")
+    removal.finish_after_exit(
+        r"C:/My [private]/../Amplifier/.", TOKEN,
+        contents=[name], folders=[], files=[], choice="keep",
+    )
+    assert process.stdin.payload["root"] == r"C:\Amplifier"
+    assert process.stdin.payload["choice"] == "keep"
+    assert process.stdin.payload["contents"] == [name]
+    assert name not in removal.FINISH_SCRIPT
 
 
 @pytest.mark.parametrize("name", ["", ".", "..", "a/b", "a\\b", "a:b", "a\0b",
@@ -270,7 +315,7 @@ def test_finish_refuses_the_whole_payload_before_start(finish_start, name, group
     groups = dict(contents=["tools"], folders=["workspace"], files=["receipt.json"])
     groups[group].append(name)
     with pytest.raises(ValueError):
-        removal.finish_after_exit(r"C:\Amplifier", "token", **groups)
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, **groups)
     assert not calls
 
 
@@ -282,14 +327,14 @@ def test_finish_retries_only_a_refused_process_start(finish_start, monkeypatch):
             raise OSError("Breakaway refused")
         return start(args, **kwargs)
     monkeypatch.setattr(removal.subprocess, "Popen", refuse_breakaway)
-    assert removal.finish_after_exit(r"C:\Amplifier", "x", contents=[], folders=[], files=[]) == 4321
+    assert removal.finish_after_exit(r"C:\Amplifier", TOKEN, contents=[], folders=[], files=[]) == 4321
     assert [kwargs["creationflags"] for _, kwargs in calls] == [0x09000200, 0x08000200]
     assert calls[0][0] == calls[1][0]
     def refuse_both(*args, **kwargs):
         raise OSError("Cannot start")
     monkeypatch.setattr(removal.subprocess, "Popen", refuse_both)
     with pytest.raises(OSError, match="Cannot start"):
-        removal.finish_after_exit(r"C:\Amplifier", "x", contents=[], folders=[], files=[])
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, contents=[], folders=[], files=[])
 
 
 def test_finish_reports_a_missing_system_powershell_as_an_os_error(finish_start, monkeypatch):
@@ -300,7 +345,7 @@ def test_finish_reports_a_missing_system_powershell_as_an_os_error(finish_start,
         raise windows_service.WindowsServiceError("No system folder")
     monkeypatch.setattr(windows_service, "_powershell", missing)
     with pytest.raises(OSError, match="Cannot locate Windows PowerShell"):
-        removal.finish_after_exit(r"C:\Amplifier", "x", contents=[], folders=[], files=[])
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, contents=[], folders=[], files=[])
     assert not calls
 
 
@@ -319,7 +364,7 @@ def test_finish_moves_only_temporary_paths_inside_root(
     monkeypatch.setenv("TEMP", temp)
     monkeypatch.setenv("TMP", tmp)
     before = os.environ.copy()
-    removal.finish_after_exit(r"C:\Amplifier", "x", contents=[], folders=[], files=[])
+    removal.finish_after_exit(r"C:\Amplifier", TOKEN, contents=[], folders=[], files=[])
     env = calls[0][1]["env"]
     assert (env["TEMP"], env["TMP"]) == (expected_temp, expected_tmp)
     assert os.environ == before and env is not os.environ
@@ -471,7 +516,9 @@ def finish_tree(tmp_path):
             (root / name / "data[1]" / "one.txt").write_text("throwaway")
         (root / "workspace").mkdir()
         (root / "receipt.json").write_text("throwaway")
-        (root / "unified-uninstall.json").write_text(json.dumps({"token": "Exact-TOKEN"}))
+        (root / "unified-uninstall.json").write_text(json.dumps({
+            "schema": 1, "choice": "delete", "token": TOKEN,
+        }))
         (outside / "deep").mkdir(parents=True)
         (outside / "keep.txt").write_text("keep outside")
         (outside / "deep" / "also.txt").write_text("keep deep outside")
@@ -551,7 +598,7 @@ def record_start(*args, **kwargs):
     row['accepted'] = True
     return process
 removal.subprocess.Popen = record_start
-pid = removal.finish_after_exit(root, 'Exact-TOKEN',
+pid = removal.finish_after_exit(root, '0123456789abcdef0123456789abcdef',
     contents=['tools', 'app', 'shared', 'cache'], folders=['workspace'],
     files=['receipt.json'], wait_for=(os.getpid(), os.getppid()), seconds=30, report=report)
 evidence.write_text(json.dumps(dict(
@@ -593,7 +640,30 @@ def test_native_finish_wrong_token_changes_nothing(finish_tree):
     tree, root = finish_tree, finish_tree["root"]
     before = {str(path.relative_to(root)): path.read_bytes() if path.is_file() else None
               for path in root.rglob("*")}
-    removal.finish_after_exit(root, "exact-TOKEN", **_finish_options(tree))
+    removal.finish_after_exit(root, "f" * 32, **_finish_options(tree))
+    result = _finish_report(tree["report"])
+    assert result["passes"] == 0 and not result["folderRemoved"]
+    assert result["reason"] == "Root or token refused"
+    after = {str(path.relative_to(root)): path.read_bytes() if path.is_file() else None
+             for path in root.rglob("*")}
+    assert after == before
+    _assert_outside_unchanged(tree)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real PowerShell journal validation")
+@pytest.mark.parametrize("journal", [
+    "", '{"schema":1,"choice":"delete","token":',
+    json.dumps({"token": TOKEN}),
+    json.dumps({"schema": 1, "choice": "keep", "token": TOKEN}),
+    json.dumps({"schema": 2, "choice": "delete", "token": TOKEN}),
+    json.dumps([{"schema": 1, "choice": "delete", "token": TOKEN}]),
+], ids=["empty", "cut-off", "token-only", "wrong-choice", "wrong-schema", "list"])
+def test_native_finish_invalid_journal_changes_nothing(finish_tree, journal):
+    tree, root = finish_tree, finish_tree["root"]
+    (root / "unified-uninstall.json").write_text(journal)
+    before = {str(path.relative_to(root)): path.read_bytes() if path.is_file() else None
+              for path in root.rglob("*")}
+    removal.finish_after_exit(root, TOKEN, **_finish_options(tree))
     result = _finish_report(tree["report"])
     assert result["passes"] == 0 and not result["folderRemoved"]
     assert result["reason"] == "Root or token refused"
@@ -626,7 +696,7 @@ def test_native_finish_deletes_only_the_link_and_leaves_outside_untouched(finish
     assert os.path.lexists(link)
     options = _finish_options(tree)
     options["contents"].insert(0, "python")
-    removal.finish_after_exit(root, "Exact-TOKEN", **options)
+    removal.finish_after_exit(root, TOKEN, **options)
     result = _finish_report(tree["report"])
     assert result["reason"] == "", result
     assert result["passes"] >= 1 and result["folderRemoved"] and not root.exists(), result
@@ -642,14 +712,14 @@ def test_native_finish_leaves_a_file_held_without_delete_sharing(finish_tree):
     with open(held, "w") as stream:
         stream.write("held")
         stream.flush()
-        removal.finish_after_exit(root, "Exact-TOKEN", **_finish_options(tree))
+        removal.finish_after_exit(root, TOKEN, **_finish_options(tree))
         result = _finish_report(tree["report"])
         assert result["reason"] == "", result
         assert result["passes"] >= 2 and not result["folderRemoved"]
         assert str(held) in result["left"] and held.read_text() == "held"
         assert sorted(path.name for path in root.iterdir()) == ["tools", "unified-uninstall.json"]
         assert sorted(path.name for path in (root / "tools").iterdir()) == ["held.txt"]
-        assert json.loads((root / "unified-uninstall.json").read_text())["token"] == "Exact-TOKEN"
+        assert json.loads((root / "unified-uninstall.json").read_text())["token"] == TOKEN
     _assert_outside_unchanged(tree)
 
 
@@ -680,7 +750,7 @@ def test_native_finish_removes_ten_thousand_files_within_four_minutes(finish_tre
     assert (alias / "package-00" / "group-000" / "leaf-000" / "file[00].txt").is_file()
     started = time.monotonic()
     removal.finish_after_exit(
-        root, "Exact-TOKEN", contents=("python", "tools"),
+        root, TOKEN, contents=("python", "tools"),
         folders=("python", "tools", "workspace"), files=(), seconds=300, report=tree["report"],
     )
     result = _finish_report(tree["report"], timeout=max(0, 240 - (time.monotonic() - started)))
