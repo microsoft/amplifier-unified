@@ -428,7 +428,7 @@ async def test_compacted_resumed_and_other_provider_requests_do_not_inherit_old_
         assert assistant.content[0].signature == 'synthetic-signature-1'
 
 
-def anthropic_fixture(monkeypatch, *, streaming):
+def anthropic_fixture(monkeypatch, *, streaming, cached_model=True):
     # The ordinary host lock need not install every user's provider. The
     # combined native qualification explicitly installs its exact candidate.
     module = pytest.importorskip('amplifier_module_provider_anthropic',
@@ -437,11 +437,13 @@ def anthropic_fixture(monkeypatch, *, streaming):
     provider = module.AnthropicProvider(api_key='synthetic-not-a-key', config={
         'default_model': 'claude-fable-5-2', 'use_streaming': streaming,
         'max_retries': 0, 'enable_prompt_caching': False,
+        'enable_1m_context': True,
     })
     # Same cached native model lookup consumed by production budgeting for
     # models whose published window is newer than the provider's static table.
-    provider._runtime_model_info_cache['claude-fable-5-2'] = module._RuntimeModelInfo(
-        max_input_tokens=1_000_000, max_tokens=128_000)
+    if cached_model:
+        provider._runtime_model_info_cache['claude-fable-5-2'] = module._RuntimeModelInfo(
+            max_input_tokens=1_000_000, max_tokens=128_000)
     measured, sent = [], []
 
     def native_response(number):
@@ -491,6 +493,36 @@ def anthropic_fixture(monkeypatch, *, streaming):
     monkeypatch.setattr(provider, '_get_request_capabilities', AsyncMock(
         return_value=provider._get_capabilities('claude-fable-5-2')))
     return provider, measured, sent
+
+
+@pytest.mark.parametrize('streaming', [False, True])
+async def test_cold_nondefault_fable52_counts_exact_host_envelope_without_model_metadata(
+        monkeypatch, streaming):
+    from amplifier_web.host.session import SelectedProvider
+    provider, measured, sent = anthropic_fixture(monkeypatch, streaming=streaming, cached_model=False)
+    # The selected model must drive measurement even when the connection's
+    # configured default is another model. Never preseed private model metadata.
+    provider.default_model = 'claude-sonnet-5'
+    assert provider._runtime_model_info_cache == {}
+    surface = SurfaceProvider(provider, CurrentContext().delivery())
+    wrapped = SelectedProvider(provider, {
+        'model': 'claude-fable-5-2', 'effort': 'high', 'max_output_tokens': 128_000},
+        lambda _: surface)
+    value = request()
+    before = value.model_copy(deep=True)
+    decision = await wrapped.request_budget(value, context_estimate=100)
+    assert decision is not None  # Regression: cold pre-PR143 provider returns None.
+    assert decision['measurement']['kind'] == 'provider_count'
+    assert decision['input_limit_tokens'] == 1_000_000
+    assert decision['max_output_tokens'] == 128_000
+    await dispatch(wrapped, value, streaming)
+    assert len(measured) == len(sent) == 1
+    for key in ('model', 'system', 'messages', 'tools', 'thinking', 'extra_body', 'extra_headers'):
+        assert measured[0].get(key) == sent[0].get(key), key
+    assert sent[0]['model'] == 'claude-fable-5-2'
+    assert 'CURRENT_REFERENCE_1' in json.dumps(sent[0])
+    assert value == before
+    assert provider._runtime_model_info_cache == {}
 
 
 @pytest.mark.parametrize('streaming', [False, True])

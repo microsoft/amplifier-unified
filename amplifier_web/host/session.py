@@ -96,13 +96,22 @@ class SelectedProvider:
         self.execution_adapter = execution_adapter
         self._selected_requests = []
         self._refused_requests = []
+        from ..overflow_feedback import OverflowFeedback
+        self._overflow_feedback = OverflowFeedback()
     def _execution_provider(self):
         return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
     def __getattr__(self, name):
         if name == "default_model" and self.selection.get("model"):
             return self.selection["model"]
-        execution = self._execution_provider() if name in {'stream', 'request_budget', 'refit_request'} else self.original
+        execution = self._execution_provider() if name in {
+            'stream', 'request_budget', 'refit_request', 'recover_context_overflow'} else self.original
         method = getattr(execution, name)
+        if name == 'recover_context_overflow' and callable(method):
+            def recover(request, error, *, context_estimate, request_options=None):
+                return self._overflow_feedback.recover(request, error,
+                    context_estimate=context_estimate, request_options=request_options,
+                    owner=self._execution_provider(), binding=self.selection)
+            return recover
         if name == 'refit_request' and callable(method):
             async def refit(request, *, error, request_options=None, **kwargs):
                 # The execution adapter owns the refusal. Forward its exact
@@ -155,6 +164,7 @@ class SelectedProvider:
             return selected_stream
         if name == "request_budget" and callable(method):
             def selected_budget(request, *, request_options=None, **kwargs):
+                self._overflow_feedback.forget(request)
                 # Preserve named-option feature detection through this wrapper,
                 # translating to keywords only for a legacy provider budget.
                 kwargs['request_options'] = request_options
@@ -253,6 +263,8 @@ class SelectedProvider:
         return True
 
     async def _stream_selected(self, execution, method, request, kwargs):
+        options = dict(kwargs)
+        self._overflow_feedback.forget(request)
         selected, kwargs = self._selected_request(request, kwargs)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
         retained, emitted, iterator = False, False, None
@@ -264,6 +276,8 @@ class SelectedProvider:
         except BaseException as error:
             if not emitted:
                 retained = self._retain_refusal(request, selected, execution, error)
+                self._overflow_feedback.remember(request, selected, error, options, kwargs,
+                                                 execution, binding=self.selection)
             raise
         finally:
             if not retained:
@@ -272,6 +286,8 @@ class SelectedProvider:
                 await iterator.aclose()
 
     async def complete(self, request, **kwargs):
+        options = dict(kwargs)
+        self._overflow_feedback.forget(request)
         selected, kwargs = self._selected_request(request, kwargs)
         execution = self._execution_provider()
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
@@ -280,6 +296,8 @@ class SelectedProvider:
             return await execution.complete(selected, **kwargs)
         except BaseException as error:
             retained = self._retain_refusal(request, selected, execution, error)
+            self._overflow_feedback.remember(request, selected, error, options, kwargs,
+                                             execution, binding=self.selection)
             raise
         finally:
             if not retained:
