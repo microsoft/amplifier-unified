@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .host.config import write_private
 from .host.storage import SessionStore
+from .native_message_projection import message_time
 
 
 class _BoundaryUnavailable(ValueError):
@@ -54,14 +55,6 @@ def capture_edit_context(home, source):
     if saved is None or revision(source) != expected:
         raise ValueError('The saved transcript changed. Refresh this chat before forking or editing it.')
     return context_digest(saved[0])
-
-
-def message_time(row):
-    value = (row.get('metadata') or {}).get('timestamp')
-    try:
-        return datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
-    except (AttributeError, TypeError, ValueError):
-        return None
 
 
 def matches_user(row, visible):
