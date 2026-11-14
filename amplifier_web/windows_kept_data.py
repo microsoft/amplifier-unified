@@ -51,7 +51,8 @@ _STUCK = ("Amplifier could not finish moving your chats and settings to this fol
           "Nothing was deleted. Restart this PC. Then uninstall again.")
 _STOPPED = ("Amplifier could not finish moving your kept chats and settings back.\n\n"
             "Nothing was deleted. They are in these two folders:\n{root}\n{kept}\n\n"
-            "Restart this PC. Then open Amplifier again to finish.")
+            "Restart this PC. Then open Amplifier again to finish. "
+            "If you see this message again, keep both folders.")
 _OFFER = ("Amplifier found the chats and settings that you kept on {date}.\n\nUse them?\n\n"
           "Yes: use them.\nNo: start fresh. You will not be asked again; they stay in this folder:\n{kept}")
 _UNREADABLE = ("Amplifier found kept chats and settings in this folder, but it cannot read them:\n{kept}\n\n"
@@ -120,8 +121,24 @@ def _private(folder, owned, *, create=False):
 
 
 def _write(kept, record):
-    from .deployment import write_private
-    write_private(kept / RECORD, json.dumps(record), owned_root=kept)  # private, atomic
+    """Replace the record as one complete private file."""
+    if _NATIVE:
+        from .deployment import write_private
+        write_private(kept / RECORD, json.dumps(record), owned_root=kept)
+        return
+    draft = kept / (RECORD + ".new")
+    draft.write_text(json.dumps(record), encoding="utf-8")
+    os.replace(draft, kept / RECORD)
+
+
+def _forget(kept):
+    """Delete the record of a finished take-back: the exact private file that was read."""
+    if _NATIVE:
+        from .windows_files import directory
+        with directory(kept, owned_root=kept) as owned:
+            owned.remove_private(RECORD, hashlib.sha256(owned.read_private(RECORD, limit=LIMIT)).hexdigest())
+    else:
+        os.remove(kept / RECORD)
 
 
 def _raw(kept):
@@ -213,6 +230,8 @@ def used_version(root, version):
     if _kind(pointer) is None:
         return version
     try:
+        if _kind(pointer) != "file" or pointer.stat().st_size > LIMIT:
+            raise ValueError
         active = json.loads(pointer.read_text(encoding="utf-8"))["version"]
         if not isinstance(active, str) or not re.fullmatch(_VERSION, active):
             raise ValueError
@@ -226,8 +245,14 @@ def _plan(root, version, transfer):
     kept = kept_folder(root)
     reason, record = _reason(root, kept, version)
     if reason is None:
-        if _kind(kept) is not None and (_kind(kept) != "folder" or _names(kept)):
-            raise Refused("kept-folder", _OCCUPIED.format(kept=kept))
+        if _kind(kept) is not None:
+            try:
+                usable = _kind(kept) == "folder" and not _names(kept)
+                _private(kept, kept)
+            except OSError:
+                usable = False
+            if not usable:
+                raise Refused("kept-folder", _OCCUPIED.format(kept=kept))
         return "new", None
     if record is None or reason == "other-folder":
         raise Refused("kept-folder", _OCCUPIED.format(kept=kept))
@@ -343,7 +368,8 @@ def move_out(root, *, version, transfer, remove=None, wait=15.0):
         state = [name for name in PROGRAM_STATE if app and _kind(kept / "app" / name) is not None]
         if state and not remaining and remove is not None:
             for name in state:
-                remove(kept / "app" / name)
+                if _kind(kept / "app" / name) == "folder":
+                    remove(kept / "app" / name)
             state = [name for name in state if _kind(kept / "app" / name) is not None]
     done = not remaining and not state
     if done:
@@ -374,6 +400,24 @@ def _settle(root, transfer):
         return "unchanged"
 
 
+def _in_the_way(root, kept, record):
+    """Whether a folder of this installation holds anything that a kept folder would join.
+
+    The one folder that an interrupted take-back was filling may hold the
+    entries that it already moved; no kept entry may have a name that is there.
+    """
+    present = set(_names(root))
+    for name in FOLDERS:
+        if name not in present or _kind(kept / name) is None:
+            continue
+        if _kind(root / name) != "folder":
+            return True
+        held = set(_names(root / name))
+        if held and (record.get("entries") != name or held & set(_names(kept / name))):
+            return True
+    return False
+
+
 def take_back(root, version):
     """Move the kept set of this folder back into this installation's empty data folders.
 
@@ -388,9 +432,10 @@ def take_back(root, version):
     stopped = _STOPPED.format(root=root, kept=kept)
     if reason != "use":
         raise Refused("take-back-" + str(reason), stopped)
+    # Before the first change, also of a continued take-back: never merge, never delete.
+    if (record["state"] == "complete" and not _fresh(root)) or _in_the_way(root, kept, record):
+        raise Refused("take-back-not-empty", stopped)
     if record["state"] == "complete":
-        if not _fresh(root):
-            raise Refused("take-back-not-empty", stopped)
         record = {**record, "state": "adopting"}
         _write(kept, record)
     present, taken = set(_names(root)), []
@@ -408,11 +453,11 @@ def take_back(root, version):
         if kind is None:
             os.rename(source, target)
         elif kind != "folder":
-            raise Refused("take-back-in-the-way", stopped)
+            raise Refused("take-back-not-empty", stopped)
         else:
             if record.get("entries") != name:
                 if _names(target):
-                    raise Refused("take-back-not-empty", stopped)  # Never merge. Never delete.
+                    raise Refused("take-back-not-empty", stopped)  # It changed after the check above.
                 record = {**record, "entries": name}
                 _write(kept, record)
             for entry in _names(source):
@@ -422,12 +467,7 @@ def take_back(root, version):
             os.rmdir(source)
         taken.append(name)
     settled = _settle(root, record["transfer"])
-    if _NATIVE:
-        from .windows_files import directory
-        with directory(kept, owned_root=kept) as owned:
-            owned.remove_private(RECORD, hashlib.sha256(owned.read_private(RECORD, limit=LIMIT)).hexdigest())
-    else:
-        os.remove(kept / RECORD)
+    _forget(kept)
     try:
         os.rmdir(kept)
     except OSError:
@@ -459,12 +499,13 @@ def first_start(root, version, *, ask):
         return {"taken": False, "reason": kind, "message": notice}
 
     state, record = read(kept)
+    adopting = state == "adopting" and record["root"] == str(root)
+    if not adopting and not _fresh(root):
+        return None  # This installation has its own data. Kept sets stay where they are.
     try:
-        if state == "adopting" and record["root"] == str(root):
+        if adopting:
             take_back(root, version)  # The person already said Yes. Never start before it is finished.
             reason = None
-        elif not _fresh(root):
-            return None  # This installation has its own data. Kept sets stay where they are.
         else:
             reason, record = _reason(root, kept, version)
         if reason == "unreadable":
