@@ -14,7 +14,9 @@ This is a default, not a sandbox:
 - A GUI child and a DETACHED_PROCESS child have no console. Their own console
   children get a new window unless that child prevents it.
 - os.startfile/ShellExecute start a console program in a new console.
-Known call sites keep their explicit no-window flag.
+Known call sites keep their explicit no-window flag. That flag is also the
+isolation boundary: such a child gets a console of its own. Children on the
+shared console share its control events, code page and input.
 
 Measured facts that this file depends on (native Windows 11, CPython 3.13):
 - A console attached after process start replaces the process's console
@@ -24,6 +26,9 @@ Measured facts that this file depends on (native Windows 11, CPython 3.13):
 - A plain attach in a process without standard handles makes them console
   handles. A child then waits forever for console input that nobody can type.
   The standard handles are therefore restored to their earlier values.
+Both steps follow the attach at once, before the helper is released. If either
+fails, the console is released again: a shared console without them is worse
+than no console.
 
 Standard library only. This file must stay importable by path, outside the
 package, so that a native check can load the exact shipped mechanism.
@@ -38,23 +43,26 @@ _HELPER = "import sys;sys.stdout.write('1');sys.stdout.flush();sys.stdin.read()"
 _control_handler = None  # Windows keeps only the address; keep the object alive.
 
 
-def ensure_hidden_console(*, timeout=10.0):
+def ensure_hidden_console(*, timeout=5.0):
     """Attach a console without a window. Report the result; never stop startup.
 
     status: "attached" (new console without a window), "existing" (the process
     already had a console; nothing changed), "not-applicable" (not Windows), or
-    "unavailable" (explicit no-window flags remain the only cover).
+    "unavailable" (explicit no-window flags remain the only cover). When a
+    completed attach had to be undone, "consoleReleased" says whether Windows
+    confirmed the release.
     """
     if sys.platform != "win32":
         return {"status": "not-applicable"}
+    rollback = {}
     try:
-        return _attach(timeout)
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return _attach(timeout, rollback)
+    except Exception as error:  # This is an improvement, never a start condition.
         return {"status": "unavailable", "errorType": type(error).__name__,
-                "windowsError": getattr(error, "winerror", None)}
+                "windowsError": getattr(error, "winerror", None), **rollback}
 
 
-def _attach(timeout):
+def _attach(timeout, rollback):
     import ctypes as c
 
     global _control_handler
@@ -75,39 +83,16 @@ def _attach(timeout):
     kernel.SetStdHandle.restype = c.c_int32
     kernel.AttachConsole.argtypes = [c.c_uint32]
     kernel.AttachConsole.restype = c.c_int32
+    kernel.FreeConsole.argtypes = []
+    kernel.FreeConsole.restype = c.c_int32
     kernel.SetConsoleCtrlHandler.argtypes = [handler_type, c.c_int32]
     kernel.SetConsoleCtrlHandler.restype = c.c_int32
-    saved = [(name, kernel.GetStdHandle(name)) for name in _STANDARD_HANDLES]
-    # CREATE_NO_WINDOW gives a console program a console without a window.
-    # This process then joins that console; it lives while any process uses it.
-    helper = subprocess.Popen(
-        [str(python), "-I", "-S", "-c", _HELPER], executable=str(python), cwd=str(python.parent),
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NO_WINDOW)
-    timer = threading.Timer(timeout, helper.kill)
-    timer.daemon = True
-    timer.start()
-    try:
-        # The byte proves that the helper runs, and so has joined its console.
-        if helper.stdout.read(1) != b"1":
-            raise OSError("The console helper did not start.")
-        if not kernel.AttachConsole(helper.pid):
-            raise c.WinError(c.get_last_error())
-    finally:
-        timer.cancel()
-        helper.stdin.close()
-        helper.stdout.close()
-        try:
-            helper.wait(timeout)
-        except subprocess.TimeoutExpired:
-            helper.kill()
-            helper.wait()
-    # Keep this process's own standard handles exactly as they were. Only the
-    # console membership changes; pipes and redirection behave as before.
-    for name, handle in saved:
-        kernel.SetStdHandle(name, handle)
 
-    # Children now share this console. Their Ctrl+C or Ctrl+Break event reaches
+    def check(result):
+        if not result:
+            raise c.WinError(c.get_last_error())
+
+    # Children share this console. Their Ctrl+C or Ctrl+Break event reaches
     # every process on it. This host stops only through its own stop request,
     # so it handles both events and does nothing. Close, sign-out and shutdown
     # events keep their default result. Children keep their own handling.
@@ -115,12 +100,59 @@ def _attach(timeout):
     def keep_running(event):
         return 1 if event in (0, 1) else 0
 
-    if not kernel.SetConsoleCtrlHandler(keep_running, 1):
-        # A shared console without this handler is worse than no console.
-        error = c.WinError(c.get_last_error())
-        kernel.FreeConsole()
-        for name, handle in saved:
-            kernel.SetStdHandle(name, handle)
-        raise error
-    _control_handler = keep_running
+    saved = [(name, kernel.GetStdHandle(name)) for name in _STANDARD_HANDLES]
+    # CREATE_NO_WINDOW gives a console program a console without a window.
+    # This process then joins that console; it lives while any process uses it.
+    helper = subprocess.Popen(
+        [str(python), "-I", "-S", "-c", _HELPER], executable=str(python), cwd=str(python.parent),
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NO_WINDOW)
+    attached = False
+    try:
+        timer = threading.Timer(timeout, helper.kill)
+        timer.daemon = True
+        timer.start()
+        try:
+            # The byte proves that the helper runs, and so has joined its console.
+            if helper.stdout.read(1) != b"1":
+                raise OSError("The console helper did not start.")
+            check(kernel.AttachConsole(helper.pid))
+            attached = True
+            # Keep this process's own standard handles exactly as they were.
+            # Only the console membership changes; pipes behave as before.
+            for name, handle in saved:
+                check(kernel.SetStdHandle(name, handle))
+            check(kernel.SetConsoleCtrlHandler(keep_running, 1))
+            _control_handler = keep_running
+        finally:
+            timer.cancel()
+    except BaseException:
+        if attached:
+            rollback["consoleReleased"] = bool(kernel.FreeConsole())
+            for name, handle in saved:
+                kernel.SetStdHandle(name, handle)
+        raise
+    finally:
+        _release(helper, timeout)
     return {"status": "attached"}
+
+
+def _release(helper, timeout):
+    """End the helper. The console stays while this process uses it.
+
+    Nothing here may change the attach result: the console is already either
+    protected or released.
+    """
+    for stream in (helper.stdin, helper.stdout):
+        try:
+            stream.close()
+        except OSError:
+            pass
+    try:
+        helper.wait(timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            helper.kill()
+            helper.wait(timeout)
+        except (OSError, subprocess.TimeoutExpired):
+            pass  # It is a child in the host's Job and ends with it.

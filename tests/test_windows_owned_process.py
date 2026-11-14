@@ -1014,22 +1014,22 @@ class HiddenConsoleTests(unittest.TestCase):
         k.AttachConsole.assert_not_called()
         k.SetConsoleCtrlHandler.assert_not_called()
 
-    def test_attach_restores_standard_handles_then_handles_control_events(self):
+    def test_attach_is_protected_before_the_helper_is_released(self):
         k, helper, popen, folder = self.native()
         order = Mock()
         order.attach_mock(k.AttachConsole, "attach")
         order.attach_mock(k.SetStdHandle, "restore")
         order.attach_mock(k.SetConsoleCtrlHandler, "handler")
+        order.attach_mock(helper.stdin.close, "release")
         self.assertEqual(hidden_console.ensure_hidden_console(), {"status": "attached"})
         argv = popen.call_args.args[0]
         self.assertEqual(argv[:3], [str(folder / "python.exe"), "-I", "-S"])
         self.assertEqual(popen.call_args.kwargs["creationflags"], 0x08000000)
-        helper.stdin.close.assert_called_once()
-        helper.wait.assert_called_once()
-        # Console membership first; the earlier pipe/absent handles return
-        # before any child can start; the control handler is last and required.
+        # Console membership first. The earlier pipe/absent handles and the
+        # control handler follow at once. Only then may the helper end.
         self.assertEqual([call[0] for call in order.mock_calls],
-                         ["attach", "restore", "restore", "restore", "handler"])
+                         ["attach", "restore", "restore", "restore", "handler", "release"])
+        helper.wait.assert_called_once()
         k.AttachConsole.assert_called_once_with(4321)
         self.assertEqual([call.args for call in k.SetStdHandle.call_args_list], list(self.saved.items()))
         handler, add = k.SetConsoleCtrlHandler.call_args.args
@@ -1042,19 +1042,60 @@ class HiddenConsoleTests(unittest.TestCase):
 
     def test_console_without_control_handler_is_released(self):
         k, helper, popen, folder = self.native(SetConsoleCtrlHandler=0)
-        result = hidden_console.ensure_hidden_console()
-        self.assertEqual(result["status"], "unavailable")
-        self.assertEqual(result["errorType"], "OSError")
+        self.assertEqual(hidden_console.ensure_hidden_console(), {
+            "status": "unavailable", "errorType": "OSError", "windowsError": None, "consoleReleased": True})
         k.FreeConsole.assert_called_once()
         self.assertEqual([call.args for call in k.SetStdHandle.call_args_list], 2 * list(self.saved.items()))
         self.assertIsNone(hidden_console._control_handler)
+        helper.stdin.close.assert_called_once()
+
+    def test_failed_handle_restore_releases_the_console_and_reports_an_unconfirmed_release(self):
+        k, helper, popen, folder = self.native(SetStdHandle=0, FreeConsole=0)
+        result = hidden_console.ensure_hidden_console()
+        self.assertEqual((result["status"], result["consoleReleased"]), ("unavailable", False))
+        k.FreeConsole.assert_called_once()
+        k.SetConsoleCtrlHandler.assert_not_called()
+        self.assertIsNone(hidden_console._control_handler)
+        helper.stdin.close.assert_called_once()
+
+    def test_helper_cleanup_errors_cannot_change_a_protected_attach(self):
+        k, helper, popen, folder = self.native()
+        helper.stdin.close.side_effect = BrokenPipeError()
+        helper.stdout.close.side_effect = OSError()
+        helper.wait.side_effect = subprocess.TimeoutExpired("helper", 10)
+        helper.kill.side_effect = PermissionError()
+        self.assertEqual(hidden_console.ensure_hidden_console(), {"status": "attached"})
+        k.SetConsoleCtrlHandler.assert_called_once()
+        k.FreeConsole.assert_not_called()
+        self.assertIsNotNone(hidden_console._control_handler)
+
+    def test_timer_that_cannot_start_does_not_stop_the_host(self):
+        k, helper, popen, folder = self.native()
+        timer = Mock(start=Mock(side_effect=RuntimeError("can't start new thread")))
+        with patch.object(hidden_console.threading, "Timer", return_value=timer):
+            self.assertEqual(hidden_console.ensure_hidden_console(),
+                             {"status": "unavailable", "errorType": "RuntimeError", "windowsError": None})
+        k.AttachConsole.assert_not_called()
+        helper.stdin.close.assert_called_once()  # The helper reads end-of-file and exits.
+        helper.wait.assert_called_once()
+
+    def test_unexpected_error_does_not_stop_the_host(self):
+        k, helper, popen, folder = self.native()
+        popen.side_effect = TypeError("unexpected")
+        self.assertEqual(hidden_console.ensure_hidden_console(),
+                         {"status": "unavailable", "errorType": "TypeError", "windowsError": None})
+        k.AttachConsole.assert_not_called()
+        with patch.object(c, "WinDLL", side_effect=ImportError("blocked"), create=True):
+            self.assertEqual(hidden_console.ensure_hidden_console()["errorType"], "ImportError")
 
     def test_failed_attach_or_missing_interpreter_changes_nothing(self):
         k, helper, popen, folder = self.native(AttachConsole=0)
-        self.assertEqual(hidden_console.ensure_hidden_console()["status"], "unavailable")
+        self.assertEqual(hidden_console.ensure_hidden_console(),
+                         {"status": "unavailable", "errorType": "OSError", "windowsError": None})
         helper.stdin.close.assert_called_once()
         k.SetStdHandle.assert_not_called()
         k.SetConsoleCtrlHandler.assert_not_called()
+        k.FreeConsole.assert_not_called()
         (folder / "python.exe").unlink()
         popen.reset_mock()
         self.assertEqual(hidden_console.ensure_hidden_console(),

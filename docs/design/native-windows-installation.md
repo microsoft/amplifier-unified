@@ -44,23 +44,42 @@ Rules that the mechanism depends on (measured on native Windows 11, CPython 3.13
 - A console attached after process start resets the process's console control
   handlers. Python's signal settings then give no protection: one Ctrl+C event
   from a child on the shared console ends the host with `0xC000013A`. The host
-  registers an explicit handler for Ctrl+C and Ctrl+Break. If that registration
-  fails, the host releases the console and continues without it.
+  registers an explicit handler for Ctrl+C and Ctrl+Break.
 - The host's standard handles are restored to their earlier values after the
   attach. A child must not inherit console input that nobody can type.
+- Both steps follow the attach at once, before the helper process is released.
+  If either fails, the host releases the console and continues without it. No
+  failure of this mechanism stops host startup.
 - Known call sites keep their explicit no-window flag. Such a child gets its own
   console and does not share the host's.
+
+Normal Stop is unchanged. The host stops through its private stop request and
+never through a console event. No host code sends a console control event.
+
+Sign-out is unchanged in effect. Before, Windows ended the windowless host at
+sign-out with no notice. Now the host is attached to a console, so Windows can
+send it the sign-out console event first. The handler does not handle that
+event (or close or shutdown), so Windows ends the process at once. In both
+cases the host ends without its normal stop sequence, and the launcher's
+lifetime job closes its descendants. This case is not measured yet.
 
 Limits. This is a default, not a sandbox:
 
 - A program that requests a new console still gets a window.
 - A windowed (GUI) child and a detached child have no console. Their console
   children get a new window unless that child prevents it.
-- Children that share the host's console also share its control events: a
-  Ctrl+C event that one child sends to the whole console reaches the others.
+- Children that share the host's console also share its control events, code
+  page and input. Measured: a Ctrl+C event that one child sent to the whole
+  console ended a sibling child that had default handling; the host continued.
+  This applies to the host's own default-flag children only. The worker tree
+  is not affected: the launch guard starts each payload with the no-window
+  flag, so each worker has a console of its own, and its tools (the shell
+  tool's bash, Git, MCP servers) inherit that one.
+- A child that asks a question on its console (a Git or SSH credential prompt)
+  now waits unseen until its caller's time limit. Before, an unflagged child
+  showed a console window. Host-side Git calls that can reach a remote should
+  set `GIT_TERMINAL_PROMPT=0` or a time limit.
 - Ending the hidden console's `conhost.exe` ends the host.
-- The worker tree was already covered: the launch guard starts each payload
-  with the no-window flag, and the worker's tools inherit that console.
 
 ### Stable launcher and update recovery
 
