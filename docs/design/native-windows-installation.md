@@ -207,7 +207,10 @@ Steps, in order:
 3. Stop the app with the normal owner stop. Decide again with the app stopped.
 4. Copy the generation's verified release file beside the installation.
    Confirm that the app is stopped, then rename the launcher folder aside. It
-   is kept.
+   is kept. Every change in the installation folder waits up to 30 seconds for
+   a program that is still closing: while the app's worker programs are alive,
+   Windows refuses a rename into that folder, and they end a moment after the
+   task reports that it stopped (measured in the clean room).
 5. Install the launcher at the same path with the generation's exact package
    list and the launcher's own interpreter. The task, the shortcuts and the
    private Python do not change.
@@ -290,6 +293,15 @@ back. The launcher's refusal of a launch record that names another launcher
 is still silent at start (it writes `task-launcher-error.json`); this command
 never leaves that state without saying so, but another cause still would.
 
+A launcher that is older than the running app also answered "not ready" to
+its own status question (the Start-menu status entry), because it compared the
+host's version with its own. It now expects the app generation that it starts
+(`installation_health.started_identity`); the identity check itself is
+unchanged. When the shortcut cannot start the app, it now says one cause and
+one next step: before the start-at-sign-in task exists the cause is the first
+start's download, and the next step is the internet connection and the Start
+menu; nothing is installed again.
+
 The Apps-list version stays at the setup version, as it already does after
 every in-app update. Setup's Repair and Update will call this command and
 refresh the private tools; that is separate work.
@@ -304,6 +316,32 @@ closed consumer plan in the native WinExe. The publisher verifies the retained
 EXE, plan, source/compiler-input hashes and checksums against the same wheel.
 It publishes `AmplifierUnifiedSetup-<version>-windows-x64.exe`, its plan/build
 receipt and `WINDOWS_SHA256SUMS` through the existing single release owner.
+It also publishes the identical bytes as `AmplifierUnifiedSetup-windows-x64.exe`,
+so that one link always gives the current setup file:
+`https://github.com/microsoft/amplifier-unified/releases/latest/download/AmplifierUnifiedSetup-windows-x64.exe`.
+That file is a copy, not another build: it embeds exactly its own release's
+plan, the publisher refuses a copy whose bytes differ, and the checksum file
+lists both names. A release that is not marked latest (a repair of an older
+line) does not move the link. The link depends on one rule: only the
+application publisher marks a release as latest. Component releases in this
+repository (`scripts/scheduling_release.py`) publish with `make_latest=false`;
+a component release marked latest would break the link, because it carries no
+setup file. The link gives the current file at download
+time; a file that a person saved earlier still installs its own release, and
+the installed app then updates itself.
+
+Weighed and not done: a version-independent setup file that reads the latest
+release plan at run time. Its bytes would stay the same across releases, which
+might build download reputation while the file is unsigned; that effect is not
+verified. It would give up the one integrity property that the unsigned file
+has: the downloaded bytes fix exactly what is installed, and the published
+receipt attests that chain (setup digest, plan digest, wheel digest). Every
+saved copy would also follow the moving latest pointer for ever, and an old
+copy would have to understand every later plan. A signed plan would need a
+signing key in CI and its custody, and an unsigned file's embedded public key
+proves little. Two independent reviews gave the same answer. Revisit only with
+evidence that reputation attaches to an unchanged unsigned file at this
+project's download volume.
 No target-side compiler, PowerShell invocation or extra agent publisher is used.
 Historical selected sources without the consumer producer retain their original
 Python-only asset set.
@@ -362,6 +400,18 @@ connection untrusted, it:
 3. Requires that the store really holds the root, then repeats its own check: a
    TLS handshake against the Windows roots must return the pinned server
    certificate. Only then does it request a browser grant.
+
+The check has three answers, not two. A listener that answers and is not
+verified is **untrusted**. A listener that does not answer is **unreachable**,
+and that says nothing about trust. The host can restart while the two dialogs
+are open: a new installation finds a newer release at its first start and
+restarts into it. So the launcher waits up to 60 seconds for the listener,
+before the step and after the Windows confirmation. If the host is still away,
+the message says that Amplifier is restarting and to open it again in a minute.
+It never says that the PC does not trust the connection. (In a clean-room run
+of 0.94.1 that updated itself to 0.95.0 at first start, the earlier two-answer
+check showed the "this PC still does not trust the connection" message two
+seconds after Yes, although the root was in the store.)
 
 Outcomes: **No** keeps the app running, says so in one plain message, and the
 next open (always started by the person) explains and asks again. A refusal by

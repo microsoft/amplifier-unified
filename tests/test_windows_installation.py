@@ -385,7 +385,9 @@ def test_browser_trust_requires_windows_roots_and_exact_private_leaf(monkeypatch
         def wrap_socket(self, transport, *, server_hostname):
             events.append(("tls", server_hostname))
             if not trusted:
-                raise setup.ssl.SSLError("Untrusted")
+                # What OpenSSL raises for a certificate it cannot verify (the
+                # real-socket test in test_windows_trust.py confirms this).
+                raise setup.ssl.SSLCertVerificationError("Untrusted")
             yield SimpleNamespace(getpeercert=lambda **kw: leaf)
     @contextmanager
     def connect(address, timeout):
@@ -399,6 +401,34 @@ def test_browser_trust_requires_windows_roots_and_exact_private_leaf(monkeypatch
     assert setup.browser_trust_ready(["https://127.0.0.1:8953/api/health"], pin) is expected
     assert events == [("roots", {"cadata": "public-root"}),
                       ("connect", ("127.0.0.1", 8953), 2), ("tls", "127.0.0.1")]
+    # A listener that answered without a verified pinned leaf is untrusted, never unreachable.
+    assert setup.trust_state(["https://127.0.0.1:8953/api/health"], pin) == (
+        "trusted" if expected else "untrusted")
+
+
+@pytest.mark.parametrize("failure", [ConnectionRefusedError("refused"), TimeoutError("timed out"),
+                                     ConnectionResetError("reset"), "handshake-cut-off"])
+def test_listener_that_gives_no_answer_is_unreachable_not_untrusted(monkeypatch, failure):
+    from contextlib import contextmanager
+    class Context:
+        def load_verify_locations(self, **kwargs):
+            pass
+
+        @contextmanager
+        def wrap_socket(self, transport, *, server_hostname):
+            raise setup.ssl.SSLEOFError("The host closed the connection while it was shutting down")
+            yield
+    @contextmanager
+    def connect(address, timeout):
+        if failure != "handshake-cut-off":
+            raise failure
+        yield object()
+    monkeypatch.setattr(setup.ssl, "SSLContext", lambda protocol: Context())
+    monkeypatch.setattr(setup.ssl, "enum_certificates", lambda store: [], raising=False)
+    monkeypatch.setattr(setup.socket, "create_connection", connect)
+    pin = SimpleNamespace(fingerprint=b"\0" * 32)
+    assert setup.trust_state(["https://127.0.0.1:8953/api/health"], pin) == "unreachable"
+    assert setup.browser_trust_ready(["https://127.0.0.1:8953/api/health"], pin) is False
     with pytest.raises(ValueError, match="loopback"):
         setup.browser_trust_ready(["https://example.invalid/api/health"], pin)
 
@@ -418,14 +448,36 @@ def test_first_setup_creates_its_identity_once_before_the_cli_checks_tls(install
         identity=lambda: pytest.fail("An existing installation's identity is never replaced")))
 
 
+def test_bounded_wait_ends_when_the_listener_answers_and_never_waits_on_an_answer(monkeypatch):
+    clock = [0.0]
+    sleeps = []
+    monkeypatch.setattr(setup.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(setup.time, "sleep", lambda seconds: sleeps.append(seconds) or clock.__setitem__(0, clock[0] + seconds))
+    answers = iter(["unreachable", "unreachable", "trusted"])
+    monkeypatch.setattr(setup, "trust_state", lambda urls, pin: next(answers))
+    assert setup.settled_trust(["u"], "p") == "trusted" and sleeps == [1.0, 1.0]
+    # An answer, good or bad, is returned at once.
+    sleeps.clear()
+    monkeypatch.setattr(setup, "trust_state", lambda urls, pin: "untrusted")
+    assert setup.settled_trust(["u"], "p") == "untrusted" and sleeps == []
+    # A listener that stays away ends the wait after its bound.
+    clock[0] = 0.0
+    monkeypatch.setattr(setup, "trust_state", lambda urls, pin: "unreachable")
+    assert setup.settled_trust(["u"], "p", wait=5, pause=1) == "unreachable"
+    assert sum(sleeps) == 5
+
+
 @pytest.fixture
 def trust_step(tmp_path, monkeypatch):
     """The key-less trust step with every Windows effect recorded."""
     from amplifier_web import windows_trust
     state = {"ready": [False, True], "candidate": b"saved-root", "add": "added", "policy": False}
     events = []
-    monkeypatch.setattr(setup, "browser_trust_ready", lambda urls, pin:
-                        events.append(("check", urls, pin)) or state["ready"].pop(0))
+    def settled(urls, pin):
+        events.append(("check", urls, pin))
+        value = state["ready"].pop(0)
+        return {True: "trusted", False: "untrusted"}.get(value, value)
+    monkeypatch.setattr(setup, "settled_trust", settled)
     def candidate(home, pin, fresh):
         events.append(("candidate", home, pin, fresh))
         return fresh if fresh is not None and state["candidate"] is not None else state["candidate"]
@@ -501,6 +553,39 @@ def test_trust_that_has_no_effect_is_reported_without_claiming_nothing_changed(t
     assert "did not change" not in text and "Nothing on this PC" not in text
 
 
+def test_host_restart_during_the_dialogs_is_waited_for_not_called_a_trust_failure(trust_step):
+    # The check itself waits for a listener that is away (see settled_trust).
+    # When the host is back in time, the browser opens as usual.
+    state, events, run = trust_step
+    state.update(ready=["untrusted", "trusted"])
+    assert run() is True
+    assert [event[0] for event in events] == ["check", "candidate", "notice", "add", "check"]
+
+
+@pytest.mark.parametrize("add", ["added", "present"])
+def test_host_still_away_after_yes_says_restarting_and_never_untrusted(trust_step, add):
+    state, events, run = trust_step
+    state.update(add=add, ready=["untrusted", "unreachable"])
+    assert run() is False
+    # No exported file and no IT advice: nothing is wrong with trust.
+    assert [event[0] for event in events] == ["check", "candidate", "notice", "add", "check", "notice"]
+    text = events[-1][1]
+    assert "Windows accepted Amplifier's certificate" in text and "restarting" in text
+    assert "Open Amplifier again in a minute" in text
+    assert "does not trust" not in text and "IT support" not in text and "security settings" not in text
+
+
+def test_host_away_at_the_start_asks_nothing_and_says_so(trust_step):
+    state, events, run = trust_step
+    state.update(ready=["unreachable"])
+    assert run() is False
+    # No certificate step at all: an absent listener says nothing about trust.
+    assert [event[0] for event in events] == ["check", "notice"]
+    text = events[-1][1]
+    assert "still starting" in text and "Open Amplifier again in a minute" in text
+    assert "Nothing on this PC was changed" in text and "certificate" not in text
+
+
 def test_policy_that_disables_user_roots_is_reported_without_a_windows_question(trust_step):
     state, events, run = trust_step
     state.update(policy=True, ready=[False])
@@ -518,8 +603,8 @@ def test_certificate_review_is_public_only_and_never_imports_trust(tmp_path, mon
     from amplifier_web import tls, windows_files, windows_trust
     monkeypatch.setattr(windows_trust, "candidate", lambda home, pin, fresh: None)
     monkeypatch.setattr(windows_trust, "add_root", lambda der: pytest.fail("never added"))
-    checks = iter([False, recheck])
-    monkeypatch.setattr(setup, "browser_trust_ready", lambda *a: next(checks))
+    monkeypatch.setattr(setup, "settled_trust", lambda *a: "untrusted")
+    monkeypatch.setattr(setup, "browser_trust_ready", lambda *a: recheck)
     monkeypatch.setattr(tls, "exported_ca_bytes", lambda home: b"public-ca")
     monkeypatch.setattr(x509, "load_pem_x509_certificate",
                         lambda content: SimpleNamespace(fingerprint=lambda algorithm: b"\x12" * 32))

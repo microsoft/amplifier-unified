@@ -22,6 +22,10 @@ from windows_bootstrap_native import consumer_plan, prepare, sources
 REPORT = "windows-consumer-release.json"
 PLAN = "windows-consumer-plan.json"
 SUMS = "WINDOWS_SHA256SUMS"
+# The same setup bytes under a name without a version, so that one link always
+# gives the current file: releases/latest/download/<STABLE>. It is a copy, not
+# another build: it still embeds exactly its own release's plan.
+STABLE = "AmplifierUnifiedSetup-windows-x64.exe"
 
 # The selected installation owns archive/RECORD and installed graph observation.
 # Run isolated from the checkout, without editing its installed source or receipts.
@@ -104,6 +108,7 @@ def build(wheel, python, revision, output):
                     *[str(output / "build" / name) for name in inputs["sources"]]],
                    capture_output=True, text=True, timeout=120, check=True,
                    creationflags=subprocess.CREATE_NO_WINDOW)
+    (output / STABLE).write_bytes(executable.read_bytes())
     report = {"schema": 1, "source": revision, "version": stamp["version"],
               "wheelSha256": sha(wheel), "planSha256": sha(output / PLAN),
               "exe": {"name": executable.name, "bytes": executable.stat().st_size, "sha256": sha(executable)},
@@ -111,7 +116,7 @@ def build(wheel, python, revision, output):
               "signed": False, "publicAcceptance": False}
     (output / REPORT).write_text(json.dumps(report, indent=2) + "\n")
     (output / SUMS).write_text("".join(f"{sha(path)}  {path.name}\n" for path in
-                                      [executable, output / PLAN, output / REPORT]))
+                                      [executable, output / STABLE, output / PLAN, output / REPORT]))
     verify(output, wheel, revision, stamp["version"])
     return report
 
@@ -153,7 +158,11 @@ def verify(directory, wheel, revision, version, *, script_dir=None):
             or path.stat().st_size != record["bytes"] or sha(path) != record["sha256"]
             or path.read_bytes()[:2] != b"MZ"):
         raise ValueError("Consumer setup bytes differ from the original build.")
-    assets = [path, plan_path, directory / REPORT]
+    stable = directory / STABLE
+    if (stable.is_symlink() or not stable.is_file() or stable.stat().st_size != record["bytes"]
+            or sha(stable) != record["sha256"]):
+        raise ValueError("The version-less setup file is not a copy of this release's setup file.")
+    assets = [path, stable, plan_path, directory / REPORT]
     expected_sums = "".join(f"{sha(item)}  {item.name}\n" for item in assets)
     if (directory / SUMS).read_text() != expected_sums:
         raise ValueError("Consumer checksums differ from the original build.")

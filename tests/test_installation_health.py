@@ -624,3 +624,32 @@ def test_windows_health_mismatched_version_is_not_ready(windows_health_chain):
     result = asyncio.run(health._windows_status(state["home"],
                          {"version": "9.9.9", "revision": None}, "running"))
     assert not result["ok"] and not result["processVerified"]
+
+
+def test_a_launcher_expects_the_app_version_that_it_starts_not_its_own(tmp_path, monkeypatch):
+    """After an in-app update the Windows launcher is older than the running app."""
+    from amplifier_web import application_generations as generations, installation_health as health
+    own = {"version": "0.94.1", "revision": "a" * 40, "instanceId": "caller"}
+    launcher = {"prefix": str(tmp_path / "tools/amplifier-unified"), "digest": "d" * 64}
+    pointer = {"bootstrap": launcher, "version": "0.95.0", "revision": "b" * 40, "generation": "c" * 32}
+    monkeypatch.setattr(generations, "bootstrap_identity", lambda prefix: launcher)
+    # No in-app update yet: the launcher is the app.
+    monkeypatch.setattr(generations, "active", lambda home: None)
+    assert health.started_identity(tmp_path, own) == own
+    # The launcher starts the active generation, so that is the app it must find.
+    monkeypatch.setattr(generations, "active", lambda home: pointer)
+    assert health.started_identity(tmp_path, own) == {**own, "version": "0.95.0", "revision": "b" * 40}
+    # A caller that is not this installation's launcher keeps its own identity:
+    # the app generation itself, a development checkout, another installation.
+    monkeypatch.setattr(generations, "bootstrap_identity", lambda prefix: {**launcher, "digest": "e" * 64})
+    assert health.started_identity(tmp_path, own) == own
+
+    def unreadable(prefix):
+        raise ValueError("no installed distribution")
+    monkeypatch.setattr(generations, "bootstrap_identity", unreadable)
+    assert health.started_identity(tmp_path, own) == own
+    # The Windows status path uses it; the identity check itself is unchanged.
+    import inspect
+    assert ("_windows_status(home, started_identity(home, expected), initial_state)"
+            in inspect.getsource(health._status_once))
+    assert health.matches_health.__code__.co_argcount == 3

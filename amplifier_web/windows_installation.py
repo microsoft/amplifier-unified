@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import socket
 import ssl
+import time
 from urllib.parse import urlsplit
 
 
@@ -141,8 +142,12 @@ async def change_address(root, launcher, environment):
     return {"port": port, "previous": config["port"]}
 
 
-def browser_trust_ready(urls, pin):
+def trust_state(urls, pin):
     """Read Windows ROOT trust and match the already verified private leaf.
+
+    Returns `trusted`, `untrusted` (the listener answered and Windows did not
+    verify it, or it presented another certificate) or `unreachable` (no
+    listener answered). A listener that is not there says nothing about trust.
 
     No bearer, grant, HTTP request, custom CA, environment override or trust
     mutation participates in this check. Browser policy can still refuse entry.
@@ -151,6 +156,7 @@ def browser_trust_ready(urls, pin):
     for certificate, encoding, trust in ssl.enum_certificates("ROOT"):
         if encoding == "x509_asn" and (trust is True or ssl.Purpose.SERVER_AUTH.oid in trust):
             context.load_verify_locations(cadata=ssl.DER_cert_to_PEM_cert(certificate))
+    state = "unreachable"
     for url in urls:
         address = urlsplit(url)
         if address.scheme != "https" or address.hostname not in {"127.0.0.1", "::1"}:
@@ -159,10 +165,33 @@ def browser_trust_ready(urls, pin):
             with socket.create_connection((address.hostname, address.port), timeout=2) as transport:
                 with context.wrap_socket(transport, server_hostname=address.hostname) as connection:
                     if hashlib.sha256(connection.getpeercert(binary_form=True)).digest() == pin.fingerprint:
-                        return True
+                        return "trusted"
+                    state = "untrusted"
+        except ssl.SSLCertVerificationError:
+            state = "untrusted"
         except (OSError, ssl.SSLError):
-            continue
-    return False
+            continue  # Refused, timed out or cut off: this listener gave no answer.
+    return state
+
+
+def browser_trust_ready(urls, pin):
+    """True only when a listener answered and Windows verified the pinned leaf."""
+    return trust_state(urls, pin) == "trusted"
+
+
+def settled_trust(urls, pin, *, wait=60.0, pause=1.0):
+    """Return `trusted` or `untrusted`, or `unreachable` after a bounded wait.
+
+    The host can restart while a dialog is open, for example to finish an
+    update that it found at its first start. Its listener is then away for
+    some seconds. That is waited for, and never reported as a trust failure.
+    """
+    deadline = time.monotonic() + wait
+    while True:
+        state = trust_state(urls, pin)
+        if state != "unreachable" or time.monotonic() >= deadline:
+            return state
+        time.sleep(pause)
 
 
 def _export_certificate(root):
@@ -183,9 +212,17 @@ def review_browser_trust(root, urls, pin, *, fresh=None):
     that exact certificate is added. No is respected: the app keeps running
     and the next open asks again. An identity with a signing key on disk is
     never added; the person can review it in the Windows certificate viewer.
+
+    A host that is restarting is waited for. If it stays away, the message
+    says that, and never says that the PC does not trust the connection.
     """
-    if browser_trust_ready(urls, pin):
+    state = settled_trust(urls, pin)
+    if state == "trusted":
         return True
+    if state == "unreachable":
+        owner_notice("Amplifier is still starting, for example to finish an update. "
+                     "Open Amplifier again in a minute. Nothing on this PC was changed.")
+        return False
     from . import windows_trust
     certificate = windows_trust.candidate(root / "app", pin, fresh)
     if certificate is None:
@@ -215,8 +252,13 @@ def review_browser_trust(root, urls, pin, *, fresh=None):
             "Open Amplifier again to see the Windows question once more, and select Yes.")
         return False
     if outcome in {"added", "present"}:
-        if browser_trust_ready(urls, pin):
+        state = settled_trust(urls, pin)
+        if state == "trusted":
             return True
+        if state == "unreachable":
+            owner_notice("Windows accepted Amplifier's certificate. Amplifier is restarting now, "
+                         "for example to finish an update. Open Amplifier again in a minute.")
+            return False
         # Windows holds the certificate, yet the connection is still refused.
         # Say that plainly; do not claim that nothing changed.
         _export_certificate(root)
