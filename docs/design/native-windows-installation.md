@@ -1814,7 +1814,13 @@ reused for this; they carry broader authority.
   exact configured remote one. It does **not** look at the peer address. A
   Tailscale TCP forward connects to the host from `127.0.0.1` (measured), so
   the socket does not say where the browser is. The local ticket keeps its
-  stricter check, where both socket ends must be local.
+  check that both socket ends are local. With the forward on, that check no
+  longer tells a tailnet device from this computer: a client there can also
+  send the local address as `Host` and `Origin`. It gains nothing by that. The
+  owner endpoints still need the control credential from the owner-only folder,
+  and the local redeem still needs a ticket that only the launcher can get.
+  Loopback was never authority; another Windows account on the PC is in the
+  same position.
 - **Wrong codes.** No lockout and no delay. A lockout would let any device
   that reaches the address keep the owner out. A delay taken in turn would
   make the owner wait behind a flood of wrong codes. The numbers carry the
