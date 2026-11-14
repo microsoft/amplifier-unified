@@ -24,6 +24,7 @@ import pytest
     ("app_features.py", "_managed_browser_path"),
     ("decision_accounts.py", "_catalog_snapshot"),
     ("bundles.py", "git"),
+    ("feedback.py", "github_api"),
     ("windows_jobs.py", "_start"),
     ("windows_launch_guard.py", "main"),
 ])

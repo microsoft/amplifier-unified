@@ -14,6 +14,7 @@ import os
 import platform
 import re
 import shutil
+import subprocess
 import time
 
 from . import __version__
@@ -102,6 +103,7 @@ async def github_api(endpoint, payload, *, method=None):
         endpoint, *(["--input", "-"] if payload is not None else []),
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         env={**os.environ, "GH_PROMPT_DISABLED": "1", "GH_PAGER": "cat"},
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     try:
         output, _ = await asyncio.wait_for(child.communicate(json.dumps(payload).encode() if payload is not None else None), 45)
