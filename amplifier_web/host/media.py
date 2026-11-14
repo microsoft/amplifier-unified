@@ -161,6 +161,7 @@ def begin_hook_graph(session, *, selection=None):
         participants.append(spec if isinstance(spec, str) else spec["module"])
     for kind in ("providers", "tools", "hooks"):
         participants.extend(row["module"] for row in config.get(kind, []) if row.get("module"))
+    selection.bind_native_endpoints(coordinator)
     bridge = install_media_hook_bridge(coordinator)
     begin = getattr(bridge, "begin_participating_graph", None)
     if not callable(begin):

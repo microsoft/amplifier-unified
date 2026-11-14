@@ -12,7 +12,7 @@ import inspect
 import json
 from pathlib import Path
 import sys
-from types import CodeType, FunctionType, MethodType, ModuleType
+from types import BuiltinMethodType, CodeType, FunctionType, MethodType, ModuleType
 
 
 class NamedMediaGraph:
@@ -36,6 +36,7 @@ class NamedMediaGraph:
         self._capability_owners = tuple(capability_owners)
         self._capability_bindings = []
         self._registration_views = []
+        self._native_endpoints = []
         self._owners = []
         self._codes = {}
         self._stamps = {}
@@ -107,6 +108,16 @@ class NamedMediaGraph:
         self._owners = [row for row in self._owners if row[4] is not coordinator]
         self._capability_bindings = [row for row in self._capability_bindings if row[0] is not coordinator]
         self._registration_views = [row for row in self._registration_views if row[0] is not coordinator]
+        self._native_endpoints = [row for row in self._native_endpoints if row[0] is not coordinator]
+
+    def bind_native_endpoints(self, coordinator):
+        # Core's actual native endpoints are captured before the public bridge
+        # wraps processing. A Python replacement is never accepted here.
+        for owner, name in ((coordinator.hooks, "emit"), (coordinator.hooks, "emit_and_collect"),
+                            (coordinator, "process_hook_result")):
+            method = getattr(owner, name, None)
+            if isinstance(method, BuiltinMethodType) and method.__self__ is owner:
+                self._native_endpoints.append((coordinator, owner, name, method))
 
     @property
     def name(self):
@@ -192,6 +203,9 @@ class NamedMediaGraph:
         """Compare live code objects, including captured loader/mount callbacks."""
         seen = set()
         def check(value):
+            if isinstance(value, BuiltinMethodType):
+                return any(value.__self__ is owner and value.__name__ == name
+                           for _, owner, name, _ in self._native_endpoints)
             if not isinstance(value, (FunctionType, MethodType)) and callable(value):
                 if not self._binding_valid(value):
                     return False
@@ -310,6 +324,13 @@ class NamedMediaGraph:
                 return False
             if any(not self.accepts_callable(item["original"])
                    for item in evidence["registrations"]):
+                return False
+            if any(not self.accepts_callable(item["original"])
+                   for item in evidence.get("mode_registrations", ())):
+                return False
+            if any(item["state"] != "completed" or
+                   not self.accepts_callable(item["original"])
+                   for item in evidence.get("contributions", ())):
                 return False
             return True
         except (OSError, ValueError, TypeError, AttributeError, KeyError):

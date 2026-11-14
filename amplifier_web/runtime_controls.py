@@ -794,6 +794,8 @@ class RuntimeControls:
         if transition is not None and not callable(transition):
             raise ValueError("Mode graph transition capability is malformed")
         state = self.coordinator.session_state
+        if state.get("mode_transition_failure") and transition is None:
+            raise ValueError("A participating mode transition is incomplete; its owner must recover it")
         previous = state.get("active_mode")
         hooks = state.get("mode_hooks")
         if operation == "mode.set":
@@ -801,11 +803,15 @@ class RuntimeControls:
             if not discovery or not discovery.find(args.get("name")):
                 raise ValueError("Mode is not available in this bundle")
         warnings = copy.deepcopy(getattr(hooks, "warned_tools", None))
-        entered = False
+        entered, primary = False, None
         try:
             with (transition() if transition is not None else nullcontext()):
                 entered = True
-                result = await self._mode(operation, args)
+                try:
+                    result = await self._mode(operation, args)
+                except BaseException as error:
+                    primary = error
+                    raise
         except BaseException as error:
             if entered and self.coordinator.get_capability("session.media.graph_transition") is not None:
                 state["active_mode"] = previous
@@ -814,9 +820,14 @@ class RuntimeControls:
                 state["mode_transition_failure"] = {
                     "previous_mode": previous,
                     "target_mode": args.get("name") if operation == "mode.set" else None,
-                    "message": f"Mode transition incomplete: {type(error).__name__}",
+                    "message": f"Mode transition incomplete: {type(primary or error).__name__}",
                 }
+            if primary is not None and error is not primary:
+                primary.add_note(f"Mode transition cleanup also failed: {type(error).__name__}")
+                raise primary
             raise
+        if primary is not None:
+            raise primary  # A foreign suppressing context is not success.
         await self.checkpoint()
         return result
 
