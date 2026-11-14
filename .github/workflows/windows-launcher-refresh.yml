@@ -1,0 +1,65 @@
+name: Windows launcher refresh
+# Native check of the launcher refresh command with real uv installations of a
+# published earlier release and the candidate. The Scheduled Task's stop, start
+# and readiness are a recorded stand-in: a runner registers no task. This is
+# not clean-room acceptance.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/windows-launcher-refresh.yml
+      - amplifier_web/windows_launcher_refresh.py
+      - amplifier_web/application_generations.py
+      - amplifier_web/windows_consumer.py
+      - tests/fixtures/windows_launcher_refresh_native.py
+      - tests/test_windows_launcher_refresh.py
+permissions:
+  contents: read
+jobs:
+  windows-launcher-refresh:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      UV_NO_BUILD_PACKAGE: amplifier-core
+      UV_PYTHON_DOWNLOADS: never
+      UV_LINK_MODE: copy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - name: Install a published earlier launcher and the candidate app version in setup's layout
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -I -B tests/fixtures/windows_launcher_refresh_native.py prepare
+          if ($LASTEXITCODE -ne 0) { throw 'Preparation failed; inspect preparation.json.' }
+      - name: Refresh the launcher with the candidate's own code, including two rollbacks
+        timeout-minutes: 12
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & "$env:REFRESH_PYTHON" -I -B tests/fixtures/windows_launcher_refresh_native.py run
+          if ($LASTEXITCODE -ne 0) { throw 'The launcher refresh check failed; inspect result.json.' }
+      - name: Remove the owned fixture folder
+        if: always()
+        shell: pwsh
+        run: python -I -B tests/fixtures/windows_launcher_refresh_native.py cleanup
+      - name: Retain the bounded results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-launcher-refresh
+          path: |
+            ${{ runner.temp }}/launcher-refresh-evidence/preparation.json
+            ${{ runner.temp }}/launcher-refresh-evidence/result.json
+          if-no-files-found: warn
+          retention-days: 7

@@ -220,6 +220,60 @@ try{
  }
  await page.locator('.a-adaptive-home').getByRole('button',{name:'New chat',exact:true}).click();
  await assertDisplayed(inherited);
+ // Synthetic tier metadata traverses the production probe/catalog/DTO and the
+ // bundled model picker. Native disclosure remains keyboard usable at narrow
+ // width; prices are descriptive and do not change the selected request.
+ await activate(model);await showComposerOption(page,'model');
+ const tierPrice=dialog.getByRole('region',{name:'Pricing for cli-model',exact:true});
+ const revealPricing=async target=>{
+  // Center the requested evidence below the sticky dialog heading. Scrolling
+  // to block:start can place the price basis/unit behind that heading.
+  await target.evaluate(node=>node.scrollIntoView({block:'center'}));
+  await expect.poll(()=>target.evaluate(node=>{
+   const rect=node.getBoundingClientRect(),dialog=node.closest('[role="dialog"]');
+   const heading=dialog.querySelector('.a-composer-options-heading').getBoundingClientRect();
+   const bounds=dialog.getBoundingClientRect();
+   return rect.top>=Math.max(bounds.top,heading.bottom)-1&&rect.bottom<=Math.min(innerHeight,bounds.bottom)+1;
+  })).toBe(true);
+ };
+ const priceHeader=tierPrice.locator(':scope > div > p').first();
+ await expect(tierPrice).toContainText('Up to 100,000 prompt tokens');
+ await expect(tierPrice).toContainText('Above 100,000 prompt tokens');
+ await expect(tierPrice).toContainText('$0.1');
+ await expect(tierPrice).toContainText('$2.5');
+ await expect(tierPrice).toContainText('whole request');
+ const cacheSummary=tierPrice.locator('summary');
+ await cacheSummary.focus();await cacheSummary.press('Enter');
+ await expect(tierPrice.getByText('Cache write (1 hour)',{exact:true}).first()).toBeVisible();
+ const cacheTiers=tierPrice.locator('.a-model-pricing-details > section').filter({has:page.locator('h5')});
+ await expect(cacheTiers.nth(0).locator('dd')).toHaveText(['$0.01','$0.125','$0.2']);
+ await expect(cacheTiers.nth(1).locator('dd')).toHaveText(['$0.05','$0.625','$1']);
+ const rateLayout=()=>tierPrice.locator('dd').evaluateAll(nodes=>nodes.filter(node=>node.getClientRects().length).map(node=>{
+  const range=document.createRange();range.selectNodeContents(node);
+  const rect=node.getBoundingClientRect(),row=node.parentElement.getBoundingClientRect();
+  return {text:node.textContent,lines:range.getClientRects().length,
+   insideRow:rect.left>=row.left-1&&rect.right<=row.right+1};
+ }));
+ const assertRates=async label=>{
+  const rates=await rateLayout();
+  assert.ok(rates.length>=10,`${label}: input/output and cache rates are present`);
+  assert.ok(rates.every(rate=>rate.lines===1&&rate.insideRow),`${label}: monetary values stay unbroken and inside their rows: ${JSON.stringify(rates)}`);
+  return rates;
+ };
+ const desktopRates=await assertRates('desktop');
+ await revealPricing(priceHeader);
+ await page.screenshot({path:`${evidence}/desktop-tiered-pricing.png`});
+ await page.setViewportSize({width:390,height:844});
+ await expect(tierPrice).toBeVisible();
+ assert.ok(await tierPrice.evaluate(node=>node.scrollWidth<=node.clientWidth+1),'Pricing reflows without horizontal clipping');
+ const narrowRates=await assertRates('390px');
+ await revealPricing(priceHeader);
+ await page.screenshot({path:`${evidence}/narrow-tiered-pricing-header.png`});
+ await revealPricing(cacheSummary);
+ await page.screenshot({path:`${evidence}/narrow-tiered-pricing.png`});
+ await save('pricing-rate-layout.json',{desktop:desktopRates,narrow390:narrowRates});
+ await page.setViewportSize({width:1280,height:900});
+ await closeOptions();
  // Deliberately choose the other real synthetic connection with the SAME model
  // and effort. The normal visible-control observer must reject its connection.
  await activate(model);await showComposerOption(page,'provider');
@@ -289,6 +343,13 @@ try{
  assert.equal((await requests()).length,count);
  await page.request.post(url+'/fixture/provider-resolution/release');
  await assertDisplayed({instance:'unified',model:'unified-model',effort:'high'});
+ await activate(model);await showComposerOption(page,'model');
+ const fixedPrice=dialog.getByRole('region',{name:'Pricing for unified-model',exact:true});
+ await expect(fixedPrice).toContainText('$8');
+ await expect(fixedPrice).toContainText('$40');
+ await expect(fixedPrice).not.toContainText('Above 100,000');
+ await page.screenshot({path:`${evidence}/desktop-fixed-pricing.png`});
+ await closeOptions();
  await page.setViewportSize({width:390,height:844});
  await model.tap();await showComposerOption(page,'provider');
  await expect(page.locator('select#chat-provider')).toHaveValue('unified');
@@ -321,15 +382,24 @@ try{
  assert.deepEqual((await state()).view.newSessionDraft.selection,wrong,'Changing the local connection field does not silently save a default model');
   // Successful recommendations are not an entitlement gate. The uncommon exact
   // ID path stays explicit and does not add a made-up row to the API inventory.
+  const announcement=dialog.locator('[data-part="model-pricing-announcement"]');
+  await expect(announcement).toHaveAttribute('aria-live','polite');
+  await expect(announcement).toHaveAttribute('aria-atomic','true');
+  const announcementNode=await announcement.elementHandle();
   await dialog.getByRole('button',{name:'Enter an exact model ID',exact:true}).click();
   await dialog.locator('input#chat-model').fill('hidden-by-recommendation');
   await dialog.locator('input#chat-model').press('Tab');
   await expect.poll(async()=>(await state()).view.newSessionDraft.selection?.model).toBe('hidden-by-recommendation');
   await expect(dialog.locator('select#chat-model-catalog option[value="hidden-by-recommendation"]')).toHaveCount(0);
   await expect(dialog.getByText(/not verified by discovery/)).toBeVisible();
+  await expect(dialog.getByText('Pricing unavailable for the selected model.',{exact:true})).toBeVisible();
+  assert.ok(await announcementNode.evaluate(node=>node.isConnected&&node===document.querySelector('[role="dialog"] [data-part="model-pricing-announcement"]')),'Unknown-price update retains the original DOM announcement container');
+  await expect(announcement.locator('[aria-live]')).toHaveCount(0);
   await dialog.locator('input#chat-model').fill(wrong.model);
   await dialog.locator('input#chat-model').press('Tab');
   await expect.poll(async()=>(await state()).view.newSessionDraft.selection?.model).toBe(wrong.model);
+  assert.ok(await announcementNode.evaluate(node=>node.isConnected&&node===document.querySelector('[role="dialog"] [data-part="model-pricing-announcement"]')),'Priced update retains the original DOM announcement container');
+  await announcementNode.dispose();
   // Choosing a different model intentionally clears model-specific effort.
   // Restore the explicit old journey baseline rather than assuming it survived.
   await showComposerOption(page,'effort');

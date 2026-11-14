@@ -26,7 +26,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from amplifier_web import deployment, windows_tls as wt, windows_trust as trust
+from amplifier_web import deployment, windows_installation as launcher, windows_tls as wt, windows_trust as trust
 
 CONFIG = deployment.validate_server({})
 DER = serialization.Encoding.DER
@@ -568,14 +568,14 @@ def test_native_windows_accepts_the_product_shape_and_enforces_the_roots_names(p
 class Page(threading.Thread):
     """One HTTPS listener that answers every request with a marker page."""
 
-    def __init__(self, directory, address, leaf, key, marker):
+    def __init__(self, directory, address, leaf, key, marker, port=0):
         super().__init__(daemon=True)
         cert_bytes, key_bytes = wt._encoded_pair(leaf, key)
         (directory / (marker + ".crt")).write_bytes(cert_bytes)
         (directory / (marker + ".key")).write_bytes(key_bytes)
         self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.context.load_cert_chain(directory / (marker + ".crt"), directory / (marker + ".key"))
-        self.listener = socket.create_server((address, 0))
+        self.listener = socket.create_server((address, port))
         self.listener.settimeout(0.25)
         self.address, self.port = address, self.listener.getsockname()[1]
         self.marker, self.stopped, self.handshakes = marker, threading.Event(), []
@@ -604,6 +604,54 @@ class Page(threading.Thread):
         self.stopped.set()
         self.listener.close()
         self.join(5)
+
+
+def test_launcher_check_tells_an_absent_listener_from_an_untrusted_one_with_real_tls(tmp_path, monkeypatch):
+    """Real sockets and real OpenSSL; the Windows root list is the only stand-in."""
+    import time
+    root, _, leaf, leaf_key = identity()
+    pin = SimpleNamespace(fingerprint=hashlib.sha256(leaf.public_bytes(DER)).digest())
+    trusted_roots = []
+    monkeypatch.setattr(launcher.ssl, "enum_certificates", lambda store: list(trusted_roots), raising=False)
+    with socket.socket() as probe:  # A loopback port with no listener.
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    url = [f"https://127.0.0.1:{port}/api/health"]
+    assert launcher.trust_state(url, pin) == "unreachable"
+    assert launcher.browser_trust_ready(url, pin) is False
+    started = time.monotonic()
+    assert launcher.settled_trust(url, pin, wait=0.3, pause=0.1) == "unreachable"
+    assert time.monotonic() - started < 5
+
+    page = Page(tmp_path, "127.0.0.1", leaf, leaf_key, "host", port=port)
+    page.start()
+    try:
+        # The listener answers, and Windows has no root for it: untrusted, at once.
+        assert launcher.trust_state(url, pin) == "untrusted"
+        assert launcher.settled_trust(url, pin, wait=30) == "untrusted"
+        trusted_roots.append((root.public_bytes(DER), "x509_asn", True))
+        assert launcher.trust_state(url, pin) == "trusted"
+        # Verified by Windows, but not this installation's certificate.
+        other = SimpleNamespace(fingerprint=b"\0" * 32)
+        assert launcher.trust_state(url, other) == "untrusted"
+    finally:
+        page.close()
+
+    # The host restarts while a dialog is open: its listener comes back later.
+    assert launcher.trust_state(url, pin) == "unreachable"
+    late = []
+    def restart():
+        time.sleep(1.2)
+        late.append(Page(tmp_path, "127.0.0.1", leaf, leaf_key, "host-again", port=port))
+        late[0].start()
+    starter = threading.Thread(target=restart, daemon=True)
+    starter.start()
+    try:
+        assert launcher.settled_trust(url, pin, wait=30, pause=0.2) == "trusted"
+    finally:
+        starter.join(10)
+        for page in late:
+            page.close()
 
 
 def edge_dom(directory, url):

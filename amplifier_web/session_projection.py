@@ -75,7 +75,7 @@ ACCOUNTING_FIELDS = {'id', 'revision', 'producerId', 'budgetRevision', 'admitted
     'assignmentId', 'assignmentRevision', 'assignmentReservation'}
 ACCOUNTING_USAGE_FIELDS = {'inputTokens', 'outputTokens', 'totalTokens',
     'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'grossInputTokens',
-    'grossTotalTokens', 'costUsd', 'costType', 'costSource'}
+    'grossTotalTokens', 'costUsd', 'costType', 'costSource', 'costUnavailableReason'}
 
 
 def _accounting_copy(value):

@@ -38,6 +38,7 @@ def built(tmp_path, monkeypatch):
     (directory / release.PLAN).write_bytes(consumer_plan(plan))
     exe = directory / release.names("1.2.3")
     exe.write_bytes(b"MZsynthetic-not-executable")
+    (directory / release.STABLE).write_bytes(exe.read_bytes())
     inputs = {"NativeInstaller.cs": b"synthetic compiler input"}
     monkeypatch.setattr(release, "sources", lambda *a, **kw: inputs)
     report = {"schema": 1, "source": revision, "version": "1.2.3", "wheelSha256": release.sha(wheel),
@@ -47,7 +48,7 @@ def built(tmp_path, monkeypatch):
               "installedPayloadVerified": True, "signed": False, "publicAcceptance": False}
     def save_report():
         (directory / release.REPORT).write_text(json.dumps(report))
-        assets = [exe, directory / release.PLAN, directory / release.REPORT]
+        assets = [exe, directory / release.STABLE, directory / release.PLAN, directory / release.REPORT]
         (directory / release.SUMS).write_text("".join(f"{release.sha(p)}  {p.name}\n" for p in assets))
     save_report()
     return directory, wheel, revision, plan, report, save_report
@@ -56,9 +57,35 @@ def built(tmp_path, monkeypatch):
 def test_exact_consumer_asset_set_is_bound_to_original_wheel(built):
     directory, wheel, revision, _, _, _ = built
     paths = release.verify(directory, wheel, revision, "1.2.3")
-    assert [p.name for p in paths] == [release.names("1.2.3"), release.PLAN, release.REPORT, release.SUMS]
+    assert [p.name for p in paths] == [release.names("1.2.3"), release.STABLE, release.PLAN, release.REPORT,
+                                       release.SUMS]
     with pytest.raises(ValueError, match="source"):
         release.verify(directory, wheel, "b" * 40, "1.2.3")
+
+
+def test_version_less_setup_file_is_a_copy_of_this_releases_setup_file(built):
+    directory, wheel, revision, _, report, save = built
+    # One stable link serves every release: the name has no version in it.
+    assert release.STABLE == "AmplifierUnifiedSetup-windows-x64.exe"
+    assert not any(character.isdigit() for character in release.STABLE.replace("x64", ""))
+    stable = directory / release.STABLE
+    sums = dict(reversed(line.split("  ")) for line in (directory / release.SUMS).read_text().splitlines())
+    assert sums[release.STABLE] == sums[release.names("1.2.3")] == report["exe"]["sha256"]
+    for change in ("other bytes", "missing", "link"):
+        original = stable.read_bytes()
+        stable.unlink()
+        if change == "other bytes":
+            stable.write_bytes(b"MZanother-release")
+        elif change == "link":
+            stable.symlink_to(directory / release.names("1.2.3"))
+        if change != "missing":
+            save()  # The checksum file then agrees; the copy itself is what is refused.
+        with pytest.raises((ValueError, FileNotFoundError)):
+            release.verify(directory, wheel, revision, "1.2.3")
+        stable.unlink(missing_ok=True)
+        stable.write_bytes(original)
+    save()
+    release.verify(directory, wheel, revision, "1.2.3")
 
 
 @pytest.mark.parametrize("changed", ["exe", "name", "count", "wheel", "plan", "graph", "inputs", "qualified", "signed", "sums"])
@@ -82,6 +109,22 @@ def test_changed_consumer_build_refuses_before_publication(built, changed):
         release.verify(directory, wheel, revision, "1.2.3")
 
 
+def test_only_the_application_release_can_become_latest():
+    # The stable setup link is releases/latest/download/<name>. A component
+    # release that became "latest" has no setup file and would break the link.
+    component = (SCRIPTS / "scheduling_release.py").read_text()
+    assert component.count("make_latest=false") == 2 and "make_latest=true" not in component
+    assert component.index('"draft=true", "-f", "make_latest=false"') < component.index(
+        '"draft=false", "-f", "make_latest=false"')
+    application = (SCRIPTS / "release.py").read_text()
+    # The app publisher uploads every asset to a draft before it publishes, so
+    # the link never points at a release without the file.
+    upload = application.index('run("gh", "release", "upload", tag')
+    publish = application.index('"--draft=false", "--latest=" + str(not newer).lower()')
+    assert application.index('"--verify-tag", "--draft"') < upload < publish
+    assert "*windows]" in application[application.rindex("assets = [", 0, upload):upload]
+
+
 def test_producer_is_build_only_no_target_compiler_or_trust_mutation():
     text = (SCRIPTS / "windows_consumer_release.py").read_text()
     assert 'def build(' in text and 'def verify(' in text
@@ -102,6 +145,18 @@ def test_release_requires_consumer_bytes_only_for_sources_with_producer(tmp_path
     monkeypatch.setattr(owner, "run", lambda *a, **kw: json.dumps(["../foreign.exe"]))
     with pytest.raises(ValueError, match="unexpected asset set"):
         owner.consumer_assets(tmp_path, dist, "1.2.3", "a" * 40)
+    setup = "AmplifierUnifiedSetup-1.2.3-windows-x64.exe"
+    rest = ["windows-consumer-plan.json", "windows-consumer-release.json", "WINDOWS_SHA256SUMS"]
+    current = [setup, "AmplifierUnifiedSetup-windows-x64.exe", *rest]
+    # The current producer's set, and the exact set of a selected source from
+    # before the version-less copy. Nothing else is published.
+    for names in (current, [setup, *rest]):
+        monkeypatch.setattr(owner, "run", lambda *a, names=names, **kw: json.dumps([str(dist / n) for n in names]))
+        assert owner.consumer_assets(tmp_path, dist, "1.2.3", "a" * 40) == [dist / n for n in names]
+    for names in ([*current, "extra.exe"], current[1:], [setup, "AmplifierUnifiedSetup-9.9.9-windows-x64.exe", *rest]):
+        monkeypatch.setattr(owner, "run", lambda *a, names=names, **kw: json.dumps([str(dist / n) for n in names]))
+        with pytest.raises(ValueError, match="unexpected asset set"):
+            owner.consumer_assets(tmp_path, dist, "1.2.3", "a" * 40)
 
 
 def test_workflow_builds_original_wheel_before_normal_publisher():
@@ -118,6 +173,11 @@ def test_workflow_builds_original_wheel_before_normal_publisher():
     download = next(i for i, step in enumerate(steps) if step.get("with", {}).get("name") == "windows-consumer")
     publish = next(i for i, step in enumerate(steps) if "publish --tag" in step.get("run", ""))
     assert check < download < publish
+    # The upload pattern with a version does not match the version-less name.
+    uploaded = next(step["with"]["path"] for step in native["steps"]
+                    if step.get("with", {}).get("name") == "windows-consumer").split()
+    assert "windows-consumer/AmplifierUnifiedSetup-windows-x64.exe" in uploaded
+    assert "windows-consumer/AmplifierUnifiedSetup-*-windows-x64.exe" in uploaded
 
 
 def test_real_compiler_inputs_are_identical_across_checkout_line_endings(tmp_path, built, monkeypatch):

@@ -1272,6 +1272,8 @@
     "portability",
     "testing-settings",
     "settings",
+    "optimize-storage",
+    "installation-repair",
     "configuration-recovery-components",
     "configuration-recovery",
     "settings-completeness",

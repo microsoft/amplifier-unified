@@ -186,7 +186,9 @@ terminal. Keep explicit `CREATE_NO_WINDOW` at known call sites. After a late
 `AttachConsole`, Python signal settings do not protect the host from a child's
 Ctrl+C; keep the explicit console control handler and the standard-handle
 restore. The stable launcher keeps the code that setup installed; an in-app
-update cannot change it.
+update cannot change it. `amplifier_web.windows_launcher_refresh` is the only
+supported replacement: it runs with the active generation's Python from outside
+the host's Job, and it rolls back fully on failure.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.
