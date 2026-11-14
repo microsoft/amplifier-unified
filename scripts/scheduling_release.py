@@ -15,7 +15,7 @@ import zipfile
 REPOSITORY = "microsoft/amplifier-unified"
 PROJECT = "components/scheduling"
 RECEIPT = "scheduling-source.json"
-COMPONENTS = ("scheduling", "worktrees")
+COMPONENTS = ("scheduling", "worktrees", "portability")
 
 
 def component_name(selected):
@@ -220,7 +220,8 @@ def publish(root, revision, dist, *, component="scheduling"):
         release = api("releases", "-X", "POST", "-f", "tag_name=" + tag,
                       "-f", "name=" + component.title() + " " + receipt["version"], "-F", "draft=true", "-f", "make_latest=false",
                       "-f", "body=" + {"scheduling": "Standalone scheduling policy/store package.",
-                                  "worktrees": "Standalone managed Git worktree mechanism."}[component] + " Source: " + revision +
+                                  "worktrees": "Standalone managed Git worktree mechanism.",
+                                  "portability": "Standalone signed task transfer mechanism."}[component] + " Source: " + revision +
                       ". Unified dependency selection is unchanged. Do not co-install with a Unified version that still bundles this package.")
         release = read_release(release, tag)
     if not release["draft"]:

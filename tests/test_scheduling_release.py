@@ -416,3 +416,27 @@ def test_component_selection_is_finite_and_cannot_relabel_scheduling(candidate, 
         release.selection(root, revision, component="../unselected")
     with pytest.raises(subprocess.CalledProcessError):
         release.publish(root, revision, dist, component="worktrees")
+
+
+def test_portability_uses_distinct_source_and_asset_identity(tmp_path):
+    root, revision, dist, _ = make_candidate(tmp_path, "portability")
+    selected = release.verify(root, revision, dist, component="portability")
+    assert selected["tag"] == "portability-v0.1.0"
+    assert selected["subdirectory"] == "components/portability"
+    assert set(path.name for path in dist.iterdir()) == {
+        "amplifier_portability-0.1.0-py3-none-any.whl",
+        "amplifier_portability-0.1.0.tar.gz", "portability-source.json", "SHA256SUMS",
+    }
+    with pytest.raises(subprocess.CalledProcessError):
+        release.verify(root, revision, dist, component="worktrees")
+
+
+def test_completed_portability_release_retry_is_read_only(tmp_path, monkeypatch):
+    candidate = make_candidate(tmp_path, "portability")
+    remote = Remote(candidate)
+    remote.install(monkeypatch)
+    root, revision, dist, _ = candidate
+    assert release.publish(root, revision, dist, component="portability") == {
+        "tag": "portability-v0.1.0", "status": "already-published-exact-bytes",
+    }
+    assert remote.mutations == []
