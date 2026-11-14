@@ -201,7 +201,7 @@ try {
             Where-Object { $names -ccontains $_.Name })
         if (-not $remaining.Count -or (Get-Date) -ge $until) { break }
         Start-Sleep -Seconds 1
-    } while ($true)
+    } while ((Get-Date) -lt $until)
     if (-not (Authorized)) { throw 'Root or token refused' }
     $remaining = @(Get-ChildItem -LiteralPath $p.root -Force)
     if ($remaining.Count -eq 1 -and $remaining[0].Name -ceq 'unified-uninstall.json') {
