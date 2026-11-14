@@ -195,37 +195,74 @@ def test_default_workspace_folder_limits_are_stated_not_hidden():
 
 
 # Source store (Amplifier Foundation owns the layout; Unified supplies the root).
-# SOURCE_NAME is the length of an object or build folder name. The locked
-# Foundation revision uses the full SHA-256 (64). Foundation's Windows change
-# uses 16 for new entries. The Unified change that moves the Foundation lock
-# sets SOURCE_NAME from Foundation's constant and empties PENDING_FOUNDATION.
-SOURCE_NAME = 64
-SOURCE_NAME_AFTER_FOUNDATION_CHANGE = 16
-CONTENT_DEPTH = 78   # deepest file the app opens by an ordinary path in an object (default bundles, measured)
-MODULE_DEPTH = 125   # deepest module source file a build backend reads in a build view (measured)
-BYTECODE = 25        # allowance for the bytecode name of that module file
-PENDING_FOUNDATION = {'source object content', 'build view module file'}
+# On Windows the locked Foundation names a new object or build folder with the
+# first SOURCE_NAME digits of its 64-digit name. The store reaches a staged
+# checkout, its seal, its cleanup and the copy into a build view by
+# extended-length paths, so the depth of a repository does not limit them.
+# These rows are the paths that other code opens by an ordinary path.
+SOURCE_NAME = 16
+SOURCE_FOLDER = 'source-store'  # AMPLIFIER_SOURCE_STORE below the installation folder
+MODULE_DEPTH = 125   # deepest module source file in the default bundles (measured)
+BYTECODE = 25        # allowance for the bytecode name of that module file in a build view
+SOURCE_OBJECT, SOURCE_BUILD, SOURCE_STAGE = (
+    'module source in a source object', 'build view module file', 'staged checkout record')
 
 
-def source_store(name):
+def source_store(name=SOURCE_NAME, folder=SOURCE_FOLDER):
     return [
-        ('source object content', FILE, f'source-store\\objects\\{"f" * name}\\{HEX40}\\' + 'c' * CONTENT_DEPTH),
-        ('build view module file', FILE, f'source-store\\builds\\{"f" * name}\\' + 'm' * (MODULE_DEPTH + BYTECODE)),
-        # After Foundation's change the store walks a staged checkout by
-        # extended-length paths; only this file is opened by an ordinary path.
-        ('staged checkout record', FILE,
-         f'source-store\\objects\\{"f" * name}\\.source-{"r" * 8}\\checkout\\.amplifier_cache_meta.json'),
+        # Python imports module source from here: Foundation's activator puts
+        # the module folder of the object on sys.path.
+        (SOURCE_OBJECT, FILE, f'{folder}\\objects\\{"f" * name}\\{HEX40}\\' + 'm' * MODULE_DEPTH),
+        # A build backend reads the same file in the writable build view.
+        (SOURCE_BUILD, FILE, f'{folder}\\builds\\{"f" * name}\\' + 'm' * (MODULE_DEPTH + BYTECODE)),
+        # The one file in a staged checkout that the store opens by an ordinary path.
+        (SOURCE_STAGE, FILE,
+         f'{folder}\\objects\\{"f" * name}\\.source-{"r" * 8}\\checkout\\.amplifier_cache_meta.json'),
     ]
 
 
-def test_source_store_fits_once_foundation_shortens_its_folder_names():
-    after = source_store(SOURCE_NAME_AFTER_FOUNDATION_CHANGE)
-    assert all(fits(kind, relative) for _, kind, relative in after)
-    assert length(after[0][2]) - MAX_ROOT - CONTENT_DEPTH == 80   # \source-store\objects\<16>\<40>\
-    assert length(after[1][2]) - MAX_ROOT - MODULE_DEPTH - BYTECODE == 38  # \source-store\builds\<16>\
-    # Today's state, stated so that it cannot change unnoticed in either direction.
-    over = {name for name, kind, relative in source_store(SOURCE_NAME) if not fits(kind, relative)}
-    assert over == PENDING_FOUNDATION
+# Stated limit, not fixed here: the longest installation folder path at which a
+# source-store row fits, for each row that does not fit at the setup limit.
+# Module source in an object is the installation folder path plus 205. Above
+# the number here Python cannot import the deepest default module. Setup owns
+# the two fixes: a shorter name for the store folder of a new installation, or
+# a lower MaxRootLength. Either one changes this table and fails the test.
+SOURCE_STORE_LONGEST_ROOT = {SOURCE_OBJECT: 54}
+# The fixed folder with the longest account name that Windows allows locally.
+ROOT_FOR_20_CHARACTER_ACCOUNT = len('C:\\Users\\' + 'u' * 20 + '\\AppData\\Local\\Amplifier')
+
+
+def test_source_store_limits_are_stated_not_hidden():
+    def longest_root(kind, relative):
+        return max(root for root in range(1, MAX_ROOT + 1) if fits(kind, relative, root))
+
+    rows = {name: (kind, relative) for name, kind, relative in source_store()}
+    assert length(rows[SOURCE_OBJECT][1]) - MAX_ROOT - MODULE_DEPTH == 80             # \source-store\objects\<16>\<40>\
+    assert length(rows[SOURCE_BUILD][1]) - MAX_ROOT - MODULE_DEPTH - BYTECODE == 38  # \source-store\builds\<16>\
+    measured = {name: longest_root(*row) for name, row in rows.items()}
+    assert {name: root for name, root in measured.items() if root < MAX_ROOT} == SOURCE_STORE_LONGEST_ROOT
+    # An account name of 20 characters fits in every row, with one character to spare.
+    assert ROOT_FOR_20_CHARACTER_ACCOUNT == 53
+    assert max(length(relative, 53) for _, relative in rows.values()) == FILE_LIMIT - 1
+    # With the store folder named "s" every row fits at the setup limit.
+    assert all(fits(kind, relative) for _, kind, relative in source_store(folder='s'))
+    # An entry that an earlier Foundation made under its 64-digit name stays
+    # in use where it is. Its module source has no budget at the setup limit.
+    assert not fits(*source_store(name=64)[0][1:]) and not fits(*source_store(name=64)[0][1:], 53)
+
+
+def test_source_store_names_are_the_ones_foundation_writes():
+    from amplifier_foundation.modules import activator
+    from amplifier_foundation.sources import shared
+    assert shared._SHORT_NAME == SOURCE_NAME
+    text = inspect.getsource(shared)
+    assert '_store_entry(self.root / "objects", source_id(url, ""), revision)' in text
+    assert '_store_entry(store / "builds", key)' in text
+    assert 'tempfile.mkdtemp(prefix=".source-", dir=target.parent)' in text
+    assert 'stage = staging / "checkout"' in text and 'stage / ".amplifier_cache_meta.json"' in text
+    # The path that the limit above rests on: module source is imported from the object.
+    assert 'path_str = str(module_path)' in inspect.getsource(activator)
+    assert 'sys.path.insert(0, path_str)' in inspect.getsource(activator)
 
 
 def test_measured_application_depths_fit_under_the_longest_root():
@@ -265,7 +302,7 @@ def test_store_folders_are_the_ones_the_app_really_uses(tmp_path, monkeypatch):
     for setting, folder in (('AMPLIFIER_WEB_HOME', 'app'), ('AMPLIFIER_HOME', 'shared'),
                             ('AMPLIFIER_SESSION_STATE_HOME', 'ownership'),
                             ('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', 'capture'),
-                            ('AMPLIFIER_SOURCE_STORE', 'source-store')):
+                            ('AMPLIFIER_SOURCE_STORE', SOURCE_FOLDER)):
         assert f'"{setting}": "{folder}"' in consumer
 
 
@@ -311,10 +348,11 @@ def table():
     lines += [f'  {name:34} {size:3}' for name, size in sorted(LONGEST_SESSION_ID.items(), key=lambda item: item[1])]
     lines += ['', 'Chat in the default workspace folder (CLI name): longest installation folder path that fits:']
     lines += [f'  {name:34} {size:3}' for name, size in DEFAULT_WORKSPACE_LONGEST_ROOT.items()]
-    lines += ['', 'Source store (Foundation). Folder name width today / after the Foundation change:']
-    for (name, kind, today), (_, _, after) in zip(source_store(SOURCE_NAME),
-                                                 source_store(SOURCE_NAME_AFTER_FOUNDATION_CHANGE)):
-        lines.append(f'  {name:34} {length(today):3} / {length(after):3}')
+    lines += ['', f'Source store (Foundation, {SOURCE_NAME}-digit folder names). Path length, and the longest',
+              'installation folder path that fits:']
+    for name, kind, relative in source_store():
+        longest = FILE_LIMIT - 1 - len(relative)
+        lines.append(f'  {name:34} {kind:6} +{len(relative) + 1:3} = {length(relative):3}   fits up to {longest}')
     return '\n'.join(lines)
 
 

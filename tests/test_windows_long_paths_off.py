@@ -13,11 +13,14 @@ paths the stores really create have those lengths, and that Windows accepts them
 """
 from __future__ import annotations
 
+import asyncio
 import errno
 import json
 import os
 from pathlib import Path
 import shutil
+import stat
+import subprocess
 import tempfile
 import uuid
 
@@ -65,7 +68,9 @@ def remove_tree(path):
             if entry.is_dir(follow_symlinks=False):
                 remove_tree(entry.path)
             else:
+                os.chmod(entry.path, stat.S_IWRITE)  # The source store seals its files read-only.
                 os.remove(entry.path)
+    os.chmod(path, stat.S_IWRITE)
     os.rmdir(path)
 
 
@@ -109,12 +114,13 @@ class Installation:
             unavailable(f'The temporary folder path is too long for an installation folder of {size} characters.')
         self.root = base / ('r' * (size - len(str(base)) - 1))
         assert len(str(self.root)) == size and not self.root.exists()
-        for folder in ('', 'app', 'shared', 'capture', 'ownership'):
+        for folder in ('', 'app', 'shared', 'capture', 'ownership', budget.SOURCE_FOLDER):
             with directory(self.root / folder, owned_root=self.root, create=True):
                 pass
         for setting, folder in (('AMPLIFIER_WEB_HOME', 'app'), ('AMPLIFIER_HOME', 'shared'),
                                 ('AMPLIFIER_SESSION_STATE_HOME', 'ownership'),
-                                ('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', 'capture')):
+                                ('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', 'capture'),
+                                ('AMPLIFIER_SOURCE_STORE', budget.SOURCE_FOLDER)):
             monkeypatch.setenv(setting, str(self.root / folder))
 
     def chat(self):
@@ -344,14 +350,110 @@ def test_history_longer_than_the_limit_is_found_and_the_chat_stays_under_its_nam
     write_view(save_session(install.root / 'app', folder, other))
 
 
-@pytest.mark.skip(reason='Enabled by the Amplifier Foundation lock change: needs Foundation\'s Windows source-store '
-                         'paths (extended-length tree walks and 16-digit folder names).')
-def test_source_store_stages_a_deep_repository_under_the_longest_supported_installation_folder(installation):
-    """Named place for the source store. Worker 54f614e2 enables it with the Foundation lock change.
+# The deepest module source file of the default bundles, by its real name (125
+# characters), and a file as deep as the deepest file of any default repository.
+MODULE_FILE = ('modules/tool-context-intelligence-transcript/'
+               'amplifier_module_tool_context_intelligence_transcript/session_transcript_tool.py')
+DEEPEST_FILE = 'docs/lanes/' + '/'.join(['evidence-' + 'e' * 20] * 4) + '/result.txt'
+SOURCE_URL = 'https://example.invalid/deep'
 
-    Expected content: with AMPLIFIER_SOURCE_STORE at ``<root>\\source-store``, stage
-    one Git repository whose deepest file is at least 141 characters below the
-    checkout (the default bundles' measured depth) through Foundation's own
-    ``checkout()``, seal it, create one build view, and remove a failed stage.
-    Then assert ``install.longest()`` and that budget.PENDING_FOUNDATION is empty.
+
+def git(folder, *arguments):
+    return subprocess.check_output(
+        ['git', '-c', 'core.longpaths=true', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+         *arguments], cwd=folder, text=True).strip()
+
+
+@pytest.fixture
+def repository(base, long_paths_off):
+    """A clean Git repository that fits the limit where it is, like a clone outside the store."""
+    assert len(MODULE_FILE) == budget.MODULE_DEPTH == 125 and len(DEEPEST_FILE) == 141
+    folder = base / ('g-' + uuid.uuid4().hex[:8])
+    folder.mkdir()
+    try:
+        git(folder, 'init', '--quiet', '-b', 'main')
+        for name, text in (('bundle.md', 'bundle'), (MODULE_FILE, 'VALUE = "module source"'),
+                           (str(Path(MODULE_FILE).parent.parent / 'pyproject.toml'),
+                            '[project]\nname = "fixture"\nversion = "1"\n'),
+                           (DEEPEST_FILE, 'deep evidence')):
+            (folder / name).parent.mkdir(parents=True, exist_ok=True)
+            (folder / name).write_text(text)
+        git(folder, 'add', '.')
+        git(folder, 'commit', '--quiet', '-m', 'fixture')
+        yield folder, git(folder, 'rev-parse', 'HEAD')
+    finally:
+        remove_tree(EXTENDED + str(folder))
+
+
+def test_source_store_stages_a_deep_repository_under_the_longest_supported_installation_folder(
+        installation, repository, monkeypatch):
+    """Foundation's real source store below ``<root>\\source-store``, long paths off.
+
+    Windows must refuse or accept each ordinary path exactly as the budget
+    table says. The store itself must reach every file at any depth.
     """
+    from amplifier_foundation.sources import shared
+    repo, revision = repository
+    limit = budget.SOURCE_STORE_LONGEST_ROOT[budget.SOURCE_OBJECT]
+    assert limit < budget.MAX_ROOT
+    rows = {name: (kind, relative) for name, kind, relative in budget.source_store()}
+    for size in (budget.MAX_ROOT, limit):
+        install = installation(size)
+        store = shared.SharedSourceStore(install.root / budget.SOURCE_FOLDER)
+        target = store.checkout(SOURCE_URL, revision)
+        assert len(target.parent.name) == budget.SOURCE_NAME and target.name == revision
+
+        # A failed attempt leaves no staging folder, also when it holds files over the limit.
+        failure, record = OSError('injected after the deep tree was copied'), shared.atomic
+
+        def fail(path, value):
+            raise failure
+
+        monkeypatch.setattr(shared, 'atomic', fail)
+        with pytest.raises(OSError) as caught:
+            asyncio.run(store.ensure(SOURCE_URL, revision, existing=repo))
+        monkeypatch.setattr(shared, 'atomic', record)
+        assert caught.value is failure and not getattr(failure, '__notes__', [])
+        assert [path.name for path in target.parent.iterdir() if path.name.startswith('.source-')] == []
+
+        assert asyncio.run(store.ensure(SOURCE_URL, revision, existing=repo)) == target
+        assert store.verify(SOURCE_URL, revision) == target
+        assert [path.name for path in target.parent.iterdir() if path.name.startswith('.source-')] == []
+
+        # The store sealed the deepest file. Only the extended-length form reaches it.
+        deepest = target / DEEPEST_FILE
+        assert len(str(deepest)) > budget.FILE_LIMIT and not os.path.exists(deepest)
+        assert Path(EXTENDED + str(deepest)).read_text() == 'deep evidence'
+        assert not os.stat(EXTENDED + str(deepest)).st_mode & stat.S_IWRITE
+
+        # Module source in the object: the path that Python imports from.
+        kind, relative = rows[budget.SOURCE_OBJECT]
+        module = target / MODULE_FILE
+        assert len(install.below(module)) == len(relative)
+        assert len(str(module)) == budget.length(relative, size)
+        if budget.fits(kind, relative, size):
+            assert len(str(module)) == budget.FILE_LIMIT
+            assert module.read_text() == 'VALUE = "module source"'
+        else:
+            assert size == budget.MAX_ROOT and len(str(module)) == budget.FILE_LIMIT + 5
+            assert refused_for_length(module.read_text)
+            assert Path(EXTENDED + str(module)).read_text() == 'VALUE = "module source"'
+
+        # The build view: a build backend reads module source here by ordinary paths.
+        build, immutable = shared.build_view(module.parent.parent)
+        view = build.parents[1]
+        assert immutable and view.parent == store.root / 'builds' and len(view.name) == budget.SOURCE_NAME
+        kind, relative = rows[budget.SOURCE_BUILD]
+        assert len(install.below(view / MODULE_FILE)) == len(relative) - budget.BYTECODE
+        assert budget.fits(kind, relative, size)
+        assert (view / MODULE_FILE).read_text() == 'VALUE = "module source"'
+        assert (build / 'pyproject.toml').is_file()
+        with shared.build_lock(build):
+            pass
+        assert Path(EXTENDED + str(view / DEEPEST_FILE)).read_text() == 'deep evidence'
+        assert [path.name for path in view.parent.iterdir() if path.name.startswith('.build-')] == []
+
+        # The staged record is the one file the store opens by an ordinary path while staging.
+        kind, relative = rows[budget.SOURCE_STAGE]
+        assert len(install.below(target.parent / ('.source-' + 'r' * 8) / 'checkout' / '.amplifier_cache_meta.json')) \
+            == len(relative) and budget.fits(kind, relative, size)
