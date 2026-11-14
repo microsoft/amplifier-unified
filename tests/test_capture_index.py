@@ -160,8 +160,7 @@ def test_unqualified_replacement_holds_original_index_and_deliveries(db, tmp_pat
     replacement.write_text(path.read_text().replace('first', 'other'))
     replacement.replace(path)
     assert path.stat().st_size == before[0] and path.stat().st_ino != before[1]
-    with pytest.raises(CaptureDrift):
-        index_shared(db, scopes, config)
+    assert index_shared(db, scopes, config) == []
     assert db.execute('SELECT offset,inode FROM captures').fetchone() == before
     assert db.execute('SELECT count(*) FROM records').fetchone()[0] == 1
     assert db.execute('SELECT count(*) FROM deliveries').fetchone()[0] == 1
@@ -179,14 +178,12 @@ def test_truncation_and_new_empty_capture_keep_required_cursor_writes(db, tmp_pa
     db.execute('INSERT INTO deliveries VALUES(?)', (old[0],))
     inode = path.stat().st_ino
     path.write_bytes(b'')
-    with pytest.raises(CaptureDrift):
-        index_shared(db, scopes, config)
+    assert index_shared(db, scopes, config) == []
     assert db.execute('SELECT offset,inode FROM captures').fetchone()[1] == inode
     assert db.execute('SELECT count(*) FROM records').fetchone()[0] == 1
     assert db.execute('SELECT count(*) FROM deliveries').fetchone()[0] == 1
     changes = db.total_changes
-    with pytest.raises(CaptureDrift):
-        index_shared(db, scopes, config)
+    assert index_shared(db, scopes, config) == []
     assert db.total_changes == changes
     empty = write_capture(workspace, 'empty', 'discard') / 'events.jsonl'
     empty.write_bytes(b'')
@@ -267,8 +264,7 @@ def test_qualified_rebind_preserves_delivery_bytes_ids_and_no_backfill(db, tmp_p
     replacement.write_bytes(converted)
     replacement.replace(path)
     # Crash window remains protected until exact recovery, not delete+reindex.
-    with pytest.raises(CaptureDrift, match='unresolved'):
-        index_shared(db, [(workspace, 'root')], {'streams': ['tools']})
+    assert index_shared(db, [(workspace, 'root')], {'streams': ['tools']}) == []
     result = rebind_replaced_capture(db, path, 'operation', witness, iter(mapping))
     assert result['backfilled'] == result['deliveriesChanged'] == 0
     assert db.execute('SELECT id,at,stream,session,workspace,event FROM records').fetchall() == records
@@ -373,3 +369,24 @@ def test_unindexed_unterminated_source_is_held_before_replacement(db, tmp_path):
         hold_replacement(db, path, 'no-final-newline', {'old': facts, 'new': facts})
     assert path.read_bytes() == original
     assert db.execute('SELECT count(*) FROM capture_maintenance').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('held', ['maintenance', 'inode'])
+def test_capture_quarantine_keeps_other_sources_incremental(db, tmp_path, held):
+    workspace = str(tmp_path)
+    first = write_capture(workspace, 'held', 'old') / 'events.jsonl'
+    write_capture(workspace, 'healthy', 'before')
+    scopes = [(workspace, 'held'), (workspace, 'healthy')]
+    index_shared(db, scopes, {'streams': ['tools']})
+    held_before = db.execute('SELECT * FROM records WHERE session=?', ('held',)).fetchall()
+    cursor = db.execute('SELECT offset,inode FROM captures WHERE path=?', (str(first),)).fetchone()
+    if held == 'maintenance':
+        db.execute('INSERT INTO capture_maintenance VALUES(?,?,?)', (str(first), 'unknown-operation', '{}'))
+    else:
+        replacement = first.with_name('other')
+        replacement.write_bytes(first.read_bytes())
+        replacement.replace(first)
+    write_capture(workspace, 'healthy', 'after', append=True)
+    assert [row[-1]['result'] for row in index_shared(db, scopes, {'streams': ['tools']})] == ['after']
+    assert db.execute('SELECT * FROM records WHERE session=?', ('held',)).fetchall() == held_before
+    assert db.execute('SELECT offset,inode FROM captures WHERE path=?', (str(first),)).fetchone() == cursor

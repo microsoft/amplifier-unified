@@ -222,7 +222,19 @@ async def test_real_ci_retention_rebinds_without_reenrolling_deliveries(owner, t
     row = {'owner': 'context-intelligence', 'sessionId': 'root', 'kind': 'root',
            'bytes': path.stat().st_size, '_path': str(path), '_sourceId': 'root',
            '_sourceSha256': retention.file_hash(path), 'status': 'eligible'}
-    result = await retention.apply(owner.app, row, operation)
+    import threading
+    loop_thread = threading.get_ident()
+    old_hold, old_hash = retention.hold_replacement, retention.file_hash
+    def off_loop_hold(*args, **kwargs):
+        assert threading.get_ident() != loop_thread
+        assert not owner.app.lock.locked()
+        return old_hold(*args, **kwargs)
+    def off_loop_hash(*args, **kwargs):
+        assert threading.get_ident() != loop_thread
+        return old_hash(*args, **kwargs)
+    from unittest.mock import patch
+    with patch.object(retention, 'hold_replacement', off_loop_hold), patch.object(retention, 'file_hash', off_loop_hash):
+        result = await retention.apply(owner.app, row, operation)
     assert result['status'] == 'completed', result
     assert not asset.exists()
     changed = json.loads(path.read_text())
@@ -260,6 +272,22 @@ async def test_real_service_dispatch_exposes_preview_and_exact_command_read(tmp_
         assert result['result']['operationId']
     finally:
         await service.close()
+
+
+def test_optimize_passive_reads_remain_work_recovery_without_mutation():
+    from amplifier_web.workspace_work_effects import APP_EFFECT, guard, recovery_read
+    service = SimpleNamespace()  # Any Work/Full lookup here is an erroneous read gate.
+    for action in (PREFIX + 'read', PREFIX + 'policy.read'):
+        body = {'operation': 'dispatch', 'args': {'action': action, 'args': {}}}
+        assert recovery_read('app_control', body)
+        token = APP_EFFECT.set({'sessionId': 'caller', 'toolName': 'app_control',
+                                'toolInput': body, 'toolCallId': 'original'})
+        try:
+            guard(service, action, {}, 'agent', 'caller')
+        finally:
+            APP_EFFECT.reset(token)
+    assert not recovery_read('app_control', {'operation': 'dispatch',
+        'args': {'action': PREFIX + 'apply', 'args': {}}})
 
 
 @pytest.mark.parametrize('change', ['native', 'workspace', 'execution'])

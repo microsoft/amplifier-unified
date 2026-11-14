@@ -201,7 +201,7 @@ def merge_model_observations(rows, *, aliases=()):
         if row['id'] in omitted or closest['id'] in matched:
             continue
         matched.add(closest['id']);omitted.add(row['id'])
-        for field in ('requestInfo', 'requestDetail', 'requestCapture', 'requestRecording', 'responseDetail', 'responseCapture', 'responseRecording', '_eventFields', 'error', 'errorDetail'):
+        for field in ('requestInfo', 'requestDetail', 'requestCapture', 'requestRecording', 'requestRecordingExpired', 'responseDetail', 'responseCapture', 'responseRecording', 'responseRecordingExpired', '_eventFields', 'error', 'errorDetail'):
             if field in row:closest[field] = row[field]
         for field in ('request', 'response'):
             if closest.get(field + 'Detail'):closest[field + 'Detail']['id'] = closest['id']

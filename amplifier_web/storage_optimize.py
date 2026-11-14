@@ -79,9 +79,9 @@ class SavedStorageOptimize:
                     "json_extract(value,'$.status') IN ('previewing','applying','cancelling')"):
                 value = json.loads(raw)
                 value.update(status='interrupted', revision=value['revision'] + 1)
-                self._save(value)
+                self._save_operation(value)
 
-    def _save(self, value):
+    def _save_operation(self, value):
         self.journal.db.execute('INSERT OR REPLACE INTO storage_optimize_operations VALUES(?,?,?)',
                                (value['operationId'], value['_owner'], json.dumps(value)))
 
@@ -142,7 +142,7 @@ class SavedStorageOptimize:
         with self.journal.lock, self.journal.db:
             value = self._get(identity, owner)
             value.update(changes, revision=value['revision'] + 1)
-            self._save(value)
+            self._save_operation(value)
         return value
 
     def _file(self, identity, ordinal, value):
@@ -192,7 +192,7 @@ class SavedStorageOptimize:
             self.journal.db.execute('INSERT OR REPLACE INTO storage_optimize_files VALUES(?,?,?)',
                                    (identity, ordinal, json.dumps(value)))
             operation['revision'] += 1
-            self._save(operation)
+            self._save_operation(operation)
 
     def _summary(self, identity, owner, *, complete):
         # Updated with each file in the same transaction: progress is O(files),
@@ -387,7 +387,7 @@ class SavedStorageOptimize:
                 public = result
             else:
                 with self.journal.lock, self.journal.db:
-                    self._save(result)
+                    self._save_operation(result)
                 public = self.read(owner, result['operationId'])
             self.requests.finish(request, 'completed', result=public)
             if action == PREFIX + 'preview':

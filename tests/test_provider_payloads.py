@@ -144,6 +144,9 @@ async def test_retention_tombstone_is_explicit_and_never_opens_old_bytes(tmp_pat
     node = index(tmp_path, 'llm:request', data)
     assert 'expired' in node['request'].lower()
     assert node['requestRecordingExpired']['sha256'] == info['sha256']
+    projected = compact(node, 'root', 'nodes', 512)
+    assert projected['requestRecordingExpired'] == node['requestRecordingExpired']
+    assert 'requestDetail' not in projected and 'requestRecording' not in projected
     assert 'requestRecording' not in node
     def forbidden(*args, **kwargs):
         raise AssertionError('Expired bytes must never be opened even if an orphan remains')

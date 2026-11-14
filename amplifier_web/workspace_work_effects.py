@@ -42,6 +42,7 @@ SAFE_ACTIONS = frozenset({
     'coordination.reply', 'coordination.cancel', 'coordination.acknowledge', 'coordination.wait',
     'task.get', 'task.history', 'task.detail', 'task.receipt',
     'operations.list', 'operations.read', 'operations.wait',
+    'maintenance.optimize.read', 'maintenance.optimize.policy.read',
     'workspace.tests.read', 'workspace.tests.result', 'workspace.tests.cancel',
     'workspace.environments.read', 'workspace.environments.reconcile',
     'question.list', 'question.read', 'capacity.read',

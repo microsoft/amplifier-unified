@@ -40,6 +40,27 @@ async def test_default_local_capture_never_infers_remote_destination(service,mon
     with collector._db() as db:assert db.execute('SELECT count(*) FROM deliveries').fetchone()[0]==0
 
 
+async def test_held_capture_does_not_drop_unrelated_app_diagnostics(service):
+    from test_capture_index import write_capture
+    await service.dispatch('session.create', {})
+    session = service._session()
+    workspace, sid = session['workspace'], session['id']
+    path = write_capture(workspace, sid, 'existing') / 'events.jsonl'
+    collector = service.diagnostics
+    await collector.flush()
+    with collector._db() as db:
+        db.execute('INSERT INTO capture_maintenance VALUES(?,?,?)', (str(path), 'unresolved', '{}'))
+        existing = db.execute('SELECT id,data FROM records').fetchall()
+    collector.record('updates', {'event': 'update:survives-quarantine', 'data': {'phase': 'probe'}})
+    await collector.flush()
+    assert not collector.storage_error and not collector.dropped
+    with collector._db() as db:
+        assert db.execute('SELECT count(*) FROM records WHERE event=?',
+                          ('update:survives-quarantine',)).fetchone()[0] == 1
+        for identity, data in existing:
+            assert db.execute('SELECT data FROM records WHERE id=?', (identity,)).fetchone()[0] == data
+
+
 async def test_provider_request_setting_is_optional_private_and_saved_without_enabling_forwarding(service):
     assert service.diagnostics.config['providerRequests'] is False
     await configure(service, providerRequests=True)

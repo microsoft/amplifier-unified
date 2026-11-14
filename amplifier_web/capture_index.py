@@ -251,13 +251,15 @@ def index_shared(db, scopes, config, *, metadata_cache=None):
             metadata_cache.validate(directory)
         stat = path.stat()
         if db.execute('SELECT 1 FROM capture_maintenance WHERE path=?', (str(path),)).fetchone():
-            raise CaptureDrift('Capture maintenance is unresolved; original indexes and delivery receipts are held')
+            # Quarantine this source only. Its retained cursor/records/outcomes
+            # remain held; unrelated sources and app-authored rows still persist.
+            continue
         previous = db.execute('SELECT offset,inode FROM captures WHERE path=?', (str(path),)).fetchone()
         offset = previous[0] if previous and previous[1] == stat.st_ino and previous[0] <= stat.st_size else 0
         if previous and (previous[1] != stat.st_ino or previous[0] > stat.st_size):
             # Inode drift is not authority to discard accepted delivery facts
             # or forward a rewritten historical record as a new event.
-            raise CaptureDrift('The capture changed; qualified index reconciliation is required')
+            continue
         with path.open('rb') as stream:
             stream.seek(offset)
             for _ in range(1000):
