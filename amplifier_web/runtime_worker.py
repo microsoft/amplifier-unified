@@ -1006,7 +1006,11 @@ class Worker:
                     active_install_overrides(self.home, str(qualified_overrides))
             self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
-            self.session.coordinator.register_capability('live.attachments.encode',encode)
+            coordinator = self.session.coordinator
+            if not callable(coordinator.get_capability('live.attachments.encode')):
+                async def encode_input(command):
+                    return await encode(command, coordinator)
+                coordinator.register_capability('live.attachments.encode', encode_input)
             with startup_timing.phase('worker.controls.restore'):
                 self.controls = RuntimeControls(self.session, self.runtime, self.telemetry,
                     preserve_configuration=config.get('_preserveConfiguration') is True,
