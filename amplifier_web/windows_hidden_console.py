@@ -30,6 +30,11 @@ Both steps follow the attach at once, before the helper is released. If either
 fails, the console is released again: a shared console without them is worse
 than no console.
 
+The app host always has the launch guard's pipes as standard handles, and a
+child with default standard handles inherits them. A caller with NO standard
+handles keeps none, and so does such a child: cmd.exe then returned 1 for
+"exit 3" (measured). Check that case before adding another caller.
+
 Standard library only. This file must stay importable by path, outside the
 package, so that a native check can load the exact shipped mechanism.
 """
