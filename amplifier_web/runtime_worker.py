@@ -1114,6 +1114,11 @@ class Worker:
             # delegated sessions. Observe their public lifecycle without changing
             # spawning, provider routing, approvals, or execution ownership.
             self.session.coordinator.register_capability("live.host", ObservedHost())
+            from amplifier_web.host.media import mint_graph_owner
+            minted_session, minted_runtime = self.session, self.runtime
+            mint_graph_owner(self.session.coordinator, self, kind="worker",
+                associations=((self, "session", minted_session), (self, "runtime", minted_runtime)))
+            mint_graph_owner(self.session.coordinator, self.runtime, kind="runtime")
             self.session.coordinator.register_capability("web.activity.install", self.install_activity)
             self.session.coordinator.register_capability("live.activation", self.activation_gate)
             self.session.coordinator.register_capability("web.context_recovery.epoch", lambda: self.stop_revision)

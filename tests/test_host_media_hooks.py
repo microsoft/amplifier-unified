@@ -12,6 +12,41 @@ from amplifier_web.host.media import (
     NAMESPACE, control_tool_post, registration_coordinator, registration_hooks,
 )
 
+DISPATCH_POLICY = {}
+
+
+async def global_policy_dispatch(event, data):
+    return await DISPATCH_POLICY["post"](event, data)
+
+
+def policy_with_action(action):
+    async def post(event, data):
+        return HookResult(action=action)
+    return post
+
+def policy_with_flags(deny, audit):
+    async def post(event, data):
+        return HookResult(action="deny" if deny else "continue", reason="audit" if audit else None)
+    return post
+
+def test_named_graph_requires_selected_global_targets_and_capture_values():
+    from amplifier_web.host.media_graph import NamedMediaGraph
+    sources = {__file__: hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+    selected = NamedMediaGraph("specific-policy", plans=[{}], sources=sources,
+                              dependencies=(HookResult,), environments={
+                                  "policy_with_action.<locals>.post": {"action": "deny"}})
+    assert selected.accepts_callable(policy_with_action("deny"))
+    assert not selected.accepts_callable(policy_with_action("continue"))
+    assert not selected.accepts_callable(global_policy_dispatch)
+    declared = selected.plans[0]
+    declared["hooks"] = [{"module": "unselected"}]
+    assert selected.accepts_plan({})
+    assert not selected.accepts_plan(declared)
+    flags = NamedMediaGraph("specific-flags", plans=[{}], sources=sources,
+        dependencies=(HookResult,), environments={
+            "policy_with_flags.<locals>.post": {"deny": True, "audit": False}})
+    assert flags.accepts_callable(policy_with_flags(True, False))
+    assert not flags.accepts_callable(policy_with_flags(False, True))
 
 def test_registration_view_is_explicit_and_keeps_execution_coordinator_identity():
     raw, selected = object(), object()
@@ -119,7 +154,8 @@ class NamedFixtureLoader:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("redact", [None, "null", "string", "inplace", "deny", "unknown", "control"])
+@pytest.mark.parametrize("redact", [None, "null", "string", "inplace", "deny", "unknown", "control",
+                                   "transition", "replacement", "eviction"])
 async def test_named_actual_core_construction_final_result_ack_private_pixels(tmp_path, redact):
     """No graph Boolean: actual source/callback join, mount/ready/late and ACK."""
     import base64
@@ -171,7 +207,13 @@ async def test_named_actual_core_construction_final_result_ack_private_pixels(tm
     selected = NamedMediaGraph("actual-core-media-fixture", plans=[plan], sources={
         __file__: hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
         bindings=(fixture_loader,), observations=(actual_calls,), dependencies=(HookResult,),
-        captures=(None, redact, "fixture-loop", "fixture-context", "fixture-provider", "fixture-hooks"))
+        environments={
+            "NamedFixtureLoader.load.<locals>.mount": [
+                {"module_id": name} for name in (
+                    "fixture-loop", "fixture-context", "fixture-provider", "fixture-hooks")],
+            # Each actual load occurrence needs its complete environment.
+            "test_named_actual_core_construction_final_result_ack_private_pixels.<locals>.late": {
+                "redact": redact}})
     session = AmplifierSession(plan, session_id="named-root")
     session.coordinator.loader = fixture_loader
     store = SessionStore(tmp_path / "sessions")
@@ -193,6 +235,45 @@ async def test_named_actual_core_construction_final_result_ack_private_pixels(tm
     assert cap.enabled is False
     assert host_media.seal_hook_graph(coordinator) is True
     assert cap.enabled is True
+    if redact in {"transition", "replacement", "eviction"}:
+        from amplifier_web.host.media import hook_configuration, _HOOK_BRIDGE
+        bridge = coordinator.get_capability(_HOOK_BRIDGE)
+        original_receipt = bridge.graph_receipt
+        from amplifier_web.surface_delivery import SurfaceProvider
+        wrapped = SurfaceProvider(coordinator.get("providers")["fixture"],
+                                  host_media.MediaOnlyDelivery(), coordinator=coordinator)
+        from amplifier_core.message_models import ChatRequest, Message
+        counted = ChatRequest(messages=[Message(role="user", content="text")])
+        await wrapped.request_budget(counted)
+        if redact == "replacement":
+            await wrapped.request_budget(counted, request_options={"temperature": 0.1})
+            assert wrapped.release_media_request(counted, request_options={"temperature": 0.1})
+        elif redact == "eviction":
+            # Provider lacking all support methods retains text-only requests.
+            wrapped.original.get_media_request_support = None
+            async def text_budget(request, **kwargs):
+                return {"input_tokens": 5}
+            wrapped.original.request_budget = text_budget
+            requests = [counted] + [ChatRequest(messages=[Message(role="user", content=str(i))])
+                                    for i in range(4)]
+            for value in requests[1:]:
+                await wrapped.request_budget(value)
+            assert not wrapped.release_media_request(counted)
+            for value in requests[1:]:
+                assert wrapped.release_media_request(value)
+        else:
+            with pytest.raises(ValueError, match="idle"):
+                with hook_configuration(coordinator):
+                    pass
+            assert wrapped.release_media_request(counted, request_options={})
+        with hook_configuration(coordinator):
+            host_media.registration_hooks(coordinator).register(
+                "tool:post", late, priority=1000, name="mode-added")
+        assert bridge.graph_receipt is not original_receipt
+        assert bridge.validate_receipt(original_receipt) is False
+        assert cap.enabled is True
+        await session.cleanup()
+        return
     if redact == "control":
         from amplifier_web.runtime_controls import RuntimeControls
         controls = object.__new__(RuntimeControls)

@@ -526,6 +526,54 @@ async def test_actual_prefit_attachment_locator_after_origin_is_unavailable(tmp_
     assert canonical.model_dump_json() == before
 
 
+@pytest.mark.parametrize("mode", ["allowed", "empty", "mutated", "changed"])
+async def test_indexed_support_binds_exact_postoverlay_source_without_v1_fallback(session, mode):
+    pytest.importorskip("amplifier_foundation.session.media_projection").validate_media_request_support
+    original = await accepted(session)
+    counted, sent, facts = [], [], {"allowed": mode != "empty"}
+    class Delivery(NoWorkDelivery):
+        async def prepare(self, request, provider):
+            return request.model_copy(update={"messages": [
+                Message(role="user", content="owned overlay before image"), *request.messages]})
+    class Provider:
+        default_model = "fixture"
+        def get_media_request_support(self, **kwargs):
+            pytest.fail("Indexed presence must not broaden through v1")
+        def get_media_request_support_for_request(self, *, request, model, request_options=None):
+            assert request.messages[0].role == "user"
+            assert request.messages[1].metadata[NAMESPACE]["refs"]
+            assert "base64" not in request.model_dump_json()
+            if mode == "mutated":
+                request.messages.clear()
+            return {"v": 2, "positions": [{"message_index": 1, "role": "tool"}]
+                    if facts["allowed"] else [], "mime_types": ["image/png"]}
+        async def request_budget(self, request, **kwargs):
+            counted.append(request.model_copy(deep=True))
+            return {"input_tokens": 5}
+        async def complete(self, request, **kwargs):
+            sent.append(request.model_copy(deep=True))
+            return "done"
+    wrapped = SurfaceProvider(Provider(), Delivery(), coordinator=session.coordinator)
+    if mode == "mutated":
+        with pytest.raises(ValueError, match="mutated"):
+            await wrapped.request_budget(original)
+        assert not counted and not sent
+        return
+    await wrapped.request_budget(original)
+    if mode == "changed":
+        facts["allowed"] = False
+        with pytest.raises(ValueError):
+            await wrapped.complete(original)
+        assert not sent
+    else:
+        assert await wrapped.complete(original) == "done"
+        images = [block for message in sent[-1].messages
+                  for block in message.content if isinstance(message.content, list)
+                  if getattr(block, "type", None) == "image"]
+        assert bool(images) is (mode == "allowed")
+    assert len(original.messages) == 1 and original.messages[0].role == "tool"
+
+
 @pytest.mark.parametrize("mode", ["finite", "selected", "nested", "resumed", "persistent"])
 async def test_actual_child_provider_receives_own_adopted_pixels_without_parent_capability(
         session, tmp_path, monkeypatch, mode):

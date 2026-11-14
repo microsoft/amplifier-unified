@@ -239,6 +239,11 @@ class SurfaceProvider:
     async def _prepare(self, request, commit=False, **kwargs):
         """Own a single graph scope before overlays through fitted dispatch."""
         from .host.media import request_graph_lifetime
+        existing = next((row for row in self.prepared if row[0] is request), None)
+        if (kwargs.get('explicit_budget') and existing is not None and len(existing) > 5
+                and existing[5] is not None
+                and not existing[5].matches_options(kwargs.get('request_options'))):
+            self._discard_prepared(request)
         row = self._graph_lifetimes.get(id(request))
         lifetime = row[1] if row is not None and row[0] is request and not row[1].closed else None
         if lifetime is None:
@@ -259,9 +264,8 @@ class SurfaceProvider:
                     candidate.graph_lifetime = lifetime
             return prepared
         except BaseException:
-            if lifetime is not None:
-                lifetime.release()
-            self._graph_lifetimes.pop(id(request), None)
+            self._discard_prepared(request)
+            if lifetime is not None:lifetime.release()
             raise
 
     async def _prepare_inner(self, request, commit=False, *, explicit_budget=False, refit_binding=None,
@@ -358,6 +362,7 @@ class SurfaceProvider:
             self.prepared.append(entry)
             while len(self.prepared) > 4:
                 evicted = self.prepared.pop(0)
+                self._retire_graph_candidate(evicted[0])
                 if len(evicted) > 5 and evicted[5] is not None:
                     evicted[5].release()
                     from . import provider_capture as capture
@@ -627,13 +632,18 @@ class SurfaceProvider:
                                    if key not in {'context_estimate', 'request_options'}}}
 
     def _discard_prepared(self, request):
-        row = self._graph_lifetimes.pop(id(request), None)
-        if row is not None and row[0] is request:
-            row[1].release()
+        self._retire_graph_candidate(request)
         for row in self.prepared:
             if row[0] is request and len(row) > 5 and row[5] is not None:
                 row[5].release()
         self.prepared = [row for row in self.prepared if row[0] is not request]
+
+    def _retire_graph_candidate(self, request):
+        row = self._graph_lifetimes.pop(id(request), None)
+        if row is not None and row[0] is request:
+            row[1].release()
+            self._private_lifetimes = {key: lifetime for key, lifetime in self._private_lifetimes.items()
+                                      if lifetime is not row[1]}
 
     def release_media_request(self, canonical, *, request_options=None):
         """Cleanup exact fitted identity/options without live witness queries."""

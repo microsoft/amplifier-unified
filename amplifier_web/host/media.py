@@ -573,8 +573,8 @@ def _media_support(provider, source, model, options):
                 raise ValueError("Indexed media request support must be synchronous")
             if snapshot.model_dump_json() != before or selected_options != frozen_options:
                 raise ValueError("Indexed media support mutated its read-only input")
-            from amplifier_foundation.session.media_projection import _indexed_support
-            return _indexed_support(support, source)
+            from amplifier_foundation.session.media_projection import validate_media_request_support
+            return validate_media_request_support(support, source)
         finally:
             for message in snapshot.messages:
                 for block in message.content if isinstance(message.content, list) else ():

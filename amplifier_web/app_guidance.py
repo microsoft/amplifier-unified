@@ -105,6 +105,8 @@ async def install_app_access(coordinator, bridge, *, execution_role):
         full_access=coordinator.get_capability('web.work_full_access')),
         bridge), context.read), context.read))
     coordinator.register_capability('web.surface_delivery', delivery)
+    from .host.media import mint_graph_owner
+    mint_graph_owner(coordinator, delivery, kind="request-delivery")
     # Observation only. The service's effect policy must independently decide
     # applicability and permissions; absent producer wiring is not a grant.
     coordinator.register_capability('web.work_effect_coverage', delivery.recheck_effect_coverage)

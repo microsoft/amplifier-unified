@@ -30,6 +30,26 @@ class StreamingProvider(Provider):
         yield 'first'
         yield 'last'
 
+async def test_abandon_uses_cached_selected_object_and_frozen_options_after_mutation():
+    class BudgetProvider(Provider):
+        async def request_budget(self, request, *, request_options=None):
+            self.counted = request
+            return {"input_tokens": 1}
+        def release_media_request(self, request, *, request_options=None):
+            assert request is self.counted
+            assert request_options == {"model": "selected", "native": {"temperature": 0.2}}
+            return True
+    provider = BudgetProvider()
+    choice = {"model": "selected"}
+    selected = SelectedProvider(provider, choice)
+    request = Request()
+    options = {"native": {"temperature": 0.2}}
+    await selected.request_budget(request, request_options=options)
+    assert not selected.release_media_request(Request(), request_options=options)
+    request.model = "mutated"
+    choice["model"] = "other"
+    assert selected.release_media_request(request, request_options=options)
+    assert not selected.release_media_request(request, request_options=options)
 
 async def test_native_compaction_and_validation_use_selected_model_without_mutating_defaults():
     class NativeProvider(Provider):

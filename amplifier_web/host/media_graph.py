@@ -18,7 +18,7 @@ from types import CodeType, FunctionType, MethodType, ModuleType
 class NamedMediaGraph:
     """Host-only selection. Never construct from session/config/imported metadata."""
     def __init__(self, name, *, plans, sources, bindings=(), observations=(), dependencies=(),
-                 captures=(), owner_rules=()):
+                 owner_rules=(), environments=None):
         if not isinstance(name, str) or not name or not plans or not sources:
             raise ValueError("A named graph needs reviewed plans and sources")
         if len(sources) > 128:
@@ -31,7 +31,7 @@ class NamedMediaGraph:
         self._bindings = tuple((obj, self._fields(obj)) for obj in bindings)
         self._observations = tuple(observations)
         self._dependencies = tuple(dependencies)
-        self._captures = tuple(copy.deepcopy(value) for value in captures)
+        self._environments = copy.deepcopy(environments or {})
         self._owner_rules = tuple(owner_rules)
         self._owners = []
         self._codes = {}
@@ -167,19 +167,36 @@ class NamedMediaGraph:
                     return False
             # Core's selected Python loader returns a closure whose default is
             # the actual module mount. Check that object too, not only loader.py.
-            captures = list(value.__defaults__ or ()) + list((value.__kwdefaults__ or {}).values())
-            for cell in value.__closure__ or ():
+            parameters = list(inspect.signature(value).parameters)
+            defaults = value.__defaults__ or ()
+            captures = list(zip(parameters[len(parameters) - len(defaults):], defaults)) if defaults else []
+            captures.extend((value.__kwdefaults__ or {}).items())
+            for name, cell in zip(value.__code__.co_freevars, value.__closure__ or ()):
                 try:
-                    captures.append(cell.cell_contents)
+                    captures.append((name, cell.cell_contents))
                 except ValueError:
                     return False
-            for item in captures:
+            environment = self._environments.get(value.__qualname__, {})
+            if isinstance(environment, list):
+                # Alternatives are whole environments, never per-value pools.
+                def constants(item):
+                    if item is None or type(item) in (str, int, float, bool, bytes):
+                        return True
+                    if type(item) is dict:
+                        return all(type(key) is str and constants(child) for key, child in item.items())
+                    if type(item) in (list, tuple):
+                        return all(constants(child) for child in item)
+                    return False
+                actual = {name: item for name, item in captures if constants(item)}
+                environment = next((candidate for candidate in environment if candidate == actual), {})
+            for capture_name, item in captures:
                 if inspect.isfunction(item) or inspect.ismethod(item):
                     if not check(item):
                         return False
                 elif item is None or type(item) in (str, int, float, bool, bytes):
-                    if not any(type(item) is type(expected) and item == expected
-                               for expected in self._captures):
+                    if (capture_name not in environment or
+                            type(item) is not type(environment[capture_name]) or
+                            item != environment[capture_name]):
                         return False
                 elif type(item) in (dict, tuple, list):
                     def plain(child):
@@ -190,8 +207,9 @@ class NamedMediaGraph:
                         if type(child) in (tuple, list):
                             return all(plain(val) for val in child)
                         return False
-                    if not (plain(item) and any(type(item) is type(expected) and item == expected
-                                               for expected in self._captures)) and not self._binding_valid(item):
+                    if not (plain(item) and capture_name in environment and
+                            type(item) is type(environment[capture_name]) and
+                            item == environment[capture_name]) and not self._binding_valid(item):
                         return False
                 elif not self._binding_valid(item):
                     return False

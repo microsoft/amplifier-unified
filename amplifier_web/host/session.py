@@ -96,6 +96,7 @@ class SelectedProvider:
         self.execution_adapter = execution_adapter
         self._selected_requests = []
         self._refused_requests = []
+        self._release_bindings = []
     def _execution_provider(self):
         return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
     def __getattr__(self, name):
@@ -163,6 +164,12 @@ class SelectedProvider:
                 selected, kwargs = self._selected_request(request, kwargs)
                 try:
                     self._budget_options(kwargs)
+                    from ..surface_delivery import SurfaceProvider
+                    options = SurfaceProvider._media_options(kwargs.get("request_options"),
+                        {key: value for key, value in kwargs.items() if key != "request_options"})
+                    self._release_bindings = [row for row in self._release_bindings if row[0] is not request]
+                    self._release_bindings.append((request, selected, execution,
+                                                   copy.deepcopy(request_options), copy.deepcopy(options)))
                     result = method(selected, **kwargs)
                 except BaseException:
                     self._forget_request(request)
@@ -178,6 +185,19 @@ class SelectedProvider:
                 return result
             return selected_budget
         return method
+
+    def release_media_request(self, canonical, *, request_options=None):
+        """Only preparation-time associations participate in cleanup."""
+        row = next((row for row in self._release_bindings if row[0] is canonical), None)
+        if row is None or row[3] != request_options:
+            return False
+        release = getattr(row[2], "release_media_request", None)
+        if not callable(release):
+            return False
+        result = release(row[1], request_options=copy.deepcopy(row[4]))
+        if result is True:
+            self._forget_request(canonical)
+        return result
     def get_info(self):
         info = self.original.get_info()
         overrides = {key:self.selection[key] for key in ("model", "max_output_tokens") if key in self.selection}
@@ -185,6 +205,7 @@ class SelectedProvider:
             overrides["reasoning_effort"] = self.selection["effort"]
         return info.model_copy(update={"defaults": {**info.defaults, **overrides}})
     def _forget_request(self, request):
+        self._release_bindings = [row for row in self._release_bindings if row[0] is not request]
         self._selected_requests = [row for row in self._selected_requests if row.original is not request]
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
 
