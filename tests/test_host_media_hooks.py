@@ -59,6 +59,26 @@ def test_external_constructor_bindings_are_exact_and_released_with_their_constru
     assert not selected.accepts_callable(first)
     assert not selected._owners and not selected._capability_bindings
 
+def test_selected_bound_receiver_snapshots_preserve_recursive_types():
+    from amplifier_web.host.media_graph import NamedMediaGraph
+    class Policy:
+        def __init__(self):
+            self.config = {"deny": True, "order": ["first"]}
+        async def post(self, event, data):
+            return HookResult(action="deny" if self.config["deny"] is True
+                              and type(self.config["order"]) is list else "continue")
+    owner = Policy()
+    selected = NamedMediaGraph("bound-types", plans=[{}],
+        sources={__file__: hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
+        bindings=(owner,), dependencies=(HookResult, list))
+    assert selected.accepts_callable(owner.post)
+    owner.config["deny"] = 1
+    assert not selected.accepts_callable(owner.post)
+    owner.config["deny"] = True
+    assert selected.accepts_callable(owner.post)
+    owner.config["order"] = ("first",)
+    assert not selected.accepts_callable(owner.post)
+
 @pytest.mark.parametrize("alternatives", [False, True])
 def test_environments_are_recursive_type_exact_and_defaults_keep_parameter_kinds(alternatives):
     from amplifier_web.host.media_graph import NamedMediaGraph

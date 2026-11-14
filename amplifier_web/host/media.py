@@ -236,7 +236,8 @@ def hook_configuration(coordinator):
             state[2], state[4] = successor, None
             coordinator.register_capability(_HOOK_GRAPH, successor)
             yield
-        seal_hook_graph(coordinator)
+        if not seal_hook_graph(coordinator):
+            raise ValueError("The changed media construction is outside the selected source graph")
 
 
 async def mount_media_adapter(coordinator, kind, value, *, previous, name):

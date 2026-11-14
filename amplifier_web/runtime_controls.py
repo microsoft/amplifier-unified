@@ -842,7 +842,8 @@ class RuntimeControls:
         if not callable(tracker):
             raise ValueError("Participating mode completion tracking is unavailable")
         with tracker(event, payload=payload) as operation:
-            result = await self.coordinator.hooks.emit(
+            from .host.media import registration_hooks
+            result = await registration_hooks(self.coordinator).emit(
                 event, {**payload, "transition_id": operation.id})
             operation.verify()
             return result

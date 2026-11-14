@@ -357,9 +357,10 @@ async def test_ui_named_reviewed_union_accepts_selected_capture_not_unreviewed_v
     reviewed = ui.bridge.graph_receipt
     assert ui.bridge.validate_receipt(reviewed)
     assert ui.coordinator.get_capability("web.media.source_join")[2] is reviewed
-    with ui.factory():
-        media.registration_hooks(ui.coordinator).register(
-            "tool:post", policy_callback("deny"), name="ui-unreviewed-variant")
+    with pytest.raises(ValueError, match="outside the selected"):
+        with ui.factory():
+            media.registration_hooks(ui.coordinator).register(
+                "tool:post", policy_callback("deny"), name="ui-unreviewed-variant")
     assert not ui.bridge.validate_receipt(reviewed)
     assert ui.coordinator.get_capability("web.media.source_join") is None
     assert media.seal_hook_graph(ui.coordinator) is False

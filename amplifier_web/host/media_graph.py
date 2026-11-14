@@ -132,14 +132,15 @@ class NamedMediaGraph:
         seen = set()
         def value(item):
             if item is None or type(item) in (str, int, float, bool, bytes):
-                return ("value", item)
+                return ("value", type(item), item)
             if id(item) in seen:
                 return ("identity", item)
             seen.add(id(item))
             if type(item) is dict:
                 return ("mapping", tuple((key, value(child)) for key, child in sorted(item.items())))
             if type(item) in (list, tuple):
-                return ("sequence", tuple(value(child) for child in item))
+                return ("list" if type(item) is list else "tuple",
+                        tuple(value(child) for child in item))
             return ("identity", item)
         return value(vars(obj) if hasattr(obj, "__dict__") else obj)
 
@@ -174,7 +175,7 @@ class NamedMediaGraph:
                     if left[0] == "identity":
                         return left[1] is right[1]
                     if left[0] == "value":
-                        return left[1] == right[1]
+                        return left[1] is right[1] and left[2] == right[2]
                     if len(left[1]) != len(right[1]):
                         return False
                     if left[0] == "mapping":
