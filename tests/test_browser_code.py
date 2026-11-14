@@ -411,7 +411,8 @@ def test_oversize_form_and_changed_host_identity_are_refused(host, monkeypatch):
     assert redeem(host, code, body="csrf=" + "x" * 4096 + "&code=" + code).status == 413
     read = entry.read_owner_control_token
     monkeypatch.setattr(entry, "read_owner_control_token", lambda *a: "d" * 64)    # The private credential changed.
-    assert redeem(host, code).status == 403 and host["browser_codes"].failures == 0
+    # The host identity cannot be confirmed: no session, and the code is kept.
+    assert wrong(redeem(host, code))
     monkeypatch.setattr(entry, "read_owner_control_token", read)
     monkeypatch.setattr(entry, "current_owner_sid", lambda: "S-1-5-21-999")        # Another Windows account.
     assert wrong(redeem(host, code))
@@ -420,6 +421,19 @@ def test_oversize_form_and_changed_host_identity_are_refused(host, monkeypatch):
     assert wrong(redeem(host, code))                        # A code from before a restart.
     host["service"].update_manager.running_identity["instanceId"] = "b" * 32
     assert signed_in(redeem(host, code))
+
+
+def test_wrong_code_reads_no_private_file_and_a_right_code_confirms_the_host(host, files):
+    code = make_code(host)
+    guess = next(symbol for symbol in entry.CODE_ALPHABET if symbol != code[0]) + code[1:]
+    files.events.clear()
+    # Any device that reaches the address can send wrong codes; each stays cheap.
+    for attempt in (guess, "not a code", "", guess.lower()):
+        assert wrong(redeem(host, attempt))
+    assert files.events == []
+    # A live code confirms the owner credential and host identity before it signs in.
+    assert signed_in(redeem(host, code))
+    assert "control-token" in files.events
 
 
 def test_wrong_code_shows_the_error_page_without_lockout_and_logs_only_a_count(host, capsys):

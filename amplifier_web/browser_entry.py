@@ -223,8 +223,12 @@ class CodeStore:
         with self._lock:
             self._codes.clear()
 
-    def consume(self, text: str, binding: Binding) -> bool:
-        """Accept case, spaces and hyphens only; never map a look-alike symbol."""
+    def consume(self, text: str, binding) -> bool:
+        """Accept case, spaces and hyphens only; never map a look-alike symbol.
+
+        `binding` may be a function that returns the current binding. It runs
+        only for a live code, so a wrong code costs no private-file read.
+        """
         code = (text.upper().replace(" ", "").replace("-", "")
                 if isinstance(text, str) and text.isascii() else "")
         key = hashlib.sha256(code.encode("ascii")).digest() if _CODE.fullmatch(code) else None
@@ -233,7 +237,11 @@ class CodeStore:
             if record is not None and record[0] <= self.clock():
                 del self._codes[key]
                 record = None
-            if record is None or record[1] != binding:
+            try:
+                current = None if record is None else binding() if callable(binding) else binding
+            except BrowserEntryUnavailable:
+                current = None  # The host identity cannot be confirmed now; the code stays.
+            if record is None or record[1] != current:
                 self.failures += 1
                 return False
             del self._codes[key]
@@ -436,11 +444,9 @@ async def code_redeem(request):
     code = await _signed_form(request, "code")
     if code is None:
         return web.Response(text=RELOAD, status=403)
-    try:
-        accepted = store.consume(code, _binding(request, origin))
-    except BrowserEntryUnavailable:
-        return web.Response(text=RELOAD, status=403)
-    if not accepted:
+    # The current host identity is read only for a live code: any device that
+    # reaches this address can send wrong codes, and each must stay cheap.
+    if not store.consume(code, lambda: _binding(request, origin)):
         if store.failures == 1 or store.failures % 100 == 0:
             try:  # The count only; never the typed text. A log fault changes nothing.
                 print(f"Remote sign-in: {store.failures} wrong codes since start.", flush=True)
