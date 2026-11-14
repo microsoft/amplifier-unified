@@ -166,11 +166,15 @@ def write_job_record(session):
 
 
 def capture_events(workspace, identity):
-    from amplifier_web.session_files import append_event, capture_dir, read_event
+    from amplifier_web.session_files import append_event, capture_dir
     reference = append_event(workspace, identity, 'test:event',
                              {'timestamp': '2026-11-14T00:00:00Z', 'event_id': 'event-1'})
-    assert read_event(reference)['data']['event_id'] == 'event-1'
-    return capture_dir(workspace, identity)
+    capture = capture_dir(workspace, identity)
+    assert Path(reference['$event']) == capture / 'events.jsonl'
+    saved = json.loads((capture / 'events.jsonl').read_text(encoding='utf-8').splitlines()[-1])
+    assert saved['data']['event_id'] == 'event-1' and saved['workspace'] == capture.parents[2].name
+    assert json.loads((capture / 'metadata.json').read_text(encoding='utf-8'))['session_id'] == identity
+    return capture
 
 
 def save_oversized_request(capture):
