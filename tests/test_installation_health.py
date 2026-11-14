@@ -530,7 +530,7 @@ def test_windows_status_says_why_the_background_app_stopped(windows_health_chain
     from datetime import datetime
     from amplifier_web import windows_task_runtime
     state = windows_health_chain
-    state["record"] = None
+    state["task"].update(state=3, instances=0)  # The task is not running.
     failure = {"source": "host", "at": datetime(2026, 11, 14, 9, 5).timestamp(),
                "errorType": "WindowsServiceError", "message": "The saved reason."}
     monkeypatch.setattr(windows_task_runtime, "last_failure", lambda spec: dict(failure))
@@ -553,14 +553,21 @@ def test_windows_status_says_why_the_background_app_stopped(windows_health_chain
     assert result["message"] == "Windows background host is not ready." and "lastFailure" not in result
 
 
-def test_windows_status_of_a_running_host_does_not_read_an_old_failure(windows_health_chain, monkeypatch):
+def test_windows_status_of_a_running_or_starting_host_does_not_read_an_old_failure(windows_health_chain, monkeypatch):
     from amplifier_web import windows_task_runtime
     monkeypatch.setattr(windows_task_runtime, "last_failure",
-                        lambda spec: pytest.fail("a listening host has no failure to show"))
+                        lambda spec: pytest.fail("a running task has no earlier failure to show"))
     state = windows_health_chain
     result = asyncio.run(health._windows_status(state["home"],
                          {"version": "1.2.3", "revision": None}, "running"))
     assert result["ok"] and "lastFailure" not in result
+    # The task runs but no host listens yet: it is starting.
+    for record in (None, {**state["record"], "phase": "starting"}):
+        state["record"] = record
+        result = asyncio.run(health._windows_status(state["home"],
+                             {"version": "1.2.3", "revision": None}, "running"))
+        assert not result["ok"] and result["message"] == "Windows background host is not ready."
+        assert "lastFailure" not in result
 
 
 @pytest.mark.parametrize("missing", ["record", "listener", "task"])

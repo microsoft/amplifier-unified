@@ -699,9 +699,10 @@ def _run(encoded: str) -> None:
                 owned.publish_private("task-launcher-error.json", json.dumps({
                     "schema": 1, "registration": spec.registration_id,
                     "errorType": type(error).__name__, "acceptance": False}).encode(), replace=True)
-            # This path ends with exit code 0. The status command shows this reason.
+            # This path ends with exit code 0. The status command shows this reason,
+            # unless the host saved its own, more exact one in this launcher run.
             from .windows_task_runtime import record_failure
-            record_failure(spec, error, "launcher")
+            record_failure(spec, error, "launcher", unless_since=started)
             code = 0
         raise SystemExit(code)
     return _host(spec)

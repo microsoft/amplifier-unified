@@ -995,7 +995,9 @@ def test_launcher_saves_a_reason_when_the_host_or_the_launch_fails(monkeypatch, 
     else:
         # This path ends with exit code 0, so the saved reason is the only signal.
         assert ended.value.code == 0 and set(files) == {"task-launcher-error.json"}
-        assert saved == [("The scheduled launch definition changed.", "launcher", {})]
+        (text, source, options), = saved
+        assert (text, source) == ("The scheduled launch definition changed.", "launcher")
+        assert abs(options["unless_since"] - time.time()) < 60
 
 
 def test_host_attaches_the_windowless_console_before_any_other_step(monkeypatch):

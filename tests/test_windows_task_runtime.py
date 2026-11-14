@@ -215,10 +215,36 @@ def test_failure_record_keeps_only_sentences_that_the_product_wrote(private_file
     assert saved["source"] == "host" and saved["errorType"] == "WindowsServiceError"
     assert saved["message"] == "The host did not start."
     assert abs(saved["at"] - runtime.time.time()) < 60
-    # A product exit sentence is kept; a bare exit code is not a sentence.
-    runtime.record_failure(spec(), SystemExit("Could not start Amplifier on 127.0.0.1, port 21603."), "host")
-    assert runtime.last_failure(spec())["message"] == "Could not start Amplifier on 127.0.0.1, port 21603."
+    # The CLI's exit text names the data folder, the address and the port.
+    # None of it is saved: only the class name.
+    for text in ("Could not start Amplifier on 10.1.2.3, port 21603.\nThe address or port is already in use.",
+                 "This Amplifier state folder is already in use: C:\\Users\\name\\data\n"
+                 "Configured address: https://10.1.2.3:21603"):
+        runtime.record_failure(spec(), SystemExit(text), "host")
+        saved = runtime.last_failure(spec())
+        assert (saved["errorType"], saved["message"]) == ("SystemExit", None)
+        for private in (b"10.1.2.3", b"21603", b"name", b"data"):
+            assert private not in private_files[runtime.FAILURE]
     runtime.record_failure(spec(), SystemExit(1), "host")
+    assert runtime.last_failure(spec())["message"] is None
+    # A failed bind gets one fixed sentence, without the address or the port.
+    import errno
+    try:
+        try:
+            raise OSError(errno.EADDRINUSE, "address in use: 10.1.2.3:21603")
+        except OSError:
+            raise SystemExit("Could not start Amplifier on 10.1.2.3, port 21603.") from None
+    except SystemExit as ended:
+        runtime.record_failure(spec(), ended, "host")
+    assert runtime.last_failure(spec())["message"] == runtime._ADDRESS_IN_USE
+    assert b"10.1.2.3" not in private_files[runtime.FAILURE] and b"21603" not in private_files[runtime.FAILURE]
+    try:
+        try:
+            raise OSError(errno.EACCES, "denied")
+        except OSError:
+            raise SystemExit("Could not start Amplifier on 10.1.2.3, port 80.") from None
+    except SystemExit as ended:
+        runtime.record_failure(spec(), ended, "host")
     assert runtime.last_failure(spec())["message"] is None
     # Any other error keeps its class name only: its text can hold a path.
     runtime.record_failure(spec(), FileNotFoundError(2, "No such file", r"C:\Users\name\private.txt"), "launcher")
@@ -252,6 +278,12 @@ def test_malformed_or_foreign_failure_record_is_ignored(private_files, change):
 def test_launcher_keeps_the_hosts_own_newer_reason(private_files):
     from amplifier_web.windows_service import WindowsServiceError
     started = runtime.time.time() - 5
+    # No earlier record, or one that cannot be read: the launcher's reason is saved.
+    runtime.record_failure(spec(), WindowsServiceError("General reason."), "launcher", unless_since=started)
+    assert runtime.last_failure(spec())["message"] == "General reason."
+    private_files[runtime.FAILURE] = b"not json"
+    runtime.record_failure(spec(), WindowsServiceError("General reason."), "launcher", unless_since=started)
+    assert runtime.last_failure(spec())["message"] == "General reason."
     runtime.record_failure(spec(), WindowsServiceError("The host's own reason."), "host")
     runtime.record_failure(spec(), WindowsServiceError("General reason."), "launcher", unless_since=started)
     assert runtime.last_failure(spec())["message"] == "The host's own reason."

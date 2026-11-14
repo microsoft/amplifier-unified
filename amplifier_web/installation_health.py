@@ -187,7 +187,11 @@ async def _windows_status(home, expected, state):
               "message": "Windows background host is not ready.",
               "nextStep": "Run amplifier-unified service status --verbose; preserve the failed stage before retrying."}
     async def stopped(spec):
-        """No listening host: add the saved reason, if no later start exists."""
+        """The task is not running: add the saved reason, if no later start exists.
+
+        A task that runs without a listening host yet is a host that is starting.
+        An older failure is not its reason, so that case returns the plain result.
+        """
         from .windows_task_runtime import last_failure
         failure = await asyncio.to_thread(last_failure, spec) if spec else None
         if not failure:
@@ -204,7 +208,7 @@ async def _windows_status(home, expected, state):
             return await stopped(spec)
         record = await asyncio.to_thread(observe, spec)
         if not record or record["phase"] != "listening":
-            return await stopped(spec)
+            return result
         config = load_server_config(home)
         # This canonical boundary validates private CA-layout/leaf identity
         # before the existing control credential is read.

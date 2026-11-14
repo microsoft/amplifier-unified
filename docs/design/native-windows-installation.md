@@ -143,16 +143,25 @@ browser trust or sign-in/out.
 ### Why the background app stopped
 
 When the app host or the launcher ends with an error, it saves one private
-record (`config/services/task-failure.json`): the time, the error class, and the
-sentence, only if this product wrote that sentence. Any other error keeps its
-class name alone, so no path or argument text is copied. `service status`, and
-the Start-menu status entry, add it to the not-ready message in one sentence,
-for example: "Amplifier's background app stopped on November 14 at 9:05 AM:
-Could not start Amplifier on 127.0.0.1, port 21603. ...". The record is not
-shown after a later host start. Saving and reading it never changes a start,
-a stop or a status result. A host that ends without running any of its own
-code (for example, it was ended from outside) has only the launcher's general
-record with the exit code.
+record (`config/services/task-failure.json`): the time, the error class, and a
+sentence, only when that sentence is fixed text that this product wrote. Any
+other error keeps its class name alone, so no path, address or argument text
+is copied. The CLI's own exit text is not saved, because it names the data
+folder, the address and the port. A busy address gets one fixed sentence.
+
+`service status`, and the Start-menu status entry, add the record to the
+not-ready message in one sentence when the task is not running, for example:
+"Amplifier's background app stopped on November 14 at 9:05 AM: Another program
+is using the address or port that Amplifier saved for this app." A task that
+runs without a listening host yet is a host that is starting; an older failure
+is not shown there. The record is also not shown after a later host start.
+
+Saving and reading the record never changes a start, a stop or a status
+result. Limits: a host that ends without running any of its own code (for
+example, it was ended from outside) has only the launcher's general record
+with the exit code, and a launcher from before this change leaves none. A
+later start that leaves neither a receipt nor a record keeps the earlier
+reason visible, with its time.
 
 The human waived the clean-machine check for the current delivery and selected
 the existing Windows test host only. That coverage is **waived / not executed**,
