@@ -170,9 +170,8 @@ class SessionStore:
             raise ValueError('The committed media writer belongs to another source.')
         with acknowledge_versioned_checkpoint(owned_writer.writer, session_id=session_id,
                                                expected=expected) as receipt:
-            pass
+            media_store.acknowledge_checkpoint(receipt)
         # Only after the complete physical fence exit can this ACK be reported.
-        media_store.acknowledge_checkpoint(receipt)
         return receipt
 
     def transcript_writer(self, session_id, *, fence):

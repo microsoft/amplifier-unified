@@ -434,6 +434,30 @@ async def test_typed_media_ack_real_append_resolve_and_fork(committed, tmp_path)
         assert receipt.verify()['kind'] == 'versioned-checkpoint-backed-v1'
         with media.resolve_ref(ref) as stream:
             assert stream.read() == raw
+        from amplifier_core import AmplifierSession
+        from amplifier_core.message_models import ChatRequest, Message, ImageBlock
+        from amplifier_foundation.session.media import bind_session_media
+        import base64
+        native = AmplifierSession({'session': {'orchestrator': 'unused', 'context': 'unused'}},
+                                  session_id='fixture')
+        cap = bind_session_media(native.coordinator, store=media, enabled=True)
+        canonical = ChatRequest(messages=[Message(**row) for row in suffix])
+        before = canonical.model_dump_json()
+        prepared = await cap.prepare_request(canonical, provider_identity={
+            'provider': 'synthetic', 'account': 'fixture', 'generation': 'host-t2',
+            'media_support': {'v': 1, 'positions': ['tool'], 'mime_types': ['image/png', 'image/jpeg']}},
+            model='fixture', purpose='model', execution_scope={}, request_options=None)
+        try:
+            projected = prepared.request
+            assert projected is not canonical and canonical.model_dump_json() == before
+            pixels = next(block for message in projected.messages
+                          if isinstance(message.content, list) for block in message.content
+                          if isinstance(block, ImageBlock))
+            assert base64.b64decode(pixels.source['data']) == raw
+            cap.validate(projected, purpose='transport', request_options=None)
+        finally:
+            prepared.release()
+        assert projected.messages == []
         source = {'id': 'fixture', 'runtimeSessionId': 'fixture', 'nativeIdentity': 'fixture',
                   'nativeProject': owner['project'], 'workspace': str(workspace), 'status': 'idle',
                   'messages': [], 'createdAt': 1}
@@ -523,3 +547,39 @@ def test_delivery_cache_overflow_does_not_lose_positive_evidence(committed, monk
         assert saved_delivery(source, 'overflow-4096') == 'accepted'
     finally:
         pool.close()
+
+
+@pytest.mark.parametrize('late_failure', [False, True])
+def test_media_ack_keeps_real_fence_through_store_acceptance(committed, monkeypatch, late_failure):
+    from contextlib import closing
+    root, _, _, _, commit, _, fixture_fence, _ = committed
+    store = SessionStore(root.parent)
+    state = {'inside': False}
+    @contextmanager
+    def fence(path):
+        with fixture_fence(path) as check:
+            state['inside'] = True
+            try:
+                yield check
+                if late_failure:
+                    raise ValueError('late fixture fence exit')
+            finally:
+                state['inside'] = False
+    owned = store.transcript_writer('fixture', fence=fence)
+    with closing(store.media('fixture')) as media:
+        receipts = []
+        original = media.acknowledge_checkpoint
+        def accept(receipt):
+            assert state['inside']
+            receipts.append(receipt)
+            return original(receipt)
+        monkeypatch.setattr(media, 'acknowledge_checkpoint', accept)
+        if late_failure:
+            with pytest.raises(ValueError):
+                store.acknowledge_committed_media('fixture', owned, commit, media)
+            with pytest.raises(ValueError):
+                receipts[0].verify()
+        else:
+            receipt = store.acknowledge_committed_media('fixture', owned, commit, media)
+            assert receipt.verify()['session_id'] == 'fixture'
+        assert len(receipts) == 1 and not state['inside']
