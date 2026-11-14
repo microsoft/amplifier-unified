@@ -194,6 +194,11 @@ connection untrusted, it:
    with this name; Amplifier uses it only for the connection between this PC's
    browser and Amplifier on this PC; select Yes. It shows the thumbprint that
    Windows will show. This is one extra click in the first-run journey.
+   The launcher raises this message in front of other windows, as it does for
+   every launcher message. Windows opens a dialog of a program that is not in
+   use behind the window that is in use, and the message-box flags alone did
+   not prevent that: in the first clean-room run the message waited behind the
+   browser, with only a taskbar button to show for it.
 2. Adds the root to the person's **Current User** trusted roots with
    `CertAddCertificateContextToStore`. Windows shows its one standard
    confirmation. For a new identity the launcher passes the exact in-memory

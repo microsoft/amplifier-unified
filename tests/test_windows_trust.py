@@ -273,6 +273,26 @@ def test_remove_reports_each_outcome_and_handles_the_default_no(store):
     assert trust.remove_root(b"root") == "blocked"
 
 
+def test_dialogs_are_raised_only_while_the_question_is_open(monkeypatch):
+    events = []
+    def raise_dialogs(done):
+        events.append("helper-started")
+        events.append(("helper-stopped", done.wait(5)))
+    monkeypatch.setattr(trust, "_raise_dialogs", raise_dialogs)
+    with trust.dialogs_in_front():
+        events.append("question-open")
+    # The helper runs while the question is open, and is stopped and joined
+    # before the caller continues.
+    assert sorted(events[:2], key=str) == ["helper-started", "question-open"]
+    assert events[2:] == [("helper-stopped", True)]
+    # A failure inside still stops the helper.
+    events.clear()
+    with pytest.raises(OSError):
+        with trust.dialogs_in_front():
+            raise OSError("store")
+    assert events[-1] == ("helper-stopped", True)
+
+
 def test_store_calls_require_native_windows(monkeypatch):
     monkeypatch.setattr(trust.os, "name", "posix")
     assert trust.user_roots_disabled() is False
@@ -338,6 +358,133 @@ def test_native_confirmation_window_is_found_and_brought_in_front():
     helper.start()
     helper.join(5)
     assert not helper.is_alive()
+
+
+def desktop():
+    """user32 calls for the window-order checks."""
+    from ctypes import wintypes as W
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.CreateWindowExW.argtypes = [W.DWORD, W.LPCWSTR, W.LPCWSTR, W.DWORD, ctypes.c_int, ctypes.c_int,
+                                     ctypes.c_int, ctypes.c_int, W.HWND, W.HMENU, W.HINSTANCE, W.LPVOID]
+    user.CreateWindowExW.restype = W.HWND
+    user.DestroyWindow.argtypes = [W.HWND]
+    user.GetWindowLongPtrW.argtypes = [W.HWND, ctypes.c_int]
+    user.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+    user.IsWindowVisible.argtypes = [W.HWND]
+    user.GetClassNameW.argtypes = [W.HWND, ctypes.c_wchar_p, ctypes.c_int]
+    user.GetWindowTextW.argtypes = [W.HWND, ctypes.c_wchar_p, ctypes.c_int]
+    user.PostMessageW.argtypes = [W.HWND, W.UINT, W.WPARAM, W.LPARAM]
+    user.GetForegroundWindow.restype = W.HWND
+    user.SetForegroundWindow.argtypes = [W.HWND]
+    user.LockSetForegroundWindow.argtypes = [W.UINT]
+    user.PeekMessageW.argtypes = [ctypes.POINTER(W.MSG), W.HWND, W.UINT, W.UINT, W.UINT]
+    user.TranslateMessage.argtypes = [ctypes.POINTER(W.MSG)]
+    user.DispatchMessageW.argtypes = [ctypes.POINTER(W.MSG)]
+    visitor = ctypes.WINFUNCTYPE(W.BOOL, W.HWND, W.LPARAM)
+    user.EnumWindows.argtypes = [visitor, W.LPARAM]
+
+    def windows():
+        """Visible top-level windows, front to back."""
+        rows = []
+        def visit(window, _):
+            if user.IsWindowVisible(window):
+                name, title = ctypes.create_unicode_buffer(64), ctypes.create_unicode_buffer(128)
+                user.GetClassNameW(window, name, 64)
+                user.GetWindowTextW(window, title, 128)
+                rows.append((window, name.value, title.value))
+            return True
+        user.EnumWindows(visitor(visit), 0)
+        return rows
+
+    def pump():
+        message = W.MSG()
+        while user.PeekMessageW(ctypes.byref(message), None, 0, 0, 1):
+            user.TranslateMessage(ctypes.byref(message))
+            user.DispatchMessageW(ctypes.byref(message))
+    return user, windows, pump
+
+
+RAW_MESSAGE = ('import ctypes; ctypes.WinDLL("user32").MessageBoxW('
+               'None, "Measurement of the message-box flags alone.", "Amplifier Unified", 0x50040)')
+LAUNCHER_MESSAGE = ('import sys; from amplifier_web import windows_installation as launcher; '
+                    'sys.exit(0 if launcher.owner_notice("Test of the launcher message.") else 1)')
+
+
+def show_message(code, other):
+    """Run one message box in ANOTHER process; report its place among the windows."""
+    import sys
+    import time
+    user, windows, pump = desktop()
+    before = {row[0] for row in windows()}
+    child = subprocess.Popen([sys.executable, "-B", "-c", code], cwd=Path(__file__).resolve().parents[1])
+    facts = {"appeared": False}
+    try:
+        deadline = time.monotonic() + 45
+        message = None
+        while message is None and time.monotonic() < deadline and child.poll() is None:
+            pump()
+            message = next((row[0] for row in windows() if row[0] not in before
+                            and row[1:] == ("#32770", "Amplifier Unified")), None)
+            time.sleep(0.02)
+        if message is None:
+            return facts
+        topmost = lambda: bool(user.GetWindowLongPtrW(message, -20) & 0x8)
+        facts.update(appeared=True, topmostAtFirstSight=topmost())
+        settled = time.monotonic() + 2  # The launcher's helper looks five times per second.
+        while time.monotonic() < settled:
+            pump()
+            time.sleep(0.05)
+        order = [row[0] for row in windows()]
+        facts.update(topmost=topmost(), inFrontOfOtherWindow=order.index(message) < order.index(other),
+                     foreground=user.GetForegroundWindow() == message)
+        user.PostMessageW(message, 0x0010, 0, 0)  # WM_CLOSE: the same as the OK button of this box.
+        facts["exit"] = child.wait(20)
+        return facts
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(10)
+
+
+@native
+def test_native_launcher_message_comes_in_front_of_another_programs_window():
+    """The real launcher message, shown by another process, on a real desktop.
+
+    On a real PC the message opened BEHIND the browser although the launcher
+    passed the topmost and foreground flags. Here this test process plays the
+    browser: it owns an ordinary window in the middle of the screen and, when
+    Windows permits, holds the foreground with foreground changes locked. The
+    message-box flags alone are measured and printed. The launcher's own
+    message must be topmost and in front of that window.
+    """
+    def unavailable(reason):
+        if os.environ.get("AMPLIFIER_REQUIRE_WINDOWS_TRUST_CHECKS") == "1":
+            pytest.fail("This lane must show a real message box: " + reason)
+        pytest.skip(reason)
+    user, windows, pump = desktop()
+    other = user.CreateWindowExW(0, "STATIC", "Another program", 0x80000000 | 0x10000000,
+                                 0, 0, 1600, 1200, None, None, None, None)  # Popup, visible.
+    if not other:
+        unavailable(f"no interactive desktop (error {ctypes.get_last_error()})")
+    locked = False
+    try:
+        user.SetForegroundWindow(other)
+        pump()
+        holds = user.GetForegroundWindow() == other
+        locked = bool(holds and user.LockSetForegroundWindow(1))
+        print("this test process holds the foreground:", holds, "| foreground changes locked:", locked)
+        flags_alone = show_message(RAW_MESSAGE, other)
+        print("message-box flags alone (measured, not required):", flags_alone)
+        launcher = show_message(LAUNCHER_MESSAGE, other)
+        print("launcher message:", launcher)
+    finally:
+        if locked:
+            user.LockSetForegroundWindow(2)
+        user.DestroyWindow(other)
+    if not flags_alone["appeared"] or not launcher["appeared"]:
+        unavailable("the message box did not appear")
+    assert launcher["topmost"] and launcher["inFrontOfOtherWindow"]
+    assert launcher["exit"] == 0  # Closing the box is its OK answer.
 
 
 @native
