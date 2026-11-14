@@ -1,4 +1,5 @@
 """Offline exact provider/host/native-loop fitting, never live vendor evidence."""
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -202,11 +203,21 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
     elif seed_kind == 'oversized-tail':
         prompt += FILLER * 8
     seed_hashes = [digest(row) for row in seed]
+    async def execute():
+        # All transport is in-process and synthetic. Bound fixture deadlocks,
+        # not real inference or the context owner's production summary policy.
+        try:
+            async with asyncio.timeout(30):
+                return await session.execute(prompt)
+        except TimeoutError:
+            pytest.fail(f'Offline fixture stalled: effects={wire.effects}; '
+                        f'sent={wire.sent}; summaries={wire.summaries}; '
+                        f'refusals={wire.refusals}; events={wire.events[-3:]}')
     try:
         assert raw._runtime_model_info_cache == {}
         if seed_kind == 'oversized-tail':
             with pytest.raises(Exception, match='(?i)(context|budget|fit)'):
-                await session.execute(prompt)
+                await execute()
             rows = await context.get_messages()
             assert not wire.sent and not wire.summaries and not wire.effects
             assert prompt in str(rows)
@@ -214,12 +225,12 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
             return
         if rejections > 1 or stop:
             with pytest.raises(Exception):
-                await session.execute(prompt)
+                await execute()
             assert len(wire.refusals) == (1 if stop else 2)
             assert wire.effects == list(range(1, 7))
             assert len(wire.sent) == 6  # Rejected iterations produce no tool.
             return
-        result = await session.execute(prompt)
+        result = await execute()
         rows = await context.get_messages()
         assert 'ORBIT complete' in result
         assert wire.first_count_cold is True
