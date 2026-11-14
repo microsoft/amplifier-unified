@@ -88,6 +88,7 @@ async def test_busy_peer_post_is_later_considered_once_without_forced_work(app_f
     await until(lambda: any(row.get('agentId') == 'alpha' for row in session['messages']))
     await until(lambda: any(row['agentId'] == 'beta' and row['sequence'] == 2 and row['state'] == 'pending'
                            for row in session['_externalRoom']['deliveries']))
+    await until(lambda: work(tmp_path, 'beta'))
     assert len(work(tmp_path, 'beta')) == 1
     (tmp_path / 'beta/peer/release').touch()
     await idle(app, sid)

@@ -28,8 +28,13 @@ def owner_notice(message, *, confirm=False):
     dialog.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint]
     dialog.restype = ctypes.c_int
     # In front of other windows: a windowless launcher's message that waits
-    # behind the browser looks like nothing happened.
-    result = dialog(None, message, "Amplifier Unified", 0x50040 | (0x4 if confirm else 0))
+    # behind the browser looks like nothing happened. The person's last click
+    # usually went to another window, and Windows then keeps a new window of
+    # this process behind it. Measured on native Windows: the foreground and
+    # topmost flags alone do not prevent that, and neither does raising the
+    # window afterwards. The system-modal flag (0x1000) does: Windows creates
+    # the message as a topmost window.
+    result = dialog(None, message, "Amplifier Unified", 0x51040 | (0x4 if confirm else 0))
     if not result:
         raise OSError("The installation dialog could not be displayed.")
     return result == 6 if confirm else True
@@ -63,10 +68,20 @@ def address_message(problem):
 
 
 def saved_port(home):
-    """Return the port an earlier setup saved for this installation, else None."""
-    from .deployment import load_server_config
+    """Return the port an earlier setup saved for this installation, else None.
+
+    Setup saves the port together with its loopback origin. An owner who later
+    lists only a remote address still has a saved port: it is not the default,
+    and the app-owned HTTPS that setup configured is in place. Setup must not
+    select again and overwrite that owner's addresses.
+    """
+    from .deployment import DEFAULT_SERVER, load_server_config
     config = load_server_config(home)
-    return config["port"] if f"https://127.0.0.1:{config['port']}" in config["public_origins"] else None
+    port = config["port"]
+    if (f"https://127.0.0.1:{port}" in config["public_origins"]
+            or (port != DEFAULT_SERVER["port"] and config["tls"]["method"] == "ca")):
+        return port
+    return None
 
 
 def address_kind(port, spec=None):

@@ -229,22 +229,64 @@ def test_identity_with_a_signing_key_on_disk_is_not_keyless(simulated, sample):
     assert wt.keyless_identity(root) is None
 
 
-def test_keyless_identity_is_checked_but_never_renewed_in_place(simulated, sample):
+def test_keyless_identity_is_checked_unchanged_by_the_ordinary_setup_command(simulated, sample):
     root, pinned, state = simulated
     wt.create_identity(root, sample[0])
     before = {p.name: p.read_bytes() for p in pinned.path.iterdir()}
     count = len(state["publications"])
     configured = tls.setup_local_ca(root, sample[0])  # What setup's CLI check runs.
     assert configured["tls"] == {"method": "ca", **wt._LAYOUT}
-    with pytest.raises(ValueError, match="cannot be renewed in place"):
-        tls.setup_local_ca(root, sample[0], force=True)
+    assert len(state["publications"]) == count
+    assert {p.name: p.read_bytes() for p in pinned.path.iterdir()} == before
+    # A missing server certificate is never reissued silently: no key can sign it.
     (pinned.path / "leaf.crt").unlink()
     (pinned.path / "leaf.key").unlink()
-    with pytest.raises(ValueError, match="cannot be renewed in place"):
+    with pytest.raises(ValueError, match="Run setup-tls force"):
         tls.setup_local_ca(root, sample[0])
     assert len(state["publications"]) == count
-    assert {p.name: p.read_bytes() for p in pinned.path.iterdir()} == {
-        name: content for name, content in before.items() if name == "ca.crt"}
+    assert [p.name for p in pinned.path.iterdir()] == ["ca.crt"]
+
+
+def test_force_replaces_a_keyless_identity_with_a_new_one_for_the_configured_names(simulated, sample):
+    root, pinned, state = simulated
+    old = wt.create_identity(root, sample[0])
+    old_leaf = (pinned.path / "leaf.crt").read_bytes()
+    wider = deployment.validate_server({
+        "public_origins": ["https://pc.example.ts.net:23456"], "tls": {"method": "ca", **wt._LAYOUT}})
+    # The old certificate does not name the new address, so the host refuses it ...
+    with pytest.raises(ValueError, match="leaf"):
+        tls.ssl_context(root, wider)
+    count = len(state["publications"])
+    configured = tls.setup_local_ca(root, wider, force=True)
+    # ... and the owner's explicit force makes a whole new identity, root last.
+    assert state["publications"][count:] == [("leaf.key", True), ("leaf.crt", True), ("ca.crt", True)]
+    assert sorted(p.name for p in pinned.path.iterdir()) == ["ca.crt", "leaf.crt", "leaf.key"]
+    new, leaf = wt.keyless_identity(root)
+    assert new != old and (pinned.path / "leaf.crt").read_bytes() != old_leaf
+    saved = (pinned.path / "ca.crt").read_bytes()
+    assert b"PRIVATE KEY" not in saved
+    context = tls.ssl_context(root, configured)
+    assert handshake(context, saved, hostname="pc.example.ts.net", strict=True) == leaf
+    handshake(context, saved, hostname="127.0.0.1", strict=True)
+    # The old root no longer vouches for this host.
+    old_pem = x509.load_der_x509_certificate(old).public_bytes(serialization.Encoding.PEM)
+    with pytest.raises(ssl.SSLCertVerificationError):
+        handshake(context, old_pem, hostname="127.0.0.1", strict=True)
+
+
+def test_force_heals_a_keyless_identity_left_partial_by_a_failed_renewal(simulated, sample):
+    root, pinned, state = simulated
+    wt.create_identity(root, sample[0])
+    state["fail"] = "ca.crt"  # The new server certificate landed; the new root did not.
+    with pytest.raises(OSError, match="may be partial"):
+        tls.setup_local_ca(root, sample[0], force=True)
+    assert not state["saves"][1:]
+    configured = {**sample[0], "tls": {"method": "ca", **wt._LAYOUT}}
+    with pytest.raises(ValueError):  # Mismatched material never serves.
+        tls.ssl_context(root, configured)
+    state["fail"] = None
+    tls.setup_local_ca(root, sample[0], force=True)
+    handshake(tls.ssl_context(root, configured), (pinned.path / "ca.crt").read_bytes(), strict=True)
 
 
 def test_keyless_identity_survives_a_renamed_computer(simulated, sample, monkeypatch):
@@ -709,8 +751,6 @@ def test_native_keyless_identity_has_no_signing_key_file_and_serves_tls(native_r
     # An existing identity is never replaced, and never renewed in place.
     assert wt.create_identity(native_root, configured) is None
     tls.setup_local_ca(native_root, configured)  # What setup's CLI check runs.
-    with pytest.raises(ValueError, match="cannot be renewed in place"):
-        tls.setup_local_ca(native_root, configured, force=True)
     assert {p.name: p.read_bytes() for p in path.iterdir() if p.name != ".tls.lock"} == before
     # The launcher's candidate: the exact in-memory root for a new identity,
     # the owner-only store on a later start.
@@ -719,6 +759,15 @@ def test_native_keyless_identity_has_no_signing_key_file_and_serves_tls(native_r
     assert windows_trust.candidate(native_root, pin) == der
     with pytest.raises(ValueError, match="changed"):
         windows_trust.candidate(native_root, SimpleNamespace(fingerprint=b"\0" * 32))
+    # The owner's force replaces the whole identity on the real private store.
+    tls.setup_local_ca(native_root, configured, force=True)
+    assert sorted(p.name for p in path.iterdir()) == [".tls.lock", "ca.crt", "leaf.crt", "leaf.key"]
+    renewed, renewed_leaf = wt.keyless_identity(native_root)
+    assert renewed != der and renewed_leaf != peer
+    assert handshake(tls.ssl_context(native_root, configured), tls.exported_ca_bytes(native_root),
+                     hostname="127.0.0.1", strict=True) == renewed_leaf
+    with pytest.raises(ValueError, match="changed"):  # The earlier root is not the candidate now.
+        windows_trust.candidate(native_root, SimpleNamespace(fingerprint=hashlib.sha256(renewed_leaf).digest()), der)
 
 
 def test_native_identity_with_a_signing_key_is_never_a_trust_candidate(native_root):

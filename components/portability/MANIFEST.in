@@ -1,2 +1,2 @@
-include README.md LICENSE pyproject.toml
+include README.md LICENSE pyproject.toml worktrees-source.json
 recursive-include tests *.py

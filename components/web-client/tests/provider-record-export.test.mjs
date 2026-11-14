@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {providerRecordExport} from '../src/provider-record-export.js';
+import {providerRecordExport,providerRecordMediaNote} from '../src/provider-record-export.js';
 
 test('exports the loaded request with identity and explicit partial capture metadata',()=>{
  const node={id:'llm:child/one',sessionId:'child',provider:'test',model:'model',
@@ -23,4 +23,14 @@ test('preserves text responses and unknown metadata without claiming completenes
  assert.equal(result.content.capture.truncated,null);
  assert.equal(result.content.capture.redacted,null);
  assert.throws(()=>providerRecordExport({id:'call'},'response',null));
+});
+
+test('diagnostic export preserves extracted references and discloses it is not a media archive',()=>{
+ const ref={v:1,session_id:'session',sha256:'a'.repeat(64),bytes:12};
+ const payload={metadata:{'experimental.media.v1':{refs:[ref]}}};
+ const result=providerRecordExport({id:'call'},'request',JSON.stringify(payload));
+ assert.deepEqual(result.content.payload,payload);
+ assert.ok(result.content.capture.note.includes(providerRecordMediaNote));
+ assert.match(result.content.capture.note,/references, not embedded files/);
+ assert.match(result.content.capture.note,/not a self-contained media archive/);
 });

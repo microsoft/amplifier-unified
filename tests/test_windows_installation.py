@@ -218,6 +218,16 @@ def test_saved_port_is_the_one_whose_loopback_origin_setup_wrote(private_home):
     deployment.save_server_config(home, {**config, "port": 23457,
                                          "public_origins": ["https://127.0.0.1:23456"]})
     assert setup.saved_port(home) is None
+    # An owner who lists only a remote address keeps the saved port: setup must
+    # not select again and overwrite that owner's addresses.
+    secure = {"method": "ca", "cert": "config/tls/leaf.crt", "key": "config/tls/leaf.key"}
+    deployment.save_server_config(home, {**config, "port": 23457, "tls": secure,
+                                         "public_origins": ["https://pc.example.ts.net"]})
+    assert setup.saved_port(home) == 23457
+    # The default port was never a setup choice, even with HTTPS configured.
+    deployment.save_server_config(home, {**config, "tls": secure,
+                                         "public_origins": ["https://pc.example.ts.net"]})
+    assert setup.saved_port(home) is None
 
 
 def test_selected_port_and_origin_reach_the_private_config_through_the_real_command(private_home):
@@ -310,8 +320,9 @@ def test_windowless_notice_uses_owner_dialog_without_shell_or_trust_change(monke
     monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **kw: SimpleNamespace(MessageBoxW=dialog), raising=False)
     assert setup.owner_notice("Review the local certificate?", confirm=True) is expected
     # Information icon, Yes/No, and in front of other windows: a windowless
-    # launcher's question must not wait behind the browser.
-    assert calls == [(None, "Review the local certificate?", "Amplifier Unified", 0x50044)]
+    # launcher's question must not wait behind the browser. The system-modal
+    # flag (0x1000) is the one that achieves it; the native test measures that.
+    assert calls == [(None, "Review the local certificate?", "Amplifier Unified", 0x51044)]
     assert dialog.restype is ctypes.c_int
 
 
