@@ -17,6 +17,44 @@ const scopeControl=section=>section.getByRole('combobox',{name:'Saved sessions t
 const settingsCloseControl=page=>page.locator('[data-part="dialog"]:visible')
  .getByRole('button',{name:/^Close (panel|settings)$/i});
 
+function diagnosticPair(records,nativeId){
+ const calls=records.filter(row=>row.kind==='llm'&&row.provider==='fixture'
+  &&row.model==='optimize-fixture'&&row.requestId==='optimize-call'
+  &&row.sessionId===nativeId&&row.sourceSessionId===nativeId);
+ const pair={};
+ for(const direction of ['request','response']){
+  const matching=calls.filter(row=>row.event==='llm:'+direction);
+  assert.equal(matching.length,1,`Require one exact original ${direction} observation for optimize-call`);
+  assert.equal(typeof matching[0].id,'string');assert.ok(matching[0].id.startsWith('event:'+nativeId+':'));
+  pair[direction]=matching[0];
+ }
+ assert.notEqual(pair.request.id,pair.response.id,'Independent diagnostic directions must not be conflated');
+ assert.ok(typeof pair.request.group==='string'&&pair.request.group.startsWith('event-window:'),
+  'Original observations must belong to an actual saved work window');
+ assert.equal(pair.request.group,pair.response.group,'Inspect both directions from the same saved work window');
+ return pair;
+}
+
+function correlatedModel(page,record){
+ // IDs come from the public nodes response for this exact native/request/event,
+ // never from model text, arrival order or a fabricated joined call identity.
+ return page.locator(`[data-kind="llm"][data-node-id=${JSON.stringify(record.id)}]`);
+}
+
+async function boundedModelDom(page){
+ let timer;
+ try{return await Promise.race([page.locator('[data-kind="llm"]').evaluateAll(elements=>({
+  total:elements.length,rows:elements.slice(0,24).map(element=>{
+   const header=element.querySelector(':scope > .a-execution-action-line');
+   return {id:element.getAttribute('data-node-id'),ownerId:element.getAttribute('data-owner-id'),
+    group:element.closest('[data-group-id]')?.getAttribute('data-group-id')||null,
+    label:(header?.textContent||'').slice(0,240),expanded:header?.getAttribute('aria-expanded')||null,
+    regions:[...element.querySelectorAll('section[aria-label]')].slice(0,8).map(region=>region.getAttribute('aria-label'))};
+  })
+ })),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Model DOM evidence timed out')),2000)})]);}
+ finally{clearTimeout(timer)}
+}
+
 // Reconciliation means a different, passive action with the original identity.
 // In particular an exact duplicate apply is still a mutation replay here.
 function assertReadOnlyReconcile(requests,command){
@@ -92,6 +130,26 @@ function sourceCheck(){
   }};
  }};
  assert.equal(settingsCloseControl(fakePage),'visible-panel-close');
+ const makeRecord=(event,id)=>({id,kind:'llm',provider:'fixture',model:'optimize-fixture',
+  requestId:'optimize-call',sessionId:'native',sourceSessionId:'native',event,group:'event-window:fixed'});
+ const recordPair=[makeRecord('llm:request','event:native:0:request'),
+  makeRecord('llm:response','event:native:1:response')];
+ const exactPair=diagnosticPair([...recordPair,{...recordPair[0],id:'event:native:2:other',requestId:'another-call'}],'native');
+ assert.equal(exactPair.request.id,recordPair[0].id);assert.equal(exactPair.response.id,recordPair[1].id);
+ assert.deepEqual(diagnosticPair([...recordPair].reverse(),'native'),exactPair);
+ assert.throws(()=>diagnosticPair([...recordPair,{...recordPair[0],id:'event:native:2:duplicate'}],'native'),
+  /one exact original request/);
+ assert.throws(()=>diagnosticPair(recordPair,'other-native'),/one exact original request/);
+ assert.throws(()=>diagnosticPair(recordPair.slice(0,1),'native'),/one exact original response/);
+ assert.throws(()=>diagnosticPair([recordPair[0],{...recordPair[1],provider:'another-provider'}],'native'),
+  /one exact original response/);
+ assert.throws(()=>diagnosticPair([recordPair[0],{...recordPair[1],requestId:'another-call'}],'native'),
+  /one exact original response/);
+ assert.throws(()=>diagnosticPair([recordPair[0],{...recordPair[1],group:'event-window:other'}],'native'),
+  /same saved work window/);
+ const idSelectors=[];
+ correlatedModel({locator:selector=>idSelectors.push(selector)},exactPair.response);
+ assert.deepEqual(idSelectors,['[data-kind="llm"][data-node-id="event:native:1:response"]']);
  const command={action:prefix+'apply',id:'fixed-command',args:{confirmExpiry:true}};
  const read={action:prefix+'read',args:{commandId:'fixed-command'}};
  assertReadOnlyReconcile([command,read],command);
@@ -138,7 +196,9 @@ function sourceCheck(){
   'restored private event ID and raw diagnostic secret rejected',
   'nonempty pending outbox equality accepted; empty baseline or result rejected',
   'extra enqueue, changed status or changed payload rejected',
-  'scope uses exact named combobox; settings dismissal is scoped to visible panel']}));
+  'scope uses exact named combobox; settings dismissal is scoped to visible panel',
+  'original request/response bind exact public native+request correlation and independent node IDs',
+  'duplicate, wrong-native, missing direction and mixed-window pairs are rejected']}));
 }
 
 async function serverIdentity(){
@@ -182,7 +242,8 @@ async function run(){
   fixtureSha256:sha(await readFile(new URL('../fixtures/optimize_storage_ui_server.py',import.meta.url))),
   journeySha256:sha(await readFile(fileURLToPath(import.meta.url))),
   productionHost:true,syntheticRuntime:true,syntheticSource:true,providerCalls:false};
- let owned,browser,failure,cleanupFailure;
+ let owned,browser,page,failure,cleanupFailure;
+ const modelRecords=new Map(),nodeReads=new Set(),nodeReadErrors=[];
  const evidence={provenance,checks:[],passed:false,acceptanceComplete:false,browserExecuted:false};
  try{
   owned=await startFixture({command:process.env.AMPLIFIER_TEST_PYTHON||join(root,'.venv/bin/python'),
@@ -193,7 +254,7 @@ async function run(){
    ?{args:['--no-zygote','--single-process','--disable-gpu']}: {})});
   const context=await browser.newContext({viewport:{width:1100,height:900},
    extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
-  const page=await context.newPage();page.setDefaultTimeout(15000);
+  page=await context.newPage();page.setDefaultTimeout(15000);
   const errors=[],offOrigin=[],requests=[],served=[];
   page.on('pageerror',error=>errors.push(error.message));
   await context.route('**/*',async route=>{
@@ -212,6 +273,26 @@ async function run(){
   const pendingAssets=[];
   page.on('response',response=>{
    const url=new URL(response.url());
+   if(url.origin===base&&response.ok()&&(url.pathname==='/api/conversation/work-sync'
+     ||url.pathname==='/api/conversation/detail'&&url.searchParams.get('part')==='nodes'&&!url.searchParams.has('field'))){
+    const reading=(async()=>{
+     const body=await response.body();assert.ok(body.length<=512*1024,'Bounded public node page required');
+     const result=JSON.parse(body.toString('utf8'));
+     assert.ok(Array.isArray(result.items)&&result.items.length<=500,'Bounded public node count required');
+     for(const node of result.items){
+      if(node.kind!=='llm'||node.model!=='optimize-fixture')continue;
+      assert.ok(modelRecords.has(node.id)||modelRecords.size<24,'Model identity evidence exceeded bound');
+      const row=Object.fromEntries(['id','kind','event','sourceSessionId','sessionId','requestId','provider','model','label']
+       .map(key=>[key,node[key]??null]));
+      row.group=result.group||url.searchParams.get('group')
+       ||(url.pathname==='/api/conversation/work-sync'?response.request().postDataJSON()?.group:null);
+      row.requestExpired=node.requestRecordingExpired??null;
+      row.requestDetailPresent=!!node.requestDetail;row.responseDetailPresent=!!node.responseDetail;
+      modelRecords.set(node.id,row);
+     }
+    })().catch(error=>nodeReadErrors.push(error.message));
+    nodeReads.add(reading);void reading.finally(()=>nodeReads.delete(reading));
+   }
    if(url.origin===base&&url.pathname.endsWith('.js')){
     pendingAssets.push((async()=>served.push({path:url.pathname,status:response.status(),
      sha256:sha(await response.body())}))());
@@ -347,32 +428,55 @@ async function run(){
   await showFixtureConversation(page);
   // Only observed, ordinary expand/load controls. Never inject a model node or
   // a replacement expiration marker into browser state.
-  const model=page.locator('[data-kind="llm"]').filter({hasText:'optimize-fixture'});
-  for(let step=0;step<12&&await model.count()===0;step++){
+  const currentPair=async()=>{
+   // A previous reload may have observed another source generation. Only exact
+   // IDs rendered now can bind this browser's active observation window.
+   const ids=await page.locator('[data-kind="llm"][data-node-id]').evaluateAll(elements=>
+    elements.slice(0,100).map(element=>element.getAttribute('data-node-id')));
+   return diagnosticPair([...modelRecords.values()].filter(row=>ids.includes(row.id)),before.nativeId);
+  };
+  const hasPair=async()=>{try{return !!await currentPair()}catch{return false}};
+  for(let step=0;step<12&&!await hasPair();step++){
+   await Promise.all([...nodeReads]);
+   if(await hasPair())break;
    const earlier=page.getByRole('button',{name:'Load earlier conversation',exact:true});
    if(await earlier.isVisible()){await earlier.click();continue;}
    const collapsed=page.locator('button.a-execution-turn-line[aria-expanded="false"]');
    if(await collapsed.count()){await collapsed.first().click();continue;}
    break;
   }
-  await expect(model).toHaveCount(1);
-  await model.locator('button.a-execution-action-line').click();
-  const expired=model.getByRole('region',{name:'Expired request recording',exact:true});
+  await expect.poll(async()=>{await Promise.all([...nodeReads]);return hasPair()}).toBe(true);
+  assert.deepEqual(nodeReadErrors,[]);
+  const pair=await currentPair();
+  evidence.diagnosticPair=pair;
+  const requestModel=correlatedModel(page,pair.request),responseModel=correlatedModel(page,pair.response);
+  await expect(requestModel).toHaveCount(1);await expect(responseModel).toHaveCount(1);
+  await expect(requestModel).toContainText('Provider request');
+  await expect(responseModel).toContainText('Provider response');
+  const requestToggle=requestModel.locator(':scope > button.a-execution-action-line');
+  if(await requestToggle.getAttribute('aria-expanded')!=='true')await requestToggle.click();
+  const expired=requestModel.getByRole('region',{name:'Expired request recording',exact:true});
   await expect(expired).toContainText('intentionally expired');
   await expect(expired).toContainText('(UTC)');
   assert.match(await expired.locator('time').getAttribute('datetime'),/Z$/);
-  await expect(model.getByRole('button',{name:/^View request/})).toHaveCount(0);
-  await expect(model.getByRole('link',{name:/Download full recorded request/})).toHaveCount(0);
-  await expect(model.getByRole('button',{name:'Open recording settings',exact:true})).toHaveCount(0);
-  await expect(model.getByRole('button',{name:'Show saved recordings',exact:true})).toHaveCount(0);
-  await expect(model).not.toContainText('OPTIMIZE-SYNTHETIC-REQUEST-ONLY');
-  await model.getByRole('button',{name:/^View response/}).click();
-  await model.getByRole('button',{name:/^Response Object/}).click();
-  await expect(model).toContainText('OPTIMIZE-SYNTHETIC-RESPONSE-KEEP');
+  await expect(requestModel.getByRole('button',{name:/^View request/})).toHaveCount(0);
+  await expect(requestModel.getByRole('link',{name:/Download full recorded request/})).toHaveCount(0);
+  await expect(requestModel.getByRole('button',{name:'Open recording settings',exact:true})).toHaveCount(0);
+  await expect(requestModel.getByRole('button',{name:'Show saved recordings',exact:true})).toHaveCount(0);
+  await expect(requestModel).not.toContainText('OPTIMIZE-SYNTHETIC-REQUEST-ONLY');
+  const responseToggle=responseModel.locator(':scope > button.a-execution-action-line');
+  if(await responseToggle.getAttribute('aria-expanded')!=='true')await responseToggle.click();
+  await responseModel.getByRole('button',{name:/^View response/}).click();
+  await responseModel.getByRole('button',{name:/^Response Object/}).click();
+  await expect(responseModel).toContainText('OPTIMIZE-SYNTHETIC-RESPONSE-KEEP');
   const downloading=page.waitForEvent('download',{timeout:15000});
-  await model.getByRole('link',{name:'Download full recorded response (JSON)',exact:true}).click();
+  await responseModel.getByRole('link',{name:'Download full recorded response (JSON)',exact:true}).click();
   const responseDownload=await downloading;
   const responseBytes=await readFile(await responseDownload.path(),'utf8');
+  const responseRecord=JSON.parse(responseBytes);
+  assert.equal(responseRecord.callId,pair.response.id);
+  assert.equal(responseRecord.sessionId,before.nativeId);
+  assert.equal(responseRecord.provider,'fixture');assert.equal(responseRecord.model,'optimize-fixture');
   assert.match(responseBytes,/OPTIMIZE-SYNTHETIC-RESPONSE-KEEP/);
   assert.doesNotMatch(responseBytes,/OPTIMIZE-SYNTHETIC-REQUEST-ONLY/);
   evidence.checks.push('actual expired request DOM has UTC notice and no disclosure/download/settings',
@@ -403,7 +507,13 @@ async function run(){
   evidence.requests=requests;evidence.after=after;evidence.passed=true;
   evidence.notCovered=[];
   evidence.acceptanceComplete=true;
- }catch(error){failure=error;evidence.failure={name:error.name,message:error.message};}
+ }catch(error){
+  failure=error;evidence.failure={name:error.name,message:error.message};
+  evidence.observedModelRecords=[...modelRecords.values()];
+  evidence.nodeReadErrors=nodeReadErrors.slice(0,8);
+  if(page&&!page.isClosed())try{evidence.failureModelDom=await boundedModelDom(page)}
+  catch(captureError){evidence.failureModelDom={unavailable:true,reason:captureError.message}}
+ }
  finally{
   if(owned)try{await finishFixture({label:'Optimize storage',
    close:browser?[['browser',()=>browser.close()]]:[],stop:owned.stop,originalError:failure});}
