@@ -44,6 +44,8 @@ async def test_upload_reference_checkpoint_and_selected_fork(tmp_path, monkeypat
         assert ref['provenance']['expires_at'] is None
         assert not any(item['type'] == 'image' for item in message['content'])
         assert base64.b64encode(png()).decode() not in json.dumps(message)
+        for path in store.directory('source').rglob('*.json*'):
+            assert base64.b64encode(png()) not in path.read_bytes()
         with media.resolve_ref(ref) as stream:
             assert stream.read() == png()
         with closing(store.media('target')) as target:
@@ -347,5 +349,23 @@ async def test_upload_origin_requires_real_admitted_owner_and_original_receipt(t
         legacy['metadata'].pop(assets.MEDIA)
         assert assets.resolve_upload_origin(legacy, session_id='source', attachment_id=row['id'],
                                             input_id='admitted', media_store=media) is None
+    finally:
+        media.close()
+
+
+@pytest.mark.parametrize('preserve_system', [False, True])
+async def test_core_message_nullable_media_metadata_matches_actual_save_ack(tmp_path, monkeypatch, preserve_system):
+    from amplifier_core.message_models import Message
+    _, store, media, row, _ = await uploaded(tmp_path, monkeypatch)
+    try:
+        message = Message(**row)
+        rows = [Message(role='system', content='Host guidance'), message]
+        canonical = store.save('source', rows, {}, preserve_system=preserve_system)
+        assert canonical == store.load('source')[0]
+        refs = assets.message_refs(canonical, 'source')
+        assert refs[0]['provenance']['expires_at'] is None
+        store.acknowledge_media('source', canonical, media)
+        with media.resolve_ref(refs[0]) as stream:
+            assert stream.read() == png()
     finally:
         media.close()
