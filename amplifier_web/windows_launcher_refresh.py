@@ -115,16 +115,34 @@ def _free(path):
     return candidate
 
 
-async def _move(source, target):
-    """Rename a folder. A scanner can hold a file in it for a moment after the app stops."""
-    for attempt in range(20):
+SETTLE_SECONDS = 30
+
+
+async def _settled(change, *args):
+    """Make one file change, waiting while a program that is closing still holds the folder.
+
+    Measured on a setup-made installation: while the app's worker programs are
+    alive, nothing can be renamed into the installation folder (Windows error
+    32). They end with the task, a moment after it reports that it stopped. A
+    scanner can also hold a new file briefly. Every change here can run again.
+    """
+    for attempt in range(SETTLE_SECONDS * 2):
         try:
-            os.rename(source, target)
-            return
+            return change(*args)
         except PermissionError:
-            if attempt == 19:
+            if attempt == SETTLE_SECONDS * 2 - 1:
                 raise
             await asyncio.sleep(0.5)
+
+
+async def _move(source, target):
+    await _settled(os.rename, source, target)
+
+
+def _copy(source, target):
+    partial = Path(target).with_name(Path(target).name + ".part")
+    shutil.copyfile(source, partial)
+    os.replace(partial, target)
 
 
 async def _discard(folder):
@@ -382,9 +400,8 @@ async def _run(service, home, wait, process):
             if _sha(wheel) != selected["source"]["sha256"]:
                 raise ValueError("Another file has the release file's name.")
         else:
-            partial = wheel.with_name(wheel.name + ".part")
-            shutil.copyfile(selected["source"]["path"], partial)
-            os.replace(partial, wheel)
+            # The first change in the installation folder itself.
+            await _settled(_copy, selected["source"]["path"], wheel)
         artifact = {**{key: selected["source"][key] for key in ("url", "sha256")}, "path": str(wheel)}
         state["step"] = "keeping the previous launcher"
         await stopped()
@@ -425,7 +442,7 @@ async def _run(service, home, wait, process):
             receipt = json.loads(receipts["consumer-install.json"])
             receipt.update(version=selected["new"]["version"], revision=selected["new"]["revision"],
                            artifact=artifact, graph=selected["graph"])
-            _write(root, root / "consumer-install.json", json.dumps(receipt))
+            await _settled(_write, root, root / "consumer-install.json", json.dumps(receipt))
             await process(python, "-I", "-B", "-m", "amplifier_web.windows_consumer", "--root", str(root),
                           "--audit", env=environment, timeout=300)
         state["step"] = "starting Amplifier"
@@ -554,16 +571,17 @@ async def _undo(service, home, journal, wait, *, earlier=False):
             try:
                 for name, raw in receipts.items():
                     if raw is None:
-                        (root / name).unlink(missing_ok=True)
+                        await _settled((root / name).unlink, True)
                     elif _current(root / name) != raw:
-                        _write(root, root / name, raw)
+                        await _settled(_write, root, root / name, raw)
                 if previous.exists():
                     if prefix.exists():
                         await _move(prefix, unused)
                     await _move(previous, prefix)
                 # The new launcher is set aside now, by this run or by an earlier
                 # rollback that was ended. Its record names the start programs it added.
-                _restore_entries(prefix, journal["entries"], _entry_points(unused) if unused.exists() else [])
+                await _settled(_restore_entries, prefix, journal["entries"],
+                               _entry_points(unused) if unused.exists() else [])
             except Exception:
                 problems.append("the previous launcher could not be put back")
         if not problems and _pending(home, journal, unused=False):

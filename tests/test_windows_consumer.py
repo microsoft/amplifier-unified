@@ -429,3 +429,38 @@ def test_maintenance_on_a_folder_that_fails_the_installation_check_writes_nothin
     assert json.loads(capsys.readouterr().out) == {"ok": False, "step": step, "errorType": "ValueError"}
     if operation == "uninstall":
         assert "nothing was changed" in consumer.Unfinished(step, ValueError()).notice
+
+
+@pytest.mark.parametrize("registered, expected", [
+    (False, "could not finish its first start"), (True, "Amplifier could not start.")])
+def test_a_shortcut_that_cannot_start_the_app_says_the_cause_and_the_next_step(
+        tmp_path, monkeypatch, capsys, registered, expected):
+    from amplifier_web import windows_installation, windows_service
+    shown = []
+
+    async def failing(root, *, open_browser=True):
+        raise RuntimeError("Runtime dependency preparation did not complete; private detail")
+    monkeypatch.setattr(consumer, "launch", failing)
+    monkeypatch.setattr(windows_service, "managed", lambda home: registered)
+    monkeypatch.setattr(windows_installation, "owner_notice", lambda message, **kw: shown.append(message))
+    with pytest.raises(SystemExit):
+        consumer.main(["--root", str(tmp_path)])
+    result = json.loads(capsys.readouterr().out)
+    assert result["ok"] is False and expected in result["message"] and "private detail" not in json.dumps(result)
+    assert "Start menu: Amplifier Unified" in result["message"]
+    if not registered:
+        assert "connected to the internet" in result["message"] and "do not need to install it again" in result["message"]
+    # Without a console (the shortcut uses pythonw) the same text is shown in a window.
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    with pytest.raises(SystemExit):
+        consumer.main(["--root", str(tmp_path)])
+    assert shown == [result["message"]]
+
+
+def test_other_operations_keep_their_own_failure_text(tmp_path, monkeypatch, capsys):
+    async def failing(root, operation):
+        raise RuntimeError("stop failed")
+    monkeypatch.setattr(consumer, "maintenance", failing)
+    with pytest.raises(SystemExit):
+        consumer.main(["--root", str(tmp_path), "--stop"])
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "errorType": "RuntimeError"}

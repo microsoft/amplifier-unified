@@ -207,7 +207,10 @@ Steps, in order:
 3. Stop the app with the normal owner stop. Decide again with the app stopped.
 4. Copy the generation's verified release file beside the installation.
    Confirm that the app is stopped, then rename the launcher folder aside. It
-   is kept.
+   is kept. Every change in the installation folder waits up to 30 seconds for
+   a program that is still closing: while the app's worker programs are alive,
+   Windows refuses a rename into that folder, and they end a moment after the
+   task reports that it stopped (measured in the clean room).
 5. Install the launcher at the same path with the generation's exact package
    list and the launcher's own interpreter. The task, the shortcuts and the
    private Python do not change.
@@ -289,6 +292,15 @@ unbound launcher; the refresh then stops with "the app is running" and rolls
 back. The launcher's refusal of a launch record that names another launcher
 is still silent at start (it writes `task-launcher-error.json`); this command
 never leaves that state without saying so, but another cause still would.
+
+A launcher that is older than the running app also answered "not ready" to
+its own status question (the Start-menu status entry), because it compared the
+host's version with its own. It now expects the app generation that it starts
+(`installation_health.started_identity`); the identity check itself is
+unchanged. When the shortcut cannot start the app, it now says one cause and
+one next step: before the start-at-sign-in task exists the cause is the first
+start's download, and the next step is the internet connection and the Start
+menu; nothing is installed again.
 
 The Apps-list version stays at the setup version, as it already does after
 every in-app update. Setup's Repair and Update will call this command and
@@ -388,6 +400,18 @@ connection untrusted, it:
 3. Requires that the store really holds the root, then repeats its own check: a
    TLS handshake against the Windows roots must return the pinned server
    certificate. Only then does it request a browser grant.
+
+The check has three answers, not two. A listener that answers and is not
+verified is **untrusted**. A listener that does not answer is **unreachable**,
+and that says nothing about trust. The host can restart while the two dialogs
+are open: a new installation finds a newer release at its first start and
+restarts into it. So the launcher waits up to 60 seconds for the listener,
+before the step and after the Windows confirmation. If the host is still away,
+the message says that Amplifier is restarting and to open it again in a minute.
+It never says that the PC does not trust the connection. (In a clean-room run
+of 0.94.1 that updated itself to 0.95.0 at first start, the earlier two-answer
+check showed the "this PC still does not trust the connection" message two
+seconds after Yes, although the root was in the store.)
 
 Outcomes: **No** keeps the app running, says so in one plain message, and the
 next open (always started by the person) explains and asks again. A refusal by
