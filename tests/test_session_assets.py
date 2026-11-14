@@ -212,7 +212,7 @@ async def test_real_portability_media_and_legacy_closure_after_origin_absent(tmp
             'id': staged['id'], 'expectedRevision': staged['revision'], 'path': released['receiptPath']}))['result']
         assert result['phase'] == 'active'
         if expires_during_transfer == 'during-decode':
-            assert crossings == [True]  # No second decode/import/retry after release.
+            assert crossings == [True]  # Exactly one injected expiry transition.
         current = target._session(sid)
         saved_store = SessionStore.for_app(target.data_dir, current['workspace'])
         saved = saved_store.load(sid)[0]
