@@ -334,3 +334,26 @@ async def test_source_accounting_keeps_unknown_coverage_unknown(owner):
     assert owner.read('user', identity)['summary']['bytes']['source'] is None
     owner._file(identity, 1, {'sessionId': '0', 'kind': 'root', 'status': 'held', 'bytes': 100})
     assert owner.read('user', identity)['summary']['bytes']['source'] == 300
+
+
+async def test_combined_selection_without_inline_images_still_previews_expiry(owner, tmp_path):
+    import json
+    import os
+    from amplifier_web.storage_optimize_owners import OwnerAdapters
+    from amplifier_web.session_files import capture_dir, project_slug
+    directory = capture_dir(str(tmp_path), 'root')
+    directory.mkdir(parents=True)
+    (directory / 'metadata.json').write_text(json.dumps({'format': 'context-intelligence', 'version': '1.0.0'}))
+    path = directory / 'events.jsonl'
+    path.write_text(json.dumps({'event': 'llm:request', 'timestamp': '2020-01-01T00:00:00Z',
+        'session_id': 'root', 'data': {'raw': 'selected old diagnostic'}}) + '\n')
+    os.utime(path, (1, 1))
+    owner.app.db.execute('CREATE TABLE history_local_rows(id TEXT,native_project TEXT,native_id TEXT)')
+    owner.app.db.execute('INSERT INTO history_local_rows VALUES(?,?,?)', ('root', project_slug(str(tmp_path)), 'root'))
+    adapters = OwnerAdapters(owner.app)
+    operation = {'scope': 'current', '_workspace': str(tmp_path), '_nativeId': 'root',
+                 'extractImages': True, 'cutoffs': {'requestBefore': '2026-01-01T00:00:00Z', 'responseBefore': None}}
+    rows = [row async for row in adapters.discover(operation)]
+    result = await adapters.preview(rows[0], operation)
+    assert result['status'] == 'eligible' and result['_action'] == 'diagnostic-retention'
+    assert 'selected old diagnostic' in path.read_text()
