@@ -18,6 +18,7 @@ The user interface and agents call the same host actions:
 | `workspace.environments.setup.reconcile` | Passive inspection of the original setup and its retained effects. |
 | `workspace.environments.setup.cleanup` | Remove only verified disposable resources from interrupted setup. |
 | `workspace.environments.read` | Workspace and root conversation identity; bounded resources, availability, source location, current observation and retained results. |
+| `workspace.environments.runner.read` | Exact owned resource and revision; read-only retained qualification, execution-binding digests and closed differing field names, recorded/current runtime identity or a conservative collection limitation. No current-selection lookup, backend invocation, candidate code execution or operation admission. |
 | `workspace.environments.start` | Approved profile plus stable `requestId`; immutable source snapshot and one owned environment. |
 | `workspace.environments.execute` | Resource identity, exact revision, stable request identity and command; bounded stdout, stderr, exit code and truncation flags. |
 | `workspace.environments.stop` | Resource identity, exact revision and stable request identity; observed stopping outcome with data retained. |
@@ -88,6 +89,20 @@ metadata path. A current Full descendant may inspect its owning conversation's
 resource; a trusted system may name that Full owner directly. These reads neither
 hydrate cold history nor create requests or invoke the backend. Existing passive
 root and UI reads remain available without admitting fresh work.
+
+Runner diagnosis uses the same exact owner and revision boundary. It reads only
+that resource's canonical retained configuration and exact private proof, never
+borrowing another installation's proof or substituting the current runner.
+Missing, unsafe and corrupt records are distinct blocked results. Runtime
+comparison preserves the full version-1 identity, including cached bytecode.
+The host's isolated, no-site base interpreter inventories files only for a
+supported ordinary venv of that exact interpreter; redirected/shared files,
+startup customization, uncertain interpreter custody and unknown layouts return
+an explicit collection limitation, never a candidate-interpreter fallback.
+Collection is bounded by 30 seconds, 4 KiB of subprocess output, 100,000 entries
+and 1 GiB of bytes. Neither an inventory match nor `effectsAuthorized: false`
+changes execution permissions, accepts changed bytes, qualifies behavior,
+observes physical absence or resolves any original unknown operation.
 
 The action interface and durable ownership are independent of the DTU library.
 The initial backend boundary is a host-owned `prepare/start/read/execute/stop/remove`
