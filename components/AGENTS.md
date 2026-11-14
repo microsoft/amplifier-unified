@@ -27,9 +27,11 @@ Its portable tests stay with the package, while host policy and integration test
 stay in Unified. It is not a generated delivery copy.
 
 `components/scheduling/` is temporarily authored here as its independently
-buildable Python project. Preserve its normal `amplifier_scheduling` import;
-Unified builds directly from the nested runtime sources. It has no external
-source-selection record and is not a generated copy. Follow its local README.
+buildable Python project. Preserve its normal `amplifier_scheduling` import.
+Unified consumes only the generated `scheduling-delivery/` snapshot selected by
+`scheduling.source.json`; author edits and publication do not change this default.
+Never edit the delivery copy by hand or coinstall the standalone distribution with
+Unified, which remains the sole installed owner. Follow the author project's README.
 
 ## Web client delivery
 

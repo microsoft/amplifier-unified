@@ -19,6 +19,8 @@
 /components/scheduling/MANIFEST.in source-context=configuration
 /components/scheduling/.gitignore source-context=configuration
 /components/scheduling/LICENSE source-context=documentation
+/components/scheduling.source.json source-context=configuration
+/components/scheduling-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/publishing/amplifier_publishing/** source-context=source
 /components/publishing/tests/** source-context=tests
 /components/publishing/MANIFEST.in source-context=configuration

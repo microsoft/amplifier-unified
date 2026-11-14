@@ -79,7 +79,7 @@ existing suitable repo if the inventory finds one.
 | `amplifier-platform-canvas` (**new**) | Canvas bridge/documents/views, frontend renderers and shell integration | Capability package and renderer SDK; ordinary chat works with it absent, agents invoke the same public operations |
 | Voice/device capability owner | `voice*.py`, device dispatch; existing `amplifier-voice`, browser bridge | Reuse/evolve existing repos after comparison; media transport separate, exactly targeted permission and lifecycle |
 | Configuration/composition owner | Shared settings, bundles and provider discovery; Foundation overlap | Native mechanisms stay Foundation; extract product admin/catalog UI capability, not a second settings authority |
-| `amplifier-platform-scheduling` (**temporary in-repo authoring home**) | [`components/scheduling/`](../../components/scheduling/README.md) owns recurrence, SQLite run admission and its pure tests; Unified builds directly from these unchanged Python sources until independent repository delivery. The distribution remains `amplifier-scheduling` | Build wheel/sdist and exercise due identities, leases and unknown-outcome recovery without the app; host authorization, Stop, task admission and execution stay in Unified |
+| `amplifier-platform-scheduling` (**temporary in-repo authoring home**) | [`components/scheduling/`](../../components/scheduling/README.md) owns recurrence, SQLite run admission and its pure tests; Unified consumes a generated snapshot of an explicitly selected public scheduling wheel, recorded by `components/scheduling.source.json`; authoring remains independent. The distribution remains `amplifier-scheduling` | Build wheel/sdist and exercise due identities, leases and unknown-outcome recovery without the app; host authorization, Stop, task admission and execution stay in Unified |
 | `amplifier-platform-operations` (**new extraction**) | `amplifier_operations/`, durable operation receipts and delivery cursors | Durable operations API and capability; independent of a particular agent engine and frontend; execution, authorization and task policy stay with their current owners |
 | Computation mechanism owner (**prepared; repository undecided**) | [`amplifier_kernels/`](../../amplifier_kernels/README.md) remains the canonical in-place authoring home; standalone distribution `amplifier-kernels` | Existing transport/observation interface and real process tests without an app checkout. Unified bundles the same source; ACP retains a temporary delivery copy requiring exact provenance and separate qualification. Host permission and lifecycle policy remain unchanged |
 | `amplifier-platform-publishing` (**prepared**) | [`components/publishing/`](../../components/publishing/README.md) | Temporary authored, independently buildable home; distribution `amplifier-publishing` and import `amplifier_publishing`; Unified bundles the same source |
@@ -93,9 +93,11 @@ A package is ready to extract when it can state its input/output contract, data
 authority and independent fixture. Small size is not an objection. An extraction
 that still imports a sibling's private source has not completed its boundary.
 
-The scheduling library's first packaging step keeps one authored source and the
-current Unified imports. Its independent artifact does not introduce a daemon or
-claim a new release/default selection. `amplifier-drumbeat` is a separate automation
+The scheduling library keeps one authored source and the current Unified imports.
+Its published wheel is selected into Unified's offline delivery snapshot; component
+source changes and publication do not silently change the app default. Unified
+remains the sole installed owner, so this is independent release consumption, not
+independent pip replacement or a new daemon. `amplifier-drumbeat` is a separate automation
 engine built on `amplifier-agent`, not the owner of these native Unified schedule
 receipts. Reusing that engine would be a separate architecture decision.
 

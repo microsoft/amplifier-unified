@@ -34,9 +34,13 @@ authorization remain in Unified. It stays here until a separate repository and
 authoring handoff are ready.
 
 [`scheduling/`](scheduling/README.md) is the temporary authoring home for the
-independently buildable scheduling package. Unified consumes its nested runtime
-sources directly in normal editable installs, wheels and source distributions.
-It stays here until its separate repository and authoring handoff are ready.
+independently buildable scheduling package. It stays here until its separate
+repository and authoring handoff are ready. Unified consumes the explicitly
+selected published wheel through the generated `scheduling-delivery/` snapshot
+and [`scheduling.source.json`](scheduling.source.json). Author changes and component
+publication do not change that app default. The app remains the sole installed
+distribution owner; this is artifact assembly, not a separately updatable pip
+dependency. Follow the [selection instructions](scheduling/README.md#unified-artifact-selection).
 The web client has a different ownership arrangement, described below.
 
 ## Web client ownership and assembly
