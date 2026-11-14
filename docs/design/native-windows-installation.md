@@ -708,6 +708,76 @@ can change, a link in place of the folder, removal, the held installation, the
 named folder above, elevation detection and the stop text. It shows no setup
 window and installs nothing.
 
+### Uninstall stops the app before it removes an entry
+
+Uninstall runs from the Apps list or from "Uninstall Amplifier" in the Start
+menu. Both start the stable launcher (`windows_consumer --uninstall`). A person
+must never be left with a running app and no entry to open, stop or remove it.
+So the order is:
+
+1. One question. No changes nothing.
+2. If the running app reports that a chat is working, a second question names
+   that. Yes stops the work through the app's normal stop. No keeps Amplifier
+   installed. The launcher asks the app over the same pinned private HTTPS
+   connection that browser entry uses. The app counts conversations with the
+   update gate's own two predicates (conversation work, background-worker
+   work). An app that does not answer, or an older app that reports no count,
+   gets no second question.
+3. Check and pin every Start-menu shortcut and the Apps-list entry. A changed
+   entry stops here, before the app is touched.
+4. Stop the app normally and remove its sign-in task. There is no forced stop.
+5. Remove the Apps-list entry, then the shortcuts ("Uninstall Amplifier" last),
+   then the emptied Start-menu folder.
+6. One message says that uninstall is complete.
+
+A step that fails leaves the entries of every later step in place and shows
+one message with the cause, the next action and a short reference (step name,
+error type and Windows error code, never the error text). The same step and
+error are saved in the private file `consumer-maintenance.json` in
+`app\config\services`, beside the app's other service records, or in the
+installation folder when that folder cannot be written.
+
+Why the app stops first. The earlier order removed the entries, rewrote
+setup's entry record `consumer-shell.json` in the installation folder, and
+only then stopped the app. While a conversation worker is alive, Windows
+refuses a new or replaced file directly in the installation folder (sharing
+violation, error 32); a worker stays alive after its chat turn ends. So after
+any chat the rewrite failed, the app was never asked to stop, and it kept
+running and starting at sign-in with no entry left. Two clean-room runs showed
+this, and a probe in the second one measured the refusal: it is present with
+live workers and gone after the app's normal stop. Which handle in the worker
+tree causes it is not yet known. `app\config\services` accepts writes in the
+same state.
+
+Uninstall can be repeated. An entry that an earlier, interrupted uninstall
+already removed is skipped; a task that is already gone is not an error.
+
+The last step rewrites the entry record with the status `removed`; a later
+setup run reads that status to choose its wording. Worker programs end a
+moment after the task reports that it stopped, so this write waits up to 15
+seconds for them. A write that is still refused does not fail a finished
+uninstall, because every entry is already gone; it is saved as a failed
+`receipt` step.
+
+The Start-menu commands Stop and Status use the same form of message: what
+did not happen, the next action and the reference. They no longer show the
+general text "could not complete this operation".
+
+The launcher is the code that setup installed; an in-app update does not
+replace it. A new installation gets this behavior from its setup file. An
+earlier installation gets it only when its launcher is refreshed. The count
+in step 2 comes from the running app, which in-app updates do replace.
+
+Not in this change: uninstall still keeps the program files, the person's data
+and the trusted certificate. A changed shortcut or Apps-list entry still makes
+uninstall refuse. The Apps list still shows the version that setup installed.
+The native check in the `windows-local-connection` job uses the real
+shortcuts, the real registry transaction, private files and NTFS sharing on a
+Windows runner. It holds the throwaway installation folder open without write
+sharing to get the same refusal, and it uses a stand-in for Task Scheduler,
+because a runner cannot register the sign-in task. A real stop with a live
+conversation worker remains clean-room acceptance.
+
 ## Process-local Proactor cleanup backport
 
 `windows_proactor.py` carries CPython gh-160429's socket-shutdown correction

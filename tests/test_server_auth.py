@@ -76,14 +76,36 @@ async def test_health_identity_is_only_disclosed_to_control_bearer(aiohttp_clien
         assert response.status == 200
         body = await response.json()
         assert "dataIdentity" not in body
-        assert "runtime" not in body
+        assert "runtime" not in body and "activity" not in body
         assert "revision" not in body and "instanceId" not in body
-    response = await client.get("/api/health", headers={"Authorization": "Bearer " + app["control_token"]})
+        # The activity count is the owner's, with or without the request for it.
+        assert "activity" not in await (await client.get("/api/health?activity=1", headers=headers)).json()
+    owner = {"Authorization": "Bearer " + app["control_token"]}
+    response = await client.get("/api/health", headers=owner)
     assert response.status == 200
     body = await response.json()
     assert body["dataIdentity"] == data_identity(tmp_path)
     assert body["instanceId"] == app['service'].update_manager.running_identity['instanceId']
     assert body['revision'] == app['service'].update_manager.running_identity['revision']
+    # An ordinary owner health probe does not scan conversations.
+    assert "activity" not in body
+    # The owner's uninstall asks before a normal stop interrupts running work.
+    asked = await (await client.get("/api/health?activity=1", headers=owner)).json()
+    assert asked["activity"] == {"working": 0} and asked["dataIdentity"] == body["dataIdentity"]
+    sessions = app['service'].state['sessions']
+    saved = list(sessions)
+    # Counted with the update gate's own predicates: a, c, f, j and k are working.
+    sessions.extend({'id': name, 'status': status, **extra} for name, status, extra in (
+        ('a', 'working', {}), ('b', 'idle', {}), ('c', 'stopping', {}), ('d', 'interrupted', {}),
+        ('e', 'error', {}), ('f', 'starting', {}), ('g', 'ready', {}), ('h', 'stopped', {}),
+        ('i', 'read-only', {}), ('j', 'ready', {'execution': {'turns': [{'phase': 'running'}]}}),
+        ('k', 'idle', {'workers': [{'status': 'idle'}, {'status': 'queued'}]}),
+        ('l', 'idle', {'workers': [{'status': 'idle', 'persistent': True}]})))
+    try:
+        response = await client.get("/api/health?activity=1", headers=owner)
+        assert (await response.json())["activity"] == {"working": 5}
+    finally:
+        sessions[:] = saved  # Synthetic rows only for this read; the app closes its real ones.
 
 
 async def test_login_rejects_cross_origin_before_pam(aiohttp_client, tmp_path):

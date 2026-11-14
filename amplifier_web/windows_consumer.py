@@ -20,6 +20,7 @@ import sys
 
 RECEIPT = "consumer-install.json"
 QUALIFICATION = "consumer-qualified.json"
+RECORD = "consumer-maintenance.json"
 
 
 def _receipt_digest(value):
@@ -203,43 +204,181 @@ async def launch(root, *, open_browser=True):
     return result
 
 
-async def maintenance(root, operation):
+_UNCHANGED = "Amplifier was not uninstalled, and nothing was changed. You can keep using it.\n\n"
+_STOPPED = "To keep using Amplifier, open it from the Start menu."
+_UNFINISHED = {
+    # Before the first step: nothing was asked yet, or the question itself failed.
+    "preparation": _UNCHANGED + "Amplifier could not check its own installation files. "
+                   "Restart this PC, then uninstall again.",
+    "stop-app": "Amplifier could not stop its background app.\n\n"
+                "Wait a few minutes or restart this PC, then select Stop Amplifier again.",
+    "status": "Amplifier could not read its status.\n\nRestart this PC, then select Amplifier status again.",
+    # The steps of an uninstall, in their order.
+    "entries-check": _UNCHANGED + "Its entries in the Start menu or the Apps list are in use, or they were "
+                     "changed after setup. If another Amplifier message is open, answer it first. "
+                     "Otherwise restart this PC, then uninstall again.",
+    "task-read": _UNCHANGED + "Amplifier could not read its start-at-sign-in entry from Windows Task "
+                 "Scheduler. Restart this PC, then uninstall again.",
+    "stop": "Amplifier was not uninstalled, because it did not stop. Nothing was removed.\n\n"
+            "Wait a few minutes or restart this PC, then uninstall again.",
+    "task-remove": "Amplifier has stopped, but it is not uninstalled yet. Windows did not remove its "
+                   "start-at-sign-in entry, and nothing else was removed.\n\n"
+                   "Uninstall again to finish. " + _STOPPED,
+    "entries": "Amplifier has stopped and no longer starts when you sign in, but some of its entries in "
+               "the Start menu or the Apps list could not be removed.\n\n"
+               "Uninstall again to finish. " + _STOPPED,
+}
+_UNFINISHED["apps-entry"] = _UNFINISHED["shortcuts"] = _UNFINISHED["entries"]
+
+
+class Unfinished(RuntimeError):
+    """A Status, Stop or Uninstall step that did not finish; `notice` is the person's text.
+
+    The uninstall steps run in an order that keeps the installation usable:
+    nothing the person needs to open, stop or uninstall again is removed before
+    the app has stopped and its sign-in task is gone.
+    """
+
+    def __init__(self, step, error):
+        super().__init__(step)
+        self.step, self.error = step, error
+
+    @property
+    def notice(self):
+        code = getattr(self.error, "winerror", None)
+        text = _UNFINISHED.get(self.step, "Amplifier could not finish this.\n\nRestart this PC, then try again.")
+        return text + f"\n\nReference: {self.step}, {type(self.error).__name__}" + (f" {code}" if code else "")
+
+
+def _record(root, operation, step, error):
+    """Keep one small private note of the step that failed. Never raises.
+
+    Nothing else records why a windowless maintenance step failed. The note
+    goes beside the app's other service records. The installation folder is
+    the second choice: while a conversation worker is alive, Windows refuses a
+    new or replaced file directly in that folder (sharing violation).
+    """
+    import time
+    import traceback
+    from .deployment import write_private
+    note = json.dumps({
+        "schema": 1, "operation": operation, "step": step,
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "errorType": type(error).__name__, "winerror": getattr(error, "winerror", None),
+        "detail": str(error)[:300],
+        "where": [f"{Path(frame.filename).name}:{frame.name}:{frame.lineno}"
+                  for frame in traceback.extract_tb(error.__traceback__)[-4:]]})
+    for folder in (root / "app" / "config" / "services", root):
+        try:
+            write_private(folder / RECORD, note, owned_root=root)
+            return True
+        except (OSError, ValueError, RuntimeError):
+            continue
+    return False
+
+
+async def _uninstall(root):
+    """Stop the app and remove its sign-in task first; remove the Windows entries last.
+
+    A failed step leaves every entry that the person needs to open, stop or
+    uninstall again. Nothing is retried, force-stopped or elevated.
+
+    The earlier order removed the entries first and then rewrote their record
+    in the installation folder. Windows refuses that write while a conversation
+    worker is alive, so the app was never asked to stop and kept running with no
+    entry left. Workers end with the app's normal stop, which now comes first.
+    """
+    from . import windows_consumer_shell as shell
+    from .installation_health import windows_working
     from .windows_installation import owner_notice
-    from .installation_health import status
-    from .windows_service import command, uninstall
-    root, value = installation(root)
-    os.environ.update(environment(root, value))
-    if operation == "status":
-        result = await status(root / "app")
-        if sys.stdout is None:
-            owner_notice(result["message"])
-        return result
-    if operation not in {"stop", "uninstall"}:
-        raise ValueError("Unknown consumer operation.")
+    from .windows_service import uninstall
     if not owner_notice(
-            "Stop Amplifier's background app?" if operation == "stop" else
-            "Remove Amplifier's start-at-sign-in registration and stop its background app? "
-            "Your accounts, settings, history and installation files will be retained.",
+            "Uninstall Amplifier?\n\n"
+            "Amplifier will stop and will no longer start when you sign in. Its entries in the "
+            "Start menu and the Apps list will be removed.\n\n"
+            "Your chats, settings, accounts and the program files stay in this folder:\n" + str(root),
             confirm=True):
         return {"ok": True, "cancelled": True}
-    if operation == "uninstall":
-        from . import windows_consumer_shell
-        def remove():
-            if (root / windows_consumer_shell.FILE).exists():
-                # Prepare and retain every shell object BEFORE touching the
-                # Scheduler task. Conflicts leave all registrations unchanged.
-                with windows_consumer_shell.removal(root) as finish:
-                    # Registry transaction commit can detect a concurrent key
-                    # edit. Settle that conflict BEFORE removing the task.
-                    finish()
-                    uninstall(root / "app")
+    working = await windows_working(root / "app")
+    if working and not owner_notice(
+            ("Amplifier is working on a chat right now." if working == 1 else
+             f"Amplifier is working on {working} chats right now.") + "\n\n"
+            "Select Yes to stop that work and uninstall now.\n"
+            "Select No to keep Amplifier installed. Uninstall again when the work has finished.",
+            confirm=True):
+        return {"ok": True, "cancelled": True}
+
+    def remove():
+        at, result = ["entries-check"], None
+
+        def mark(name):
+            at[0] = name
+        try:
+            if (root / shell.FILE).exists():
+                # Check and pin every entry first: a changed entry refuses before
+                # the app stops. Remove the entries only when the task is gone.
+                with shell.removal(root, progress=mark) as finish:
+                    uninstall(root / "app", progress=mark)
+                    result = finish()
             else:
-                uninstall(root / "app")
-        await asyncio.to_thread(remove)
-    else:
-        await asyncio.to_thread(command, "stop", root / "app")
-    return {"ok": True, "operation": operation, "userDataRetained": True,
+                uninstall(root / "app", progress=mark)
+                result = {}
+        except (OSError, ValueError, RuntimeError, TimeoutError) as error:
+            if result is None:
+                raise Unfinished(at[0], error) from error
+            result.setdefault("receiptError", error)  # Everything was removed; only tidying failed.
+        return result
+
+    try:
+        result = await asyncio.to_thread(remove)
+    except Unfinished as stopped:
+        _record(root, "uninstall", stopped.step, stopped.error)
+        raise
+    if result.get("receiptError") is not None:
+        _record(root, "uninstall", "receipt", result["receiptError"])
+    if sys.stdout is None:
+        # No advice to delete the folder by hand: it holds the person's chats,
+        # and File Explorer can refuse its longest paths.
+        owner_notice("Amplifier is uninstalled. It no longer runs, and it no longer starts when you sign in.\n\n"
+                     "Your chats, settings, accounts and the program files are still in this folder:\n" + str(root))
+    return {"ok": True, "operation": "uninstall", "userDataRetained": True,
             "installationFilesRetained": True}
+
+
+async def maintenance(root, operation):
+    """Status, Stop and Uninstall from the Start menu or the Apps list.
+
+    Every failure leaves as `Unfinished`, with a plain cause and next step.
+    """
+    from .windows_installation import owner_notice
+    from .installation_health import status
+    from .windows_service import command
+    step = {"status": "status", "stop": "stop-app", "uninstall": "preparation"}.get(operation)
+    if step is None:
+        raise ValueError("Unknown consumer operation.")
+    checked = None
+    try:
+        checked, value = installation(root)
+        os.environ.update(environment(checked, value))
+        if operation == "status":
+            result = await status(checked / "app")
+            if sys.stdout is None:
+                owner_notice(result["message"])
+            return result
+        if operation == "uninstall":
+            return await _uninstall(checked)
+        if not owner_notice("Stop Amplifier's background app?", confirm=True):
+            return {"ok": True, "cancelled": True}
+        await asyncio.to_thread(command, "stop", checked / "app")
+        return {"ok": True, "operation": operation, "userDataRetained": True,
+                "installationFilesRetained": True}
+    except Unfinished:
+        raise  # An uninstall step; already recorded.
+    except (OSError, ValueError, RuntimeError, TimeoutError, metadata.PackageNotFoundError) as error:
+        # Write a record only into a folder that passed the installation check.
+        if checked is not None and operation != "status":
+            _record(checked, operation, step, error)
+        raise Unfinished(step, error) from error
 
 def integrate(root):
     """Setup-only OS entries after source/payload/graph and dependency checks."""
@@ -282,6 +421,13 @@ def main(argv=None):
                   if operation else asyncio.run(launch(args.root, open_browser=not args.no_open)))
         if sys.stdout is not None:
             print(json.dumps(result))
+    except Unfinished as stopped:
+        from .windows_installation import owner_notice
+        if sys.stdout is None:
+            owner_notice(stopped.notice)
+        else:
+            print(json.dumps({"ok": False, "step": stopped.step, "errorType": type(stopped.error).__name__}))
+        raise SystemExit(1) from None
     except (OSError, ValueError, RuntimeError, TimeoutError, metadata.PackageNotFoundError) as error:
         from .windows_installation import owner_notice
         starting = not (args.audit or args.integrate or args.status or args.stop or args.uninstall)
