@@ -718,12 +718,38 @@ class Children:
                 child = constructing
             initialization = initialization_hooks(isolation=isolation, decision_accounts=decision_accounts,
                                                   routing=routing, retain=retain_child)
+            from ..module_failures import ConfiguredModuleError, safe_failures
+            load_failures = []
+            remove_failure_hook = None
+            async def failed_module(event, data):
+                load_failures.extend(safe_failures([{
+                    "module": data.get("module_id"), "type": data.get("module_type"),
+                    "reason_code": data.get("reason_code"), "instance_id": data.get("instance_id"),
+                }]))
+                return HookResult()
+            async def before_initialize(constructing):
+                nonlocal remove_failure_hook
+                # Own cleanup even when initialization never returns a child.
+                retain_child(constructing)
+                remove_failure_hook = constructing.coordinator.hooks.register(
+                    "module:load_failed", failed_module, name="unified-child-mount-diagnostics")
+                if callback := initialization.get("before_initialize"):
+                    await callback(constructing)
             from .approvals import Approvals
             approvals = (self.approvals.for_context(lambda: child.coordinator.get('context') if child else None)
                          if isinstance(self.approvals, Approvals) else self.approvals)
-            child = await child_prepared.create_session(session_id=identity, parent_id=parent.session_id,
-                approval_system=approvals, display_system=getattr(parent.coordinator, "display_system", None),
-                session_cwd=cwd, is_resumed=resumed, **initialization)
+            try:
+                child = await child_prepared.create_session(session_id=identity, parent_id=parent.session_id,
+                    approval_system=approvals, display_system=getattr(parent.coordinator, "display_system", None),
+                    session_cwd=cwd, is_resumed=resumed, before_initialize=before_initialize)
+            finally:
+                if remove_failure_hook:
+                    remove_failure_hook()
+            # Match root admission: only existing provider isolation permits a
+            # configured failure; require_selected below still owns selection.
+            fatal_failures = [row for row in load_failures if not isolation or row["type"] != "provider"]
+            if fatal_failures:
+                raise ConfiguredModuleError(fatal_failures)
             decision_accounts.require_complete()
             coordinator = child.coordinator
             from ..read_policy import validate_mounted_read_policy

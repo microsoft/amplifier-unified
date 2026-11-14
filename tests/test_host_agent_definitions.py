@@ -645,7 +645,7 @@ async def test_real_delegate_refuses_failed_child_tool_mount(delegate_specialist
     if inherited:
         # A prepared declaration inherited from the parent, not the overlay.
         # Root-equivalent policy must not inspect just agent-declared tools.
-        fixture.parent.coordinator.config["tools"].append(copy.deepcopy(fixture.sources["alpha"]))
+        fixture.parent.coordinator.config.setdefault("tools", []).append(copy.deepcopy(fixture.sources["alpha"]))
         fixture.parent.coordinator.config["agents"]["specialists:alpha"]["tools"] = []
     result = await fixture.delegate.execute({
         "agent": "specialists:alpha", "instruction": "must not execute", "persistent": persistent})
@@ -668,6 +668,52 @@ async def test_real_delegate_refuses_failed_child_tool_mount(delegate_specialist
     # Failed persistent startup is not a resumable successful checkpoint.
     with pytest.raises(FileNotFoundError, match="No saved child"):
         await fixture.children.resume(child.session_id, "not a replay", fixture.parent)
+
+
+async def test_real_child_mount_failure_preserves_saved_resume_history(delegate_specialists):
+    from amplifier_web.module_failures import ConfiguredModuleError
+    fixture = delegate_specialists
+    result = await fixture.delegate.execute({"agent": "specialists:alpha", "instruction": "inspect"})
+    assert result.success, result.error
+    identity = fixture.state["executed"][-1]
+    directory = fixture.store.directory(identity)
+    before = {name: (directory / name).read_bytes() for name in ("transcript.jsonl", "metadata.json")}
+    executions = list(fixture.state["executed"])
+    fixture.state["fail"].add("alpha")
+    with pytest.raises(ConfiguredModuleError) as failure:
+        await fixture.children.resume(identity, "explicit new input, never replay", fixture.parent)
+    assert failure.value.failures == [{
+        "module": fixture.sources["alpha"]["module"], "type": "tool", "reason_code": "unknown",
+        "guidance": "The module could not be loaded. Check its configuration and dependencies.",
+    }]
+    assert {name: (directory / name).read_bytes() for name in before} == before
+    assert fixture.state["executed"] == executions
+    assert fixture.state["cleaned"].count(identity) == 2  # once per distinct construction
+    assert fixture.children.rows[identity]["status"] == "error"
+    assert set(fixture.children.sessions) == {"parent"}
+
+
+async def test_real_child_cancel_during_mount_retains_cleanup_without_checkpoint(delegate_specialists):
+    import asyncio
+    fixture = delegate_specialists
+    fixture.state["block"] = True
+    task = asyncio.create_task(fixture.children.spawn(
+        "specialists:alpha", "must not execute", fixture.parent, sub_session_id="cancelled-mount"))
+    try:
+        await asyncio.wait_for(fixture.state["mounting"].wait(), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    assert not fixture.state["executed"] and not fixture.state["events"]
+    assert fixture.state["cleaned"].count("cancelled-mount") == 1
+    assert fixture.store.load("cancelled-mount") is None
+    assert fixture.children.rows["cancelled-mount"]["status"] == "cancelled"
+    assert set(fixture.children.sessions) == {"parent"}
+    assert not fixture.children.admissions
 
 
 DRIVER = '''__amplifier_module_type__ = "orchestrator"
