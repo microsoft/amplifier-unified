@@ -1555,7 +1555,10 @@ class Worker:
                          **({'executionFailure': capture,
                              **({'generationId': capture['generationId']} if capture.get('generationId') else {})}
                             if capture else {})})
-        self.shutdown.set()
+        # A successful idle retirement owns the ordered execution join and its
+        # reply. Let that command publish before shutdown cancels commands.
+        if not (self.retiring and not task.cancelled() and task.exception() is None):
+            self.shutdown.set()
 
     async def command(self, data):
         """Serialize admission with retirement and bind a per-work write token."""
@@ -1616,8 +1619,9 @@ class Worker:
                             from amplifier_module_loop_live.runtime import Input
                             await self.runtime.submit(Input("stop", target="finish"))
                             await asyncio.shield(self.execution)
-                        self.shutdown.set()
                     publish({"op": "reply", "id": data.get("id"), "result": {"retired": settled}})
+                    if settled:
+                        self.shutdown.set()
             except Exception as error:
                 from amplifier_web.worker_diagnostics import command_failure_facts
                 publish({"op": "reply", "id": data.get("id"), "error": "Worker retirement could not save the conversation.",

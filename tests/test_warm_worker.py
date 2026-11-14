@@ -69,6 +69,42 @@ async def test_idle_retirement_joins_actual_runtime_close_before_shutdown(monkey
 
 
 @pytest.mark.asyncio
+async def test_retirement_reply_precedes_concurrent_cleanup_command_cancellation(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from amplifier_web import runtime_worker
+    worker = runtime_worker.Worker(canonical_bootstrap=False)
+    closed = asyncio.Event()
+    async def execution():
+        await closed.wait()
+    worker.execution = asyncio.create_task(execution())
+    worker.execution.add_done_callback(worker.executed)
+    async def submit(command):
+        closed.set()
+    worker.runtime = SimpleNamespace(submit=submit)
+    worker.session = SimpleNamespace(
+        coordinator=SimpleNamespace(get_capability=lambda _: worker.runtime), cleanup=AsyncMock())
+    worker.checkpoint_idle = AsyncMock(return_value=True)
+    worker.checkpoint_terminal_outcome = AsyncMock()
+    async def read():
+        await asyncio.sleep(100)
+    worker.read = read
+    worker.computer_episodes = SimpleNamespace(fence=lambda: None, close=AsyncMock(return_value={"settled": True}))
+    events = []
+    monkeypatch.setattr(runtime_worker, "publish", events.append)
+    cleanup = asyncio.create_task(worker._run())
+    retirement = asyncio.create_task(worker.command({"op": "retire", "id": "ordered-retire"}))
+    worker.tasks.add(retirement)
+    await retirement
+    await cleanup
+    assert not retirement.cancelled()
+    assert any(event.get("id") == "ordered-retire" and event.get("result") == {"retired": True}
+               for event in events)
+    assert worker._cleanup_settled
+
+
+@pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform != "linux", reason="Prospective lifetime is qualified on Linux")
 async def test_cancelled_worker_run_retains_physical_binding_until_cleanup_owner_settles(tmp_path):
     import asyncio
