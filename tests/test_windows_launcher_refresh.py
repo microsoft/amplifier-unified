@@ -1,0 +1,380 @@
+"""Launcher refresh composition with real pointer code; native installs are CI evidence."""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+import zipfile
+
+import pytest
+
+from amplifier_web import app_component_graph as components, application_generations as generations
+from amplifier_web import windows_launcher_refresh as refresher
+from amplifier_web.app_updates import PROBE
+from amplifier_web.update_diagnostics import PROBE_PREFIX
+
+SOURCE = "https://github.com/microsoft/amplifier-unified"
+OLD, NEW = ("0.87.0", "a" * 40), ("0.94.0", "b" * 40)
+
+
+def wheel(folder, version, revision):
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"amplifier_unified-{version}-py3-none-any.whl"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("amplifier_web/release-source.json", json.dumps({
+            "schema": 1, "repository": "microsoft/amplifier-unified", "revision": revision, "version": version}))
+    return path
+
+
+def install(prefix, version, revision, source, base):
+    """An installed app environment as uv leaves it, with only the facts the refresh reads."""
+    site = prefix / "lib/python3.13/site-packages"
+    info = site / f"amplifier_unified-{version}.dist-info"
+    info.mkdir(parents=True)
+    (info / "METADATA").write_text(f"Metadata-Version: 2.4\nName: amplifier-unified\nVersion: {version}\n")
+    (info / "direct_url.json").write_text(json.dumps({"url": Path(source).as_uri(), "archive_info": {}}))
+    (site / "amplifier_web").mkdir()
+    (site / "amplifier_web/release-source.json").write_text(json.dumps({
+        "schema": 1, "repository": "microsoft/amplifier-unified", "revision": revision, "version": version}))
+    (prefix / "bin").mkdir()
+    (prefix / "bin/python").write_text("launcher " + version)
+    (prefix / "pyvenv.cfg").write_text(f"home = {base}\n")
+
+
+class Service:
+    """The task's facts and controls, without a Scheduled Task."""
+
+    def __init__(self, root, *, up=True, ready=(True,)):
+        self.launcher = root / "tools/amplifier-unified"
+        self.tool_path, self.launch_roots = str(root / "uv"), {"UV_TOOL_BIN_DIR": str(root / "tool-bin")}
+        self.github_access, self.up, self.results, self.events = "anonymous", up, list(ready), []
+        self.inside = self.handoff = False
+
+    def running(self):
+        return self.up
+
+    def inside_host(self):
+        return self.inside
+
+    def handoff_in_flight(self):
+        return self.handoff
+
+    def stop(self):
+        self.events.append("stop")
+        self.up = False
+
+    def start(self):
+        self.events.append("start")
+        self.up = True
+
+    async def ready(self, wait):
+        return self.results.pop(0)
+
+
+@pytest.fixture
+def installed(tmp_path, monkeypatch):
+    """A setup-made installation whose app has updated itself past its launcher."""
+    monkeypatch.setattr(refresher, "_WINDOWS", False)
+    root, home = tmp_path / "Amplifier", tmp_path / "Amplifier/app"
+    base = tmp_path / "Amplifier/python/cpython"
+    for folder in (home, base, root / "uv", root / "tool-bin"):
+        folder.mkdir(parents=True)
+    (base / "python3").write_text("")
+    uv = root / "uv/uv"
+    uv.write_text("#!/bin/sh\n")
+    uv.chmod(0o755)
+    old_wheel = wheel(root, *OLD)
+    launcher = root / "tools/amplifier-unified"
+    install(launcher, *OLD, old_wheel, base)
+    entry = root / "tool-bin/amplifier-unified"
+    entry.write_text("entry " + OLD[0])
+    (launcher / "uv-receipt.toml").write_text(
+        '[tool]\nentrypoints = [{ name = "amplifier-unified", install-path = ' + json.dumps(str(entry))
+        + ', from = "amplifier-unified" }]\n')
+    generation = "c" * 32
+    folder = generations.directory(home, NEW[1], generation)
+    source = wheel(folder, *NEW)
+    artifact = {"url": f"{SOURCE}/releases/download/v{NEW[0]}/{source.name}",
+                "sha256": hashlib.sha256(source.read_bytes()).hexdigest(), "path": str(source)}
+    prefix = folder / "tools/amplifier-unified"
+    install(prefix, *NEW, source, base)
+    graph = [{"name": "amplifier-unified", "version": NEW[0], "url": SOURCE, "revision": NEW[1],
+              "delivery": {key: artifact[key] for key in ("url", "sha256")}},
+             {"name": "zeta", "version": "1.0"}]
+    validated = {"revision": NEW[1], "version": NEW[0], "generation": generation, "attemptId": "d" * 32,
+                 "extras": [], "componentGraph": graph, "componentDigest": components.digest(graph),
+                 "artifact": artifact, "installation": generations.bootstrap_identity(prefix)}
+    (folder / "validated.json").write_text(json.dumps(validated))
+    (folder / "components.txt").write_text(components.requirements(graph))
+    generations.promote(home, validated, launcher)
+    (root / "consumer-install.json").write_text(json.dumps({
+        "schema": 1, "kind": "windows-consumer-preview", "version": OLD[0], "revision": OLD[1],
+        "artifact": {"url": "old", "sha256": "0" * 64, "path": str(old_wheel)}, "graph": [],
+        "uv": str(uv), "git": str(root / "git/cmd/git.exe")}))
+    (root / "consumer-qualified.json").write_text("proof of the old launcher")
+    monkeypatch.setattr(sys, "prefix", str(prefix))
+    calls, fail = [], {}
+
+    async def process(*args, env=None, timeout=None, **kwargs):
+        args = [str(item) for item in args]
+        if args[1:3] == ["tool", "install"]:
+            calls.append("install")
+            assert env["UV_TOOL_DIR"] == str(launcher.parent) and "--force" in args
+            assert args[args.index("--python") + 1] == str(base / "python3")
+            assert args[args.index("--overrides") + 1] == str(folder / "components.txt")
+            # The launcher is installed from its own copy of the app's verified release file.
+            assert args[-1] == (root / source.name).as_uri() and not launcher.exists()
+            if fail.get("install"):
+                (launcher / "half").mkdir(parents=True)
+                raise RuntimeError("uv failed with private output")
+            install(launcher, *NEW, root / source.name, base)
+            (launcher / "uv-receipt.toml").write_text("[tool]\nentrypoints = []\n")
+            entry.write_text("entry " + NEW[0])
+            return ""
+        if "amplifier_web.windows_consumer" in args:
+            calls.append("audit")
+            assert args[0] == str(launcher / "bin/python") and args[-3:] == ["--root", str(root), "--audit"]
+            (root / "consumer-qualified.json").write_text("proof of the new launcher")
+            return ""
+        script = args[args.index("-c") + 1]
+        if script == PROBE:
+            calls.append("probe")
+            return PROBE_PREFIX + json.dumps({"ok": True, "version": fail.get("version", NEW[0])})
+        if script == components.GRAPH_PROBE:
+            calls.append("graph")
+            return json.dumps([
+                {"name": "amplifier-unified", "version": NEW[0],
+                 "direct": {"url": (root / source.name).as_uri(), "archive_info": {}},
+                 "stamp": {"schema": 1, "repository": "microsoft/amplifier-unified",
+                           "revision": NEW[1], "version": NEW[0]}},
+                {"name": "zeta", "version": fail.get("zeta", "1.0"), "direct": None}])
+        assert "generations.directory" in script and args[0] == str(launcher / "bin/python")
+        calls.append("reader")
+        return "compatible" if not fail.get("reader") else "unsupported"
+
+    return SimpleNamespace(root=root, home=home, launcher=launcher, entry=entry, prefix=prefix, folder=folder,
+                           process=process, calls=calls, fail=fail, validated=validated,
+                           pointer=home / "updates/application-active.json",
+                           old=generations.bootstrap_identity(launcher))
+
+
+def run(installed, service, **options):
+    return asyncio.run(refresher.refresh(service, installed.home, process=installed.process, **options))
+
+
+def unchanged(installed, pointer):
+    assert installed.pointer.read_bytes() == pointer
+    assert generations.bootstrap_identity(installed.launcher) == installed.old
+    assert generations.active(installed.home)["bootstrap"] == installed.old
+    assert installed.entry.read_text() == "entry " + OLD[0]
+    assert (installed.root / "consumer-qualified.json").read_text() == "proof of the old launcher"
+    assert json.loads((installed.root / "consumer-install.json").read_text())["version"] == OLD[0]
+    assert not list(installed.root.glob("launcher-*"))
+    assert not (installed.root / f"amplifier_unified-{NEW[0]}-py3-none-any.whl").exists()
+
+
+def test_check_reports_the_plan_and_changes_nothing(installed):
+    pointer, service = installed.pointer.read_bytes(), Service(installed.root)
+    result = run(installed, service, check=True)
+    assert result["ok"] and not result["changed"] and result["action"] == "refresh"
+    assert result["launcher"]["version"] == OLD[0] and result["app"]["version"] == NEW[0]
+    assert "Nothing was changed now." in result["message"]
+    assert service.events == [] and installed.calls == []
+    unchanged(installed, pointer)
+
+
+def test_refresh_replaces_the_launcher_at_its_path_and_keeps_everything_else(installed):
+    service = Service(installed.root)
+    result = run(installed, service)
+    assert result["ok"] and result["changed"] and result["running"] and result["state"] == "refreshed"
+    assert service.events == ["stop", "start"]
+    assert installed.calls == ["install", "probe", "graph", "reader", "audit"]
+    facts = refresher.launcher_facts(installed.launcher)
+    assert (facts["version"], facts["revision"]) == NEW and facts["identity"] != installed.old
+    assert facts["identity"]["prefix"] == installed.old["prefix"]  # the same folder: task and shortcuts hold
+    target = generations.active(installed.home)
+    assert target["bootstrap"] == facts["identity"] and target["generation"] == "c" * 32
+    # The previous launcher is kept, unchanged, beside the installation.
+    previous = Path(result["previousLauncher"])
+    assert previous.parent == installed.root and previous.name.startswith("launcher-" + OLD[0] + "-")
+    assert generations.bootstrap_identity(previous)["digest"] == installed.old["digest"]
+    receipt = json.loads((installed.root / "consumer-install.json").read_text())
+    assert (receipt["version"], receipt["revision"]) == NEW and receipt["graph"] == installed.validated["componentGraph"]
+    assert receipt["artifact"]["path"] == str(installed.root / f"amplifier_unified-{NEW[0]}-py3-none-any.whl")
+    assert receipt["uv"].endswith("uv") and receipt["kind"] == "windows-consumer-preview"
+    assert (installed.root / "consumer-qualified.json").read_text() == "proof of the new launcher"
+    record = json.loads((installed.home / "config/services" / refresher.RECORD).read_text())
+    assert record["result"] == "refreshed" and record["to"]["version"] == NEW[0]
+    saved = installed.home / "config/services" / refresher.SAVED
+    assert json.loads(saved.read_text())["bootstrap"] == installed.old
+    # A second run finds nothing to do and does not stop the app.
+    again = run(installed, service)
+    assert again["ok"] and again["action"] == "none" and "already has the app's version" in again["message"]
+    assert service.events == ["stop", "start"]
+
+
+@pytest.mark.parametrize("failure, step, calls", [
+    ({"install": True}, "installing the launcher", ["install"]),
+    ({"version": "0.1.0"}, "checking the new launcher", ["install", "probe"]),
+    ({"zeta": "2.0"}, "checking the new launcher", ["install", "probe", "graph"]),
+    ({"reader": True}, "checking the new launcher", ["install", "probe", "graph", "reader"]),
+])
+def test_a_failed_refresh_puts_the_previous_launcher_back_and_restarts_the_app(installed, failure, step, calls):
+    pointer, service = installed.pointer.read_bytes(), Service(installed.root)
+    installed.fail.update(failure)
+    result = run(installed, service)
+    assert not result["ok"] and result["rolledBack"] and result["running"] and result["state"] == "rolled-back"
+    assert result["step"] == step and installed.calls == calls
+    assert result["message"] == (f"The launcher refresh did not finish. It stopped at this step: {step}. "
+                                 "The previous launcher is back. Amplifier is running.")
+    assert "private output" not in json.dumps(result)
+    assert service.events == ["stop", "start"] and service.up
+    unchanged(installed, pointer)
+    record = json.loads((installed.home / "config/services" / refresher.RECORD).read_text())
+    assert record["result"] == "rolled-back" and record["step"] == step
+
+
+def test_an_app_that_is_not_ready_after_the_refresh_is_rolled_back_completely(installed):
+    pointer = installed.pointer.read_bytes()
+    service = Service(installed.root, ready=(False, True))
+    result = run(installed, service)
+    assert not result["ok"] and result["rolledBack"] and result["running"]
+    assert result["step"] == "starting Amplifier"
+    # Stop, start with the new launcher, stop again, start with the previous launcher.
+    assert service.events == ["stop", "start", "stop", "start"]
+    assert installed.calls == ["install", "probe", "graph", "reader", "audit"]
+    unchanged(installed, pointer)
+
+
+def test_an_app_that_was_stopped_stays_stopped_after_a_failed_refresh(installed):
+    pointer, service = installed.pointer.read_bytes(), Service(installed.root, up=False)
+    installed.fail["install"] = True
+    result = run(installed, service)
+    assert not result["ok"] and result["rolledBack"] and result["running"] is False
+    assert result["message"].endswith("Amplifier was not running before and is not running now.")
+    assert service.events == []
+    unchanged(installed, pointer)
+
+
+def test_an_incomplete_rollback_never_claims_that_the_app_runs(installed):
+    service = Service(installed.root, ready=(False,))
+    stops = []
+
+    def stop():
+        stops.append(1)
+        if len(stops) == 2:
+            raise RuntimeError("the task did not stop")
+        service.up = False
+    service.stop = stop
+    result = run(installed, service)
+    assert not result["ok"] and result["rolledBack"] is False and result["state"] == "rollback-incomplete"
+    assert result["running"] is False and "Amplifier is NOT running." in result["message"]
+    assert "the app could not be stopped" in result["message"]
+    assert str(installed.home / "config/services" / refresher.SAVED) in result["message"]
+    assert "launcher-" + OLD[0] in result["message"]
+
+
+def test_a_stop_that_is_not_confirmed_changes_nothing_and_reports_an_app_that_answers(installed):
+    pointer, service = installed.pointer.read_bytes(), Service(installed.root, ready=(True,))
+
+    def stop():
+        raise RuntimeError("Task still has a running instance; no force-stop attempted.")
+    service.stop = stop
+    result = run(installed, service)
+    assert not result["ok"] and result["state"] == "unchanged" and result["running"] is True
+    assert result["step"] == "stopping Amplifier" and installed.calls == []
+    assert result["message"].endswith("Nothing was changed. Amplifier is running.")
+    assert service.events == [] and service.results == []  # the app was asked whether it answers
+    unchanged(installed, pointer)
+
+
+def refused(installed, service):
+    pointer = installed.pointer.read_bytes()
+    with pytest.raises(refresher.Refused) as reason:
+        run(installed, service)
+    assert service.events == [] and installed.calls == []
+    unchanged(installed, pointer)
+    return str(reason.value)
+
+
+def test_refusals_change_nothing_and_say_why(installed, monkeypatch):
+    service = Service(installed.root)
+    service.inside = True
+    assert "from inside the running app" in refused(installed, service)
+    service.inside, service.handoff = False, True
+    assert "An app update is still finishing" in refused(installed, service)
+    service.handoff = False
+    monkeypatch.setattr(sys, "prefix", str(installed.root / "another"))
+    assert str(installed.prefix / "bin/python") in refused(installed, service)
+    monkeypatch.setattr(sys, "prefix", str(installed.prefix))
+    (installed.folder / "components.txt").write_text("changed==1.0\n")
+    assert "did not pass its own checks" in refused(installed, service)
+    (installed.folder / "components.txt").write_text(components.requirements(installed.validated["componentGraph"]))
+    (installed.root / "uv/uv").unlink()
+    monkeypatch.setenv("PATH", str(installed.root / "empty"))
+    assert "setup helper (uv)" in refused(installed, service)
+
+
+def test_a_pointer_of_another_launcher_is_never_rebound(installed):
+    other = installed.root / "other/tools/amplifier-unified"
+    install(other, "0.90.0", "e" * 40, installed.root / "x.whl", installed.root / "python/cpython")
+    service = Service(installed.root)
+    service.launcher = other
+    assert "belongs to another launcher" in refused(installed, service)
+    with pytest.raises(ValueError, match="does not belong to the replaced launcher"):
+        generations.rebind(installed.home, generations.bootstrap_identity(other), installed.launcher)
+    with pytest.raises(ValueError, match="does not belong to the replaced launcher"):
+        generations.rebind(installed.home, installed.old, other)  # a different folder
+    with pytest.raises(ValueError, match="does not belong to the replaced launcher"):
+        generations.rebind(installed.home, installed.old, installed.launcher)  # nothing was replaced
+
+
+def test_nothing_to_refresh_without_an_app_update_or_with_a_newer_launcher(installed):
+    service = Service(installed.root)
+    installed.pointer.unlink()
+    result = run(installed, service)
+    assert result["ok"] and result["action"] == "none" and "runs from the launcher itself" in result["message"]
+    assert service.events == []
+
+
+def test_task_service_reads_the_owned_task_and_uses_the_normal_stop(tmp_path, monkeypatch):
+    from amplifier_web import windows_app_recovery, windows_service, windows_task_runtime
+    spec = SimpleNamespace(python=str(tmp_path / "tools/amplifier-unified/Scripts/pythonw.exe"),
+                           tool_path="tools", launch_roots={"UV_TOOL_BIN_DIR": "bin"}, github_access="auto",
+                           registration_id="r" * 32)
+    task, commands = {"instances": 1}, []
+    monkeypatch.setattr(windows_service, "_read", lambda home: (task, spec))
+    monkeypatch.setattr(windows_service, "command", lambda name, home: commands.append((name, home)))
+    service = refresher.TaskService(tmp_path / "app")
+    assert service.launcher == tmp_path / "tools/amplifier-unified" and service.launch_roots == {"UV_TOOL_BIN_DIR": "bin"}
+    assert service.running()
+    task["instances"] = 0
+    assert not service.running()
+    service.stop()
+    service.start()
+    assert commands == [("stop", tmp_path / "app"), ("start", tmp_path / "app")]
+    monkeypatch.setattr(windows_app_recovery, "read", lambda value: {"status": "prepared"})
+    assert service.handoff_in_flight()
+    monkeypatch.setattr(windows_app_recovery, "read", lambda value: {"status": "acknowledged"})
+    assert not service.handoff_in_flight()
+    # A process that the app started is a descendant of its host.
+    import os
+    parents = {os.getpid(): 500, 500: 77, 77: 4}
+    monkeypatch.setattr(windows_task_runtime, "read", lambda value: {"pid": 77})
+    monkeypatch.setattr(windows_task_runtime, "parent_pid", lambda pid: parents[pid])
+    assert service.inside_host()
+    monkeypatch.setattr(windows_task_runtime, "read", lambda value: {"pid": 9999})
+    parents[4] = 0
+    assert not service.inside_host()
+    monkeypatch.setattr(windows_service, "_read", lambda home: (task, None))
+    with pytest.raises(refresher.Refused, match="No Amplifier start-at-sign-in task"):
+        refresher.TaskService(tmp_path / "app")
+
+
+def test_help_says_where_the_command_must_run():
+    assert "from a process outside the\napp" in refresher.__doc__
+    assert "refuses to run from inside it" in refresher.__doc__
+    assert "-I -m amplifier_web.windows_launcher_refresh --data-dir <data> [--check]" in refresher.__doc__

@@ -127,6 +127,33 @@ def _promote(home, validated, bootstrap):
     return active(home)
 
 
+def rebind(home, expected, bootstrap):
+    """Bind the active generation to a launcher that was replaced at its own path.
+
+    Only the launcher refresh calls this, with the host stopped. The stored
+    launcher identity must equal `expected` exactly, and the replacement must be
+    at the same folder: a pointer of another installation is never rebound. The
+    retained `previous` entry stays as history; the next promotion copies this
+    rebound top level, so a later rollback matches.
+    """
+    with _pointer_lock(home):
+        from .deployment import write_private
+
+        path = Path(home) / "updates/application-active.json"
+        record = json.loads(path.read_text())
+        current = bootstrap_identity(bootstrap)
+        if (record.get("schema") != 1 or record.get("bootstrap") != expected
+                or current["prefix"] != expected.get("prefix") or current == expected):
+            raise ValueError("The application launch target does not belong to the replaced launcher")
+        active(home)  # The pointer and its generation still agree before the write.
+        record["bootstrap"] = current
+        write_private(path, json.dumps(record), **({"owned_root": home} if os.name == "nt" else {}))
+        result = active(home)
+        if result["bootstrap"] != current:
+            raise ValueError("The application launch target was not rebound")
+        return result
+
+
 def restore(home, promoted, previous, bootstrap, *, expected_bootstrap):
     """Restore only the exact pointer this promotion replaced, never an install."""
     with _pointer_lock(home):

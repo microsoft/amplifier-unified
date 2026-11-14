@@ -144,6 +144,80 @@ The human waived the clean-machine check for the current delivery and selected
 the existing Windows test host only. That coverage is **waived / not executed**,
 not a prerequisite-free installation pass. Signing is deferred separately.
 
+### Launcher refresh
+
+An in-app update never replaces the stable launcher, so launcher code stays at
+the version that setup installed. A defect there cannot be repaired by an
+update: one measured installation kept a 0.87.0 launcher under a 0.92.5 app,
+and that launcher opened a terminal window at every start. The Start-menu
+entries run launcher code too.
+
+`amplifier_web.windows_launcher_refresh` replaces the launcher with the version
+of the active app generation:
+
+```text
+<data>\updates\a\<generation>\tools\amplifier-unified\Scripts\python.exe -I -m amplifier_web.windows_launcher_refresh --data-dir <data> [--check]
+```
+
+It is keyed on the owned task, not on setup's files: the task names the
+launcher folder and the data folder. It therefore also fits an installation
+that setup did not make. `--check` reports the plan and changes nothing.
+
+**It must run outside the app.** The normal stop ends every process in the
+host's Job. The command runs with the active generation's Python (never the
+launcher's own), and refuses when it is a descendant of the running host. A
+terminal, a remote shell and setup qualify. The app itself cannot run it
+without a helper that Windows starts outside that Job; none exists yet.
+
+Steps, in order:
+
+1. Decide, changing nothing. Refuse unless the launch record names exactly the
+   launcher that the task starts, no update handoff is in flight, the launcher
+   is not newer than the app, and the generation still passes its own checks
+   (installation identity, package list, release file by digest).
+2. Stop the app with the normal owner stop. Decide again with the app stopped.
+3. Save the launch record. Copy the generation's verified release file beside
+   the installation. Rename the launcher folder aside; it is kept.
+4. Install the launcher at the same path with the generation's exact package
+   list and the launcher's own interpreter. The task, the shortcuts and the
+   private Python do not change.
+5. Check the new launcher: its probe, its package list against the
+   generation's, and its own reader against the active generation.
+6. Bind the launch record to the new launcher in one private write
+   (`application_generations.rebind`). The write refuses unless the stored
+   identity is exactly the replaced launcher's and the folder is the same.
+7. For a setup-made installation, rewrite setup's receipt and rerun setup's
+   audit with the new launcher.
+8. Start the app and require the normal readiness result.
+
+It does not touch `config/server.yaml`, the port, the TLS files, the trusted
+certificate, the task definition, settings, chats or app generations.
+
+Any failure after step 2 puts back what the run changed: the saved launch
+record, setup's receipts, the previous launcher folder at its original path and
+its start programs. It then restores the app's running state and reports in
+plain words whether the app runs. It never reports "running" for an app that
+does not answer. If the previous state cannot be restored, the result says
+that the app is not running, where the previous launcher and the saved launch
+record are, and what to do. `config/services/launcher-refresh.json` records
+the outcome and the failed step, never output or paths from child programs.
+
+Evidence and limits. The `Windows launcher refresh` workflow installs a
+published earlier release (0.93.2) as the launcher and the candidate as the
+active generation with real uv installations, in setup's layout. It runs the
+command's own code through a refused installation, an app that does not become
+ready (full rollback after the rebind), a successful refresh and a second run.
+After the refresh the new launcher's own code accepts the active generation
+and setup's records, and a later update's rollback check passes with the
+rebound record. A runner registers no Scheduled Task: stop, start and readiness
+are a recorded stand-in there. The real task on a setup-made installation, a
+restart of the PC afterwards, and the installation that setup did not make are
+clean-room and owner checks, and are not claimed here.
+
+The Apps-list version stays at the setup version, as it already does after
+every in-app update. Setup's Repair and Update will call this command and
+refresh the private tools; that is separate work.
+
 ### Consumer release asset
 
 `scripts/windows_consumer_release.py` is a build-machine producer. The normal
