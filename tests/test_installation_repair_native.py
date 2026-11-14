@@ -391,6 +391,35 @@ class NativeRepairHarnessTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'registration state is unknown'):
                 native.launch_job('example.saved.label', {})
 
+    def test_bootout_observation_retries_only_until_both_domains_prove_absence(self):
+        parent, absent, failed = Mock(), Mock(), Mock()
+        parent.returncode, parent.stdout = 0, 'services = {\n  0  example.saved.label\n}\n'
+        absent.returncode, absent.stdout = 0, 'services = {\n}\n'
+        failed.returncode = 1
+        with patch.object(native, 'execute', side_effect=[
+                parent, failed, absent, failed, absent, failed]) as observed, \
+                patch.object(native.time, 'sleep') as sleep:
+            value = native.wait_for(lambda: not native.launch_job('example.saved.label', {}),
+                                    seconds=1, description='service bootout')
+        self.assertTrue(value)
+        self.assertEqual(observed.call_count, 6)
+        sleep.assert_called_once_with(.15)
+        self.assertTrue(all(call.args[:2] == ('launchctl', 'print') for call in observed.call_args_list))
+
+    def test_persistent_launchd_disagreement_exhausts_deadline_never_claims_absence(self):
+        with patch.object(native.time, 'monotonic', side_effect=[0, 1]), \
+                patch.object(native.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(RuntimeError, 'timed out: service bootout'):
+                native.wait_for(Mock(side_effect=native.LaunchdObservationPending('unknown')),
+                                seconds=.5, description='service bootout')
+        sleep.assert_not_called()
+
+    def test_other_runtime_errors_are_not_observation_retry(self):
+        with patch.object(native.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(RuntimeError, 'foreign owner'):
+                native.wait_for(Mock(side_effect=RuntimeError('foreign owner')))
+        sleep.assert_not_called()
+
     def test_saved_child_cleanup_reaps_without_signalling(self):
         with patch.object(native.os, 'waitpid', return_value=(123, 0)) as reap, \
                 patch.object(native, 'pid_start', return_value=''), \

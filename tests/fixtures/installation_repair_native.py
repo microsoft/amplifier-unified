@@ -106,6 +106,10 @@ def check(condition, message):
         raise RuntimeError(message)
 
 
+class LaunchdObservationPending(RuntimeError):
+    """Two sequential passive launchd reads disagree; never proof of absence."""
+
+
 def execute(*args, env=None, check_result=True, timeout=120):
     result = subprocess.run([str(arg) for arg in args], env=env, stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
@@ -188,8 +192,9 @@ def launch_job(label, env):
         if result.returncode == 0:
             found.append((domain, result.stdout))
         else:
-            check(not re.search(r'(?<![\w.-])' + re.escape(label) + r'(?![\w.-])', parent.stdout),
-                  'launchd job lookup disagrees with domain; registration state is unknown')
+            if re.search(r'(?<![\w.-])' + re.escape(label) + r'(?![\w.-])', parent.stdout):
+                raise LaunchdObservationPending(
+                    'launchd job lookup disagrees with domain; registration state is unknown')
     # A GUI job may be visible through a user-domain lookup as well. Preserve
     # exact identity; prefer the GUI owner used by production bootstrap/bootout.
     return found
@@ -206,7 +211,10 @@ def wait_for(read, predicate=bool, *, seconds=90, description='checkpoint'):
             value = read()
             if predicate(value):
                 return value
-        except (FileNotFoundError, json.JSONDecodeError, ConnectionError, OSError):
+        except (FileNotFoundError, json.JSONDecodeError, ConnectionError, OSError, LaunchdObservationPending):
+            # A bootout can land between the parent-domain snapshot and exact
+            # job lookup. Retry only passive observations within this existing
+            # deadline; persistent disagreement still fails, never absent.
             pass
         check(time.monotonic() < deadline, 'timed out: ' + description)
         time.sleep(.15)

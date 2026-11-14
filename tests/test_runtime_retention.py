@@ -411,12 +411,12 @@ async def test_background_startup_is_bounded_and_disabled_policy_does_not_start(
     entered, release = asyncio.Event(), asyncio.Event()
     starts = []
     original = manager.start
-    async def held_start(session, emit):
+    async def held_start(session, emit, **kwargs):
         starts.append(session['id'])
         if len(starts) >= 2:
             entered.set()
         await release.wait()
-        await original(session, emit)
+        await original(session, emit, **kwargs)
     monkeypatch.setattr(manager, 'start', held_start)
     pending = [asyncio.create_task(warm(manager, f'slow-{i}')) for i in range(4)]
     try:
