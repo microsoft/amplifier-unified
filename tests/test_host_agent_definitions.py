@@ -503,7 +503,7 @@ async def test_real_preparation_and_fresh_native_child_expose_specialist_only_to
 
 
 @pytest.fixture
-async def delegate_specialists(specialist, tmp_path, request):
+async def delegate_specialists(specialist, tmp_path, request, monkeypatch):
     """Real file loading, preparation, DelegateTool, Core mounts and host children."""
     import asyncio
     from dataclasses import fields
@@ -582,8 +582,9 @@ async def mount(coordinator, config):
     if getattr(request, "param", False):
         provider_id = "provider-mount-probe-" + suffix
         provider_path = specialist.root / "modules" / provider_id
-        provider_path.mkdir()
-        (provider_path / "__init__.py").write_text('''__amplifier_module_type__ = "provider"
+        package = provider_path / ("amplifier_module_" + provider_id.replace("-", "_"))
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text(('''__amplifier_module_type__ = "provider"
 from amplifier_core import ProviderInfo
 class ProbeProvider:
     def __init__(self, config=None):
@@ -605,8 +606,11 @@ async def mount(coordinator, config):
     if state is not None and coordinator.session_id != "parent" and config.get("name") == "broken":
         raise RuntimeError("fixture-provider-secret")
     provider = ProbeProvider(config)
-    await coordinator.mount("providers", provider, name=provider.name)
-''')
+    await coordinator.mount("providers", provider, name="PROVIDER_DEFAULT")
+''').replace("PROVIDER_DEFAULT", provider_id.removeprefix("provider-")))
+        # The provider-schema owner uses the ordinary public import name.
+        # This is a local fixture package, never a replacement app source path.
+        monkeypatch.syspath_prepend(str(provider_path))
         loaded.providers = [
             {"module": provider_id, "instance_id": name, "source": str(provider_path),
              "config": {"name": name, "priority": 1}} for name in ("healthy", "broken")]
@@ -733,12 +737,23 @@ async def test_real_child_mount_failure_preserves_saved_resume_history(delegate_
     assert set(fixture.children.sessions) == {"parent"}
 
 
-async def test_real_child_cancel_during_mount_retains_cleanup_without_checkpoint(delegate_specialists):
+@pytest.mark.parametrize("resumed", [False, True])
+async def test_real_child_cancel_during_mount_retains_cleanup_without_checkpoint(delegate_specialists, resumed):
     import asyncio
     fixture = delegate_specialists
+    identity = "cancelled-mount"
+    before = {}
+    if resumed:
+        result = await fixture.delegate.execute({"agent": "specialists:alpha", "instruction": "inspect"})
+        assert result.success, result.error
+        identity = fixture.state["executed"][-1]
+        directory = fixture.store.directory(identity)
+        before = {name: (directory / name).read_bytes() for name in ("transcript.jsonl", "metadata.json")}
+    executions = list(fixture.state["executed"])
     fixture.state["block"] = True
-    task = asyncio.create_task(fixture.children.spawn(
-        "specialists:alpha", "must not execute", fixture.parent, sub_session_id="cancelled-mount"))
+    task = asyncio.create_task(
+        fixture.children.resume(identity, "explicit follow-up", fixture.parent) if resumed else
+        fixture.children.spawn("specialists:alpha", "must not execute", fixture.parent, sub_session_id=identity))
     try:
         await asyncio.wait_for(fixture.state["mounting"].wait(), 5)
         task.cancel()
@@ -748,10 +763,13 @@ async def test_real_child_cancel_during_mount_retains_cleanup_without_checkpoint
         if not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-    assert not fixture.state["executed"] and not fixture.state["events"]
-    assert fixture.state["cleaned"].count("cancelled-mount") == 1
-    assert fixture.store.load("cancelled-mount") is None
-    assert fixture.children.rows["cancelled-mount"]["status"] == "cancelled"
+    assert fixture.state["executed"] == executions and not fixture.state["events"]
+    assert fixture.state["cleaned"].count(identity) == (2 if resumed else 1)
+    if resumed:
+        assert {name: (directory / name).read_bytes() for name in before} == before
+    else:
+        assert fixture.store.load(identity) is None
+    assert fixture.children.rows[identity]["status"] == "cancelled"
     assert set(fixture.children.sessions) == {"parent"}
     assert not fixture.children.admissions
 
