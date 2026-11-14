@@ -475,9 +475,12 @@ Reply with the fixture response.
         destination.parent.chmod(0o700)
         canonical_binding = VersionedSessionBinding.create_new(
             destination, session_id="warm-fixture", operation_id="prospective-create", admit=lambda: None)
-    worker = Worker(media_graph_selection=selection, canonical_binding=canonical_binding)
+    worker = Worker(media_graph_selection=selection, canonical_binding=canonical_binding,
+                    **({"canonical_resume": False} if use_versioned else {}))
     workers.append(worker)
     config = {"id": "warm-fixture", "workspace": str(workspace), "bundle": str(bundle)}
+    if use_versioned:
+        config.update(forkContext=True, messages=[{"role": "assistant", "text": "prospective fork context"}])
     cold_started = time.monotonic()
     source_scope = local_sources([bundle, provider.parent, Path(context_module).parent.parent,
                                  Path(capture_module).parent.parent, *modules.values()]) if overlay or use_media else nullcontext()
@@ -496,6 +499,9 @@ Reply with the fixture response.
                     await asyncio.sleep(.02)
                 require_media(worker, selection)
                 assert not worker.session.coordinator.get_capability("live.host").registrations
+            if use_versioned:
+                assert any(row.get("content") == "prospective fork context"
+                           for row in await worker.session.coordinator.get("context").get_messages())
             first_input = {"op": "send", "id": "one-request", "input_id": "one", "text": "one"}
             if use_media:
                 first_input["attachments"] = [upload]
@@ -552,7 +558,8 @@ Reply with the fixture response.
                 committed_prefix = canonical_binding.expected  # Includes the actual terminal checkpoint.
             resumed_binding = (VersionedSessionBinding.resume(destination, session_id="warm-fixture",
                 expected=committed_prefix) if use_versioned else None)
-            restored = Worker(media_graph_selection=selection, canonical_binding=resumed_binding)
+            restored = Worker(media_graph_selection=selection, canonical_binding=resumed_binding,
+                              **({"canonical_resume": True} if use_versioned else {}))
             workers.append(restored)
             sends_before_resume = len([event for event in events if event.get("type") == "assistant.message"])
             await restored.start(config)

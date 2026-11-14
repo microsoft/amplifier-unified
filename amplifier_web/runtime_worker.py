@@ -53,7 +53,9 @@ def publish_process_identity():
 
 class Worker:
     def __init__(self, *, media_graph_selection=None, canonical_binding=None,
-                 canonical_binding_factory=None):
+                 canonical_binding_factory=None, canonical_resume=None):
+        if canonical_binding is not None and type(canonical_resume) is not bool:
+            raise ValueError("A canonical Worker needs explicit new-versus-resume intent")
         self.session = self.runtime = self.execution = None
         # Assembly-owned object, never a worker command/configuration field.
         self.media_graph_selection = media_graph_selection
@@ -61,6 +63,8 @@ class Worker:
         # Never reconstruct it from a command, catalog row or JSON prefix.
         self.canonical_binding = canonical_binding
         self.canonical_binding_factory = canonical_binding_factory
+        self.canonical_resume = canonical_resume
+        self._cleanup_settled = False
         self.approvals = {}
         self.approval_contexts = {}
         self.approval_deliveries = {}
@@ -1025,6 +1029,8 @@ class Worker:
                     ephemeral_mcp_servers=config.get("ephemeralMcpServers"),
                     media_graph_selection=self.media_graph_selection,
                     **({"canonical_binding": self.canonical_binding} if self.canonical_binding is not None else {}),
+                    **({"canonical_resume": self.canonical_resume}
+                       if self.canonical_binding is not None else {}),
                     **({"canonical_binding_factory": self.canonical_binding_factory}
                        if self.canonical_binding_factory is not None else {}),
                     startup_timing=startup_timing)
@@ -2024,14 +2030,24 @@ class Worker:
         # Bind before creating any worker task and retain through joined cleanup.
         # Foundation captures this policy for later lazy module activation.
         with preparation_scope() as self.preparation_report:
+            owner = asyncio.create_task(self._run())
+            cancelled = None
             try:
-                await self._run()
+                while not owner.done():
+                    try:
+                        await asyncio.shield(owner)
+                    except asyncio.CancelledError as error:
+                        cancelled = cancelled or error
+                        self.shutdown.set()
+                await owner
             finally:
-                if self.canonical_binding is not None:
+                if self.canonical_binding is not None and self._cleanup_settled:
                     # The owner joins any physical operation before releasing
                     # descriptors, including cancellation during worker cleanup.
                     await self.canonical_binding.aclose()
                     self.canonical_binding = None
+            if cancelled is not None:
+                raise cancelled
 
     async def _run(self):
         # The host verifies membership/creation time before sending even start.
@@ -2078,6 +2094,7 @@ class Worker:
                         await asyncio.to_thread(self.shared_handle.release)
                     finally:
                         self.shared_handle = None
+                self._cleanup_settled = True
 
 
 if __name__ == "__main__":

@@ -1088,7 +1088,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                           shared_handle_getter=None, shared_snapshot=None,
                           write_guard=None, resolved_root=None, execution_workspace=None, owner_session_id=None,
                           refresh_dependencies=False, install_overrides=None, qualification_readonly=False, global_only=False, runtime_plan=None, startup_timing=None, ephemeral_mcp_servers=None, media_graph_selection=None,
-                          canonical_binding=None, canonical_binding_factory=None, **kwargs):
+                          canonical_binding=None, canonical_binding_factory=None, canonical_resume=None, **kwargs):
     from ..worker_diagnostics import StartupTimings
     startup_timing = startup_timing or StartupTimings()
     if refresh_dependencies and resume:
@@ -1103,6 +1103,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     from .storage import SessionStore
 
     runtime = runtime or Runtime()
+    if canonical_binding is not None:
+        if type(canonical_resume) is not bool:
+            raise ValueError("A canonical root needs explicit new-versus-resume construction intent")
+        resume = canonical_resume
     with startup_timing.phase('manager.config'):
         config = load_config(workspace, session_id=runtime.session_id, global_only=global_only,
             **({'owner_session_id': owner_session_id} if owner_session_id is not None else {}))
@@ -1428,6 +1432,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 from .media import acknowledge_media
                 if canonical_binding is None:
                     acknowledge_media(coordinator, store, runtime.session_id, saved_rows)
+                else:
+                    from .media import settle_media_policy
+                    settle_media_policy(coordinator, saved_rows)
                 if timing:timing.mark('store.end')
                 if canonical_binding is None:
                     native_guard.saved()

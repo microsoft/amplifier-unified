@@ -7,11 +7,45 @@ from pathlib import Path
 import runpy
 import shutil
 import subprocess
+import sys
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform != "linux", reason="Prospective lifetime is qualified on Linux")
+async def test_cancelled_worker_run_retains_physical_binding_until_cleanup_owner_settles(tmp_path):
+    import asyncio
+    from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+    from amplifier_web.runtime_worker import Worker
+    binding = VersionedSessionBinding.create_new(
+        tmp_path / "owned-worker", session_id="owned-worker", operation_id="init", admit=lambda: None)
+    worker = Worker(canonical_binding=binding, canonical_resume=False)
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def retained_cleanup():
+        entered.set()
+        await release.wait()
+        binding.check()
+        worker._cleanup_settled = True
+    worker._run = retained_cleanup
+    task = asyncio.create_task(worker.run())
+    await entered.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    binding.check()
+    with pytest.raises(ValueError):
+        VersionedSessionBinding.resume(binding.directory, session_id=binding.session_id,
+                                        expected=binding.expected)
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    with pytest.raises(ValueError, match="closed"):
+        binding.check()
+    reopened = VersionedSessionBinding.resume(binding.directory, session_id=binding.session_id,
+                                              expected=binding.expected)
+    await reopened.aclose()
 
 def test_warm_media_plan_is_derived_from_fixed_declarations(tmp_path):
     probe = runpy.run_path(str(ROOT / "tests/fixtures/warm_worker_probe.py"))

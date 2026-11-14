@@ -594,14 +594,19 @@ def enable_media(coordinator):
                               callable(coordinator.get_capability("session.durable_checkpoint")))
 
 
+def settle_media_policy(coordinator, canonical):
+    """Settle observed classifications independently of checkpoint format."""
+    policy = coordinator.get_capability("web.media.source_policy")
+    if policy is not None:
+        policy.settle(canonical)
+
+
 def acknowledge_media(coordinator, store, session_id, canonical):
     """ACK the actual settled save; never save again or turn a report into proof."""
     media = coordinator.get_capability("web.media.store")
     if media is None:
         return
-    policy = coordinator.get_capability("web.media.source_policy")
-    if policy is not None:
-        policy.settle(canonical)
+    settle_media_policy(coordinator, canonical)
     if not any(NAMESPACE in (row.get("metadata") or {}) for row in canonical):
         return  # Ordinary text sessions do not acquire an extra O(history) scan.
     if not _durable_media_supported():

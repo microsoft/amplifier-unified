@@ -166,6 +166,7 @@ class ChildRouteLoop:
     async def execute(self, prompt, context, providers, tools, hooks, coordinator):
         _assert_qualified(coordinator)
         rows = await context.get_messages()
+        coordinator.get_capability("web.media.source_policy").pending["call-1"] = "tool"
         before = copy.deepcopy(rows)
         refs = [ref for row in rows for ref in
                 (row.get("metadata", {}).get(NAMESPACE, {}).get("refs", []))]
@@ -375,6 +376,8 @@ async def test_actual_children_routes_use_own_acked_refs_and_private_count_send(
     assert all(session.coordinator.get_capability(NAMESPACE) is not cap
                for session in state["sessions"][1:])
     providers = state["providers"][1:]
+    assert all("call-1" not in session.coordinator.get_capability("web.media.source_policy").pending
+               for session in state["sessions"][1:])
     assert all(len(provider.counted) == len(provider.sent) == 1 for provider in providers)
     assert all(provider.counted[0] is provider.sent[0] and provider.sent[0].messages == []
                for provider in providers)
@@ -486,3 +489,16 @@ async def test_prospective_child_provider_terminal_failure_retires_physical_owne
         await reopened.aclose()
     assert not registry.admissions and set(registry.sessions) == {"parent"}
     assert await parent.coordinator.get("context").get_messages() == rows
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Prospective lifetime is qualified on Linux")
+def test_canonical_root_without_factory_refuses_child_before_native_creation(tmp_path):
+    from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+    from contextlib import closing
+    with closing(VersionedSessionBinding.create_new(tmp_path / "root", session_id="root",
+                 operation_id="init", admit=lambda: None)) as binding:
+        registry = host_children.Children(Runtime("root"),
+            SessionStore(tmp_path, canonical_binding=binding), None)
+        with pytest.raises(ValueError, match="explicit child lifetime factory"):
+            registry._canonical_binding("new-child", resumed=False)
+        assert not (tmp_path / "new-child").exists()
+        assert not registry.sessions and not registry.rows

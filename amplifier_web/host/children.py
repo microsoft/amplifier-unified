@@ -476,6 +476,8 @@ class Children:
 
     def _canonical_binding(self, identity, *, resumed):
         if self.canonical_binding_factory is None:
+            if getattr(self.store, "canonical_binding", None) is not None:
+                raise ValueError("A prospective root needs an explicit child lifetime factory before child admission")
             return None
         binding = self.canonical_binding_factory(self.store.directory(identity),
                                                  session_id=identity, resumed=resumed)
@@ -765,6 +767,9 @@ class Children:
             from .media import acknowledge_media
             if canonical_binding is None:
                 acknowledge_media(child.coordinator, store, identity, canonical)
+            else:
+                from .media import settle_media_policy
+                settle_media_policy(child.coordinator, canonical)
             if continuity:
                 continuity.save()
         completion = {}
