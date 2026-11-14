@@ -1043,20 +1043,35 @@ class HiddenConsoleTests(unittest.TestCase):
     def test_console_without_control_handler_is_released(self):
         k, helper, popen, folder = self.native(SetConsoleCtrlHandler=0)
         self.assertEqual(hidden_console.ensure_hidden_console(), {
-            "status": "unavailable", "errorType": "OSError", "windowsError": None, "consoleReleased": True})
+            "status": "unavailable", "errorType": "OSError", "windowsError": None,
+            "consoleReleased": True, "standardHandlesRestored": True})
         k.FreeConsole.assert_called_once()
         self.assertEqual([call.args for call in k.SetStdHandle.call_args_list], 2 * list(self.saved.items()))
         self.assertIsNone(hidden_console._control_handler)
         helper.stdin.close.assert_called_once()
 
-    def test_failed_handle_restore_releases_the_console_and_reports_an_unconfirmed_release(self):
+    def test_failed_handle_restore_releases_the_console_and_reports_the_confirmed_state(self):
+        # The release result is read from the process state, not from the
+        # FreeConsole or SetStdHandle return values.
         k, helper, popen, folder = self.native(SetStdHandle=0, FreeConsole=0)
+        k.GetStdHandle.side_effect = [11, 12, None, 11, 77, None]  # saved, then read back
         result = hidden_console.ensure_hidden_console()
-        self.assertEqual((result["status"], result["consoleReleased"]), ("unavailable", False))
+        self.assertEqual((result["status"], result["consoleReleased"], result["standardHandlesRestored"]),
+                         ("unavailable", True, False))
         k.FreeConsole.assert_called_once()
         k.SetConsoleCtrlHandler.assert_not_called()
         self.assertIsNone(hidden_console._control_handler)
         helper.stdin.close.assert_called_once()
+
+    def test_console_that_can_be_neither_protected_nor_released_stops_the_start(self):
+        k, helper, popen, folder = self.native(SetConsoleCtrlHandler=0)
+        k.GetConsoleCP.side_effect = [0, 437]  # no console at first; still attached after the release
+        with self.assertRaises(hidden_console.HiddenConsoleError) as raised:
+            hidden_console.ensure_hidden_console()
+        self.assertIsInstance(raised.exception.__cause__, OSError)
+        k.FreeConsole.assert_called_once()
+        self.assertIsNone(hidden_console._control_handler)
+        helper.stdin.close.assert_called_once()  # The helper is still released.
 
     def test_helper_cleanup_errors_cannot_change_a_protected_attach(self):
         k, helper, popen, folder = self.native()

@@ -927,8 +927,9 @@ def _host(spec):
     prepare_environment()
     runner = Runner(spec)
     with PrivateLog(spec) as log, redirect_stdout(log), redirect_stderr(log):
-        print("Windowless console for child programs: " + console["status"]
-              + (f" ({console['errorType']})" if console.get("errorType") else ""))
+        print("Windowless console for child programs: " + console["status"] + "".join(
+            f" {key}={value}" for key, value in console.items()
+            if key != "status" and value is not None))
         try:
             cli._serve(cli._parse(), Path(spec.data_dir), task_runner=runner)
         except BaseException:

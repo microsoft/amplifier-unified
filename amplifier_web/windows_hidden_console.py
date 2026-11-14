@@ -28,7 +28,12 @@ Measured facts that this file depends on (native Windows 11, CPython 3.13):
   The standard handles are therefore restored to their earlier values.
 Both steps follow the attach at once, before the helper is released. If either
 fails, the console is released again: a shared console without them is worse
-than no console.
+than no console. The release is confirmed by state, not by a return value. A
+process that stays attached to a console it could neither protect nor release
+must not continue: one Ctrl+C from a child would end it later, without notice.
+Nothing else in this process may call AttachConsole, AllocConsole or
+FreeConsole afterwards: each one resets the handler table and so removes the
+protection without notice.
 
 The app host always has the launch guard's pipes as standard handles, and a
 child with default standard handles inherits them. A caller with NO standard
@@ -48,21 +53,30 @@ _HELPER = "import sys;sys.stdout.write('1');sys.stdout.flush();sys.stdin.read()"
 _control_handler = None  # Windows keeps only the address; keep the object alive.
 
 
+class HiddenConsoleError(RuntimeError):
+    """The process is attached to a console that it could not protect or release."""
+
+
 def ensure_hidden_console(*, timeout=5.0):
-    """Attach a console without a window. Report the result; never stop startup.
+    """Attach a console without a window, and report the result.
 
     status: "attached" (new console without a window), "existing" (the process
     already had a console; nothing changed), "not-applicable" (not Windows), or
     "unavailable" (explicit no-window flags remain the only cover). When a
-    completed attach had to be undone, "consoleReleased" says whether Windows
-    confirmed the release.
+    completed attach had to be undone, "consoleReleased" and
+    "standardHandlesRestored" report the confirmed state.
+
+    A failure does not stop startup, with one exception: HiddenConsoleError,
+    when the process stays attached to a console without its protection.
     """
     if sys.platform != "win32":
         return {"status": "not-applicable"}
     rollback = {}
     try:
         return _attach(timeout, rollback)
-    except Exception as error:  # This is an improvement, never a start condition.
+    except HiddenConsoleError:
+        raise
+    except Exception as error:  # An improvement, not a start condition.
         return {"status": "unavailable", "errorType": type(error).__name__,
                 "windowsError": getattr(error, "winerror", None), **rollback}
 
@@ -131,11 +145,20 @@ def _attach(timeout, rollback):
             _control_handler = keep_running
         finally:
             timer.cancel()
-    except BaseException:
+    except BaseException as error:
         if attached:
-            rollback["consoleReleased"] = bool(kernel.FreeConsole())
+            kernel.FreeConsole()
             for name, handle in saved:
                 kernel.SetStdHandle(name, handle)
+            # Confirm by state. FreeConsole resets the handler table.
+            rollback["consoleReleased"] = not kernel.GetConsoleCP()
+            rollback["standardHandlesRestored"] = all(
+                kernel.GetStdHandle(name) == handle for name, handle in saved)
+            if not rollback["consoleReleased"]:
+                raise HiddenConsoleError(
+                    "This process is attached to a console that it could neither protect "
+                    "nor release.") from error
+            _control_handler = None
         raise
     finally:
         _release(helper, timeout)

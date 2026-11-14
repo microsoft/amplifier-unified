@@ -48,8 +48,11 @@ Rules that the mechanism depends on (measured on native Windows 11, CPython 3.13
 - The host's standard handles are restored to their earlier values after the
   attach. A child must not inherit console input that nobody can type.
 - Both steps follow the attach at once, before the helper process is released.
-  If either fails, the host releases the console and continues without it. No
-  failure of this mechanism stops host startup.
+  If either fails, the host releases the console and continues without it.
+- A failure of this mechanism does not stop host startup, with one exception.
+  If the host stays attached to a console that it could neither protect nor
+  release, it does not start. The release is confirmed by state. Continuing
+  would leave a host that one child's Ctrl+C ends later, without notice.
 - Known call sites keep their explicit no-window flag. Such a child gets its own
   console and does not share the host's.
 
