@@ -137,6 +137,29 @@ class SessionStore:
         return SessionHistoryStore(self.directory(session_id), events_path=events_path,
                                    session_id=session_id)
 
+    def media(self, session_id, *, policy_verifier=None, read_only=False, source_read_verifier=None,
+              request_only_verifier=None):
+        """Open a fresh owner-bound store; callers must close its lifetime lock."""
+        from amplifier_foundation.session.media import MediaPolicy, SessionMediaStore
+        from amplifier_foundation.session.checkpoint import verified_checkpoint_refs
+        from ..attachments import MAX_BYTES, MAX_FILES
+        from ..output_media import MAX_PIXELS
+        return SessionMediaStore(self.directory(session_id).absolute() / 'media', session_id,
+                                 policy=MediaPolicy(max_bytes=MAX_BYTES, max_pixels=MAX_PIXELS,
+                                                    max_images=MAX_FILES),
+                                 checkpoint_verifier=verified_checkpoint_refs,
+                                 policy_verifier=policy_verifier, read_only=read_only,
+                                 source_read_verifier=source_read_verifier,
+                                 request_only_verifier=request_only_verifier)
+
+    def acknowledge_media(self, session_id, canonical, media_store):
+        """ACK only an exact primary saved prefix, never a report or backup."""
+        from amplifier_foundation.session.checkpoint import acknowledge_legacy_checkpoint
+        receipt = acknowledge_legacy_checkpoint(self.directory(session_id), session_id=session_id,
+                                                expected_messages=canonical, windows_policy='legacy')
+        media_store.acknowledge_checkpoint(receipt)
+        return receipt
+
     def has_transcript(self, session_id):
         directory = self.directory(session_id)
         return any((directory / name).exists() for name in

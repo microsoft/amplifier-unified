@@ -227,6 +227,10 @@ async def install_app_access(coordinator, bridge):
     async def guarded_mount(mount_point, module, name=None):
         if mount_point == 'tools':
             module = guard_tools((name or getattr(module, 'name', None), module))
+        if mount_point == 'providers' and coordinator.get_capability('live.child_mode') == 'finite':
+            transform = coordinator.get_capability('web.provider_transform')
+            if callable(transform):
+                module = transform(module)
         return await original_mount(mount_point, module, name=name)
     coordinator.mount = guarded_mount
     def programmatic_guarded():

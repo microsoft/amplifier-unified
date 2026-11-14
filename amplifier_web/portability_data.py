@@ -4,6 +4,7 @@ import copy
 import json
 from pathlib import Path
 import stat
+from contextlib import closing
 
 from amplifier_portability.capsule import validate_bytes, validate_public, _regular_bytes
 from amplifier_outputs.content import CANVAS_IMAGE, body_bytes
@@ -72,9 +73,28 @@ def _operation_event(sequence, event_id, value):
     return json.loads(value)
 
 
+def asset_selection(value):
+    """Explicit transcript/backup/checkpoint owners, not arbitrary JSON strings."""
+    from .session_assets import message_refs, upload_rows
+    messages = []
+    for name in ('transcript.jsonl', 'transcript.jsonl.backup'):
+        if name in value['native']:
+            for line in decode_file(value['native'][name]).splitlines():
+                if line.strip():
+                    row = json.loads(line)
+                    if not isinstance(row, dict) or not isinstance(row.get('role'), str):
+                        raise ValueError('Unsupported transcript format in task transfer')
+                    messages.append(row)
+    session = value['session']
+    return (message_refs(messages, value['nativeIdentity']),
+            upload_rows(messages, session.get('messages') or [], session.get('draftAttachments') or []))
+
+
 def capture(app, session):
     identity = validate_id(session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'])
     native = native_directory(app, session)
+    from amplifier_foundation.session.transcript_guard import NativeTranscriptGuard
+    source_guard = NativeTranscriptGuard(native / 'transcript.jsonl')
     files = {}
     for name in sorted(NATIVE_FILES):
         path = native / name
@@ -139,6 +159,15 @@ def capture(app, session):
              'origin': {'historyHome': session['workspace'], 'executionDirectory': session.get('workingDirectory') or session['workspace']}}
     checkpoint = directory / 'context-checkpoint.json'
     if checkpoint.exists(): value['contextCheckpoint'] = file_data(checkpoint)
+    from .session_assets import capture_media, capture_uploads, source_reader_guard
+    refs, uploads = asset_selection(value)
+    media = {}
+    if refs:
+        store = SessionStore(native.parent, shared=True)
+        verifier = source_reader_guard(source_guard, refs)
+        with closing(store.media(identity, read_only=True, source_read_verifier=verifier)) as owned:
+            media = capture_media(owned, refs)
+    value['assets'] = {'v': 1, 'media': media, 'attachments': capture_uploads(app.data_dir, uploads)}
     from .resource_files import references
     pending = list(references(value))
     resources = {}
@@ -150,6 +179,7 @@ def capture(app, session):
         resources[key] = copy.deepcopy(resource)
         pending.extend(references(resource))
     value['resources'] = resources
+    source_guard.check()
     validate(value)
     return value
 
@@ -213,6 +243,13 @@ def _validate(value):
                     raise ValueError('Native metadata bundle differs from declared configuration intent')
     if value.get('contextCheckpoint'): decode_file(value['contextCheckpoint'])
     for row in value['observations']['liveJobs']: decode_file(row['file'])
+    from .session_assets import validate_media, validate_uploads
+    refs, uploads = asset_selection(value)
+    assets = value.get('assets', {'v': 1, 'media': {}, 'attachments': {}})
+    if not isinstance(assets, dict) or set(assets) != {'v', 'media', 'attachments'} or type(assets['v']) is not int or assets['v'] != 1:
+        raise ValueError('Unsupported task asset manifest')
+    validate_media(assets['media'], refs)
+    validate_uploads(assets['attachments'], uploads)
     for key, resource in value['resources'].items():
         raw = json.dumps(resource, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
         if digest(raw) != key:
@@ -254,6 +291,10 @@ def preflight_install(app, value):
     """Reject destination identity conflicts before publishing any imported data."""
     from .resource_files import root
     directory = root(app.db)
+    from .session_assets import preflight_uploads
+    _, uploads = asset_selection(value)
+    if uploads:
+        preflight_uploads(app.data_dir, value['assets']['attachments'], uploads)
     for key, resource in value['resources'].items():
         raw = json.dumps(resource, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
         if digest(raw) != key:

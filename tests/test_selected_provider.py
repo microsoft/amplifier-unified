@@ -188,6 +188,11 @@ async def test_selected_preparation_invalidates_changed_inputs_or_selection(chan
         request.tools.append(ToolSpec(name='new_tool', parameters={'type': 'object'}))
     else:
         request = request.model_copy()
+    if changed != 'new_request':
+        with pytest.raises(ValueError, match='changed after fitting'):
+            await selected.complete(request)
+        assert dispatched == [] and commits == []
+        await selected.request_budget(request, context_estimate=20)
     await selected.complete(request)
     assert len(lookups) == 2 and len(commits) == 1
     assert dispatched[0][0] is not budgets[0][0]
