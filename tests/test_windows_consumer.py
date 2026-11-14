@@ -198,7 +198,8 @@ def test_no_browser_launch_composes_existing_background_owner_without_reinstall(
     calls = []
     monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {})
-    async def prepare(root, launcher, env):
+    async def prepare(root, launcher, env, *, identity):
+        assert callable(identity)
         calls.append((root, launcher, env))
         return {"background": True, "created": False, "health": {"ok": True}}
     monkeypatch.setattr(windows_installation, "prepare_background", prepare)
@@ -213,7 +214,7 @@ def address_launch(tmp_path, monkeypatch, *, answer, kinds=("in-use",)):
     monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {})
     pending = list(kinds)
-    async def prepare(root, launcher, env):
+    async def prepare(root, launcher, env, *, identity):
         events.append(("prepare", launcher))
         if pending:
             raise windows_installation.AddressUnavailable(pending.pop(0), 23456)
@@ -246,7 +247,7 @@ def test_confirmed_address_repair_selects_once_then_starts_the_same_installation
     # Browser entry after the repaired start is the ordinary path, covered below.
     monkeypatch.setattr(deployment, "load_server_config", lambda home: {})
     monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (["private-target"], "private-pin"))
-    monkeypatch.setattr(windows_installation, "review_browser_trust", lambda *a: False)
+    monkeypatch.setattr(windows_installation, "review_browser_trust", lambda *a, **kw: False)
     result = asyncio.run(consumer.launch(tmp_path))
     assert result["health"]["ok"] and result["browser"]["opened"] is False
     assert [event[0] for event in events] == ["prepare", "notice", "change", "prepare"]
@@ -271,20 +272,52 @@ def test_pending_certificate_review_does_not_issue_browser_grant(tmp_path, monke
     from amplifier_web import windows_installation, deployment, browser_entry, updates
     monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {})
-    async def prepared(*args):
+    async def prepared(*args, identity):
         return {"background": True, "created": False, "health": {"ok": True}}
     monkeypatch.setattr(windows_installation, "prepare_background", prepared)
     monkeypatch.setattr(deployment, "load_server_config", lambda home: {})
     monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (["private-target"], "private-pin"))
     reviews = []
     monkeypatch.setattr(windows_installation, "review_browser_trust",
-                        lambda *a: reviews.append(a) or False)
+                        lambda *a, fresh: reviews.append(a) or False)
     async def forbidden(*args, **kwargs):
         pytest.fail("No browser command or transient grant before certificate decision")
     monkeypatch.setattr(updates, "process", forbidden)
     result = asyncio.run(consumer.launch(tmp_path))
     assert result["browser"] == {"opened": False, "reason": "certificate-review-pending"}
     assert result["health"]["ok"] and reviews == [(tmp_path, ["private-target"], "private-pin")]
+
+
+@pytest.mark.parametrize("first_setup", [True, False])
+def test_first_setup_creates_the_identity_in_this_process_and_hands_windows_that_root(
+        tmp_path, monkeypatch, first_setup):
+    from amplifier_web import windows_installation, deployment, browser_entry, windows_tls
+    monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
+    monkeypatch.setattr(consumer, "environment", lambda *a: {})
+    config = {"saved": "configuration"}
+    monkeypatch.setattr(deployment, "load_server_config", lambda home: config)
+    created = []
+    fresh = b"root-created-in-this-process"
+    monkeypatch.setattr(windows_tls, "create_identity", lambda home, value:
+                        created.append((home, value)) or fresh)
+    async def prepare(root, launcher, env, *, identity):
+        if first_setup:
+            identity()
+            # A repeated call finds the material and creates nothing; the first
+            # in-memory root stays the one that Windows is asked about.
+            monkeypatch.setattr(windows_tls, "create_identity", lambda home, value: None)
+            identity()
+        return {"background": True, "created": first_setup, "health": {"ok": True}}
+    monkeypatch.setattr(windows_installation, "prepare_background", prepare)
+    monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (["private-target"], "private-pin"))
+    reviews = []
+    monkeypatch.setattr(windows_installation, "review_browser_trust",
+                        lambda *a, fresh: reviews.append((a, fresh)) or False)
+    asyncio.run(consumer.launch(tmp_path))
+    assert created == ([(tmp_path / "app", config)] if first_setup else [])
+    # The exact in-memory root for a new identity; a later start reads the private store.
+    assert reviews == [((tmp_path, ["private-target"], "private-pin"), fresh if first_setup else None)]
+    assert reviews[0][1] is (fresh if first_setup else None)
 
 
 def test_os_entries_require_audited_first_install_proof(tmp_path, monkeypatch):

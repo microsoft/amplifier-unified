@@ -1,8 +1,11 @@
 """Compose the installed owner-logon setup from the public CLI boundaries.
 
-No trust-store import, credential transfer, force stop, or task replacement is
-performed here. The bootstrap owns verified package installation; Task Scheduler
-and the CLI keep ownership of registration, readiness, serving, and removal.
+No credential transfer, force stop, or task replacement is performed here. The
+bootstrap owns verified package installation; Task Scheduler and the CLI keep
+ownership of registration, readiness, serving, and removal. The only trust
+change is the person's own Yes to Windows for this installation's key-less
+local certificate (windows_trust.py); an identity with a signing key on disk
+is never added, only shown for the person's own review.
 """
 from __future__ import annotations
 
@@ -24,7 +27,9 @@ def owner_notice(message, *, confirm=False):
     dialog = ctypes.WinDLL("user32", use_last_error=True).MessageBoxW
     dialog.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint]
     dialog.restype = ctypes.c_int
-    result = dialog(None, message, "Amplifier Unified", 0x40 | (0x4 if confirm else 0))
+    # In front of other windows: a windowless launcher's message that waits
+    # behind the browser looks like nothing happened.
+    result = dialog(None, message, "Amplifier Unified", 0x50040 | (0x4 if confirm else 0))
     if not result:
         raise OSError("The installation dialog could not be displayed.")
     return result == 6 if confirm else True
@@ -145,18 +150,78 @@ def browser_trust_ready(urls, pin):
     return False
 
 
-def review_browser_trust(root, urls, pin):
-    """Offer public-certificate review; only the human can change trust."""
-    if browser_trust_ready(urls, pin):
-        return True
-    from cryptography import x509
-    from cryptography.hazmat.primitives import hashes
+def _export_certificate(root):
+    """Save the public certificate where the person or their IT can read it."""
     from .tls import exported_ca_bytes
     from .windows_files import directory
     content = exported_ca_bytes(root / "app")
-    fingerprint = x509.load_pem_x509_certificate(content).fingerprint(hashes.SHA256())
     with directory(root / "export", owned_root=root, create=True) as exported:
         exported.publish_private("local-ca.cer", content, replace=True)
+    return content
+
+
+def review_browser_trust(root, urls, pin, *, fresh=None):
+    """Make this installation's HTTPS trusted before any browser grant exists.
+
+    A key-less identity: explain once, then Windows asks the person its one
+    standard question. `fresh` is the root this process created moments ago;
+    that exact certificate is added. No is respected: the app keeps running
+    and the next open asks again. An identity with a signing key on disk is
+    never added; the person can review it in the Windows certificate viewer.
+    """
+    if browser_trust_ready(urls, pin):
+        return True
+    from . import windows_trust
+    certificate = windows_trust.candidate(root / "app", pin, fresh)
+    if certificate is None:
+        return _review_manually(root, urls, pin)
+    saved = str(root / "export" / "local-ca.cer")
+    support = ("If your organization manages this PC, ask its IT support to trust this "
+               "certificate for your account:\n" + saved)
+    blocked = ("Amplifier is running, but this PC's security settings do not let it finish "
+               "setting up its private connection to your browser.\n\n" + support + "\n\n"
+               "Amplifier did not change any security setting.")
+    if windows_trust.user_roots_disabled():
+        _export_certificate(root)
+        owner_notice(blocked)
+        return False
+    owner_notice(
+        "Windows will now ask one question: whether to install a certificate named \""
+        + windows_trust.ROOT_NAME + "\". Select Yes.\n\n"
+        "Amplifier uses this certificate only for the private connection between your "
+        "browser and Amplifier on this PC. It does not work for any website. Windows "
+        "shows the same security warning for every certificate of this kind.\n\n"
+        "Thumbprint in the Windows message:\n" + windows_trust.thumbprint(certificate))
+    outcome = windows_trust.add_root(certificate)
+    if outcome == "declined":
+        owner_notice(
+            "Amplifier is running, but it cannot open in your browser until Windows trusts "
+            "its certificate. Nothing on this PC was changed.\n\n"
+            "Open Amplifier again to see the Windows question once more, and select Yes.")
+        return False
+    if outcome in {"added", "present"}:
+        if browser_trust_ready(urls, pin):
+            return True
+        # Windows holds the certificate, yet the connection is still refused.
+        # Say that plainly; do not claim that nothing changed.
+        _export_certificate(root)
+        owner_notice(
+            "Amplifier is running. Windows accepted its certificate, but this PC still does "
+            "not trust the connection between your browser and Amplifier.\n\n"
+            "Open Amplifier again. If this message returns, this PC's security settings "
+            "override your choice.\n\n" + support)
+        return False
+    _export_certificate(root)
+    owner_notice(blocked)
+    return False
+
+
+def _review_manually(root, urls, pin):
+    """An identity with a signing key on disk: public review only, never an add."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    content = _export_certificate(root)
+    fingerprint = x509.load_pem_x509_certificate(content).fingerprint(hashes.SHA256())
     if owner_notice(
             "Amplifier is running in the background. Could not verify trusted local HTTPS. "
             "The local certificate may need your review, or the connection may have changed. "
@@ -177,11 +242,14 @@ def review_browser_trust(root, urls, pin):
     return False
 
 
-async def prepare_background(root, launcher, environment, *, port=None):
+async def prepare_background(root, launcher, environment, *, port=None, identity=None):
     """Prepare/start one owned logon host, or inspect/restart that exact host.
 
     A recorded task is never reconfigured or resynced by a shortcut click.
     Failed setup retains its task/state for normal status/stop and reconciliation.
+
+    `identity`, when given, runs once in first setup before the CLI checks TLS.
+    The consumer entry uses it to create a key-less identity in its own process.
 
     Without an explicit port, first setup selects a free loopback port and saves
     it; every later start reuses the saved port, because the browser origin
@@ -227,6 +295,8 @@ async def prepare_background(root, launcher, environment, *, port=None):
                 raise AddressUnavailable(kind, known)
         if saved is None:
             await command("config", "set", "bind", "[127.0.0.1]")
+        if identity is not None:
+            await asyncio.to_thread(identity)
         await command("setup-tls")
         preparation = json.loads(await command("runtime", "prepare", "--json", timeout=1800))
         if preparation.get("ok") is not True or preparation.get("prepared") is not True:
