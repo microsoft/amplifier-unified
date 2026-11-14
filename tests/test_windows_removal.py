@@ -247,7 +247,8 @@ def test_finish_static_program_and_stdin_only_payload(finish_start):
     assert len(removal.FINISH_SCRIPT) < 9000
     assert "-recurse" not in removal.FINISH_SCRIPT.lower()
     assert "]::" not in removal.FINISH_SCRIPT
-    assert not re.search(r"\.\w+\s*\(", removal.FINISH_SCRIPT)
+    assert re.findall(r"\$\w+\.\w+\s*\([^)]*\)", removal.FINISH_SCRIPT) == ["$entry.Delete()"]
+    assert re.findall(r"\.\w+\s*\(", removal.FINISH_SCRIPT) == [".Delete("]
     assert token not in removal.FINISH_SCRIPT
     assert options["cwd"] == r"C:\Windows\System32"
     assert options["creationflags"] == 0x09000200
@@ -478,7 +479,11 @@ def finish_tree(tmp_path):
     finally:
         for path in links:
             if os.path.lexists(path):
-                os.rmdir(path)  # Remove only our junction itself, never its target.
+                # Use the link's own attributes, including for dangling links.
+                if path.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_DIRECTORY:
+                    os.rmdir(path)
+                else:
+                    os.unlink(path)
         shutil.rmtree(root, ignore_errors=True)
         shutil.rmtree(outside, ignore_errors=True)
 
@@ -598,24 +603,36 @@ def test_native_finish_wrong_token_changes_nothing(finish_tree):
     _assert_outside_unchanged(tree)
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Real PowerShell junction refusal")
-def test_native_finish_leaves_a_junction_and_its_target_untouched(finish_tree):
+@pytest.mark.skipif(os.name != "nt", reason="Real PowerShell link deletion")
+@pytest.mark.parametrize("kind", ["junction", "folderlink", "filelink", "insidejunction"])
+def test_native_finish_deletes_only_the_link_and_leaves_outside_untouched(finish_tree, kind):
     import _winapi
 
     tree, root = finish_tree, finish_tree["root"]
-    junction = root / "tools" / "junction"
-    _winapi.CreateJunction(str(tree["outside"]), str(junction))
-    tree["links"].append(junction)
-    removal.finish_after_exit(root, "Exact-TOKEN", **_finish_options(tree))
+    link = root / "tools" / kind
+    if kind == "insidejunction":
+        target = root / "python" / "cpython-3.13.17-windows-x86_64-none"
+        target.mkdir(parents=True)
+        (target / "python.exe").write_text("stand-in, never executed")
+        link = root / "python" / "cpython-3.13-windows-x86_64-none"
+        _winapi.CreateJunction(str(target), str(link))
+    elif kind == "junction":
+        _winapi.CreateJunction(str(tree["outside"]), str(link))
+    else:
+        target = tree["outside"] if kind == "folderlink" else tree["outside"] / "keep.txt"
+        # A native lane that cannot make either symbolic link fails, never skips.
+        os.symlink(target, link, target_is_directory=kind == "folderlink")
+    tree["links"].append(link)
+    assert os.path.lexists(link)
+    options = _finish_options(tree)
+    options["contents"].insert(0, "python")
+    removal.finish_after_exit(root, "Exact-TOKEN", **options)
     result = _finish_report(tree["report"])
     assert result["reason"] == "", result
-    assert result["passes"] >= 2 and not result["folderRemoved"]
-    assert str(junction) in result["left"]
-    assert junction.is_junction() and (junction / "keep.txt").read_text() == "keep outside"
-    assert sorted(path.name for path in root.iterdir()) == ["tools", "unified-uninstall.json"]
-    assert sorted(path.name for path in (root / "tools").iterdir()) == ["junction"]
-    assert json.loads((root / "unified-uninstall.json").read_text())["token"] == "Exact-TOKEN"
+    assert result["passes"] >= 1 and result["folderRemoved"] and not root.exists(), result
+    assert not os.path.lexists(link) and not result["left"] and result["leftCount"] == 0
     _assert_outside_unchanged(tree)
+    print(f"AFTER_EXIT_LINK {kind}: removed; outside names and contents unchanged")
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Real PowerShell file sharing refusal")

@@ -38,7 +38,7 @@ _DIRECTORY, _LINK = 0x10, 0x400  # FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPA
 
 
 # All variable data travels on stdin, never in this program. Unlike the pinned
-# in-process walk below, this path-based last step deliberately leaves links.
+# in-process walk below, this path-based last step deletes links only as links.
 # It cannot prevent a same-account program swapping an entry between cmdlets.
 FINISH_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
@@ -67,10 +67,16 @@ function Authorized {
         return ($record.token -is [string] -and $record.token -ceq $p.token)
     } catch { return $false }
 }
+function Clear-Link($entry) {
+    # The only method call: nonrecursive deletion of the link itself avoids
+    # Windows PowerShell's folder-link removal behavior. Constrained language
+    # can refuse this call; then the link stays and prevents root removal.
+    try { $entry.Delete() } catch { Keep $entry.FullName }
+}
 function Clear-Entry($path) {
     try {
         $entry = Get-Item -LiteralPath $path -Force
-        if ("$($entry.Attributes)" -match 'ReparsePoint') { Keep $path; return }
+        if ("$($entry.Attributes)" -match 'ReparsePoint') { Clear-Link $entry; return }
         if ($entry.PSIsContainer) {
             $children = @(Get-ChildItem -LiteralPath $path -Force)
             foreach ($child in $children) { Clear-Entry $child.FullName }
@@ -116,7 +122,8 @@ try {
         }
         foreach ($entry in @(Get-ChildItem -LiteralPath $p.root -Force)) {
             if (@($p.folders) -ccontains $entry.Name) {
-                if ((Real-Folder $entry) -and
+                if ("$($entry.Attributes)" -match 'ReparsePoint') { Clear-Link $entry }
+                elseif ((Real-Folder $entry) -and
                     -not @(Get-ChildItem -LiteralPath $entry.FullName -Force).Count) {
                     try { Remove-Item -LiteralPath $entry.FullName -Force }
                     catch { Keep $entry.FullName }
@@ -125,7 +132,8 @@ try {
         }
         foreach ($entry in @(Get-ChildItem -LiteralPath $p.root -Force)) {
             if (@($p.files) -ccontains $entry.Name) {
-                if (-not $entry.PSIsContainer -and "$($entry.Attributes)" -notmatch 'ReparsePoint') {
+                if ("$($entry.Attributes)" -match 'ReparsePoint') { Clear-Link $entry }
+                elseif (-not $entry.PSIsContainer) {
                     try { Remove-Item -LiteralPath $entry.FullName -Force }
                     catch { Keep $entry.FullName }
                 } else { Keep $entry.FullName }
@@ -165,7 +173,8 @@ def finish_after_exit(root, token, *, contents, folders, files, wait_for=(), sec
 
     A successful return means only that the payload was written, not that the
     folder was removed. Failure to escape a Job retries process creation alone;
-    no already-started helper is replayed. Links and unnamed entries stay.
+    no already-started helper is replayed. Links are deleted as links; unnamed
+    entries and links whose nonrecursive deletion is refused stay.
     """
     from .windows_service import WindowsServiceError, _powershell
 
