@@ -119,29 +119,22 @@ async def test_actual_ci_foundation_private_diagnostic_apply_rebind_and_resume(t
         assert snapshot['sha256'] == accepted['sha256'] and snapshot['bytes'] == accepted['bytes']
         admitted.validate_ref(accepted, committed=False)
         return accepted['provenance']
+    from amplifier_web.storage_optimize_media import InstalledCaptureCheckpoint
+    installed_checkpoint = InstalledCaptureCheckpoint(opdir, path, session_id='root',
+                                                       store_session_id='root')
     def checkpoint(receipt):
         assert app.diagnostics.flush_lock.locked()
         from amplifier_foundation.session import SharedSessionStore, SessionBusyError
         with pytest.raises(SessionBusyError):
             SharedSessionStore(str(tmp_path), 'root').acquire(app='checkpoint-competitor')
-        assert receipt['session_id'] == 'root'
-        assert receipt['sha256'] == file_hash(path)
-        assert receipt['mapping_sha256'] == file_hash(opdir / 'records.jsonl')
-        # Small single-record fixture; production owner verification is streamed.
-        with path.open('rb') as stream:
-            block = json.loads(stream.readline())['data']['result']['content'][0]
-        ref = diagnostic_image_ref(block)
-        assert json.loads((opdir / 'assets.jsonl').read_bytes())['owner']['ref'] == ref
-        yield ref
+        yield from installed_checkpoint.refs(receipt)
     diagnostic = SessionMediaStore(tmp_path / 'private-diagnostic-only', 'root',
         policy=MediaPolicy(100000, 1000, 2), checkpoint_verifier=checkpoint)
     def allocated(ref):
         with diagnostic.resolve_ref(ref, committed=False) as stream:
             return os.fstat(stream.fileno()).st_size
     binding = CaptureMediaOwner(diagnostic, staged_factory=StagedImage, origin_for=origin_for,
-        checkpoint_receipt_for=lambda manifest, source, sha256: {
-            'session_id': 'root', 'sha256': sha256,
-            'mapping_sha256': file_hash(opdir / 'records.jsonl')},
+        checkpoint_receipt_for=installed_checkpoint.receipt_for,
         new_asset_bytes_for=allocated, reader_ready=lambda name: name == BINDING,
         single_image_origin=lambda snapshot, provenance: provenance == accepted['provenance'])
     from context_intelligence.prune import operations as retention_operations
@@ -314,6 +307,301 @@ def test_unknown_original_never_becomes_admitted_by_resume_or_poll():
     from amplifier_web.storage_optimize_media import capture_owner, UnknownHistoricalMedia
     with pytest.raises(UnknownHistoricalMedia, match='receipt is unavailable'):
         capture_owner(None, {}, {}, resume=True, poll=lambda: None)
+
+
+def test_capture_ack_expiry_map_does_not_consume_unhashed_wal(tmp_path):
+    from amplifier_web.storage_optimize_media import _expiry_rows
+    path = tmp_path / 'map.sqlite3'
+    writer = sqlite3.connect(path)
+    try:
+        writer.execute('PRAGMA journal_mode=WAL')
+        writer.executescript("CREATE TABLE format(name TEXT,version INTEGER);"
+            "INSERT INTO format VALUES('ci-diagnostic-retention',1);"
+            "CREATE TABLE record_map(ordinal INTEGER PRIMARY KEY,old_offset INTEGER,"
+            "old_bytes INTEGER,old_sha256 TEXT,new_offset INTEGER,new_bytes INTEGER,new_sha256 TEXT);"
+            "INSERT INTO record_map VALUES(1,0,10,'old',0,5,'new');")
+        writer.commit()
+        writer.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        before = file_hash(path)
+        writer.execute('UPDATE record_map SET new_offset=999')
+        writer.commit()
+        assert file_hash(path) == before and Path(str(path) + '-wal').stat().st_size > 0
+        with path.open('rb') as pinned:
+            rows = list(_expiry_rows(pinned, None))
+        assert rows == [{'old': {'offset': 0, 'bytes': 10, 'sha256': 'old'},
+                         'new': {'offset': 0, 'bytes': 5, 'sha256': 'new'}}]
+    finally:
+        writer.close()
+
+
+@pytest.mark.parametrize('selected_only,wrong_slot,expire_raw,padding,crash,drift,members', [
+    (False, False, False, 0, False, None, 2), (True, False, False, 0, False, None, 2),
+    (False, True, False, 0, False, None, 2), (False, False, True, 0, False, None, 2),
+    (False, False, False, 16 * 1024 * 1024, False, None, 2),
+    (False, False, False, 0, True, None, 2),
+    (False, False, False, 0, False, 'records', 2),
+    (False, False, True, 0, False, 'expiry-receipt', 2),
+    (False, False, True, 0, False, 'expiry-map', 2),
+    (False, False, False, 0, False, 'batch-final', 2),
+    (False, False, False, 0, False, 'final-proof-tail', 2),
+    (False, False, False, 0, False, None, 12)])
+def test_exact_host_ack_commits_only_actual_selected_group_positions(tmp_path, monkeypatch,
+        selected_only, wrong_slot, expire_raw, padding, crash, drift, members):
+    """Real group/CI/F1 mechanism; explicit synthetic origin, no legacy claim."""
+    from PIL import Image
+    from amplifier_foundation.session.media import MediaPolicy, SessionMediaStore, MediaRefusal
+    from amplifier_foundation.session.media_conversion_owner import CaptureGroupMediaOwner, GROUP_BINDING
+    from context_intelligence.optimize import stage, apply as commit, resume, StagedImage
+    from context_intelligence.optimize.capture import capture_group_sources
+    from amplifier_web.storage_optimize_media import InstalledCaptureCheckpoint
+    path = tmp_path / 'events.jsonl'
+    pixels = []
+    for color in [(position * 19 % 256, position * 31 % 256, position * 43 % 256)
+                  for position in range(members)]:
+        stream = io.BytesIO()
+        Image.new('RGB', (3, 2), color).save(stream, format='PNG')
+        pixels.append(stream.getvalue())
+    blocks = [{'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png',
+               'data': base64.b64encode(value).decode()}} for value in pixels]
+    record = {'event': 'tool:post', 'session_id': 'root', 'event_id': 'one',
+        'timestamp': '2020-01-01T00:00:00Z',
+        'data': {'tool_call_id': 'original', 'status': 'unknown',
+                 'result': {'success': False, 'content': blocks}}}
+    if expire_raw:
+        record.update(event='llm:request', data={'raw': {'messages': [{'role': 'user', 'content': blocks}]}})
+    if padding:
+        record['data']['padding'] = 'x' * padding
+    path.write_text(json.dumps(record) + '\n')
+    digest = file_hash(path)
+    opdir = tmp_path / 'operation'
+    checkpoint = InstalledCaptureCheckpoint(opdir, path, session_id='root', store_session_id='diagnostic')
+    store = SessionMediaStore(tmp_path / 'diagnostic-media', 'diagnostic',
+        policy=MediaPolicy(100000, 1000, 16), checkpoint_verifier=checkpoint.refs)
+    origin = {'kind': 'migration', 'session_id': 'root', 'id': 'explicit-synthetic-group',
+              'created_at': '2020-01-01T00:00:00Z', 'expires_at': None}
+    # This is deliberately a declared fixture authority, NOT production receipt
+    # admission. Production capture_owner still refuses unknown originals.
+    def original(snapshot):
+        assert snapshot['source_sha256'] == digest
+        return origin
+    try:
+        with path.open('rb') as source, capture_group_sources(source, session_id='root',
+                source_sha256=digest, origin_for=original,
+                complete_group_for=lambda snapshot, policy: policy == origin) as groups:
+            owner = CaptureGroupMediaOwner(store, group_sources_for=groups, staged_factory=StagedImage,
+                origin_for=original, checkpoint_receipt_for=checkpoint.receipt_for,
+                new_asset_bytes_for=lambda ref: 0,
+                reader_ready=lambda name: name == GROUP_BINDING)
+            class Selected:
+                count = 0
+                first_replacement = None
+                def stage_image(self, stream, *, mime, origin):
+                    self.count += 1
+                    result = owner.stage_image(stream, mime=mime, origin=origin)
+                    if self.count == 1:
+                        self.first_replacement = result.replacement
+                    if wrong_slot and self.count == 2:
+                        return StagedImage(replacement=self.first_replacement,
+                                           receipt=result.receipt, new_asset_bytes=0)
+                    if selected_only and self.count == 2:
+                        # Entire original group was assets-published, but the
+                        # second selected slot is not a diagnostic reference.
+                        return StagedImage(replacement=blocks[1], receipt=result.receipt,
+                                           new_asset_bytes=0)
+                    return result
+                publish = owner.publish
+                verify = owner.verify
+                acknowledge = owner.acknowledge
+            stage(path, opdir, session_id='root', media=Selected(), writers_stopped=True)
+            if selected_only:
+                # Synthetic staged-subset layout for mechanism qualification,
+                # NOT a production receipt admission. The ordinary CI stage
+                # selects all supported images; publication remains whole-group.
+                manifest = opdir / 'assets.jsonl'
+                rows = manifest.read_bytes().splitlines(keepends=True)
+                manifest.write_bytes(rows[0])
+                journal = json.loads((opdir / 'journal.json').read_bytes())
+                journal['manifest_sha256'] = file_hash(manifest)
+                (opdir / 'journal.json').write_text(json.dumps(journal))
+            if wrong_slot:
+                with pytest.raises(CaptureDrift, match='slot differs'):
+                    commit(opdir, media=owner, writers_stopped=True)
+                first_row = json.loads((opdir / 'assets.jsonl').read_bytes().splitlines()[0])
+                for ref in first_row['owner']['refs']:
+                    with pytest.raises(MediaRefusal):
+                        store.resolve_ref(ref)
+                assert json.loads((opdir / 'journal.json').read_bytes())['state'] == 'replaced'
+                return  # No partial ACK despite a valid first installed member.
+            if crash:
+                import context_intelligence.optimize.operations as operations
+                actual_save, actual_replace = operations._save, operations._replace_candidate
+                replacements = []
+                def replaced(*args):
+                    replacements.append(True)
+                    return actual_replace(*args)
+                def save(directory, journal):
+                    if journal['state'] == 'replaced':
+                        raise OSError('lost replacement journal save')
+                    return actual_save(directory, journal)
+                monkeypatch.setattr(operations, '_replace_candidate', replaced)
+                monkeypatch.setattr(operations, '_save', save)
+                with pytest.raises(OSError, match='lost replacement journal'):
+                    commit(opdir, media=owner, writers_stopped=True)
+                assert json.loads((opdir / 'journal.json').read_bytes())['state'] == 'replace-pending'
+                monkeypatch.setattr(operations, '_save', actual_save)
+                assert resume(opdir, media=owner, writers_stopped=True)['state'] == 'verified'
+                assert len(replacements) == 1
+            if drift == 'batch-final':
+                import context_intelligence.optimize.positions as positions
+                actual = positions.capture_image_verifier
+                @contextmanager
+                def final_failure(*args, **kwargs):
+                    with actual(*args, **kwargs) as read:
+                        @contextmanager
+                        def many(snapshots):
+                            with read.read_many(snapshots) as values:
+                                yield values
+                            raise CaptureDrift('synthetic batch final seal failed')
+                        yield SimpleNamespace(read_many=many)
+                with monkeypatch.context() as patch:
+                    patch.setattr(positions, 'capture_image_verifier', final_failure)
+                    with pytest.raises(CaptureDrift, match='batch final seal'):
+                        commit(opdir, media=owner, writers_stopped=True)
+                first_row = json.loads((opdir / 'assets.jsonl').read_bytes().splitlines()[0])
+                for ref in first_row['owner']['refs']:
+                    with pytest.raises(MediaRefusal):
+                        store.resolve_ref(ref)
+                return  # Even fully read valid slots cannot precede final seal.
+            if drift == 'final-proof-tail':
+                actual = checkpoint._refs
+                ready, substituted = [], []
+                def slot_phase(*args):
+                    yield from actual(*args)
+                    ready.append(True)
+                def poll_tail():
+                    if ready and not substituted:
+                        same = path.with_name('changed-tail')
+                        same.write_bytes(path.read_bytes())
+                        same.replace(path)
+                        substituted.append(True)
+                with monkeypatch.context() as patch:
+                    patch.setattr(checkpoint, '_refs', slot_phase)
+                    patch.setattr(checkpoint, 'poll', poll_tail)
+                    with pytest.raises(CaptureDrift, match='proof changed'):
+                        commit(opdir, media=owner, writers_stopped=True)
+                assert substituted
+                first_row = json.loads((opdir / 'assets.jsonl').read_bytes().splitlines()[0])
+                for ref in first_row['owner']['refs']:
+                    with pytest.raises(MediaRefusal):
+                        store.resolve_ref(ref)
+                return  # Tail polls cannot outlive the installed generation pin.
+            result = commit(opdir, media=owner, writers_stopped=True)
+            assert result['state'] == 'verified'
+            with pytest.raises(CaptureDrift, match='live owner receipt'):
+                list(checkpoint.refs({'session_id': 'diagnostic', 'sha256': file_hash(path)}))
+            other = InstalledCaptureCheckpoint(opdir, path, session_id='root', store_session_id='diagnostic')
+            with pytest.raises(CaptureDrift, match='live owner receipt'):
+                list(checkpoint.refs(other.receipt_for(opdir / 'assets.jsonl',
+                                                     source=path, sha256=file_hash(path))))
+            manifest_row = json.loads((opdir / 'assets.jsonl').read_bytes().splitlines()[0])
+            refs = manifest_row['owner']['refs']
+            assert len(refs) == members
+            with store.resolve_ref(refs[0]) as binary:
+                assert binary.read() == pixels[0]
+            if selected_only:
+                store.validate_published_ref(refs[1])
+                with pytest.raises(MediaRefusal):
+                    store.resolve_ref(refs[1])  # Assets-only is not installed.
+            else:
+                with store.resolve_ref(refs[1]) as binary:
+                    assert binary.read() == pixels[1]
+            installed = path.read_bytes()
+            assert resume(opdir, media=owner, writers_stopped=True)['state'] == 'verified'
+            assert path.read_bytes() == installed
+            import context_intelligence.optimize.positions as positions
+            hash_calls = []
+            actual_hash = positions._check_hash
+            def observed_hash(*args):
+                hash_calls.append(True)
+                return actual_hash(*args)
+            with monkeypatch.context() as patch:
+                patch.setattr(positions, '_check_hash', observed_hash)
+                receipt = checkpoint.receipt_for(opdir / 'assets.jsonl', source=path, sha256=file_hash(path))
+                assert list(checkpoint.refs(receipt)) == (refs[:1] if selected_only else refs)
+            # Same fixed batch+outer hash passes for 2 and 12 selected images.
+            assert 0 < len(hash_calls) <= 12, len(hash_calls)
+            def assert_proof_drift(target):
+                import context_intelligence.optimize.positions as positions
+                actual = positions.capture_image_verifier
+                swapped = []
+                @contextmanager
+                def changed(*args, **kwargs):
+                    with actual(*args, **kwargs) as read:
+                        @contextmanager
+                        def many(snapshots):
+                            with read.read_many(snapshots) as values:
+                                def results():
+                                    for value in values:
+                                        if not swapped:
+                                            same = target.with_name(target.name + '.replacement')
+                                            same.write_bytes(target.read_bytes())
+                                            same.replace(target)
+                                            swapped.append(True)
+                                        yield value
+                                yield results()
+                        yield SimpleNamespace(read_many=many)
+                with monkeypatch.context() as patch:
+                    patch.setattr(positions, 'capture_image_verifier', changed)
+                    receipt = checkpoint.receipt_for(opdir / 'assets.jsonl',
+                                                     source=path, sha256=file_hash(path))
+                    with pytest.raises(CaptureDrift, match='proof changed'):
+                        list(checkpoint.refs(receipt))
+                assert swapped
+            if drift == 'records':
+                assert_proof_drift(opdir / 'records.jsonl')
+            if padding:
+                import tracemalloc
+                tracemalloc.start()
+                try:
+                    receipt = checkpoint.receipt_for(opdir / 'assets.jsonl', source=path, sha256=file_hash(path))
+                    assert list(checkpoint.refs(receipt)) == refs
+                    _, peak = tracemalloc.get_traced_memory()
+                finally:
+                    tracemalloc.stop()
+                # Two disk indexes, streamed physical mappings/manifest/hash:
+                # adding a giant non-image string cannot hydrate the record.
+                assert peak < 4 * 1024 * 1024, peak
+            if expire_raw:
+                from datetime import datetime, timedelta, timezone
+                from context_intelligence.prune.operations import PruneRequest, prune_file
+                from context_intelligence.prune.policy import Policy
+                result = prune_file(path, PruneRequest(tmp_path,
+                    Policy(datetime(2026, 1, 1, tzinfo=timezone.utc), diagnostic_sidecars=True),
+                    apply=True, writers_stopped=True, min_idle=timedelta(0), verified_optimize=opdir))
+                assert result.status == 'pruned'
+                receipt = checkpoint.receipt_for(opdir / 'assets.jsonl', source=path, sha256=file_hash(path))
+                assert list(checkpoint.refs(receipt)) == []  # All raw-field slots truly expired.
+                from context_intelligence.prune.coordination import receipt_path
+                from context_intelligence.prune.compound import optimize_retention_receipt
+                expiry_proof = optimize_retention_receipt(path, file_hash(receipt_path(path)))
+                retained_proof = tmp_path / 'retained-expiry-proof.json'
+                expiry_proof.rename(retained_proof)
+                try:
+                    with pytest.raises(CaptureDrift, match='exact owner expiry receipt'):
+                        list(checkpoint.refs(receipt))  # Absence alone grants nothing.
+                finally:
+                    retained_proof.rename(expiry_proof)
+                if drift:
+                    expiry = json.loads(expiry_proof.read_bytes())
+                    target = expiry_proof if drift == 'expiry-receipt' else (
+                        path.parent / expiry['diagnostic_manifest']['name'])
+                    assert_proof_drift(target)
+                owner.acknowledge(opdir / 'assets.jsonl', source=path, sha256=file_hash(path))
+                # Retained original recovery still pins bytes; final empty ACK
+                # is not a reclamation or retroactive-uncommit claim.
+                assert (opdir / 'original').read_bytes()
+    finally:
+        store.close()
 
 
 @pytest.mark.parametrize('mutate', [False, True])
