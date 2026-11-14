@@ -421,8 +421,104 @@ worker.join()
 sys.exit(0 if result == [True] else 1)
 """
 
+# Measurement only: candidate ways to bring a message box in front when its
+# process has no foreground rights. Raw Win32 calls, no product code.
+RAISE_EXPERIMENT = r"""
+import ctypes, os, sys, threading, time, traceback
+from ctypes import wintypes as W
+strategy, report = sys.argv[1], sys.argv[2]
+log = []
+try:
+    time.sleep(4)   # The person clicks another program's window during this pause.
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    visitor = ctypes.WINFUNCTYPE(W.BOOL, W.HWND, W.LPARAM)
+    user.EnumWindows.argtypes = [visitor, W.LPARAM]
+    user.GetWindowThreadProcessId.argtypes = [W.HWND, ctypes.POINTER(W.DWORD)]
+    user.GetWindowThreadProcessId.restype = W.DWORD
+    user.IsWindowVisible.argtypes = [W.HWND]
+    user.GetClassNameW.argtypes = [W.HWND, ctypes.c_wchar_p, ctypes.c_int]
+    user.SetWindowPos.argtypes = [W.HWND, W.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, W.UINT]
+    user.SetWindowPos.restype = W.BOOL
+    user.SetForegroundWindow.argtypes = [W.HWND]
+    user.SetForegroundWindow.restype = W.BOOL
+    user.GetForegroundWindow.restype = W.HWND
+    user.AttachThreadInput.argtypes = [W.DWORD, W.DWORD, W.BOOL]
+    user.AttachThreadInput.restype = W.BOOL
+    user.ShowWindow.argtypes = [W.HWND, ctypes.c_int]
+    user.MessageBoxW.argtypes = [W.HWND, W.LPCWSTR, W.LPCWSTR, W.UINT]
+    user.CreateWindowExW.argtypes = [W.DWORD, W.LPCWSTR, W.LPCWSTR, W.DWORD, ctypes.c_int, ctypes.c_int,
+                                     ctypes.c_int, ctypes.c_int, W.HWND, W.HMENU, W.HINSTANCE, W.LPVOID]
+    user.CreateWindowExW.restype = W.HWND
+    kernel.GetCurrentThreadId.restype = W.DWORD
+    TOPMOST = W.HWND(-1)
 
-def show_message(kind, other):
+    def dialogs():
+        found = []
+        def visit(window, _):
+            owner, name = W.DWORD(), ctypes.create_unicode_buffer(16)
+            user.GetWindowThreadProcessId(window, ctypes.byref(owner))
+            if (owner.value == os.getpid() and user.IsWindowVisible(window)
+                    and user.GetClassNameW(window, name, 16) and name.value == "#32770"):
+                found.append(window)
+            return True
+        user.EnumWindows(visitor(visit), 0)
+        return found
+
+    def raise_once(window):
+        if strategy == "activate":          # What the launcher did in the failed fix.
+            moved = user.SetWindowPos(window, TOPMOST, 0, 0, 0, 0, 0x3)
+            error = ctypes.get_last_error()
+            log.append(["SetWindowPos", moved, error, "SetForegroundWindow", user.SetForegroundWindow(window)])
+        elif strategy == "noactivate":      # Window order only; no request for activation.
+            moved = user.SetWindowPos(window, TOPMOST, 0, 0, 0, 0, 0x3 | 0x10)
+            log.append(["SetWindowPos+NOACTIVATE", moved, ctypes.get_last_error()])
+        elif strategy == "attach":          # Shares input state with the foreground thread.
+            front = user.GetForegroundWindow()
+            other = user.GetWindowThreadProcessId(front, None) if front else 0
+            me = kernel.GetCurrentThreadId()
+            attached = user.AttachThreadInput(me, other, True) if other else 0
+            moved = user.SetWindowPos(window, TOPMOST, 0, 0, 0, 0, 0x3)
+            taken = user.SetForegroundWindow(window)
+            if attached:
+                user.AttachThreadInput(me, other, False)
+            log.append(["AttachThreadInput", attached, "SetWindowPos", moved, "SetForegroundWindow", taken])
+        elif strategy == "minimize-restore":
+            log.append(["minimize", user.ShowWindow(window, 6), "restore", user.ShowWindow(window, 9)])
+
+    def helper(done):
+        seen = set()
+        while not done.wait(0.2):
+            for window in dialogs():
+                if window not in seen:
+                    seen.add(window)
+                    raise_once(window)
+
+    def show():
+        flags = 0x50040 | (0x1000 if strategy == "systemmodal" else 0)
+        owner = None
+        if strategy == "owner-topmost":     # A hidden, never-activated topmost owner window.
+            owner = user.CreateWindowExW(0x8 | 0x80 | 0x08000000, "STATIC", "", 0x80000000,
+                                         0, 0, 0, 0, None, None, None, None)
+            log.append(["owner", bool(owner), ctypes.get_last_error()])
+        log.append(["MessageBoxW", user.MessageBoxW(owner, "Measurement.", "Amplifier Unified", flags)])
+
+    done = threading.Event()
+    if strategy in {"activate", "noactivate", "attach", "minimize-restore"}:
+        threading.Thread(target=helper, args=(done,), daemon=True).start()
+    worker = threading.Thread(target=show)
+    worker.start()
+    worker.join()
+    done.set()
+except BaseException:
+    log.append(["error", traceback.format_exc()[-600:]])
+finally:
+    with open(report, "w", encoding="utf-8") as stream:
+        stream.write(repr(log))
+"""
+
+
+def show_message(code, arguments, other):
     """Show one message box from ANOTHER, windowless process; report its place.
 
     The person's situation is reproduced with real input: after that process
@@ -437,7 +533,7 @@ def show_message(kind, other):
     windowless = Path(sys.executable).with_name("pythonw.exe")
     before = {row[0] for row in windows()}
     child = subprocess.Popen([str(windowless if windowless.is_file() else sys.executable), "-B", "-c",
-                              SHOW_AFTER_A_PAUSE, kind], cwd=Path(__file__).resolve().parents[1])
+                              code, *arguments], cwd=Path(__file__).resolve().parents[1])
     facts = {"appeared": False, "windowless": windowless.is_file()}
     try:
         time.sleep(1.5)
@@ -477,6 +573,35 @@ def show_message(kind, other):
             child.wait(10)
 
 
+def other_program_window(user):
+    """A visible popup that receives clicks (SS_NOTIFY), like any program's window."""
+    return user.CreateWindowExW(0, "STATIC", "Another program", 0x80000000 | 0x10000000 | 0x100,
+                                0, 0, 1600, 1200, None, None, None, None)
+
+
+@native
+def test_native_measure_ways_to_bring_a_background_message_in_front(private_directory):
+    """Measurement only; it requires nothing. It prints what each way achieves."""
+    user, windows, pump = desktop()
+    other = other_program_window(user)
+    if not other:
+        pytest.skip("No interactive desktop for a test window")
+    try:
+        user.SetForegroundWindow(other)
+        pump()
+        for strategy in ("flags-only", "activate", "noactivate", "owner-topmost", "systemmodal",
+                         "minimize-restore", "attach"):
+            report = private_directory / (strategy + ".txt")
+            facts = show_message(RAISE_EXPERIMENT, [strategy, str(report)], other)
+            calls = report.read_text(encoding="utf-8") if report.is_file() else "no report"
+            print("RAISE", strategy, "| topmost:", facts.get("topmost"), "| in front:", facts.get("inFront"),
+                  "| foreground:", facts.get("foreground"), "| at first sight:", facts.get("topmostAtFirstSight"),
+                  facts.get("inFrontAtFirstSight"), "| appeared:", facts["appeared"],
+                  "| other was foreground:", facts.get("otherWindowIsForegroundAfterClick"), "| calls:", calls)
+    finally:
+        user.DestroyWindow(other)
+
+
 @native
 def test_native_launcher_message_comes_in_front_of_the_window_the_person_is_using():
     """The real launcher message, from a windowless process, on a real desktop.
@@ -493,18 +618,16 @@ def test_native_launcher_message_comes_in_front_of_the_window_the_person_is_usin
             pytest.fail("This lane must show a real message box: " + reason)
         pytest.skip(reason)
     user, windows, pump = desktop()
-    # A visible popup that receives clicks (SS_NOTIFY), like any program's window.
-    other = user.CreateWindowExW(0, "STATIC", "Another program", 0x80000000 | 0x10000000 | 0x100,
-                                 0, 0, 1600, 1200, None, None, None, None)
+    other = other_program_window(user)
     if not other:
         unavailable(f"no interactive desktop (error {ctypes.get_last_error()})")
     try:
         user.SetForegroundWindow(other)
         pump()
         print("this test's window is the foreground window at the start:", user.GetForegroundWindow() == other)
-        flags_alone = show_message("flags-alone", other)
+        flags_alone = show_message(SHOW_AFTER_A_PAUSE, ["flags-alone"], other)
         print("message-box flags alone (measured, not required):", flags_alone)
-        launcher = show_message("launcher", other)
+        launcher = show_message(SHOW_AFTER_A_PAUSE, ["launcher"], other)
         print("launcher message:", launcher)
     finally:
         user.DestroyWindow(other)
