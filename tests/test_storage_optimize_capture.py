@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -119,6 +120,10 @@ async def test_actual_ci_foundation_private_diagnostic_apply_rebind_and_resume(t
         admitted.validate_ref(accepted, committed=False)
         return accepted['provenance']
     def checkpoint(receipt):
+        assert app.diagnostics.flush_lock.locked()
+        from amplifier_foundation.session import SharedSessionStore, SessionBusyError
+        with pytest.raises(SessionBusyError):
+            SharedSessionStore(str(tmp_path), 'root').acquire(app='checkpoint-competitor')
         assert receipt['session_id'] == 'root'
         assert receipt['sha256'] == file_hash(path)
         assert receipt['mapping_sha256'] == file_hash(opdir / 'records.jsonl')
@@ -145,11 +150,16 @@ async def test_actual_ci_foundation_private_diagnostic_apply_rebind_and_resume(t
     actual_commit = optimize.apply
     commits = []
     def observed_commit(*args, **kwargs):
+        assert app.diagnostics.flush_lock.locked()
         commits.append(True)
         return actual_commit(*args, **kwargs)
     monkeypatch.setattr(optimize, 'apply', observed_commit)
     retention_results = []
     def observed_prune(*args, **kwargs):
+        assert app.diagnostics.flush_lock.locked()
+        from amplifier_foundation.session import SharedSessionStore, SessionBusyError
+        with pytest.raises(SessionBusyError):
+            SharedSessionStore(str(tmp_path), 'root').acquire(app='expiry-competitor')
         value = actual_prune(*args, **kwargs)
         retention_results.append((value.status, value.reason))
         if lost_expiry_ack and value.status == 'pruned':
@@ -211,3 +221,147 @@ async def test_actual_ci_foundation_private_diagnostic_apply_rebind_and_resume(t
         admitted.close()
         journal.db.close()
         appdb.close()
+
+
+@pytest.mark.parametrize('cancel,cleanup_failure', [(False, False), (True, False), (False, True)])
+async def test_capture_lifetime_keeps_real_native_fence_and_thread_through_cleanup(tmp_path, monkeypatch, cancel, cleanup_failure):
+    """Lifetime only: no invented media admission or installed-host claim."""
+    from amplifier_foundation.session import SharedSessionStore, SessionBusyError
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.storage_optimize_capture import _capture_lifetime
+    import amplifier_web.storage_optimize_media as media_module
+    source = {'id': 'root', 'workspace': str(tmp_path)}
+    runtime = SimpleNamespace(_closed=False, _locks={}, _preparations={}, workers={},
+                              _check_execution=lambda *args: None)
+    runtime.stopped_boundary = lambda session: RuntimeManager.stopped_boundary(runtime, session)
+    journal = OperationJournal(tmp_path / 'operations.sqlite3')
+    app = SimpleNamespace(lock=asyncio.Lock(), runtime=runtime,
+        diagnostics=SimpleNamespace(flush_lock=asyncio.Lock()),
+        operations=SimpleNamespace(journal=journal, requests=OperationRequests(journal)),
+        _session=lambda *args, **kwargs: source)
+    controller = SavedStorageOptimize(app)
+    app._saved_storage_optimize = controller
+    operation = {'operationId': 'lifetime', '_owner': 'user', '_authority': None,
+        'revision': 0, 'status': 'applying', '_phase': 'apply',
+        'summary': {'coverage': {}, 'bytes': {}}}
+    with journal.db:
+        controller._save_operation(operation)
+    row = {'_sourceId': 'root', 'sessionId': 'root',
+           '_path': str(capture_dir(str(tmp_path), 'root') / 'events.jsonl')}
+    threads, phases = [], []
+    entered, release = threading.Event(), threading.Event()
+
+    def protected(phase):
+        assert app.diagnostics.flush_lock.locked()
+        with pytest.raises(SessionBusyError):
+            SharedSessionStore(str(tmp_path), 'root').acquire(app='competing-test')
+        threads.append(threading.get_ident())
+        phases.append(phase)
+
+    @contextmanager
+    def binding(*args, **kwargs):
+        protected('open')
+        try:
+            yield object()
+        finally:
+            protected('close')
+            if cleanup_failure:
+                raise OSError('synthetic context final verification failed')
+    monkeypatch.setattr(media_module, 'capture_owner', binding)
+
+    async def work():
+        async with _capture_lifetime(app, row, operation, resume=False, media=None) as lifetime:
+            def image_stage():
+                protected('images')
+                entered.set()
+                assert release.wait(5)
+                protected('image-settled')
+            await lifetime['run'](image_stage)
+            await lifetime['run'](lambda: protected('expiry-final-ack'))
+    task = asyncio.create_task(work())
+    try:
+        while not entered.is_set():
+            await asyncio.sleep(0.001)
+            if task.done():
+                await task
+        if cancel:
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()  # Repeated cancellation still cannot release fences.
+            assert not task.done() and app.diagnostics.flush_lock.locked()
+        release.set()
+        if cancel:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        elif cleanup_failure:
+            with pytest.raises(OSError, match='context final verification'):
+                await task
+        else:
+            await task
+        assert phases == (['open', 'images', 'image-settled', 'close'] if cancel else
+                          ['open', 'images', 'image-settled', 'expiry-final-ack', 'close'])
+        assert len(set(threads)) == 1 and threads[0] != threading.get_ident()
+        assert not app.diagnostics.flush_lock.locked()
+        held = SharedSessionStore(str(tmp_path), 'root').acquire(app='after-test')
+        held.release()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        journal.db.close()
+
+
+def test_unknown_original_never_becomes_admitted_by_resume_or_poll():
+    from amplifier_web.storage_optimize_media import capture_owner, UnknownHistoricalMedia
+    with pytest.raises(UnknownHistoricalMedia, match='receipt is unavailable'):
+        capture_owner(None, {}, {}, resume=True, poll=lambda: None)
+
+
+@pytest.mark.parametrize('mutate', [False, True])
+def test_index_rebind_does_not_treat_its_own_read_atime_as_source_drift(tmp_path, mutate):
+    from amplifier_web.capture_index import hold_replacement, rebind_replaced_capture
+    path = tmp_path / 'events.jsonl'
+    before, after = b'{"old":1}\n', b'{"new":1}\n'
+    fact = lambda raw: {'offset': 0, 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+    witness = {'old': {key: value for key, value in fact(before).items() if key != 'offset'},
+               'new': {key: value for key, value in fact(after).items() if key != 'offset'}}
+    db = sqlite3.connect(':memory:')
+    try:
+        db.executescript('CREATE TABLE captures(path TEXT PRIMARY KEY,offset INTEGER,inode INTEGER);'
+                        'CREATE TABLE records(id TEXT,data TEXT);')
+        path.write_bytes(before)
+        hold_replacement(db, path, 'op', witness)
+        replacement = tmp_path / 'candidate'
+        replacement.write_bytes(after)
+        replacement.replace(path)
+        # Reconciliation must read the installed bytes. With an older atime,
+        # that ordinary read updates atime without changing content or ctime.
+        os.utime(path, ns=(1, path.stat().st_mtime_ns))
+        old = path.stat()
+        def mappings():
+            yield {'old': fact(before), 'new': fact(after)}
+            if mutate:
+                path.write_bytes(b'{"bad":1}\n')
+        if mutate:
+            with pytest.raises(CaptureDrift, match='changed during index'):
+                rebind_replaced_capture(db, path, 'op', witness, mappings())
+            assert db.execute('SELECT operation_id FROM capture_maintenance').fetchall() == [('op',)]
+            assert db.execute('SELECT count(*) FROM capture_rebindings').fetchone() == (0,)
+            return
+        rebind_replaced_capture(db, path, 'op', witness, mappings())
+        assert path.stat().st_mtime_ns == old.st_mtime_ns
+        assert path.read_bytes() == after
+    finally:
+        db.close()
+
+
+def test_content_stamp_ignores_only_atime(monkeypatch):
+    from amplifier_web.capture_index import _content_stamp
+    import amplifier_web.capture_index as module
+    # Independent of mount atime/noatime policy; all mutation witnesses retained.
+    monkeypatch.setattr(module, 'source_change_time', lambda info: info.st_ctime_ns)
+    fields = dict(st_dev=1, st_ino=2, st_mode=3, st_nlink=4, st_uid=5,
+                  st_gid=6, st_size=7, st_mtime_ns=8, st_ctime_ns=9, st_atime_ns=10)
+    original = _content_stamp(SimpleNamespace(**fields))
+    assert _content_stamp(SimpleNamespace(**{**fields, 'st_atime_ns': 11})) == original
+    for key in fields.keys() - {'st_atime_ns'}:
+        assert _content_stamp(SimpleNamespace(**{**fields, key: fields[key] + 1})) != original

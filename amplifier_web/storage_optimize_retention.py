@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -119,7 +120,7 @@ def _mapping(path, receipt):
         db.close()
 
 
-async def apply(app, row, operation, *, resume=False, after_rebind=None):
+async def apply(app, row, operation, *, resume=False, after_rebind=None, _lifetime=None):
     """Keep native writer exclusion and diagnostics serialization until settled."""
     from context_intelligence.prune.operations import PruneRequest, prune_file
     from .storage_cleanup import check
@@ -128,15 +129,22 @@ async def apply(app, row, operation, *, resume=False, after_rebind=None):
     continuation = Path(row['_captureOperation']) if row.get('_captureOperation') else None
     identity = operation['operationId'] + ':' + hashlib.sha256(str(path).encode()).hexdigest()
     loop = asyncio.get_running_loop()
-    cancelled = threading.Event()
+    cancelled = _lifetime['cancelled'] if _lifetime else threading.Event()
+    async def run(function):
+        if _lifetime:
+            return await _lifetime['run'](function)
+        return await settle_owned(function, cancelled)
     boundary = None
-    async with app.lock:
-        check(app, operation.get('_authority'))
-        source = source_owner(app, row)
-        boundary = app.runtime.stopped_boundary(source)
-        boundary.__enter__()
+    if _lifetime is None:
+        async with app.lock:
+            check(app, operation.get('_authority'))
+            source = source_owner(app, row)
+            boundary = app.runtime.stopped_boundary(source)
+            boundary.__enter__()
     try:
-        async with app.diagnostics.flush_lock:
+        # A combined image+expiry operation owns this exact lock and native
+        # boundary continuously, including its thread-affine original CI index.
+        async with (app.diagnostics.flush_lock if _lifetime is None else nullcontext()):
             async def admission(prepared=None):
                 async with app.lock:
                     current = owner(app)._get(operation['operationId'], operation['_owner'])
@@ -184,16 +192,16 @@ async def apply(app, row, operation, *, resume=False, after_rebind=None):
                     before_commit=poll, **options))
                 return result, _receipt(path, continuation)
 
-            result, receipt = await settle_owned(perform, cancelled)
+            result, receipt = await run(perform)
             if receipt:
                 def rebind():
                     with app.diagnostics._db() as db:
                         return rebind_replaced_capture(db, path, identity, _witness(receipt),
                                                        _mapping(path, receipt))
-                await settle_owned(rebind, cancelled)
+                await run(rebind)
                 if after_rebind is not None:
                     await admission()
-                    await settle_owned(after_rebind, cancelled)
+                    await run(after_rebind)
             if result is None:
                 return {**row, 'status': 'held', 'reason':
                     'Diagnostic reference expiry was reconciled; earlier unlink outcome remains unknown and was not replayed',
