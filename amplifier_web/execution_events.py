@@ -339,7 +339,8 @@ class ExecutionEvents:
         original_compact = getattr(provider, "compact_context", None)
         async def compact_context(request, **kwargs):
             return await self.provider_call(sid, provider, request,
-                lambda: original_compact(request, **kwargs), label="Context compaction", run_id=run_id)
+                lambda: original_compact(request, **kwargs), label="Context compaction", run_id=run_id,
+                request_options=kwargs)
 
         original_image = getattr(provider, "generate_image", None)
         async def generate_image(request, *, plan):

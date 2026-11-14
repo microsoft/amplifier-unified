@@ -9,6 +9,7 @@ import inspect
 import json
 import time
 import uuid
+import weakref
 
 from .surface_context import compact
 
@@ -167,8 +168,15 @@ class SurfaceDelivery:
             metadata['contextAnchorToolCalls'] = sorted({
                 retained_calls[k] for k in retained if k in self.images
                 and self.images[k] is pixels[0] and retained_calls.get(k)})
+        from .host.media import record_request_only
+        observed_epoch = self.epoch
+        focused_until = self.focus['until'] if pixels and self.focus else None
+        def current_image():
+            return (self.epoch_available and self.epoch == observed_epoch
+                    and (focused_until is None or time.monotonic() < focused_until))
         result = request.model_copy(update={'messages': [*request.messages,
-            Message(role='user', content=blocks, metadata=metadata)]})
+            record_request_only(Message(role='user', content=blocks, metadata=metadata),
+                                validate=current_image)]})
         if commit:
             self.commit(result)
         return result
@@ -200,6 +208,21 @@ class SurfaceProvider:
         self._capture_tickets = []
         self.refused = []
         self.refusal_overflow = False
+        self._active_media = {}
+        if coordinator is not None and callable(getattr(coordinator, 'register_cleanup', None)):
+            async def close_media():
+                for row in self.prepared:
+                    if len(row) > 5 and row[5] is not None:
+                        row[5].release()
+                for projection in self._active_media.values():
+                    projection.release()
+                self.prepared.clear()
+                self._active_media.clear()
+                self.refused.clear()
+                for ticket in self._capture_tickets:
+                    ticket.close()
+                self._capture_tickets.clear()
+            coordinator.register_cleanup(close_media)
         from .performance_diagnostics import TIMING_ENABLED, time_preparation
         self.timing_coordinator = coordinator if TIMING_ENABLED else None
         if self.timing_coordinator is not None:
@@ -207,8 +230,17 @@ class SurfaceProvider:
             self.refit_request = time_preparation(coordinator, 'provider.refit', self.refit_request)
 
     async def _prepare(self, request, commit=False, *, explicit_budget=False, refit_binding=None,
-                       projection_out=None):
+                       projection_out=None, request_options=None, media_only=False):
         entry = next((row for row in self.prepared if row[0] is request), None)
+        if entry is not None and len(entry) > 5 and entry[5] is not None:
+            if not entry[5].matches_options(request_options):
+                if not explicit_budget:
+                    entry[5].release()
+                    self.prepared.remove(entry)
+                    raise ValueError('Prepared media request options changed after fitting')
+                entry[5].release()
+                self.prepared.remove(entry)
+                entry = None
         refused = any(row[0] is request for row in self.refused) or (entry is None and self.refusal_overflow)
         if refused and not explicit_budget:
             raise ValueError("The request was refused before transport; a new explicit budget/refit is required.")
@@ -217,7 +249,7 @@ class SurfaceProvider:
             project = (self.coordinator.get_capability('computer_use.prepare_request')
                        if self.coordinator is not None else None)
             prepared_input = request
-            if callable(project):
+            if callable(project) and not media_only:
                 prepared_input, source_validate = project(request)
                 if source_validate is not None:
                     def projection_validate():
@@ -225,70 +257,127 @@ class SurfaceProvider:
                             raise ValueError('Computer projection owner changed')
                         source_validate()
             refit = getattr(self.delivery, 'prepare_refit', None)
-            cached = (await refit(prepared_input, self.original, binding=refit_binding)
-                      if refit_binding is not None and callable(refit)
-                      else await self.delivery.prepare(prepared_input, self.original))
+            from .host.media import request_only_scope
+            with request_only_scope() as issued:
+                cached = (prepared_input if media_only else
+                          await refit(prepared_input, self.original, binding=refit_binding)
+                          if refit_binding is not None and callable(refit)
+                          else await self.delivery.prepare(prepared_input, self.original))
+            registry = self.coordinator.get_capability('web.media.request_only') if self.coordinator is not None else None
+            if callable(getattr(registry, 'bind', None)):
+                registry.bind(cached, issued)
             if refused and hasattr(self.delivery, "revalidate"):
                 # Stabilize revoked visual/context warnings BEFORE the new
                 # measurement. Never replace fitted bytes during transport.
                 cached = await self.delivery.revalidate(cached)
-            boundary = hasattr(self.delivery, "finalize_work")
+            boundary = not media_only and hasattr(self.delivery, "finalize_work")
+            binding = self.delivery.work_request(cached) if boundary else None
+            from .host.media import prepare_media
+            media = await prepare_media(self.coordinator, self.original, cached,
+                                        request_options=request_options,
+                                        purpose='context-compaction' if media_only else 'model')
+            if media is None and callable(getattr(registry, 'release', None)):
+                registry.release(cached)
+            if media is not None:
+                cached = media.request
+                previous_validate = projection_validate
+                def projection_validate():
+                    if previous_validate is not None:
+                        previous_validate()
+                    media.validate()
             entry = (request, cached, cached.model_dump_json() if boundary or projection_validate is not None else None,
-                     self.delivery.work_request(cached) if boundary else None,
-                     projection_validate)
+                     binding, projection_validate, media)
             if refit_binding is not None:
                 from .request_refit import RequestFitChanged
-                self.delivery.check_execution_scope(refit_binding['executionScope'])
-                current = entry[3]
-                same_scope = current and current.get('executionScope') == refit_binding.get('executionScope')
-                same_required = current and current.get('required') == refit_binding.get('required')
-                if (not same_scope or (not same_required
-                        and not self.delivery.current_full(refit_binding['executionScope']))):
-                    self.delivery.discard_work(current)
-                    unavailable = not current or current.get('required', {}).get('status') != 'available'
-                    raise RequestFitChanged('authority_unavailable' if unavailable else 'authority_changed')
-                if not same_required:
-                    # Retain the Full reliance across awaited budget work, even
-                    # when the new observation itself is unavailable.
-                    current['assuranceUnavailable'] = True
-            self.prepared = (self.prepared + [entry])[-4:]
+                try:
+                    self.delivery.check_execution_scope(refit_binding['executionScope'])
+                    current = entry[3]
+                    same_scope = current and current.get('executionScope') == refit_binding.get('executionScope')
+                    same_required = current and current.get('required') == refit_binding.get('required')
+                    if (not same_scope or (not same_required
+                            and not self.delivery.current_full(refit_binding['executionScope']))):
+                        self.delivery.discard_work(current)
+                        unavailable = not current or current.get('required', {}).get('status') != 'available'
+                        raise RequestFitChanged('authority_unavailable' if unavailable else 'authority_changed')
+                    if not same_required:
+                        # Retain Full reliance across awaited budget work.
+                        current['assuranceUnavailable'] = True
+                except BaseException:
+                    if media is not None:
+                        media.release()
+                    raise
+            self.prepared.append(entry)
+            while len(self.prepared) > 4:
+                evicted = self.prepared.pop(0)
+                if len(evicted) > 5 and evicted[5] is not None:
+                    evicted[5].release()
             self.refused = [row for row in self.refused if row[0] is not request]
         _, cached, fitted, binding = entry[:4]
         if projection_out is not None:
             projection_out[:] = [fitted, entry[4] if len(entry) > 4 else None]
         if commit:
+            media = entry[5] if len(entry) > 5 else None
             try:
-                if hasattr(self.delivery, "revalidate"):
+                if not media_only and hasattr(self.delivery, "revalidate"):
                     cached = await self.delivery.revalidate(cached)
-                if fitted is not None and hasattr(self.delivery, "finalize_work"):
+                if media is not None:
+                    if cached != entry[1]:
+                        raise ValueError('Prepared media projection changed after fitting')
+                    cached = entry[1]  # Count and send the exact private object.
+                    media.validate()
+                if fitted is not None and not media_only and hasattr(self.delivery, "finalize_work"):
                     cached = await self.delivery.finalize_work(cached, fitted=fitted, binding=binding)
-            except Exception as error:
+                if media is not None:
+                    media.validate()
+            except BaseException as error:
                 # Only the pretransport checks are covered. A sent/unknown
                 # provider request never enters this refit path.
                 from .request_refit import RequestFitChanged
                 if isinstance(error, RequestFitChanged):
                     error.local_refusal = True
                 self.prepared = [row for row in self.prepared if row[0] is not request]
+                if media is not None:
+                    media.release()
                 # Revalidation can remove unavailable optional observations.
                 # Refit that reduced request rather than reintroducing the
                 # same pixels/memory and racing their checks a second time.
                 # Only reuse this adapter's unchanged fitted input and exact
                 # binding; arbitrary provider/budget mutations still rebuild.
-                reduced = (cached if isinstance(error, RequestFitChanged)
+                reduced = (cached if media is None and isinstance(error, RequestFitChanged)
                            and error.reason == 'content_changed' and binding
                            and self.delivery.work_request(cached) is binding
                            and entry[1].model_dump_json() == fitted else None)
                 if reduced is None and hasattr(self.delivery, "discard_work"):
                     self.delivery.discard_work(binding)
-                self.refused.append((request, error, binding, reduced,
-                                     entry[4] if len(entry) > 4 else None))
+                # Media failures cannot reuse a pixel-bearing refusal frame or
+                # its serialized fitted payload. A new explicit fit is required.
+                if media is None:
+                    self.refused.append((request, error, binding, reduced,
+                                         entry[4] if len(entry) > 4 else None))
+                elif isinstance(error, RequestFitChanged):
+                    self.refused.append((request, weakref.ref(error), binding, None, None))
+                if media is not None:
+                    # The propagated error may be retained by the selected
+                    # refit owner. Do not leave fitted pixels in its traceback.
+                    error.__traceback__ = None
+                    if projection_out is not None:
+                        projection_out.clear()
+                    entry = cached = fitted = None
                 if len(self.refused) > 16:
                     self.refused.pop(0)
                     self.refusal_overflow = True
                 raise
-            self.delivery.commit(cached)
+            if not media_only:
+                self.delivery.commit(cached)
+            if media is not None:
+                self._active_media[id(cached)] = media
             self.prepared = [row for row in self.prepared if row[0] is not request]
         return cached
+
+    def _release_media(self, request):
+        projection = self._active_media.pop(id(request), None)
+        if projection is not None:
+            projection.release()
 
     @staticmethod
     async def _budget(method, request, *, request_options=None, **kwargs):
@@ -314,7 +403,8 @@ class SurfaceProvider:
         from .request_refit import RequestFitChanged
         from . import provider_capture as capture
         capture.observe(capture.invalidate, self, request)
-        row = next((row for row in self.refused if row[0] is request and row[1] is error), None)
+        row = next((row for row in self.refused if row[0] is request and
+                    (row[1]() if isinstance(row[1], weakref.ReferenceType) else row[1]) is error), None)
         if (row is None or not isinstance(error, RequestFitChanged)
                 or error.reason not in {'content_changed', 'binding_missing', 'binding_changed'}):
             return None
@@ -332,7 +422,8 @@ class SurfaceProvider:
                                                   row[4] if len(row) > 4 else None)])[-4:]
                 self.refused = [item for item in self.refused if item[0] is not request]
             else:
-                cached = await self._prepare(request, explicit_budget=True, refit_binding=binding)
+                cached = await self._prepare(request, explicit_budget=True, refit_binding=binding,
+                                             request_options=self._media_options(request_options, kwargs))
         except RequestFitChanged as error:
             error.local_refusal = True
             raise
@@ -344,10 +435,28 @@ class SurfaceProvider:
             return decision
         except BaseException:
             if ticket is not None:ticket.close()
+            self._discard_prepared(request)
             raise
 
     def __getattr__(self, name):
         method = getattr(self.original, name)
+        if name == 'compact_context' and callable(method):
+            async def compact(request, **kwargs):
+                # Compaction is not a new interactive observation or consent.
+                projection = []
+                prepared = await self._prepare(request, commit=True, media_only=True,
+                                              request_options=kwargs, projection_out=projection)
+                try:
+                    if projection and projection[1] is not None:
+                        projection[1]()
+                    from .request_projection import dispatch as projection_dispatch
+                    with projection_dispatch(self.original, prepared, *projection, kwargs):
+                        return await method(prepared, **kwargs)
+                finally:
+                    self._release_media(prepared)
+                    from . import provider_capture as capture
+                    capture.observe(capture.invalidate, self, request)
+            return compact
         if name == 'stream' and callable(method):
             async def stream(request, **kwargs):
                 from . import provider_capture as capture
@@ -355,21 +464,29 @@ class SurfaceProvider:
                 trace = capture.observe(capture.describe_take, self, request, ticket)
                 projection = []
                 try:
-                    request = await self._prepare(request, commit=True, projection_out=projection)
+                    request = await self._prepare(request, commit=True, projection_out=projection,
+                                                  request_options=kwargs)
                 except BaseException:
                     if ticket is not None:ticket.close()
+                    self._release_media(request)
                     raise
                 from .coordination_delivery import WORK_ATTEMPT
                 try:
                     attempt = self.delivery.begin_work(request, streaming=True) if hasattr(self.delivery, 'begin_work') else None
                 except BaseException:
                     if ticket is not None:ticket.close()
+                    self._release_media(request)
                     raise
-                async def within_attempt(operation):
+                async def within_attempt(operation, *, closing=False):
                     # __anext__ and aclose may run in different consumer tasks.
                     # Never carry a ContextVar token across an outward yield.
                     token = WORK_ATTEMPT.set((self.delivery, attempt) if attempt else None)
                     try:
+                        media = self._active_media.get(id(request))
+                        if media is not None and not closing:
+                            media.validate()
+                        if closing:
+                            return await operation()
                         from .request_projection import dispatch as projection_dispatch
                         with projection_dispatch(self.original, request, *projection, kwargs), capture.dispatch(ticket, self.original, request, trace):
                             return await operation()
@@ -397,33 +514,55 @@ class SurfaceProvider:
                 finally:
                     try:
                         if callable(getattr(iterator, "aclose", None)):
-                            await within_attempt(iterator.aclose)
+                            await within_attempt(iterator.aclose, closing=True)
                     finally:
                         if attempt:
                             self.delivery.close_work_stream(attempt)
                         if ticket is not None:ticket.close()
+                        self._release_media(request)
             return stream
         if name == 'request_budget' and callable(method):
             async def budget(request, *, request_options=None, **kwargs):
                 from . import provider_capture as capture
                 capture.observe(capture.invalidate, self, request)
                 original_request = request
-                request = await self._prepare(request, explicit_budget=True)
+                from .host.media import has_media
+                media_only = (has_media(request) and
+                              (getattr(request, 'metadata', None) or {}).get('purpose') == 'context-compaction')
+                request = await self._prepare(request, explicit_budget=True,
+                    request_options=self._media_options(request_options, kwargs), media_only=media_only)
                 ticket = capture.observe(capture.begin_fit, self, original_request, request, request_options, kwargs)
                 actual = self._budget
                 if self.timing_coordinator is not None:
                     from .performance_diagnostics import time_preparation
                     actual = time_preparation(self.timing_coordinator, 'provider.budget', actual)
                 try:
+                    row = next((row for row in self.prepared if row[0] is original_request), None)
+                    if row is not None and len(row) > 5 and row[5] is not None:
+                        row[5].validate()
                     with capture.fitting(ticket, self.original, request):
                         decision = await actual(method, request, request_options=request_options, **kwargs)
                     capture.finish_fit(ticket, decision)
                     return decision
                 except BaseException:
                     if ticket is not None:ticket.close()
+                    self._discard_prepared(original_request)
                     raise
             return budget
         return method
+
+    @staticmethod
+    def _media_options(options, kwargs):
+        if options is not None and not isinstance(options, dict):
+            raise ValueError('Prepared media request options are unsupported')
+        return {**(options or {}), **{key: value for key, value in kwargs.items()
+                                   if key not in {'context_estimate', 'request_options'}}}
+
+    def _discard_prepared(self, request):
+        for row in self.prepared:
+            if row[0] is request and len(row) > 5 and row[5] is not None:
+                row[5].release()
+        self.prepared = [row for row in self.prepared if row[0] is not request]
 
     async def complete(self, request, **kwargs):
         from . import provider_capture as capture
@@ -431,19 +570,25 @@ class SurfaceProvider:
         trace = capture.observe(capture.describe_take, self, request, ticket)
         projection = []
         try:
-            request = await self._prepare(request, commit=True, projection_out=projection)
+            request = await self._prepare(request, commit=True, projection_out=projection,
+                                          request_options=kwargs)
         except BaseException:
             if ticket is not None:ticket.close()
+            self._release_media(request)
             raise
         from .coordination_delivery import WORK_ATTEMPT
         try:
             attempt = self.delivery.begin_work(request) if hasattr(self.delivery, 'begin_work') else None
         except BaseException:
             if ticket is not None:ticket.close()
+            self._release_media(request)
             raise
         token = WORK_ATTEMPT.set((self.delivery, attempt) if attempt else None)
         try:
             from .request_projection import dispatch as projection_dispatch
+            media = self._active_media.get(id(request))
+            if media is not None:
+                media.validate()
             with projection_dispatch(self.original, request, *projection, kwargs), capture.dispatch(ticket, self.original, request, trace):
                 response = await self.original.complete(request, **kwargs)
             if hasattr(self.delivery, 'finish_work'):
@@ -456,3 +601,4 @@ class SurfaceProvider:
         finally:
             WORK_ATTEMPT.reset(token)
             if ticket is not None:ticket.close()
+            self._release_media(request)

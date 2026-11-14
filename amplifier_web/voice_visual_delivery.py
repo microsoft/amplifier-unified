@@ -2,6 +2,7 @@
 import asyncio
 import copy
 import json
+import time
 
 
 class VoiceVisualDelivery:
@@ -70,9 +71,16 @@ class VoiceVisualDelivery:
                 blocks.append({"type": "text", "text": "Vision support could not be confirmed for the selected model; no image evidence was delivered. Do not claim to see the screenshot."})
         except Exception:  # noqa: BLE001 — provider boundary must fail closed on bridge errors
             blocks.append({"type": "text", "text": "The requested screen snapshot is stale or unavailable. No image was delivered; do not infer current screen contents."})
-        message = Message(role="user", content=blocks, metadata={
+        from .host.media import record_request_only
+        observed_epoch = copy.deepcopy(self.surfaces.epoch)
+        received = observation.get('receivedAt') if 'observation' in locals() else None
+        def current_capture():
+            return (self.capture is capture and self.surfaces.epoch == observed_epoch
+                    and (received is None or time.time() - received <= 30))
+        message = record_request_only(Message(role="user", content=blocks, metadata={
             "ephemeral": True, "voiceVisualObservation": capture["id"], "visualRead": capture["read"],
-            "contextAnchorToolCalls": [tool_call_id] if tool_call_id else []})
+            "contextAnchorToolCalls": [tool_call_id] if tool_call_id else []}),
+            validate=current_capture)
         return request.model_copy(update={"messages": [*request.messages, message]})
 
     async def revalidate(self, request):
