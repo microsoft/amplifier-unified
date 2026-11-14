@@ -41,6 +41,54 @@ function correlatedModel(page,record){
  return page.locator(`[data-kind="llm"][data-node-id=${JSON.stringify(record.id)}]`);
 }
 
+function terminalOptimize(result,operationId){
+ assert.equal(result.operationId,operationId,'Passive status must describe the exact saved operation');
+ assert.ok(Number.isSafeInteger(result.revision));
+ return !['previewing','applying','cancelling'].includes(result.status);
+}
+
+function assertSettledOptimize(result,receipt){
+ assert.equal(terminalOptimize(result,receipt.operationId),true,'File replacement alone is not terminal completion');
+ assert.equal(result.status,'partial','This fixture must truthfully retain its two held sources');
+ assert.deepEqual(result.cutoffs,receipt.cutoffs,'Terminal status must preserve the original frozen cutoffs');
+ const coverage=result.summary.coverage;
+ assert.equal(coverage.complete,true);assert.equal(coverage.completed,1);assert.equal(coverage.held,2);
+ assert.equal(coverage.eligible||0,0);assert.equal(coverage.attempting||0,0);
+ assert.equal(result.canCancel,false);
+}
+
+const currentHistoryRead=(observedEpoch,currentEpoch,capture)=>capture&&observedEpoch===currentEpoch;
+
+async function browserWindowState(page){
+ return page.evaluate(()=>{
+  const state=window.amplifier.getState(),selected=state.selectedSessionId;
+  const session=state.sessions?.find(row=>row.id===selected);
+  const projection=session?.workProjection,executionWindow=session?.executionWindow;
+  return {selectedSessionId:selected??null,stateRevision:state.revision??null,
+   hostInstanceId:state.client?.hostInstanceId??null,
+   workProjection:projection?{status:projection.status,current:projection.current,
+    receipt:projection.receipt?Object.fromEntries(['generation','scope','windowKey','sourceCount','itemCount']
+     .map(key=>[key,projection.receipt[key]??null])):null}:null,
+   executionWindow:executionWindow?{revision:executionWindow.revision??null,windowKey:executionWindow.windowKey??null,
+    coverage:executionWindow.coverage?Object.fromEntries(['kind','historyComplete','rootExhausted','sourceCount',
+     'rangeStart','rangeEnd','scannedEvents','scannedBytes','partialRecord','pagingBlocked','invalidEvents']
+     .map(key=>[key,executionWindow.coverage[key]??null])):null}:null};
+ });
+}
+
+function assertFreshPair(pair,window,sessionId,epoch){
+ assert.equal(window.selectedSessionId,sessionId,'The fresh window must belong to the selected fixture session');
+ assert.equal(window.workProjection?.status,'ready');assert.equal(window.workProjection?.current,true);
+ assert.equal(pair.request.historyEpoch,epoch,'Pre-reload request evidence is stale');
+ assert.equal(pair.response.historyEpoch,epoch,'Pre-reload response evidence is stale');
+ assert.equal(pair.request.group,'event-window:'+window.executionWindow?.revision,
+  'The selected rows must belong to the current published source generation');
+ assert.equal(window.executionWindow?.coverage?.sourceCount,1);
+ assert.equal(window.executionWindow?.coverage?.partialRecord,false);
+ assert.equal(pair.request.requestDetailPresent,false,'Old raw request detail is not the post-expiry generation');
+ assert.equal(pair.response.responseDetailPresent,true,'The original opposite-direction recording must remain available');
+}
+
 async function boundedModelDom(page){
  let timer;
  try{return await Promise.race([page.locator('[data-kind="llm"]').evaluateAll(elements=>({
@@ -115,7 +163,7 @@ function assertPendingOutbox(before,after){
  }
 }
 
-function sourceCheck(){
+async function sourceCheck(){
  const locatorCalls=[];
  const fakeScope={getByRole:(role,options)=>{locatorCalls.push({role,options});return 'scope-control'}};
  assert.equal(scopeControl(fakeScope),'scope-control');
@@ -150,6 +198,43 @@ function sourceCheck(){
  const idSelectors=[];
  correlatedModel({locator:selector=>idSelectors.push(selector)},exactPair.response);
  assert.deepEqual(idSelectors,['[data-kind="llm"][data-node-id="event:native:1:response"]']);
+ const settled={operationId:'operation',revision:14,status:'partial',cutoffs:{requestBefore:'2026-11-12T00:00:00Z',responseBefore:null},
+  summary:{coverage:{complete:true,completed:1,held:2,eligible:0,attempting:0}},canCancel:false};
+ assertSettledOptimize(settled,settled);
+ assert.equal(terminalOptimize({...settled,status:'applying'},'operation'),false);
+ assert.throws(()=>assertSettledOptimize({...settled,status:'applying'},settled),/not terminal/);
+ assert.throws(()=>assertSettledOptimize({...settled,operationId:'other'},settled),/exact saved operation/);
+ const freshPair=structuredClone(exactPair);
+ freshPair.request.historyEpoch=freshPair.response.historyEpoch=1;
+ freshPair.request.requestDetailPresent=false;freshPair.response.responseDetailPresent=true;
+ const freshWindow={selectedSessionId:'session',workProjection:{status:'ready',current:true},
+  executionWindow:{revision:'fixed',coverage:{sourceCount:1,partialRecord:false}}};
+ assertFreshPair(freshPair,freshWindow,'session',1);
+ assert.throws(()=>assertFreshPair(freshPair,freshWindow,'session',2),/stale/);
+ assert.throws(()=>assertFreshPair(freshPair,{...freshWindow,executionWindow:{...freshWindow.executionWindow,revision:'old'}},'session',1),
+  /current published source generation/);
+ assert.throws(()=>assertFreshPair({...freshPair,request:{...freshPair.request,requestDetailPresent:true}},freshWindow,'session',1),
+  /Old raw request detail/);
+ assert.equal(currentHistoryRead(0,1,true),false,'Late pre-reload response must not repopulate the new page map');
+ assert.equal(currentHistoryRead(1,1,false),false);
+ assert.equal(currentHistoryRead(1,1,true),true);
+ // Execute the actual page-evaluation callback with a minimal public browser
+ // global, without launching a browser. Syntax checks alone cannot catch TDZ
+ // shadowing of `window`, nor an accidental whole-session evidence read.
+ const savedWindow=Object.getOwnPropertyDescriptor(globalThis,'window');
+ try{
+  globalThis.window={amplifier:{getState:()=>({selectedSessionId:'session',revision:7,
+   client:{hostInstanceId:'synthetic-host'},sessions:[{id:'session',...freshWindow,
+    messages:['DO-NOT-COPY'],executionWindow:{revision:'fixed',windowKey:'finite',
+     coverage:{sourceCount:1,partialRecord:false}}}]})}};
+  const observed=await browserWindowState({evaluate:callback=>callback()});
+  assert.equal(observed.selectedSessionId,'session');assert.equal(observed.stateRevision,7);
+  assert.equal(observed.executionWindow.revision,'fixed');
+  assert.equal(JSON.stringify(observed).includes('DO-NOT-COPY'),false);
+ }finally{
+  if(savedWindow)Object.defineProperty(globalThis,'window',savedWindow);
+  else delete globalThis.window;
+ }
  const command={action:prefix+'apply',id:'fixed-command',args:{confirmExpiry:true}};
  const read={action:prefix+'read',args:{commandId:'fixed-command'}};
  assertReadOnlyReconcile([command,read],command);
@@ -198,7 +283,10 @@ function sourceCheck(){
   'extra enqueue, changed status or changed payload rejected',
   'scope uses exact named combobox; settings dismissal is scoped to visible panel',
   'original request/response bind exact public native+request correlation and independent node IDs',
-  'duplicate, wrong-native, missing direction and mixed-window pairs are rejected']}));
+  'duplicate, wrong-native, missing direction and mixed-window pairs are rejected',
+  'applying receipts are not terminal; wrong operation identity rejected',
+  'pre-reload epoch, old raw request detail and noncurrent published generation rejected',
+  'actual browser-window read callback executes without shadowing and omits session bodies']}));
 }
 
 async function serverIdentity(){
@@ -242,8 +330,9 @@ async function run(){
   fixtureSha256:sha(await readFile(new URL('../fixtures/optimize_storage_ui_server.py',import.meta.url))),
   journeySha256:sha(await readFile(fileURLToPath(import.meta.url))),
   productionHost:true,syntheticRuntime:true,syntheticSource:true,providerCalls:false};
- let owned,browser,page,failure,cleanupFailure;
- const modelRecords=new Map(),nodeReads=new Set(),nodeReadErrors=[];
+ let owned,browser,page,failure,cleanupFailure,historyEpoch=0,historyCapture=true;
+ const modelRecords=new Map(),nodeReads=new Set(),nodeReadErrors=[],publicNodePages=[];
+ const requestEpochs=new WeakMap();
  const evidence={provenance,checks:[],passed:false,acceptanceComplete:false,browserExecuted:false};
  try{
   owned=await startFixture({command:process.env.AMPLIFIER_TEST_PYTHON||join(root,'.venv/bin/python'),
@@ -265,6 +354,7 @@ async function run(){
    return route.fallback();
   });
   page.on('request',request=>{
+   requestEpochs.set(request,historyEpoch);
    if(request.method()==='POST'&&request.url()===base+'/api/actions'){
     const body=request.postDataJSON();
     if(body?.action?.startsWith(prefix))requests.push(body);
@@ -273,24 +363,33 @@ async function run(){
   const pendingAssets=[];
   page.on('response',response=>{
    const url=new URL(response.url());
-   if(url.origin===base&&response.ok()&&(url.pathname==='/api/conversation/work-sync'
+   const observedEpoch=requestEpochs.get(response.request());
+   if(currentHistoryRead(observedEpoch,historyEpoch,historyCapture)&&url.origin===base&&response.ok()&&(url.pathname==='/api/conversation/work-sync'
      ||url.pathname==='/api/conversation/detail'&&url.searchParams.get('part')==='nodes'&&!url.searchParams.has('field'))){
     const reading=(async()=>{
      const body=await response.body();assert.ok(body.length<=512*1024,'Bounded public node page required');
+     if(!currentHistoryRead(observedEpoch,historyEpoch,historyCapture))return;
      const result=JSON.parse(body.toString('utf8'));
      assert.ok(Array.isArray(result.items)&&result.items.length<=500,'Bounded public node count required');
+     const group=result.group||url.searchParams.get('group')
+      ||(url.pathname==='/api/conversation/work-sync'?response.request().postDataJSON()?.group:null);
+     publicNodePages.push({historyEpoch:observedEpoch,group,revision:result.revision??null,
+      itemCount:result.items.length,coverage:result.coverage?Object.fromEntries(
+       ['kind','historyComplete','rootExhausted','sourceCount','rangeStart','rangeEnd',
+        'scannedEvents','scannedBytes','partialRecord','pagingBlocked','invalidEvents']
+       .map(key=>[key,result.coverage[key]??null])):null});
+     if(publicNodePages.length>8)publicNodePages.shift();
      for(const node of result.items){
       if(node.kind!=='llm'||node.model!=='optimize-fixture')continue;
       assert.ok(modelRecords.has(node.id)||modelRecords.size<24,'Model identity evidence exceeded bound');
       const row=Object.fromEntries(['id','kind','event','sourceSessionId','sessionId','requestId','provider','model','label']
        .map(key=>[key,node[key]??null]));
-      row.group=result.group||url.searchParams.get('group')
-       ||(url.pathname==='/api/conversation/work-sync'?response.request().postDataJSON()?.group:null);
+      row.group=group;row.historyEpoch=observedEpoch;
       row.requestExpired=node.requestRecordingExpired??null;
       row.requestDetailPresent=!!node.requestDetail;row.responseDetailPresent=!!node.responseDetail;
       modelRecords.set(node.id,row);
      }
-    })().catch(error=>nodeReadErrors.push(error.message));
+    })().catch(error=>{if(currentHistoryRead(observedEpoch,historyEpoch,historyCapture))nodeReadErrors.push(error.message)});
     nodeReads.add(reading);void reading.finally(()=>nodeReads.delete(reading));
    }
    if(url.origin===base&&url.pathname.endsWith('.js')){
@@ -409,6 +508,19 @@ async function run(){
   await exact.click();
   await expect(section).toContainText('No command was repeated.');
   assertReadOnlyReconcile(requests,lost);
+  // The durable command receipt precedes asynchronous file completion and
+  // publication. Read ONLY this operation until its terminal ledger is complete;
+  // a changed capture hash is not a completion witness or a ready Work window.
+  await expect.poll(async()=>{
+   const response=await page.evaluate(args=>window.amplifier.dispatch('maintenance.optimize.read',args),
+    {operationId:evidence.resumeReceipt.operationId,limit:50});
+   assert.equal(response.accepted,true);assert.ok(response.result);
+   evidence.lastOptimizationStatus=response.result;
+   return terminalOptimize(response.result,evidence.resumeReceipt.operationId);
+  },{timeout:20000,intervals:[100,250,500]}).toBe(true);
+  assertSettledOptimize(evidence.lastOptimizationStatus,evidence.resumeReceipt);
+  assert.equal(requests.filter(row=>mutations.has(row.action)).length,mutationCount,
+   'Terminal status polling must not issue or replay mutations');
   await expect.poll(async()=>Number((await observe()).sourceSha256!==before.sourceSha256)).toBe(1);
   const after=await observe();
   assertPendingOutbox(before,after);
@@ -422,7 +534,18 @@ async function run(){
   assert.equal(after.diagnosticFacts['optimize-response'].rawPresent,true);
   assert.deepEqual(after.diagnosticFacts['optimize-response'].usage,before.diagnosticFacts['optimize-response'].usage);
   evidence.checks.push('lost real resume receipt reconciled by exact read without mutation replay',
-   'reload only reads','canonical source/event IDs/delivery outbox/runtime preserved');
+   'reload only reads','canonical source/event IDs/delivery outbox/runtime preserved',
+   'exact operation terminal partial receipt confirms one completed and two held sources before history inspection');
+  evidence.preHistoryReload={window:await browserWindowState(page),modelRecords:[...modelRecords.values()]};
+  // A real page reload discards private client page caches after the host's
+  // terminal receipt. Epochs reject pre-reload HTTP requests even if they finish
+  // later. No source, node, application state or expiry marker is injected.
+  historyCapture=false;historyEpoch++;modelRecords.clear();nodeReadErrors.length=0;publicNodePages.length=0;
+  historyCapture=true;
+  await page.reload();await page.waitForSelector('#amp-one');await openSettingsPage(page,'repair');
+  await expect(section).toContainText('partial');
+  assert.equal(requests.filter(row=>mutations.has(row.action)).length,mutationCount,
+   'Post-terminal fresh history reload must remain passive');
   await settingsCloseControl(page).click();
   const {showFixtureConversation}=await import('./browser-chat-pages.mjs');
   await showFixtureConversation(page);
@@ -433,9 +556,15 @@ async function run(){
    // IDs rendered now can bind this browser's active observation window.
    const ids=await page.locator('[data-kind="llm"][data-node-id]').evaluateAll(elements=>
     elements.slice(0,100).map(element=>element.getAttribute('data-node-id')));
-   return diagnosticPair([...modelRecords.values()].filter(row=>ids.includes(row.id)),before.nativeId);
+   const pair=diagnosticPair([...modelRecords.values()].filter(row=>ids.includes(row.id)),before.nativeId);
+   const window=await browserWindowState(page);
+   evidence.lastHistoryWindow=window;
+   assertFreshPair(pair,window,before.sessionId,historyEpoch);
+   return pair;
   };
-  const hasPair=async()=>{try{return !!await currentPair()}catch{return false}};
+  const hasPair=async()=>{try{return !!await currentPair()}catch(error){
+   evidence.lastPairReadinessError=error.message.slice(0,1000);return false;
+  }};
   for(let step=0;step<12&&!await hasPair();step++){
    await Promise.all([...nodeReads]);
    if(await hasPair())break;
@@ -445,10 +574,11 @@ async function run(){
    if(await collapsed.count()){await collapsed.first().click();continue;}
    break;
   }
-  await expect.poll(async()=>{await Promise.all([...nodeReads]);return hasPair()}).toBe(true);
+  await expect.poll(async()=>{await Promise.all([...nodeReads]);return hasPair()},
+   {timeout:20000,intervals:[100,250,500]}).toBe(true);
   assert.deepEqual(nodeReadErrors,[]);
   const pair=await currentPair();
-  evidence.diagnosticPair=pair;
+  evidence.diagnosticPair=pair;evidence.publicNodePages=[...publicNodePages];
   const requestModel=correlatedModel(page,pair.request),responseModel=correlatedModel(page,pair.response);
   await expect(requestModel).toHaveCount(1);await expect(responseModel).toHaveCount(1);
   await expect(requestModel).toContainText('Provider request');
@@ -510,9 +640,17 @@ async function run(){
  }catch(error){
   failure=error;evidence.failure={name:error.name,message:error.message};
   evidence.observedModelRecords=[...modelRecords.values()];
+  evidence.publicNodePages=[...publicNodePages];evidence.historyEpoch=historyEpoch;
   evidence.nodeReadErrors=nodeReadErrors.slice(0,8);
   if(page&&!page.isClosed())try{evidence.failureModelDom=await boundedModelDom(page)}
   catch(captureError){evidence.failureModelDom={unavailable:true,reason:captureError.message}}
+  if(page&&!page.isClosed()){
+   let timer;
+   try{evidence.failureWindow=await Promise.race([browserWindowState(page),
+    new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Window evidence timed out')),2000)})]);}
+   catch(captureError){evidence.failureWindow={unavailable:true,reason:captureError.message}}
+   finally{clearTimeout(timer)}
+  }
  }
  finally{
   if(owned)try{await finishFixture({label:'Optimize storage',
@@ -525,4 +663,4 @@ async function run(){
  if(failure)throw failure;if(cleanupFailure)throw cleanupFailure;
 }
 
-if(process.argv.includes('--source-check'))sourceCheck();else await run();
+if(process.argv.includes('--source-check'))await sourceCheck();else await run();
