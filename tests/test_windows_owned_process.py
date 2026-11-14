@@ -1103,6 +1103,15 @@ class HiddenConsoleTests(unittest.TestCase):
         k.FreeConsole.assert_called_once()
         k.SetConsoleCtrlHandler.assert_not_called()
 
+    def test_error_during_the_release_itself_stops_the_start(self):
+        # The release state is recorded as unconfirmed BEFORE the release calls.
+        k, helper, popen, folder = self.native(SetConsoleCtrlHandler=0)
+        k.FreeConsole.side_effect = MemoryError()
+        with self.assertRaises(hidden_console.HiddenConsoleError) as raised:
+            hidden_console.ensure_hidden_console()
+        self.assertIsInstance(raised.exception.__cause__, MemoryError)
+        helper.stdin.close.assert_called_once()
+
     def test_helper_wait_error_cannot_change_a_protected_attach(self):
         k, helper, popen, folder = self.native()
         helper.wait.side_effect = OSError("wait failed")

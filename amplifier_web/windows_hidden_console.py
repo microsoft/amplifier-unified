@@ -156,6 +156,7 @@ def _attach(timeout, rollback):
         # Entry proved that there was no console, so any console now is ours,
         # even if an error arrived before the flag was set.
         if attached or kernel.GetConsoleCP():
+            rollback["consoleReleased"] = False  # Until the state check below confirms it.
             kernel.FreeConsole()
             for name, handle in saved:
                 kernel.SetStdHandle(name, handle)
