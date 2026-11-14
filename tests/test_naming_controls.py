@@ -26,12 +26,16 @@ class NamingRuntime:
         self.release = asyncio.Event()
         self.ready = asyncio.Event()
 
-    async def start(self, source, emit, *, preserve_emit=False):
+    async def start(self, source, emit, *, preserve_emit=False, guard=None):
+        if guard:
+            guard()
         self.started += 1
         self.source = source
         await emit('runtime.status', {'sessionId': source['id'], 'status': 'starting'})
 
-    async def control(self, identity, operation, arguments):
+    async def control(self, identity, operation, arguments, *, guard=None):
+        if guard:
+            guard()
         assert operation == 'session.naming'
         self.calls += 1
         snapshot = read(directory_for(self.home, self.source))
