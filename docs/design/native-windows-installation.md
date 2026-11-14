@@ -194,12 +194,21 @@ connection untrusted, it:
    with this name; Amplifier uses it only for the connection between this PC's
    browser and Amplifier on this PC; select Yes. It shows the thumbprint that
    Windows will show. This is one extra click in the first-run journey.
+   Every launcher message is a system-modal message box, which Windows creates
+   in front of other windows. The person's last click has usually gone to
+   another window by then (about 40 seconds pass after setup ends), and Windows
+   keeps an ordinary new window of the launcher behind it: in the first
+   clean-room run the message waited behind the browser, with only a taskbar
+   button to show for it. The foreground and topmost message-box flags did not
+   prevent that, and raising the window afterwards did not either.
 2. Adds the root to the person's **Current User** trusted roots with
    `CertAddCertificateContextToStore`. Windows shows its one standard
    confirmation. For a new identity the launcher passes the exact in-memory
-   certificate it created, not a copy read back from a file. Windows can open
-   its confirmation behind other windows; the launcher brings it to the front
-   and never answers it.
+   certificate it created, not a copy read back from a file. The confirmation
+   follows the person's OK on the launcher's message, so Windows lets it open in
+   front. The launcher also asks Windows to bring it forward and never answers
+   it; that request has no effect when the person has moved to another window
+   in between.
 3. Requires that the store really holds the root, then repeats its own check: a
    TLS handshake against the Windows roots must return the pinned server
    certificate. Only then does it request a browser grant.

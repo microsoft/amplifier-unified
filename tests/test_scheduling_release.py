@@ -18,9 +18,10 @@ SPEC.loader.exec_module(release)
 def make_candidate(tmp_path, component="scheduling"):
     package = "amplifier_" + component
     root = tmp_path / "repo"; root.mkdir()
-    source = root / "components" / component; source.mkdir(parents=True)
+    source = root / (package if component == "operations" else "components/" + component); source.mkdir(parents=True)
+    runtime = "__init__.py" if component == "operations" else package + "/__init__.py"
     files = {"pyproject.toml": f'[project]\nname="amplifier-{component}"\nversion="0.1.0"\n',
-             package + "/__init__.py": 'value = "selected"\n',
+             runtime: 'value = "selected"\n',
              "README.md": "Scheduling\n", "LICENSE": "MIT\n", "MANIFEST.in": "include README.md\n",
              "tests/test_policy_store.py": "def test_fixture(): assert True\n", ".gitignore": "dist/\n"}
     for name, text in files.items():
@@ -34,7 +35,7 @@ def make_candidate(tmp_path, component="scheduling"):
     dist = tmp_path / "dist"; dist.mkdir()
     wheel, sdist = release.artifact_names(selected)
     with zipfile.ZipFile(dist / wheel, "w") as archive:
-        archive.writestr(package + "/__init__.py", files[package + "/__init__.py"])
+        archive.writestr(package + "/__init__.py", files[runtime])
         archive.writestr(package + "-0.1.0.dist-info/METADATA", f"Name: amplifier-{component}\nVersion: 0.1.0\n")
     with tarfile.open(dist / sdist, "w:gz") as archive:
         for name, text in files.items():
@@ -440,3 +441,31 @@ def test_completed_portability_release_retry_is_read_only(tmp_path, monkeypatch)
         "tag": "portability-v0.1.0", "status": "already-published-exact-bytes",
     }
     assert remote.mutations == []
+
+
+def test_operations_flat_project_matches_wheel_and_completed_release_identity(tmp_path, monkeypatch):
+    candidate = make_candidate(tmp_path, "operations")
+    root, revision, dist, _ = candidate
+    selected = release.verify(root, revision, dist, component="operations")
+    assert selected["tag"] == "operations-v0.1.0"
+    assert selected["subdirectory"] == "amplifier_operations"
+    assert "__init__.py" in selected["sourceFiles"]
+    assert "amplifier_operations/__init__.py" not in selected["sourceFiles"]
+    assert set(path.name for path in dist.iterdir()) == {
+        "amplifier_operations-0.1.0-py3-none-any.whl",
+        "amplifier_operations-0.1.0.tar.gz", "operations-source.json", "SHA256SUMS",
+    }
+    remote = Remote(candidate); remote.install(monkeypatch)
+    assert release.publish(root, revision, dist, component="operations") == {
+        "tag": "operations-v0.1.0", "status": "already-published-exact-bytes",
+    }
+    assert remote.mutations == []
+
+
+def test_flat_project_tests_cannot_become_installed_runtime(tmp_path, monkeypatch):
+    root, revision, dist, _ = make_candidate(tmp_path, "operations")
+    with zipfile.ZipFile(next(dist.glob("*.whl")), "a") as archive:
+        archive.writestr("amplifier_operations/tests/test_policy_store.py", "assert True\n")
+    monkeypatch.setattr(release, "api", lambda *a, **k: pytest.fail("Invalid flat package reached GitHub"))
+    with pytest.raises(ValueError, match="second package or non-runtime"):
+        release.publish(root, revision, dist, component="operations")
