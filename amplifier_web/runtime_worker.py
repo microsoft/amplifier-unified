@@ -762,8 +762,10 @@ class Worker:
             if self.telemetry:
                 providers = coordinator.get("providers") or {}
                 for name, provider in list(providers.items()):
-                    providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider,
-                        run_id=coordinator.get_capability("web.worker_run"))
+                    from .host.media import replace_media_adapter
+                    replace_media_adapter(coordinator, "providers", name, provider,
+                        self.telemetry.instrument_provider(coordinator.session_id, provider,
+                            run_id=coordinator.get_capability("web.worker_run")))
             return
         coordinator.register_capability("web.activity", True)
         from amplifier_web.performance_diagnostics import install_preparation_timing
@@ -832,8 +834,10 @@ class Worker:
                 self.telemetry.lifecycle({"type":"child.updated", **registry.rows[coordinator.session_id]})
             providers = coordinator.get("providers") or {}
             for name, provider in list(providers.items()):
-                providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider,
-                        run_id=coordinator.get_capability("web.worker_run"))
+                from .host.media import replace_media_adapter
+                replace_media_adapter(coordinator, "providers", name, provider,
+                    self.telemetry.instrument_provider(coordinator.session_id, provider,
+                        run_id=coordinator.get_capability("web.worker_run")))
         async def activity(event, data):
             identity = coordinator.session_id
             if data.get("session_id", identity) != identity:
@@ -1094,6 +1098,14 @@ class Worker:
                         if isinstance(getattr(loop,'root_provider',None), SelectedProvider):
                             loop.root_provider.execution_adapter = transform
                         runtime, selected, scope = result
+                        from amplifier_web.host.media import flush_media_adapters
+                        await flush_media_adapters(coordinator)
+                        from amplifier_web.host.media import mount_media_adapter
+                        for name, value in selected.items():
+                            mounted = (coordinator.get("providers") or {}).get(name)
+                            wrapped = transform(value)
+                            await mount_media_adapter(coordinator, "providers", wrapped,
+                                                      previous=mounted, name=name)
                         from amplifier_web.host.media import seal_hook_graph
                         seal_hook_graph(coordinator)
                         return runtime, {name: transform(value) for name, value in selected.items()}, scope

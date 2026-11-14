@@ -231,7 +231,8 @@ async def install_app_access(coordinator, bridge, *, execution_role):
         for name, tool in list(tools.items()):
             # AppControl carries its witness into service-owned synchronous
             # action admission. Avoid consuming that execution twice.
-            tools[name] = wrapped(name, tool)
+            from .host.media import replace_media_adapter
+            replace_media_adapter(coordinator, 'tools', name, tool, wrapped(name, tool))
     coordinator.register_capability('web.work_guard_tools', guard_tools)
     original_mount = coordinator.mount
     async def guarded_mount(mount_point, module, name=None):
@@ -371,7 +372,8 @@ async def install_app_access(coordinator, bridge, *, execution_role):
         delivery.observe_nested_pre(data)
         return HookResult()
 
-    await coordinator.mount('tools', AppControl(), name='app_control')
+    from .host.media import registration_coordinator
+    await registration_coordinator(coordinator).mount('tools', AppControl(), name='app_control')
     delivery.install_dispatch(coordinator)
     guard_tools()
     from .host.media import registration_hooks

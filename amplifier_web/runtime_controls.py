@@ -188,7 +188,9 @@ class RuntimeControls:
 
     async def _restore_saved(self, saved, *, selection_override=None):
         if self.configurator:
-            await self.configurator.apply_saved_settings(saved.get("configurator", {}))
+            from .host.media import hook_configuration
+            with hook_configuration(self.coordinator):
+                await self.configurator.apply_saved_settings(saved.get("configurator", {}))
         self.coordinator.session_state["goal"] = saved.get("goal")
         self.coordinator.session_state["task"] = saved.get("task")
         self.coordinator.session_state["configurationCheckpoint"] = saved.get("configurationCheckpoint")
@@ -472,9 +474,11 @@ class RuntimeControls:
             if section == "agents" and not enabled and name in self.coordinator.config.get("agents", {}):
                 # Retain runtime edits/additions, not only the initial bundle.
                 self.agent_definitions[name] = copy.deepcopy(self.coordinator.config["agents"][name])
-            result = function(name)
-            if inspect.isawaitable(result):
-                await result
+            from .host.media import hook_configuration
+            with hook_configuration(self.coordinator):
+                result = function(name)
+                if inspect.isawaitable(result):
+                    await result
             await self.checkpoint()
             return self.configuration()
         if operation == "catalog.inspect":
@@ -783,6 +787,14 @@ class RuntimeControls:
         return result
 
     async def mode(self, operation, args):
+        if operation not in {"mode.set", "mode.clear"}:
+            return await self._mode(operation, args)
+        self.require_idle()
+        from .host.media import hook_configuration
+        with hook_configuration(self.coordinator):
+            return await self._mode(operation, args)
+
+    async def _mode(self, operation, args):
         state = self.coordinator.session_state
         discovery = state.get("mode_discovery")
         if operation == "mode.list":

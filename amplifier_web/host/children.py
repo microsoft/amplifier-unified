@@ -806,7 +806,9 @@ class Children:
                 # Native installation is deliberately not attempted on this path.
                 from .media import execution_providers
                 providers = coordinator.get("providers") or {}
-                providers.update(execution_providers(coordinator, providers))
+                from .media import replace_media_adapter
+                for name, wrapped in execution_providers(coordinator, providers).items():
+                    replace_media_adapter(coordinator, "providers", name, providers[name], wrapped)
             unregister = registration_hooks(coordinator).register(
                 "orchestrator:complete", completed, name="unified-child-completion", priority=999)
             if ledger and parent_messages is not None:
@@ -823,6 +825,12 @@ class Children:
             enable_media(coordinator)
             if not persistent or not callable(getattr(coordinator.get("orchestrator"), "_select_provider", None)):
                 from .media import seal_hook_graph
+                from .media import flush_media_adapters, mount_media_adapter
+                await flush_media_adapters(coordinator)
+                for name, value in providers.items():
+                    mounted = (coordinator.get("providers") or {}).get(name)
+                    await mount_media_adapter(coordinator, "providers", value,
+                                              previous=mounted, name=name)
                 seal_hook_graph(coordinator)
             row["status"] = "running"
             self._emit(row)

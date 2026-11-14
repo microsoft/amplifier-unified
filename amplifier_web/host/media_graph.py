@@ -137,6 +137,10 @@ class NamedMediaGraph:
                         return False
                 elif callable(item) and not any(item is dependency for dependency in self._dependencies):
                     return False
+                elif (item is not None and type(item) not in (str, int, float, bool, bytes)
+                      and not self._binding_valid(item)
+                      and not any(item is dependency for dependency in self._dependencies)):
+                    return False
             # Core's selected Python loader returns a closure whose default is
             # the actual module mount. Check that object too, not only loader.py.
             captures = list(value.__defaults__ or ()) + list((value.__kwdefaults__ or {}).values())
@@ -151,8 +155,17 @@ class NamedMediaGraph:
                         return False
                 elif item is None or type(item) in (str, int, float, bool, bytes):
                     continue
-                elif type(item) is tuple and all(x is None or type(x) in (str, int, float, bool, bytes) for x in item):
-                    continue
+                elif type(item) in (dict, tuple, list):
+                    def plain(child):
+                        if child is None or type(child) in (str, int, float, bool, bytes):
+                            return True
+                        if type(child) is dict:
+                            return all(type(key) is str and plain(val) for key, val in child.items())
+                        if type(child) in (tuple, list):
+                            return all(plain(val) for val in child)
+                        return False
+                    if not plain(item) and not self._binding_valid(item):
+                        return False
                 elif not self._binding_valid(item):
                     return False
             return True

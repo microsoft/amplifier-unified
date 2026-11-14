@@ -1297,7 +1297,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                                         copy.deepcopy(coordinator.config.get("agents", {})))
         with startup_timing.phase('manager.settings'):
             if not snapshot:
-                await configurator.apply_saved_settings(config.settings.get("configurator") or {})
+                from .media import hook_configuration
+                with hook_configuration(coordinator):
+                    await configurator.apply_saved_settings(config.settings.get("configurator") or {})
             configurator.take_snapshot()
         providers = coordinator.get("providers") or {}
         if not providers:

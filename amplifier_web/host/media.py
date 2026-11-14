@@ -104,6 +104,63 @@ def seal_hook_graph(coordinator):
     return bridge.validate_receipt(bridge.graph_receipt) is True
 
 
+@contextmanager
+def hook_configuration(coordinator):
+    """Track actual saved settings or an idle edit in a new issuer generation."""
+    graph = coordinator.get_capability(_HOOK_GRAPH)
+    bridge = coordinator.get_capability(_HOOK_BRIDGE)
+    if graph is None or bridge is None:
+        yield
+        return
+    coordinator.register_capability("web.media.source_join", None)
+    capability = coordinator.get_capability(NAMESPACE)
+    if capability is not None:
+        capability.enabled = False
+    if bridge.graph_receipt is None:
+        with graph.configure():
+            yield
+    else:
+        with graph.transition() as successor:
+            coordinator.register_capability(_HOOK_GRAPH, successor)
+            yield
+        seal_hook_graph(coordinator)
+
+
+async def mount_media_adapter(coordinator, kind, value, *, previous, name):
+    """Record the actual host wrapper edge before sealing a named construction."""
+    if value is previous:
+        return
+    bridge = coordinator.get_capability(_HOOK_BRIDGE)
+    if bridge is None:
+        return
+    view = bridge.participant(_HOST_PARTICIPANT)
+    await view.mount_adapter(kind, value, previous=previous, name=name)
+
+
+def replace_media_adapter(coordinator, kind, name, previous, wrapped):
+    """Retain a synchronous host wrapper decision for its async mount boundary."""
+    if wrapped is previous:
+        return
+    if coordinator.get_capability(_HOOK_BRIDGE) is None:
+        (coordinator.get(kind) or {})[name] = wrapped
+        return
+    pending = coordinator.get_capability("web.media.pending_adapters")
+    if pending is None:
+        pending = []
+        coordinator.register_capability("web.media.pending_adapters", pending)
+    if not any(row[0] == kind and row[1] == name and row[2] is previous and row[3] is wrapped
+               for row in pending):
+        pending.append((kind, name, previous, wrapped))
+
+
+async def flush_media_adapters(coordinator):
+    pending = coordinator.get_capability("web.media.pending_adapters") or []
+    while pending:
+        kind, name, previous, wrapped = pending[0]
+        await mount_media_adapter(coordinator, kind, wrapped, previous=previous, name=name)
+        pending.pop(0)
+
+
 async def control_tool_post(coordinator, event):
     """Settle the separate UI/control invocation once, without claiming a turn.
 
