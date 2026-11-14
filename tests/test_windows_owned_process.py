@@ -593,7 +593,8 @@ class LaunchOrderingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.spawn_kwargs["cwd"], str(Path(BASE_PYTHON).parent))
         self.assertEqual(self.spawn_kwargs["env"], {"SystemRoot": "synthetic"})
         self.assertTrue(self.spawn_kwargs["close_fds"])
-        self.assertNotIn("creationflags", self.spawn_kwargs)
+        self.assertEqual(self.spawn_kwargs["creationflags"],
+                         getattr(subprocess, "CREATE_NO_WINDOW", 0))
         handles = self.spawn_kwargs["startupinfo"].lpAttributeList
         self.assertEqual(list(handles), ["handle_list"])
         self.assertNotIn(0x100000001, handles["handle_list"])
@@ -987,6 +988,37 @@ class NativeWindowsTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(errors, [], "native proactor callback error")
 
         self.addAsyncCleanup(check_callbacks)
+
+    async def test_captured_guard_and_payload_need_no_console(self):
+        # Run with either python.exe or pythonw.exe as the host. A captured
+        # console-subsystem payload must not allocate a visible terminal.
+        code = ("import ctypes as c,json; k=c.WinDLL('kernel32'); "
+                "k.GetConsoleWindow.restype=c.c_void_p; "
+                "print(json.dumps({'console':int(k.GetConsoleWindow() or 0)}),flush=True)")
+        create = asyncio.create_subprocess_exec
+        flags = []
+        async def spawn(*args, **kwargs):
+            flags.append(kwargs.get("creationflags", 0))
+            return await create(*args, **kwargs)
+        with patch.object(asyncio, "create_subprocess_exec", spawn):
+            owner = await jobs.WindowsOwnedProcess.start(
+                [BASE_PYTHON, "-I", "-S", "-c", code],
+                cwd=str(Path(BASE_PYTHON).parent),
+                env=jobs._Native().bootstrap_env(), trusted_python=BASE_PYTHON)
+        try:
+            owner.stdin.close()
+            stdout, stderr, result = await asyncio.gather(
+                owner.stdout.read(), owner.stderr.read(), owner.wait())
+            self.assertEqual(json.loads(stdout), {"console": 0})
+            self.assertEqual(stderr, b"")
+            self.assertEqual(flags, [subprocess.CREATE_NO_WINDOW])
+            self.assertEqual(result.payload_returncode, 0)
+            self.assertEqual(result.guard_returncode, 0)
+            self.assertEqual(result.active_processes, 0)
+            self.assertFalse(result.output_discarded)
+            self.assertTrue(owner.io_finalized)
+        finally:
+            await owner.close()
 
     async def test_venv_redirector_rejected_base_guard_preserves_venv_payload(self):
         import venv

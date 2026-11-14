@@ -714,8 +714,10 @@ class RuntimeControls:
                 path = path.parent
             uri = state.uri
             try:
-                commit = subprocess.run(["git","-C",str(path),"rev-parse","HEAD"],capture_output=True,text=True,check=True,timeout=2).stdout.strip()
-                repository = Path(subprocess.run(["git","-C",str(path),"rev-parse","--show-toplevel"],capture_output=True,text=True,check=True,timeout=2).stdout.strip()).resolve()
+                commit = subprocess.run(["git","-C",str(path),"rev-parse","HEAD"],capture_output=True,text=True,check=True,timeout=2,
+                    creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0)).stdout.strip()
+                repository = Path(subprocess.run(["git","-C",str(path),"rev-parse","--show-toplevel"],capture_output=True,text=True,check=True,timeout=2,
+                    creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0)).stdout.strip()).resolve()
                 base = uri.split("#",1)[0]
                 if "@" in base.split("github.com/",1)[-1]:
                     base = base.rsplit("@",1)[0]
