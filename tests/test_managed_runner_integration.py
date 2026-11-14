@@ -16,17 +16,6 @@ from test_test_queue import queue, record, submit, drive
 
 @pytest.fixture
 def prepared(app, monkeypatch):
-    # New Docker copies use ordinary dependency commands. Keep these original
-    # preparation/cleanup commit regressions on the explicit Incus route.
-    previous_config = owner.configuration(app)[0]
-    config = {**previous_config, 'backend': 'incus', 'incus': {}}
-    monkeypatch.setattr(owner, 'configuration', lambda app: (config, 'ready', 'Retained Incus preparation'))
-    original_invoke = owner.invoke
-    def incus(config, home, row, action, args):
-        result = original_invoke(config, home, row, action, args)
-        result['backendIdentity'] = {'backend': 'incus', 'daemon': 'a' * 64, 'project': 'owned'}
-        return result
-    monkeypatch.setattr(owner, 'invoke', incus)
     calls = []
     def prepare(config, root, snapshot, profile_id, request_id, *,
                 resource_request=None, host_reservation=None, timing_request=None, dependency_store=None):
@@ -36,7 +25,7 @@ def prepared(app, monkeypatch):
         assert host_reservation['supported'] is False  # Controlled backend has no host target.
         calls.append((snapshot, profile_id, request_id))
         return {'version': 1, 'status': 'ready', 'profileId': profile_id,
-                'sourceSha256': snapshot['archive_sha256'], 'backend': 'incus', 'image': 'sha256:'+'a'*64,
+                'sourceSha256': snapshot['archive_sha256'], 'backend': 'docker', 'image': 'sha256:'+'a'*64,
                 'resourceRequest': resource_request, 'timingRequest': timing_request}
     monkeypatch.setattr(owner.dependencies, 'prepare', prepare)
     monkeypatch.setattr(owner.dependencies, 'cleanup', lambda *a: {'complete': True, 'status': 'removed'})

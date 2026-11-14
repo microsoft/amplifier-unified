@@ -90,6 +90,29 @@ def test_default_network_and_disposable_copy_retention_are_explicit():
             profiles.compose_options({'composeFile': path})
 
 
+@pytest.mark.parametrize('profile', ['python-project', 'browser-test'])
+@pytest.mark.parametrize('compose_file', [None, 'compose.yaml'])
+def test_default_presets_keep_preparation_unless_custom_compose(tmp_path, profile, compose_file):
+    config = {'backend': 'docker'}
+    row = environments.prepare(tmp_path, 'owner', 'workspace', {}, '/source',
+        configs.key(config), 'request', backend_config=config, profile_id=profile,
+        compose_options={'composeFile': compose_file, 'offline': False})
+    assert row['preparationRequired'] is (compose_file is None)
+    public = environments.public(tmp_path, row)
+    assert public['dependencyPreparation'] == ('automatic' if compose_file is None else 'custom-compose')
+    assert public.get('executionContract') is None  # No fabricated prepared receipt.
+    payload = {'profileId': profile, 'composeFile': compose_file, 'offline': False,
+               'preparedRuntime': compose_file is None}
+    assert worker.prepared_runtime(payload) is (compose_file is None)
+    environment = worker.job_environment(payload)
+    if compose_file:
+        assert environment == {}
+    else:
+        assert environment['AMPLIFIER_TEST_PYTHON'] == '/opt/unified-prepared/venv/bin/python'
+        assert environment['PATH'].startswith('/opt/unified-prepared/venv/bin:')
+        assert not {'UV_OFFLINE', 'PIP_NO_INDEX', 'npm_config_offline'} & environment.keys()
+
+
 @pytest.mark.parametrize('content', [
     'services:\n  twin:\n    image: python\n    env_file: /host/private.env\n',
     'include: [../../host/compose.yaml]\n',
@@ -234,6 +257,8 @@ def test_real_smart_tool_two_owners_dirty_worktree_wheel_and_preview():
             {'requestId': row['id'] + '-' + action, 'expectedRevision': row['revision'], **args})
         report.setdefault('calls', []).append({'owner': row['sessionId'], 'action': action, 'result': result})
         setup.write_json(report_path, report)
+
+
         assert result.get('ok'), result
         return result
     try:

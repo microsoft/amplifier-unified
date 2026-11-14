@@ -75,7 +75,7 @@ def catalog():
 def compose_fields(string):
     return {
         'composeFile': {**string(2000), 'minLength': 1,
-                        'description': 'Trusted ordinary Compose YAML/JSON file relative to the selected source. Build contexts come from the copied source, never the writable original.'},
+                        'description': 'Trusted ordinary Compose YAML/JSON file relative to the selected source. Explicit custom Compose takes over dependency preparation; no prepared Python/Node/browser runtime is promised. Without this option, Python/browser presets prepare their maintained locked dependencies automatically.'},
         'offline': {'type': 'boolean', 'description': 'Disable external networking. Default false permits ordinary dependency commands and Docker build cache.'},
         'preserveSource': {'type': 'boolean', 'description': 'Export the full disposable guest source before removal. Default false retains selected /artifacts and the original source snapshot, not a mandatory multi-GB workspace export.'},
     }

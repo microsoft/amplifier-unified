@@ -44,7 +44,7 @@ def binding(source):
 def definitions(schema, string):
     scope = {'workspaceId': string(100), 'sessionId': string(200)}
     return {
-        ACTION: ('Queue one isolated check. The host waits for capacity, snapshots the working folder when admitted, runs the command once, stops its environment, exports source and artifacts and removes the owned environment. Source and results are retained; the full temporary workspace follows Storage retention unless keepWorkspace is true. Save useful generated changes to /artifacts. Continue independent work while waiting. Unknown effects never replay. A guarded completion notification can resume this chat.', schema({
+        ACTION: ('Queue one isolated check. The host waits for capacity, snapshots the working folder when admitted, prepares default Python/browser dependencies, runs once, stops, exports selected evidence and removes only its owned environment. Original source and results stay; preserveSource adds a full disposable guest workspace export. Custom composeFile explicitly owns dependency setup. Save useful generated changes to /artifacts. Continue independent work while waiting. Unknown effects never replay. A guarded completion notification can resume this chat.', schema({
             **scope, 'requestId': {**string(200), 'minLength': 1}, 'profileId': {'enum': [row['id'] for row in profiles.catalog()]},
             'command': {**string(16384), 'minLength': 1},
             **profiles.compose_fields(string),

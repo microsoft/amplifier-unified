@@ -65,7 +65,7 @@ def definitions(schema, string):
         'workspace.environments.start': ('Copy this task’s current Git working area into a DTU Compose environment. Optionally select an ordinary trusted Compose file from that source; otherwise use the Python/browser/app preset. Network and normal dependency commands are available unless offline is explicit. No implicit host mounts or credentials. Keep requestId stable; unknown launches never replay.', schema({**request, 'profileId': {'enum': [item['id'] for item in profiles.catalog()]}, **profiles.compose_fields(string)}, [*request, 'profileId'])),
         'workspace.environments.execute': ('Run a command in this task’s environment, retaining bounded output. Docker uses normal dependency/build commands; copied source has no Git metadata. Keep selected evidence in /artifacts and verify installed artifacts outside source/PYTHONPATH. Keep requestId stable. Timeout means the command may still be running, not cancelled.', schema({**owned, 'command': {**string(16384), 'minLength': 1}, 'timeoutSeconds': {'type': 'integer', 'minimum': 1, 'maximum': profiles.MAX_SECONDS}}, [*owned, 'command'])),
         'workspace.environments.stop': ('Stop this task’s containers at an exact revision and observe the result. Keeps source, artifacts, containers and volumes; never implies removal.', schema(owned)),
-        'workspace.environments.remove': ('Remove an already stopped owned environment after preserving its source and artifacts. Optional full retention preserves the complete Incus environment; Docker supports files only. Unknown export or teardown never replays.', schema({**owned, 'retentionMode': {'enum': ['files', 'full']}}, list(owned))),
+        'workspace.environments.remove': ('Remove an already stopped owned environment after preserving its selected evidence and original source snapshot. New disposable Docker copies export full guest source only when preserveSource was explicit; old owners retain their contract. Optional full retention preserves the complete Incus environment. Unknown export or teardown never replays.', schema({**owned, 'retentionMode': {'enum': ['files', 'full']}}, list(owned))),
         'workspace.environments.finishCleanup': ('Finish cleanup of an exact stopped owned environment after a failed or uncertain removal. Preserve complete bounded archives without following guest links, then verify removal and release ownership. The original request and test result stay unchanged. For interrupted local Docker cleanup, the host first verifies that the previous local executor is settled and the exact owner is stopped. This is a new cleanup attempt, not a replay or a claim about the old outcome. Requires its previousRequestId; keep the new requestId stable.', schema({**owned, 'previousRequestId': {**string(200), 'minLength': 1}})),
         'workspace.environments.reconcile': ('Inspect this exact owned environment and repair its metadata without starting, stopping, deleting or replaying backend work. Retire ownership only after the original backend proves physical absence; earlier uncertain operations stay uncertain.', schema(owned)),
         'workspace.environments.exportArtifacts': ('Recover a bounded, verified artifacts archive from this exact stopped owned environment. No workspace export, restart, command execution or deletion. Does not satisfy preservation required for removal. Unknown exports never replay.', schema(owned)),
@@ -214,6 +214,7 @@ def public(home, row):
         'previousCleanup': row.get('previousCleanup'),
         'artifactExport': row.get('artifactExport'), 'lastArtifactExport': row.get('lastArtifactExport'),
         'preparation': ({'status': 'ready' if row.get('preparedDependencies') else 'pending', 'remote': True} if row.get('testMachine') else dependencies.status(storage.directory(home, row))) if row.get('preparationPending') or row.get('preparedDependencies') else None,
+        'dependencyPreparation': 'custom-compose' if row.get('composeFile') else 'automatic' if row.get('preparationRequired') else 'not-required',
         'preparationCleanup': row.get('preparationCleanup'),
         'executionContract': row.get('preparedDependencies', {}).get('executionContract'),
         'reason': row.get('reason'), 'observation': row.get('observation'),
@@ -309,7 +310,7 @@ def prepare(home, sid, workspace, actor, source, backend_key, request_id, instal
                'owner': actor, 'source': source, 'profileId': profile_id, 'backendKey': backend_key,
                'workspaceArchivePolicy': workspace_archive_policy,
                'resourceRequest': resource_request, 'timingRequest': timing_request,
-               'preparationRequired': False if compose else profile['preparationRequired'],
+               'preparationRequired': profile['preparationRequired'] and not compose.get('composeFile'),
                **compose,
                'backendInstallation': installation,
                'backendConfigRetained': backend_config is not None,
@@ -397,6 +398,7 @@ def invoke(config, home, row, action, args, *, _qualification=False):
                'jobId': args.get('jobId', args.get('requestId')),
                'profileId': row.get('profileId', PROFILE), 'resourceRequest': row.get('resourceRequest'), 'timingRequest': row.get('timingRequest'),
                **{key: row[key] for key in ('composeFile', 'offline', 'preserveSource') if key in row},
+               **({'preparedRuntime': bool(row.get('preparedDependencies'))} if 'composeFile' in row else {}),
                'timeoutSeconds': args.get('timeoutSeconds', 60),
                **{key: config[key] for key in ('maxRunning', 'maxInstances', 'minFreeBytes', 'admissionRoot') if key in config}}
     if config.get('remoteRunner'):

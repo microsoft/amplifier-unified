@@ -58,6 +58,20 @@ def selected_profile(payload):
     return profiles.resources(payload.get('profileId', 'linux-python'), payload.get('resourceRequest'))
 
 
+def prepared_runtime(payload):
+    # An explicit custom Compose file owns dependency setup. Ordinary presets
+    # retain the maintained prepared image/initializer, regardless of networking.
+    return payload.get('preparedRuntime', selected_profile(payload)['preparationRequired'] and not payload.get('composeFile'))
+
+
+def job_environment(payload):
+    value = dict(selected_profile(payload)['environment']) if prepared_runtime(payload) else {}
+    if payload.get('offline') is False:
+        for key in ('UV_OFFLINE', 'PIP_NO_INDEX', 'npm_config_offline'):
+            value.pop(key, None)
+    return value
+
+
 def read_private_record(path, *, max_bytes=4096):
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -922,7 +936,7 @@ def execute_call(payload):
                 if unpack.exit_code != 0:
                     return {'ok': False, 'universeId': identity, 'snapshot': snapshot, 'status': 'unknown',
                             'message': 'The environment launched but source preparation did not complete. Inspect it; launch was not replayed.', 'result': serialize(unpack)}
-                initialized = lib.execute(identity, jobs.initialize_command(selected_profile(payload)['preparationRequired'] and 'offline' not in payload),
+                initialized = lib.execute(identity, jobs.initialize_command(prepared_runtime(payload)),
                     workdir='/', timeout_seconds=120, max_output_bytes=32768, config=config)
                 if initialized.exit_code != 0:
                     return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
@@ -942,7 +956,7 @@ def execute_call(payload):
                 return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
                         'message': 'The exact source preparation is not confirmed; no job was started.'}
             payload = {**payload, 'universeId': identity,
-                       'jobEnvironment': {} if 'offline' in payload and not payload.get('offline') else selected_profile(payload)['environment']}
+                       'jobEnvironment': job_environment(payload)}
             result = lib.execute(identity, jobs.command(payload), workdir='/', timeout_seconds=15,
                 max_output_bytes=262144, config=config)
             return jobs.result(payload, serialize(result))
@@ -957,7 +971,7 @@ def execute_call(payload):
             if not source_ready(root, identity, snapshot):
                 return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
                         'message': 'Source preparation is not confirmed for this exact snapshot. No check was started and source was not installed again.'}
-            command = jobs.command({**payload, 'jobEnvironment': {} if 'offline' in payload and not payload.get('offline') else selected_profile(payload)['environment']})
+            command = jobs.command({**payload, 'jobEnvironment': job_environment(payload)})
             result = lib.execute(identity, command, workdir='/workspace',
                 timeout_seconds=payload['timeoutSeconds'], max_output_bytes=32768, config=config)
             return {'ok': True, 'universeId': identity, 'result': serialize(result)}

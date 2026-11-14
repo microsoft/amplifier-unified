@@ -129,8 +129,11 @@ images/build contexts from copied source. They never implicitly inherit host
 credentials, a Docker socket, writable original source, privileged services or
 host namespaces. Container volumes do **not** have a host disk quota. The small Python profile
 runs for up to five minutes without preparation. Python project and browser
-presets provide larger workload budgets; dependencies use normal in-guest
-commands or a trusted Compose build. Explicit Incus retains its locked,
+presets provide larger workload budgets and automatically prepare their maintained
+locked Python/Node/browser dependencies unless a custom `composeFile` explicitly
+takes over setup. Normal networked commands remain available; the prepared venv,
+Node/Chromium/X11 paths and execution contract are still provided for default
+presets. Explicit Incus retains its locked,
 networked preparation and offline execution. Remote Docker registration is
 unsupported; a local preview URL is not remote routing qualification.
 

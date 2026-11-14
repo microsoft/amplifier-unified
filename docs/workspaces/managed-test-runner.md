@@ -33,10 +33,16 @@ never replayed by repeating a request.
 
 ## One Compose flow
 
-`linux-python`, `python-project`, `browser-test` and `app-preview` are resource
-presets for new Docker work. Pass a trusted `composeFile` relative to the selected
-source for an ordinary editable Compose YAML/JSON profile. Images, build contexts,
-normal network/dependency commands and Docker's normal build cache are available.
+`linux-python`, `python-project`, `browser-test` and `app-preview` select useful
+defaults for new Docker work. Without a custom Compose file, `python-project`
+automatically prepares locked Python/project/build dependencies; `browser-test`
+also prepares locked Node projects, Playwright Chromium and X11 tools. Their
+prepared image, initialization, paths and execution contract remain maintained.
+Pass a trusted `composeFile` relative to the selected source for an ordinary
+editable Compose YAML/JSON profile that explicitly takes over dependency setup.
+That instance reports `dependencyPreparation: custom-compose` and no prepared
+execution contract. Images, build contexts, normal network/dependency commands
+and Docker's normal build cache are available.
 There is no new profile language, scheduler, registry or cache manager.
 
 Build contexts, Dockerfiles and explicit file inputs come from copied source,
