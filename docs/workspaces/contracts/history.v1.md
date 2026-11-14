@@ -43,8 +43,9 @@ SessionRef is unchanged.
 - When both names hold saved history for one chat (possible only after an update
   rollback), the chat uses the short name. The other folder is kept and stays
   listed, read-only, as a project without a folder.
-- Saved history means a transcript or session metadata. Capture files alone, such
-  as those of a first message that failed, do not keep a chat on the path slug.
+- Saved history means a transcript, session metadata or the chat's own settings
+  file. Capture and view files alone, such as those of a first message that
+  failed, do not keep a chat on the path slug.
 - A CLI or TUI started inside such a folder on Windows computes the path slug. It
   lists a chat kept under the path slug and does not list one under the short name.
 

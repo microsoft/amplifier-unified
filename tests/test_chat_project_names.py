@@ -144,7 +144,8 @@ def test_a_copy_of_a_chat_folder_never_takes_over_the_original_history(chat, win
 
 def test_chat_with_history_under_the_cli_name_stays_there(chat, windows_rule):
     identity, workspace = chat
-    for name in ('metadata.json', 'transcript.jsonl', 'transcript.jsonl.backup'):
+    for name in ('metadata.json', 'metadata.json.backup', 'transcript.jsonl', 'transcript.jsonl.backup',
+                 'settings.yaml'):  # the chat's own saved settings also keep it in place
         directory = history(cli_name(workspace), identity, workspace, name=name)
         assert project_slug(workspace) == cli_name(workspace)
         assert sessions_dir(workspace) / identity == directory

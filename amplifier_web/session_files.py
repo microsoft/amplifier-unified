@@ -35,7 +35,10 @@ def amplifier_home():
 # A separate name lets tests exercise that rule on any platform.
 _SHORT_CHAT_PROJECTS = _WINDOWS
 _CHAT_ID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
-_HISTORY = ('transcript.jsonl', 'transcript.jsonl.backup', 'metadata.json')
+# What shows that a chat was saved under a project name: its conversation,
+# its session record or its own settings. Capture and view files do not.
+_HISTORY = ('transcript.jsonl', 'transcript.jsonl.backup', 'metadata.json', 'metadata.json.backup',
+            'settings.yaml')
 
 
 def chat_project_name(path):
@@ -74,7 +77,7 @@ def _present(path):
 
 
 def _has_history(project):
-    """A session folder with a transcript or metadata. An empty leftover is not history.
+    """A session folder with saved history (see _HISTORY). An empty leftover is not history.
 
     Reads through the extended-length form, so history that was written while
     Windows long paths were on is still found after they are turned off.
