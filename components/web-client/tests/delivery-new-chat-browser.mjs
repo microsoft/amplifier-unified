@@ -191,7 +191,7 @@ async function runCase(kind){
    await page.getByRole('button',{name:'Close delivery item',exact:true}).click();
    await expect(page.locator('[data-input-id="old-failed"]')).toHaveCount(0);
    assert.deepEqual(await outbox(),[{...retained,closed:true}]);
-   assert.deepEqual(actions.slice(beforeClose),[],'Close before a chat exists is local only');
+   assert.deepEqual(actions.slice(beforeClose).filter(row=>row.action!=='shell.report'),[],'Close changes no delivery or saved view; ordinary shell readiness may report independently');
    state.selectedSessionId='previous';await emit();
    await expect(page.getByRole('banner')).toContainText('Previous conversation');
    state.selectedSessionId=null;await emit();
