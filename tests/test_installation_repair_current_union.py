@@ -184,6 +184,40 @@ async def test_queued_naming_after_hold_refuses_runtime_start_and_transport(host
     assert repair.blocks_action('message.edit', {})
 
 
+@pytest.mark.parametrize('refusal', ['ordinary-reason', 'repair'])
+async def test_observation_startup_preserves_returned_reason_and_typed_refusal(host, refusal):
+    runtime = RuntimeManager()
+    runtime.retention.wake = lambda: None
+    runtime._retired['observed'] = ({'id': 'observed'}, AsyncMock())
+    runtime._check_preparation_cleanup = lambda sid: None
+    runtime._admit = AsyncMock(side_effect=AssertionError('No observation transport'))
+    checks = 0
+    def guard():
+        nonlocal checks
+        checks += 1
+        if checks > 1:
+            if refusal == 'repair':
+                raise repair.RepairHeld('Installation repair owns this host')
+            return 'The original watch authority changed'
+    async def startup(session, emit, *, guard):
+        guard()
+        runtime.workers[session['id']] = {}
+    runtime._start_locked = AsyncMock(side_effect=startup)
+    try:
+        if refusal == 'repair':
+            with pytest.raises(repair.RepairHeld):
+                await runtime.observation_input('observed', {}, guard)
+        else:
+            assert await runtime.observation_input('observed', {}, guard) == {
+                'accepted': False, 'reason': 'The original watch authority changed'}
+        runtime._admit.assert_not_awaited()
+        assert checks == (2 if refusal == 'repair' else 3)
+    finally:
+        runtime.workers.clear()
+        runtime._retired.clear()
+        await runtime.close()
+
+
 async def test_direct_voice_fresh_admission_is_held_but_exact_receipt_remains_readable(host):
     service = host.service
     await service.dispatch('session.create', {})

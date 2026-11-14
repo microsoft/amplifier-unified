@@ -66,6 +66,52 @@ async def test_exact_candidate_rechecked_and_opened_once_in_original_client(tmp_
     finally: await app.close()
 
 
+async def test_presentation_dispatch_wait_blocks_repair_without_skipping_same_outbox(tmp_path, monkeypatch):
+    import asyncio
+    from amplifier_web import installation_repair as repair
+    from amplifier_web.updates import UpdateManager
+    app, runtime, now, sid, args, data, *_ = await fixture(tmp_path, monkeypatch)
+    app.update_manager = UpdateManager(app)
+    runtime.has_pending_operations = lambda: False
+    runtime._preparations = {}
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+    async def account_guard(client):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            entered.set()
+            await release.wait()
+    app.smart_tools.connections['observer'].account_guard = account_guard
+    task = None
+    try:
+        await arm(app, sid, args)
+        result(data, args)
+        task = asyncio.create_task(app.observations.tick())
+        await asyncio.wait_for(entered.wait(), 3)
+        item = app.observations.store.rows('outbox')[0]
+        assert app.observations.active_reads == 2  # Presentation + its nested MCP read.
+        async with app.lock:
+            with pytest.raises(ValueError, match='in-flight observation'):
+                repair.require_idle(app)
+        assert not repair.held(app) and not item.get('presentationPhase')
+        release.set()
+        await asyncio.wait_for(task, 3)
+        after = app.observations.store.get('outbox', item['id'])
+        assert after['presentationPhase'] == 'opened' and after['phase'] == 'accepted'
+        assert app.observations.active_reads == 0
+        canvas = app.clients.records['original']['canvas']['id']
+        now[0] += 16
+        await app.observations.tick()
+        assert calls == 2 and runtime.observation_input.await_count == 1
+        assert app.clients.records['original']['canvas']['id'] == canvas
+    finally:
+        release.set()
+        if task:
+            await asyncio.gather(task, return_exceptions=True)
+        await app.close()
+
+
 @pytest.mark.parametrize('change',['leave-return','disconnect','reconnect','source-selection','wrong-origin','dirty','expiry','cancel','activation'])
 async def test_presentation_races_preserve_original_selection_and_offer_reference(tmp_path,monkeypatch,change):
     app,runtime,now,sid,args,data,*_ = await fixture(tmp_path,monkeypatch)

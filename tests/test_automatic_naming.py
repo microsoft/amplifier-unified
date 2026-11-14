@@ -97,7 +97,7 @@ async def test_discovery_and_preview_are_read_only_but_background_loop_names(app
     await finish_actions(app)
 
 
-@pytest.mark.parametrize('restriction', ['busy', 'update', 'voice', 'no-view', 'loading'])
+@pytest.mark.parametrize('restriction', ['busy', 'update', 'voice', 'no-view', 'loading', 'repair'])
 async def test_background_naming_waits_for_an_idle_open_view(app_factory, tmp_path, restriction):
     app, naming, clock, calls = await imported(app_factory, tmp_path)
     if restriction == 'busy':
@@ -111,10 +111,83 @@ async def test_background_naming_waits_for_an_idle_open_view(app_factory, tmp_pa
     elif restriction == 'no-view':
         for queue in list(app.queue_clients):
             app.unsubscribe(queue)
+    elif restriction == 'repair':
+        app._installation_repair_gate = 'a' * 32
+        async def forbidden_provider(session):
+            pytest.fail('A known repair hold must not prepare a provider')
+        naming.provider_ready = forbidden_provider
     else:
         app.state['sharedHistory']['loading'] = True
     await tick(app, naming, clock)
     assert not calls and not naming.attempts
+
+
+async def test_naming_provider_wait_is_visible_and_hold_after_wait_consumes_no_attempt(app_factory, tmp_path):
+    from amplifier_web import installation_repair as repair
+    from amplifier_web.updates import UpdateManager
+    app, naming, clock, calls = await imported(app_factory, tmp_path)
+    app.update_manager = UpdateManager(app)
+    app.runtime.has_pending_operations = lambda: False
+    app.runtime._preparations = {}
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def ready(session):
+        entered.set()
+        await release.wait()
+        return True
+    naming.provider_ready = ready
+    app.history.naming = naming
+    task = asyncio.create_task(naming.schedule())
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        assert app._automatic_naming_provider_checks == 1
+        async with app.lock:
+            with pytest.raises(ValueError, match='automatic naming'):
+                repair.require_idle(app)
+        # Conservative post-await recheck also handles a hold restored by an
+        # external owner; no daily/source attempt or model call is consumed.
+        app._installation_repair_gate = 'a' * 32
+        release.set()
+        await task
+        assert app._automatic_naming_provider_checks == 0
+        assert not calls and not naming.attempts and not app.naming_backfill.running
+        app._installation_repair_gate = None
+        await tick(app, naming, clock)
+        assert len(calls) == 1 and len(naming.attempts) == 1
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        app._installation_repair_gate = None
+
+
+async def test_cancelled_naming_scan_keeps_unsettled_provider_visible(app_factory, tmp_path):
+    from amplifier_web import installation_repair as repair
+    from amplifier_web.updates import UpdateManager
+    app, naming, clock, calls = await imported(app_factory, tmp_path)
+    app.update_manager = UpdateManager(app)
+    app.runtime.has_pending_operations = lambda: False
+    app.runtime._preparations = {}
+    entered, release, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    async def ready(session):
+        entered.set()
+        await release.wait()
+        finished.set()
+        return True
+    naming.provider_ready = ready
+    task = asyncio.create_task(naming.schedule())
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert app._automatic_naming_provider_checks == 1
+        with pytest.raises(ValueError, match='automatic naming'):
+            repair.require_idle(app)
+        assert not calls and not naming.attempts
+    finally:
+        release.set()
+        await asyncio.wait_for(finished.wait(), 3)
+        await asyncio.sleep(0)  # The exact check's completion callback releases ownership.
+        assert app._automatic_naming_provider_checks == 0
 
 
 @pytest.mark.parametrize('metadata', [

@@ -414,6 +414,11 @@ def require_idle(service):
         raise ValueError('Finish configuration management before installation repair.')
     if service.runtime_lifecycle_lock.locked():
         raise ValueError('Finish runtime lifecycle work before installation repair.')
+    if getattr(getattr(service, 'observations', None), 'active_reads', 0):
+        raise ValueError('Finish the in-flight observation read or presentation before installation repair.')
+    if (getattr(service, '_automatic_naming_provider_checks', 0)
+            or getattr(getattr(service, 'naming_backfill', None), 'running', False)):
+        raise ValueError('Finish automatic naming preparation or backfill before installation repair.')
     personalization = getattr(getattr(service, 'recall', None), 'personalization', None)
     if personalization and any(not task.done() for task in personalization.tasks.values()):
         raise ValueError('Finish workspace memory consolidation before installation repair.')

@@ -94,6 +94,49 @@ async def test_exact_retry_before_preview_does_not_rearm_and_conflict_rejected(t
     finally: await app.close()
 
 
+async def test_mcp_dispatch_wait_blocks_repair_without_terminalizing_the_watch(tmp_path, monkeypatch):
+    import asyncio
+    from amplifier_web import installation_repair as repair
+    from amplifier_web.updates import UpdateManager
+    app, runtime, now, sid, args, data, _, _ = await fixture(tmp_path, monkeypatch)
+    app.update_manager = UpdateManager(app)
+    runtime.has_pending_operations = lambda: False
+    runtime._preparations = {}
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def account_guard(client):
+        entered.set()
+        await release.wait()
+    app.smart_tools.connections['observer'].account_guard = account_guard
+    task = None
+    try:
+        watch = await create(app, args)
+        record(data / 'record.json', 'actionable', 'same-occurrence')
+        task = asyncio.create_task(app.observations.tick())
+        await asyncio.wait_for(entered.wait(), 3)
+        run = app.observations.store.rows('run')[0]
+        assert app.observations.active_reads == 1
+        async with app.lock:
+            with pytest.raises(ValueError, match='in-flight observation'):
+                repair.require_idle(app)
+        assert not repair.held(app)
+        assert app.observations.store.get('watch', watch['id'])['status'] == 'active'
+        assert not app.observations.store.rows('outbox')
+        release.set()
+        await asyncio.wait_for(task, 3)
+        assert app.observations.active_reads == 0
+        assert len(app.observations.store.rows('run')) == 1
+        assert app.observations.store.rows('run')[0]['id'] == run['id']
+        assert app.observations.store.rows('outbox')[0]['outcome']['status'] == 'actionable'
+        assert runtime.observation_input.await_count == 1
+        await app.observations.tick()
+        assert runtime.observation_input.await_count == 1
+    finally:
+        release.set()
+        if task:
+            await asyncio.gather(task, return_exceptions=True)
+        await app.close()
+
+
 async def test_repair_hold_retains_exact_unsubmitted_handoff_but_never_unknown(tmp_path, monkeypatch):
     from amplifier_web import installation_repair as repair
     app, runtime, now, sid, args, data, _, _ = await fixture(tmp_path, monkeypatch)

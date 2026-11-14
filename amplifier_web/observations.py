@@ -1,6 +1,7 @@
 """Qualified MCP observations; pending reads never enter the conversation runtime."""
 import asyncio
 import copy
+from contextlib import contextmanager
 from contextvars import ContextVar
 import json
 import time
@@ -46,6 +47,16 @@ class Observations:
         self.input_bindings = ContextVar('observation_input_bindings', default=None)
         self.pending = None
         self.attached = False
+        self.active_reads = 0
+
+    @contextmanager
+    def reading(self):
+        """Keep connection waits and presentation's final claim visible to repair."""
+        self.active_reads += 1
+        try:
+            yield
+        finally:
+            self.active_reads -= 1
 
     def wake(self):
         if not self.attached and getattr(self.app, 'operations', None):
@@ -258,6 +269,10 @@ class Observations:
         await self.handoffs()
 
     async def read(self, watch, occurrence, guard):
+        with self.reading():
+            return await self._read(watch, occurrence, guard)
+
+    async def _read(self, watch, occurrence, guard):
         descriptor = self.store.get('observer', watch['observerId'])
         guard()
         envelope = {'contract': CONTRACT, 'watchId': watch['id'], 'watchRevision': watch['revision'],

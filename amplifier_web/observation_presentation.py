@@ -100,6 +100,13 @@ def check_grant(observations, watch):
 
 
 async def present(observations, watch, item):
+    # The read can finish before this owner acquires app.lock for its Canvas
+    # claim. Keep that whole interval visible, not only MCP transport.
+    with observations.reading():
+        return await _present(observations, watch, item)
+
+
+async def _present(observations, watch, item):
     """Called once for a terminal outbox. No source URL is fetched by the host."""
     app, store, now = observations.app, observations.store, observations.clock
     value = item['outcome'].get('presentation')

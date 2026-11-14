@@ -2039,9 +2039,10 @@ class RuntimeManager:
             if session_id not in self.workers and session_id in self._retired:
                 session, emit = self._retired[session_id]
                 def start_guard():
-                    reason = guard()
-                    if reason:
-                        raise ValueError(reason)
+                    # Raised pre-admission fences still abort startup. Ordinary
+                    # returned refusal reasons retain the existing final-check
+                    # result below; they are not startup/unknown exceptions.
+                    guard()
                 await self._start_locked(session, emit, guard=start_guard)
             reason = guard()
             if reason: return {"accepted": False, "reason": reason}
