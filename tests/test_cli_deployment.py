@@ -98,12 +98,16 @@ def test_cli_starts_with_saved_server_extension_fields(tmp_path, monkeypatch):
         return app
     monkeypatch.setattr(server, "create_app", create_app)
     launches = []
-    monkeypatch.setattr(web, "run_app", lambda app, **kwargs: launches.append((app, kwargs)))
+    def run(app, **kwargs):
+        assert "host" not in kwargs and "port" not in kwargs
+        assert [sock.getsockname()[1] for sock in kwargs["sock"]] == [9321]
+        launches.append((app, kwargs))
+    monkeypatch.setattr(web, "run_app", run)
 
     cli.main()
     assert configurations[0]["debug"] == {"profiling": True}
     assert launches[0][0] is app
-    assert launches[0][1]["port"] == 9321
+    assert all(sock.fileno() == -1 for sock in launches[0][1]["sock"])
     assert path.read_text() == original
 
 
