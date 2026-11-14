@@ -159,13 +159,13 @@ ERROR_LABELS = frozenset(ERROR_CLASSES.values()) | {
 EXCEPTION_RECORD_LIMIT = 6
 TURN_STEPS = frozenset({
     "session_create", "access_read", "access_save", "inherited_access", "conversation_send",
-    "wait_parked_history", "provider_identity", "guard_identity", "output_utf8",
+    "wait_idle_history", "provider_identity", "guard_identity", "output_utf8",
     "history_assistant", "history_tool"})
 TRIAL_ACTIONS = frozenset({"session.create", "access.get", "access.set", "conversation.send",
                           "outputs.attach", "outputs.read"})
 TRIAL_ACTION_CODES = frozenset({"worker_startup_failed", "runtime_pending", "session_busy",
                                "host_shutdown", "other", "none"})
-WORKER_EVENTS = frozenset({"runtime.identity", "runtime.ready", "runtime.error", "runtime.parked",
+WORKER_EVENTS = frozenset({"runtime.identity", "runtime.ready", "runtime.error", "session.idle",
                           "input.delivered", "generation.started", "generation.finished"})
 
 
@@ -1475,11 +1475,11 @@ async def journey(root, wheel, report, guard, phase):
             directory = sessions_dir(workspace) / sid
             expected = MARKER if phase == "first" else RESUMED
             def completed():
-                if not runtime.workers.get(sid, {}).get("parked"):
+                if not runtime.workers.get(sid, {}).get("idle"):
                     return False
                 return any(m["role"] == "assistant" and expected in str(m.get("content"))
                            for m in SessionHistoryStore(directory).load_messages())
-            report["turnStep"] = "wait_parked_history"
+            report["turnStep"] = "wait_idle_history"
             await until(completed)
             row = runtime.workers[sid]
             owners.append(row["windows_owner"])
@@ -1528,7 +1528,7 @@ async def journey(root, wheel, report, guard, phase):
                 "control": auth.control_token(home), "secret": auth.session_secret(home),
                 "nonReplay": baseline}), owned_root=root)
     finally:
-        # Include a worker that failed before its first parked observation.
+        # Include a worker that failed before its first idle observation.
         for row in runtime.workers.values():
             if row.get("windows_owner") is not None and row["windows_owner"] not in owners:
                 owners.append(row["windows_owner"])
@@ -1550,7 +1550,7 @@ async def journey(root, wheel, report, guard, phase):
             assert report["workerFacts"]["diagnosticStatus"] == "PASS"
             if phase == "resume":
                 # The final promise includes shutdown: no late tool write or
-                # history effect can escape a check made while still parked.
+                # history effect can escape a check made while still idle.
                 assert_resume_without_replay(root, saved["nonReplay"],
                     SessionHistoryStore(directory).load_messages())
                 report["checks"]["hostRestartResumeWithoutReplay"] = "PASS"

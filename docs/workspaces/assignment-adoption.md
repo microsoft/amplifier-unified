@@ -94,7 +94,7 @@ separate deliberate follow-up through ordinary `coordination.send`.
 
 Lost replies retry the same operation ID. A stale review needs a fresh
 inspection; a failed durable save restores the target and assignment together.
-No running work is stopped to make adoption possible. A known parked idle worker
+No running work is stopped to make adoption possible. A known settled idle worker
 may retire through its ordinary acknowledged release path; every binding is
 checked again and the native ownership lease is held through the membership save.
 Foreign native writers remain protected even when the UI last reported idle. Cross-workspace takeover,

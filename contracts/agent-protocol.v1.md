@@ -49,6 +49,9 @@ reply; an agent's supported triggers and outcome channels belong to its implemen
    experience conversation can have several agent participants without merging
    their native identities or becoming owned by one of them. ACP loading/resuming and lock
    acquisition preserve that authority; UI attachment neither changes engines nor takes ownership.
+   A live Amplifier worker retains its exclusive writer while busy or idle. Idle
+   retention, replacement and takeover save and retire that owner before a fresh
+   worker acquires it; there is no ownerless live parking or hot reacquisition.
    Broken: a new viewer starts a competing native writer. Affected: every session participant.
 
    Experience-owned public context may be retrieved through standard MCP supplied

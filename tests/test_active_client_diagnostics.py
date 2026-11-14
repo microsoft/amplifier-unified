@@ -105,7 +105,7 @@ async def test_failure_and_lock_cancellation_keep_original_authority():
 def test_failed_browser_always_retains_active_client_evidence():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     steps = workflow['jobs']['browser']['steps']
-    run = next(step for step in steps if 'scripts/browser_check_runner.py' in step.get('run', '')
+    run = next(step for step in steps if 'python scripts/browser_check_runner.py --plan' in step.get('run', '')
                and '--initialize' not in step['run'])
     assert '--plan tests/web/browser-checks.json' in run['run']
     # Report ownership and distinct destinations belong to the runner contract

@@ -1,10 +1,24 @@
 """Real host and persisted handoff receipts; synthetic recipient, no model or account."""
 import asyncio
 import json
+import os
 from pathlib import Path
 import signal
+import sys
 import tempfile
 import uuid
+
+if installed := os.environ.get('AMPLIFIER_TEST_INSTALLED_PACKAGE'):
+    if not Path(installed).is_absolute() or not sys.flags.isolated or not sys.dont_write_bytecode:
+        raise ValueError('Installed fixture requires an absolute package path and Python -I -B')
+    import amplifier_web
+    package = Path(installed).resolve()
+    if (Path(amplifier_web.__file__).resolve() != package / '__init__.py'
+            or {Path(path).resolve() for path in amplifier_web.__path__} != {package}):
+        raise ValueError('Fixture imported a different amplifier_web package')
+    # Validate the installed package before exposing only test-helper siblings,
+    # never the checkout root excluded by -I.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from aiohttp import web
 import settings_ui_server as fixture

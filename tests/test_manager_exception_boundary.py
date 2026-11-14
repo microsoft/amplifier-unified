@@ -28,6 +28,8 @@ PRIVATE = "PRIVATE_MANAGER_MESSAGE_AND_LOCAL"
 def retain_failure(worker, terminal):
     """Use the real observer before the loop retires its failed generation."""
     worker.runtime.session_id = 'root'
+    if worker.session and not hasattr(worker.session.coordinator, 'get_capability'):
+        worker.session.coordinator.get_capability = lambda _: None
     worker.observe({'type': 'generation.failed', **terminal})
     return worker.failed_generation
 
@@ -264,7 +266,7 @@ def test_os_error_numbers_are_bounded_typed_facts_not_message_parsing():
 
 
 @pytest.mark.parametrize('boundary', ['current', 'stop', 'stop-requested', 'new-generation', 'other-input',
-                                    'runtime-replaced', 'old-turn', 'remount', 'yield', 'cancel', 'cancel-context', 'foreign-wrapper'])
+                                    'runtime-replaced', 'old-turn', 'yield', 'cancel', 'cancel-context', 'foreign-wrapper'])
 async def test_cleanup_context_capture_cannot_cross_current_execution(monkeypatch, boundary):
     from types import SimpleNamespace
     from amplifier_module_loop_live.failures import ManagerTurnError
