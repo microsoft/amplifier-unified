@@ -94,6 +94,85 @@ async def test_exact_retry_before_preview_does_not_rearm_and_conflict_rejected(t
     finally: await app.close()
 
 
+async def test_mcp_dispatch_wait_blocks_repair_without_terminalizing_the_watch(tmp_path, monkeypatch):
+    import asyncio
+    from amplifier_web import installation_repair as repair
+    from amplifier_web.updates import UpdateManager
+    app, runtime, now, sid, args, data, _, _ = await fixture(tmp_path, monkeypatch)
+    app.update_manager = UpdateManager(app)
+    runtime.has_pending_operations = lambda: False
+    runtime._preparations = {}
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def account_guard(client):
+        entered.set()
+        await release.wait()
+    app.smart_tools.connections['observer'].account_guard = account_guard
+    task = None
+    try:
+        watch = await create(app, args)
+        record(data / 'record.json', 'actionable', 'same-occurrence')
+        task = asyncio.create_task(app.observations.tick())
+        await asyncio.wait_for(entered.wait(), 3)
+        run = app.observations.store.rows('run')[0]
+        assert app.observations.active_reads == 1
+        async with app.lock:
+            with pytest.raises(ValueError, match='in-flight observation'):
+                repair.require_idle(app)
+        assert not repair.held(app)
+        assert app.observations.store.get('watch', watch['id'])['status'] == 'active'
+        assert not app.observations.store.rows('outbox')
+        release.set()
+        await asyncio.wait_for(task, 3)
+        assert app.observations.active_reads == 0
+        assert len(app.observations.store.rows('run')) == 1
+        assert app.observations.store.rows('run')[0]['id'] == run['id']
+        assert app.observations.store.rows('outbox')[0]['outcome']['status'] == 'actionable'
+        assert runtime.observation_input.await_count == 1
+        await app.observations.tick()
+        assert runtime.observation_input.await_count == 1
+    finally:
+        release.set()
+        if task:
+            await asyncio.gather(task, return_exceptions=True)
+        await app.close()
+
+
+async def test_repair_hold_retains_exact_unsubmitted_handoff_but_never_unknown(tmp_path, monkeypatch):
+    from amplifier_web import installation_repair as repair
+    app, runtime, now, sid, args, data, _, _ = await fixture(tmp_path, monkeypatch)
+    try:
+        watch = await create(app, args)
+        record(data / 'record.json', 'actionable', 'repair-pending')
+        app._installation_repair_gate = 'a' * 32
+        await app.observations.tick()
+        assert not app.observations.store.rows('run')
+        app._installation_repair_gate = None
+        async def pre_admission_hold(*values):
+            app._installation_repair_gate = 'a' * 32
+            values[-1]()  # Real runtime invokes the retained host guard before transport.
+            pytest.fail('No native handoff may be written')
+        runtime.observation_input.side_effect = pre_admission_hold
+        await app.observations.tick()
+        item = app.observations.store.rows('outbox')[0]
+        assert item['phase'] == 'waiting_worker'
+        assert app.observations.store.get('watch', watch['id'])['status'] == 'ended'
+        assert repair.held(app)
+        await app.observations.handoffs()
+        assert runtime.observation_input.await_count == 1
+        app._installation_repair_gate = None
+        runtime.observation_input.side_effect = None
+        await app.observations.handoffs()
+        assert runtime.observation_input.await_count == 2
+        assert app.observations.store.get('outbox', item['id'])['phase'] == 'accepted'
+        # A retained unknown is never made eligible by clearing the repair hold.
+        app.observations.store.outbox_phase(item['id'], ['accepted'], 'unknown', now[0])
+        await app.observations.handoffs()
+        assert runtime.observation_input.await_count == 2
+    finally:
+        app._installation_repair_gate = None
+        await app.close()
+
+
 @pytest.mark.parametrize('change', ['task', 'stop', 'execution', 'pause', 'cancel', 'expiry', 'activation'])
 async def test_read_return_race_cannot_restore_authority(tmp_path, monkeypatch, change):
     app, runtime, now, sid, args, data, control, _ = await fixture(tmp_path, monkeypatch)

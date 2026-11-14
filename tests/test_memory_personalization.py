@@ -60,10 +60,10 @@ async def test_explicit_consolidation_finds_dormant_workspace_source(memory_app,
     app._session(caller)['status'] = 'working'
     retain_only(app, caller)
     original_control = app.runtime.control
-    async def checked_control(identity, operation, args):
+    async def checked_control(identity, operation, args, **kwargs):
         assert identity == source
         assert [row['id'] for row in app.state['sessions']] == [caller]
-        return await original_control(identity, operation, args)
+        return await original_control(identity, operation, args, **kwargs)
     monkeypatch.setattr(app.runtime, 'control', checked_control)
     args = {'sessionId': caller, **({'sourceSessionId': source} if explicit_source else {})}
     await app.dispatch('memory.consolidate', args)
@@ -81,8 +81,10 @@ class MemoryRuntime(Runtime):
         self.calls = []
         self.pause = None
 
-    async def control(self, sid, operation, args):
+    async def control(self, sid, operation, args, *, guard=None):
         assert operation == 'memory.consolidate'
+        if guard:
+            guard()
         self.calls.append((sid, args))
         if self.pause:
             await self.pause.wait()
@@ -310,7 +312,8 @@ async def test_new_source_natural_correction_supersedes_existing_with_provenance
     correction = 'I changed my mind: for future status updates, two short bullet points work better for me.'
     other = await make(app, text=correction)
     app._session(other)['status'] = 'idle'
-    async def corrected_control(source, operation, args):
+    async def corrected_control(source, operation, args, *, guard):
+        guard()
         assert prior['id'] in args['prompt'] and correction in args['prompt']
         return {'text': json.dumps([{'text':'Use two short bullet points for status updates.',
                                     'quote':correction,'supersedes':[prior['id']]}])}
@@ -332,12 +335,14 @@ async def test_deletion_suppresses_same_message_even_with_changed_quote_boundari
     prior = next(n for n in app.recall.store.list_memories(None)['items'] if n['text']==PREFERENCE)
     await app.dispatch('memory.delete',{'sessionId':sid,'id':prior['id'],'expectedRevision':1})
     app._message(app._session(sid),'user','New unrelated information changes the source snapshot.','text',inputOrigin='ui')
-    async def different_quote(*args):
+    async def different_quote(*args, guard):
+        guard()
         return {'text':json.dumps([{'text':'Use paragraphs when reporting status.',
                                    'quote':'a short paragraph is easier for me to scan than bullets.'}])}
     app.runtime.control = different_quote
     await consolidate(app, sid)
     assert len(app.recall.store.list_memories(None)['items'])==2
+    assert app.recall.personalization.status(app._session(sid))['activity']['status'] == 'completed'
 
 
 async def test_later_human_reversal_can_restore_a_superseded_preference(memory_app):
@@ -351,7 +356,8 @@ async def test_later_human_reversal_can_restore_a_superseded_preference(memory_a
         app._message(app._session(sid),'user',quote,'text',inputOrigin='ui')
         # The latest repeated quotation is new attributable evidence; the
         # original source message must not be selected for the later reversal.
-        async def correction(*args):
+        async def correction(*args, guard):
+            guard()
             return {'text':json.dumps([{'text':text,'quote':quote,'supersedes':[active['id']]}])}
         app.runtime.control=correction
         await consolidate(app,sid)
@@ -372,7 +378,8 @@ async def test_older_source_cannot_supersede_newer_manual_correction(memory_app)
     older = await make(app, text=correction)
     app._session(older)['status']='idle'
     await app.dispatch('memory.update',{'sessionId':sid,'id':prior['id'],'expectedRevision':1,'text':'Use bullet status updates.'})
-    async def stale_control(*args):
+    async def stale_control(*args, guard):
+        guard()
         return {'text':json.dumps([{'text':'Use numbered status updates.','quote':correction,'supersedes':[prior['id']]}])}
     app.runtime.control=stale_control
     app.recall.personalization.start(app._session(older),[older])
@@ -406,7 +413,8 @@ async def test_failed_supersession_rolls_back_the_complete_batch(memory_app):
     prior=next(n for n in before if n['text']==PREFERENCE)
     other=await make(app,text='Use bullet points for status updates. The archive naming scheme is now date based.')
     app._session(other)['status']='idle'
-    async def invalid_batch(*args):
+    async def invalid_batch(*args, guard):
+        guard()
         return {'text':json.dumps([
             {'text':'Use bullets for status updates.','quote':'Use bullet points for status updates.','supersedes':[prior['id']]},
             {'text':'Use dated archive names.','quote':'The archive naming scheme is now date based.','supersedes':[prior['id']]}
@@ -435,7 +443,8 @@ async def test_withdrawn_source_is_not_sent_as_known_context_to_another_consolid
         app.db.commit()
     else:
         app._session(sid)['messages'][0]['text']='The original evidence changed.'
-    async def observe(*args):
+    async def observe(*args, guard):
+        guard()
         prompt=args[-1]['prompt']
         assert PREFERENCE not in prompt and DECISION not in prompt and OUTCOME not in prompt
         return {'text':'[]'}
@@ -480,8 +489,9 @@ async def test_interrupted_auxiliary_attempt_is_visible_and_not_replayed(memory_
     app,sid=memory_app
     await configure(app,sid,contribute=True)
     count=0
-    async def interrupt(*args):
+    async def interrupt(*args, guard):
         nonlocal count
+        guard()
         count+=1
         return {'interrupted':True}
     app.runtime.control=interrupt

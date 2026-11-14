@@ -61,11 +61,16 @@ class MemoryConsolidation:
                 'notice': 'Opt-in workspace memory uses the source conversation model. Each attempt can incur provider charges. Failed or interrupted source attempts are not replayed automatically.'}
 
     def idle(self, session):
+        from .installation_repair import held
+        if held(self.app):
+            return
         config = self.data.settings(session.get('workspace') or '')
         if eligible(session, config):
             self.start(session, [session['id']])
 
     def start(self, session, ids=None):
+        from .installation_repair import guard
+        guard(self.app)
         workspace = session.get('workspace') or ''
         if not self.data.settings(workspace)['contribute']:
             raise ValueError('Enable contribution for this workspace before consolidating.')
@@ -113,12 +118,15 @@ class MemoryConsolidation:
                 request = build_request([row['text'] for row in rows], policy='workspace', known=known)
                 if self.app.runtime is None:
                     raise ValueError('The conversation runtime is unavailable.')
+                from .installation_repair import guard
+                guard(self.app)
                 identity = self.data.claim(workspace, sid, signature, config['maxCallsPerDay'])
                 if identity is None:
                     continue
                 # Ordinary worker control and selected provider; no second session,
                 # task controller, transcript input, model fallback, or OS timer.
-                result = await self.app.runtime.control(sid, 'memory.consolidate', {'prompt': request})
+                result = await self.app.runtime.control(sid, 'memory.consolidate', {'prompt': request},
+                    guard=lambda: guard(self.app))
                 if result.get('interrupted'):
                     self.data.finish(identity, {'status':'interrupted','reason':'Foreground input took priority; no automatic replay'})
                     self.data.activity(workspace, {'status':'interrupted','reason':'Foreground input took priority'})

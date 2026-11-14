@@ -254,3 +254,13 @@ async def test_only_explicit_create_prepares_owner_never_passive_reads_or_old_ce
         await host.dispatch('kernels.execute', {'sessionId': sid, 'kernelId': kernel['id'],
             'generation': kernel['generation'], 'code': '42'})
     ensure.assert_awaited_once()
+
+
+async def test_fixture_control_executes_host_guard_before_kernel_effect(host):
+    def refused():
+        raise ValueError('Synthetic repair admission refused')
+    with pytest.raises(ValueError, match='repair admission refused'):
+        await host.runtime.control(host._session()['id'], 'kernels.create',
+                                   {'language': 'python'}, guard=refused)
+    assert host.runtime.calls == []
+    assert host.runtime.controls.kernels is None

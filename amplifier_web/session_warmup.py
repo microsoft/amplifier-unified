@@ -38,7 +38,8 @@ class SessionWarmup:
 
     def allowed(self, session):
         from .updates import work_paused
-        return (not self.service.closed and not work_paused(self.service.state)
+        from .installation_repair import held
+        return (not self.service.closed and not held(self.service) and not work_paused(self.service.state)
                 and not session.get("configurationBusy")
                 and not session.get("configurationPending")
                 and session.get("workspaceAvailable") is not False

@@ -345,10 +345,19 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False)
     batch = diagnostics.get('batch') or {}
     retry = batch.get('retry') or {}
     phase = state.get('phase')
-    def result(status, title, detail, *, action=None, component=None):
-        return {'status': status, 'title': title, 'detail': detail,
-                'actionRequired': status in {'action-required', 'protected', 'unverified'},
-                'action': action, 'component': component}
+    def result(status, title, detail, *, action=None, component=None, failure=None):
+        projection = {'status': status, 'title': title, 'detail': detail,
+                      'actionRequired': status in {'action-required', 'protected', 'unverified'},
+                      'action': action, 'component': component}
+        if failure:
+            if failure.get('kind') in {'application', 'ecosystem'}:
+                projection['failureKind'] = failure['kind']
+            if isinstance(failure.get('attemptId'), str) and re.fullmatch('[a-f0-9]{32}', failure['attemptId']):
+                projection['failureAttemptId'] = failure['attemptId']
+            if isinstance(failure.get('phase'), str) and re.fullmatch(
+                    r'(?:ecosystem|candidate|runtime|replacement|restart|target|recovery|stage)[a-z-]{0,50}', failure['phase']):
+                projection['failurePhase'] = failure['phase']
+        return projection
     if state.get('pendingReplacement') is not None:
         return result('unverified', 'Installation needs verification',
                       'The application replacement outcome is not confirmed. Work remains protected; inspect the update diagnostics before another installation.', action='diagnostics')
@@ -466,13 +475,17 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False)
         failure = max(remaining, key=lambda row: row.get('at', 0), default=diagnostics.get('lastFailure') or {})
         reason = failure.get('reason') or failure.get('probe', {}).get('reason')
         component = failure.get('package') or failure.get('probe', {}).get('package') or failure.get('component')
+        prior_component = (application_verified and failure.get('kind') == 'ecosystem'
+                           and 0 < failure.get('at', 0) < application_batch['startedAt'])
+        context = ('The application update was verified successfully. A prior component update still needs review; '
+                   'application success does not verify that component attempt. ') if prior_component else ''
         if reason in DETERMINISTIC:
-            return result('protected', 'Component source needs review',
-                          failure_guidance(failure) or 'A source or configuration conflict prevented this update. Current components remain active. Review source settings or share diagnostics; unchanged automatic attempts are paused.',
-                          action='sources', component=component)
-        return result('action-required', 'Update could not finish',
-                      failure_guidance(failure) or state.get('error') or 'The prior attempt has no applicable verified outcome. Current installation is retained; inspect diagnostics before retrying.',
-                      action='diagnostics', component=component)
+            return result('protected', 'Application updated; component source needs review' if prior_component else 'Component source needs review',
+                          context + (failure_guidance(failure) or 'A source or configuration conflict prevented this update. Current components remain active. Review source settings or share diagnostics; unchanged automatic attempts are paused.'),
+                          action='sources', component=component, failure=failure)
+        return result('action-required', 'Application updated; component update needs review' if prior_component else 'Update could not finish',
+                      context + (failure_guidance(failure) or state.get('error') or 'The prior attempt has no applicable verified outcome. Current installation is retained; inspect diagnostics before retrying.'),
+                      action='diagnostics', component=component, failure=failure)
     if any(row.get('failure') for row in state.get('pendingSmartTools', [])):
         return result('action-required', 'Some tools were not updated',
                       'Their current versions remain installed. Review the failed tool to retry or keep its current version.',

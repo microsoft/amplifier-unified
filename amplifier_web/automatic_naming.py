@@ -36,10 +36,11 @@ class AttemptReceipts(MutableMapping):
 
 def idle(service):
     from .updates import work_paused
+    from .installation_repair import held
     state = service.state
     return (not service.closed and bool(service.queue_clients)
             and not state.get('sharedHistory', {}).get('loading')
-            and not work_paused(state)
+            and not held(service) and not work_paused(state)
             and state.get('voice', {}).get('status') not in {'starting', 'connecting', 'connected', 'reconnecting'}
             and not any(row.get('status') in BUSY or row.get('configurationBusy') for row in state['sessions']))
 
@@ -87,6 +88,8 @@ class AutomaticNaming:
             if not idle(self.service):
                 return
             for session in window:
+                if not idle(self.service):
+                    return
                 self.cursor += 1
                 if session.get('nativeAvailable') is False:
                     continue
@@ -95,7 +98,20 @@ class AutomaticNaming:
                     continue
                 workspace = session.get('workspace')
                 if workspace not in ready:
-                    ready[workspace] = await self.provider_ready(session)
+                    # This provider preparation is not a RuntimeManager request.
+                    # Register it synchronously before its first await so repair
+                    # cannot acquire the gate while the account check is running.
+                    self.service._automatic_naming_provider_checks = getattr(
+                        self.service, '_automatic_naming_provider_checks', 0) + 1
+                    check = asyncio.create_task(self.provider_ready(session))
+                    def settled(done):
+                        self.service._automatic_naming_provider_checks -= 1
+                        if not done.cancelled():
+                            done.exception()  # Observe an error if the scheduler was cancelled.
+                    check.add_done_callback(settled)
+                    # Cancelling a scan cannot cancel a to_thread account check
+                    # that is already running, or make that owner disappear.
+                    ready[workspace] = await asyncio.shield(check)
                 if not ready[workspace]:
                     continue
                 chosen[session['id']] = source

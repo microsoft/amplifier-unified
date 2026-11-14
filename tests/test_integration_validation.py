@@ -38,7 +38,9 @@ async def project(tmp_path):
         'dependencies': []}, command_id='candidate')
     assert capture['result']['status'] == 'matched'
     calls = []
-    async def control(session_id, action, args):
+    async def control(session_id, action, args, *, guard=None):
+        if guard is not None:
+            guard()
         calls.append(args)
         await admit(app, sid, args['integrationId'], args['command'])
         identity = 'process-' + str(len(calls))
@@ -118,7 +120,9 @@ async def test_drift_rejected_before_execution_and_after_terminal_preserves_cont
 @pytest.mark.parametrize('evidence_case', ['failed', 'incomplete', 'wrong_owner', 'unobserved', 'no_admission'])
 async def test_failure_or_missing_native_evidence_cannot_pass(project, evidence_case):
     app, sid, roots, calls = project
-    async def control(session_id, action, args):
+    async def control(session_id, action, args, *, guard=None):
+        if guard is not None:
+            guard()
         if evidence_case != 'no_admission': await admit(app, sid, args['integrationId'], args['command'])
         if evidence_case != 'unobserved': await observed(app, sid, 'p', code=3 if evidence_case == 'failed' else 0, complete=evidence_case != 'incomplete')
         return {'result': {'success': True, 'output': {'process_id': 'p', 'owner_id': 'other' if evidence_case == 'wrong_owner' else 'mount'}}}
@@ -141,8 +145,8 @@ async def test_assignment_explicit_member_responsibility_stop_and_delayed_admiss
         'expectedRevision': assignment['revision'], 'responsibleSessionId': sid}))['result']['assignment']
     entered, release = asyncio.Event(), asyncio.Event()
     original = app.runtime.control
-    async def delayed(*values):
-        entered.set(); await release.wait(); return await original(*values)
+    async def delayed(*values, **kwargs):
+        entered.set(); await release.wait(); return await original(*values, **kwargs)
     app.runtime.control = delayed
     await app.dispatch('integration.validate', {'sessionId': sid, 'captureId': 'candidate', 'repositoryPath': str(roots[0]), 'command': 'printf pass'}, command_id='delayed')
     await asyncio.wait_for(entered.wait(), 5)
@@ -385,7 +389,9 @@ async def test_http_agent_parity_without_private_selection_or_unrelated_reads(pr
     server = await create_app(directory, workspace=roots[0].parent, runtime=runtime,
                               voice=False, background_updates=False, preload_providers=False)
     service = server['service']
-    async def control(session, action, args):
+    async def control(session, action, args, *, guard=None):
+        if guard is not None:
+            guard()
         await admit(service, sid, args['integrationId'], args['command'])
         await observed(service, sid, 'http-operation')
         return {'result': {'success': True, 'output': {'process_id': 'http-operation', 'owner_id': 'mount'}}}
@@ -424,7 +430,9 @@ async def test_real_native_shell_command_and_postapproval_stop(project, monkeypa
         get_capability=lambda name: (lambda identity, command: admit(app, sid, identity, command)) if name == 'integration.admit' else None,
         hooks=SimpleNamespace(emit=hook), process_hook_result=AsyncMock(side_effect=lambda value,*_:value))
     controls = object.__new__(RuntimeControls); controls.coordinator = coordinator; controls.session = SimpleNamespace(session_id=sid)
-    async def control(session_id, action, args):
+    async def control(session_id, action, args, *, guard=None):
+        if guard is not None:
+            guard()
         return await controls.perform(action, args)
     app.runtime.control = control
     async def terminal(identity):

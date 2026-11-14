@@ -15,8 +15,12 @@ from test_coordination_generation import agent, until, source_plan
 class Runtime:
     def __init__(self):
         self.calls = []
+        self.start_guards = []
 
-    async def start(self, session, emit):
+    async def start(self, session, emit, *, guard=None):
+        if guard is not None:
+            guard()
+            self.start_guards.append(guard)
         self.calls.append(('start', session['id']))
 
     async def control(self, sid, operation, args):
@@ -208,6 +212,8 @@ async def test_existing_provider_selection_does_not_require_administration(app):
     await agent(app, source, 'runtime.control', {'sessionId': source['id'], 'operation': 'provider.select',
         'args': {'instance': 'existing', 'model': 'configured-model'}}, 'select')
     assert (await finished(app, 'select'))['phase'] == 'ready'
+    assert len(app.runtime.start_guards) == 1
+    assert callable(app.runtime.start_guards[0])
     assert any(row[0] == 'provider.select' for row in app.runtime.calls)
     assert not app.configuration_authority.rows(source['id'])
 

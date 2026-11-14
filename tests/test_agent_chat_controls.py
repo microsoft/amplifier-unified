@@ -5,8 +5,12 @@ from amplifier_web.service import AppService
 from amplifier_web.management import Management
 
 class Runtime:
-    def __init__(self):self.selection=None
-    async def start(self,session,emit):
+    def __init__(self):self.selection=None;self.start_guards=[]
+    async def start(self,session,emit,*,guard=None):
+        if guard is not None:
+            assert callable(guard)
+            self.start_guards.append(guard)
+            guard()
         await emit('runtime.status',{'sessionId':session['id'],'status':'ready'})
     async def control(self,sid,operation,args):
         if operation=='provider.select':self.selection=args.copy();return {'selection':self.selection}
@@ -38,6 +42,7 @@ async def test_agent_can_rename_select_model_and_inspect_nonprivate_controls(tmp
             if app.state.get('actionStatus',{}).get('runtime.control',{}).get('phase') in {'ready','error'}:break
             await asyncio.sleep(.01)
         assert app.state['actionStatus']['runtime.control']['phase']=='ready'
+        assert len(runtime.start_guards)==1
         assert runtime.selection=={'instance':'fixture','model':'agent-model','effort':'high'}
         assert app.state['runtimeControl'][sid]['configuration.providers']['effective']==runtime.selection
         app.clients.attach('fixture')

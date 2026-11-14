@@ -28,10 +28,8 @@ class Runtime:
         self.calls = []
         self.hook = None
         self.controls = None
-        sys.modules.setdefault(
-            "amplifier_module_loop_live.scope",
-            SimpleNamespace(JOB_CALL=ContextVar("fixture_job", default=None)),
-        )
+        self.scope_shim = SimpleNamespace(JOB_CALL=ContextVar("fixture_job", default=None))
+        sys.modules.setdefault("amplifier_module_loop_live.scope", self.scope_shim)
 
     async def setup(self, session_id):
         if self.controls:
@@ -81,11 +79,17 @@ class Runtime:
         # This fixture mounts approved local tools without a model/provider.
         await self.setup(session["id"])
 
-    async def control(self, session_id, operation, args):
+    async def control(self, session_id, operation, args, *, guard=None):
         await self.setup(session_id)
+        if guard is not None:
+            guard()
         return await self.controls.perform(operation, args)
 
     async def close(self):
-        if self.controls and self.controls.kernels:
-            await self.controls.kernels.shutdown()
-        await self.tools["bash"].close()
+        try:
+            if self.controls and self.controls.kernels:
+                await self.controls.kernels.shutdown()
+            await self.tools["bash"].close()
+        finally:
+            if sys.modules.get("amplifier_module_loop_live.scope") is self.scope_shim:
+                sys.modules.pop("amplifier_module_loop_live.scope")

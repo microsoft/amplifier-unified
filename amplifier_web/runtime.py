@@ -1698,7 +1698,11 @@ class RuntimeManager:
             row = self.workers.get(session["id"])
             if row and row["process"].returncode is None:
                 return
-            await self.start(session, emit)
+            # Preparation may have waited while installation repair acquired
+            # the host. Keep the composed host input fence through startup's
+            # own admission waits; no serialized argument can opt out.
+            gate = getattr(self, 'update_input_gate', lambda: None)
+            await self.start(session, emit, guard=gate)
 
     async def send(self, session, text, input_id, emit, *, admission_check=None):
         def current_input():
@@ -2082,7 +2086,12 @@ class RuntimeManager:
             if reason: return {"accepted": False, "reason": reason}
             if session_id not in self.workers and session_id in self._retired:
                 session, emit = self._retired[session_id]
-                await self._start_locked(session, emit)
+                def start_guard():
+                    # Raised pre-admission fences still abort startup. Ordinary
+                    # returned refusal reasons retain the existing final-check
+                    # result below; they are not startup/unknown exceptions.
+                    guard()
+                await self._start_locked(session, emit, guard=start_guard)
             reason = guard()
             if reason: return {"accepted": False, "reason": reason}
             args = {"operation": "observation.submit", "arguments": arguments}

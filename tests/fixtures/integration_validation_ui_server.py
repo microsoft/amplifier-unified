@@ -33,8 +33,12 @@ async def main(home):
         hooks=hooks, process_hook_result=AsyncMock(side_effect=lambda value,*_:value))
     controls = object.__new__(RuntimeControls); controls.coordinator = coordinator; controls.session = SimpleNamespace(session_id=sid)
     original = service.runtime.control
-    async def control(owner, action, args):
-        return await controls.perform(action, args) if action.startswith('operations.') else await original(owner, action, args)
+    async def control(owner, action, args, *, guard=None):
+        if action.startswith('operations.'):
+            if guard is not None:
+                guard()
+            return await controls.perform(action, args)
+        return await original(owner, action, args, guard=guard)
     service.runtime.control = control
     service.runtime.integration_validation_supported = AsyncMock(return_value=True)
     service.management.ensure_runtime = AsyncMock()

@@ -48,10 +48,12 @@ async def main(home):
     controls.session = SimpleNamespace(session_id=sid)
     controls.lock = asyncio.Lock()
     original_control = service.runtime.control
-    async def control(owner, operation, args):
+    async def control(owner, operation, args, *, guard=None):
         if operation.startswith("operations."):
+            if guard is not None:
+                guard()
             return await controls.perform(operation, args)
-        return await original_control(owner, operation, args)
+        return await original_control(owner, operation, args, guard=guard)
     service.runtime.control = control
     async def cleanup_tool(app):
         await tool.close()

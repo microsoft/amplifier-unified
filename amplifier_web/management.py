@@ -286,6 +286,9 @@ class Management:
                 # A published start must reach clients before synchronous
                 # settings work; uncontended asyncio locks do not yield.
                 await asyncio.sleep(0)
+                from .installation_repair import guard as repair_guard, blocks_action as repair_blocks_action
+                if repair_blocks_action(action, args):
+                    repair_guard(self.service)
                 if action=='bundle.save':
                     async with self.service.lock:
                         current=self.service._session(args['sessionId'])
@@ -814,6 +817,8 @@ class Management:
                         self.background(self.service.collaboration.drain(identity))
 
     async def ensure_runtime(self,session,*,selection_override=None,bundle_replacement=None,restart_guard=None,preserve_configuration=False,saved_configuration_operation=None):
+        from .installation_repair import guard as repair_guard
+        repair_guard(self.service)
         if self.unresolved_configuration(self.service._session(session['id'])):
             if saved_configuration_operation is None or restart_guard is None:
                 raise ValueError('The original configuration application is unresolved. Runtime preparation cannot reconcile or repeat it.')
@@ -837,6 +842,7 @@ class Management:
         if session.get('historyManaged') and not session.get('historyLoaded'):
             await self.service.history.ensure_loaded(session['id'])
         async with self.service.lock:
+            repair_guard(self.service)
             if restart_guard is not None: restart_guard()
             current = self.service._session(session['id'])
             current['historyManaged'] = False
@@ -853,8 +859,12 @@ class Management:
                 session.pop('selection', None)
         from .configuration_authority import check_current
         check_current()
+        def guarded_start():
+            repair_guard(self.service)
+            if restart_guard is not None:
+                restart_guard()
         await self.service.runtime.start(session,self.service.on_runtime_event,
-            **({'guard': restart_guard} if restart_guard is not None else {}),
+            guard=guarded_start,
             **({'preserve_configuration': True} if preserve_configuration else {}))
 
     async def recover_provider_catalog(self, session, operation, args):
