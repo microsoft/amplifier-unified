@@ -910,6 +910,10 @@ async def _wait_updated_host(spec, finished, actual, restart):
 
 def _host(spec):
     """Run the actual application, not the stable Scheduler launcher."""
+    # First: every console program that this host or its code starts with
+    # default flags then shares one console without a window.
+    from .windows_hidden_console import ensure_hidden_console
+    console = ensure_hidden_console()
     value, installed = _read(spec.data_dir)
     python, _target = _launch_python(spec) if spec.supervised else (spec.python, None)
     if (installed != spec or value.get("state") != 4
@@ -923,6 +927,9 @@ def _host(spec):
     prepare_environment()
     runner = Runner(spec)
     with PrivateLog(spec) as log, redirect_stdout(log), redirect_stderr(log):
+        print("Windowless console for child programs: " + console["status"] + "".join(
+            f" {key}={value}" for key, value in console.items()
+            if key != "status" and value is not None))
         try:
             cli._serve(cli._parse(), Path(spec.data_dir), task_runner=runner)
         except BaseException:

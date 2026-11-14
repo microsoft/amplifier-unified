@@ -114,20 +114,28 @@ class ExecutionOwner:
         self.attached = set()
         self.pending = {}
         self._disconnected = False
+        self._retiring = False
+        self._retired = None
+        self.retirement_hint = None
+        self._retirement_hint_task = None
         self._observers = ensure_observers(service)
         self._observers.attachments.add(self)
 
     def require_connection(self):
         if self._disconnected:
             raise ValueError("Execution attachment is disconnected")
+        if self._retiring or self._retired:
+            raise ValueError("Execution attachment retirement is in progress or confirmed")
 
     async def _attach_session(self, identity, mcp_servers):
         self.require_connection()
         if self.mcp_capabilities is not None:
             await self.service.runtime.bind_ephemeral_mcp(identity, self._attachment_id, mcp_servers or {})
-            if self._disconnected:
-                self.service.runtime.release_ephemeral_mcp(identity, self._attachment_id)
+            try:
                 self.require_connection()
+            except ValueError:
+                self.service.runtime.release_ephemeral_mcp(identity, self._attachment_id)
+                raise
         self.attached.add(identity)
         return identity
 
@@ -259,6 +267,29 @@ class ExecutionOwner:
         if identity in self.pending:
             self.pending[identity]["delivery"].fail("Observation detached; native work may continue. Inspect retained owner state.")
 
+    async def retire(self, identity):
+        """One attached session only: success permits closing this connection."""
+        if self._retired == identity and not self._disconnected:
+            return 'retired'  # A lost acknowledgement never requires new work.
+        self.require_attachment(identity)
+        if self.attached != {identity} or self.pending:
+            return 'busy'
+        def occupied():
+            return (self._disconnected or self.attached != {identity}
+                    or any(identity in owner.pending for owner in self._observers.attachments))
+        if occupied():
+            return 'busy'
+        self._retiring = True
+        try:
+            disposition = await self.service.runtime.retire_attachment(
+                identity, self._attachment_id, guard=occupied)
+            if disposition == 'retired':
+                self._retired = identity
+                self.attached.discard(identity)
+            return disposition
+        finally:
+            self._retiring = False
+
     async def approvals(self, identity, row):
         try:
             while row["approval_ids"]:
@@ -280,6 +311,18 @@ class ExecutionOwner:
 
     async def observe(self, kind, payload):
         identity = payload.get("sessionId")
+        candidate = kind == 'runtime.retirement_requested'
+        if (candidate and self.attached == {identity} and not self._disconnected
+                and not self._retiring and self.retirement_hint is not None
+                and (self._retirement_hint_task is None or self._retirement_hint_task.done())):
+            # This is only an opportunity to ask the native owner. Never wait
+            # for a client socket on the canonical runtime event reader.
+            async def hint():
+                try:
+                    await self.retirement_hint(identity)
+                except Exception:
+                    pass  # Losing an advisory event cannot authorize cleanup.
+            self._retirement_hint_task = asyncio.create_task(hint())
         row = self.pending.get(identity)
         if row is None or identity not in self.attached:
             return
@@ -341,6 +384,9 @@ class ExecutionOwner:
                 await self.release(identity)
         finally:
             self._observers.remove(self)
+            if self._retirement_hint_task is not None:
+                self._retirement_hint_task.cancel()
+                await asyncio.gather(self._retirement_hint_task, return_exceptions=True)
             for row in rows:
                 row["delivery"].fail("Observation detached; native work may continue. Inspect retained owner state.")
             await asyncio.gather(*(row["delivery"].close() for row in rows))

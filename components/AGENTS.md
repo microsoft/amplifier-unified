@@ -18,8 +18,9 @@ standalone distribution. This is not a generated copy or the whole resources dom
 buildable Python project. Preserve `amplifier_portability` imports and its existing
 worktree dependency. Its signed-journal and Git-capsule tests stay with the package;
 Unified retains task admission, data projection, native fencing and account probes.
-Normal Unified builds both runtime packages directly; the standalone preparation
-uses an exact local worktrees artifact, not an assumed public dependency.
+Normal Unified builds both runtime packages directly. Standalone delivery selects
+an exact public worktrees artifact through `portability/worktrees-source.json`;
+install both selected wheels explicitly, never alongside their Unified-owned copies.
 
 `components/worktrees/` is temporarily authored here as an independently buildable
 Python project. Preserve `amplifier_worktrees` and `amplifier_worktrees.git` imports;

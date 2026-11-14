@@ -16,9 +16,43 @@ on:
       - amplifier_web/windows_read_files.py
       - tests/fixtures/windows_private_shell_probe.py
       - tests/test_windows_private_git.py
+      - tests/fixtures/windows_setup_native.py
+      - tests/windows/native_setup.Tests.cs
+      - tests/test_windows_setup_folder.py
 permissions:
   contents: read
 jobs:
+  # Consumer setup's one folder, removal and plain stop messages, compiled from
+  # the actual sources. No setup window, download or installation.
+  windows-setup-folder:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - name: Compile setup and check its folder, removal and stop messages on native Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = Join-Path $env:RUNNER_TEMP 'setup-folder'
+          python -I -S -B tests/fixtures/windows_setup_native.py --root "$base/work" --receipt "$env:RUNNER_TEMP/setup-folder-result.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Native setup checks failed; inspect the stage in the result file.' }
+      - name: Retain the bounded result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-setup-folder
+          path: ${{ runner.temp }}/setup-folder-result.json
+          if-no-files-found: warn
+          retention-days: 7
   windows-private-shell:
     runs-on: windows-latest
     timeout-minutes: 15

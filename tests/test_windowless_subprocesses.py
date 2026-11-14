@@ -27,6 +27,7 @@ import pytest
     ("feedback.py", "github_api"),
     ("windows_jobs.py", "_start"),
     ("windows_launch_guard.py", "main"),
+    ("windows_hidden_console.py", "_attach"),
 ])
 def test_captured_update_children_have_explicit_console_policy(path, function):
     root = Path(__file__).resolve().parents[1] / "amplifier_web"

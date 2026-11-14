@@ -2229,8 +2229,12 @@ def test_workflow_keeps_old_lane_commands_and_bounded_installed_candidate_job():
     # Strip only EOF scalar newline; appending a new job adds one to the prior
     # final block in YAML. No command, matrix, dependency or budget may change.
     # Frozen 177b9c98 commands, including the already accepted bootstrap lane.
+    # windows-private-config-tls is frozen again at ab6af87f. Since 177b9c98
+    # it has exactly two accepted changes: the filelock floor follows the
+    # product's security floor (#1840), and its pytest command also runs
+    # tests/test_windows_task_runtime.py (#1920). New checks go in a new job.
     golden = {"passive-process-check": "fa89a68443d5cbbda12ea3513cd5cfa12bb5cb42adbf0f7744f240fdeb3b3d8b",
-              "windows-private-config-tls": "557dd004afccf2bff8d53e3a40ad62ca232ee6a218ba1a56e9bbda71ad302987"}
+              "windows-private-config-tls": "7a355e16976e1ff7fc3423f58f6dd637b14ed0fb91f7d42d6465bb705bae7980"}
     for name, expected in golden.items():
         job = copy.deepcopy(workflow["jobs"][name])
         assert job.pop("if") == "${{ !inputs.bootstrap_only && !inputs.foreground_only && !inputs.storage_only }}"
@@ -2322,8 +2326,19 @@ def test_default_command_job_is_separate_finite_and_requires_real_native_node():
                and part.func.attr == "validate_report" for part in ast.walk(runner))
     upload = next(step for step in job["steps"] if step.get("name") == "Upload only the bounded default-runtime result")
     assert upload["if"] == "always()" and upload["with"]["name"] == "windows-default-runtime"
-    assert upload["with"]["path"] == "${{ runner.temp }}/dr-ci/evidence/publicresult.json"
+    # Exactly two named files, no pattern: the public result and the count
+    # summary of the metadata observation tests (fd77d428). That summary is a
+    # closed set of four counts and a status; its raw log stays private.
+    assert upload["with"]["path"] == (
+        "${{ runner.temp }}/dr-ci/evidence/publicresult.json\n"
+        "${{ runner.temp }}/dr-ci/evidence/metadata-observation-tests.json\n")
     assert "*" not in upload["with"]["path"] and "private" not in upload["with"]["path"]
+    summary = next(step["run"] for step in job["steps"]
+                   if step.get("name") == "Check closed metadata observation and original-outcome preservation")
+    assert ('result = {key: getattr(selected, key) for key in ("collected", "passed", "failed", "skipped")}\n'
+            in summary and summary.count("metadata-observation-tests.json") == 1)
+    assert ('(base / "evidence/metadata-observation-tests.json").write_text(json.dumps(result), encoding="utf-8")'
+            in summary and '(base / "private-observation-tests.log").open("x", encoding="utf-8")' in summary)
 
 
 @pytest.mark.parametrize("fault", [None, "missing", "wrong-node", "duplicate", "skip", "failed",

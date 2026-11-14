@@ -909,6 +909,37 @@ def test_native_owned_background_failure_before_any_runtime_receipt(tmp_path):
     assert (home / "config/services/task-launcher-output.log").is_file()
 
 
+def test_host_does_not_start_attached_to_a_console_without_protection(monkeypatch):
+    from amplifier_web import windows_hidden_console, windows_task_runtime
+
+    def unsafe():
+        raise windows_hidden_console.HiddenConsoleError("attached, not protected, not released")
+
+    monkeypatch.setattr(windows_hidden_console, "ensure_hidden_console", unsafe)
+    monkeypatch.setattr(service, "_read", lambda *a: pytest.fail("an unsafe host must not continue"))
+    monkeypatch.setattr(windows_task_runtime, "Runner",
+                        lambda *a: pytest.fail("an unsafe host must not publish a runtime receipt"))
+    # The launcher sees a host that ended before its receipt: a failed start.
+    with pytest.raises(windows_hidden_console.HiddenConsoleError):
+        service._host(spec(supervised=True))
+
+
+def test_host_attaches_the_windowless_console_before_any_other_step(monkeypatch):
+    from amplifier_web import windows_hidden_console
+    order = []
+    monkeypatch.setattr(windows_hidden_console, "ensure_hidden_console",
+                        lambda: order.append("console") or {"status": "attached"})
+
+    def read(home):
+        order.append("task")
+        raise service.WindowsServiceError("stop here")
+
+    monkeypatch.setattr(service, "_read", read)
+    with pytest.raises(service.WindowsServiceError):
+        service._host(spec(supervised=True))
+    assert order == ["console", "task"]
+
+
 def test_unqualified_supervised_update_owner_is_closed_before_any_native_read(monkeypatch):
     monkeypatch.setattr(service, "SUPERVISED_UPDATES_QUALIFIED", False)
     monkeypatch.setattr(service, "_read", lambda *a: pytest.fail("closed gate must not inspect native tasks"))

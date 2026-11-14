@@ -47,6 +47,7 @@ on:
       - amplifier_web/update_checks.py
       - amplifier_web/windows_jobs.py
       - amplifier_web/windows_launch_guard.py
+      - amplifier_web/windows_hidden_console.py
       - amplifier_web/deployment.py
       - amplifier_web/tls.py
       - amplifier_web/windows_tls.py
@@ -351,7 +352,8 @@ jobs:
     needs: windows-user-trial
     if: ${{ !inputs.bootstrap_only && !inputs.storage_only && !cancelled() && (inputs.foreground_only || needs.windows-user-trial.result == 'success') }}
     runs-on: windows-latest
-    # 8-minute setup + unchanged 21-minute cold check + 4-minute CLI cell + overhead.
+    # 6-minute setup + 2-minute metadata check + unchanged 21-minute cold check
+    # + 4-minute CLI cell + overhead. The step budgets stay below this budget.
     timeout-minutes: 34
     env:
       PYTHONDONTWRITEBYTECODE: '1'
@@ -369,7 +371,7 @@ jobs:
           architecture: x64
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - name: Build and install candidate host for cold default-command setup
-        timeout-minutes: 8
+        timeout-minutes: 6
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'

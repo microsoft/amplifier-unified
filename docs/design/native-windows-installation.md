@@ -25,6 +25,65 @@ rollback. Private runtime receipts still identify the actual host PID, exact
 creation time, process image and listening identity. Native windowless worker
 containment and full background lifetime remain affected qualification boundaries.
 
+### One console without a window for the host's child programs
+
+`pythonw.exe` has no console. Windows creates a new, visible console for every
+console program that such a process starts with default creation flags. A
+no-window flag at each known call site cannot cover code that the application
+does not own.
+
+The app host therefore attaches a console that has no window as its first step
+(`amplifier_web/windows_hidden_console.py`). A console program started with
+default flags inherits that console, and so do the console programs it starts.
+The mechanism lives in the app generation, so an in-app update delivers it. The
+stable launcher is not changed by it: a launcher keeps the code that setup
+installed.
+
+Rules that the mechanism depends on (measured on native Windows 11, CPython 3.13):
+
+- A console attached after process start resets the process's console control
+  handlers. Python's signal settings then give no protection: one Ctrl+C event
+  from a child on the shared console ends the host with `0xC000013A`. The host
+  registers an explicit handler for Ctrl+C and Ctrl+Break.
+- The host's standard handles are restored to their earlier values after the
+  attach. A child must not inherit console input that nobody can type.
+- Both steps follow the attach at once, before the helper process is released.
+  If either fails, the host releases the console and continues without it.
+- A failure of this mechanism does not stop host startup, with one exception.
+  If the host stays attached to a console that it could neither protect nor
+  release, it does not start. The release is confirmed by state. Continuing
+  would leave a host that one child's Ctrl+C ends later, without notice.
+- Known call sites keep their explicit no-window flag. Such a child gets its own
+  console and does not share the host's.
+
+Normal Stop is unchanged. The host stops through its private stop request and
+never through a console event. No host code sends a console control event.
+
+Sign-out is unchanged in effect. Before, Windows ended the windowless host at
+sign-out with no notice. Now the host is attached to a console, so Windows can
+send it the sign-out console event first. The handler does not handle that
+event (or close or shutdown), so Windows ends the process at once. In both
+cases the host ends without its normal stop sequence, and the launcher's
+lifetime job closes its descendants. This case is not measured yet.
+
+Limits. This is a default, not a sandbox:
+
+- A program that requests a new console still gets a window.
+- A windowed (GUI) child and a detached child have no console. Their console
+  children get a new window unless that child prevents it.
+- Children that share the host's console also share its control events, code
+  page and input. Measured: a Ctrl+C event that one child sent to the whole
+  console ended a sibling child that had default handling; the host continued.
+  This applies to the host's own default-flag children only. The worker tree
+  is not affected: the launch guard starts each payload with the no-window
+  flag, so each worker has a console of its own, and its tools (the shell
+  tool's bash, Git, MCP servers) inherit that one.
+- A child that asks a question on its console (a Git or SSH credential prompt)
+  now waits unseen until its caller's time limit. Before, an unflagged child
+  showed a console window. Host-side Git calls that can reach a remote should
+  set `GIT_TERMINAL_PROMPT=0` or a time limit.
+- Ending the hidden console's `conhost.exe` ends the host.
+
 ### Stable launcher and update recovery
 
 The supervised candidate keeps the owner-logon task's `pythonw.exe` as a stable
@@ -297,6 +356,104 @@ consumer setup with the embedded pin and unpacker. It does not run setup:
 setup refuses administrator and server accounts. The real setup file on a clean
 ordinary account, the task's actual PATH, and windows during shell use remain
 clean-room acceptance and are not claimed here.
+
+### One installation folder and plain stops
+
+Consumer setup installs into one fixed folder, `%LOCALAPPDATA%\Amplifier`.
+Earlier setup files created a new `amplifier-install-<32 hex>` folder at every
+run. That name cost 50 characters, and the app repeats the installation path
+inside its own data paths. Windows refuses a path of 260 characters or more
+(248 for a folder) unless long paths are enabled, which is not the default. With
+the long name no setup-made installation could chat on a default PC.
+
+The longest supported installation folder path is **59 characters**
+(`MaxRootLength` in `scripts/windows_bootstrap_native.cs`). The fixed folder is
+33 characters plus the account's profile-folder name, so a name of up to 26
+characters fits. The path-length work in the app owns this number. It measured
+the whole tree below the folder in a clean-room installation: 59 is the root
+that its design supports under both of its variants, and it may raise the
+number in its own change when its budget test proves a larger one. Worst
+observed depths below the folder: app generation 169 characters, worker
+environment 162, private Python 142, tools 124, private Git 68. Those fit at
+59 today.
+
+The short folder is necessary and not sufficient. Until the path-length work
+ships, the session folder and the source store still exceed the Windows limit
+for every folder path, so 59 is the number that stays true afterwards, not a
+claim that a first chat works on this release. A change to the folder name
+must respect this number, and `tests/test_windows_setup_folder.py` fails when
+code and document disagree. Setup stops before it asks anything when the path
+would be longer.
+
+Setup checks the PC and the folder before its first question. Each stop names
+one cause and one next step in plain language, and never shows exception text,
+child output or network values:
+
+| Found | Result |
+| --- | --- |
+| Setup was started with "Run as administrator" | Stop: close, open the file again with a double-click |
+| The sign-in always runs as administrator (User Account Control off) | Stop: use a standard sign-in or turn User Account Control on |
+| Not Windows 11 on a 64-bit Intel or AMD processor | Stop |
+| A folder above the installation folder lets other accounts change it | Stop: names that folder. The storage check is unchanged |
+| Less than 4 GB free | Stop |
+| The folder exists and setup did not create it | Stop. Setup never changes it |
+| The folder holds a finished installation | "Amplifier is already installed." Yes opens it. Nothing is installed or changed |
+| The folder holds setup's own unfinished attempt, or is empty | Setup removes it and installs |
+| The folder has setup's first marker and app data, but no completion record | Stop. Setup never removes it |
+| Another installation already starts at sign-in for this account | Stop: remove it first. One sign-in task exists per account |
+| A sign-in entry remains for an installation whose files were deleted | Stop: exact steps to delete that entry in Task Scheduler |
+| Task Scheduler cannot be read | Stop: restart Windows |
+
+Setup removes or starts only what it made, and marker files alone do not prove
+that. An existing folder is first pinned and checked by the storage owner with
+the checks of every private folder that setup creates: the person is its owner,
+no other account has access, it is not a link, and every folder above it passes
+the existing ancestor checks. `InstallStorage` gains only that create-nothing
+form and a create-nothing check of the folders above a new folder. A folder
+that fails is "not setup's": it is never removed and never started.
+
+Inside a checked folder two marker files make the states exact.
+`unified-setup-started.json` is the first file setup writes.
+`unified-setup-complete.json` is written after the installed-package audit and
+before the Start-menu step; setup then deletes the first marker. A finished
+installation therefore never carries the mark of unfinished work, and a lost
+completion record makes the folder "not setup's", not removable. As a second
+guard, a folder whose app data folders hold anything is never "unfinished".
+
+Removal has one path. It pins the folder and the folders above it, classifies
+the folder again at that moment, copies the small private log files to a new
+private folder that the storage owner creates exclusively in the person's
+temporary folder, and removes the contents while the pins hold. It uses
+extended-length paths, clears read-only attributes, removes a link without
+entering its target, and deletes the marker last, so a removal that stops
+part-way leaves a folder that the next run still recognizes. A failed run
+removes the folder that it created unless the completion record exists; it
+deletes nothing that it did not create. Opening an installation pins the
+folder, the folders above it and the program file while Windows starts it.
+One setup runs per Windows account at a time.
+
+Setup reads the sign-in task and changes no task. Only "not found" counts as
+absence.
+
+Downloads retry twice in the same exclusive private file after a dropped
+connection. A refused, oversized or checksum-failed file is not retried. The
+progress window names each step in plain words and says which steps take
+minutes.
+
+Not in this change: Repair and Update on a second run, refresh of the launcher
+and private tools, removal of program files at uninstall, removal of a leftover
+sign-in entry, the setup file's icon and version information, and a restart of
+an elevated setup without elevation. A person who removed Amplifier through the
+Apps list keeps the folder; a later setup run says so and starts that
+installation again, and its Start-menu entry returns only with the Repair step.
+An installation in an earlier long folder is not moved or read: setup asks the
+person to remove it and then installs into the short folder. The real setup
+file on a clean ordinary account remains clean-room acceptance. The native
+`windows-setup-folder` check compiles the actual sources and exercises, on a
+Windows runner, folder states, a planted marker in a folder that other accounts
+can change, a link in place of the folder, removal, the held installation, the
+named folder above, elevation detection and the stop text. It shows no setup
+window and installs nothing.
 
 ## Process-local Proactor cleanup backport
 

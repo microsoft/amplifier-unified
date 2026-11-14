@@ -69,6 +69,19 @@ reply; an agent's supported triggers and outcome channels belong to its implemen
    Capabilities without a faithful mapping are explicit limitations or negotiated extensions.
    Broken: an admission response is treated as a finished turn. Affected: clients and automation.
 
+   Optional conditional retirement is distinct from Stop and session closure.
+   A host may close an idle attachment only after its exact native owner
+   acknowledges that the attached execution has saved and retired, with no
+   remaining work using the connection's tools. A completed prompt, advertised
+   resume support or inherited wrapper metadata is not that acknowledgement.
+   Refused or uncertain retirement retains the attachment and its authority;
+   timeout never authorizes killing work. New input and retirement are fenced
+   against each other. Durable conversation, endpoint, workspace and native
+   session identities survive; waking uses exact resume without replay.
+   Automatic cleanup follows the owner's existing warm-worker retention policy,
+   not every completed turn. Advisory retention requests require a fresh policy
+   and native-owner check and confer no closure authority.
+
 5. **AP5 — Keep advanced behavior optional.** Standard config options expose supported
    session controls. Composition administration and advanced runtime controls have
    separate scoped interfaces; their absence never blocks an ordinary supported turn.

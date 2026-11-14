@@ -135,6 +135,126 @@ async def test_idle_deadline_and_navigation_do_not_extend_retention(manager):
     assert first.returncode == 0
 
 
+@pytest.mark.parametrize('reason', ['count', 'ttl', 'update'])
+async def test_attached_retention_requests_existing_policy_and_rechecks_stale_demand(manager, reason):
+    servers = {'fixture': {'type': 'http', 'url': 'http://127.0.0.1:1/unused'}}
+    await manager.bind_ephemeral_mcp('attached', 'attachment', servers)
+    process = await warm(manager, 'attached')
+    row = manager.workers['attached']
+    await manager.retention.sweep()
+    assert not [event for event in manager.events if event[0] == 'runtime.retirement_requested']
+    assert await manager.retire_attachment('attached', 'attachment', guard=lambda: False) == 'busy'
+    assert process.returncode is None  # Default warm budget retains the ordinary settled worker.
+    if reason == 'count':
+        manager.retention.settings['max_warm_workers'] = 1
+        manager.now = 10
+        await warm(manager, 'newer')
+    elif reason == 'ttl':
+        manager.now = 12 * 3600
+    else:
+        row['update_pending'] = True
+    await manager.retention.sweep()
+    assert [event for event in manager.events if event[0] == 'runtime.retirement_requested'] == [
+        ('runtime.retirement_requested', {'sessionId': 'attached'})]
+    assert manager._ephemeral_mcp['attached'] == ('attachment', servers)
+    assert process.returncode is None and not row.get('closing')
+    # A delivered hint is not a lasting policy grant: pressure or idle age can change.
+    if reason == 'count':
+        await manager.stop('newer', reason='retention')
+    elif reason == 'ttl':
+        row['idle_at'] = manager.now
+    else:
+        row['update_pending'] = False
+    assert await manager.retire_attachment('attached', 'attachment', guard=lambda: False) == 'busy'
+    assert process.returncode is None and manager._ephemeral_mcp['attached'][0] == 'attachment'
+    row['update_pending'] = True
+    assert await manager.retire_attachment('attached', 'attachment', guard=lambda: False) == 'retired'
+    assert process.returncode == 0 and 'attached' not in manager._ephemeral_mcp
+
+
+async def test_protected_or_active_attachment_does_not_receive_policy_request(manager):
+    await manager.bind_ephemeral_mcp('attached', 'attachment', {
+        'fixture': {'type': 'http', 'url': 'http://127.0.0.1:1/unused'}})
+    process = await warm(manager, 'attached')
+    manager.retention.settings['max_warm_workers'] = 0
+    manager.retention.protected = lambda _: True
+    await manager.retention.sweep()
+    manager.retention.protected = lambda _: False
+    await manager.send({'id': 'attached'}, 'original work', 'once', manager.emit)
+    await manager.retention.sweep()
+    assert not [event for event in manager.events if event[0] == 'runtime.retirement_requested']
+    assert process.returncode is None and 'attached' in manager._ephemeral_mcp
+
+
+@pytest.mark.parametrize('late', [False, True])
+async def test_empty_tool_retirement_notifies_after_exact_ack_outside_lock(manager, late):
+    process = await warm(manager, 'plain')
+    row = manager.workers['plain']
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = manager._write
+    async def write(current, value):
+        if value['op'] == 'retire':
+            entered.set()
+            await release.wait()
+        await original(current, value)
+    manager._write = write
+    notifications = []
+    async def emit(kind, payload):
+        if kind == 'runtime.retirement_requested':
+            assert not manager._locks['plain'].locked()
+            assert 'plain' not in manager.workers and 'plain' in manager._retired
+            notifications.append(payload)
+    row['emit'] = emit
+    manager.retention.settings['max_warm_workers'] = 0
+    if late:
+        manager.retention.reply_timeout = .01
+    sweep = asyncio.create_task(manager.retention.sweep())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if late:
+            await asyncio.wait_for(sweep, 2)
+        assert not notifications and manager.workers['plain'] is row and process.returncode is None
+        release.set()
+        await asyncio.wait_for(asyncio.shield(row['retirement_task']), 3)
+        await sweep
+        assert notifications == [{'sessionId': 'plain'}] and process.returncode == 0
+        # A client's exact absent-worker receipt has no new native operation/event.
+        assert await manager.retire_attachment('plain', 'attachment', guard=lambda: False) == 'retired'
+        assert await manager.retire_attachment('plain', 'attachment', guard=lambda: False) == 'retired'
+        assert notifications == [{'sessionId': 'plain'}] and not manager.workers
+    finally:
+        release.set()
+        await asyncio.gather(sweep, return_exceptions=True)
+
+
+@pytest.mark.parametrize('result', ['refused', 'unknown', 'notify-failed'])
+async def test_retirement_completion_signal_preserves_native_outcome(manager, result):
+    process = await warm(manager, 'plain')
+    row = manager.workers['plain']
+    notifications = []
+    async def emit(kind, payload):
+        if kind == 'runtime.retirement_requested':
+            notifications.append(payload)
+            raise RuntimeError('Synthetic observer failure')
+    row['emit'] = emit
+    manager.retention.settings['max_warm_workers'] = 0
+    if result == 'refused':
+        await manager.send({'id': 'plain'}, 'one accepted input', 'once', emit)
+        row['idle'] = True  # Stale host hint cannot override native work.
+    elif result == 'unknown':
+        async def unavailable(*args, **kwargs):
+            raise ConnectionResetError('Synthetic missing acknowledgement')
+        manager._request_unlocked = unavailable
+    await manager.retention.sweep()
+    if result == 'notify-failed':
+        assert notifications == [{'sessionId': 'plain'}]
+        assert process.returncode == 0 and 'plain' in manager._retired
+        assert await row['retirement_task'] is True
+    else:
+        assert not notifications and process.returncode is None
+        assert manager.workers['plain'] is row and 'plain' not in manager._retired
+
+
 async def test_active_and_unanswered_commands_are_protected(manager):
     first = await warm(manager, 'a')
     await manager.send({'id': 'a'}, 'work', 'one', manager.emit)
@@ -427,9 +547,9 @@ async def test_selecting_six_chats_starts_no_workers_but_explicit_warm_and_send_
     app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
     starts = []
     original = runtime.start
-    async def start(session, emit):
+    async def start(session, emit, *, guard=None):
         starts.append(session['id'])
-        return await original(session, emit)
+        return await original(session, emit, guard=guard)
     monkeypatch.setattr(runtime, 'start', start)
     try:
         ids = []

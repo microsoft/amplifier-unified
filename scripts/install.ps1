@@ -234,7 +234,11 @@ namespace UnifiedBootstrap {
                     throw new IOException("Bootstrap path crossed a volume boundary.");
                 pin.volume=info.volume; pin.high=info.high; pin.low=info.low;
                 pins.Add(path, pin); order.Add(pin); return pin;
-            } catch { pin.handle.Dispose(); throw; }
+            } catch (Exception error) {
+                // Name the refused object for the caller's plain explanation.
+                if (!error.Data.Contains("path")) error.Data["path"] = path;
+                pin.handle.Dispose(); throw;
+            }
         }
         void Traverse(string path) {
             path = Address(path);
@@ -268,11 +272,29 @@ namespace UnifiedBootstrap {
             } finally { LocalFree(descriptor); }
             Hold(path, true, true, false);
         }
-        public InstallStorage(string parent) {
+        InstallStorage() {}
+        public static void Check(string parent) {
+            // Validate every folder from the drive to `parent` exactly as a new
+            // root's ancestors are validated. Creates, pins and repairs nothing.
+            var storage = new InstallStorage();
+            try { storage.Traverse(Address(parent)); } finally { storage.Dispose(); }
+        }
+        public InstallStorage(string parent)
+            : this(parent, "amplifier-install-" + Guid.NewGuid().ToString("N"), false) {}
+        public InstallStorage(string parent, string name) : this(parent, name, false) {}
+        public InstallStorage(string parent, string name, bool existing) {
+            // A fixed name is the consumer installation's one folder. A new root
+            // is created exclusively; an existing folder is never adopted for
+            // writing. `existing` only pins and checks a root that an earlier run
+            // created, with the checks of every private directory here: current
+            // user owner, no access for another account, no reparse point, and
+            // validated ancestors. Nothing is created or repaired.
             try {
+                if (name == null || !Regex.IsMatch(name, "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$"))
+                    throw new IOException("Unsafe bootstrap root name.");
                 parent = Address(parent); Traverse(parent);
-                Root = Path.Combine(parent, "amplifier-install-" + Guid.NewGuid().ToString("N"));
-                CreateExact(Root);
+                Root = Path.Combine(parent, name);
+                if (existing) Hold(Root, true, true, false); else CreateExact(Root);
             } catch { Dispose(); throw; }
         }
         public void Validate() {

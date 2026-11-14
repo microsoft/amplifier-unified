@@ -246,6 +246,8 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         return kind, {**base, **{key: event[key] for key in ('status', 'source', 'detail') if key in event}}
     if kind in {'session.naming','session.naming.progress'}:
         return kind, {**base,**{key:event[key] for key in ('name','description','completedInputs','nameRevision') if key in event}}
+    if kind == 'session.naming.finished':
+        return kind, base
     if kind == "execution.event":
         event = event.get("event", {})
         allowed = ("id", "revision", "producerId", "budgetRevision", "admittedAt", "parentId", "turnId", "admissionInputId", "generationId", "purpose", "sessionId", "rootSessionId", "kind", "phase", "label",
@@ -416,6 +418,50 @@ class RuntimeManager:
         prior = self._ephemeral_mcp.get(session_id)
         if prior and prior[0] == attachment_id:
             self._ephemeral_mcp.pop(session_id)
+
+    async def retire_attachment(self, session_id, attachment_id, *, guard):
+        """Conditionally retire this attachment's exact native owner, never Stop.
+
+        Keep its live tools until the worker acknowledges quiescence. A caller
+        timeout or cancellation leaves reconciliation and the binding intact.
+        """
+        lock = self._locks.setdefault(session_id, asyncio.Lock())
+        if lock.locked():
+            return 'busy'
+        async with lock:
+            if self._closed or guard() or self.retention.protected(session_id):
+                return 'busy'
+            self._check_preparation_cleanup(session_id)
+            binding = self._ephemeral_mcp.get(session_id)
+            if binding and binding[0] != attachment_id:
+                return 'busy'
+            row = self.workers.get(session_id)
+            if row is not None:
+                if row.get('closing') or row.get('stop_task'):
+                    return 'unknown'
+                if not self.retention.due(session_id, row):
+                    return 'busy'
+                mounted = row.get('ephemeral_mcp_binding')
+                if mounted and (not binding or mounted != attachment_id):
+                    return 'busy'
+                pending = self.retention.schedule(session_id, row)
+            else:
+                pending = None
+        if pending is not None:
+            try:
+                result = await asyncio.wait_for(asyncio.shield(pending), self.retention.reply_timeout)
+            except TimeoutError:
+                return 'unknown'
+            if result is not True:
+                return 'busy' if result is False else 'unknown'
+        async with lock:
+            if (self._closed or guard() or self.retention.protected(session_id)
+                    or self.workers.get(session_id) is not None
+                    or self._ephemeral_mcp.get(session_id) != binding):
+                return 'busy'
+            if binding is not None:
+                self._ephemeral_mcp.pop(session_id)
+            return 'retired'
 
     async def retire_idle(self, session_id, owner_id, *, guard):
         """Retire an exact settled owner by the existing acknowledged handshake."""
@@ -1389,6 +1435,8 @@ class RuntimeManager:
                         if data.get("type") == "session.idle":
                             row["idle"] = True
                             row["idle_at"] = self.retention.clock()
+                            self.retention.wake()
+                        elif data.get('type') == 'session.naming.finished':
                             self.retention.wake()
                         elif data.get("type") in {"generation.started", "input.delivered"}:
                             row["idle"] = False
