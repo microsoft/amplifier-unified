@@ -23,10 +23,13 @@ Stop or cancellation). An explicit wait limit and already-accepted deadlines kee
 their original meaning; changing defaults never rewrites a queued receipt. The
 host saves the request in the existing command journal, waits for physical
 backend capacity, takes a working-folder snapshot when admitted, executes the
-command once, stops the exact owned environment, exports source and artifacts,
-then removes the environment. Export or removal uncertainty preserves ownership
-and evidence. Docker exports the working folder and artifact directory; do not
-put unique output elsewhere. The first Incus adapter retains a bounded complete
+command once, stops the exact owned environment, preserves its selected evidence,
+then removes the environment. New disposable Docker owners export `/artifacts`
+by default; `preserveSource: true` additionally exports `/workspace`. The original
+source snapshot, results and receipts remain retained. Existing owners keep their
+original preservation contract. Export or removal uncertainty preserves ownership
+and evidence; keep unique output in the selected retained roots. The first Incus
+adapter retains a bounded complete
 instance archive, with its storage cost described in
 [Incus test environments](workspaces/incus-test-environments.md).
 

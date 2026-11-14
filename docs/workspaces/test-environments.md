@@ -159,7 +159,9 @@ If working-folder preservation fails, **Save artifact evidence** can retain
 `/artifacts` independently for diagnosis. Recovery uses the original approved
 backend, exact owner, stopped-state checks and immutable request receipts.
 It does not mark the working folder preserved, retire ownership, retry the
-failed check, or satisfy removal's two-root/full-retention requirement.
+failed check, or satisfy removal's selected-root preservation requirement.
+For owners requiring both roots or full retention, those requirements remain;
+new disposable Docker owners export the guest working folder only when selected.
 Archive bytes, members, logical selected size, safe links and complete tar
 termination remain bounded and verified. Incus still streams a bounded full
 backup while selecting artifacts only; its input-size, free-space and deadline
