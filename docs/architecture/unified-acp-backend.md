@@ -102,6 +102,12 @@ hours. Finishing a turn does not itself request attachment cleanup. Policy is
 checked again under native admission before retirement: a delayed pressure hint
 cannot evict a worker that is now within its warm budget. Older
 `retirementAvailable` advertisements do not negotiate automatic cleanup.
+For an attachment with no mounted tools, normal native retention can finish
+without first involving that connection. Its acknowledged completion emits the
+same request after the exact worker is removed, including after a late reply.
+The attached client can then obtain the already-retired receipt. This does not
+start another retirement or replay work, and failed notification delivery cannot
+undo the completed native retirement.
 
 The request is neither an idle guarantee nor an instruction to retry work.
 Retirement replies do not produce another notification. This reuses the existing

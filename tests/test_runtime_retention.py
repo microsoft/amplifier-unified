@@ -186,6 +186,75 @@ async def test_protected_or_active_attachment_does_not_receive_policy_request(ma
     assert process.returncode is None and 'attached' in manager._ephemeral_mcp
 
 
+@pytest.mark.parametrize('late', [False, True])
+async def test_empty_tool_retirement_notifies_after_exact_ack_outside_lock(manager, late):
+    process = await warm(manager, 'plain')
+    row = manager.workers['plain']
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = manager._write
+    async def write(current, value):
+        if value['op'] == 'retire':
+            entered.set()
+            await release.wait()
+        await original(current, value)
+    manager._write = write
+    notifications = []
+    async def emit(kind, payload):
+        if kind == 'runtime.retirement_requested':
+            assert not manager._locks['plain'].locked()
+            assert 'plain' not in manager.workers and 'plain' in manager._retired
+            notifications.append(payload)
+    row['emit'] = emit
+    manager.retention.settings['max_warm_workers'] = 0
+    if late:
+        manager.retention.reply_timeout = .01
+    sweep = asyncio.create_task(manager.retention.sweep())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if late:
+            await asyncio.wait_for(sweep, 2)
+        assert not notifications and manager.workers['plain'] is row and process.returncode is None
+        release.set()
+        await asyncio.wait_for(asyncio.shield(row['retirement_task']), 3)
+        await sweep
+        assert notifications == [{'sessionId': 'plain'}] and process.returncode == 0
+        # A client's exact absent-worker receipt has no new native operation/event.
+        assert await manager.retire_attachment('plain', 'attachment', guard=lambda: False) == 'retired'
+        assert await manager.retire_attachment('plain', 'attachment', guard=lambda: False) == 'retired'
+        assert notifications == [{'sessionId': 'plain'}] and not manager.workers
+    finally:
+        release.set()
+        await asyncio.gather(sweep, return_exceptions=True)
+
+
+@pytest.mark.parametrize('result', ['refused', 'unknown', 'notify-failed'])
+async def test_retirement_completion_signal_preserves_native_outcome(manager, result):
+    process = await warm(manager, 'plain')
+    row = manager.workers['plain']
+    notifications = []
+    async def emit(kind, payload):
+        if kind == 'runtime.retirement_requested':
+            notifications.append(payload)
+            raise RuntimeError('Synthetic observer failure')
+    row['emit'] = emit
+    manager.retention.settings['max_warm_workers'] = 0
+    if result == 'refused':
+        await manager.send({'id': 'plain'}, 'one accepted input', 'once', emit)
+        row['idle'] = True  # Stale host hint cannot override native work.
+    elif result == 'unknown':
+        async def unavailable(*args, **kwargs):
+            raise ConnectionResetError('Synthetic missing acknowledgement')
+        manager._request_unlocked = unavailable
+    await manager.retention.sweep()
+    if result == 'notify-failed':
+        assert notifications == [{'sessionId': 'plain'}]
+        assert process.returncode == 0 and 'plain' in manager._retired
+        assert await row['retirement_task'] is True
+    else:
+        assert not notifications and process.returncode is None
+        assert manager.workers['plain'] is row and 'plain' not in manager._retired
+
+
 async def test_active_and_unanswered_commands_are_protected(manager):
     first = await warm(manager, 'a')
     await manager.send({'id': 'a'}, 'work', 'one', manager.emit)

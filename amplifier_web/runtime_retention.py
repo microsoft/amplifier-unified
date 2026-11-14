@@ -142,7 +142,14 @@ class WorkerRetention:
             await self.manager.stop(sid, reason='retention')
             # Commands held behind even a late acknowledgement can restart.
             self.manager._retired[sid] = (session, emit)
-            return True
+        # An attached client with no mounted tools was not part of the initial
+        # sweep request. Notify only after canonical retirement, outside admission.
+        # Asking for the now-absent worker's receipt cannot retire it a second time.
+        try:
+            await emit('runtime.retirement_requested', {'sessionId': sid})
+        except Exception:
+            pass  # Advisory delivery cannot undo acknowledged retirement.
+        return True
 
     async def run(self):
         try:
