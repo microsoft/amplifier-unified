@@ -58,6 +58,7 @@ on:
       - amplifier_web/windows_ports.py
       - amplifier_web/windows_consumer.py
       - amplifier_web/windows_consumer_shell.py
+      - amplifier_web/windows_removal.py
       - amplifier_web/installation_runtime.py
       - amplifier_web/cli.py
       - amplifier_web/deployment_service.py
@@ -97,6 +98,7 @@ on:
       - tests/test_windows_ports.py
       - tests/test_windows_consumer.py
       - tests/test_windows_consumer_shell.py
+      - tests/test_windows_removal.py
       - tests/test_installation_runtime.py
       - tests/test_installation_health.py
       - tests/test_cli_deployment.py
@@ -266,6 +268,17 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_consumer_shell.py
           if ($LASTEXITCODE -ne 0) { throw 'Windows uninstall entry checks failed.' }
+      # Folder removal for uninstall: a real NTFS tree with a junction, folder
+      # and file links, a hard link to an outside file, a read-only file, a path
+      # of more than 400 characters and a file in use. Nothing outside the
+      # throwaway folder may change. A lane that cannot make links fails.
+      - name: Check that folder removal never follows a link or leaves its folder
+        shell: pwsh
+        env:
+          AMPLIFIER_REQUIRE_LINK_CHECKS: '1'
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_removal.py
+          if ($LASTEXITCODE -ne 0) { throw 'Windows folder removal checks failed.' }
   windows-user-trial:
     if: ${{ inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only) }}
     # Candidate-only combined boundary, not a universal suite/release gate.
