@@ -50,6 +50,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Probe environment creation failed.' }
           uv pip install --python "$base/env/Scripts/python.exe" --only-binary amplifier-core "amplifier-core==2.0.2" "pytest>=8,<10" "amplifier-module-tool-bash @ git+https://github.com/microsoft/amplifier-module-tool-bash@d5bb46d24dcae8e260211bf8fb5c22de3a67f406"
           if ($LASTEXITCODE -ne 0) { throw 'Shell tool installation failed.' }
+      # Setup unpacks with its private uv-managed CPython, not the runner's Python.
+      - name: Install the same kind of private Python that setup uses
+        shell: pwsh
+        env:
+          UV_PYTHON_DOWNLOADS: manual
+          UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/private-shell/python
+        run: |
+          $ErrorActionPreference = 'Stop'
+          uv python install 3.13 --no-bin --no-registry
+          if ($LASTEXITCODE -ne 0) { throw 'Private Python installation failed.' }
+          $private = uv python find --no-project --managed-python 3.13
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $private)) { throw 'Private Python was not found.' }
+          "SHELL_PRIVATE_PYTHON=$private" >> $env:GITHUB_ENV
       - name: Check archive refusals and runtime link files on native NTFS
         shell: pwsh
         run: |
@@ -59,7 +72,7 @@ jobs:
         timeout-minutes: 10
         shell: pwsh
         run: |
-          & "$env:SHELL_BASE/env/Scripts/python.exe" -I -B tests/fixtures/windows_private_shell_probe.py --root "$env:SHELL_BASE/probe" --receipt "$env:SHELL_BASE/result.json"
+          & "$env:SHELL_BASE/env/Scripts/python.exe" -I -B tests/fixtures/windows_private_shell_probe.py --root "$env:SHELL_BASE/probe" --receipt "$env:SHELL_BASE/result.json" --unpack-python "$env:SHELL_PRIVATE_PYTHON"
           if ($LASTEXITCODE -ne 0) { throw 'The private shell proof failed; inspect the stage in result.json.' }
       - name: Retain the bounded result
         if: always()

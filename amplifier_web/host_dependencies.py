@@ -50,6 +50,11 @@ def prepare_environment():
     # Include absent standard directories: a later helper installation becomes
     # visible to the running service on its next preparation attempt.
     os.environ['PATH'] = tool_path()
+    if sys.platform == 'win32':
+        # Windows program lookup otherwise tries the current folder before PATH.
+        # For a host or worker that folder is a workspace: a file named bash,
+        # git or uv there must never be chosen. Workers inherit this.
+        os.environ.setdefault('NoDefaultCurrentDirectoryInExePath', '1')
 
 
 def require_uv():

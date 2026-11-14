@@ -140,14 +140,19 @@ directory and refuses unsafe names, repeated entries, special files and any link
 other than the archive's five known runtime links. It writes those as the MSYS2
 runtime's own system-file links, never as reparse points that Windows follows,
 and writes archive hard links as separate copies. Git's own license comes from
-the exact tagged source commit by digest. Setup then runs `git --version`
-through the private `bin\bash.exe` and requires the pinned version, so a shell
-that cannot start stops setup instead of failing in a first chat. Setup records
-the result in `private-git.json` and removes the unpacked archive.
+the exact tagged source commit by digest. Setup then starts the private
+`bin\bash.exe` and requires that its `git` is this installation's Git, by
+location and pinned version, so a shell that cannot start stops setup instead
+of failing in a first chat. Setup children do not inherit `BASH_ENV` or exported
+shell functions. Setup records the result in `private-git.json` and removes the
+unpacked archive.
 
 Each host start puts this installation's `git\bin` first on PATH; workers
 inherit it. The order is derived at start, not only read from the saved task
-definition. The shell tool's own `AMPLIFIER_BASH_WINDOWS_SHELL=wsl` choice still
+definition. Each Windows host start also sets `NoDefaultCurrentDirectoryInExePath`.
+Python's program lookup on Windows otherwise tries the current folder first, and
+the shell tool's folder is a workspace: a file named `bash` in a cloned
+repository would have been chosen and run. The shell tool's own `AMPLIFIER_BASH_WINDOWS_SHELL=wsl` choice still
 selects WSL for a person who wants it. An installation made by an earlier setup
 file keeps MinGit, and nothing is added to its PATH, until setup refreshes its
 private tools; an in-app update does not replace them.
@@ -156,7 +161,9 @@ The `Windows private shell` workflow runs on a native runner with a new PC's
 PATH (Windows folders only). It unpacks the pinned archive with the same
 isolated invocation, checks the runtime links and the app's own file reader,
 and requires the real shell tool to resolve the private bash and run `echo`, a
-pipe, `git --version` and a file write, with no model request. It also compiles
+pipe, `git --version` and a file write, with no model request. A decoy
+`bash.cmd` in the workspace must be selected without the guard and never with
+it. The unpacker runs with a uv-managed CPython, as in setup. It also compiles
 consumer setup with the embedded pin and unpacker. It does not run setup:
 setup refuses administrator and server accounts. The real setup file on a clean
 ordinary account, the task's actual PATH, and windows during shell use remain

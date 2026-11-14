@@ -51,7 +51,9 @@ def digest(path):
 
 def _name(value):
     parts = value.split("/")
-    if not value or len(value) > 200 or any(
+    # Short enough that the private folder plus any entry stays within
+    # Windows' ordinary 260-character path limit. The pinned maximum is 85.
+    if not value or len(value) > 120 or any(
             not part or part in {".", ".."} or part.endswith((".", " "))
             or _UNSAFE.search(part) or _DEVICE.match(part) for part in parts):
         raise ValueError("The Git archive has an unsafe entry name.")
@@ -75,7 +77,8 @@ def _link(path, target):
 def extract(archive, destination):
     """Create every entry exclusively below an existing private directory."""
     destination = Path(destination)
-    if not destination.is_dir() or destination.is_symlink() or any(destination.iterdir()):
+    if (not destination.is_dir() or destination.is_symlink() or destination.is_junction()
+            or any(destination.iterdir())):
         raise ValueError("The private Git directory must already exist and be empty.")
     files, seen, total = set(), set(), 0
     with tarfile.open(archive, "r:bz2") as source:

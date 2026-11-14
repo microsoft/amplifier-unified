@@ -71,6 +71,7 @@ def test_complete_tree_is_created_exclusively_with_copies_and_runtime_links(tmp_
     (entry("C:/Windows/tool.exe", data=b"x"), "unsafe entry name"),
     (entry("usr/bin/con.txt", data=b"x"), "unsafe entry name"),
     (entry("usr/bin/trailing. ", data=b"x"), "unsafe entry name"),
+    (entry("usr/" + "n" * 117, data=b"x"), "unsafe entry name"),
     (entry("BIN/BASH.EXE", data=b"x"), "repeats an entry"),
     (entry("usr/bin/link", tarfile.SYMTYPE, "/etc/passwd"), "unexpected link"),
     (entry("dev/fd", tarfile.SYMTYPE, "../../outside"), "unexpected link"),
@@ -172,5 +173,11 @@ def test_consumer_setup_unpacks_checks_and_proves_the_shell_before_the_app():
     steps = [helper.index(text) for text in (
         "Storage.CreateDirectory(destination)", '"-I","-S","-B",unpacker',
         "CheckHash(notice,NativePins.ShellGitLicenseHash)",
-        'Child(bash,new[]{"-c","git --version"},environment)=="git version "+NativePins.ShellGitVersion')]
+        'Child(bash,new[]{"-c","command -v git && git --version"},environment)',
+        'Regex.IsMatch(shell[0],"^/(ucrt64/bin|cmd|bin)/git$",RegexOptions.CultureInvariant)',
+        'shell[1]=="git version "+NativePins.ShellGitVersion')]
     assert steps == sorted(steps)
+    # Setup children never run inherited shell startup code or exported functions.
+    child = source.split("static string Child(", 1)[1].split("static string Helper(", 1)[0]
+    for name in ('upper.StartsWith("BASH_FUNC_")', '"BASH_ENV"'):
+        assert name in child

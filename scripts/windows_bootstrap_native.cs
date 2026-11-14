@@ -183,8 +183,11 @@ namespace UnifiedBootstrap {
             };
             foreach(var key in info.EnvironmentVariables.Keys.Cast<string>().ToArray()) {
                 var upper=key.ToUpperInvariant();
+                // BASH_ENV and exported functions are shell startup code: a setup
+                // child must not run them or let them replace the commands it checks.
                 if(upper.StartsWith("UV_") || upper.StartsWith("PIP_") || upper.StartsWith("GIT_") || upper.EndsWith("_API_KEY") ||
-                    upper.EndsWith("_TOKEN") || new[]{"PYTHONHOME","PYTHONPATH","VIRTUAL_ENV","SSH_ASKPASS","AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AZURE_CLIENT_SECRET"}.Contains(upper))
+                    upper.EndsWith("_TOKEN") || upper.StartsWith("BASH_FUNC_") ||
+                    new[]{"PYTHONHOME","PYTHONPATH","VIRTUAL_ENV","SSH_ASKPASS","AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AZURE_CLIENT_SECRET","BASH_ENV"}.Contains(upper))
                     info.EnvironmentVariables.Remove(key);
             }
             foreach(var pair in environment) info.EnvironmentVariables[pair.Key]=pair.Value;
@@ -233,9 +236,13 @@ namespace UnifiedBootstrap {
             string git=Path.Combine(destination,"cmd","git.exe"), bash=Path.Combine(destination,"bin","bash.exe");
             Need(File.Exists(git) && File.Exists(bash),"Private Git or its shell is missing.");
             // The agent's shell tool starts this same entry. Prove on this PC that
-            // it runs and finds Git, before setup reports a usable installation.
-            Need(Child(bash,new[]{"-c","git --version"},environment)=="git version "+NativePins.ShellGitVersion,
-                "The private shell did not run its own Git.");
+            // it runs and that its Git is this installation's pinned Git, by
+            // location and version, before setup reports a usable installation.
+            // A program outside this private tree would appear as a drive path (/c/...).
+            string[] shell=Child(bash,new[]{"-c","command -v git && git --version"},environment)
+                .Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries);
+            Need(shell.Length==2 && Regex.IsMatch(shell[0],"^/(ucrt64/bin|cmd|bin)/git$",RegexOptions.CultureInvariant) &&
+                shell[1]=="git version "+NativePins.ShellGitVersion,"The private shell did not run its own Git.");
             return git;
         }
         static void Platform() {

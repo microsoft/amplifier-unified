@@ -88,6 +88,9 @@ def test_doctor_names_missing_helpers_and_uses_linux_guidance(isolated_tools):
     assert 'xcode' not in messages
 
 
+GUARD = 'NoDefaultCurrentDirectoryInExePath'
+
+
 @pytest.fixture
 def consumer_shell(isolated_tools, monkeypatch):
     """A Windows consumer installation's layout; path logic only, not native."""
@@ -99,6 +102,9 @@ def consumer_shell(isolated_tools, monkeypatch):
     bash.write_bytes(b'MZ')
     monkeypatch.setattr(sys, 'platform', 'win32')
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(root / 'app'))
+    # Recorded so the guard that preparation sets does not outlive the test.
+    monkeypatch.setenv(GUARD, 'recorded')
+    monkeypatch.delenv(GUARD)
     return root
 
 
@@ -130,3 +136,15 @@ def test_only_this_windows_installations_complete_shell_is_added(consumer_shell,
     monkeypatch.setenv('PATH', '/windows/system32')
     assert dependencies.private_shell() is None
     assert str(consumer_shell / 'git/bin') not in dependencies.tool_path().split(os.pathsep)
+
+
+def test_windows_hosts_never_resolve_a_program_from_the_current_workspace(consumer_shell, monkeypatch):
+    # Python's own Windows lookup tries the current folder first unless this
+    # documented Windows variable exists; workers inherit the host environment.
+    assert GUARD not in os.environ
+    dependencies.prepare_environment()
+    assert os.environ[GUARD] == '1'
+    monkeypatch.setattr(sys, 'platform', 'linux')
+    monkeypatch.delenv(GUARD)
+    dependencies.prepare_environment()
+    assert GUARD not in os.environ

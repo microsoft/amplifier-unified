@@ -15,6 +15,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
+GUARD = "NoDefaultCurrentDirectoryInExePath"
 UTILITIES = ("ls cat grep sed awk find sort head tail wc tr cut xargs mkdir rm cp mv chmod touch date "
              "sleep basename dirname diff patch tar gzip unzip curl ssh perl git")
 
@@ -40,6 +42,11 @@ def inside(path, root):
 async def tool_commands():
     """The worker's side: the real tool, its own resolution, ordinary commands."""
     from amplifier_module_tool_bash import BashTool
+    # The tool finds bash with this lookup. Its working folder is a workspace.
+    guarded = shutil.which("bash")
+    saved = os.environ.pop(GUARD)
+    unguarded = shutil.which("bash")
+    os.environ[GUARD] = saved
     tool = BashTool({"working_dir": os.getcwd()})
     results = {}
     for name, command in (
@@ -54,12 +61,15 @@ async def tool_commands():
                          "stdout": output.get("stdout", ""), "stderr": output.get("stderr", "")}
     executable, wsl = await tool._resolve_windows_bash()
     return {"executable": executable, "wsl": wsl, "results": results,
+            "guarded": guarded, "unguarded": unguarded,
             "described": "WINDOWS SHELL: Git Bash" in tool.description}
 
 
-def run(base, receipt):
+def run(base, receipt, unpack_python=None):
     report = {"schema": 1, "ok": False, "stage": "preflight", "modelRequests": 0,
-              "cleanAccountQualified": False, "setupFileQualified": False}
+              "cleanAccountQualified": False, "setupFileQualified": False,
+              # Setup unpacks with a uv-managed CPython; CI supplies the same kind.
+              "unpackPython": "uv-managed" if unpack_python else "runner"}
     try:
         assert sys.platform == "win32" and sys.version_info[:2] == (3, 13) and sys.maxsize > 2 ** 32
         base = Path(base).resolve()
@@ -84,7 +94,7 @@ def run(base, receipt):
             folder.mkdir(parents=True)
         (install / "consumer-install.json").write_text("{}")
         unpacked = subprocess.run(
-            [sys._base_executable, "-I", "-S", "-B", str(SCRIPTS / "windows_private_git.py"),
+            [str(unpack_python or sys._base_executable), "-I", "-S", "-B", str(SCRIPTS / "windows_private_git.py"),
              "--archive", str(archive), "--destination", str(git)],
             capture_output=True, text=True, timeout=600)
         assert unpacked.returncode == 0, unpacked.stderr[-2000:]
@@ -114,13 +124,19 @@ def run(base, receipt):
         # Recorded, not required: the runner image decides whether the hazard exists.
         report["wslLauncherOnCleanPath"] = bool(other and inside(other, windows))
         from amplifier_web import host_dependencies
-        os.environ["AMPLIFIER_WEB_HOME"] = str(install / "app")
-        path = host_dependencies.tool_path(clean)
+        # The host's own preparation, not a copy of it: workers inherit the result.
+        os.environ.pop(GUARD, None)
+        os.environ.update(PATH=clean, AMPLIFIER_WEB_HOME=str(install / "app"))
+        host_dependencies.prepare_environment()
+        path = os.environ["PATH"]
         assert os.path.normcase(path.split(os.pathsep)[0]) == os.path.normcase(str(bash.parent))
+        assert os.environ[GUARD] == "1"
         environment = {name: value for name, value in os.environ.items()
-                       if name.upper() not in {"PATH", "AMPLIFIER_BASH_WINDOWS_SHELL", "MSYSTEM", "SHELL"}}
-        environment["PATH"] = path
+                       if name.upper() not in {"AMPLIFIER_BASH_WINDOWS_SHELL", "MSYSTEM", "SHELL"}}
         report["pathSelectsPrivateShell"] = True
+        # A cloned repository can contain a program named bash. It must never run.
+        decoy = install / "workspace/bash.cmd"
+        decoy.write_text('@echo decoy>"%~dp0decoy-ran.txt"\r\n')
 
         report["stage"] = "the real shell tool in a worker environment"
         worker = subprocess.run([sys.executable, "-I", "-B", str(Path(__file__).resolve()), "--worker"],
@@ -131,6 +147,13 @@ def run(base, receipt):
         results = tool["results"]
         assert os.path.normcase(tool["executable"]) == os.path.normcase(str(bash)), tool["executable"]
         assert tool["wsl"] is False and tool["described"] is True
+        same = lambda left, right: os.path.normcase(os.path.abspath(left)) == os.path.normcase(str(right))
+        assert same(tool["guarded"], bash), tool["guarded"]
+        # The same lookup without the host's guard selects the workspace file:
+        # this check would fail if the guard stopped working.
+        assert tool["unguarded"] and same(install / "workspace" / tool["unguarded"], decoy), tool["unguarded"]
+        assert not (install / "workspace/decoy-ran.txt").exists()
+        report["workspaceDecoy"] = {"selectedWithoutGuard": True, "selectedWithGuard": False, "ran": False}
         assert all(row["success"] and row["returncode"] == 0 for row in results.values()), results
         assert results["echo"]["stdout"].strip() == "amplifier-shell"
         assert results["pipe"]["stdout"].strip() == "a"
@@ -147,6 +170,12 @@ def run(base, receipt):
                                   capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
             assert done.returncode == 0, (command, done.stdout[-1000:], done.stderr[-1000:])
             return done.stdout.strip()
+        # Setup's own shell check, same command text and rule: this Git by
+        # location inside the private tree and by pinned version.
+        located = shell("command -v git && git --version").splitlines()
+        assert (len(located) == 2 and re.fullmatch("/(ucrt64/bin|cmd|bin)/git", located[0])
+                and located[1] == "git version " + pin["version"]), located
+        report["setupShellCheck"] = located
         assert shell("cat <(echo fd-ok)") == "fd-ok"
         assert shell("echo stdin-ok | cat /dev/stdin") == "stdin-ok"
         assert shell("readlink /dev/fd /etc/mtab").split() == ["/proc/self/fd", "/proc/mounts"]
@@ -185,13 +214,14 @@ def main():
     parser.add_argument("--worker", action="store_true")
     parser.add_argument("--root", type=Path)
     parser.add_argument("--receipt", type=Path)
+    parser.add_argument("--unpack-python", type=Path)
     args = parser.parse_args()
     if args.worker:
         print(json.dumps(asyncio.run(tool_commands())))
         return 0
     if args.root is None or args.receipt is None:
         parser.error("--root and --receipt are required")
-    return run(args.root, args.receipt)
+    return run(args.root, args.receipt, args.unpack_python)
 
 
 if __name__ == "__main__":
