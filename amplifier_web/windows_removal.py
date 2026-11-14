@@ -50,6 +50,7 @@ $p = $null
 $passes = 0
 $removed = $false
 $started = Get-Date
+$startedUtc = ([datetimeoffset]$started).UtcDateTime
 $script:left = @()
 $script:leftCount = 0
 $script:seen = @{}
@@ -64,29 +65,37 @@ function Keep($path) {
 function Real-Folder($item) {
     return ($item.PSIsContainer -and "$($item.Attributes)" -notmatch 'ReparsePoint')
 }
+function Later($entry) {
+    if ($entry.CreationTimeUtc -gt $startedUtc) { Keep $entry.FullName; return $true }
+    return $false
+}
 function Authorized {
     try {
         $root = Get-Item -LiteralPath $p.root -Force
-        if (-not (Real-Folder $root)) { return $false }
+        if (-not (Real-Folder $root) -or (Later $root)) { return $false }
         $journal = Get-Item -LiteralPath (Join-Path $p.root 'unified-uninstall.json') -Force
-        if ($journal.PSIsContainer -or "$($journal.Attributes)" -match 'ReparsePoint') {
+        if ($journal.PSIsContainer -or "$($journal.Attributes)" -match 'ReparsePoint' -or
+            (Later $journal)) {
             return $false
         }
         $text = Get-Content -LiteralPath $journal.FullName -Raw
         if ($text -notmatch '^\s*\{') { return $false }
         $record = ConvertFrom-Json -InputObject $text
-        return ($record -is [pscustomobject] -and $record.schema -eq 1 -and
-            $record.choice -ceq $p.choice -and $record.token -is [string] -and
+        return ($record -is [pscustomobject] -and
+            ($record.schema -is [int] -or $record.schema -is [long]) -and $record.schema -eq 1 -and
+            $record.choice -is [string] -and $record.choice -ceq $p.choice -and $record.token -is [string] -and
             $record.token -ceq $p.token -and $record.token -cmatch '^[0-9a-f]{32}$')
     } catch { return $false }
 }
 function Clear-Link($entry) {
+    if (Later $entry) { return }
     # The only method call: nonrecursive deletion of the link itself avoids
     # Windows PowerShell's folder-link removal behavior. Constrained language
     # can refuse this call; then the link stays and prevents root removal.
     try { $entry.Delete() } catch { Keep $entry.FullName }
 }
 function Clear-File($entry) {
+    if (Later $entry) { return }
     try {
         if ("$($entry.Attributes)" -match 'ReadOnly|Hidden|System') {
             if ($entry.LinkType -eq 'HardLink') { Keep $entry.FullName; return }
@@ -98,13 +107,15 @@ function Clear-File($entry) {
 }
 function Clear-Entry($entry) {
     # Type and attributes come from the parent's listing, not a per-file stat.
+    if (Later $entry) { return }
     if ("$($entry.Attributes)" -match 'ReparsePoint') { Clear-Link $entry; return }
     $path = $entry.FullName
     try {
         if ($entry.PSIsContainer) {
+            if ((Get-Date) -ge $until) { Keep $path; return }
             $children = @(Get-ChildItem -LiteralPath $path -Force)
             $plain = @($children | Where-Object {
-                -not $_.PSIsContainer -and
+                -not (Later $_) -and -not $_.PSIsContainer -and
                 "$($_.Attributes)" -notmatch 'ReparsePoint|ReadOnly|Hidden|System'
             })
             if ($plain.Count) {
@@ -158,10 +169,16 @@ try {
         $script:seen = @{}
         $entries = @(Get-ChildItem -LiteralPath $p.root -Force)
         foreach ($entry in $entries) {
-            if (@($p.contents) -ccontains $entry.Name) { Clear-Entry $entry }
+            if (@($p.contents) -ccontains $entry.Name) {
+                if (-not (Authorized)) { throw 'Root or token refused' }
+                Clear-Entry $entry
+            }
         }
         foreach ($entry in @(Get-ChildItem -LiteralPath $p.root -Force)) {
             if (@($p.folders) -ccontains $entry.Name) {
+                if (-not (Authorized)) { throw 'Root or token refused' }
+                if (Later $entry) { continue }
+                if ((Get-Date) -ge $until) { Keep $entry.FullName; continue }
                 if ("$($entry.Attributes)" -match 'ReparsePoint') { Clear-Link $entry }
                 elseif ((Real-Folder $entry) -and
                     -not @(Get-ChildItem -LiteralPath $entry.FullName -Force).Count) {
@@ -172,6 +189,8 @@ try {
         }
         foreach ($entry in @(Get-ChildItem -LiteralPath $p.root -Force)) {
             if (@($p.files) -ccontains $entry.Name) {
+                if (-not (Authorized)) { throw 'Root or token refused' }
+                if (Later $entry) { continue }
                 if ("$($entry.Attributes)" -match 'ReparsePoint') { Clear-Link $entry }
                 elseif (-not $entry.PSIsContainer) {
                     Clear-File $entry
@@ -186,9 +205,11 @@ try {
     if (-not (Authorized)) { throw 'Root or token refused' }
     $remaining = @(Get-ChildItem -LiteralPath $p.root -Force)
     if ($remaining.Count -eq 1 -and $remaining[0].Name -ceq 'unified-uninstall.json') {
-        Remove-Item -LiteralPath $remaining[0].FullName -Force
-        Remove-Item -LiteralPath $p.root -Force
-        $removed = $true
+        Clear-File $remaining[0]
+        if (-not @(Get-ChildItem -LiteralPath $p.root -Force).Count) {
+            Remove-Item -LiteralPath $p.root -Force
+            $removed = $true
+        }
     } else {
         foreach ($entry in $remaining) {
             if ($entry.Name -cne 'unified-uninstall.json' -and

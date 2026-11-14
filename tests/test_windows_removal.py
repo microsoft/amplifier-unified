@@ -782,6 +782,109 @@ $p = $input | Out-String | ConvertFrom-Json
           "hard link kept; single-name ReadOnly and Hidden files removed")
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Real PowerShell creation cutoff and journal withdrawal")
+def test_native_finish_preserves_later_content_and_stops_when_journal_is_gone(finish_tree):
+    import _winapi
+
+    tree, root = finish_tree, finish_tree["root"]
+    (root / "python").mkdir()
+    options = _finish_options(tree)
+    options["contents"].extend(["python", "later-contents"])
+    options["folders"].append("later-folder")
+    options["files"].append("later-file.txt")
+    options["seconds"] = 30
+    created = []
+    with open(root / "tools" / "held.txt", "w"), open(root / "python" / "held.txt", "w"):
+        removal.finish_after_exit(root, TOKEN, **options)
+        # The files loop runs last: losing this original file witnesses pass 1.
+        deadline = time.monotonic() + 15
+        while (root / "receipt.json").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not (root / "receipt.json").exists(), "The first pass did not finish."
+        assert not tree["report"].exists(), "The held files must keep the helper retrying."
+        for parent in (root / "tools", root / "python"):
+            direct = parent / "new-file.txt"
+            direct.write_text("created after helper start")
+            folder = parent / "new-folder"
+            folder.mkdir()
+            nested = folder / "inside.txt"
+            nested.write_text("created inside a later folder")
+            created.extend([direct, nested])
+        for name in ("later-contents", "later-folder"):
+            (root / name).mkdir()
+            path = root / name / "inside.txt"
+            path.write_text("later named top-level folder")
+            created.append(path)
+        (root / "later-file.txt").write_text("later named top-level file")
+        created.append(root / "later-file.txt")
+        link = root / "tools" / "later-junction"
+        _winapi.CreateJunction(str(tree["outside"]), str(link))
+        tree["links"].append(link)
+        time.sleep(3)  # Deliberately allow several retry passes over the new entries.
+        assert all(path.is_file() for path in created)
+        assert link.is_junction()
+        (root / "unified-uninstall.json").unlink()
+        for parent in (root / "tools", root / "python"):
+            folder = parent / "after-journal"
+            folder.mkdir()
+            path = folder / "inside.txt"
+            path.write_text("journal was withdrawn")
+            created.append(path)
+    result = _finish_report(tree["report"], timeout=15)
+    assert result["passes"] >= 2 and not result["folderRemoved"], result
+    assert result["reason"] == "Root or token refused", result
+    assert root.exists() and not (root / "unified-uninstall.json").exists()
+    assert all(path.is_file() and path.read_text() for path in created)
+    assert link.is_junction()
+    _assert_outside_unchanged(tree)
+    print("AFTER_EXIT_LATER content and link created after start stayed; journal withdrawal stopped retries")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real PowerShell per-folder deadline")
+def test_native_finish_never_enters_a_folder_after_its_deadline(finish_tree):
+    tree, root = finish_tree, finish_tree["root"]
+    options = _finish_options(tree)
+    options["seconds"] = 0
+    removal.finish_after_exit(root, TOKEN, **options)
+    result = _finish_report(tree["report"])
+    assert result["passes"] == 1 and not result["folderRemoved"] and result["reason"] == "", result
+    for name in ("tools", "app", "shared", "cache"):
+        assert (root / name / "data[1]" / "one.txt").read_text() == "throwaway"
+        assert str(root / name) in result["left"]
+    assert (root / "workspace").is_dir() and (root / "unified-uninstall.json").exists()
+    _assert_outside_unchanged(tree)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Measure Windows PowerShell long-path behavior")
+def test_native_finish_long_path_has_only_safe_outcomes(finish_tree):
+    tree, root = finish_tree, finish_tree["root"]
+    directory = root / "tools" / ("a" * 80) / ("b" * 80) / ("c" * 80)
+    path = str(directory / "long-file.txt")
+    extended = "\\\\?\\" + path
+    os.makedirs("\\\\?\\" + str(directory))
+    with open(extended, "w") as stream:
+        stream.write("long path proof")
+    assert len(path) > 260
+    removal.finish_after_exit(root, TOKEN, **_finish_options(tree))
+    result = _finish_report(tree["report"])
+    long_left = os.path.exists(extended)
+    journal_left = (root / "unified-uninstall.json").exists()
+    print("AFTER_EXIT_LONG_PATH " + json.dumps({
+        "pathLength": len(path), "folderRemoved": result["folderRemoved"],
+        "longPathLeft": long_left, "journalLeft": journal_left,
+        "ordinaryRemoved": not (root / "tools" / "data[1]").exists(),
+        "leftCount": result["leftCount"], "reason": result["reason"],
+    }, separators=(",", ":")))
+    _assert_outside_unchanged(tree)
+    if root.exists():
+        assert long_left and journal_left and not result["folderRemoved"], result
+        with open(extended) as stream:
+            assert stream.read() == "long path proof"
+        assert result["left"], result
+    else:
+        assert result["folderRemoved"] and not long_left and not journal_left, result
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Real PowerShell installation-sized removal")
 def test_native_finish_removes_ten_thousand_files_within_four_minutes(finish_tree):
     import _winapi
