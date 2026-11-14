@@ -3,6 +3,8 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 import zipfile
 
 import pytest
@@ -248,3 +250,61 @@ def test_portability_dependency_receipt_is_bound_to_published_source(selected_pa
     path.write_text(json.dumps(record, indent=2) + "\n")
     with pytest.raises(ValueError, match="exact selected worktrees artifact"):
         delivery.verify(root, component="portability")
+
+
+@pytest.fixture
+def operations_selection(tmp_path):
+    root, revision, dist, _ = make_candidate(tmp_path, "operations")
+    with zipfile.ZipFile(next(dist.glob("*.whl")), "a") as archive:
+        archive.writestr("amplifier_operations-0.1.0.dist-info/licenses/LICENSE", "MIT\n")
+    (dist / "operations-source.json").unlink(); (dist / "SHA256SUMS").unlink()
+    release.seal(root, revision, dist, component="operations")
+    # Selection consumes the published historical project without cloning it.
+    plain = tmp_path / "consumer"; (plain / "components").mkdir(parents=True)
+    (plain / "pyproject.toml").write_text(
+        '[project]\nname="amplifier-unified"\nversion="1.0.0"\ndependencies=[]\n'
+        '[tool.hatch.build.targets.wheel]\npackages=["amplifier_operations"]\n')
+    checksum = delivery.sha((dist / "operations-source.json").read_bytes())
+    delivery.select(plain, dist, revision, checksum, component="operations")
+    return plain, revision, dist, checksum
+
+
+def test_operations_flat_selection_does_not_shadow_independent_author(operations_selection):
+    root, *_ = operations_selection
+    before = delivery.verify(root, component="operations")
+    author = root / "components/operations"; author.mkdir()
+    (author / "__init__.py").write_text('raise RuntimeError("unpublished author change")\n')
+    assert delivery.verify(root, component="operations") == before
+    assert before["source"]["subdirectory"] == "amplifier_operations"
+    assert set(before["files"]) == {"__init__.py", "LICENSE"}
+    assert not (root / ".git").exists()
+    # This is the ordinary cwd import used by source/editable development.
+    result = subprocess.check_output([sys.executable, "-c",
+        'import amplifier_operations as p; print(p.value); print(p.__file__)'], cwd=root, text=True)
+    assert result.splitlines() == ["selected", str(root / "amplifier_operations/__init__.py")]
+
+
+def test_operations_selection_refuses_author_packaging(operations_selection):
+    root, *_ = operations_selection
+    project = root / "pyproject.toml"
+    project.write_text(project.read_text().replace('packages=[', 'packages=["components/operations",'))
+    with pytest.raises(ValueError, match="only the selected"):
+        delivery.verify(root, component="operations")
+
+
+@pytest.mark.parametrize("recorded", [True, False])
+def test_operations_selection_preserves_modified_root_snapshot(operations_selection, recorded):
+    root, revision, dist, checksum = operations_selection
+    path = root / "amplifier_operations/__init__.py"
+    path.write_text("local_work = True\n")
+    record_path = root / "components/operations.source.json"
+    record = record_path.read_bytes()
+    if not recorded:
+        record_path.unlink()  # An unmoved author tree is never a replaceable selection.
+    with pytest.raises(ValueError, match="locally modified"):
+        delivery.select(root, dist, revision, checksum, component="operations")
+    assert path.read_text() == "local_work = True\n"
+    if recorded:
+        assert record_path.read_bytes() == record
+    else:
+        assert not record_path.exists()

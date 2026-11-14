@@ -46,6 +46,14 @@ Unified consumes only the generated `scheduling-delivery/` snapshot selected by
 Never edit the delivery copy by hand or coinstall the standalone distribution with
 Unified, which remains the sole installed owner. Follow the author project's README.
 
+`operations/` is the temporary authoring project for `amplifier_operations`.
+Its SQLite operation observations and bounded delivery/cursor tests belong here;
+Unified retains admission, authority, Stop and execution. The top-level
+`amplifier_operations/` is the generated runtime snapshot selected by
+`operations.source.json`, preserving the installed and isolated-worker import path.
+Never edit that snapshot by hand or coinstall the standalone distribution with
+Unified. Independent author edits/publication do not refresh the app selection.
+
 ## Web client delivery
 
 `web-client/` is a verbatim snapshot of the separate client repository selected

@@ -63,6 +63,10 @@ distinction: `components/<name>` is authored, while `components/<name>-delivery`
 is generated and opt-in. Visible `components/<name>.source.json` records the
 selected public wheel. Use `--all --under components/<name>-delivery` to inspect
 it; a new component source edit or publication does not silently refresh the copy.
+Operations is authored in `components/operations`; its generated selection stays
+at top-level `amplifier_operations` to preserve editable and isolated-worker import
+paths. `components/operations.source.json` records its published artifact.
+Use `--all --under amplifier_operations` to inspect that selected runtime.
 Source bootstrap files in the canonical client's `public/` remain authored inputs;
 their delivery copy has the same generated-context classification as other copied
 client source. Shipped documentation in `docs/shell` is authored here. Frozen UX inventory/control

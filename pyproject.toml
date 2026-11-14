@@ -58,18 +58,14 @@ path = "scripts/scheduling_build_hook.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "components/scheduling-delivery/amplifier_scheduling", "amplifier_recall", "components/outputs/amplifier_outputs", "components/workspaces/amplifier_workspace_metadata", "components/worktrees-delivery/amplifier_worktrees", "components/publishing/amplifier_publishing", "components/portability-delivery/amplifier_portability"]
-# Standalone projects share these same runtime sources; test/build inputs do not ship.
+# Test/build inputs do not ship; selected component provenance is included below.
 exclude = [
     "/amplifier_kernels/tests/**", "/amplifier_kernels/build/**",
     "/amplifier_kernels/dist/**", "/amplifier_kernels/.venv/**",
     "/amplifier_kernels/*.egg-info/**", "/amplifier_kernels/pyproject.toml",
     "/amplifier_kernels/MANIFEST.in", "/amplifier_kernels/LICENSE",
     "/amplifier_kernels/.gitignore", "/amplifier_kernels/README.md",
-    "/amplifier_operations/tests/**", "/amplifier_operations/build/**",
-    "/amplifier_operations/dist/**", "/amplifier_operations/.venv/**",
-    "/amplifier_operations/*.egg-info/**", "/amplifier_operations/pyproject.toml",
-    "/amplifier_operations/MANIFEST.in", "/amplifier_operations/LICENSE",
-    "/amplifier_operations/.gitignore", "/amplifier_operations/README.md",
+    "/amplifier_operations/LICENSE", # Selected license ships with app provenance.
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -77,8 +73,8 @@ exclude = [
     "/amplifier_kernels/build/**", "/amplifier_kernels/dist/**",
     "/amplifier_kernels/.venv/**", "/amplifier_kernels/*.egg-info/**",
     "/.ci/**", "/components/web-client/**",
-    "/amplifier_operations/build/**", "/amplifier_operations/dist/**",
-    "/amplifier_operations/.venv/**", "/amplifier_operations/*.egg-info/**",
+    "/components/operations/build/**", "/components/operations/dist/**",
+    "/components/operations/.venv/**", "/components/operations/*.egg-info/**",
     "/components/scheduling/build/**", "/components/scheduling/dist/**",
     "/components/scheduling/.venv/**", "/components/scheduling/*.egg-info/**",
     "/components/publishing/build/**", "/components/publishing/dist/**",
@@ -100,6 +96,8 @@ exclude = [
 "components/worktrees-delivery/LICENSE" = "amplifier_web/component_delivery/worktrees-LICENSE"
 "components/portability.source.json" = "amplifier_web/component_delivery/portability.json"
 "components/portability-delivery/LICENSE" = "amplifier_web/component_delivery/portability-LICENSE"
+"components/operations.source.json" = "amplifier_web/component_delivery/operations.json"
+"amplifier_operations/LICENSE" = "amplifier_web/component_delivery/operations-LICENSE"
 "bundle.yaml" = "amplifier_web/bundle_data/bundle.yaml"
 "behaviors" = "amplifier_web/bundle_data/behaviors"
 "context" = "amplifier_web/bundle_data/context"
@@ -158,4 +156,4 @@ artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "re
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "amplifier_kernels/tests", "amplifier_operations/tests", "components/publishing/tests", "components/outputs/tests", "components/workspaces/tests"]
+testpaths = ["tests", "amplifier_kernels/tests", "components/publishing/tests", "components/outputs/tests", "components/workspaces/tests"]

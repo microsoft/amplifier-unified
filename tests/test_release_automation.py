@@ -651,12 +651,13 @@ def test_real_sdist_build_excludes_untracked_ci_checkouts(repository):
         shutil.copyfile(project / name, repository / name)
     for name in ('scripts/scheduling_build_hook.py', 'scripts/scheduling_delivery.py',
                  'components/scheduling.source.json', 'components/worktrees.source.json',
-                 'components/portability.source.json'):
+                 'components/portability.source.json', 'components/operations.source.json'):
         target = repository / name; target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(project / name, target)
     for component in ('scheduling', 'worktrees', 'portability'):
         shutil.copytree(project / f'components/{component}-delivery',
                         repository / f'components/{component}-delivery')
+    shutil.copytree(project / 'amplifier_operations', repository / 'amplifier_operations')
     (repository / 'README.md').write_text('Package build fixture')
     for dependency in ('loop-live', 'recipes'):
         checkout = repository / '.ci' / dependency
