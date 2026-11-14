@@ -561,6 +561,60 @@ def test_a_pointer_of_another_launcher_is_never_rebound(installed):
         generations.rebind(installed.home, installed.old, installed.launcher)  # nothing was replaced
 
 
+@pytest.mark.parametrize("held", ["the release file copy", "setup's receipt", "the receipt during a rollback"])
+def test_a_folder_that_a_closing_program_still_holds_is_waited_for(installed, monkeypatch, held):
+    # Measured in the clean room: while the app's workers are alive, a rename
+    # into the installation folder fails with "used by another process". They
+    # end a moment after the task reports that it stopped.
+    waits, service, pointer = [], Service(installed.root), installed.pointer.read_bytes()
+
+    async def sleep(seconds):
+        waits.append(seconds)
+    monkeypatch.setattr(refresher.asyncio, "sleep", sleep)
+    name, original, busy = ("_copy" if held == "the release file copy" else "_write"), None, {"left": 3}
+    original = getattr(refresher, name)
+
+    def holding(*args):
+        receipt = name == "_write" and Path(args[1]).name == "consumer-install.json"
+        if (name == "_copy" or receipt) and busy["left"] and (
+                held != "the receipt during a rollback" or busy.get("armed")):
+            busy["left"] -= 1
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+        return original(*args)
+    monkeypatch.setattr(refresher, name, holding)
+    if held == "the receipt during a rollback":
+        undo = refresher._undo
+
+        async def armed(*args, **kwargs):
+            busy["armed"] = True
+            return await undo(*args, **kwargs)
+        monkeypatch.setattr(refresher, "_undo", armed)
+        service.results = [False, False]  # the app does not become ready: roll back
+        result = run(installed, service)
+        assert result["state"] == "rolled-back" and result["running"] and busy["left"] == 0
+        unchanged(installed, pointer)
+    else:
+        result = run(installed, service)
+        assert result["ok"] and result["changed"] and busy["left"] == 0
+    assert waits.count(0.5) == 3
+
+
+def test_a_folder_that_stays_held_stops_the_refresh_and_is_rolled_back(installed, monkeypatch):
+    pointer, service, waits = installed.pointer.read_bytes(), Service(installed.root), []
+
+    async def sleep(seconds):
+        waits.append(seconds)
+    monkeypatch.setattr(refresher.asyncio, "sleep", sleep)
+
+    def held(*args):
+        raise PermissionError(13, "used by another process")
+    monkeypatch.setattr(refresher, "_copy", held)
+    result = run(installed, service)
+    assert not result["ok"] and result["step"] == "copying the release file" and result["running"]
+    assert result["state"] == "unchanged" and len(waits) == refresher.SETTLE_SECONDS * 2 - 1
+    unchanged(installed, pointer)
+
+
 def test_restore_binding_puts_back_only_the_launcher_binding(installed):
     saved = installed.pointer.read_bytes()
     assert generations.restore_binding(installed.home, saved) is False  # nothing differs

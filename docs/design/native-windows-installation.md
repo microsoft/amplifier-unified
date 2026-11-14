@@ -207,7 +207,10 @@ Steps, in order:
 3. Stop the app with the normal owner stop. Decide again with the app stopped.
 4. Copy the generation's verified release file beside the installation.
    Confirm that the app is stopped, then rename the launcher folder aside. It
-   is kept.
+   is kept. Every change in the installation folder waits up to 30 seconds for
+   a program that is still closing: while the app's worker programs are alive,
+   Windows refuses a rename into that folder, and they end a moment after the
+   task reports that it stopped (measured in the clean room).
 5. Install the launcher at the same path with the generation's exact package
    list and the launcher's own interpreter. The task, the shortcuts and the
    private Python do not change.
