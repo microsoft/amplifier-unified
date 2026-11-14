@@ -10,6 +10,7 @@ from pathlib import Path
 import uuid
 
 from .errors import _error
+from .workspace_registrations import edit, register
 
 
 def _registration(path, name=None):
@@ -103,30 +104,15 @@ def workspace_command(state, action, args):
             _error("Choose an existing workspace folder.")
         name = args.get("name", "").strip()
         row = _registration(path, name or None)
-        existing = next((w for w in rows if w["id"] == row["id"]), None)
-        if not existing:
-            rows.append(row)
-        else:
-            existing["available"] = True
-            if name:
-                existing["name"] = name
+        register(rows, row, name=name)
         state["selectedWorkspaceId"] = row["id"]
         state["settings"]["workspace"] = row["path"]
     else:
-        row = next((w for w in rows if w["id"] == args["id"]), None)
-        if not row:
-            _error("This workspace is no longer registered.")
-        if action in {"workspace.archive", "workspace.restore"}:
-            row["archived"] = action == "workspace.archive"
-        elif action == "workspace.rename":
-            name = args["name"].strip()
-            if not name:
-                _error("Enter a workspace name.")
-            row["name"] = name
-        elif action == "workspace.remove":
-            if len(rows) == 1:
-                _error("Keep at least one workspace registered.")
-            rows.remove(row)
+        try:
+            row = edit(rows, action, args)
+        except ValueError as exc:
+            _error(str(exc))
+        if action == "workspace.remove":
             state['pinnedWorkspaceIds'] = [identity for identity in state.get('pinnedWorkspaceIds', [])
                                            if identity != row['id']]
             from .pinned_navigation import ordered_ids
