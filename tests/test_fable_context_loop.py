@@ -1,5 +1,7 @@
 """Offline exact provider/host/native-loop fitting, never live vendor evidence."""
 import asyncio
+import faulthandler
+import sys
 import json
 import re
 from pathlib import Path
@@ -114,6 +116,10 @@ class Wire:
     ids=['proactive', 'reactive', 'second-overflow-terminal', 'stop-before-retry',
          'resume-over-1m-signed-history', 'oversized-retained-tail'])
 async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(rejections, stop, seed_kind):
+    # An out-of-loop watchdog distinguishes synchronous stalls from awaited
+    # work in this entirely offline fixture. A deadlock must retain a real stack.
+    faulthandler.dump_traceback_later(45, exit=True)
+    print('fable-fixture: creating native session', file=sys.stderr, flush=True)
     module = pytest.importorskip('amplifier_module_provider_anthropic',
         reason='Native qualification installs exact accepted Anthropic source.')
     from anthropic import _base_client
@@ -131,6 +137,7 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
     session = await PreparedBundle(plan, BundleModuleResolver(paths),
         Bundle(name='fable-context-loop', session=plan['session'])).create_session(
             session_id='fable-context-loop')
+    print('fable-fixture: native session ready', file=sys.stderr, flush=True)
     sdk = module.AsyncAnthropic(api_key='synthetic-not-live', max_retries=0,
         http_client=http.AsyncClient(transport=http.MockTransport(wire.transport)))
     coordinator = session.coordinator
@@ -207,6 +214,7 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
         # All transport is in-process and synthetic. Bound fixture deadlocks,
         # not real inference or the context owner's production summary policy.
         try:
+            print('fable-fixture: execute', file=sys.stderr, flush=True)
             async with asyncio.timeout(30):
                 return await session.execute(prompt)
         except TimeoutError:
@@ -251,5 +259,8 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
             assert json.loads(row['content']) == {
                 'receipt': f'RECEIPT-{index}', 'outcome': 'completed', 'filler': wire.filler}
     finally:
+        print('fable-fixture: closing SDK', file=sys.stderr, flush=True)
         await sdk.close()
+        print('fable-fixture: cleaning session', file=sys.stderr, flush=True)
         await session.cleanup()
+        faulthandler.cancel_dump_traceback_later()
