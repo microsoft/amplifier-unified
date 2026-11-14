@@ -506,8 +506,9 @@ class SurfaceProvider:
                         if closing:
                             return await operation()
                         refresh = getattr(projection[1], 'before_transport', None) if projection else None
-                        if callable(refresh):
+                        if callable(refresh) and media is not None and not media.transport_started:
                             await refresh()
+                            media.transport_started = True
                         from .request_projection import dispatch as projection_dispatch
                         with projection_dispatch(self.original, request, *projection, kwargs), capture.dispatch(ticket, self.original, request, trace):
                             return await operation()
@@ -570,6 +571,7 @@ class SurfaceProvider:
                 except BaseException:
                     if ticket is not None:ticket.close()
                     self._discard_prepared(original_request)
+                    row = request = None
                     raise
             return budget
         return method

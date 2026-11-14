@@ -298,6 +298,7 @@ class HostMediaProjection:
         registry = coordinator.get_capability("web.media.request_only")
         self.request_only = registry is not None and registry.contains(source)
         self.transport_armed = False
+        self.transport_started = False
         self.model = model
         self.canonical = self.canonical_snapshot = None
         self.live_binding = _live_binding(coordinator, provider, model, options)

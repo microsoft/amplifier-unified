@@ -335,6 +335,52 @@ async def test_failure_traceback_does_not_retain_serialized_private_pixels(sessi
     assert not wrapped._active_media
 
 
+async def test_count_failure_traceback_does_not_retain_fitted_row_pixels(session):
+    value = await accepted(session)
+    wrapped, _ = provider(session)
+    async def failure(*args, **kwargs):
+        raise RuntimeError("Count failed")
+    wrapped.original.request_budget = failure
+    with pytest.raises(RuntimeError) as failed:
+        await wrapped.request_budget(value)
+    sentinel = base64.b64encode(session.raw).decode()
+    frame = failed.value.__traceback__
+    while frame is not None:
+        if frame.tb_frame.f_code.co_filename.endswith("surface_delivery.py"):
+            assert frame.tb_frame.f_locals.get("row") is None
+            assert sentinel not in str(frame.tb_frame.f_locals.get("request"))
+        frame = frame.tb_next
+    assert wrapped.prepared == []
+
+
+async def test_stream_advance_does_not_rearm_request_only_transport_without_new_admission(session):
+    from amplifier_web.host.media import record_request_only
+    value = await accepted(session)
+    wrapped, _ = provider(session)
+    attempts = []
+    overlay = Message(role="user", content=[{"type": "image", "source": {
+        "type": "base64", "media_type": "image/png", "data": base64.b64encode(session.raw).decode()}}])
+    class Delivery(NoWorkDelivery):
+        async def prepare(self, request, provider):
+            record_request_only(overlay)
+            return request.model_copy(update={"messages": [*request.messages, overlay]})
+    wrapped.delivery = Delivery()
+    async def stream(request, **kwargs):
+        session.caps[NAMESPACE].validate(request, purpose="transport", request_options=kwargs)
+        attempts.append(True)
+        yield "started"
+        session.caps[NAMESPACE].validate(request, purpose="transport", request_options=kwargs)
+        attempts.append(True)
+        yield "unexpected"
+    wrapped.original.stream = stream
+    iterator = wrapped.stream(value)
+    assert await anext(iterator) == "started"
+    with pytest.raises(ValueError, match="fresh host consent"):
+        await anext(iterator)
+    assert attempts == [True]
+    assert not wrapped._active_media
+
+
 async def test_source_classification_is_owner_journal_and_resume_does_not_renew_consent(session):
     cap = session.caps[NAMESPACE]
     cap.enabled = True
