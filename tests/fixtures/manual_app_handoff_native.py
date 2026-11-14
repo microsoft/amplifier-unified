@@ -476,6 +476,43 @@ async def exercise(root, wheel, report):
         report['listenerClosed'] = True
 
 
+async def wait_for_manual_result(service, state, request_id, report, checkpoint, *, timeout=420, interval=5):
+    """Observe the real verifier without changing, retrying or cancelling it."""
+    started = time.monotonic()
+    observations = report.setdefault('controlledWait', [])
+    def observe():
+        frames = []
+        for task in tuple(service.tasks):
+            coroutine = task.get_coro()
+            chain = []
+            for _ in range(16):
+                frame = getattr(coroutine, 'cr_frame', None)
+                if frame is None:
+                    break
+                # Fixed source positions only: no locals, arguments or paths.
+                chain.append({'file': Path(frame.f_code.co_filename).name,
+                              'function': frame.f_code.co_name, 'line': frame.f_lineno})
+                coroutine = getattr(coroutine, 'cr_await', None)
+            if chain:
+                frames.append(chain)
+        row = {'elapsedSeconds': round(time.monotonic() - started, 3), 'tasks': frames}
+        if not observations or observations[-1]['tasks'] != frames:
+            observations.append(row)
+            del observations[:-32]
+        report['controlledWaitElapsedSeconds'] = row['elapsedSeconds']
+        checkpoint()
+    try:
+        # 43604288877's unchanged production verifier completed this flow in
+        # 222 seconds; 43605832931's slower native path checks exhausted 240.
+        # This is a finite fixture workload budget, not a production timeout.
+        async with asyncio.timeout(timeout):
+            while state.get('manualHandoffResults', {}).get(request_id, {}).get('status') == 'queued':
+                observe()
+                await asyncio.sleep(interval)
+    finally:
+        observe()
+
+
 async def controlled_flow(manager, wheel, proof, report):
     """Only HTTP acquisition is substituted; real on-disk fixture state is local."""
     from amplifier_web import app_release_artifacts as artifacts, app_updates, manual_app_handoff as handoff
@@ -534,9 +571,8 @@ async def controlled_flow(manager, wheel, proof, report):
         save(Path(os.environ['HANDOFF_ROOT']) / 'child.json', report)
         receipt = await manager.service.dispatch('updates.reconcileManualHandoff', args, command_id='native-controlled')
         assert receipt['accepted']
-        async with asyncio.timeout(240):
-            while state.get(handoff.RESULTS, {}).get('native-controlled', {}).get('status') == 'queued':
-                await asyncio.sleep(.05)
+        await wait_for_manual_result(manager.service, state, 'native-controlled', report,
+            lambda: save(Path(os.environ['HANDOFF_ROOT']) / 'child.json', report))
         result = state[handoff.RESULTS]['native-controlled']
         assert result['status'] == 'succeeded', result['status']
         assert state['pendingApp'] is None and state['sequence']['install'] is False
@@ -604,9 +640,9 @@ async def contained():
             counts[index] += len(chunk)
     readers = [asyncio.create_task(drain(stream, i)) for i, stream in enumerate((job.stdout, job.stderr))]
     try:
-        # 939 shipped files each receive retained native path/handle checks;
+        # All shipped files receive retained native path/handle checks;
         # qualification, final commit and reload audit are distinct passes.
-        await asyncio.wait_for(job.wait(), 480)
+        await asyncio.wait_for(job.wait(), 720)
     finally:
         result = await job.close()
         await asyncio.gather(*readers)

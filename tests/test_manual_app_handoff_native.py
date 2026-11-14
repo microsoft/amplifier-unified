@@ -75,3 +75,32 @@ def test_preparation_uv_operations_use_owned_tree_not_raw_timeout(fixture_module
     assert not any(isinstance(node.func, ast.Attribute) and node.func.attr == 'run'
                    and isinstance(node.func.value, ast.Name) and node.func.value.id == 'subprocess' for node in calls)
     assert 'jobsSettled' in inspect.getsource(fixture_module.owned_command)
+
+
+@pytest.mark.asyncio
+async def test_controlled_wait_retains_positions_without_cancelling_or_replaying(fixture_module):
+    import asyncio
+    from types import SimpleNamespace
+    ready = asyncio.Event()
+    async def verifier():
+        await ready.wait()
+    task = asyncio.create_task(verifier())
+    await asyncio.sleep(0)
+    service = SimpleNamespace(tasks={task})
+    state = {'manualHandoffResults': {'exact': {'status': 'queued'}}}
+    report, saved = {}, []
+    try:
+        with pytest.raises(TimeoutError):
+            await fixture_module.wait_for_manual_result(service, state, 'exact', report,
+                lambda: saved.append(json.loads(json.dumps(report))), timeout=.02, interval=.005)
+        assert not task.done() and state['manualHandoffResults']['exact']['status'] == 'queued'
+        assert saved and report['controlledWaitElapsedSeconds'] >= .02
+        frames = report['controlledWait'][0]['tasks'][0]
+        assert frames[0]['function'] == 'verifier'
+        assert set(frames[0]) == {'file', 'function', 'line'}
+        state['manualHandoffResults']['exact']['status'] = 'rejected'
+        await fixture_module.wait_for_manual_result(service, state, 'exact', report, lambda: None)
+        assert not task.done()
+    finally:
+        ready.set()
+        await task
