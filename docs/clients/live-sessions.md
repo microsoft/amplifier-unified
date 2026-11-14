@@ -150,7 +150,8 @@ inspect or reopen it without sending. Reload and reconnect preserve closure;
 late negative replies cannot reopen it, and exact positive acceptance still
 retires it. Closing is neither delivery confirmation nor cancellation. It does
 not change drafts, selection, uploaded attachment ownership or shared history.
-Active sends and pending checks cannot be closed. Existing collapsed warnings
+Active sends cannot be closed. A passive check may finish after closure, but
+cannot reopen the item or resend it. Existing collapsed warnings
 are not silently converted to closed items.
 
 For a server-only message, the browser can dismiss its delivery warning into
@@ -184,8 +185,9 @@ Both that source and any returned target-session frame must match the original
 scope before acknowledgement or state adoption. A generic, malformed or
 conflicting acknowledgement cannot retire the outbox.
 Passive checks do not occupy the mutation queue, so they cannot delay Stop.
-The host skips full history refresh and a separate command-journal row for each
-check. It reads existing message/receipt/runtime evidence without copying unrelated
+For an admitted chat the host skips full history refresh and a separate
+command-journal row for each check. Dormant chats retain the existing keyed
+admission and recovery rules. Checks read message/receipt/runtime evidence without copying unrelated
 execution history. Newly confirmed acceptance still uses the existing delivery
 owner to reconcile the original receipt and attachment disposition; this is not
 a new send. Missing evidence triggers no projection save.

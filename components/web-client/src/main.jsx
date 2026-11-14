@@ -41,7 +41,7 @@ import {appAppearanceState} from './app-appearance-state';
 import {homePatch} from './adaptive-work.js';
 import {SettingsExperience} from './settings-experience';
 import {useGuardedSettingsPanel,useGuardedSettingsSession} from './settings-drafts';
-import {useMessageOutbox,outboxMessages,outboxMatches} from './message-outbox';
+import {useMessageOutbox,outboxMessages,outboxMatches,ClosedDeliveryItems} from './message-outbox';
 import {checkedDelivery,deliveryRecovery,deliveryScope,deliveryTargetMatches,nativeDeliverySource,retainedDeliveryTarget,freshRetrySource} from './pending-delivery-checks';
 import {clientId,clientUrl,attachClient,draftJournal} from './api';
 import {checkpointSurfaces} from './surface-checkpoint';
@@ -932,14 +932,14 @@ function App(){
  }
  function discardMessage(message){
   const entry=outbox.current.current.find(row=>row.id===message.localDelivery?.id);
-  if(!entry||entry.status!=='failed'||deliveries.current.has(entry.id))return;
-  const saved=latest.current?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.some(row=>row.inputId===entry.commandId);
-  if(saved)return;
-  outbox.update(entry.id,null);
-  if(latest.current?.view?.messageEdit?.messageId===message.id)act('view.update',{patch:{messageEdit:null}});
+  if(!entry||!['failed','unknown'].includes(entry.status)||deliveries.current.has(entry.id))return;
+  const owner=latest.current?.sessions?.find(row=>row.id===entry.sessionId),saved=owner?.messages?.find(row=>row.inputId===entry.commandId);
+  if(!deliveryTargetMatches(latest.current,{scope:entry.scope},entry.sessionId)||['sending','queued','queued_for_update'].includes(saved?.delivery?.status)||
+   ['working','starting','running','stopping'].includes(owner?.status)&&owner?.execution?.currentTurnId===entry.commandId)return;
+  outbox.update(entry.id,{closed:true});
  }
  async function retryMessage(message,text){
-  const previous=outbox.current.current.find(row=>row.id===(message.localDelivery?.id||message.id));if(!previous||previous.status==='sending'||!deliveryTargetMatches(latest.current,{scope:previous.scope},previous.sessionId))return;
+  const previous=outbox.current.current.find(row=>row.id===(message.localDelivery?.id||message.id));if(!previous||previous.closed||previous.status==='sending'||!deliveryTargetMatches(latest.current,{scope:previous.scope},previous.sessionId))return;
   if(previous.document&&text!==undefined){setError('Retry this quoted message unchanged, or discard it and compose a correction.');return;}
   if(previous.status==='unknown'&&text!==undefined)return;
   if(previous.status==='unknown'&&(previous.expectedGenerationId!==undefined||previous.allowNextTurn!==undefined)){setError('This earlier submission is still uncertain and cannot be sent again here. Use Check delivery for its original receipt. The saved message was kept.');return;}
@@ -1012,7 +1012,7 @@ function App(){
   activeScope:appearance.activeScope,storageVersion:appearanceCacheLocal.storageVersion,confirmed:appearanceCacheConfirmed,
   invalidate:!!appearanceCacheLocal.error||!!state&&(!hasAppearanceIdentity(state.appearance)||state.appearance.availability==='failed')});
  useLayoutEffect(()=>bindWindowControlsOverlay(root.current),[shell.ready,!!state]);
- const newChatPending=!session&&outbox.entries.some(row=>outboxMatches(row,outboxSource)&&row.sessionId===null&&['sending','unknown'].includes(row.status));
+ const newChatPending=!session&&outbox.entries.some(row=>!row.closed&&outboxMatches(row,outboxSource)&&row.sessionId===null&&['sending','unknown'].includes(row.status));
  const responseActive=working||(session?.workers||[]).some(worker=>['queued','starting','working','running','stopping'].includes(worker.status));
  const sendingHere=outbox.entries.some(row=>outboxMatches(row,outboxSource)&&row.sessionId===(session?.id??null)&&row.status==='sending');
  const primaryAction=composerPrimaryAction({draft,attachments:availableAttachments,uploading,working,responseActive,stopping:session?.status==='stopping',voiceStatus:voice.status,voiceStarting,voiceAvailable:!externalConversation,busy,newChatPending,sending:sendingHere,historyPending,executionUnavailable});
@@ -1098,6 +1098,7 @@ function App(){
    {(!presentation.planPlacement||presentation.planPlacement==='composer'||presentation.planPlacement==='active'&&responseActive)&&!historyDisplayPending&&<ChatPlan session={session} state={state} act={act}/> }
    <QuestionNotice session={session} paneRef={messagesPane}/>
    {!browsing&&<ConversationError state={state} session={session} act={act}/>}
+   {!session&&<ClosedDeliveryItems entries={outbox.entries} sessionId={null} scope={outboxSource} reopen={id=>outbox.update(id,{closed:false})}/>}
    <form className="a-composer a-compact-composer" data-part="composer" data-action="conversation.send" onSubmit={send}>
     {draftStorageError&&<p role="alert" className="a-upload-status">This browser could not keep a recovery copy of your draft. Keep this tab open until it is saved.</p>}
     {outbox.storageError&&outbox.entries.length>0&&<p role="alert" className="a-upload-status">This browser could not save the pending message. Keep this tab open until delivery is confirmed.</p>}
@@ -1146,6 +1147,7 @@ function App(){
    <ArchiveNotice value={archiveValue}/>
    {error&&<div className="a-alert" role="alert"><span>{error}</span><button type="button" aria-label="Dismiss error" onClick={()=>setError('')}><X/></button></div>}
    {(Object.hasOwn(chatPageTitles,panel)||panel==='runtime')&&<ChatPages key={session?.id||'draft'} page={panel} state={state} session={session} act={act} dispatch={dispatch} open={open} working={working} questionReviewState={questionReviewState} computerControls={<VoiceVisualControls sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={reportError}/>}/>}
+   {panel==='session-details'&&<ClosedDeliveryItems entries={outbox.entries} sessionId={session?.id} scope={outboxSource} reopen={id=>outbox.update(id,{closed:false})}/>}
     {panel==='coordination'&&<CoordinationPanel key={session?.id} dispatch={dispatch} sessionId={session?.id} session={session} onOpenChat={id=>selectWorkspaceChat(dispatch,id,target=>latest.current?.selectedSessionId===target&&latest.current?.view?.panel==='coordination')}/>}
    {panel==='subagent-history'&&<SubagentHistory state={state} session={session} act={act}/>}
    {panel==='automation'&&<AutomationHub state={state} dispatch={dispatch} isCurrent={id=>latest.current?.selectedSessionId===id&&pendingView.current.apply(latest.current)?.view?.panel==='automation'}/>}

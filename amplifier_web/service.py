@@ -2083,7 +2083,7 @@ class AppService:
         if routed is not None:
             return routed
         if action == 'conversation.delivery':
-            # A check is not another send command. Skip full history refresh and
+            # A check is not another send command. Skip ordinary history refresh and
             # per-check receipt/publication; exact new acceptance still reconciles
             # through the existing delivery owner below.
             if admission_check is not None:
