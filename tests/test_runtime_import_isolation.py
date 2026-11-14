@@ -283,6 +283,62 @@ assert sys.path == paths
 """)
 
 
+def test_installed_terminal_checkpoint_does_not_require_workspace_metadata(installed_app):
+    import filelock
+    import yaml
+
+    root, _ = installed_app
+    runtime = root / "checkpoint-runtime-dependencies"
+    runtime.mkdir()
+    for module in (filelock, yaml):
+        shutil.copytree(Path(module.__file__).parent, runtime / module.__name__,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+    # This import-only native history type is not instantiated by display_message.
+    # Keep the fixture dependency separate from the installed host package root.
+    foundation = runtime / "amplifier_foundation" / "session"
+    foundation.mkdir(parents=True)
+    (foundation.parent / "__init__.py").write_text("")
+    (foundation / "__init__.py").write_text("")
+    (foundation / "history.py").write_text("class SessionHistoryStore: pass\n")
+    run_bootstrap_check(installed_app, """
+import asyncio
+from types import SimpleNamespace
+sys.path.insert(0, str(Path.cwd() / "checkpoint-runtime-dependencies"))
+runtime_paths = list(sys.path)
+bootstrap.bootstrap_app_package()
+assert importlib.util.find_spec("amplifier_workspace_metadata") is None
+assert importlib.util.find_spec("host_only_dependency") is None
+from amplifier_web.runtime_worker import Worker
+from amplifier_operations.coordination import fingerprint
+rows = [{"role": "user", "content": "Input"},
+        {"role": "assistant", "content": [
+            {"type": "text", "text": "First "}, {"type": "text", "text": "second"}]}]
+calls = []
+async def checkpoint(*args, **kwargs):
+    calls.append((args, kwargs))
+    return rows
+capabilities = {"live.checkpoint": checkpoint}
+coordinator = SimpleNamespace(session_id="native-root", get_capability=capabilities.get,
+    register_capability=lambda name, value: capabilities.__setitem__(name, value))
+worker = Worker()
+worker.session = SimpleNamespace(coordinator=coordinator)
+worker.runtime = SimpleNamespace(generation={"id": "generation"})
+worker.install_collaboration_checkpoint(coordinator)
+result = asyncio.run(capabilities["live.checkpoint"](transcript_required=True))
+assert result is rows and calls == [((), {"transcript_required": True})]
+from amplifier_web.automatic_history import display_identity
+assert worker.collaboration_terminal == {
+    "messageId": display_identity({"id": "native-root"}, 1, "assistant", "First \\nsecond"),
+    "nativeIndex": 1, "rootSessionId": "native-root", "generationId": "generation",
+    "nativeText": "First \\nsecond", "textDigest": fingerprint("First second")}
+assert "amplifier_workspace_metadata" not in sys.modules
+assert importlib.util.find_spec("amplifier_workspace_metadata") is None
+assert importlib.util.find_spec("host_only_dependency") is None
+assert importlib.util.find_spec("aiohttp") is None
+assert str(site) not in sys.path and sys.path == runtime_paths
+""")
+
+
 @pytest.mark.parametrize("name", ["amplifier_web", "amplifier_operations", "amplifier_kernels"])
 def test_bootstrap_rejects_blocked_module_entries(installed_app, name):
     run_bootstrap_check(installed_app, f"""
