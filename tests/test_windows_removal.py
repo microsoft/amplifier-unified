@@ -531,8 +531,14 @@ def finish_tree(tmp_path):
                     os.rmdir(path)
                 else:
                     os.unlink(path)
-        shutil.rmtree(root, ignore_errors=True)
-        shutil.rmtree(outside, ignore_errors=True)
+        def writable_and_retry(function, path, error):
+            if isinstance(error, FileNotFoundError):
+                return
+            # Only our throwaway trees, after all safety assertions ran.
+            os.chmod(path, stat.S_IWRITE)
+            function(path)
+        shutil.rmtree(root, onexc=writable_and_retry)
+        shutil.rmtree(outside, onexc=writable_and_retry)
 
 
 def _finish_report(path, *, timeout=90):
@@ -721,6 +727,59 @@ def test_native_finish_leaves_a_file_held_without_delete_sharing(finish_tree):
         assert sorted(path.name for path in (root / "tools").iterdir()) == ["held.txt"]
         assert json.loads((root / "unified-uninstall.json").read_text())["token"] == TOKEN
     _assert_outside_unchanged(tree)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real PowerShell hard-link attribute preservation")
+@pytest.mark.parametrize("location", ["tools", "root-files"])
+def test_native_finish_never_clears_attributes_through_a_hard_link(finish_tree, location):
+    import ctypes
+    from amplifier_web.windows_service import _powershell
+
+    tree, root = finish_tree, finish_tree["root"]
+    parent = root / "tools" if location == "tools" else root
+    outside = tree["outside"] / "keep.txt"
+    hardlink, readonly, hidden = (parent / name for name in ("hardlink.txt", "readonly.txt", "hidden.txt"))
+    os.chmod(outside, stat.S_IREAD)
+    os.link(outside, hardlink)
+    readonly.write_text("single read-only file")
+    os.chmod(readonly, stat.S_IREAD)
+    hidden.write_text("single hidden file")
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.SetFileAttributesW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
+    kernel.SetFileAttributesW.restype = ctypes.c_int
+    assert kernel.SetFileAttributesW(str(hidden), stat.FILE_ATTRIBUTE_HIDDEN)
+    assert readonly.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+    assert hidden.stat().st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN
+    code = r"""
+$p = $input | Out-String | ConvertFrom-Json
+(Get-Item -LiteralPath $p.path -Force).LinkType
+"""
+    observed = subprocess.run(
+        [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+         base64.b64encode(code.encode("utf-16-le")).decode("ascii")],
+        input=json.dumps({"path": str(hardlink)}), capture_output=True, text=True, timeout=15,
+    )
+    assert observed.returncode == 0, observed.stderr[-1000:]
+    link_type = observed.stdout.strip()
+    assert link_type == "HardLink", link_type
+    options = _finish_options(tree)
+    if location == "root-files":
+        options["files"].extend(path.name for path in (hardlink, readonly, hidden))
+    removal.finish_after_exit(root, TOKEN, **options)
+    result = _finish_report(tree["report"])
+    assert result["reason"] == "" and not result["folderRemoved"], result
+    assert hardlink.exists() and str(hardlink) in result["left"]
+    assert not readonly.exists() and not hidden.exists()
+    assert outside.exists() and outside.read_text() == "keep outside"
+    assert outside.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+    assert hardlink.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+    assert (root / "unified-uninstall.json").exists() and root.exists()
+    if location == "tools":
+        assert sorted(path.name for path in root.iterdir()) == ["tools", "unified-uninstall.json"]
+        assert sorted(path.name for path in (root / "tools").iterdir()) == ["hardlink.txt"]
+    _assert_outside_unchanged(tree)
+    print(f"AFTER_EXIT_HARDLINK {location}: LinkType={link_type}; outside ReadOnly stayed; "
+          "hard link kept; single-name ReadOnly and Hidden files removed")
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Real PowerShell installation-sized removal")

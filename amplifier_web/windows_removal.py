@@ -86,6 +86,16 @@ function Clear-Link($entry) {
     # can refuse this call; then the link stays and prevents root removal.
     try { $entry.Delete() } catch { Keep $entry.FullName }
 }
+function Clear-File($entry) {
+    try {
+        if ("$($entry.Attributes)" -match 'ReadOnly|Hidden|System') {
+            if ($entry.LinkType -eq 'HardLink') { Keep $entry.FullName; return }
+            Remove-Item -LiteralPath $entry.FullName -Force
+        } else {
+            Remove-Item -LiteralPath $entry.FullName -ErrorAction SilentlyContinue
+        }
+    } catch { Keep $entry.FullName }
+}
 function Clear-Entry($entry) {
     # Type and attributes come from the parent's listing, not a per-file stat.
     if ("$($entry.Attributes)" -match 'ReparsePoint') { Clear-Link $entry; return }
@@ -94,22 +104,25 @@ function Clear-Entry($entry) {
         if ($entry.PSIsContainer) {
             $children = @(Get-ChildItem -LiteralPath $path -Force)
             $plain = @($children | Where-Object {
-                -not $_.PSIsContainer -and "$($_.Attributes)" -notmatch 'ReparsePoint'
+                -not $_.PSIsContainer -and
+                "$($_.Attributes)" -notmatch 'ReparsePoint|ReadOnly|Hidden|System'
             })
             if ($plain.Count) {
                 # One cmdlet call per folder, even for thousands of plain files.
-                Remove-Item -LiteralPath $plain.FullName -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $plain.FullName -ErrorAction SilentlyContinue
             }
             foreach ($child in $children) {
                 if ($child.PSIsContainer -or "$($child.Attributes)" -match 'ReparsePoint') {
                     Clear-Entry $child
+                } elseif ("$($child.Attributes)" -match 'ReadOnly|Hidden|System') {
+                    Clear-File $child
                 }
             }
             $remaining = @(Get-ChildItem -LiteralPath $path -Force)
             foreach ($child in $remaining) { Keep $child.FullName }
             if ($remaining.Count) { return }
-        }
-        Remove-Item -LiteralPath $path -Force
+            Remove-Item -LiteralPath $path -Force
+        } else { Clear-File $entry }
     } catch { Keep $path }
 }
 try {
@@ -161,8 +174,7 @@ try {
             if (@($p.files) -ccontains $entry.Name) {
                 if ("$($entry.Attributes)" -match 'ReparsePoint') { Clear-Link $entry }
                 elseif (-not $entry.PSIsContainer) {
-                    try { Remove-Item -LiteralPath $entry.FullName -Force }
-                    catch { Keep $entry.FullName }
+                    Clear-File $entry
                 } else { Keep $entry.FullName }
             }
         }
