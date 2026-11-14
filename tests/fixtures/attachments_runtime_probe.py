@@ -1,4 +1,4 @@
-"""Real Core/Foundation/loop-live multimodal turn against a local stub provider."""
+"""Real loop-live input without media capability must be explicit text-only."""
 import asyncio
 import base64
 import importlib.util
@@ -52,9 +52,8 @@ async def run():
             assert provider.requests
             request = provider.requests[0]
             user = next(message for message in request.messages if message.role == 'user' and isinstance(message.content, list))
-            image = next(block for block in user.content if block.type == 'image')
-            assert image.source['media_type'] == 'image/png'
-            assert base64.b64decode(image.source['data']) == base64.b64decode(PNG)
+            assert not any(block.type == 'image' for block in user.content)
+            assert 'compatible media handling is not installed' in user.model_dump_json()
             assert PNG not in json.dumps(runtime.events)
             await runtime.submit(Input('stop'))
             await asyncio.wait_for(task, 5)
@@ -63,6 +62,6 @@ async def run():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         await session.cleanup()
-    print(json.dumps({'image_received': True, 'public_events_contain_no_image_data': True, 'provider_network_calls': 0}))
+    print(json.dumps({'image_unavailable_without_capability': True, 'public_events_contain_no_image_data': True, 'provider_network_calls': 0}))
 
 asyncio.run(run())
