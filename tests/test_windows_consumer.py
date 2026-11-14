@@ -39,6 +39,27 @@ def test_process_local_roots_preserve_accounts_and_user_git_policy(tmp_path, mon
     assert len(roots) == 13 and all(kwargs == {"owned_root": tmp_path, "create": False} for _, kwargs in roots)
 
 
+def test_shortcut_and_first_task_put_the_installations_shell_first(tmp_path, monkeypatch):
+    from amplifier_web import windows_files
+    @contextmanager
+    def directory(path, **kwargs):
+        yield
+    monkeypatch.setattr(windows_files, "directory", directory)
+    monkeypatch.setattr(consumer.sys, "platform", "win32")
+    monkeypatch.setattr(consumer.sys, "_base_executable", str(tmp_path / "python/python.exe"), raising=False)
+    monkeypatch.setenv("PATH", "system32")
+    value = {"uv": str(tmp_path / "uv/uv.exe"), "git": str(tmp_path / "git/cmd/git.exe")}
+    # An installation whose private Git is still MinGit keeps its existing order.
+    assert consumer.environment(tmp_path, value)["PATH"].split(consumer.os.pathsep)[0] == str(tmp_path / "uv")
+    (tmp_path / "consumer-install.json").write_text("{}")
+    (tmp_path / "git/bin").mkdir(parents=True)
+    (tmp_path / "git/bin/bash.exe").write_bytes(b"MZ")
+    entries = consumer.environment(tmp_path, value)["PATH"].split(consumer.os.pathsep)
+    # System32's bash.exe only starts WSL; the agent's shell tool takes the first bash.
+    assert entries[:3] == [str(tmp_path / "git/bin"), str(tmp_path / "uv"), str(tmp_path / "git/cmd")]
+    assert entries[-1] == "system32"
+
+
 def test_audit_reuses_native_archive_payload_reader_and_exact_graph(tmp_path, monkeypatch):
     from amplifier_web import app_component_graph as graph, app_release_artifacts, manual_app_handoff
     from amplifier_web import application_generations, app_updates, deployment, windows_files
@@ -183,6 +204,67 @@ def test_no_browser_launch_composes_existing_background_owner_without_reinstall(
     monkeypatch.setattr(windows_installation, "prepare_background", prepare)
     assert asyncio.run(consumer.launch(tmp_path, open_browser=False))["health"]["ok"]
     assert calls == [(tmp_path, tmp_path / "tools/amplifier-unified/Scripts/amplifier-unified.exe", {})]
+
+
+def address_launch(tmp_path, monkeypatch, *, answer, kinds=("in-use",)):
+    """Launch with a saved address that another owner holds; record every effect."""
+    from amplifier_web import windows_installation
+    events = []
+    monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
+    monkeypatch.setattr(consumer, "environment", lambda *a: {})
+    pending = list(kinds)
+    async def prepare(root, launcher, env):
+        events.append(("prepare", launcher))
+        if pending:
+            raise windows_installation.AddressUnavailable(pending.pop(0), 23456)
+        return {"background": True, "created": False, "health": {"ok": True}}
+    async def change(root, launcher, env):
+        events.append(("change", launcher))
+        return {"port": 31007, "previous": 23456}
+    def notice(message, *, confirm=False):
+        events.append(("notice", message, confirm))
+        return answer
+    monkeypatch.setattr(windows_installation, "prepare_background", prepare)
+    monkeypatch.setattr(windows_installation, "change_address", change)
+    monkeypatch.setattr(windows_installation, "owner_notice", notice)
+    return events, tmp_path / "tools/amplifier-unified/Scripts/amplifier-unified.exe"
+
+
+@pytest.mark.parametrize("kind,phrase", [("in-use", "another program is using"),
+                                        ("reserved", "Windows has reserved")])
+def test_taken_saved_address_asks_before_moving_and_declining_changes_nothing(tmp_path, monkeypatch, kind, phrase):
+    events, launcher = address_launch(tmp_path, monkeypatch, answer=False, kinds=(kind,))
+    result = asyncio.run(consumer.launch(tmp_path))
+    assert result == {"background": False, "address": {"available": False, "reason": kind}}
+    assert [event[0] for event in events] == ["prepare", "notice"]  # No change, no second start.
+    assert phrase in events[1][1] and events[1][2] is True
+
+
+def test_confirmed_address_repair_selects_once_then_starts_the_same_installation(tmp_path, monkeypatch):
+    from amplifier_web import windows_installation, deployment, browser_entry
+    events, launcher = address_launch(tmp_path, monkeypatch, answer=True)
+    # Browser entry after the repaired start is the ordinary path, covered below.
+    monkeypatch.setattr(deployment, "load_server_config", lambda home: {})
+    monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (["private-target"], "private-pin"))
+    monkeypatch.setattr(windows_installation, "review_browser_trust", lambda *a: False)
+    result = asyncio.run(consumer.launch(tmp_path))
+    assert result["health"]["ok"] and result["browser"]["opened"] is False
+    assert [event[0] for event in events] == ["prepare", "notice", "change", "prepare"]
+    assert events[2][1] == events[3][1] == launcher
+
+
+def test_second_refusal_after_repair_is_reported_not_repaired_again(tmp_path, monkeypatch):
+    events, _ = address_launch(tmp_path, monkeypatch, answer=True, kinds=("in-use", "reserved"))
+    with pytest.raises(RuntimeError, match="adopted or stopped"):
+        asyncio.run(consumer.launch(tmp_path))
+    assert [event[0] for event in events] == ["prepare", "notice", "change", "prepare"]
+
+
+def test_noninteractive_launch_gets_the_refusal_without_a_dialog_or_change(tmp_path, monkeypatch):
+    events, _ = address_launch(tmp_path, monkeypatch, answer=True)
+    with pytest.raises(RuntimeError, match="adopted or stopped"):
+        asyncio.run(consumer.launch(tmp_path, open_browser=False))
+    assert [event[0] for event in events] == ["prepare"]
 
 
 def test_pending_certificate_review_does_not_issue_browser_grant(tmp_path, monkeypatch):

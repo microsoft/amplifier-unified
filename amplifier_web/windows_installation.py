@@ -30,17 +30,95 @@ def owner_notice(message, *, confirm=False):
     return result == 6 if confirm else True
 
 
-def listener_present(port=8942):
-    if os.name == "nt":
-        from .windows_task_runtime import listener_owners
-        return bool(listener_owners("127.0.0.1", port))
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1):
-            return True
-    except ConnectionRefusedError:
-        return False
-    except OSError as error:
-        raise RuntimeError("Cannot establish whether the installation address is occupied.") from error
+class AddressUnavailable(RuntimeError):
+    """This installation's saved loopback port cannot be claimed right now.
+
+    `kind` is `in-use` (another program listens there) or `reserved` (Windows
+    excludes the port and no program holds it).
+    """
+
+    def __init__(self, kind, port):
+        super().__init__("The installation address is unavailable; no existing host was adopted or stopped.")
+        self.kind, self.port = kind, port
+
+
+def address_message(problem):
+    """Plain owner text for a taken saved port, ending in the repair question."""
+    cause = (f"another program is using its local address (port {problem.port}).\n\n"
+             "Close that program and open Amplifier again. Or select Yes to move "
+             "Amplifier to a new local address now."
+             if problem.kind == "in-use" else
+             f"Windows has reserved its local address (port {problem.port}) for another "
+             "feature. No other program is using it, so there is nothing to close.\n\n"
+             "Select Yes to move Amplifier to a new local address now.")
+    return ("Amplifier cannot start because " + cause + "\n\n"
+            "Your chats, settings and accounts stay. If you installed Amplifier as an app "
+            "from the browser, install it again afterwards. Messages that you typed but "
+            "did not send are not carried over.")
+
+
+def saved_port(home):
+    """Return the port an earlier setup saved for this installation, else None."""
+    from .deployment import load_server_config
+    config = load_server_config(home)
+    return config["port"] if f"https://127.0.0.1:{config['port']}" in config["public_origins"] else None
+
+
+def address_kind(port, spec=None):
+    """Classify a saved port as `free`, `in-use`, `reserved` or `own`.
+
+    `own` is this installation's recorded host listening outside a running
+    task. That is not another program, and never a reason to move the address.
+    """
+    from . import windows_ports
+    kind = windows_ports.state(port)
+    if kind == "in-use" and spec is not None and os.name == "nt":
+        from .windows_task_runtime import listener_owned, observe
+        record = observe(spec)
+        if record is not None and listener_owned(record, "127.0.0.1", port):
+            return "own"
+    return kind
+
+
+def _conflict(home):
+    """After a failed start: is another owner holding this installation's port?"""
+    from . import windows_service
+    from .deployment import load_server_config
+    port = load_server_config(home)["port"]
+    kind = address_kind(port, windows_service._read(home)[1])
+    return AddressUnavailable(kind, port) if kind in {"in-use", "reserved"} else None
+
+
+def _moved(origin, old, new):
+    parts = urlsplit(origin)
+    if parts.port != old:
+        return origin
+    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    return f"{parts.scheme}://{host}:{new}"
+
+
+async def change_address(root, launcher, environment):
+    """Owner-confirmed repair: save a new loopback port for this stopped installation.
+
+    Origins that named the old port move with it in the same write. The
+    certificate names no port, so its trust is unchanged. The browser sees a
+    new site: an installed app window and unsent drafts do not carry over.
+    """
+    from . import windows_ports, windows_service
+    from .deployment import load_server_config
+    from .updates import process
+    root, launcher = Path(root), Path(launcher)
+    home = root / "app"
+    task, spec = await asyncio.to_thread(windows_service._read, home)
+    if spec is not None and (task.get("instances") != 0 or task.get("state") != 3):
+        raise RuntimeError("The address can change only while this installation's host is stopped.")
+    config = load_server_config(home)
+    port = await asyncio.to_thread(windows_ports.select)
+    origins = [_moved(origin, config["port"], port) for origin in config["public_origins"]]
+    await process(str(launcher), "--data-dir", str(home), "--workspace", str(root / "workspace"),
+                  "config", "set", "port", str(port), "public_origins", json.dumps(origins),
+                  env=environment, cwd=root, timeout=90)
+    return {"port": port, "previous": config["port"]}
 
 
 def browser_trust_ready(urls, pin):
@@ -99,16 +177,21 @@ def review_browser_trust(root, urls, pin):
     return False
 
 
-async def prepare_background(root, launcher, environment, *, port=8942):
+async def prepare_background(root, launcher, environment, *, port=None):
     """Prepare/start one owned logon host, or inspect/restart that exact host.
 
     A recorded task is never reconfigured or resynced by a shortcut click.
     Failed setup retains its task/state for normal status/stop and reconciliation.
+
+    Without an explicit port, first setup selects a free loopback port and saves
+    it; every later start reuses the saved port, because the browser origin
+    (installed app, drafts) includes it. A saved port that cannot be claimed
+    raises AddressUnavailable; only the owner's confirmed repair changes it.
     """
-    from . import windows_service
+    from . import windows_ports, windows_service
     from .updates import process
 
-    if type(port) is not int or not 1 <= port <= 65535:
+    if port is not None and (type(port) is not int or not 1 <= port <= 65535):
         raise ValueError("Installation port must be a TCP port number.")
     root, launcher = Path(root), Path(launcher)
     home = root / "app"
@@ -124,24 +207,46 @@ async def prepare_background(root, launcher, environment, *, port=8942):
                 or Path(spec.workspace) != root / "workspace"):
             raise RuntimeError("The existing task belongs to another installed launcher.")
         if task.get("instances") == 0 and task.get("state") == 3:
+            from .deployment import load_server_config
+            saved = load_server_config(home)["port"]
+            kind = await asyncio.to_thread(address_kind, saved, spec)
+            if kind in {"in-use", "reserved"}:
+                raise AddressUnavailable(kind, saved)
+            if kind != "free":
+                raise RuntimeError("The existing task is not in a safe start/reopen state.")
             await command("service", "start")
         elif task.get("instances") != 1 or task.get("state") != 4:
             raise RuntimeError("The existing task is not in a safe start/reopen state.")
     else:
-        if await asyncio.to_thread(listener_present, port):
-            raise RuntimeError("The installation address is occupied; no existing host was adopted or stopped.")
-        for key, value in (("port", str(port)), ("bind", "[127.0.0.1]"),
-                           ("public_origins", f"[https://127.0.0.1:{port}]")):
-            await command("config", "set", key, value)
+        # An installation that already saved its port keeps it and its settings.
+        saved = None if port is not None else await asyncio.to_thread(saved_port, home)
+        known = port if port is not None else saved
+        if known is not None:
+            kind = await asyncio.to_thread(address_kind, known)
+            if kind != "free":
+                raise AddressUnavailable(kind, known)
+        if saved is None:
+            await command("config", "set", "bind", "[127.0.0.1]")
         await command("setup-tls")
         preparation = json.loads(await command("runtime", "prepare", "--json", timeout=1800))
         if preparation.get("ok") is not True or preparation.get("prepared") is not True:
             raise RuntimeError("Runtime dependency preparation did not complete; no task was registered.")
+        if saved is None:
+            # Select last: the host's own listener claims the port seconds later.
+            if port is None:
+                port = await asyncio.to_thread(windows_ports.select)
+            await command("config", "set", "port", str(port),
+                          "public_origins", f"[https://127.0.0.1:{port}]")
         await command("service", "install")
 
     health = json.loads(await command("service", "status", "--wait", "60", "--json"))
     if not (health.get("ok") is True and health.get("processVerified") is True
             and health.get("responding") is True):
+        # The test bind is not ownership. If another owner took the port before
+        # this host's listener did, say so instead of a generic failure.
+        conflict = await asyncio.to_thread(_conflict, home)
+        if conflict is not None:
+            raise conflict
         raise RuntimeError("The owned background host is not ready; retain its status and private logs.")
     return {"background": True, "created": spec is None, "health": health,
             "runtime": preparation}

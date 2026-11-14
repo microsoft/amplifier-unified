@@ -80,7 +80,7 @@ async def test_setup_returns_before_work_and_reuses_exact_managed_core(app, monk
     result = await settle(app)
     assert result['state'] == 'completed'
     assert result['proof']['probeRemoved']
-    app.smart_tools.install.assert_awaited_once_with({'repository': owner.REPOSITORY, 'ref': owner.DTU_COMMIT, 'path': '.', 'extras': []})
+    app.smart_tools.install.assert_awaited_once_with({'repository': owner.REPOSITORY, 'ref': 'main', 'path': '.', 'extras': []})
     config = app.data_dir / 'test-environments.json'
     assert config.stat().st_mode & 0o777 == 0o600
     assert json.loads(config.read_text())['commit'] == owner.DTU_COMMIT
@@ -219,7 +219,7 @@ def test_private_config_publication_preserves_unsafe_existing_file(app, kind):
     assert other.read_text() == '{}'
 
 
-async def test_docker_probe_is_offline_owned_and_absence_verified(app, monkeypatch, tmp_path):
+async def test_docker_setup_observes_daemon_without_certification_guest(app, monkeypatch, tmp_path):
     calls = []
     def run(argv, **kwargs):
         calls.append(argv)
@@ -234,12 +234,10 @@ async def test_docker_probe_is_offline_owned_and_absence_verified(app, monkeypat
         phases.append(phase)
     selected = {'executable': '/usr/bin/docker', 'dockerHost': 'unix:///run/docker.sock'}
     config, proof = await setup.setup_docker({'backend': 'docker'}, selected, tmp_path, {'id': 'f' * 32}, step)
-    run = next(row for row in calls if 'run' in row)
-    assert run[run.index('--network') + 1] == 'none'
-    assert '--read-only' in run and '--rm' in run and '--label' in run
-    assert not any(value in run for value in ['--mount', '-v'])
-    assert config['image'] == owner.APPROVED_IMAGE and proof['probeRemoved']
-    assert phases == ['preparing_image', 'checking_profile', 'checking_profile']
+    assert not any('run' in row or 'pull' in row for row in calls)
+    assert config['image'] == owner.APPROVED_IMAGE and proof['configurationReady']
+    assert 'probeRemoved' not in proof and not (tmp_path / 'probe.json').exists()
+    assert not phases
 
 
 async def test_interrupted_setup_cleanup_is_owned_and_retains_image(app, monkeypatch):
@@ -326,19 +324,19 @@ async def test_shutdown_holds_setup_ownership_until_inflight_thread_settles(app,
     assert result['state'] == 'outcome_unknown'
 
 
-async def test_existing_config_needs_real_base_probe_without_configuration_change(app, monkeypatch):
+async def test_existing_docker_needs_no_certification_or_configuration_rewrite(app, monkeypatch):
     config = {'enabled': True, 'backend': 'docker'}
     setup.write_json(app.data_dir / 'test-environments.json', config)
     monkeypatch.setattr(owner, 'configuration', lambda _: (config, 'ready', 'Configured'))
     monkeypatch.setattr(owner, 'invoke', lambda *a: {'ok': True, 'capacity': {'blockers': []}})
     before = await setup.readiness(app)
-    assert before['status'] == 'configured' and before['backendReachable']
+    assert before['status'] == 'ready' and before['backendReachable']
     verify = AsyncMock(return_value={'probeRemoved': True, 'offline': True})
     monkeypatch.setattr(setup, 'verify_existing', verify)
     await setup.request(app, args(), {})
     result = await settle(app)
     assert result['state'] == 'completed'
-    verify.assert_awaited_once()
+    verify.assert_not_called()
     app.smart_tools.install.assert_not_called()
     assert setup.read_json(app.data_dir / 'test-environments.json') == config
     assert (await setup.readiness(app))['status'] == 'ready'

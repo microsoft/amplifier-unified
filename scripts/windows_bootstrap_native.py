@@ -107,6 +107,24 @@ def sources(script_dir: Path, *, consumer=None) -> dict[str, bytes]:
     spec = importlib.util.spec_from_file_location("capsule_build_identity", script_dir / "windows_bootstrap_capsule.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    # Consumer setup's complete Git for Windows (bash and core utilities for the
+    # agent's shell). Its pin and unpacker have one owner; the unpacker travels
+    # inside the setup file and runs with setup's private Python.
+    unpacker = (script_dir / "windows_private_git.py").read_text(encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("private_git_pin", script_dir / "windows_private_git.py")
+    shell = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shell)
+    git = shell.PIN
+    if (not isinstance(git, dict) or set(git) != {"version", "url", "sha256", "license", "licenseSha256"}
+            or not all(isinstance(value, str) for value in git.values())
+            or not re.fullmatch(r"\d+\.\d+\.\d+\.windows\.\d+", git["version"])
+            or not re.fullmatch(
+                r"https://github\.com/git-for-windows/git/releases/download/v"
+                + re.escape(git["version"]) + r"/Git-[0-9.]+-64-bit\.tar\.bz2", git["url"])
+            or not re.fullmatch(
+                r"https://raw\.githubusercontent\.com/git-for-windows/git/[0-9a-f]{40}/COPYING", git["license"])
+            or not all(re.fullmatch("[0-9a-f]{64}", git[key]) for key in ("sha256", "licenseSha256"))):
+        raise ValueError("The private Git pin is not an exact official release asset.")
     plan = consumer_plan(consumer) if consumer is not None else b""
     quote = json.dumps
     pins = [
@@ -120,6 +138,12 @@ def sources(script_dir: Path, *, consumer=None) -> dict[str, bytes]:
         f"internal const string UvVersion={quote(versions[0])};",
         f"internal const string GitUrl={quote(urls[1])};",
         f"internal const string GitHash={quote(hashes[1])};",
+        f"internal const string ShellGitVersion={quote(git['version'])};",
+        f"internal const string ShellGitUrl={quote(git['url'])};",
+        f"internal const string ShellGitHash={quote(git['sha256'])};",
+        f"internal const string ShellGitLicenseUrl={quote(git['license'])};",
+        f"internal const string ShellGitLicenseHash={quote(git['licenseSha256'])};",
+        f"internal const string ShellGitUnpacker={quote(base64.b64encode(unpacker.encode('utf-8')).decode())};",
         f"internal const string UvLicenseSource={quote(license_source[0])};",
         "internal static readonly Dictionary<string,string> UvLicenses=new Dictionary<string,string> {",
         ",\n".join("{" + quote(name) + "," + quote(digest) + "}" for name, digest in sorted(licenses.items())),

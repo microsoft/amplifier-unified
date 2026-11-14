@@ -81,7 +81,8 @@ def _installed_checkout_environment(root, env):
     lookup = {key: value for key, value in env.items() if not key.startswith('GIT_CONFIG_')}
     result = subprocess.run(
         ['git', '--no-optional-locks', 'config', '--no-includes', '--get', 'core.autocrlf'],
-        cwd=root, env=lookup, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+        cwd=root, env=lookup, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10,
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if result.returncode == 1 and not result.stdout:
         return env  # Unset remains Git's default, not an invented Windows policy.
     if result.returncode != 0:
@@ -105,7 +106,8 @@ def _installed_checkout_dirty(root, env):
         result = subprocess.run(
             ['git', '--no-optional-locks', 'diff', '--quiet', '--no-ext-diff',
              '--no-textconv', *(['--cached'] if cached else []), '--'],
-            cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+            cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         if result.returncode == 1:
             return True
         if result.returncode != 0:
@@ -140,11 +142,14 @@ def installed_graph(project):
                         if parent not in roots:
                             data = json.loads(meta.read_text())
                             checkout_env = _installed_checkout_environment(parent, git_env)
-                            revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=parent, env=checkout_env, text=True).strip()
-                            dirty = subprocess.check_output(['git', '--no-optional-locks', 'status', '--porcelain', '--untracked-files=no'], cwd=parent, env=checkout_env, text=True).strip()
+                            revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=parent, env=checkout_env, text=True,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).strip()
+                            dirty = subprocess.check_output(['git', '--no-optional-locks', 'status', '--porcelain', '--untracked-files=no'], cwd=parent, env=checkout_env, text=True,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).strip()
                             if dirty and checkout_env is not git_env:
                                 dirty = _installed_checkout_dirty(parent, checkout_env)
-                            tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=parent, env=checkout_env).split(b'\0')
+                            tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=parent, env=checkout_env,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).split(b'\0')
                             tree = hashlib.sha256()
                             for raw in sorted(item for item in tracked if item):
                                 file = parent / raw.decode()

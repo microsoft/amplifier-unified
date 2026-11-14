@@ -13,9 +13,30 @@ class MissingHostDependency(RuntimeError):
     """Safe, app-authored guidance; may be shown during provider sign-in."""
 
 
+def private_shell(home=None):
+    """This Windows installation's own Git for Windows shell folder, if present.
+
+    Setup keeps complete Git for Windows beside the app data. The agent's shell
+    tool takes the first bash on PATH, and System32's bash.exe only starts WSL.
+    """
+    home = home or os.environ.get('AMPLIFIER_WEB_HOME')
+    if sys.platform != 'win32' or not home:
+        return None
+    root = Path(home).parent
+    folder = root / 'git' / 'bin'
+    if (root / 'consumer-install.json').is_file() and (folder / 'bash.exe').is_file():
+        return str(folder)
+    return None
+
+
 def tool_path(path=None):
     current = os.environ.get('PATH', os.defpath) if path is None else path
     entries = current.split(os.pathsep) if current else os.defpath.split(os.pathsep)
+    shell = private_shell()
+    if shell:
+        # Derived at every host start, not only from the saved task definition:
+        # an installation refreshed by setup needs no new registration.
+        entries = [shell, *(entry for entry in entries if entry.casefold() != shell.casefold())]
     additions = [Path.home() / '.local/bin', Path.home() / '.cargo/bin']
     if sys.platform == 'darwin':
         additions += [Path('/opt/homebrew/bin'), Path('/usr/local/bin')]
@@ -29,6 +50,11 @@ def prepare_environment():
     # Include absent standard directories: a later helper installation becomes
     # visible to the running service on its next preparation attempt.
     os.environ['PATH'] = tool_path()
+    if sys.platform == 'win32':
+        # Windows program lookup otherwise tries the current folder before PATH.
+        # For a host or worker that folder is a workspace: a file named bash,
+        # git or uv there must never be chosen. Workers inherit this.
+        os.environ.setdefault('NoDefaultCurrentDirectoryInExePath', '1')
 
 
 def require_uv():

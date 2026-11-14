@@ -183,8 +183,11 @@ namespace UnifiedBootstrap {
             };
             foreach(var key in info.EnvironmentVariables.Keys.Cast<string>().ToArray()) {
                 var upper=key.ToUpperInvariant();
+                // BASH_ENV and exported functions are shell startup code: a setup
+                // child must not run them or let them replace the commands it checks.
                 if(upper.StartsWith("UV_") || upper.StartsWith("PIP_") || upper.StartsWith("GIT_") || upper.EndsWith("_API_KEY") ||
-                    upper.EndsWith("_TOKEN") || new[]{"PYTHONHOME","PYTHONPATH","VIRTUAL_ENV","SSH_ASKPASS","AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AZURE_CLIENT_SECRET"}.Contains(upper))
+                    upper.EndsWith("_TOKEN") || upper.StartsWith("BASH_FUNC_") ||
+                    new[]{"PYTHONHOME","PYTHONPATH","VIRTUAL_ENV","SSH_ASKPASS","AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AZURE_CLIENT_SECRET","BASH_ENV"}.Contains(upper))
                     info.EnvironmentVariables.Remove(key);
             }
             foreach(var pair in environment) info.EnvironmentVariables[pair.Key]=pair.Value;
@@ -216,6 +219,31 @@ namespace UnifiedBootstrap {
             var destination=Path.Combine(Storage.Root,name); Extract(archive,destination);
             var result=Path.Combine(destination,executable); Need(File.Exists(result),"Helper entry missing.");
             return result;
+        }
+        static string PrivateGit(string python, string archive, Dictionary<string,string> environment) {
+            // The agent's shell tool needs bash.exe and core utilities; MinGit has
+            // neither. The complete official distribution is tar.bz2 only, which
+            // the in-box framework cannot read. Setup's private Python unpacks the
+            // already verified archive: no other tool is acquired or executed.
+            string root=Storage.Root, destination=Path.Combine(root,"git"), unpacker=Path.Combine(root,"private-git.py");
+            PrivateText(unpacker,Utf8.GetString(Convert.FromBase64String(NativePins.ShellGitUnpacker)));
+            Storage.CreateDirectory(destination); Storage.EnableToolWrites(destination);
+            PrivateText(Path.Combine(root,"private-git.json"),
+                Child(python,new[]{"-I","-S","-B",unpacker,"--archive",archive,"--destination",destination},environment));
+            // The archive keeps its components' notices but not Git's own license.
+            string notice=Path.Combine(destination,"LICENSE.txt");
+            CopyOrDownload(NativePins.ShellGitLicenseUrl,notice,1048576); CheckHash(notice,NativePins.ShellGitLicenseHash);
+            string git=Path.Combine(destination,"cmd","git.exe"), bash=Path.Combine(destination,"bin","bash.exe");
+            Need(File.Exists(git) && File.Exists(bash),"Private Git or its shell is missing.");
+            // The agent's shell tool starts this same entry. Prove on this PC that
+            // it runs and that its Git is this installation's pinned Git, by
+            // location and version, before setup reports a usable installation.
+            // A program outside this private tree would appear as a drive path (/c/...).
+            string[] shell=Child(bash,new[]{"-c","command -v git && git --version"},environment)
+                .Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries);
+            Need(shell.Length==2 && Regex.IsMatch(shell[0],"^/(ucrt64/bin|cmd|bin)/git$",RegexOptions.CultureInvariant) &&
+                shell[1]=="git version "+NativePins.ShellGitVersion,"The private shell did not run its own Git.");
+            return git;
         }
         static void Platform() {
             Need(Environment.OSVersion.Platform==PlatformID.Win32NT && Environment.Is64BitProcess,"Windows x64 required.");
@@ -308,13 +336,14 @@ namespace UnifiedBootstrap {
                     Storage.EnableToolWrites(Path.Combine(root,relative));
                 Stage="verified private prerequisites";
                 string uv=Helper("uv",NativePins.UvUrl,NativePins.UvHash,"uv.exe");
-                string git=Helper("git",NativePins.GitUrl,NativePins.GitHash,"cmd\\git.exe");
                 foreach(var license in NativePins.UvLicenses) {
                     string notice=Path.Combine(root,"uv",license.Key);
                     CopyOrDownload(NativePins.UvLicenseSource+"/"+license.Key,notice,1048576);
                     CheckHash(notice,license.Value);
                 }
-                Need(File.Exists(Path.Combine(root,"git","LICENSE.txt")),"MinGit license missing.");
+                string gitArchive=Path.Combine(root,"git.tar.bz2");
+                CopyOrDownload(NativePins.ShellGitUrl,gitArchive,268435456); CheckHash(gitArchive,NativePins.ShellGitHash);
+                string git=Path.Combine(root,"git","cmd","git.exe");
                 var env=EnvironmentFor(uv,git);
                 env["AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH"]=Path.Combine(root,"capture");
                 env["AMPLIFIER_UNIFIED_IMPORT_HOME"]=Path.Combine(root,"import");
@@ -325,6 +354,8 @@ namespace UnifiedBootstrap {
                 string basePython=Child(uv,new[]{"python","find","--no-project","--managed-python",patch},env);
                 Need(basePython.StartsWith(Path.Combine(root,"python")+"\\",StringComparison.OrdinalIgnoreCase),"Interpreter escaped private installation.");
                 Child(basePython,new[]{"-I","-S","-c","import sys,sysconfig,struct; assert sys.platform=='win32' and '.'.join(map(str,sys.version_info[:3]))==sys.argv[1] and sys.version_info[:2]==(3,13) and struct.calcsize('P')==8 and not sysconfig.get_config_var('Py_GIL_DISABLED')",patch},env);
+                Stage="private Git and shell";
+                Need(PrivateGit(basePython,gitArchive,env)==git,"Private Git entry differs.");
                 Stage="verified application download";
                 string wheel=Path.Combine(root,name);CopyOrDownload(Text(artifact,"url"),wheel,134217728);
                 CheckHash(wheel,Text(artifact,"sha256"));
@@ -351,6 +382,9 @@ namespace UnifiedBootstrap {
                 ConsumerShortcut(python,root,"Remove Amplifier sign-in host"," --uninstall");
                 Storage.Validate();
             }
+            // Storage has released its pins. The verified archive is unpacked and
+            // private-git.json records it; do not keep a second 118 MB copy.
+            try {File.Delete(Path.Combine(root,"git.tar.bz2"));} catch(IOException) {} catch(UnauthorizedAccessException) {}
             Stage="background application setup";
             var start=new ProcessStartInfo(Path.Combine(Path.GetDirectoryName(python),"pythonw.exe"),
                 "-I -m amplifier_web.windows_consumer --root "+Quote(root)) {

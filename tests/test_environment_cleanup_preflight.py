@@ -1,4 +1,4 @@
-"""Cleanup may continue after a proven pre-dispatch failure, never a lost effect."""
+"""Common dispatch distinguishes proven local refusal from a lost effect."""
 import json
 import sys
 
@@ -29,6 +29,7 @@ def test_cleanup_preflight_failure_never_starts_helper(tmp_path, monkeypatch, ac
 
     monkeypatch.setattr(owner.subprocess, 'Popen', launch)
     if boundary == 'qualification':
+        config['backend'] = 'incus'
         monkeypatch.setattr(managed_runner_updates, 'validate_execution', refuse)
     elif boundary == 'retained-qualification':
         config['originSnapshotVersion'] = 1
@@ -56,6 +57,50 @@ def test_started_cleanup_helper_failure_remains_uncertain(tmp_path, monkeypatch,
     (tmp_path / 'test_environment_worker.py').write_text(source)
     with pytest.raises(ValueError):
         REAL_INVOKE({'python': sys.executable}, home, row, 'remove', {'requestId': 'started-cleanup'})
+
+
+@pytest.mark.parametrize('action', ['prepare', 'start', 'execute', 'stop', 'exportArtifacts', 'job_cancel'])
+@pytest.mark.parametrize('boundary', ['qualification', 'dependencies', 'executable'])
+def test_common_local_refusal_is_not_an_unknown_effect(tmp_path, monkeypatch, action, boundary):
+    home, row = allocated(tmp_path)
+    config = {'python': sys.executable}
+    calls = []
+
+    def refuse(*args, **kwargs):
+        raise ValueError('private dispatch diagnostic')
+
+    def launch(*args, **kwargs):
+        calls.append('Popen')
+        raise FileNotFoundError('private executable diagnostic')
+
+    monkeypatch.setattr(owner.subprocess, 'Popen', launch)
+    if boundary == 'qualification':
+        config['backend'] = 'incus'
+        monkeypatch.setattr(managed_runner_updates, 'validate_execution', refuse)
+    elif boundary == 'dependencies':
+        row.update(preparedDependencies={'status': 'ready'}, snapshot={}, profileId='browser-test')
+        monkeypatch.setattr(owner.dependencies, 'validate_receipt', refuse)
+    result = REAL_INVOKE(config, home, row, action, {'requestId': 'local-refusal'})
+    assert result['effectAdmitted'] is False and result['status'] == 'not-started'
+    assert result['code'] == 'environment_helper_not_started'
+    assert calls == (['Popen'] if boundary == 'executable' else [])
+    assert 'private' not in json.dumps(result)
+    assert owner.durable_state(result) == 'failed'
+
+
+@pytest.mark.parametrize('action', ['execute', 'stop'])
+async def test_common_failed_helper_launch_preserves_guest_and_does_not_replay(app, backend, monkeypatch, action):
+    row = (await start(app))['resource']
+    monkeypatch.setattr(owner, 'invoke', REAL_INVOKE)
+    extra = {'command': 'true'} if action == 'execute' else {}
+    failed = await act(app, action, row, 'unstarted-' + action, **extra)
+    assert failed['request']['state'] == 'failed'
+    assert failed['request']['result']['status'] == 'not-started'
+    assert failed['request']['result']['effectAdmitted'] is False
+    assert failed['resource']['status'] == 'running'
+    monkeypatch.setattr(owner, 'invoke', lambda *a: pytest.fail('local refusal replayed'))
+    duplicate = await act(app, action, row, 'unstarted-' + action, **extra)
+    assert duplicate['request'] == failed['request']
 
 
 async def test_real_failed_helper_launch_can_continue_without_rewriting_request(app, backend, monkeypatch):
@@ -188,3 +233,64 @@ async def test_unstarted_cleanup_has_bounded_refusal_reason(app, backend, monkey
     assert result['request']['result']['code'] == code
     assert message not in json.dumps(result['request'])
     assert [name for name, _ in backend] == ['prepare', 'start', 'stop']
+
+
+@pytest.mark.parametrize('cancel', [False, True])
+@pytest.mark.parametrize('state', ['running', 'outcome_unknown'])
+async def test_unstarted_job_observer_never_overwrites_original_execute(app, backend, monkeypatch, cancel, state):
+    row = (await start(app))['resource']
+    job = {'requestId': 'original-job', 'command': 'sleep 30', 'timeoutSeconds': 60}
+    request, _ = app.operations.requests.begin(row['sessionId'], 'workspace.environments.execute', job, {})
+    original = app.operations.requests.finish(request, state, resourceId=row['id'],
+        result={'ok': True, 'job': {'id': 'original-job', 'state': 'running', 'terminal': False}})
+    config = owner.configuration(app)[0]
+    raw = owner.get(app.data_dir, row['sessionId'], row['id'])
+    raw = owner.save(app.data_dir, raw, durableJob=job, pendingRequest=job['requestId'])
+    # Bind before taking the comparison: the test targets dispatch, not the
+    # separately maintained migration of an old owner's recovery descriptor.
+    raw = owner.recovery.bind_configuration(app, raw, config)
+    monkeypatch.setattr(owner, 'invoke', REAL_INVOKE)
+    with pytest.raises(ValueError, match='observer could not start'):
+        owner.observe_job(app, raw, config, cancel=cancel)
+    assert app.operations.requests.read(row['sessionId'], job['requestId']) == original
+    assert owner.get(app.data_dir, row['sessionId'], row['id']) == raw
+    assert [name for name, _ in backend] == ['prepare', 'start']
+
+
+async def test_launch_refusal_does_not_mask_lost_preparation_cleanup(app, backend, monkeypatch):
+    simulated = owner.invoke
+    def launch(config, home, row, action, args):
+        if action == 'start':
+            return {'ok': False, 'status': 'not-started', 'effectAdmitted': False}
+        return simulated(config, home, row, action, args)
+    monkeypatch.setattr(owner, 'invoke', launch)
+    # A retained preparation may still exist when an earlier admission was
+    # refused. This distinct cleanup transport has its own uncertain effect.
+    original_prepare = owner.prepare
+    def prepared(*args, **kwargs):
+        return owner.save(args[0], original_prepare(*args, **kwargs), preparationPending=True)
+    monkeypatch.setattr(owner, 'prepare', prepared)
+    def lost_cleanup(*args):
+        raise owner.subprocess.TimeoutExpired('ssh cleanup', 5)
+    monkeypatch.setattr(owner, 'cleanup_preparation', lost_cleanup)
+    result = await start(app)
+    assert result['request']['state'] == 'outcome_unknown'
+    assert result['request']['result'].get('effectAdmitted') is not False
+    retained = owner.get(app.data_dir, result['resource']['sessionId'], result['resource']['id'])
+    assert retained['preparationPending'] is True
+
+
+@pytest.mark.parametrize('prior_action,prior_state,transition', [('start', 'running', 'starting'), ('stop', 'stopped', 'stopping')])
+async def test_local_refusal_restores_repaired_prior_result(app, backend, monkeypatch, prior_action, prior_state, transition):
+    row = (await start(app))['resource']
+    raw = owner.get(app.data_dir, row['sessionId'], row['id'])
+    prior, _ = app.operations.requests.begin(row['sessionId'], 'workspace.environments.' + prior_action,
+                                            {'requestId': 'unprojected'}, {})
+    prior = app.operations.requests.finish(prior, 'completed', resourceId=row['id'],
+                                           result={'ok': True, 'status': prior_state})
+    raw = owner.save(app.data_dir, raw, pendingRequest=prior['requestId'], environmentState=transition)
+    monkeypatch.setattr(owner, 'invoke', REAL_INVOKE)
+    result = await act(app, 'stop', raw, 'local-after-repair')
+    assert result['request']['state'] == 'failed'
+    assert result['resource']['status'] == prior_state
+    assert app.operations.requests.read(row['sessionId'], prior['requestId']) == prior

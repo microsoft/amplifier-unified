@@ -53,6 +53,8 @@ on:
       - amplifier_web/windows_service.py
       - amplifier_web/windows_task_runtime.py
       - amplifier_web/windows_installation.py
+      - amplifier_web/windows_ports.py
+      - amplifier_web/windows_consumer.py
       - amplifier_web/installation_runtime.py
       - amplifier_web/cli.py
       - amplifier_web/deployment_service.py
@@ -87,6 +89,8 @@ on:
       - tests/test_windows_service.py
       - tests/test_windows_task_runtime.py
       - tests/test_windows_installation.py
+      - tests/test_windows_ports.py
+      - tests/test_windows_consumer.py
       - tests/test_installation_runtime.py
       - tests/test_installation_health.py
       - tests/test_cli_deployment.py
@@ -192,6 +196,15 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_cli_deployment.py::test_service_cli_binds_every_operation_to_selected_data_root tests/test_cli_deployment.py::test_background_launcher_uses_platform_neutral_owned_service_check tests/test_cli_deployment.py::test_windows_service_cli_real_chain_root_boundary tests/test_cli_deployment.py::test_windows_default_launcher_refuses_before_setup_or_browser
           if ($LASTEXITCODE -ne 0) { throw 'CLI service root binding checks failed.' }
+      - name: Check saved-port selection against this runner's real TCP ranges and a real reservation
+        shell: pwsh
+        env:
+          # The hosted runner's elevated token can create (and must remove) one
+          # temporary port exclusion. A skip here would hide the reserved case.
+          AMPLIFIER_REQUIRE_PORT_RESERVATION_CHECK: '1'
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_ports.py tests/test_windows_installation.py -k "not captured_cli_children"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows saved-port selection or setup composition checks failed.' }
   windows-user-trial:
     if: ${{ inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only) }}
     # Candidate-only combined boundary, not a universal suite/release gate.
