@@ -8,6 +8,7 @@ from pathlib import Path
 import stat
 
 from .session_files import amplifier_home, project_slug, validate_id
+from .committed_source import versioned
 
 
 def _metadata(path):
@@ -78,7 +79,8 @@ class OwnerAdapters:
                             continue
                         if owner == 'context-intelligence' and root != captures:
                             continue
-                        if not path.exists():
+                        committed = owner == 'foundation' and versioned(directory)
+                        if not committed and not path.exists():
                             continue
                         row = {'owner': owner, 'sessionId': directory.name, 'kind': kind,
                                'status': 'held', 'reason': 'Owner qualification required', 'bytes': None,
@@ -90,6 +92,17 @@ class OwnerAdapters:
                         if any(parent.is_symlink() for parent in (root, project, directory,
                                                                   path.parent)):
                             row['reason'] = 'Redirected storage ancestry is protected'
+                            yield row
+                            continue
+                        if committed:
+                            # Namespace recognition cannot grant enrollment or
+                            # original media admission. Keep one explicit source
+                            # row, even with missing/stale legacy names, without
+                            # reading a body or treating a fence directory as a
+                            # legacy file. The bound committed owner must later
+                            # supply its own checked prefix and eligibility.
+                            row.update(_canonicalFormat='committed', _sessionDir=str(directory),
+                                reason='Committed transcript requires a checked owner-bound conversion')
                             yield row
                             continue
                         try:

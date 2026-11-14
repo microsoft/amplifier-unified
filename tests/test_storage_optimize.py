@@ -451,6 +451,45 @@ async def test_discovery_uses_native_roots_and_keeps_worker_coverage(owner, tmp_
     assert {row['sessionId'] async for row in adapter.discover(operation)} == {'root', 'child', 'other'}
 
 
+@pytest.mark.parametrize('namespace', ['fenced', 'partial', 'redirected', 'missing-legacy'])
+async def test_discovery_keeps_recognized_committed_namespace_visible_and_held(owner, tmp_path, namespace):
+    import json
+    from amplifier_web.storage_optimize_owners import OwnerAdapters
+    from amplifier_web.session_files import sessions_dir
+    directory = sessions_dir(str(tmp_path)) / 'root'
+    directory.mkdir(parents=True)
+    (directory / 'metadata.json').write_text(json.dumps({'host': 'amplifier-unified'}))
+    if namespace == 'redirected':
+        target = tmp_path / 'unrelated-transcript'
+        target.mkdir()
+        (directory / 'transcript.v2').symlink_to(target, target_is_directory=True)
+    else:
+        (directory / 'transcript.v2').mkdir()
+    if namespace == 'fenced':
+        (directory / 'transcript.jsonl').mkdir()
+        (directory / 'transcript.jsonl' / 'format.json').write_text('{"protected":true}')
+    elif namespace != 'missing-legacy':
+        # Even a stale readable legacy file cannot override a recognized T2
+        # namespace. Recognition is not proof that its committed source is valid.
+        (directory / 'transcript.jsonl').write_text('{"role":"user","content":"stale"}\n')
+    adapters = OwnerAdapters(owner.app)
+    operation = {'scope': 'current', '_workspace': str(tmp_path), '_nativeId': 'root',
+                 'extractImages': True, 'cutoffs': {'requestBefore': None, 'responseBefore': None}}
+    rows = [row async for row in adapters.discover(operation)]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row['owner'] == 'foundation' and row['sessionId'] == 'root'
+    assert row['_canonicalFormat'] == 'committed'
+    assert row['_sessionDir'] == str(directory)
+    assert row['bytes'] is None and '_stamp' not in row
+    assert row['status'] == 'held' and '_action' not in row
+    assert 'owner-bound' in row['reason']
+    # The ordinary preview cannot fall through into a legacy parser, enroll
+    # this namespace or create a conversion action from mere recognition.
+    assert await adapters.preview(row, operation) == row
+    assert not (directory / 'recovery').exists()
+
+
 async def test_source_accounting_keeps_unknown_coverage_unknown(owner):
     value = await preview(owner)
     identity = value['operationId']
