@@ -437,3 +437,186 @@ def test_native_folder_refuses_a_link_and_a_folder_that_another_account_can_chan
         except OSError:
             pass
         shutil.rmtree(real, ignore_errors=True)
+
+
+@pytest.fixture
+def finish_tree(tmp_path):
+    """Only our private throwaway tree and outside sentinel; links go first."""
+    from amplifier_web import windows_files
+
+    tag = uuid.uuid4().hex[:10]
+    root = windows_files.address(Path.home() / ("au-finish-test-" + tag))
+    outside = Path.home() / ("au-finish-outside-" + tag)
+    with windows_files.directory(root, owned_root=root, create=True):
+        pass
+    links = []
+    try:
+        for name in ("tools", "app", "shared", "cache"):
+            (root / name / "data[1]").mkdir(parents=True)
+            (root / name / "data[1]" / "one.txt").write_text("throwaway")
+        (root / "workspace").mkdir()
+        (root / "receipt.json").write_text("throwaway")
+        (root / "unified-uninstall.json").write_text(json.dumps({"token": "Exact-TOKEN"}))
+        (outside / "deep").mkdir(parents=True)
+        (outside / "keep.txt").write_text("keep outside")
+        (outside / "deep" / "also.txt").write_text("keep deep outside")
+        yield dict(root=root, outside=outside, links=links, report=tmp_path / "finish.json")
+    finally:
+        for path in links:
+            if os.path.lexists(path):
+                os.rmdir(path)  # Remove only our junction itself, never its target.
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(outside, ignore_errors=True)
+
+
+def _finish_report(path, *, timeout=90):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            return json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            time.sleep(0.1)
+    pytest.fail("The after-exit helper wrote no complete report within its time budget.")
+
+
+def _finish_options(tree):
+    return dict(contents=["tools", "app", "shared", "cache"], folders=["workspace"],
+                files=["receipt.json"], seconds=2, report=tree["report"])
+
+
+def _assert_outside_unchanged(tree):
+    outside = tree["outside"]
+    assert sorted(str(path.relative_to(outside)) for path in outside.rglob("*")) == [
+        "deep", str(Path("deep") / "also.txt"), "keep.txt",
+    ]
+    assert (outside / "keep.txt").read_text() == "keep outside"
+    assert (outside / "deep" / "also.txt").read_text() == "keep deep outside"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real Windows venv redirector and after-exit helper")
+def test_native_finish_survives_the_real_redirector_and_python_exit(finish_tree, tmp_path):
+    tree, root = finish_tree, finish_tree["root"]
+    venv = root / "tools" / "amplifier-unified"
+    made = subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)],
+                          capture_output=True, text=True, timeout=60)
+    assert made.returncode == 0, made.stderr[-1500:]
+    redirector = venv / "Scripts" / "python.exe"
+    evidence = tmp_path / "in-process.json"
+    code = r"""
+import ctypes, json, os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from amplifier_web import windows_removal as removal
+from amplifier_web.windows_service import _powershell
+root, evidence, report = map(Path, sys.argv[2:5])
+os.chdir(Path(_powershell()).parents[2])
+in_job = ctypes.c_int()
+kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+kernel.IsProcessInJob.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+kernel.IsProcessInJob.restype = ctypes.c_int
+assert kernel.IsProcessInJob(ctypes.c_void_p(-1), None, ctypes.byref(in_job))
+with removal.folder(root) as owned:
+    first = owned.remove(['shared', 'app', 'cache', 'workspace', 'tools', 'receipt.json'])
+redirector_left = (root / 'tools' / 'amplifier-unified' / 'Scripts' / 'python.exe').exists()
+workspace_removed = not (root / 'workspace').exists()
+attempts = []
+popen = removal.subprocess.Popen
+def record_start(*args, **kwargs):
+    row = {'flags': kwargs['creationflags']}
+    attempts.append(row)
+    try:
+        process = popen(*args, **kwargs)
+    except OSError as error:
+        row.update(accepted=False, winerror=error.winerror)
+        raise
+    row['accepted'] = True
+    return process
+removal.subprocess.Popen = record_start
+pid = removal.finish_after_exit(root, 'Exact-TOKEN',
+    contents=['tools', 'app', 'shared', 'cache'], folders=['workspace'],
+    files=['receipt.json'], wait_for=(os.getpid(), os.getppid()), seconds=30, report=report)
+evidence.write_text(json.dumps(dict(
+    inProcess=first, redirectorLeft=redirector_left,
+    workspaceRemovedInProcess=workspace_removed, pid=pid,
+    realPid=os.getpid(), redirectorPid=os.getppid(), inJob=bool(in_job.value),
+    attempts=attempts)))
+"""
+    environment = os.environ.copy()
+    environment.update(TEMP=str(root / "cache"), TMP=str(root / "cache"))
+    process = subprocess.Popen(
+        [str(redirector), "-I", "-S", "-c", code, str(Path(__file__).resolve().parents[1]),
+         str(root), str(evidence), str(tree["report"])],
+        cwd=root / "workspace", env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    try:
+        _, stderr = process.communicate(timeout=60)
+    except subprocess.TimeoutExpired:
+        process.kill()  # Only the throwaway redirector this test started.
+        process.communicate()
+        raise
+    assert process.returncode == 0, stderr.decode("utf-8", errors="replace")[-2000:]
+    first = json.loads(evidence.read_text())
+    assert first["realPid"] != process.pid and first["redirectorPid"] == process.pid
+    assert first["redirectorLeft"], "The real redirector must still be mapped during in-process removal."
+    assert r"tools\amplifier-unified\Scripts\python.exe" in first["inProcess"]["left"]
+    assert first["inProcess"]["leftCount"] > 0
+    print("AFTER_EXIT_CHAIN " + json.dumps(first, separators=(",", ":")))
+    assert not any((root / name).exists() for name in ("app", "shared", "cache", "receipt.json"))
+    result = _finish_report(tree["report"])
+    assert result["reason"] == "", result
+    assert result["folderRemoved"] and result["passes"] >= 1 and not root.exists(), result
+    assert not result["left"] and result["leftCount"] == 0
+    _assert_outside_unchanged(tree)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real PowerShell token refusal")
+def test_native_finish_wrong_token_changes_nothing(finish_tree):
+    tree, root = finish_tree, finish_tree["root"]
+    before = {str(path.relative_to(root)): path.read_bytes() if path.is_file() else None
+              for path in root.rglob("*")}
+    removal.finish_after_exit(root, "exact-TOKEN", **_finish_options(tree))
+    result = _finish_report(tree["report"])
+    assert result["passes"] == 0 and not result["folderRemoved"]
+    assert result["reason"] == "Root or token refused"
+    after = {str(path.relative_to(root)): path.read_bytes() if path.is_file() else None
+             for path in root.rglob("*")}
+    assert after == before
+    _assert_outside_unchanged(tree)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real PowerShell junction refusal")
+def test_native_finish_leaves_a_junction_and_its_target_untouched(finish_tree):
+    import _winapi
+
+    tree, root = finish_tree, finish_tree["root"]
+    junction = root / "tools" / "junction"
+    _winapi.CreateJunction(str(tree["outside"]), str(junction))
+    tree["links"].append(junction)
+    removal.finish_after_exit(root, "Exact-TOKEN", **_finish_options(tree))
+    result = _finish_report(tree["report"])
+    assert result["reason"] == "", result
+    assert result["passes"] >= 2 and not result["folderRemoved"]
+    assert str(junction) in result["left"]
+    assert junction.is_junction() and (junction / "keep.txt").read_text() == "keep outside"
+    assert sorted(path.name for path in root.iterdir()) == ["tools", "unified-uninstall.json"]
+    assert sorted(path.name for path in (root / "tools").iterdir()) == ["junction"]
+    assert json.loads((root / "unified-uninstall.json").read_text())["token"] == "Exact-TOKEN"
+    _assert_outside_unchanged(tree)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real PowerShell file sharing refusal")
+def test_native_finish_leaves_a_file_held_without_delete_sharing(finish_tree):
+    tree, root = finish_tree, finish_tree["root"]
+    held = root / "tools" / "held.txt"
+    with open(held, "w") as stream:
+        stream.write("held")
+        stream.flush()
+        removal.finish_after_exit(root, "Exact-TOKEN", **_finish_options(tree))
+        result = _finish_report(tree["report"])
+        assert result["reason"] == "", result
+        assert result["passes"] >= 2 and not result["folderRemoved"]
+        assert str(held) in result["left"] and held.read_text() == "held"
+        assert sorted(path.name for path in root.iterdir()) == ["tools", "unified-uninstall.json"]
+        assert sorted(path.name for path in (root / "tools").iterdir()) == ["held.txt"]
+        assert json.loads((root / "unified-uninstall.json").read_text())["token"] == "Exact-TOKEN"
+    _assert_outside_unchanged(tree)

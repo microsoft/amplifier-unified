@@ -277,7 +277,7 @@ jobs:
         env:
           AMPLIFIER_REQUIRE_LINK_CHECKS: '1'
         run: |
-          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_removal.py
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_removal.py
           if ($LASTEXITCODE -ne 0) { throw 'Windows folder removal checks failed.' }
   windows-user-trial:
     if: ${{ inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only) }}
