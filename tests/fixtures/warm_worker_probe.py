@@ -7,6 +7,7 @@ network model request, real home, or existing session state.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -66,11 +67,18 @@ Reply with the fixture response.
     )
     # The fixture exercises worker lifecycle, not downloading optional community
     # behaviors. Keep its empty home and declared local provider deterministic.
-    from amplifier_web.builtin_behaviors import IMAGEGEN_BEHAVIOR_URI
+    from amplifier_web.builtin_behaviors import DEFAULT_BEHAVIORS
+    modules = {}
+    for name, package in [('loop-live', 'amplifier_module_loop_live'),
+                          ('hook-context-intelligence', 'amplifier_module_hook_context_intelligence')]:
+        spec = importlib.util.find_spec(package)
+        assert spec and spec.origin, f'Missing prepared lifecycle dependency: {package}'
+        modules[name] = str(Path(spec.origin).parent)
     settings = root / "amplifier-home" / "settings.yaml"
     settings.parent.mkdir(parents=True)
     settings.write_text(json.dumps({"bundle": {"active": str(bundle), "app": []},
-                                   "web_bundles": {"excluded": [IMAGEGEN_BEHAVIOR_URI]}}))
+                                   "web_bundles": {"excluded": list(DEFAULT_BEHAVIORS)},
+                                   "sources": {"modules": modules}}))
     events = []
     import amplifier_web.runtime_worker as worker_module
 
@@ -111,10 +119,10 @@ Reply with the fixture response.
     first_session, first_execution = id(worker.session), id(worker.execution)
     await worker.command({"op": "send", "id": "one-request", "input_id": "one", "text": "one"})
     for _ in range(200):
-        if worker.parked:
+        if worker.idle():
             break
         await asyncio.sleep(0.02)
-    assert worker.parked, events
+    assert worker.idle() and worker.shared_handle.active, events
     assert not worker.bridges
     assert any(event.get('type') == 'runtime.bridge' and event.get('operation') == 'context.prepare'
                and event.get('phase') == 'completed' for event in events), events
@@ -123,11 +131,11 @@ Reply with the fixture response.
     warm_started = time.monotonic()
     await worker.command({"op": "send", "id": "two-request", "input_id": "two", "text": "two"})
     for _ in range(200):
-        if worker.parked and any(event.get("type") == "generation.finished"
+        if worker.idle() and any(event.get("type") == "generation.finished"
                                  and "two" in event.get("input_ids", []) for event in events):
             break
         await asyncio.sleep(0.02)
-    assert worker.parked and any(event.get("type") == "generation.finished"
+    assert worker.idle() and any(event.get("type") == "generation.finished"
                                  and "two" in event.get("input_ids", []) for event in events), events
     warm_seconds = time.monotonic() - warm_started
     from amplifier_foundation.session.history import SessionHistoryStore
@@ -147,16 +155,16 @@ Reply with the fixture response.
     await restored.start(config)
     await restored.command({"op": "send", "id": "three-request", "input_id": "three", "text": "three"})
     for _ in range(200):
-        if restored.parked:
+        if restored.idle():
             break
         await asyncio.sleep(.02)
-    assert restored.parked, events
+    assert restored.idle() and restored.shared_handle.active, events
     messages = SessionHistoryStore(sessions_dir(workspace) / config["id"]).load_messages()
     assert [row['content'] for row in messages if (row.get('metadata') or {}).get('amplifier_input', {}).get('kind') == 'user'] == ['one', 'two', 'three']
     assert len([event for event in events if event.get('type') == 'assistant.message']) == 3
     print(json.dumps({
         "cold_prepare_seconds": round(cold_seconds, 6),
-        "stamp_only_dispatch_seconds": round(warm_seconds, 6),
+        "same_owner_dispatch_seconds": round(warm_seconds, 6),
         "same_mounted_session": True,
         "two_authoritative_turns": True,
         "retired_safely": True,

@@ -85,7 +85,7 @@ def require_normal_cleanup(report, parent):
     assert report['writerAvailableAfterClose'] is True
 
 
-@pytest.mark.parametrize('variant', ['cold','parked','parked-remount','when-idle','skip-preservation','retired-control'])
+@pytest.mark.parametrize('variant', ['cold','idle','new-owner','when-idle','skip-preservation','retired-control'])
 async def test_production_patch_placement_lifecycle(tmp_path, variant):
     fixture = Path(__file__).parent / 'fixtures/patch_placement_native_probe.py'
     root = tmp_path / variant
@@ -113,7 +113,15 @@ async def test_production_patch_placement_lifecycle(tmp_path, variant):
         'stages':report.get('stages'), 'stderr':(output/'stderr.log').read_text()[-3000:]})
     assert len(report['workerSources'])==len(report['processes'])
     methods={x['method'] for x in report['workerEvents'] if x['stage']=='production-method-entry'}
-    assert {'start','prepare_manager','acquire_for_mutation'} <= methods
+    assert {'start','prepare_manager'} <= methods
+    lifetime = [x for x in report['workerEvents'] if x['stage']=='production-method-entry'
+                and x['method'] in {'checkpoint_idle','bind_activation'}]
+    assert lifetime and all(x['activationObjectId'] is not None and x['sharedHandleObjectId'] is not None
+                            for x in lifetime), 'Production mutation/checkpoint lost its lifetime owner'
+    for source in report['workerSources']:
+        identities = {(x['activationObjectId'], x['sharedHandleObjectId']) for x in lifetime
+                      if x['pid'] == source['pid']}
+        assert len(identities) == 1, 'Missing lifetime owner or a live worker rotated its activation/writer'
     mutant = variant=='skip-preservation'
     assert all(s['mutant'] is mutant for s in report['workerSources'])
     assert all((s['originalConstructorSha256']!=s['executedConstructorSha256']) is mutant for s in report['workerSources'])
@@ -123,9 +131,11 @@ async def test_production_patch_placement_lifecycle(tmp_path, variant):
         assert report['controlHashBefore'] == report['controlHashAfter']
         assert proof['controlHashBeforeRestart'] == proof['controlHashAfterRestart']
         assert proof['oldReturncode'] == 0 and proof['oldPid'] != proof['newPid']
+        assert proof['checkpointEntry']['method'] == 'checkpoint_idle'
+        assert proof['checkpointEntry']['pid'] == proof['oldPid']
         assert proof['attemptWorkerPid'] == proof['oldPid']
-        assert proof['guardPresent'] and proof['writerAvailableAfterRetirement']
-        assert proof['writerAvailableAfterRefusal'] and proof['originalRecordPreserved'] and proof['noReplay']
+        assert proof['guardPresent'] and proof['writerHeldBeforeRetirement'] and proof['writerAvailableAfterRetirement']
+        assert proof['writerHeldAfterRefusal'] and proof['originalRecordPreserved'] and proof['noReplay']
         assert report['state']['effect'] == 'unknown' and report['attempts'] == 1
         assert proof['effectRead']['nativeEffect'] == 'unconfirmed'
         assert 'Native evidence is absent' in proof['reconcileRefusal']
@@ -140,27 +150,56 @@ async def test_production_patch_placement_lifecycle(tmp_path, variant):
         assert process.returncode == 0, (output/'stderr.log').read_text()[-3000:]
         assert report['state']['phase']=='ready' and report['state']['effect']=='mounted'
         assert report['controlHashBefore']==report['controlHashAfter']
-        assert report['attempts']==1 and len(report['processes'])==2
+        assert report['idleOwnershipObservations']
+        assert all(x['writerHeld'] and x['activationObjectId'] is not None
+                   and x['sharedHandleObjectId'] is not None for x in report['idleOwnershipObservations'])
+        assert report['attempts']==1 and len(report['processes'])==(3 if variant == 'new-owner' else 2)
         assert {'binding-settled','field-only-and-actual-replacement-verified','exact-duplicate-no-effect',
-                'fresh-read-write-and-park','next-generation-and-park-usable'} <= set(report['stages'])
-        assert 'park' in methods
-        if variant in {'parked','parked-remount','when-idle'}:
-            assert 'real-initial-startup-and-park' in report['stages']
-            assert any(x['stage']=='production-method-entry' and x['method']=='acquire_for_mutation'
-                and x['parked'] for x in report['workerEvents'])
-        if variant == 'parked-remount':
-            assert report['staleRemountRequested'] and report['staleRemountObserved']
-            assert 'remount' in methods
+                'fresh-read-write-and-idle-writer-held','next-generation-and-idle-owner-usable'} <= set(report['stages'])
+        assert 'bind_activation' in methods
+        if variant in {'idle','new-owner','when-idle'}:
+            assert 'real-initial-startup-and-idle-writer-held' in report['stages']
+            assert report['controlStampIgnored']
+        if variant == 'new-owner':
+            assert report['externalStampChanged']
+            proof = report['newOwnerRetirement']
+            assert proof['oldReturncode'] == 0 and proof['oldPid'] != proof['newPid']
+            assert proof['checkpointEntry']['method'] == 'checkpoint_idle'
+            assert proof['checkpointEntry']['pid'] == proof['oldPid']
+            assert proof['writerAvailableAfterRetirement']
+            assert proof['controlHashBeforeRestart'] == proof['controlHashAfterRestart'] == report['controlHashBefore']
+            assert report['productionBoundaryFailure'] == 'new-owner-stale-object-binding-refused'
             recovery = report['explicitRecovery']
-            assert recovery['originalState']['effect'] == 'unknown'
+            original_control, fresh_control = report['placementControlAttempts']
+            assert original_control['guardPresent'] and fresh_control['guardPresent']
+            assert original_control['operationId'] == recovery['originalOperationId']
+            assert fresh_control['operationId'] == recovery['freshOperationId']
+            assert original_control['workerPid'] == fresh_control['workerPid'] == proof['newPid']
+            assert 'Mounted patch configuration changed before binding' in original_control['failure']['message']
+            assert 'failure' not in fresh_control
+            assert recovery['originalState']['phase'] == 'error'
+            assert recovery['originalState']['stage'] == 'reconciled'
+            assert recovery['originalState']['effect'] == 'none'
+            assert recovery['automaticNoneReleasedFence']
+            receipt = recovery['nativeNoEffectReceipt']
+            assert receipt['effect'] == 'none' and receipt['terminal'] is True
+            assert receipt['workerPid'] == proof['newPid'] != proof['oldPid']
+            assert receipt['operationId'] == recovery['originalOperationId']
+            assert receipt['attemptId'] == original_control['attemptId']
+            assert receipt['requestHash'] == recovery['originalRequestHash']
+            dispatches = [entry for entry in recovery['originalHistory'] if entry['stage'] == 'dispatching']
+            assert len(dispatches) == 1 and dispatches[0]['effect'] == 'unknown'
+            assert dispatches[0]['attemptId'] == receipt['attemptId']
             assert recovery['effectRead']['nativeEffect'] == 'none'
+            assert recovery['effectRead']['state'] == recovery['reconciled']['state']
             assert recovery['reconciled']['state']['effect'] == 'none'
             assert recovery['reconciled']['state']['stage'] == 'reconciled'
             assert recovery['cancelledState']['phase'] == 'cancelled'
             assert recovery['cancelledHistory'][:len(recovery['originalHistory'])] == recovery['originalHistory']
             assert recovery['freshOperationId'] != recovery['originalOperationId']
             assert recovery['freshCommandId'] != recovery['originalCommandId']
-            assert recovery['remountedObjectId'] != recovery['originalMountedObjectId']
+            assert recovery['freshMountedObjectId'] == recovery['replacementObjectId']
+            assert recovery['freshMountedObjectId'] != recovery['originalMountedObjectId']
             assert recovery['originalRecordPreserved'] and recovery['noOriginalReplay']
             assert 'explicit-none-cancel-fresh-binding' in report['stages']
         if variant != 'when-idle':
@@ -170,6 +209,10 @@ async def test_production_patch_placement_lifecycle(tmp_path, variant):
             assert report['nextSuccessfulResponse']['text'] == 'placement-finite-turn-complete'
         if variant=='when-idle':
             assert 'actual-generation-queued-binding' in report['stages']
+            assert 'exclusive-history-read-after-confirmed-close' in report['stages']
+            assert report['nextSuccessfulResponse']['text'] == 'placement-next-duplicate-verified'
+            assert report['nextSuccessfulResponse']['inputId'] == 'placement-next-input'
+            assert report['nextSuccessfulResponse']['outcome'] == 'generation.finished'
             assert report['originalInputCount']==report['originalBindToolCount']==1
             assert report['controlHashAtRead']==report['controlHashAtBind']==report['controlHashAfter']
 
@@ -187,7 +230,7 @@ def test_native_placement_cleanup_fallback_is_not_qualification(source):
         require_normal_cleanup(report,parent)
 
 
-@pytest.mark.parametrize('case', ['success','failed-but-parked','previous-input','wrong-response'])
+@pytest.mark.parametrize('case', ['success','failed-but-idle','previous-input','wrong-response'])
 def test_native_placement_next_response_requires_bound_success(case):
     from fixtures.patch_placement_native_probe import require_next_success
     owner = {'id':'synthetic-root', 'status':'idle',
@@ -197,14 +240,14 @@ def test_native_placement_next_response_requires_bound_success(case):
         'messages':[{'id':'next-final','role':'assistant','inputId':'placement-next-input',
             'generationId':'next-generation','text':'placement-finite-turn-complete',
             'response':{'status':'completed','phase':'final'}}]}
-    parked = True  # The old terminal/input/park predicate permits every case.
-    if case == 'failed-but-parked':
+    idle = True  # A terminal/input/idle predicate alone permits every case.
+    if case == 'failed-but-idle':
         owner['generations'][0]['event'] = 'generation.failed'
     elif case == 'previous-input':
         owner['messages'][0]['inputId'] = 'placement-warm-input'
     elif case == 'wrong-response':
         owner['messages'][0]['text'] = 'unrelated response'
-    assert parked and owner['collaborationGeneration']['terminal']
+    assert idle and owner['collaborationGeneration']['terminal']
     if case == 'success':
         assert require_next_success(owner)['messageId'] == 'next-final'
     else:
@@ -306,7 +349,8 @@ async def test_explicit_rebind_requires_authenticated_terminal_none(boundary, ev
         expected = {'missing':'Authenticated native no-effect is unproven',
                     'unknown':'Authenticated native no-effect is unproven',
                     'saved':'Authenticated native no-effect is unproven',
-                    'nonterminal':'not terminal', 'conflicting':'different binding'}[evidence_kind]
+                    'nonterminal':'not terminal',
+                    'conflicting':r'^The retained configuration operation cannot be verified\. Nothing was retried\.$'}[evidence_kind]
         with pytest.raises((AssertionError, AppError), match=expected):
             await reconcile_proven_none(action, b.owner['id'], original['id'], retained)
         assert operation(b) == original and b.owner['configurationBusy']

@@ -53,6 +53,8 @@ accepted execution -> runtime admission -> working -> safely evictable when idle
    retain exact identities; completed detail remains accessible through durable reads.
    Associated processes and temporary environments can retire or wake through their
    lifecycle owner only when actual work, other consumers and review holds allow it.
+   An idle live Amplifier worker still holds its native writer. Retirement saves
+   and rechecks pending work before exit; idle events alone never release ownership.
    Viewer absence alone is not an idle witness; archive is not permission to delete
    durable conversation or agent memory. Retention follows its separate owner/policy.
    Broken: one slow client grows memory without limit or eviction cancels work. Affected: all users.

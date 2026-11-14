@@ -114,7 +114,7 @@ class ExecutionEvents:
         elif is_root and kind == 'input.delivered' and not event.get('target_generation_id'):
             self.admission_inputs[sid] = event.get('input_id')
         if (is_root and kind == "input.delivered" and event.get("source", "user") == "user"
-                and not event.get('target_generation_id')):
+                and not event.get('target_generation_id') and event.get('delivery') != 'request_boundary'):
             self.turn_id = event.get("input_id") or self.turn_id
         elif kind == "child.updated":
             identity = event.get("sessionId")

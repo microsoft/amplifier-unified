@@ -1004,6 +1004,14 @@
       ]
     },
     {
+      "id": "session-health-request-failure",
+      "command": ["node", "tests/web/session-health-browser.mjs", "--request-failure"]
+    },
+    {
+      "id": "session-health-completed-runtime-fault",
+      "command": ["node", "tests/web/session-health-browser.mjs", "--completed-runtime-fault"]
+    },
+    {
       "id": "session-health-module-failure",
       "command": [
         "node",
@@ -1327,6 +1335,8 @@
     "session-health",
     "session-health-context-limit",
     "session-health-context-limit-active-worker",
+    "session-health-request-failure",
+    "session-health-completed-runtime-fault",
     "session-health-module-failure",
     "activity-feedback",
     "capacity",

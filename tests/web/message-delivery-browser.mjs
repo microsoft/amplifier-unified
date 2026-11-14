@@ -4,13 +4,14 @@ import './composer-test-helpers.mjs';
 import {startFixture} from './fixture-readiness.mjs';
 import {finishFixture} from './fixture-lifecycle.mjs';
 import {existsSync,statSync} from 'node:fs';
+import {mkdir,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 
 const {base,stop}=await startFixture({
  command:fixturePython(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),
- args:[fileURLToPath(new URL('../../tests/fixtures/message_delivery_ui_server.py',import.meta.url))],
+ args:[...(process.env.AMPLIFIER_TEST_INSTALLED_PACKAGE?['-I','-B','-u']:[]),fileURLToPath(new URL('../../tests/fixtures/message_delivery_ui_server.py',import.meta.url))],
  env:process.env,tag:'message-delivery-ui',name:'Message delivery',
 });
 let browser,originalError;
@@ -24,8 +25,9 @@ try{
   const action=request.postDataJSON()?.action;
   if(action==='conversation.send'||action==='conversation.retry')inputActions.push(action);
  });
- const artifacts=existsSync('/artifacts')&&statSync('/artifacts').isDirectory();
- const screenshot=async name=>{if(artifacts)await page.screenshot({path:`/artifacts/${name}.png`})};
+ const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS||(existsSync('/artifacts')&&statSync('/artifacts').isDirectory()?'/artifacts':null);
+ if(artifacts)await mkdir(artifacts,{recursive:true});
+ const screenshot=async name=>{if(artifacts)await page.screenshot({path:`${artifacts}/${name}.png`})};
  const isActionResponse=(response,action)=>{const request=response.request();return new URL(request.url()).pathname==='/api/actions'&&request.method()==='POST'&&request.postDataJSON()?.action===action};
  // Observe the real service's automatic passive check; do not suppress it or
  // replace its response merely to preserve the former manual-check sequence.
@@ -153,6 +155,88 @@ try{
  await finishedObserved(); // A terminal duration remains fixed, not a newly running timer.
  assert.deepEqual((await inspect()).statusEvents.map(row=>row.step),['ambient','unrelated','started','finished']);
  await screenshot('message-delivery-input-status-finished-mobile');
+ // Hold exactly the first send POST. The second rendered Send captures A and
+ // waits in the ordinary send queue while real host navigation selects B.
+ await page.setViewportSize({width:1280,height:900});
+ const targets=await inspect();
+ const bounded=async(promise,label,timeout=10000)=>{
+  let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(label)),timeout)})])}
+  finally{clearTimeout(timer)}
+ };
+ let releaseFirst,firstHeld,barrierError;
+ const causal={targetA:sessionId,targetB:targets.targetB,posted:[]};
+ const checkpoint=async()=>{if(artifacts)await writeFile(`${artifacts}/captured-target-settlement.json`,JSON.stringify(causal,null,2))};
+ const held=new Promise(resolve=>firstHeld=resolve);
+ const release=new Promise(resolve=>releaseFirst=resolve);
+ const captureRoute=async route=>{
+  const body=route.request().postDataJSON();
+  if(body?.action==='conversation.send'&&body.args.text==='Captured target first'){
+   firstHeld(body);
+   try{await bounded(release,'First POST release barrier expired',30000)}
+   catch(error){barrierError=error;await route.abort();return}
+  }
+  if(body?.action==='conversation.send'&&body.args.text.startsWith('Captured target '))causal.posted.push(body);
+  await route.continue();
+ };
+ await page.route('**/api/actions',captureRoute);
+ try{
+ const firstResponse=page.waitForResponse(response=>isActionResponse(response,'conversation.send')&&response.request().postDataJSON().args.text==='Captured target first',{timeout:30000});
+ // Attach immediately so an intermediate assertion cannot leave a rejected waiter.
+ firstResponse.catch(()=>{});
+ await composer.fill('Captured target first');
+ await page.getByRole('button',{name:'Send message',exact:true}).click();
+ const firstSend=await bounded(held,'First POST did not reach the acquisition barrier');
+ causal.firstSend=firstSend;await checkpoint();
+ await composer.fill('Captured target queued');
+ await page.getByRole('button',{name:'Send message',exact:true}).click();
+ const queued=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).find(row=>row.text==='Captured target queued'));
+ assert.ok(queued);assert.equal(queued.sessionId,sessionId);
+ causal.queued=queued;await checkpoint();
+ const queuedResponse=page.waitForResponse(response=>isActionResponse(response,'conversation.send')&&response.request().postDataJSON().id===queued.commandId,{timeout:30000});
+ queuedResponse.catch(()=>{});
+ await page.evaluate(async id=>{
+  const receipt=await window.amplifier.dispatch('session.select',{id});
+  if(receipt.accepted!==true)throw Error('Fixture navigation refused');
+ },targets.targetB);
+ const selected=await page.evaluate(()=>window.amplifier.getState());
+ causal.selectedSessionId=selected.selectedSessionId;causal.selectedFrameSessionIds=selected.sessions.map(row=>row.id);await checkpoint();
+ assert.equal(selected.selectedSessionId,targets.targetB);
+ assert.equal(selected.sessions.some(row=>row.id===sessionId),false,'Real selected-only frame omits captured A');
+ releaseFirst();
+ const firstReply=await firstResponse;
+ causal.firstReply={status:firstReply.status(),receipt:await firstReply.json()};await checkpoint();
+ assert.equal(causal.firstReply.receipt.accepted,true,'First send must be accepted before attributing queued refusal');
+ // Observe either the exact queued POST or its terminal local refusal, rather
+ // than timing out while waiting only for the desired successful network path.
+ let settlement;
+ await expect.poll(async()=>{
+  const local=await page.evaluate(id=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).find(row=>row.id===id),queued.id);
+  const posted=causal.posted.some(row=>row.id===queued.commandId);
+  settlement={posted,local};
+  return posted?'posted':local&&['failed','unknown'].includes(local.status)&&/target changed|different source/.test(local.error||'')?'source-refused':'pending';
+ },{timeout:5000,message:'Finite queued-send settlement after releasing first POST'}).not.toBe('pending');
+ causal.settlement=settlement;await checkpoint();
+ await screenshot('message-delivery-captured-target-settlement');
+ assert.equal(settlement.posted,true,
+  `CAPTURED TARGET CAUSAL REGRESSION: selected-only omission refused queued A: ${JSON.stringify(settlement)}`);
+ const queuedReply=await queuedResponse;
+ causal.queuedReply={status:queuedReply.status(),receipt:await queuedReply.json()};await checkpoint();
+ assert.equal(causal.queuedReply.receipt.accepted,true);
+ assert.deepEqual(firstSend.args.expectedSource,queued.expectedSource);
+ assert.ok(queued.expectedSource?.nativeIdentity,'New native submission carries its captured witness');
+ assert.equal(queued.expectedSource.workspace,JSON.parse(queued.scope)[1]);
+ assert.equal(queued.expectedSource.nativeIdentity,JSON.parse(queued.scope)[2]);
+ const sent=(await inspect()).capturedSends;
+ assert.deepEqual(sent.map(row=>row.sessionId),[sessionId,sessionId]);
+ assert.equal(firstSend.args.sessionId,sessionId);
+ await screenshot('message-delivery-captured-target-after-navigation');
+ }catch(error){causal.failure=String(error.stack||error);throw error}
+ finally{
+  releaseFirst();
+  if(barrierError)causal.barrierError=String(barrierError);
+  await checkpoint();
+  await page.unrouteAll({behavior:'wait'});
+ }
  assert.deepEqual(errors,[]);
  console.log('Delivery recovery and actual-server input status passed: exact passive receipt, cancel/confirmation negatives, one confirmed retry, Received without timer despite ambient/unrelated work, exact observed Working/start across active reload, fixed Turn finished duration across reload, original input/attachment/draft, no resend and mobile bounds.');
 }catch(error){originalError=error;throw error}

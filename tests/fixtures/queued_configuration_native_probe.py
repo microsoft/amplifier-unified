@@ -509,15 +509,16 @@ async def probe(root, mutant, continuation=False, targeted=False, update_held=Fa
             "native-next-input")
         await until(lambda: any(m.get("text") == "recovery-next-turn-verified"
             for m in owner["messages"]) and owner["collaborationGeneration"].get("terminal"))
-        await until(lambda: runtime.workers[sid].get("parked"))
+        await until(lambda: runtime.workers[sid].get("idle"))
+        assert runtime.workers[sid]["process"] is processes[1] and processes[1].returncode is None
         messages = SessionHistoryStore(sessions_dir(workspace) / attempt["nativeSessionId"]).load_messages()
         ids = [(m.get("metadata") or {}).get("amplifier_input", {}).get("id") for m in messages]
         assert ids.count("native-original-input") == ids.count("native-next-input") == 1
         assert len([m for m in messages if m.get("role") == "tool"
                     and m.get("tool_call_id") == "native-queue-config"]) == 1
-        assert await writer_available(workspace, attempt["nativeSessionId"])
+        assert not await writer_available(workspace, attempt["nativeSessionId"])
         report.update(mountedPlanVerified=True, nextInputUsable=True, originalInputCount=1,
-            originalToolResultCount=1, duplicateResumePassive=True, writerReleasedWhileParked=True)
+            originalToolResultCount=1, duplicateResumePassive=True, writerRetainedWhileIdle=True)
     except BaseException as exc:
         primary_failure = exc
         report["primaryFailure"] = {"type": type(exc).__name__, "message": str(exc)}
@@ -670,7 +671,7 @@ async def settings_continuation(app, runtime, owner, action, root, workspace,
     assert record["state"]["phase"] == "ready", record
     await until(lambda: any(m.get("text") == "settings-continuation-finished"
         for m in owner["messages"]) and owner["collaborationGeneration"].get("terminal"))
-    await until(lambda: runtime.workers[sid].get("parked"))
+    await until(lambda: runtime.workers[sid].get("idle"))
     processes.append(runtime.workers[sid]["process"])
     assert processes[0].returncode is not None and processes[0].pid != processes[1].pid
     assert len(record["attempts"]) == 1 and record["attempts"][0]["workerPid"] == processes[0].pid
@@ -704,8 +705,9 @@ async def settings_continuation(app, runtime, owner, action, root, workspace,
                for m in history) == 1
     actual = [json.loads(line) for line in calls.read_text().splitlines()]
     assert len(actual) == 7 and sum(c["evaluation"] for c in actual) == 3, actual
-    await until(lambda: runtime.workers[sid].get("parked"))
-    assert await writer_available(workspace, native_id)
+    await until(lambda: runtime.workers[sid].get("idle"))
+    assert runtime.workers[sid]["process"] is processes[1] and processes[1].returncode is None
+    assert not await writer_available(workspace, native_id)
     report.update(automaticContinuation=True, taskAndBudgetPreserved=True,
         oneSettingsSave=True, exactlyOneReplacement=True, duplicateOutcomePassive=True,
         originalInputCount=1, originalToolResultCount=1, logicalContinuationCount=1)
