@@ -192,7 +192,23 @@ def valid_session(app, value: str | None) -> bool:
     that sign-out is refused as well.
     """
     issued = _issued(app["session_secret"], value, app["server_config"]["session_ttl_seconds"], "session")
-    return issued is not None and issued > app.get("session_epoch", 0)
+    return issued is not None and issued > getattr(app.get("sessions"), "epoch", 0)
+
+
+class Sessions:
+    """The running host's sign-out time and the change hint of its saved record.
+
+    A holder object: the keys of an application are fixed once it has started,
+    and this value changes while the host runs.
+    """
+
+    def __init__(self, epoch=0, hint=None):
+        self.epoch, self.hint = epoch, hint
+
+    @classmethod
+    def load(cls, data_dir):
+        hint = _epoch_hint(data_dir)  # Read first: a change during the read is seen next time.
+        return cls(session_epoch(data_dir), hint)
 
 
 _EPOCH = "session-epoch"
@@ -284,15 +300,15 @@ def refresh_sessions(app, streams=()) -> bool:
     ended so that a signed-out browser cannot keep watching. A stream that
     reconnects must pass the session check again.
     """
-    data_dir = app["service"].data_dir
+    data_dir, state = app["service"].data_dir, app["sessions"]
     hint = _epoch_hint(data_dir)
-    if hint == app.get("session_epoch_hint", ...):
+    if hint == state.hint:
         return False
-    app["session_epoch_hint"] = hint
+    state.hint = hint
     value = session_epoch(data_dir)
-    if value <= app.get("session_epoch", 0):
+    if value <= state.epoch:
         return False
-    app["session_epoch"] = value
+    state.epoch = value
     for store in (app.get("browser_entry"), app.get("browser_codes")):
         if store is not None:
             store.clear()
@@ -304,12 +320,20 @@ def refresh_sessions(app, streams=()) -> bool:
 async def watch_sessions(app, streams, *, interval=2.0):
     """Notice the owner's sign-out while the host runs."""
     import asyncio
+    reported = False
     while True:
         await asyncio.sleep(interval)
         try:
             refresh_sessions(app, streams)
-        except Exception:  # A watcher fault must never stop the host.
-            continue
+        except Exception as error:  # A watcher fault must never stop the host.
+            if not reported:
+                # Say it once in the host log: a sign-out that the running
+                # host cannot apply must not fail in silence.
+                reported = True
+                try:
+                    print("Sign-out of all browsers could not be checked: " + type(error).__name__, flush=True)
+                except (OSError, ValueError):
+                    pass
 
 
 def new_session(secret: str, *, remote: bool = False) -> str:

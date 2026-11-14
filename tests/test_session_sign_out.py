@@ -44,7 +44,7 @@ def home(tmp_path_factory):
 
 def application(home, **values):
     app = {"session_secret": SECRET, "server_config": {"session_ttl_seconds": 600},
-           "service": SimpleNamespace(data_dir=home), "session_epoch": 0, **values}
+           "service": SimpleNamespace(data_dir=home), "sessions": auth.Sessions(), **values}
     return app
 
 
@@ -55,7 +55,7 @@ def session(issued):
 def test_session_from_before_the_sign_out_is_refused_and_a_later_one_accepted(monkeypatch):
     now = 1_900_000_000
     monkeypatch.setattr(auth.time, "time", lambda: now)
-    app = application(None, session_epoch=now - 10)
+    app = application(None, sessions=auth.Sessions(now - 10))
     assert not auth.valid_session(app, session(now - 11))
     assert not auth.valid_session(app, session(now - 10))  # The same second is refused too.
     assert auth.valid_session(app, session(now - 9))
@@ -142,13 +142,13 @@ def test_running_host_applies_the_sign_out_and_ends_open_streams(home, monkeypat
     ticket = store.issue(browser_entry.Binding("i", "d", "https://127.0.0.1:1", "S-1-5-21-1-2-3-1001"))
     cancelled = []
     streams = [SimpleNamespace(cancel=lambda: cancelled.append("stream"))]
-    app = application(home, browser_entry=store, session_epoch_hint=auth._epoch_hint(home))
+    app = application(home, browser_entry=store, sessions=auth.Sessions.load(home))
     before = session(1_900_000_050)
     assert auth.valid_session(app, before)
     assert auth.refresh_sessions(app, streams) is False and cancelled == []  # Nothing changed yet.
     auth.sign_out_all(home)  # The owner's command, in another process.
     assert auth.refresh_sessions(app, streams) is True
-    assert app["session_epoch"] == 1_900_000_100 and cancelled == ["stream"]
+    assert app["sessions"].epoch == 1_900_000_100 and cancelled == ["stream"]
     assert not auth.valid_session(app, before)
     # A ticket issued before the sign-out cannot produce a session after it.
     assert store.consume(ticket, browser_entry.Binding("i", "d", "https://127.0.0.1:1", "S-1-5-21-1-2-3-1001")) is None
@@ -158,12 +158,12 @@ def test_running_host_applies_the_sign_out_and_ends_open_streams(home, monkeypat
     assert auth.valid_session(app, session(1_900_000_150))  # A new sign-in works.
 
 
-def test_watcher_keeps_running_after_a_fault_and_stops_when_cancelled(home, monkeypatch):
+def test_watcher_keeps_running_after_a_fault_and_stops_when_cancelled(home, monkeypatch, capsys):
     calls = []
     def refresh(app, streams):
         calls.append(len(calls))
-        if len(calls) == 1:
-            raise RuntimeError("one fault")
+        if len(calls) <= 2:
+            raise RuntimeError("a fault")
     monkeypatch.setattr(auth, "refresh_sessions", refresh)
     async def run():
         task = asyncio.create_task(auth.watch_sessions(application(home), set(), interval=0.01))
@@ -173,12 +173,14 @@ def test_watcher_keeps_running_after_a_fault_and_stops_when_cancelled(home, monk
         await asyncio.gather(task, return_exceptions=True)
         return task.cancelled()
     assert asyncio.run(run()) is True and len(calls) >= 3
+    # Said once in the host log, not once per attempt and never in silence.
+    assert capsys.readouterr().out == "Sign-out of all browsers could not be checked: RuntimeError\n"
 
 
 def test_real_middleware_refuses_a_signed_out_cookie(home, monkeypatch):
     monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_100)
     app = web.Application()
-    app.update(application(home, session_epoch=1_900_000_050, control_token="c" * 64,
+    app.update(application(home, sessions=auth.Sessions(1_900_000_050), control_token="c" * 64,
                            allowed_origins=frozenset({"https://127.0.0.1:8941"})))
     async def handler(request):
         return web.json_response({"ok": True})

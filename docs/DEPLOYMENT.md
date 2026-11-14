@@ -244,10 +244,22 @@ with the port that Unified uses (`amplifier-unified config get port`). Pass the
 same `--data-dir` value to every command if Unified uses a non-default data
 directory.
 
-1. Add the Tailscale address. Keep the local address in the list.
+On a PC that was set up with the Windows setup file, `amplifier-unified` is not
+on the PATH. Use the full program path and the data folder of that installation
+in every command below:
+
+```
+"%LOCALAPPDATA%\Amplifier\tools\amplifier-unified\Scripts\amplifier-unified.exe" --data-dir "%LOCALAPPDATA%\Amplifier\app" <command>
+```
+
+Stop and start Amplifier there with **Stop Amplifier** and **Amplifier Unified**
+in the Start menu.
+
+1. Add the Tailscale address **after** the local address. The first address in
+   the list is the main one: sign-in callbacks for connected services use it.
 
    ```
-   amplifier-unified config set public_origins "[https://<pc>.<tailnet>.ts.net:<port>, https://127.0.0.1:<port>]"
+   amplifier-unified config set public_origins "[https://127.0.0.1:<port>, https://<pc>.<tailnet>.ts.net:<port>]"
    ```
 
 2. Stop Amplifier.
@@ -292,7 +304,8 @@ other devices, and drops every code that is not used yet.
 
 Measured on Windows 11 with Tailscale 1.104.5 from an ordinary account: the
 forward in step 5 needs no administrator and no firewall rule, and the other
-device receives Unified's own certificate. Not measured: a real phone, and a
+device receives Unified's own certificate. Not measured: these steps from start
+to end on a PC that was set up with the Windows setup file, a real phone, and a
 Windows restart with the forward in place.
 
 Limits, stated plainly:

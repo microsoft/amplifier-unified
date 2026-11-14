@@ -108,9 +108,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         for host in ("localhost", "127.0.0.1", "[::1]")
     )
     app["session_secret"] = session_secret(data_dir)
-    from .auth import _epoch_hint, session_epoch
-    app["session_epoch_hint"] = _epoch_hint(data_dir)
-    app["session_epoch"] = session_epoch(data_dir)
+    from .auth import Sessions
+    app["sessions"] = Sessions.load(data_dir)
     app["control_token"] = control_token(data_dir)
     service = AppService(data_dir, runtime=runtime, workspace=workspace)
     service.port = config["port"]

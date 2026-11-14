@@ -404,13 +404,13 @@ async def test_pwa_metadata_is_public_but_conversations_and_canvas_stay_private(
     assert 'Could not sign in.' in await login.text()
 
 
-async def test_real_host_applies_sign_out_all_browsers_to_requests_and_open_streams(aiohttp_client, tmp_path, monkeypatch):
+async def test_real_host_applies_sign_out_all_browsers_to_requests_and_open_streams(aiohttp_client, tmp_path, monkeypatch, recwarn):
     import asyncio
     from amplifier_web import auth
     app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
                            voice=False, background_updates=False)
     client = await aiohttp_client(app)
-    assert app["session_epoch"] == 0 and not app["session_watch"].done()
+    assert app["sessions"].epoch == 0 and not app["session_watch"].done()
     cookie = {"Cookie": f"amplifier_unified_session={new_session(app['session_secret'])}"}
     assert (await client.get("/api/state", headers=cookie)).status == 200
     stream = await client.get("/api/events", headers=cookie)
@@ -422,10 +422,12 @@ async def test_real_host_applies_sign_out_all_browsers_to_requests_and_open_stre
     saved = auth.sign_out_all(tmp_path)
     # The running host notices by itself (its watcher looks every two seconds).
     for _ in range(100):
-        if app["session_epoch"] == saved:
+        if app["sessions"].epoch == saved:
             break
         await asyncio.sleep(0.1)
-    assert app["session_epoch"] == saved
+    assert app["sessions"].epoch == saved
+    # The running application's own keys are not changed (a later aiohttp refuses that).
+    assert not [str(row.message) for row in recwarn.list if "Changing state" in str(row.message)]
     # The same cookie is refused, for the API and for a page.
     assert (await client.get("/api/state", headers=cookie)).status == 401
     page = await client.get("/", headers=cookie, allow_redirects=False)

@@ -278,6 +278,8 @@ Replace the example origin and Tailscale IP with your host's real addresses. Bef
 
 For the complete setup—including certificate transfer and trust, reverse-proxy limits, and Linux service management—see the [deployment guide](docs/DEPLOYMENT.md).
 
+On a Windows host the steps differ: Unified stays on `127.0.0.1`, Tailscale forwards to it, and a browser on another device signs in with a one-use code that you make at the PC. See [Windows host: reach Unified from another device](docs/DEPLOYMENT.md#windows-host-reach-unified-from-another-device).
+
 </details>
 
 <details>

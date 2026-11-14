@@ -423,6 +423,90 @@ def test_oversize_form_and_changed_host_identity_are_refused(host, monkeypatch):
     assert signed_in(redeem(host, code))
 
 
+def test_real_https_sign_in_at_the_remote_address_with_the_product_certificate(host, tmp_path):
+    """Real sockets, real TLS and the real middleware; only the private store is a model.
+
+    The listener is on loopback, as on a Windows host behind a Tailscale TCP
+    forward: the client reaches it by the remote name, and the peer is local.
+    """
+    from cryptography.hazmat.primitives import serialization
+    from amplifier_web import deployment, windows_tls
+    config = deployment.validate_server({"public_origins": [LOCAL, REMOTE]})
+    root, root_key = windows_tls._new_root(config)          # The key-less identity's shape.
+    leaf, leaf_key = windows_tls._new_local_leaf(root, root_key, config)
+    cert, key = windows_tls._encoded_pair(leaf, leaf_key)
+    (tmp_path / "leaf.crt").write_bytes(cert)
+    (tmp_path / "leaf.key").write_bytes(key)
+    serving = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    serving.load_cert_chain(tmp_path / "leaf.crt", tmp_path / "leaf.key")
+    trusting = ssl.create_default_context(cadata=root.public_bytes(serialization.Encoding.PEM).decode())
+    served = web.Application(middlewares=[auth.auth_required])
+    for name in ("control_token", "session_secret", "server_config", "allowed_origins", "service",
+                 "browser_entry", "browser_codes"):
+        served[name] = host[name]
+    served.router.add_post(entry.CODE_PATH, entry.code_issue)
+    served.router.add_post(entry.CODE_REDEEM_PATH, entry.code_redeem)
+    served.router.add_get("/login", auth.login_page)
+
+    async def protected(request):
+        return web.json_response({"authenticated": True})
+    served.router.add_get("/api/protected", protected)
+    remote_name, remote_host = "pc.tail1234.ts.net", REMOTE.split("://", 1)[1]
+
+    async def run():
+        runner = web.AppRunner(served)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=serving)
+        await site.start()
+        base = f"https://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar()) as client:
+                def at_remote(method, path, **options):
+                    headers = {"Host": remote_host, **options.pop("headers", {})}
+                    return client.request(method, base + path, ssl=trusting, server_hostname=remote_name,
+                                          allow_redirects=False, headers=headers, **options)
+                # The certificate is valid for the remote name and for no other name.
+                with pytest.raises(aiohttp.ClientConnectorCertificateError):
+                    await client.get(base + "/login", ssl=trusting, server_hostname="other.example")
+                async with at_remote("GET", "/login") as page:
+                    text = await page.text()
+                    csrf = page.cookies[auth.CSRF_COOKIE].value
+                assert page.status == 200 and "<script" not in text and f'value="{csrf}"' in text
+                form = {"Origin": REMOTE, "Content-Type": FORM, "Cookie": f"{auth.CSRF_COOKIE}={csrf}"}
+                # The owner makes a code at the PC, over the local address.
+                async with client.post(base + entry.CODE_PATH, ssl=trusting, json=issue_body(host), headers={
+                        **BEARER, "Host": LOCAL.split("://", 1)[1], "Origin": LOCAL}) as issued:
+                    code = (await issued.json())["code"]
+                assert issued.status == 200
+                guess = next(symbol for symbol in entry.CODE_ALPHABET if symbol != code[0]) + code[1:]
+                async with at_remote("POST", entry.CODE_REDEEM_PATH, headers=form,
+                                     data=urlencode({"csrf": csrf, "code": guess})) as refused:
+                    assert refused.status == 303 and refused.headers["Location"] == "/login?error=1"
+                    assert auth.SESSION_COOKIE not in refused.cookies
+                # The same form at the local address is not a remote sign-in.
+                async with client.post(base + entry.CODE_REDEEM_PATH, ssl=trusting, allow_redirects=False,
+                                       data=urlencode({"csrf": csrf, "code": code}),
+                                       headers={**form, "Host": LOCAL.split("://", 1)[1], "Origin": LOCAL}) as local:
+                    assert local.status == 403
+                async with at_remote("POST", entry.CODE_REDEEM_PATH, headers=form,
+                                     data=urlencode({"csrf": csrf, "code": code})) as accepted:
+                    assert accepted.status == 303 and accepted.headers["Location"] == "/"
+                    cookie = accepted.cookies[auth.SESSION_COOKIE]
+                assert cookie["secure"] and cookie["httponly"] and cookie["samesite"] == "Strict"
+                async with at_remote("GET", "/api/protected") as anonymous:
+                    assert anonymous.status == 401
+                async with at_remote("GET", "/api/protected", headers={
+                        "Cookie": f"{auth.SESSION_COOKIE}={cookie.value}"}) as signed:
+                    assert signed.status == 200 and (await signed.json()) == {"authenticated": True}
+                # The code worked once.
+                async with at_remote("POST", entry.CODE_REDEEM_PATH, headers=form,
+                                     data=urlencode({"csrf": csrf, "code": code})) as again:
+                    assert again.status == 303 and again.headers["Location"] == "/login?error=1"
+        finally:
+            await runner.cleanup()
+    asyncio.run(run())
+
+
 def test_wrong_code_reads_no_private_file_and_a_right_code_confirms_the_host(host, files):
     code = make_code(host)
     guess = next(symbol for symbol in entry.CODE_ALPHABET if symbol != code[0]) + code[1:]
@@ -482,8 +566,8 @@ def test_sign_out_all_browsers_drops_pending_codes_and_remote_sessions(home, mon
     store = entry.CodeStore()
     code = store.issue(binding())
     app = {"session_secret": SECRET, "server_config": {"session_ttl_seconds": 600},
-           "service": SimpleNamespace(data_dir=home), "session_epoch": 0,
-           "browser_codes": store, "session_epoch_hint": auth._epoch_hint(home)}
+           "service": SimpleNamespace(data_dir=home), "sessions": auth.Sessions.load(home),
+           "browser_codes": store}
     before = auth._signed(SECRET, {"kind": "session", "issued": 1_900_000_050, "nonce": "n", "via": "remote"})
     assert auth.valid_session(app, before)
     assert auth.refresh_sessions(app) is False and len(store._codes) == 1
