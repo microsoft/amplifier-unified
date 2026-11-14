@@ -1025,7 +1025,9 @@ class Worker:
             from amplifier_web.attachments import encode
             coordinator = self.session.coordinator
             if not callable(coordinator.get_capability('live.attachments.encode')):
-                async def encode_input(command):
+                async def encode_input(command, current=None):
+                    if current is not None and current.get_capability("live.attachments.encode") is not encode_input:
+                        raise ValueError("Attachment encoder belongs to another construction")
                     return await encode(command, coordinator)
                 coordinator.register_capability('live.attachments.encode', encode_input)
             with startup_timing.phase('worker.controls.restore'):
