@@ -1,5 +1,6 @@
 """Read positive delivery evidence without treating missing history as non-delivery."""
 import json
+import hashlib
 
 
 def receipt_mapping(raw):
@@ -56,6 +57,48 @@ def saved_delivery(session, input_id):
     validate_id(identity)
     path = sessions_dir(session['workspace']) / identity / 'transcript.jsonl'
     try:
+        from .committed_source import versioned
+        if versioned(path.parent):
+            from .committed_source import background_sources
+            from .transcript_window import RECORD_LIMIT, _bounded_json, _OBJECT_LIMIT
+            owner = {'project': str(path.parent.parent), 'nativeId': identity}
+            with background_sources().source(path.parent, owner) as source:
+                # Compact derived facts are scoped to this exact checked source.
+                # At most4096 hashes, never message bodies or caller identities.
+                cache = getattr(source, '_unified_delivery', None)
+                if cache is None:
+                    cache = {'markers': set(), 'position': 0, 'overflow': False}
+                    source._unified_delivery = cache
+                wanted = hashlib.sha256(input_id.encode()).digest()
+                if wanted in cache['markers']:
+                    source.read_range(0, 0)
+                    return 'accepted'
+                # Beyond the compact cache's explicit bound, retain lookup
+                # semantics by rescanning on a miss, not silently forgetting
+                # already visited markers. This exceptional pass is O(history).
+                if cache['overflow']:
+                    cache['position'] = 0
+                while cache['position'] < source.commit.message_count:
+                    index = cache['position']
+                    bounds = source.message_range(index)
+                    cache['position'] += 1
+                    if bounds.end - bounds.start > RECORD_LIMIT:
+                        continue  # Missing evidence is unknown, never non-delivery.
+                    value = _bounded_json(b''.join(source.iter_bytes(bounds.start, bounds.end)))
+                    if value is _OBJECT_LIMIT:
+                        continue
+                    marker = _input_marker(value)
+                    if isinstance(marker, str):
+                        digest = hashlib.sha256(marker.encode()).digest()
+                        if len(cache['markers']) < 4096:
+                            cache['markers'].add(digest)
+                        elif digest not in cache['markers']:
+                            cache['overflow'] = True
+                        if marker == input_id:
+                            source.read_range(0, 0)
+                            return 'accepted'
+                source.read_range(0, 0)
+                return 'unknown'
         messages = SessionHistoryStore(path.parent).indexed_messages()
         if isinstance(messages, TranscriptIndex):
             markers = messages.project('unified-delivery-v1', _input_marker)

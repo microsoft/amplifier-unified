@@ -395,6 +395,24 @@ def _media_fork_map(canonical, bindings, visible, index_map, messages, target_id
 
 
 def fork_session(home, source, target_id, *, turn=None, after_message_id=None, before_message_id=None, live_messages=None, bundle=None, reset_model=False, prepare_only=False, recovery=False, expected_context_digest=None, media_origins=None):
+    from .committed_source import guard
+    store = SessionStore.for_app(home, source.get("workspace") or Path.cwd())
+    source_id = source.get("runtimeSessionId") or source["id"]
+    with guard(store.directory(source_id), source_id) as source_guard:
+        result = _fork_session(home, source, target_id, turn=turn, after_message_id=after_message_id,
+            before_message_id=before_message_id, live_messages=live_messages, bundle=bundle,
+            reset_model=reset_model, prepare_only=prepare_only, recovery=recovery,
+            expected_context_digest=expected_context_digest, media_origins=media_origins, source_guard=source_guard)
+        try:
+            source_guard.check()
+        except (ValueError, OSError, RuntimeError) as error:
+            if not prepare_only:
+                raise ValueError(f'The source changed after fork publication. Target {target_id} was retained; inspect it before retrying.') from error
+            raise
+        return result
+
+
+def _fork_session(home, source, target_id, *, turn=None, after_message_id=None, before_message_id=None, live_messages=None, bundle=None, reset_model=False, prepare_only=False, recovery=False, expected_context_digest=None, media_origins=None, source_guard):
     """Fork complete provider context into a new independent root session.
 
     The source must be idle (also enforced by the service). Job ledgers,
@@ -410,11 +428,10 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
     store = SessionStore.for_app(home, source.get("workspace") or Path.cwd())
     source_store = store
     source_id = source.get("runtimeSessionId") or source["id"]
-    from amplifier_foundation.session.transcript_guard import NativeTranscriptGuard
-    source_guard = NativeTranscriptGuard(store.directory(source_id) / 'transcript.jsonl')
+    from . import committed_source
     source_dir = home / "sessions" / source_id
     target_dir = home / "sessions" / target_id
-    if not prepare_only and (target_dir.exists() or (store.directory(target_id) / "transcript.jsonl").exists()):
+    if not prepare_only and (target_dir.exists() or committed_source.present(store.directory(target_id))):
         raise ValueError("Fork target already exists")
     revision_checked = bool(source.get('nativeProject') and source.get('nativeRevision'))
     current_revision = None
@@ -594,6 +611,7 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
                                        index_map, messages, target_id)
                         if media_origins is not None else {})
     from .managed_chats import is_managed, allocate
+    source_guard.check()
     managed = is_managed(source)
     target_workspace = (allocate(home, target_id, 'fork-' + target_id) if managed
                         else source.get('workspace') or Path.cwd())
@@ -624,6 +642,7 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
             canonical = store.save(target_id, messages, metadata, preserve_system=not bool(bundle or recovery))
             store.acknowledge_media(target_id, canonical, target)
     else:
+        source_guard.check()
         store.save(target_id,messages,metadata,preserve_system=not bool(bundle or recovery))
     for name,value in copied.items():
         write_private(target_dir / name,value)

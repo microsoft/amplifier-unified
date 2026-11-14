@@ -572,17 +572,23 @@ class EventIndex:
     def associations(self, directory):
         """Use Foundation's exact transcript associations for undated history."""
         from amplifier_foundation.session.history import SessionHistoryStore, associate_events
+        from . import committed_source
+        names = (committed_source.source_files(directory) if committed_source.versioned(directory)
+                 else ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending'))
+        self.association_paths = tuple(directory / name for name in names)
         stamps = []
-        for name in ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending'):
+        for path in self.association_paths:
             try:
-                stat = (directory / name).stat()
+                stat = path.stat()
                 stamps.append(((stat.st_dev, stat.st_ino), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
             except FileNotFoundError:
                 stamps.append(None)
         revision = (self.revision, tuple(stamps))
         if revision == self.association_revision:
             return self.association_cache
-        messages = SessionHistoryStore(directory, session_id=self.identity).indexed_messages() if any(stamps) else []
+        messages = (committed_source.load(directory, session_id=self.identity).messages
+                    if committed_source.versioned(directory) else
+                    SessionHistoryStore(directory, session_id=self.identity).indexed_messages() if any(stamps) else [])
         associations = associate_events(messages, self.association_events)
         current, result = None, {}
         for association in associations:
@@ -1073,7 +1079,8 @@ class EventLogView:
                 self._forget_index(str(root_index.path))
             raise
         if root_index:
-            transcript_paths = tuple(directory(source) / name for name in ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending'))
+            transcript_paths = getattr(root_index, 'association_paths', tuple(directory(source) / name
+                for name in ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending')))
             self.read_paths[session['id']] += transcript_paths
             self.read_revisions[session['id']] += tuple(
                 (str(path), stamp) for path, stamp in zip(transcript_paths, root_index.association_revision[1]))

@@ -39,11 +39,12 @@ def query(request):
 
     from amplifier_foundation.session.history import SessionHistoryStore
     from amplifier_web.session_files import sessions_dir, validate_id
+    from amplifier_web import committed_source
     root = sessions_dir(workspace)
     operation = request.get("op")
     if operation == "list":
         native = {path.name for path in root.iterdir() if path.is_dir() and not path.is_symlink()
-                  and any((path / name).is_file() for name in ("transcript.jsonl", "transcript.jsonl.backup"))} if root.exists() else set()
+                  and committed_source.present(path)} if root.exists() else set()
         return {"items": [
             {"id": identity, "workspace": str(workspace), "shared": True}
             for identity in sorted(native | set(SharedSessionStore.list_ids(workspace)))
@@ -59,9 +60,11 @@ def query(request):
     if type(limit) is not int or not 1 <= limit <= MAX_MESSAGES:
         raise ValueError("limit must be an integer from 1 through 100.")
     validate_id(identity)
+    if committed_source.versioned(root / identity):
+        return _committed_query(root / identity, workspace, identity, operation, offset, limit)
     history = SessionHistoryStore(root / identity, session_id=identity)
-    if any((root / identity / name).exists() for name in ("transcript.jsonl", "transcript.jsonl.backup")):
-        value = history.load(include_events=False)
+    if committed_source.present(root / identity):
+        value = committed_source.load(root / identity, session_id=identity)
         checkpoint = {"messages": value.messages, "metadata": value.metadata,
                       "bundle": value.metadata.get("bundle_name") or value.metadata.get("bundle")}
     else:
@@ -86,6 +89,45 @@ def query(request):
         "nextOffset": offset + limit if offset + limit < len(messages) else None,
         "totalMessages": len(messages),
     }
+
+
+def _committed_query(directory, workspace, identity, operation, offset, limit):
+    """Reuse the canonical checked source; retain only the requested text page."""
+    from collections import deque
+    from amplifier_web.committed_source import background_sources
+    from amplifier_web.transcript_window import RECORD_LIMIT, _bounded_json, _OBJECT_LIMIT
+    from amplifier_foundation.session.history import SessionHistoryStore
+    owner = {'project': str(directory.parent), 'nativeId': identity}
+    # This legacy shared API promises exact visible totals/offsets. Its explicit
+    # scalar pass is linear, but never materializes full history or huge rows.
+    # The ordinary cursor/window API is the O(page) path for selected browsing.
+    with background_sources().source(directory, owner) as source:
+        recent, page, total = deque(maxlen=limit), [], 0
+        for index in range(source.commit.message_count):
+            bounds = source.message_range(index)
+            if bounds.end - bounds.start > RECORD_LIMIT:
+                raise ValueError('The shared history contains a record outside the bounded view budget.')
+            row = _bounded_json(b''.join(source.iter_bytes(bounds.start, bounds.end)))
+            if row is _OBJECT_LIMIT:
+                raise ValueError('The shared history contains a record outside the bounded object budget.')
+            if (row.get('role') not in {'user', 'assistant'}
+                    or (row.get('metadata') or {}).get('ephemeral') or not text_content(row)):
+                continue
+            visible = {'role': row['role'], 'text': text_content(row)}
+            if operation == 'open':
+                recent.append(visible)
+            elif offset <= total < offset + limit:
+                page.append(visible)
+            total += 1
+        metadata = SessionHistoryStore(directory, session_id=identity).load_metadata()
+        source.read_range(0, 0)
+    if operation == 'open':
+        offset, page = max(0, total - limit), list(recent)
+    return {'id': identity, 'workspace': str(workspace),
+            'bundle': metadata.get('bundle_name') or metadata.get('bundle'),
+            'name': metadata.get('name') or metadata.get('title'),
+            'messages': page, 'offset': offset, 'totalMessages': total,
+            'nextOffset': offset + limit if offset + limit < total else None}
 
 
 def main():

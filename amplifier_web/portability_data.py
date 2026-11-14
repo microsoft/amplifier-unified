@@ -91,15 +91,36 @@ def asset_selection(value):
 
 
 def capture(app, session):
+    from .committed_source import guard
+    identity = validate_id(session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'])
+    with guard(native_directory(app, session), identity) as source_guard:
+        return _capture(app, session, source_guard)
+
+
+def _capture(app, session, source_guard):
     identity = validate_id(session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id'])
     native = native_directory(app, session)
-    from amplifier_foundation.session.transcript_guard import NativeTranscriptGuard
-    source_guard = NativeTranscriptGuard(native / 'transcript.jsonl')
+    from .committed_source import versioned
+    committed = versioned(native)
     files = {}
     for name in sorted(NATIVE_FILES):
+        if committed and name in {'transcript.jsonl', 'transcript.jsonl.backup'}:
+            continue
         path = native / name
         if path.exists():
             files[name] = file_data(path)
+    if committed:
+        # Capsule v1 deliberately receives an exact legacy-readable snapshot,
+        # not a v2 body header, uncommitted tail, recovery files or directory
+        # fences. Import remains an explicit independent legacy generation.
+        source = source_guard.source
+        start = source.message_range(0).start if source.commit.message_count else source.commit.committed_bytes
+        if source.commit.committed_bytes - start > MAX_BYTES:
+            raise ValueError('Task history exceeds the 32 MiB transfer limit')
+        raw = b''.join(source.iter_bytes(start))
+        validate_bytes(raw)
+        files['transcript.jsonl'] = {'data': base64.b64encode(raw).decode(),
+                                     'sha256': digest(raw), 'bytes': len(raw)}
     if 'transcript.jsonl' not in files:
         raise ValueError('A canonical saved transcript is required before transferring a task')
     directory = app.data_dir / 'sessions' / identity

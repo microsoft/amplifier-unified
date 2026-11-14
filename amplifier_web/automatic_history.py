@@ -69,6 +69,9 @@ def directory(session):
 
 
 def revision(session):
+    from . import committed_source
+    if committed_source.versioned(directory(session)):
+        return committed_source.revision(directory(session))
     for name in ('transcript.jsonl', 'transcript.jsonl.backup'):
         try:
             info = (directory(session) / name).stat()
@@ -103,6 +106,9 @@ def read_transcript(session, *, before=None, limit=100, diagnostics=None, includ
     reader = SessionHistoryStore(root, events_path=events, session_id=native_id)
     start = revision(session)
     with measure(service, 'history.transcript.index', synchronous=True, session_id=session['id']):
+        from . import committed_source
+        if committed_source.versioned(root):
+            raise ValueError('Use the bounded committed message window for this transcript.')
         messages = reader.indexed_messages()
     diagnostics = list(reader.diagnostics)
     # A live runtime can append while someone is reading older pages. Verify

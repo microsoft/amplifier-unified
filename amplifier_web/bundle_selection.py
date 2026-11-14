@@ -164,12 +164,16 @@ class BundleTransaction:
             for name in names}
 
     def begin(self):
+        from .committed_source import refuse_legacy_write
+        refuse_legacy_write(self.native)
         if self.path.exists(): raise ValueError('An earlier bundle change needs recovery before another change.')
         write_private(self.path, json.dumps({'version': 1, 'files': {
             key: path.read_text() if path.exists() else None for key, path in self.paths.items()}}))
 
     def restore(self):
         if not self.path.exists(): return False
+        from .committed_source import refuse_legacy_write
+        refuse_legacy_write(self.native)
         saved = json.loads(self.path.read_text())
         if saved.get('version') != 1 or set(saved.get('files', {})) != set(self.paths):
             raise ValueError('The saved bundle transition cannot be recovered automatically.')
@@ -184,6 +188,8 @@ class BundleTransaction:
         self.path.unlink()
 
     def select(self, bundle, *, reset_model=False):
+        from .committed_source import refuse_legacy_write
+        refuse_legacy_write(self.native)
         metadata = self.native/'metadata.json'
         value = json.loads(metadata.read_text()) if metadata.exists() else {}
         value.update(bundle_name=bundle, bundle=bundle, preserve_system=False)

@@ -457,7 +457,7 @@ class Portability:
             raise ValueError('This destination already has a writable task with that identity')
         from .session_files import amplifier_home
         identity = payload['nativeIdentity']
-        if any(path for name in ('transcript.jsonl', 'transcript.jsonl.backup')
+        if any(path for name in ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.v2')
                for path in (amplifier_home() / 'projects').glob('*/sessions/' + identity + '/' + name)):
             raise ValueError('This native task already has canonical history on the destination')
         target = self.node.directory / 'checkouts' / body['id']

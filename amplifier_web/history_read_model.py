@@ -305,8 +305,8 @@ class SelectedHistoryReadModel:
         from .automatic_history import directory
         source = {**inputs, 'nativeProject': inputs.get('nativeProject') or
                   project_slug(inputs['workspace'])}
-        transcripts = {directory(source) / name for name in
-                       ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending')}
+        from .committed_source import source_files
+        transcripts = {directory(source) / name for name in source_files(directory(source))}
         try:
             for name in value['paths']:
                 path = Path(name)

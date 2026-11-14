@@ -65,6 +65,8 @@ async def rewind(controls, args):
     source = copy.deepcopy(args['source'])
     source['status'] = 'idle'
     store = SessionStore.for_app(app_home(), source['workspace'])
+    from .committed_source import refuse_legacy_write
+    refuse_legacy_write(store.directory(identity))
     prepared = fork_session(app_home(), source, identity,
                             before_message_id=args['messageId'], prepare_only=True,
                             expected_context_digest=source.get('historyEditContextDigest'))

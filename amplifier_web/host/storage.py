@@ -14,6 +14,7 @@ import tempfile
 import time
 
 from amplifier_foundation.session.history import SessionHistoryStore
+from .. import committed_source
 
 _SECRET_KEYS = {"api_key", "apikey", "access_token", "refresh_token", "secret", "password", "authorization", "client_secret"}
 
@@ -47,7 +48,7 @@ class SessionStore:
         """Locate a native session without making another host-owned copy."""
         from ..session_files import amplifier_home, validate_id
         validate_id(identity)
-        candidates = sorted({path.parent for name in ('transcript.jsonl', 'transcript.jsonl.backup')
+        candidates = sorted({path.parent for name in (*committed_source.LEGACY_NAMES, 'transcript.v2')
                              for path in (amplifier_home() / 'projects').glob(f'*/sessions/{identity}/{name}')})
         if len(candidates) > 1:
             raise ValueError('This session ID exists in more than one workspace. Open it through shared workspace history.')
@@ -141,16 +142,16 @@ class SessionStore:
               request_only_verifier=None):
         """Open a fresh owner-bound store; callers must close its lifetime lock."""
         from amplifier_foundation.session.media import MediaPolicy, SessionMediaStore
-        from amplifier_foundation.session.checkpoint import verified_checkpoint_refs
         return SessionMediaStore(self.directory(session_id).absolute() / 'media', session_id,
                                  policy=MediaPolicy(),
-                                 checkpoint_verifier=verified_checkpoint_refs,
+                                 checkpoint_verifier=committed_source.checkpoint_refs,
                                  policy_verifier=policy_verifier, read_only=read_only,
                                  source_read_verifier=source_read_verifier,
                                  request_only_verifier=request_only_verifier)
 
     def acknowledge_media(self, session_id, canonical, media_store):
         """ACK only an exact primary saved prefix, never a report or backup."""
+        committed_source.refuse_legacy_write(self.directory(session_id))
         from amplifier_foundation.session.checkpoint import acknowledge_legacy_checkpoint
         receipt = acknowledge_legacy_checkpoint(self.directory(session_id), session_id=session_id,
                                                 expected_messages=canonical, windows_policy='legacy')
@@ -158,9 +159,31 @@ class SessionStore:
         return receipt
 
     def has_transcript(self, session_id):
-        directory = self.directory(session_id)
-        return any((directory / name).exists() for name in
-                   ("transcript.jsonl", "transcript.jsonl.backup"))
+        return committed_source.present(self.directory(session_id))
+
+    def acknowledge_committed_media(self, session_id, owned_writer, expected, media_store):
+        """Mint the typed T2 receipt; never interpret a plain CommitAck as authority."""
+        from amplifier_foundation.session.versioned_checkpoint import acknowledge_versioned_checkpoint
+        if (type(owned_writer) is not committed_source.OwnedTranscript
+                or owned_writer.directory != self.directory(session_id).absolute()
+                or owned_writer.session_id != session_id):
+            raise ValueError('The committed media writer belongs to another source.')
+        with acknowledge_versioned_checkpoint(owned_writer.writer, session_id=session_id,
+                                               expected=expected) as receipt:
+            pass
+        # Only after the complete physical fence exit can this ACK be reported.
+        media_store.acknowledge_checkpoint(receipt)
+        return receipt
+
+    def transcript_writer(self, session_id, *, fence):
+        """Explicit settled-suffix/rewrite seam, never format activation.
+
+        The runtime owner must exclude every old/nonparticipating writer and
+        keep its canonical path-bound live fence through physical settlement.
+        A stopped catalog row or an advisory lock is not that evidence. There is
+        no default fence, initialization, migration, retry or media ACK here.
+        """
+        return committed_source.OwnedTranscript(self.directory(session_id), session_id, fence=fence)
 
     def save(self, session_id, messages, metadata, *, preserve_system=False):
         """Synchronously persist owned context; returned rows borrow its values.
@@ -169,6 +192,7 @@ class SessionStore:
         execution ownership through this call; no detached history snapshot is
         needed for the immediately consumed checkpoint anchors.
         """
+        committed_source.refuse_legacy_write(self.directory(session_id))
         history = self.history(session_id)
         rows = [m if isinstance(m, dict) else m.model_dump() for m in messages]
         from ..naming import adopt, initial_name
@@ -223,14 +247,14 @@ class SessionStore:
         directory = self.directory(session_id)
         from ..naming import read
         if self.has_transcript(session_id):
-            value = self.history(session_id).load(include_events=False)
+            value = committed_source.load(directory, session_id=session_id)
             changed = {item.source for item in value.diagnostics if item.code == 'changed_during_read'}
             # A title/status writer can replace metadata during a long history
             # read. Re-read once, but never retry a changing transcript or use
             # the inconsistent first snapshot. Edit callers still validate
             # their expected transcript revision before and after this load.
             if changed and changed <= {'metadata', 'metadata_backup'}:
-                value = self.history(session_id).load(include_events=False)
+                value = committed_source.load(directory, session_id=session_id)
             if any(item.code == 'changed_during_read' for item in value.diagnostics):
                 raise ValueError('The saved session changed while it was being read.')
             return value.messages, {**value.metadata, **read(directory)}
@@ -269,10 +293,11 @@ class SessionStore:
             if source in seen:
                 continue
             seen.add(source)
-            transcript = source / "transcript.jsonl"
-            if not transcript.is_file() and not transcript.with_suffix(".jsonl.backup").is_file():
+            if not committed_source.present(source):
                 continue
-            history = SessionHistoryStore(source, session_id=session_id).load(include_events=False)
+            # Import is a legacy conversion, not implicit T2 adoption.
+            committed_source.refuse_legacy_write(source)
+            history = committed_source.load(source, session_id=session_id)
             rows, metadata = history.messages, history.metadata
             # Checkpoints are conversation evidence only. Pending/unfinished tool
             # calls remain historical; loop-live receives no imported job tasks.

@@ -257,9 +257,9 @@ def test_edit_snapshot_metadata_retry_preserves_content_guard(tmp_path, monkeypa
     original = history._read_metadata
     calls = 0
 
-    def racing_read(path):
+    def racing_read(path, **kwargs):
         nonlocal calls
-        result = original(path)
+        result = original(path, **kwargs)
         calls += 1
         if calls == 1:
             path.write_text(json.dumps({**result, 'name': 'New title'}))

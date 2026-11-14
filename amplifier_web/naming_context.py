@@ -128,13 +128,31 @@ def saved_sample(directory, owner):
 
     Recent reads use the existing owner/revision-fenced window reader: at most
     8 MiB / 512 raw records. Opening adds at most 256 KiB / 128 raw records.
-    No index is built, transcript changed, or unrequested history loaded.
+    Legacy reads build no index. T2 cold verification scans once into the shared
+    eight-source anonymous index; warm samples do not scan the intervening body.
+    Neither path changes the transcript.
     """
-    reader = TranscriptWindowReader()
+    from .committed_source import background_sources
+    reader = TranscriptWindowReader(source_pool=background_sources())
+    try:
+        return _saved_sample(reader, directory, owner)
+    finally:
+        reader.close()
+
+
+def _saved_sample(reader, directory, owner):
+    from .committed_source import versioned, opening
     revision = reader.source_revision(directory, owner)
     recent = reader.read_window(directory, owner, limit=32, visible=lambda row: bool(message_text(row)))
     if recent['status'] != 'ready':
         raise ValueError('Naming history is unavailable: ' + recent['reason'])
+    if versioned(directory):
+        with reader._committed.source(directory, owner) as source:
+            rows = dict(opening(source, max_bytes=HEAD_BYTES, max_rows=HEAD_ROWS))
+            rows.update({item['byteOffset']: item['value'] for item in recent['rows']})
+            if reader.source_revision(directory, owner) != revision:
+                raise ValueError('Naming history changed while reading; no name was requested.')
+            return sample([row for _, row in sorted(rows.items())])
     filename = 'transcript.jsonl.backup' if recent['messageWindow']['source'] == 'backup' else 'transcript.jsonl'
     rows = {}
     try:
