@@ -286,12 +286,12 @@ PR815's default-capability policy tests and its Foundation export roundtrip use
 the same already-required native dependencies. They join that lane. Ordinary
 builtin-behavior and export unit cases remain in the full Python suite.
 
-The four `default-installed` suites require a noneditable candidate wheel,
+The five `default-installed` suites require a noneditable candidate wheel,
 source-bound offline behavior checkouts and their matching installed modules.
 The native lane intentionally uses an editable Unified checkout, so it cannot
 substitute for that proof. The Smart Tools/runtime integration owner runs these
 checks in an owned container on changes to composition, forwarding, desktop
-policy, routing or the qualified dependency set, before claiming those boundaries
+policy, routing, curated skills or the qualified dependency set, before claiming those boundaries
 qualified. This is explicit affected-feature acceptance, not a new universal
 publication gate or an automatically provisioned hosted lane. Its fake desktop
 backend and finite providers do not exercise physical input or paid accounts.
@@ -303,14 +303,15 @@ checkout. The root below contains only the copied `tests/` tree; the interpreter
 contains the candidate wheel. Both commands must succeed:
 
 ```sh
-"$UNIFIED_RUNTIME_PYTHON" -I -m pytest --import-mode=prepend \
+UNIFIED_CURATED_RESOLVER=1 "$UNIFIED_RUNTIME_PYTHON" -I -m pytest --import-mode=prepend \
   -p pytest_asyncio.plugin -p pytest_aiohttp.plugin \
   --rootdir=/owned/default-qualification \
   --junitxml=/owned/evidence/default-installed.xml \
   /owned/default-qualification/tests/test_default_behaviors_integration.py \
   /owned/default-qualification/tests/test_default_runtime_safety.py \
   /owned/default-qualification/tests/test_default_mount_runtime.py \
-  /owned/default-qualification/tests/test_default_routing_runtime.py
+  /owned/default-qualification/tests/test_default_routing_runtime.py \
+  /owned/default-qualification/tests/test_curated_resolver_installed.py
 python /owned/candidate/scripts/integration_checks.py check \
   --lane default-installed --junit /owned/evidence/default-installed.xml
 ```
@@ -320,6 +321,11 @@ log and JUnit alongside the check result. Missing prerequisites, module skips,
 per-test skips or absent selectors mean **unqualified**, even if ordinary pytest
 exits zero. The isolated installed probes reject checkout/editable imports;
 keep their original guards rather than bypassing them to fit the native lane.
+The maintained adapter checks 53 cases: 18 composition/runtime cases and 35
+public host-roster-to-canonical-resolver cases. The latter runs the real helper
+CLI with synthetic allowlisted metadata and a standalone-CLI sentinel; it does
+not prove live inventory, provider execution or child network confinement by
+itself. The owned execution container supplies the offline boundary.
 
 ### Installed desktop safety continuation
 

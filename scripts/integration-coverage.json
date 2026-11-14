@@ -372,7 +372,8 @@
         "tests/test_default_behaviors_integration.py",
         "tests/test_default_runtime_safety.py",
         "tests/test_default_mount_runtime.py",
-        "tests/test_default_routing_runtime.py"
+        "tests/test_default_routing_runtime.py",
+        "tests/test_curated_resolver_installed.py"
       ],
       "paths": [
         "amplifier_web/builtin_behaviors.py",
@@ -384,10 +385,11 @@
         "tests/test_default_runtime_safety.py",
         "tests/test_default_mount_runtime.py",
         "tests/test_default_routing_runtime.py",
+        "tests/test_curated_resolver_installed.py",
         "tests/fixtures/default_mount_probe.py",
         "tests/fixtures/default_routing_probe.py"
       ],
-      "prerequisite": "Explicit owned container, noneditable candidate wheel and source-bound offline behavior repositories/runtime packages. Run copied tests outside source, then integration_checks.py check --lane default-installed; missing prerequisites/skips fail the owner. See docs/validation/release-qualification.md and integration-coverage.md."
+      "prerequisite": "Explicit owned container, noneditable candidate wheel and source-bound offline behavior repositories/runtime packages. Set UNIFIED_CURATED_RESOLVER=1 for the canonical host-roster consumer. Run copied tests outside source, then integration_checks.py check --lane default-installed; missing prerequisites/skips fail the owner. See docs/validation/release-qualification.md and integration-coverage.md."
     },
     "default-desktop-safety": {
       "runner": "owned-container",
@@ -1047,6 +1049,13 @@
       "owner": "default-installed",
       "prerequisite": "Noneditable candidate wheel, declared prepared source checkouts and matching installed packages; no model/desktop effects",
       "introducedBy": "#815"
+    },
+    {
+      "node": "tests/test_curated_resolver_installed.py",
+      "kind": "test_module",
+      "owner": "default-installed",
+      "prerequisite": "Noneditable candidate wheel and canonical prepared skills helper with explicit host metadata input; container-only opt-in UNIFIED_CURATED_RESOLVER=1; no standalone CLI/provider calls",
+      "introducedBy": "#1958"
     },
     {
       "node": "tests/fixtures/status_emitter_probe.py",

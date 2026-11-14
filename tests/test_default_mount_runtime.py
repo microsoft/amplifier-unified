@@ -81,12 +81,22 @@ def mount_probe(tmp_path_factory):
     return invoke
 
 
-def test_real_five_behavior_mount_has_shipped_balanced_resolver(mount_probe):
+def test_real_default_behavior_mount_has_shipped_balanced_resolver(mount_probe):
     result = mount_probe("mount")
     assert result.returncode == 0, _diagnostics(result)
     rows = _records(result)
     assert len(rows) == 1 and rows[0]["status"] == "passed", _diagnostics(result)
     assert rows[0]["case"] == "mount" and rows[0]["forbidden_effects"] == []
+    print(PREFIX + json.dumps(rows[0], sort_keys=True))
+
+
+def test_default_curated_skills_reach_real_request_catalog(mount_probe):
+    result = mount_probe("skills")
+    assert result.returncode == 0, _diagnostics(result)
+    rows = _records(result)
+    assert len(rows) == 1 and rows[0]["status"] == "passed", _diagnostics(result)
+    assert rows[0]["case"] == "skills" and rows[0]["forbidden_effects"] == []
+    assert rows[0]["catalog_observed"] and rows[0]["provider_completions"] == 0
     print(PREFIX + json.dumps(rows[0], sort_keys=True))
 
 

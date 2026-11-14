@@ -696,6 +696,7 @@ class RuntimeControls:
         registry = self.coordinator.get_capability("web.registry")
         bundle = self.prepared.bundle if self.prepared else None
         result = {"instruction":getattr(bundle,"instruction",None) or "", "context":[], "namespaces":[], "warnings":[]}
+        result["warnings"].extend(getattr(bundle, "_host_resource_scan_warnings", []))
         resolver = self.coordinator.get_capability("model_role_resolver")
         # This metadata belongs to the pinned routing-matrix implementation.
         # Other resolver implementations need not expose their strategy; never
@@ -706,13 +707,19 @@ class RuntimeControls:
         elif resolver:
             result["warnings"].append("The active model routing strategy does not expose an exportable matrix.")
         roots = []
-        for namespace,state in (registry.get_state() if registry else {}).items():
-            if not state.local_path or not state.uri.startswith("git+"):
+        sources = [(state.local_path, state.uri)
+                   for state in (registry.get_state() if registry else {}).values()]
+        # Resource-only namespaces were selected/admitted during preparation.
+        # Export never discovers repositories or composes their capabilities.
+        sources.extend((str(binding["source_root"]), binding["uri"])
+                       for binding in getattr(bundle, "_host_resource_namespaces", {}).values())
+        for local_path, source_uri in dict.fromkeys(sources):
+            if not local_path or not source_uri.startswith("git+"):
                 continue
-            path = Path(state.local_path).resolve()
+            path = Path(local_path).resolve()
             if path.is_file():
                 path = path.parent
-            uri = state.uri
+            uri = source_uri
             try:
                 commit = subprocess.run(["git","-C",str(path),"rev-parse","HEAD"],capture_output=True,text=True,check=True,timeout=2).stdout.strip()
                 repository = Path(subprocess.run(["git","-C",str(path),"rev-parse","--show-toplevel"],capture_output=True,text=True,check=True,timeout=2).stdout.strip()).resolve()

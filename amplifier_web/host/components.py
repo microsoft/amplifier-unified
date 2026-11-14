@@ -77,6 +77,26 @@ async def prepare_bundle(bundle, *, source_home=None, **kwargs):
     walk assumes every nested agents value is a mapping. Flatten an activation-
     only copy, then retain the exact executable plan and original bundle.
     """
+    resource_context = getattr(bundle, "_host_resource_context", None)
+    if resource_context is not None:
+        from .session import _bind_resource_namespaces, is_snapshot
+        if not is_snapshot(bundle):
+            registry, config = resource_context
+            # Runtime edits deliberately discard the composition selector, so
+            # derive resource-only repository choices from surviving effective
+            # declarations. Never restore stale pre-edit pins or normalize
+            # activation rows with this projection.
+            resource_components = HostComponents()
+            resource_components.select_bundle(bundle, {})
+            repository_pins = {}
+            for row in declarations(bundle.to_mount_plan()):
+                if selected := git_source(row.get("source")):
+                    path = urlsplit(selected[1][4:]).path
+                    _, separator, revision = path.rpartition("@")
+                    repository_pins.setdefault(selected[0], set()).add(revision if separator else None)
+            resource_components._resource_ambiguous_repositories = {
+                repository for repository, pins in repository_pins.items() if len(pins) > 1}
+            await _bind_resource_namespaces(bundle, registry, config, resource_components)
     if source_home is not None:
         # Canonicalize before Foundation records source-qualified provider
         # paths and before Core/modes capture the plan. Never relabel those
@@ -404,6 +424,39 @@ def compose_bundles(base, overlay):
     return result
 
 
+def _skill_sources(config, plan=None):
+    """Preserve the loader's implicit/local discovery before adding a source.
+
+    tool-skills is worker-owned, not a host dependency. Keep this small
+    composition boundary aligned with its source precedence and verify it with
+    the real installed loader; do not import or resolve optional worker code here.
+    """
+    value = []
+    for key in ('skills', 'skills_dirs', 'skills_dir'):
+        if key in config:
+            value = config[key]
+            # Modern null is the loader's default discovery. Null legacy paths
+            # are invalid, not a request to reinterpret a lower-priority alias.
+            if key == 'skills' and value is None:
+                value = []
+            if key == 'skills_dir' and not isinstance(value, str):
+                raise ValueError('Skill sources must be a string or list of strings.')
+            break
+    else:
+        value = (plan or {}).get('skills', [])
+        if isinstance(value, dict):
+            value = value.get('sources', value.get('dirs', []))
+    value = [value] if isinstance(value, str) else value
+    if not isinstance(value, list) or any(not isinstance(path, str) for path in value):
+        raise ValueError('Skill sources must be a string or list of strings.')
+    if value:
+        return value
+    # Same fallback as tool-skills.discovery.get_default_skills_dirs. Preserve
+    # portable user paths rather than freezing this host's home in a saved plan.
+    env = os.environ.get('AMPLIFIER_SKILLS_DIR')
+    return ([env] if env else []) + ['.amplifier/skills', '~/.amplifier/skills']
+
+
 def imagegen_defaults(base, behavior):
     """Add image discovery without replacing an explicit root tool's policy.
 
@@ -422,7 +475,7 @@ def imagegen_defaults(base, behavior):
         for row in base.tools:
             if row['module'] == 'tool-skills':
                 config = row.setdefault('config', {})
-                config['skills'] = list(dict.fromkeys([*config.get('skills', []), *skill_paths]))
+                config['skills'] = list(dict.fromkeys([*_skill_sources(config, base.to_mount_plan()), *skill_paths]))
     behavior.tools = [row for row in behavior.tools
                       if row['module'] not in {'tool-image', 'tool-skills'} or row['module'] not in existing]
     return base, behavior
@@ -466,8 +519,9 @@ def capability_defaults(base, behavior, defaults):
             if path_key:
                 for item in previous:
                     config = item.setdefault('config', {})
+                    paths = _skill_sources(config, base.to_mount_plan()) if path_key == 'skills' else config.get(path_key, [])
                     config[path_key] = list(dict.fromkeys([
-                        *config.get(path_key, []), *row.get('config', {}).get(path_key, [])]))
+                        *paths, *row.get('config', {}).get(path_key, [])]))
         setattr(behavior, section, additions)
     # A default can introduce a specialist, not reconfigure a same-named one.
     behavior.agents = {name: agent for name, agent in behavior.agents.items()

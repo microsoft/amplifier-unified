@@ -7,12 +7,14 @@ IMAGEGEN_BEHAVIOR_URI = "git+https://github.com/microsoft/amplifier-bundle-image
 COMPUTER_USE_BEHAVIOR_URI = "git+https://github.com/microsoft/amplifier-bundle-computer-use@main#subdirectory=behaviors/computer-use.yaml"
 CONTEXT_INTELLIGENCE_BEHAVIOR_URI = "git+https://github.com/microsoft/amplifier-bundle-context-intelligence@main#subdirectory=behaviors/context-intelligence.yaml"
 ROUTING_BEHAVIOR_URI = "git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main#subdirectory=behaviors/routing.yaml"
+SKILLS_BEHAVIOR_URI = "git+https://github.com/microsoft/amplifier-bundle-skills@main#subdirectory=behaviors/skills.yaml"
 DEFAULT_BEHAVIORS = {
     SHELL_BEHAVIOR_URI: "Unified shell",
     IMAGEGEN_BEHAVIOR_URI: "Image generation",
     COMPUTER_USE_BEHAVIOR_URI: "Computer use",
     CONTEXT_INTELLIGENCE_BEHAVIOR_URI: "Context intelligence",
     ROUTING_BEHAVIOR_URI: "Model routing",
+    SKILLS_BEHAVIOR_URI: "Microsoft curated skills",
 }
 APPENDED_DEFAULTS = tuple(uri for uri in DEFAULT_BEHAVIORS if uri != SHELL_BEHAVIOR_URI)
 
