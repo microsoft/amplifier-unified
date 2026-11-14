@@ -1,7 +1,7 @@
 # Registration metadata ownership
 
 Workspace discovery supplies observations; it does not own the application's
-registrations or conversation history. `amplifier_web.workspace_registrations`
+registrations or conversation history. `amplifier_workspace_metadata.reconcile`
 reconciles those observations into caller-owned registration rows and hidden IDs.
 It preserves existing row objects, display names and custom fields, and reports
 ordered old-to-new reference remaps with the destination path observed at each
@@ -17,8 +17,15 @@ and publication remain the only write boundary for this refresh.
 filesystem creation, and manual selection/settings/pin/Canvas effects. It adapts
 registration errors to the existing application errors; the service's lock,
 authority, receipts and persistence are unchanged. Native discovery remains the
-source of saved native conversations. This split adds no registry, public API,
-access decision or independent package.
+source of saved native conversations. The metadata package also owns
+list/search/paging over those rows; the host
+passes the same canonical registrations and retains demand and pinned-scope
+selection. It adds no registry, access decision or persistence owner.
+
+The temporary [`components/workspaces`](../../../components/workspaces/README.md)
+project provides the standalone metadata API and direct tests. Unified packages
+those same sources as their sole installed owner. Independent publication and
+artifact adoption remain separate; this is not the complete workspace domain.
 
 Current registration IDs still derive from canonical paths, with native-project
 placeholder IDs for unresolved folders. A registration's `aliases` are display

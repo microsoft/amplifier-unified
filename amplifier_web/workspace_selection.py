@@ -10,7 +10,7 @@ from pathlib import Path
 import uuid
 
 from .errors import _error
-from .workspace_registrations import edit, register
+from amplifier_workspace_metadata import edit, register
 
 
 def _registration(path, name=None):

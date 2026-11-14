@@ -542,7 +542,7 @@ class ShellModules:
         view['navRecentLimit'] = self.recent_limits.get(self.recent_key(client, instance, identity), saved_limit)
         chat_page = projections.chats(scoped) if wants('chatNavigation') else None
         workspace = next((row for row in state.get('workspaces', []) if row['id'] == workspace_id and row.get('available') is True), None)
-        from .workspace_registrations import listing
+        from amplifier_workspace_metadata import listing
         home_view = {**view, 'navChatScope': 'all', 'navArchive': 'active', 'navCollection': None,
                      'navFilter': '', 'navStatusFilter': 'all', 'navLocationFilter': 'all', 'navSort': 'activity'}
         home_view.pop('navChatPage', None)

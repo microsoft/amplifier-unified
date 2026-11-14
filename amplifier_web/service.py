@@ -2896,7 +2896,7 @@ class AppService:
                 placement_result = None
                 try:
                     if action == 'workspace.list':
-                        from .workspace_registrations import listing
+                        from amplifier_workspace_metadata import listing
                         diagnostic_result = listing(self.state['workspaces'], args)
                     elif action == 'workspace.prepare':
                         diagnostic_result = prepare_workspace(self, args)
