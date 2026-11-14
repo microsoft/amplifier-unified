@@ -97,7 +97,9 @@ def policy_worker(tmp_path, monkeypatch):
                         SimpleNamespace(Runtime=lambda **kwargs: runtime))
     state.events = []
     monkeypatch.setattr(runtime_worker, "publish", state.events.append)
-    state.worker = runtime_worker.Worker()
+    # This fixture deliberately replaces preparation/recovery/native ownership;
+    # prospective source custody is exercised by its real-boundary suite.
+    state.worker = runtime_worker.Worker(canonical_bootstrap=False)
     state.worker.shared_store = SimpleNamespace()
     state.worker.shared_handle = SimpleNamespace()
     state.worker.activation_gate = ActivationGate()
