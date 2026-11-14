@@ -17,7 +17,6 @@ from .session_files import amplifier_home, project_slug
 from .managed_chats import catalog_locations
 from amplifier_foundation.session.history import SessionHistoryStore
 from .shared_state_probe import text_content
-from .workspace_registrations import reconcile as reconcile_workspace_registrations
 
 BUSY = {'starting', 'working', 'running', 'stopping', 'ready'}
 INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSource', 'nativeNameRevision', 'nativeNamePolicyRevision', 'autoName', 'naming', 'description', 'bundle', 'workspace',
@@ -728,6 +727,7 @@ class AutomaticHistory:
                             for row in incoming['sessions']) if directory_mode else
                             all(row.get('sessionKind') == 'worker' for row in incoming['sessions']))
                         and not locations_changed)
+                    from amplifier_workspace_metadata import reconcile as reconcile_workspace_registrations
                     reconciliation = reconcile_workspace_registrations(
                         state['workspaces'], known, snapshot['workspaces'],
                         hidden_ids=state.get('hiddenNativeWorkspaces', []), managed_paths=managed_paths)

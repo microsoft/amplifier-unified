@@ -1,5 +1,12 @@
 # Component projects
 
+[`workspaces/`](workspaces/README.md) is the temporary authoring home for the
+independently buildable workspace registration metadata package and its direct
+tests. Unified includes the same runtime sources and keeps host selection,
+filesystem, native history, authority and persistence. The standalone distribution
+must not be coinstalled with Unified. This prepares metadata ownership; the full
+workspace domain, independent publication and artifact adoption remain separate.
+
 [`amplifier_kernels/`](../amplifier_kernels/README.md) prepares the independently
 buildable computation mechanism in its existing source location, preserving
 runtime bootstrap origin checks. Its real Python/Node tests use selected process

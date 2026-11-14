@@ -122,3 +122,19 @@ def edit(registrations, action, args):
             raise ValueError("Keep at least one workspace registered.")
         registrations.remove(row)
     return row
+
+
+def listing(registrations, args):
+    query = args.get('query', '').strip().casefold()
+    rows = [dict(row) for row in registrations if row.get('available') and row.get('path') and not row.get('archived')
+            and (not query or query in (row['name'] + ' ' + row['path']).casefold())]
+    names = {}
+    for row in rows:
+        names[row['name']] = names.get(row['name'], 0) + 1
+    for row in rows:
+        row['label'] = row['name'] + (' · ' + row['path'] if names[row['name']] > 1 else '')
+    rows.sort(key=lambda row: (row['name'].casefold(), row['path']))
+    offset = args.get('offset', 0)
+    limit = args.get('limit', 100)
+    return {'items': rows[offset:offset + limit], 'nextOffset': offset + limit if len(rows) > offset + limit else None,
+            'total': len(rows)}
