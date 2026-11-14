@@ -706,9 +706,18 @@ tree causes it is not yet known. `app\config\services` accepts writes in the
 same state.
 
 Uninstall can be repeated. An entry that an earlier, interrupted uninstall
-already removed is skipped; a task that is already gone is not an error. A
-refused rewrite of the entry record no longer fails a finished uninstall,
-because every entry is already gone.
+already removed is skipped; a task that is already gone is not an error.
+
+The last step rewrites the entry record with the status `removed`; a later
+setup run reads that status to choose its wording. Worker programs end a
+moment after the task reports that it stopped, so this write waits up to 15
+seconds for them. A write that is still refused does not fail a finished
+uninstall, because every entry is already gone; it is saved as a failed
+`receipt` step.
+
+The Start-menu commands Stop and Status use the same form of message: what
+did not happen, the next action and the reference. They no longer show the
+general text "could not complete this operation".
 
 The launcher is the code that setup installed; an in-app update does not
 replace it. A new installation gets this behavior from its setup file. An

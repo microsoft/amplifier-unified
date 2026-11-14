@@ -337,9 +337,10 @@ async def _uninstall(root):
     if result.get("receiptError") is not None:
         _record(root, "uninstall", "receipt", result["receiptError"])
     if sys.stdout is None:
+        # No advice to delete the folder by hand: it holds the person's chats,
+        # and File Explorer can refuse its longest paths.
         owner_notice("Amplifier is uninstalled. It no longer runs, and it no longer starts when you sign in.\n\n"
-                     "Your chats, settings, accounts and the program files are still in this folder. "
-                     "Delete the folder to remove them:\n" + str(root))
+                     "Your chats, settings, accounts and the program files are still in this folder:\n" + str(root))
     return {"ok": True, "operation": "uninstall", "userDataRetained": True,
             "installationFilesRetained": True}
 

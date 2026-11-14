@@ -24,6 +24,7 @@ def model(tmp_path, monkeypatch):
     state = {"registry": None, "links": {}, "calls": [], "pins": set()}
     monkeypatch.setattr(windows_files, "address", Path)
     monkeypatch.setattr(shell, "programs", lambda: programs)
+    monkeypatch.setattr(shell, "SETTLE_SECONDS", 0)  # One attempt; the wait has its own test.
     @contextmanager
     def directory(path, **kwargs):
         if kwargs.get("create"):
@@ -239,6 +240,42 @@ def test_refused_receipt_write_after_removal_is_reported_not_raised(model):
     state["refuse_write"] = None
     assert "receiptError" not in shell.remove(root)
     assert json.loads((root / shell.FILE).read_text())["status"] == "removed"
+
+
+@pytest.mark.parametrize("released_after,recorded", [(3, True), (None, False)])
+def test_receipt_write_waits_for_a_closing_app_and_then_reports_instead_of_failing(
+        model, monkeypatch, released_after, recorded):
+    # The app's worker programs end a moment after its task reports that it
+    # stopped. Until then Windows refuses the receipt; setup reads its status.
+    root, programs, state = model
+    shell.install(root, "1.0.0")
+    folder = programs / ("Amplifier Unified - " + shell.identity(root))
+    waits = []
+    monkeypatch.setattr(shell, "SETTLE_SECONDS", 4)
+    monkeypatch.setattr(shell.time, "sleep", waits.append)
+    def refuse(path):
+        # At every attempt the entries are already gone: the pins were released first.
+        assert state["registry"] is None and not folder.exists() and not state["pins"]
+        return path.name == shell.FILE and (released_after is None or len(waits) < released_after)
+    state["refuse_write"] = refuse
+    result = shell.remove(root)
+    assert result["shortcutsRemoved"] and ("receiptError" not in result) is recorded
+    assert json.loads((root / shell.FILE).read_text())["status"] == ("removed" if recorded else "installed")
+    # Half a second between attempts; eight attempts and no sleep after the last one.
+    assert waits == [0.5] * (released_after if recorded else 7)
+
+
+def test_receipt_write_does_not_wait_for_a_failure_that_waiting_cannot_cure(model, monkeypatch):
+    from amplifier_web import deployment
+    root, programs, state = model
+    shell.install(root, "1.0.0")
+    waits = []
+    monkeypatch.setattr(shell, "SETTLE_SECONDS", 4)
+    monkeypatch.setattr(shell.time, "sleep", waits.append)
+    def broken(path, raw, **kw):
+        raise ValueError("private files require a bounded absolute local Windows drive path")
+    monkeypatch.setattr(deployment, "write_private", broken)
+    assert isinstance(shell.remove(root)["receiptError"], ValueError) and not waits
 
 
 def saved_record(root):
@@ -494,6 +531,9 @@ def _seed_native_entries(root, folder):
             row["links"][name] = hashlib.sha256(content).hexdigest()
     shell.registry(root, values)
     write_private(root / shell.FILE, json.dumps(row), owned_root=root)
+    # A real installation has this folder before its app first runs.
+    with windows_files.directory(root / "app" / "config" / "services", owned_root=root, create=True):
+        pass
     return shell.registry(root)
 
 
@@ -510,10 +550,13 @@ def test_native_uninstall_order_failure_and_second_uninstall(monkeypatch):
     for listing without write sharing. That kind of handle gives the refusal
     that the clean room measured with a live conversation worker (a rename into
     the folder fails with WinError 32). Which handle a real worker holds is not
-    known; this is the same refusal, not the same owner.
+    known; this is the same refusal, not the same owner. The stand-in releases
+    the folder about one second after its stop reports, because real worker
+    programs end a moment after the task reports that it stopped.
     """
     import ctypes
     import shutil
+    import threading
     import winreg
     from amplifier_web import installation_health, windows_consumer as consumer
     from amplifier_web import windows_files, windows_installation, windows_service
@@ -528,7 +571,7 @@ def test_native_uninstall_order_failure_and_second_uninstall(monkeypatch):
     kernel.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
                                    ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
     kernel.CloseHandle.argtypes = [ctypes.c_void_p]
-    held, events, failure, present = [], [], [], set(shell.LINKS)
+    held, events, failure, present, timers = [], [], [], set(shell.LINKS), []
 
     def hold():
         # FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_SHARE_READ only,
@@ -552,12 +595,16 @@ def test_native_uninstall_order_failure_and_second_uninstall(monkeypatch):
         progress("stop")
         # While the app stops, each remaining shortcut exists and real NTFS
         # sharing refuses another program that tries to change it.
-        assert {path.name for path in folder.iterdir()} == present
-        with pytest.raises(OSError):
-            (folder / "Uninstall Amplifier.lnk").open("wb")
+        names = {path.name for path in folder.iterdir()} if folder.exists() else set()
+        assert names == present
+        if names:
+            with pytest.raises(OSError):
+                (folder / "Uninstall Amplifier.lnk").open("wb")
         if failure:
             raise windows_service.WindowsServiceError(failure[0])
-        release()  # A normal stop ends the app and its conversation workers.
+        # A normal stop ends the app; its worker programs end a moment later.
+        timers.append(threading.Timer(1.0, release))
+        timers[-1].start()
         events.append("task")
     monkeypatch.setattr(windows_service, "uninstall", uninstall)
     try:
@@ -592,17 +639,26 @@ def test_native_uninstall_order_failure_and_second_uninstall(monkeypatch):
         present.discard(name)
         winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)
         # 4. The second uninstall completes: the stop first, then the remaining
-        #    entries, the emptied Start-menu folder and the receipt.
+        #    entries and the emptied Start-menu folder. The receipt is written
+        #    although the folder is still held when the stop reports: the last
+        #    step waits for the closing programs.
         failure.clear()
         result = asyncio.run(consumer.maintenance(root, "uninstall"))
         assert result["ok"] and events == ["task"] and not held
         assert shell.registry(root) is None and not folder.exists()
         with windows_files.directory(root, owned_root=root) as owned:
             assert json.loads(owned.read_private(shell.FILE, limit=65536))["status"] == "removed"
+        with windows_files.directory(root / "app" / "config" / "services", owned_root=root) as owned:
+            # No new note: the wait succeeded, so the earlier "stop" note is still the only one.
+            assert json.loads(owned.read_private(consumer.RECORD, limit=65536))["step"] == "stop"
         # 5. Asking again changes nothing and is not an error.
+        present.clear()
         assert asyncio.run(consumer.maintenance(root, "uninstall"))["ok"] and events == ["task", "task"]
     finally:
         # Only this test's own throwaway objects, by their exact names.
+        for timer in timers:
+            timer.cancel()
+            timer.join()
         release()
         try:
             winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key)

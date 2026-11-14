@@ -17,9 +17,11 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 import uuid
 
 FILE = "consumer-shell.json"
+SETTLE_SECONDS = 15  # Longest wait for a closing app to release the installation folder.
 LINKS = {"Amplifier Unified.lnk": "", "Amplifier status.lnk": " --status",
          "Stop Amplifier.lnk": " --stop", "Uninstall Amplifier.lnk": " --uninstall"}
 REGISTRY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\AmplifierUnified-"
@@ -257,7 +259,8 @@ def removal(root, *, progress=None):
     uninstall completes. An entry that differs from setup's record refuses.
 
     `progress(name)` names the step that is about to run: `apps-entry`,
-    `shortcuts`, `receipt`.
+    `shortcuts`, `receipt`. `finish` releases the pins itself, so the entries
+    are gone before it records the removal.
     """
     from .windows_files import address, directory
     from .deployment import write_private
@@ -279,7 +282,6 @@ def removal(root, *, progress=None):
         # A completed earlier removal. Setup never recreates entries under this receipt.
         yield lambda: dict(result)
         return
-    finished = False
     with ExitStack() as stack:
         removers, commit = [], None
         try:
@@ -301,7 +303,6 @@ def removal(root, *, progress=None):
         except FileNotFoundError:
             pass  # The installed-app entry is already gone.
         def finish():
-            nonlocal finished
             # The commit can refuse because another program edited the key; it
             # runs before any shortcut is removed. Later genuine I/O failures
             # can leave partial effects, which the next removal completes.
@@ -311,22 +312,31 @@ def removal(root, *, progress=None):
             step("shortcuts")
             for remove_link in removers:
                 remove_link()
-            finished = True
+            stack.close()  # Release the pins: Windows removes the shortcuts now.
+            try:
+                os.rmdir(folder)  # Only when empty; a file the person added stays.
+            except OSError:
+                pass
             step("receipt")
             row["status"] = "removed"
-            try:
-                write_private(root / FILE, json.dumps(row), owned_root=root)
-            except (OSError, ValueError, RuntimeError) as error:
-                # Every entry is gone. A receipt that still says "installed"
-                # only makes a later removal check for entries and find none.
-                return {**result, "receiptError": error}
-            return dict(result)
+            # Setup reads this status on a later run. Every entry is gone, so a
+            # refused write does not fail the removal; it is reported instead.
+            for attempt in range(max(1, SETTLE_SECONDS * 2)):
+                try:
+                    write_private(root / FILE, json.dumps(row), owned_root=root)
+                    return dict(result)
+                except PermissionError as refused:
+                    # The app's worker programs end a moment after its task
+                    # reports that it stopped. Until then Windows refuses a
+                    # replaced file in the installation folder.
+                    error = refused
+                    if attempt < SETTLE_SECONDS * 2 - 1:
+                        time.sleep(0.5)
+                except (OSError, ValueError, RuntimeError) as failed:
+                    error = failed
+                    break
+            return {**result, "receiptError": error}
         yield finish
-    if finished:
-        try:
-            os.rmdir(folder)  # Only when empty; a file the person added stays.
-        except OSError:
-            pass
 
 
 def remove(root):
