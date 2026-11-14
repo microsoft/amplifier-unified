@@ -250,6 +250,20 @@ def integrate(root):
     return install(root, value["version"])
 
 
+def start_failure(root):
+    """One plain cause and next step when the shortcut could not start the app."""
+    from .windows_service import managed
+    # No start-at-sign-in task yet: this was the first start, which prepares
+    # the app's remaining parts from the internet before it registers the task.
+    if not managed(Path(root) / "app"):
+        return ("Amplifier could not finish its first start. On the first start it downloads "
+                "the remaining parts of the app from the internet.\n\n"
+                "Check that this PC is connected to the internet. Then open Amplifier from the "
+                "Start menu: Amplifier Unified. You do not need to install it again.")
+    return ("Amplifier could not start.\n\n"
+            "Restart Windows. Then open Amplifier from the Start menu: Amplifier Unified.")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
@@ -270,11 +284,20 @@ def main(argv=None):
             print(json.dumps(result))
     except (OSError, ValueError, RuntimeError, TimeoutError, metadata.PackageNotFoundError) as error:
         from .windows_installation import owner_notice
+        starting = not (args.audit or args.integrate or args.status or args.stop or args.uninstall)
+        message = None
+        if starting:
+            try:
+                message = start_failure(args.root)
+            except (OSError, ValueError, RuntimeError):
+                pass
         if sys.stdout is None:
-            owner_notice("Amplifier could not complete this operation. Its private setup/service evidence "
+            owner_notice(message or
+                         "Amplifier could not complete this operation. Its private setup/service evidence "
                          "is retained. No automatic retry, force-stop or security-policy change was attempted.")
         else:
-            print(json.dumps({"ok": False, "errorType": type(error).__name__}))
+            print(json.dumps({"ok": False, "errorType": type(error).__name__,
+                              **({"message": message} if message else {})}))
         raise SystemExit(1) from None
 
 

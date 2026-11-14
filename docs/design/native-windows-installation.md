@@ -290,6 +290,15 @@ back. The launcher's refusal of a launch record that names another launcher
 is still silent at start (it writes `task-launcher-error.json`); this command
 never leaves that state without saying so, but another cause still would.
 
+A launcher that is older than the running app also answered "not ready" to
+its own status question (the Start-menu status entry), because it compared the
+host's version with its own. It now expects the app generation that it starts
+(`installation_health.started_identity`); the identity check itself is
+unchanged. When the shortcut cannot start the app, it now says one cause and
+one next step: before the start-at-sign-in task exists the cause is the first
+start's download, and the next step is the internet connection and the Start
+menu; nothing is installed again.
+
 The Apps-list version stays at the setup version, as it already does after
 every in-app update. Setup's Repair and Update will call this command and
 refresh the private tools; that is separate work.

@@ -87,6 +87,24 @@ def matches_health(value, home, expected):
             and (not expected['revision'] or value.get('revision') == expected['revision']))
 
 
+def started_identity(home, expected):
+    """The app version that this installation starts, for a caller that is its launcher.
+
+    A Windows launcher keeps the version that setup installed, and starts the
+    active app generation. After any in-app update the two differ. The host
+    must then match the generation that this launcher itself selects, not the
+    launcher's own version. Any other caller keeps its own identity.
+    """
+    from .application_generations import active, bootstrap_identity
+    try:
+        target = active(home)
+        if target and target.get("bootstrap") == bootstrap_identity(sys.prefix):
+            return {**expected, "version": target["version"], "revision": target["revision"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return expected
+
+
 async def status(home, wait=0):
     # A fresh service has not necessarily created its control token or TLS
     # material yet. Apply the readiness budget to initialization as well.
@@ -115,7 +133,7 @@ async def _status_once(home, wait=0):
         return {'ok': False, 'service': initial_state, 'message': "The background service manager could not be reached.",
                 'nextStep': service_manager_help() if sys.platform == 'linux' else 'Sign in to your desktop account and retry service status.'}
     if sys.platform == 'win32':
-        return await _windows_status(home, expected, initial_state)
+        return await _windows_status(home, started_identity(home, expected), initial_state)
     try:
         config = load_server_config(home)
         manager = SimpleNamespace(home=home, service=SimpleNamespace(server_config=config, port=config['port']))
