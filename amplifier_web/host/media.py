@@ -34,6 +34,14 @@ def registration_hooks(coordinator):
     return getattr(registration_coordinator(coordinator), "hooks", None)
 
 
+def neutral_control_media(coordinator):
+    store = coordinator.get_capability("web.media.store")
+    if store is None:
+        return False
+    from amplifier_foundation.session.media import NeutralSessionMediaStore
+    return type(store) is NeutralSessionMediaStore
+
+
 def begin_hook_graph(session, *, selection=None):
     """Capture this actual construction, before any host/module registration.
 
@@ -81,12 +89,16 @@ def seal_hook_graph(coordinator):
         return False
     selection = coordinator.get_capability("web.media.graph_selection")
     if selection is None or not selection.accepts_construction(graph):
+        coordinator.register_capability("web.media.source_join", None)
+        enable_media(coordinator)
         return False
     if bridge.graph_receipt is None:
         try:
             graph.seal()
         except ValueError:
             return False
+    coordinator.register_capability("web.media.source_join", (
+        bridge, graph, bridge.graph_receipt, selection))
     enable_media(coordinator)
     return bridge.validate_receipt(bridge.graph_receipt) is True
 
@@ -122,9 +134,9 @@ async def control_tool_post(coordinator, event):
     return value
 
 
-async def drop_control_media(capability, session_id, call_id):
+async def drop_control_media(capability, session_id, call_id, *, neutral=False):
     """Settle the captured actual origin, never mutable post-event identity."""
-    if capability is not None and callable(getattr(capability, "publish", None)):
+    if not neutral and capability is not None and callable(getattr(capability, "publish", None)):
         await capability.publish([], origin={"kind": "tool", "session_id": session_id,
                                              "id": call_id}, disposition="drop")
 
@@ -384,8 +396,14 @@ def enable_media(coordinator):
                      and facts.get("ready") is True
                      for facts in consumers.values())
     bridge = coordinator.get_capability(_HOOK_BRIDGE)
-    qualified = (bridge is not None and
-                 bridge.validate_receipt(bridge.graph_receipt) is True)
+    join = coordinator.get_capability("web.media.source_join")
+    selection = coordinator.get_capability("web.media.graph_selection")
+    graph = coordinator.get_capability(_HOOK_GRAPH)
+    qualified = (bridge is not None and isinstance(join, tuple) and len(join) == 4 and
+                 join[0] is bridge and join[1] is graph and
+                 join[2] is bridge.graph_receipt and join[3] is selection and
+                 bridge.validate_receipt(join[2]) is True and
+                 selection.accepts_construction(graph))
     capability.enabled = bool(qualified and loop_ready and _durable_media_supported() and
                               callable(coordinator.get_capability("session.durable_checkpoint")))
 

@@ -77,8 +77,9 @@ async def test_control_post_cannot_publish_unappended_media_or_borrow_loop_check
 
 class NamedFixtureLoader:
     """Selected source fixture exercising real Core mount/ready phases."""
-    def __init__(self, provider, context):
+    def __init__(self, provider, context, tool=None, sentinel=""):
         self.provider, self.context = provider, context
+        self.tool, self.sentinel = tool or object(), sentinel
         self.queue = []
 
     async def load(self, module_id, config, *, source_hint=None, coordinator=None):
@@ -90,7 +91,7 @@ class NamedFixtureLoader:
                     details={"role": "loop", "contract": 1})
             elif module_id == "fixture-context":
                 await current.mount("context", self.context)
-                await current.mount("tools", object(), name="fixture")
+                await current.mount("tools", self.tool, name="fixture")
             elif module_id == "fixture-provider":
                 await current.mount("providers", self.provider, name="fixture")
             elif module_id == "fixture-hooks":
@@ -100,6 +101,8 @@ class NamedFixtureLoader:
         return mount
 
     async def post(self, event, data):
+        if self.sentinel and self.sentinel in str(data):
+            raise RuntimeError("Private pixels reached the first post observer")
         return HookResult()
 
     async def ready(self, current):
@@ -116,7 +119,7 @@ class NamedFixtureLoader:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("redact", [None, "null", "string", "inplace", "deny", "unknown"])
+@pytest.mark.parametrize("redact", [None, "null", "string", "inplace", "deny", "unknown", "control"])
 async def test_named_actual_core_construction_final_result_ack_private_pixels(tmp_path, redact):
     """No graph Boolean: actual source/callback join, mount/ready/late and ACK."""
     import base64
@@ -155,16 +158,26 @@ async def test_named_actual_core_construction_final_result_ack_private_pixels(tm
     plan = {"session": {"orchestrator": "fixture-loop", "context": "fixture-context"},
             "providers": [{"module": "fixture-provider"}],
             "hooks": [{"module": "fixture-hooks"}]}
+    actual_calls = []
+    class RawTool:
+        input_schema = {"type": "object"}
+        async def execute(self, arguments):
+            from amplifier_core.message_models import ImageBlock
+            return ToolResult(success=True, content=[ImageBlock(source={
+                "type": "base64", "media_type": "image/png",
+                "data": base64.b64encode(pixels).decode()})])
+    fixture_loader = NamedFixtureLoader(Provider(), Context(), RawTool(),
+                                       base64.b64encode(pixels).decode())
     selected = NamedMediaGraph("actual-core-media-fixture", plans=[plan], sources={
-        __file__: hashlib.sha256(Path(__file__).read_bytes()).hexdigest()})
+        __file__: hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
+        bindings=(fixture_loader,), observations=(actual_calls,), dependencies=(HookResult,))
     session = AmplifierSession(plan, session_id="named-root")
-    session.coordinator.loader = NamedFixtureLoader(Provider(), Context())
+    session.coordinator.loader = fixture_loader
     store = SessionStore(tmp_path / "sessions")
     host_media.bind_media(session, store, selection=selected)
     coordinator = session.coordinator
     cap = coordinator.get_capability(NAMESPACE)
     await session.initialize()
-    actual_calls = []
     async def late(event, data):
         actual_calls.append(data["tool_call_id"])
         if redact == "null":
@@ -179,6 +192,17 @@ async def test_named_actual_core_construction_final_result_ack_private_pixels(tm
     assert cap.enabled is False
     assert host_media.seal_hook_graph(coordinator) is True
     assert cap.enabled is True
+    if redact == "control":
+        from amplifier_web.runtime_controls import RuntimeControls
+        controls = object.__new__(RuntimeControls)
+        controls.coordinator, controls._tool_invocation = coordinator, None
+        controls.checkpoint = AsyncMock()
+        final = await controls.invoke({"name": "fixture", "arguments": {}}, checkpoint=False)
+        assert len(actual_calls) == 1
+        assert final["result"]["mediaDelivery"]["available"] is False
+        assert base64.b64encode(pixels).decode() not in str(final)
+        await session.cleanup()
+        return
     if redact == "unknown":
         async def unowned(event, data):
             return HookResult()

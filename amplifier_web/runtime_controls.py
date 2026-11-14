@@ -855,6 +855,8 @@ class RuntimeControls:
         from .host.media import NAMESPACE
         media_capability = coordinator.get_capability(NAMESPACE)
         media_session_id = coordinator.session_id
+        from .host.media import neutral_control_media
+        neutral_media = neutral_control_media(coordinator)
         primary_error = None
         try:
             if integration_id is not None:
@@ -883,7 +885,7 @@ class RuntimeControls:
             from .host.media import control_tool_post, prepare_control_result
             result = await prepare_control_result(coordinator, result, call)
             result = await control_tool_post(coordinator, {
-                **data, "result": result})
+                **{key: value for key, value in data.items() if key != "tool_obj"}, "result": result})
             if checkpoint:
                 await self.checkpoint()
             return {"callId":call,"result":public_config(result)}
@@ -897,7 +899,7 @@ class RuntimeControls:
             JOB_CALL.reset(ownership)
             from .host.media import drop_control_media
             try:
-                await drop_control_media(media_capability, media_session_id, call)
+                await drop_control_media(media_capability, media_session_id, call, neutral=neutral_media)
             except BaseException as cleanup_error:
                 if primary_error is None:
                     raise
