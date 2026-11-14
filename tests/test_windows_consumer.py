@@ -350,20 +350,86 @@ def test_windowless_failure_is_bounded_owner_notice_not_stderr_or_retry(tmp_path
 
 @pytest.mark.parametrize("operation,confirmed", [("stop", True), ("uninstall", True), ("uninstall", False)])
 def test_consumer_maintenance_uses_normal_owner_stop_and_preserves_files(tmp_path, monkeypatch, operation, confirmed):
-    from amplifier_web import windows_installation, windows_service
+    # An installation without Windows entries: only the normal owner stop runs.
+    from amplifier_web import installation_health, windows_installation, windows_service
     events = []
     monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {})
     monkeypatch.setattr(windows_installation, "owner_notice", lambda text, confirm:
                         events.append(("confirm", confirm)) or confirmed)
-    monkeypatch.setattr(windows_service, "uninstall", lambda home: events.append(("uninstall", home)))
+    async def working(home):
+        return None
+    monkeypatch.setattr(installation_health, "windows_working", working)
+    monkeypatch.setattr(windows_service, "uninstall", lambda home, progress: events.append(("uninstall", home)))
     monkeypatch.setattr(windows_service, "command", lambda name, home: events.append((name, home)))
     retained = tmp_path / "user-data"
     retained.write_bytes(b"original")
     result = asyncio.run(consumer.maintenance(tmp_path, operation))
     assert events == [("confirm", True)] + ([(operation, tmp_path / "app")] if confirmed else [])
     assert retained.read_bytes() == b"original"
+    assert result == ({"ok": True, "operation": operation, "userDataRetained": True,
+                       "installationFilesRetained": True} if confirmed else {"ok": True, "cancelled": True})
     assert result.get("userDataRetained", result.get("cancelled")) is True
+
+@pytest.mark.parametrize("operation,step,phrase", [
+    ("stop", "stop-app", "could not stop its background app"),
+    ("status", "status", "could not read its status"),
+    ("uninstall", "task-read", "could not read its start-at-sign-in entry")])
+def test_failed_maintenance_names_its_cause_and_next_step_not_the_old_generic_text(
+        tmp_path, monkeypatch, operation, step, phrase):
+    from amplifier_web import deployment, installation_health, windows_installation, windows_service
+    notices, written = [], []
+    monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
+    monkeypatch.setattr(consumer, "environment", lambda *a: {})
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    monkeypatch.setattr(windows_installation, "owner_notice",
+                        lambda text, confirm=False: notices.append((text, confirm)) or True)
+    monkeypatch.setattr(deployment, "write_private", lambda path, raw, **kw: written.append((path, json.loads(raw))))
+    def refuse(*args, **kwargs):
+        if kwargs.get("progress"):
+            kwargs["progress"]("task-read")
+        raise windows_service.WindowsServiceError("synthetic-private-detail")
+    async def status(home):
+        refuse()
+    async def working(home):
+        return None
+    monkeypatch.setattr(windows_service, "command", refuse)
+    monkeypatch.setattr(windows_service, "uninstall", refuse)
+    monkeypatch.setattr(installation_health, "status", status)
+    monkeypatch.setattr(installation_health, "windows_working", working)
+    with pytest.raises(SystemExit) as stopped:
+        consumer.main(["--root", str(tmp_path), "--" + operation])
+    assert stopped.value.code == 1
+    shown = [text for text, confirm in notices if not confirm]
+    assert len(shown) == 1 and phrase in shown[0] and "restart this pc" in shown[0].lower()
+    assert shown[0].endswith(f"Reference: {step}, WindowsServiceError")
+    assert "synthetic-private-detail" not in shown[0] and "evidence" not in shown[0]
+    # Stop and uninstall keep one private note of the failed step; a status read keeps none.
+    if operation == "status":
+        assert not written
+    else:
+        (path, record), = written
+        assert path == tmp_path / "app/config/services" / consumer.RECORD
+        assert (record["operation"], record["step"]) == (operation, step)
+
+
+@pytest.mark.parametrize("operation,step", [("uninstall", "preparation"), ("stop", "stop-app"), ("status", "status")])
+def test_maintenance_on_a_folder_that_fails_the_installation_check_writes_nothing(
+        tmp_path, monkeypatch, capsys, operation, step):
+    from amplifier_web import deployment
+    def foreign(root):
+        raise ValueError("Use this consumer installation's original shortcut.")
+    monkeypatch.setattr(consumer, "installation", foreign)
+    def unused(*args, **kwargs):
+        raise AssertionError("No record may be written into an unchecked folder.")
+    monkeypatch.setattr(deployment, "write_private", unused)
+    with pytest.raises(SystemExit) as stopped:
+        consumer.main(["--root", str(tmp_path), "--" + operation])
+    assert stopped.value.code == 1 and list(tmp_path.iterdir()) == []
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "step": step, "errorType": "ValueError"}
+    if operation == "uninstall":
+        assert "nothing was changed" in consumer.Unfinished(step, ValueError()).notice
+
 
 @pytest.mark.parametrize("registered, expected", [
     (False, "could not finish its first start"), (True, "Amplifier could not start.")])

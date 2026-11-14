@@ -653,3 +653,86 @@ def test_a_launcher_expects_the_app_version_that_it_starts_not_its_own(tmp_path,
     assert ("_windows_status(home, started_identity(home, expected), initial_state)"
             in inspect.getsource(health._status_once))
     assert health.matches_health.__code__.co_argcount == 3
+
+
+@pytest.fixture
+def working_chain(windows_health_chain, monkeypatch):
+    """The owner's activity question over the same pinned private boundary."""
+    import aiohttp
+    from amplifier_web import browser_entry
+    state = windows_health_chain
+    state["body"] = {"ok": True, "app": "amplifier-unified", "version": "1.2.3",
+                     "dataIdentity": "owned-data", "activity": {"working": 2}}
+    monkeypatch.setattr(browser_entry, "current_owner_sid", lambda: state["spec"].sid)
+    def unused(*args):
+        raise AssertionError("The activity question must not wait for Task Scheduler.")
+    monkeypatch.setattr(windows_service, "_read", unused)
+
+    class Response:
+        async def json(self):
+            return state["body"]
+        async def __aenter__(self):
+            self.status = state.get("status", 200)
+            return self
+        async def __aexit__(self, *args):
+            pass
+    class Client:
+        def __init__(self, **kwargs):
+            assert kwargs["trust_env"] is False
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        def get(self, url, **kwargs):
+            assert kwargs["ssl"] is state["pin"] and kwargs["allow_redirects"] is False
+            state["requests"].append((url, kwargs))
+            if state.get("offline"):
+                raise aiohttp.ClientConnectionError("refused")
+            return Response()
+    monkeypatch.setattr(aiohttp, "ClientSession", Client)
+    return state
+
+
+def test_windows_working_reads_the_count_from_this_installations_pinned_host(working_chain):
+    state = working_chain
+    assert asyncio.run(health.windows_working(state["home"])) == 2
+    (url, request), = state["requests"]
+    assert url == "https://127.0.0.1:8942/api/health" and request["params"] == {"activity": "1"}
+    assert request["headers"] == {"Authorization": "Bearer synthetic-control"}
+    state["body"]["activity"] = {"working": 0}
+    assert asyncio.run(health.windows_working(state["home"])) == 0
+
+
+@pytest.mark.parametrize("change", [
+    {"dataIdentity": "another-installation"}, {"app": "something-else"}, {"activity": None},
+    {"activity": {}}, {"activity": {"working": True}}, {"activity": {"working": -1}},
+    {"activity": {"working": "2"}}, {"activity": [2]}])
+def test_windows_working_is_unknown_for_another_host_or_an_answer_without_a_count(working_chain, change):
+    state = working_chain
+    state["body"].update(change)
+    assert asyncio.run(health.windows_working(state["home"])) is None
+
+
+@pytest.mark.parametrize("fault", ["offline", "status", "pin", "targets", "owner", "credential"])
+def test_windows_working_is_unknown_when_no_owned_host_answers(working_chain, monkeypatch, fault):
+    from amplifier_web import browser_entry
+    state = working_chain
+    def unavailable(*args):
+        raise browser_entry.BrowserEntryUnavailable("private boundary unavailable")
+    if fault == "offline":
+        state["offline"] = True
+    elif fault == "status":
+        state["status"] = 503
+    elif fault == "pin":
+        state["pin"] = object()
+    elif fault == "targets":
+        monkeypatch.setattr(browser_entry, "_owner_probe_targets", unavailable)
+    elif fault == "owner":
+        monkeypatch.setattr(browser_entry, "current_owner_sid", unavailable)
+    else:
+        monkeypatch.setattr(browser_entry, "_control_token", unavailable)
+    assert asyncio.run(health.windows_working(state["home"])) is None
+    if fault in {"pin", "targets", "owner", "credential"}:
+        # No request, and no credential read before the private pin is valid.
+        assert state["requests"] == []
+        assert state["credentialReads"] == 0
