@@ -115,11 +115,34 @@ receipts without automatic replay. Update-held inputs stay under the existing
 update owner's admission boundary. An independent participant's failure does not
 transfer or repeat its work through another agent.
 
-The initial shared-room connector supplies bounded public context. On-demand
-retrieval from a Unified-owned room requires the separate source MCP binding;
-the already-qualified Conversations-source retrieval is not evidence that this
-binding is installed. No new history store, Core change, or Instance management
-credential is required for shared participation itself.
+The shared-room connector supplies bounded public context. When the peer advertises
+standard HTTP MCP support and the host has a primary configured HTTPS public
+origin, session creation/resume also supplies `unified-room-context`. Its
+`conversation_read` tool returns up to 20 source rows per page with source IDs,
+sequence and author, an older-page cursor and explicit text truncation.
+`conversation_read_text` follows a returned continuation. The existing saved
+message-window owner reads actual public text; there is no copied transcript store.
+Private reasoning, tools, interrupted partial replies, composer drafts and browser
+action/detail grants are excluded. A page can contain fewer public messages than
+its source range; follow its cursor rather than assuming an empty page is the end.
+
+Room membership and the saved endpoint identity authorize these reads without an
+approval step. An ephemeral bearer credential is only their transport: it is scoped
+to one room, participant and exact source binding and is checked before and after
+asynchronous reads. Removal or source replacement denies future reads, including
+an in-flight result; it cannot erase material already received by the agent.
+The credential persists across turns and ordinary connection/viewer loss, and is
+cleared on host shutdown. Text continuations/cursors expire when their saved
+window or source changes; errors never silently reset paging. Stop keeps its
+existing execution meaning and does not remove room membership.
+
+The primary configured HTTPS origin must be reachable and trusted by the external
+runtime; it is never guessed from request headers or localhost. Missing origin or
+HTTP capability leaves ordinary chat unchanged with `roomContext: false` in the
+participant capability receipt. Failed advertised tool attachment is an ordinary
+connection failure, not a reason to silently remove tools or recreate the native
+session. No Instance administrator secret, provider registry or new listener is
+required. Singleton and earlier directed chats retain their existing behavior.
 
 ## Earlier directed conversations with multiple agents
 
