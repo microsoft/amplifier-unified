@@ -43,6 +43,59 @@ def session(tmp_path):
         asyncio.run(callback())
 
 
+async def test_readiness_requires_positive_loop_report_and_actual_checkpoint(session):
+    from amplifier_web.host.media import enable_media
+    cap = session.caps[NAMESPACE]
+    session.caps["session.durable_checkpoint"] = lambda: None
+    for outcome in ("failed", "rejected", "ready"):
+        cap.report("fixture-loop", event="consumer-ready", outcome=outcome,
+                   details={"role": "loop", "contract": 1})
+        enable_media(session.coordinator)
+        assert cap.enabled is (outcome == "ready")
+    session.caps.pop("session.durable_checkpoint")
+    enable_media(session.coordinator)
+    assert cap.enabled is False
+
+
+async def test_attachment_encoder_is_bound_to_this_coordinator_before_initialize(session, tmp_path, monkeypatch):
+    from amplifier_web import attachments
+    home = tmp_path / "app"
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(home))
+    row = attachments.save(home, "image.png", base64.b64encode(session.raw).decode())
+    cap = session.caps[NAMESPACE]
+    cap.enabled = True
+    encoded = await session.caps["live.attachments.encode"](
+        SimpleNamespace(id="input-1", text="Inspect", attachments=[row]))
+    ref = encoded["metadata"][NAMESPACE]["refs"][0]
+    assert ref["session_id"] == session.native.session_id
+    assert base64.b64encode(session.raw).decode() not in str(encoded)
+
+
+async def test_unqualified_platform_binds_neutral_reader_without_creating_media_files(tmp_path, monkeypatch):
+    from amplifier_web.host import media as host
+    monkeypatch.setattr(host, "_durable_media_supported", lambda: False)
+    caps, cleanup = {}, []
+    coordinator = SimpleNamespace(session_id="neutral", config={}, get=lambda _: {},
+        get_capability=caps.get, register_capability=lambda k, v: caps.update({k: v}),
+        register_cleanup=cleanup.append, hooks=SimpleNamespace(register=lambda *args, **kw: None))
+    store = SessionStore(tmp_path / "sessions")
+    bind_media(SimpleNamespace(session_id="neutral", coordinator=coordinator), store)
+    cap = caps[NAMESPACE]
+    assert cap.enabled is False
+    assert not (store.directory("neutral") / "media").exists()
+    value = ChatRequest(messages=[Message(role="user", content="Text works")])
+    class Provider:
+        default_model = "text"
+        def get_media_request_support(self, **kwargs):
+            return {"v": 1, "positions": []}
+        async def complete(self, request, **kwargs):
+            cap.validate(request, purpose="transport", request_options=kwargs)
+            return request.messages[0].content
+    from amplifier_web.host.media import MediaOnlyDelivery
+    assert await SurfaceProvider(Provider(), MediaOnlyDelivery(), coordinator=coordinator).complete(value) == "Text works"
+    for callback in cleanup:
+        await callback()
+
 async def accepted(session, *, checkpoint=True):
     cap = session.caps[NAMESPACE]
     # This fixture explicitly qualifies the synthetic producer, not a live graph.
@@ -210,6 +263,73 @@ async def test_request_only_issued_overlay_survives_without_admitting_canonical_
     assert value.messages[-1] is original_inline and original_inline.content[0].source["data"]
 
 
+@pytest.mark.parametrize("mode", ["admission-revoke", "sdk-retry"])
+async def test_request_only_consent_is_rechecked_after_admission_and_never_renews_for_sdk_retry(session, mode):
+    from amplifier_web.host.media import record_request_only
+    from amplifier_web.execution_events import ExecutionEvents
+    value = await accepted(session)
+    state = {"allowed": True, "attempts": 0}
+    overlay = Message(role="user", content=[{"type": "image", "source": {
+        "type": "base64", "media_type": "image/png", "data": base64.b64encode(session.raw).decode()}}])
+    class Delivery(NoWorkDelivery):
+        async def prepare(self, request, provider):
+            record_request_only(overlay)
+            return request.model_copy(update={"messages": [*request.messages, overlay]})
+        async def revalidate(self, request):
+            if not state["allowed"]:
+                raise ValueError("Original consent ended")
+            return request.model_copy(deep=True)
+    class Provider:
+        default_model = "fixture"
+        config = {}
+        def get_info(self):
+            return {"id": "fixture", "defaults": {"model": "fixture"}}
+        def get_media_request_support(self, **kwargs):
+            return {"v": 1, "positions": ["user", "tool"]}
+        async def request_budget(self, request, **kwargs):
+            return {"input_tokens": 42}
+        async def complete(self, request, **kwargs):
+            for _ in range(2 if mode == "sdk-retry" else 1):
+                session.caps[NAMESPACE].validate(request, purpose="transport", request_options=kwargs)
+                state["attempts"] += 1
+                await asyncio.sleep(0)  # Simulated provider retry backoff.
+            return "unexpected"
+    events = ExecutionEvents("root", lambda row: None)
+    if mode == "admission-revoke":
+        async def admission(row):
+            state["allowed"] = False
+        events.admission_guard = admission
+    wrapped = SurfaceProvider(events.instrument_provider("root", Provider()), Delivery(),
+                              coordinator=session.coordinator)
+    await wrapped.request_budget(value)
+    with pytest.raises(ValueError, match="(consent ended|fresh host consent)"):
+        await wrapped.complete(value)
+    assert state["attempts"] == (1 if mode == "sdk-retry" else 0)
+    assert not session.caps["web.media.request_only"].requests
+    assert not wrapped._active_media
+
+
+async def test_failure_traceback_does_not_retain_serialized_private_pixels(session):
+    value = await accepted(session)
+    wrapped, seen = provider(session)
+    async def failure(request, **kwargs):
+        raise RuntimeError("Unknown provider outcome")
+    wrapped.original.complete = failure
+    await wrapped.request_budget(value)
+    with pytest.raises(RuntimeError) as failed:
+        await wrapped.complete(value)
+    sentinel = base64.b64encode(session.raw).decode()
+    frame = failed.value.__traceback__
+    while frame is not None:
+        if frame.tb_frame.f_code.co_filename.endswith("surface_delivery.py"):
+            for local in frame.tb_frame.f_locals.values():
+                assert not isinstance(local, str) or sentinel not in local
+                assert not isinstance(local, list) or all(
+                    not isinstance(item, str) or sentinel not in item for item in local)
+        frame = frame.tb_next
+    assert not wrapped._active_media
+
+
 async def test_source_classification_is_owner_journal_and_resume_does_not_renew_consent(session):
     cap = session.caps[NAMESPACE]
     cap.enabled = True
@@ -243,6 +363,116 @@ async def test_source_classification_is_owner_journal_and_resume_does_not_renew_
     await wrapped.request_budget(value.model_copy(deep=True))
     assert all(block.type != "image" for block in seen.count[-1].messages[0].content)
     assert ref["provenance"] == rows[0]["metadata"][NAMESPACE]["refs"][0]["provenance"]
+
+
+async def test_request_only_scope_never_admits_inherited_task_or_copied_marker():
+    from amplifier_web.host.media import record_request_only, request_only_scope, RequestOnlyRegistry
+    image = Message(role="user", content=[{"type": "image", "source": {
+        "type": "base64", "media_type": "image/png", "data": "SENTINEL"}}])
+    registry = RequestOnlyRegistry()
+    with request_only_scope() as issued:
+        await asyncio.create_task(asyncio.sleep(0))
+        async def foreign():
+            record_request_only(image)
+        await asyncio.create_task(foreign())
+        assert issued == []
+        record_request_only(image)
+    value = ChatRequest(messages=[image])
+    registry.bind(value, issued)
+    assert registry.validate(value, message_index=0, block_index=0, purpose="model")
+    copied = value.model_copy(deep=True)
+    assert not registry.validate(copied, message_index=0, block_index=0, purpose="model")
+    async def foreign_validate():
+        assert not registry.validate(value, message_index=0, block_index=0, purpose="model")
+    await asyncio.create_task(foreign_validate())
+    registry.release(value)
+    assert not registry.requests
+
+
+@pytest.mark.parametrize("mutate", [False, True])
+async def test_compaction_observation_passes_exact_options_to_pretransport_validation(session, mutate):
+    from amplifier_web.execution_events import ExecutionEvents
+    from amplifier_web.host.media import MediaOnlyDelivery
+    value = (await accepted(session)).model_copy(update={"metadata": {"purpose": "context-compaction"}})
+    options = {"native": {"temperature": 0.2}}
+    calls = []
+    class Provider:
+        default_model = "fixture"
+        config = {}
+        def get_info(self):
+            return {"id": "fixture", "defaults": {"model": "fixture"}}
+        def get_media_request_support(self, **kwargs):
+            return {"v": 1, "positions": ["tool"]}
+        async def complete(self, request, **kwargs):
+            return "unused"
+        async def compact_context(self, request, **kwargs):
+            calls.append((request.model_copy(deep=True), copy.deepcopy(kwargs)))
+            return "summary"
+    events = ExecutionEvents("root", lambda row: None)
+    if mutate:
+        async def admission(row):
+                options["native"]["temperature"] = 0.3
+        events.admission_guard = admission
+    observed = events.instrument_provider("root", Provider())
+    wrapped = SurfaceProvider(observed, MediaOnlyDelivery(), coordinator=session.coordinator)
+    if mutate:
+        with pytest.raises(ValueError, match="options changed"):
+            await wrapped.compact_context(value, **options)
+        assert calls == []
+    else:
+        assert await wrapped.compact_context(value, **options) == "summary"
+        assert calls[0][1] == options
+        assert calls[0][0].messages[0].content[-1].type == "image"
+
+
+@pytest.mark.parametrize("route", ["ordinary", "custom-finite", "compaction"])
+async def test_actual_prefit_attachment_locator_after_origin_is_unavailable(tmp_path, monkeypatch, route):
+    from pathlib import Path
+    from amplifier_web import attachments, session_assets
+    from amplifier_web.host.media import execution_providers, MediaOnlyDelivery
+    origin, destination = tmp_path / "origin", tmp_path / "destination"
+    data = b"%PDF-offline-transfer-fixture"
+    row = attachments.save(origin, "report.pdf", base64.b64encode(data).decode())
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(origin))
+    encoded = await attachments.encode(SimpleNamespace(id="input", text="Read", attachments=[row]))
+    selected = session_assets.upload_rows(visible=[{"attachments": [row]}])
+    session_assets.install_uploads(destination, session_assets.capture_uploads(origin, selected), selected)
+    origin.rename(tmp_path / "origin-preserved")  # Never delete fixture evidence.
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(destination))
+    canonical = ChatRequest(messages=[Message(role="user", **encoded)])
+    before = canonical.model_dump_json()
+    counted, sent = [], []
+    class Provider:
+        async def request_budget(self, request, **kwargs):
+            counted.append(request)
+            return {"input_tokens": 1}
+        async def complete(self, request, **kwargs):
+            sent.append(request)
+            return "done"
+        async def compact_context(self, request, **kwargs):
+            sent.append(request)
+            return "summary"
+    raw = Provider()
+    if route == "custom-finite":
+        caps = {}
+        coordinator = SimpleNamespace(get_capability=caps.get, get=lambda _: None,
+                                      register_capability=lambda k, v: caps.update({k: v}))
+        wrapped = execution_providers(coordinator, {"provider": raw})["provider"]
+    else:
+        wrapped = SurfaceProvider(raw, MediaOnlyDelivery())
+    if route == "compaction":
+        canonical.metadata = {"purpose": "context-compaction"}
+        before = canonical.model_dump_json()
+    await wrapped.request_budget(canonical)
+    if route == "compaction":
+        await wrapped.compact_context(canonical)
+    else:
+        await wrapped.complete(canonical)
+    assert sent[0] is counted[0]
+    locator = sent[0].messages[0].content[-1].text.split("\nLocal file: ", 1)[1]
+    assert Path(locator).read_bytes() == data
+    assert str(origin) not in locator and str(destination) in locator
+    assert canonical.model_dump_json() == before
 
 
 @pytest.mark.parametrize("mode", ["finite", "selected", "nested", "resumed", "persistent"])

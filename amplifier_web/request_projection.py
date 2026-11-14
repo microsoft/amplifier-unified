@@ -46,6 +46,18 @@ def release(scope):
         scope['encoded'] = None
 
 
+async def refresh(scope, request):
+    """Request-only consent may require an owner read after admission awaits."""
+    if scope is None:
+        return
+    callback = getattr(scope['validator'], 'before_transport', None)
+    if callable(callback):
+        if (not scope['active'] or scope['task'] is not asyncio.current_task()
+                or scope['request'] is not request):
+            raise ValueError('Prepared media consent refresh identity changed')
+        await callback()
+
+
 def validate(scope, request, options):
     """Synchronous after admission; failures must not be swallowed as diagnostics."""
     if scope is None:

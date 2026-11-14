@@ -69,6 +69,9 @@ class RequestOnlyRegistry:
     def release(self, request):
         self.requests.pop(id(request), None)
 
+    def contains(self, request):
+        return id(request) in self.requests
+
 
 class SourcePolicy:
     """Per-origin source classification, not a bearer screenshot-consent token."""
@@ -147,6 +150,10 @@ def effective_options(request, options):
     return result
 
 
+def _durable_media_supported():
+    return os.name == "posix"
+
+
 def bind_media(session, store):
     """Run before initialization, including for every newly resumed coordinator."""
     coordinator = session.coordinator
@@ -166,8 +173,12 @@ def bind_media(session, store):
     coordinator.register_capability("web.media.source_policy", policy)
     coordinator.hooks.register("tool:pre", policy.observe, name="unified-media-source",
                                priority=-100)
-    media = store.media(session.session_id, policy_verifier=policy.validate,
-                        request_only_verifier=request_only.validate)
+    if _durable_media_supported():
+        media = store.media(session.session_id, policy_verifier=policy.validate,
+                            request_only_verifier=request_only.validate)
+    else:
+        from amplifier_foundation.session.media import NeutralSessionMediaStore
+        media = NeutralSessionMediaStore(session.session_id)
     policy.store = media
     # Module readiness reports describe compatibility, never execution authority.
     # Enable only after the selected loop and actual checkpoint seam are mounted.
@@ -179,11 +190,28 @@ def bind_media(session, store):
             facts["ready"] = outcome == "ready"
         return original_report(component, event=event, outcome=outcome, details=facts)
     capability.report = report
+    projected = {}
+    coordinator.register_capability("web.media.projections", projected)
+    original_validate = capability.validate
+    def validate(value, *, purpose, request_options=None):
+        projection = projected.get(id(value))
+        if (projection is not None and projection.request is value
+                and projection.request_only and purpose in {"transport", "provider-send"}):
+            if not projection.transport_armed:
+                raise ValueError("Request-only image requires a fresh host consent check before another transport attempt")
+            projection.transport_armed = False
+        return original_validate(value, purpose=purpose, request_options=request_options)
+    capability.validate = validate
     coordinator.register_capability("web.media.store", media)
+    from ..attachments import encode
+    async def encode_input(command):
+        return await encode(command, coordinator)
+    coordinator.register_capability("live.attachments.encode", encode_input)
     cleanup = getattr(coordinator, "register_cleanup", None)
     if callable(cleanup):
         async def close():
             request_only.requests.clear()
+            projected.clear()
             media.close()
         cleanup(close)
 
@@ -198,7 +226,7 @@ def enable_media(coordinator):
                      and type(facts.get("contract")) is int and facts["contract"] == 1
                      and facts.get("ready") is True
                      for facts in consumers.values())
-    capability.enabled = bool(loop_ready and os.name != "nt" and
+    capability.enabled = bool(loop_ready and _durable_media_supported() and
                               callable(coordinator.get_capability("session.durable_checkpoint")))
 
 
@@ -212,7 +240,7 @@ def acknowledge_media(coordinator, store, session_id, canonical):
         policy.settle(canonical)
     if not any(NAMESPACE in (row.get("metadata") or {}) for row in canonical):
         return  # Ordinary text sessions do not acquire an extra O(history) scan.
-    if os.name == "nt":
+    if not _durable_media_supported():
         # The checkpoint owner has not qualified directory durability on Windows.
         return
     store.acknowledge_media(session_id, canonical, media)
@@ -263,14 +291,22 @@ class HostMediaProjection:
         self.prepared = prepared
         self.request = prepared.request
         self.capability = coordinator.get_capability(NAMESPACE)
+        registry = coordinator.get_capability("web.media.request_only")
+        self.request_only = registry is not None and registry.contains(source)
+        self.transport_armed = False
         self.model = model
+        self.canonical = self.canonical_snapshot = None
         self.live_binding = _live_binding(coordinator, provider, model, options)
         install = getattr(prepared, "set_binding_validator", None)
         if callable(install):
             install(self.validate_binding)
+        projected = coordinator.get_capability("web.media.projections")
+        if projected is not None:
+            projected[id(self.request)] = self
 
     def validate_binding(self):
         if (self.prepared is None or self.source != self.snapshot
+                or self.canonical is not None and self.canonical != self.canonical_snapshot
                 or self.coordinator.get_capability(NAMESPACE) is not self.capability
                 or _provider_owner(self.provider) is not self.owner
                 or any(_provider_owner((self.coordinator.get("providers") or {}).get(name))
@@ -279,6 +315,9 @@ class HostMediaProjection:
                 or _scope(self.coordinator) != self.scope):
             raise ValueError("Prepared media request identity changed")
         return True
+
+    def bind_canonical(self, request):
+        self.canonical, self.canonical_snapshot = request, request.model_copy(deep=True)
 
     def validate(self):
         self.validate_binding()
@@ -289,6 +328,9 @@ class HostMediaProjection:
         return normalized_options(effective_options(self.source, options)) == normalized_options(self.options)
 
     def release(self):
+        projected = self.coordinator.get_capability("web.media.projections")
+        if projected is not None:
+            projected.pop(id(self.request), None)
         if self.prepared is not None:
             self.prepared.release()
             self.prepared = None
@@ -297,6 +339,7 @@ class HostMediaProjection:
             registry.release(self.source)
             registry.release(getattr(self, "projection_source", None))
         self.request = self.source = self.snapshot = None
+        self.canonical = self.canonical_snapshot = None
         self.projection_source = None
 
 
@@ -385,6 +428,12 @@ class NeutralMedia:
         refs = []
         projected = request.model_copy(deep=True)
         for message in projected.messages:
+            if isinstance(message.content, list):
+                from amplifier_core.message_models import TextBlock
+                message.content = [
+                    TextBlock(text="[Image unavailable: compatible media handling is not installed; no pixels supplied]")
+                    if getattr(block, "type", None) == "image" else block
+                    for block in message.content]
             envelope = (message.metadata or {}).get(NAMESPACE)
             if envelope is None:
                 continue

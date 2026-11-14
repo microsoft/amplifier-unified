@@ -135,7 +135,7 @@ class SelectedProvider:
             return refit
         if name == "compact_context" and callable(method):
             async def compact(request, **kwargs):
-                selected, _ = self._selected_request(request, {}, consume=True)
+                selected, _ = self._selected_request(request, {}, consume=True, dispatch=True)
                 # Native compaction owns its own output reservation. Only the
                 # selected model/effort follows the conversation preference.
                 if selected.max_output_tokens != request.max_output_tokens:
@@ -222,7 +222,7 @@ class SelectedProvider:
         return next((row for row in self._selected_requests
                      if row.original is request and row.choices == updates and row.snapshot == request), None)
 
-    def _selected_request(self, request, kwargs, *, consume=False):
+    def _selected_request(self, request, kwargs, *, consume=False, dispatch=False):
         updates, kwargs = self._selection_overrides(request, kwargs)
         # Budget and dispatch must share one selected request so the host's
         # surface adapter can reuse its prepared observation. Retain a bounded
@@ -230,6 +230,9 @@ class SelectedProvider:
         # it unless the adapter can refit an exact local refusal.
         entry = self._cached_request(request, updates)
         selected = entry.selected if entry is not None else None
+        if entry is None and dispatch and any(
+                row.original is request for row in self._selected_requests):
+            raise ValueError("The selected request changed after fitting; request a new explicit budget.")
         if entry is None:
             selected = request.model_copy(update=updates)
             self._forget_request(request)
@@ -255,7 +258,7 @@ class SelectedProvider:
         return True
 
     async def _stream_selected(self, execution, method, request, kwargs):
-        selected, kwargs = self._selected_request(request, kwargs)
+        selected, kwargs = self._selected_request(request, kwargs, dispatch=True)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
         retained, emitted, iterator = False, False, None
         try:
@@ -274,7 +277,7 @@ class SelectedProvider:
                 await iterator.aclose()
 
     async def complete(self, request, **kwargs):
-        selected, kwargs = self._selected_request(request, kwargs)
+        selected, kwargs = self._selected_request(request, kwargs, dispatch=True)
         execution = self._execution_provider()
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
         retained = False
