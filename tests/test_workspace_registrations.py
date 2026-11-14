@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from amplifier_web.workspace_registrations import edit, reconcile, register
+from amplifier_web.workspace_registrations import edit, listing, reconcile, register
 
 
 def test_reconcile_preserves_owned_rows_and_reports_ordered_reference_remaps():
@@ -86,6 +86,29 @@ def test_manual_metadata_errors_preserve_records_and_lookup_precedence(action, a
         edit(rows, action, args)
     assert str(exc.value) == message
     assert rows == [before] and rows[0] is row
+
+
+def test_listing_preserves_rows_and_filters_before_labels_and_paging():
+    custom = {'color': 'blue'}
+    rows = [
+        {'id': 'two', 'name': 'Reports', 'path': '/teams/two', 'available': True, 'custom': custom},
+        {'id': 'archived', 'name': 'Reports', 'path': '/archive', 'available': True, 'archived': True},
+        {'id': 'missing', 'name': 'Missing', 'path': '/missing', 'available': False},
+        {'id': 'unresolved', 'name': 'Unknown', 'path': None, 'available': True},
+        {'id': 'one', 'name': 'Reports', 'path': '/teams/one', 'available': True},
+    ]
+    before = copy.deepcopy(rows)
+    first = listing(rows, {'query': '  REPORTS  ', 'limit': 1})
+    second = listing(rows, {'offset': first['nextOffset'], 'limit': 1})
+    assert first['total'] == second['total'] == 2
+    assert first['nextOffset'] == 1 and second['nextOffset'] is None
+    assert first['items'][0]['id'] == 'one' and second['items'][0]['id'] == 'two'
+    assert first['items'][0]['label'] == 'Reports · /teams/one'
+    assert second['items'][0] is not rows[0] and second['items'][0]['custom'] is custom
+    filtered = listing(rows, {'query': 'TEAMS/TWO'})
+    assert filtered['total'] == 1 and filtered['nextOffset'] is None
+    assert filtered['items'][0]['label'] == 'Reports'
+    assert rows == before and 'label' not in rows[0]
 
 
 async def test_host_manual_actions_and_native_observation_preserve_history(tmp_path):
