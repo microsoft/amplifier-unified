@@ -554,7 +554,8 @@ class Worker:
                 async def install_child_access(child_coordinator):
                     from amplifier_web.app_guidance import install_app_access
                     await install_app_access(child_coordinator, self.app_access_bridge(child_coordinator,
-                                                                                      assignment=assignment))
+                                                                                      assignment=assignment),
+                                             execution_role='native_child')
                     self.computer_episodes.install(child_coordinator,
                         lambda: self.computer_execution(child_coordinator))
                     children = self.session.coordinator.get_capability('live.children')
@@ -1044,7 +1045,8 @@ class Worker:
                     self.session.session_id, current=policy_current)
             from amplifier_web.app_guidance import install_app_access
             with startup_timing.phase('worker.app.access'):
-                await install_app_access(self.session.coordinator, self.app_access_bridge(self.session.coordinator))
+                await install_app_access(self.session.coordinator, self.app_access_bridge(self.session.coordinator),
+                                         execution_role='root')
                 root_coordinator = self.session.coordinator
                 self.computer_episodes.install(root_coordinator, lambda: self.computer_execution(root_coordinator))
                 self.install_collaboration_checkpoint(self.session.coordinator)
@@ -1057,7 +1059,8 @@ class Worker:
                     if coordinator:
                         host.install_activity(coordinator)
                         host.install_collaboration_checkpoint(coordinator)
-                        await install_app_access(coordinator, host.app_access_bridge(coordinator))
+                        await install_app_access(coordinator, host.app_access_bridge(coordinator),
+                            execution_role='root' if coordinator is host.session.coordinator else 'native_child')
                         host.computer_episodes.install(coordinator, lambda: host.computer_execution(coordinator))
                         from amplifier_web.host.session import SelectedProvider
                         transform = coordinator.get_capability('web.provider_transform')

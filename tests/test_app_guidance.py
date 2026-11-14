@@ -1,9 +1,62 @@
 """Verify real provider requests, without network calls to a model service."""
 import os
+import ast
 from pathlib import Path
 import subprocess
 import sys
 import pytest
+
+
+@pytest.mark.parametrize('role', ['root', 'native_child'])
+async def test_guidance_requires_trusted_role_and_installs_once(role):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from amplifier_core import HookRegistry
+    from amplifier_web.app_guidance import COMMON_GUIDANCE, execution_guidance, install_app_access
+    from amplifier_web.coordination_guidance import READ_GUIDANCE, PLANNING_GUIDANCE, NATIVE_CHILD_GUIDANCE
+
+    capabilities, tools = {}, {}
+    async def mount(kind, tool, name=None):
+        assert name not in tools
+        tools[name] = tool
+    c = SimpleNamespace(get=lambda kind: tools if kind == 'tools' else None,
+        get_capability=capabilities.get, register_capability=capabilities.__setitem__,
+        mount=mount, hooks=HookRegistry())
+    bridge = AsyncMock()
+    with pytest.raises(TypeError, match='execution_role'):
+        await install_app_access(c, bridge)
+    for unknown in (None, '', 'worker', 'commissioned_root'):
+        with pytest.raises(ValueError, match='explicit root or native_child'):
+            await install_app_access(c, bridge, execution_role=unknown)
+    assert not tools and not capabilities
+    await install_app_access(c, bridge, execution_role=role)
+    await install_app_access(c, bridge, execution_role=role)
+    injection = (await c.hooks.emit('provider:request', {})).context_injection
+    assert injection.count(COMMON_GUIDANCE) == 1
+    assert injection.count(READ_GUIDANCE) == 1
+    assert (PLANNING_GUIDANCE in injection) is (role == 'root')
+    assert (NATIVE_CHILD_GUIDANCE in injection) is (role == 'native_child')
+    assert execution_guidance(role) in injection
+    bridge.assert_not_awaited()
+
+
+def test_all_installers_supply_an_explicit_execution_role():
+    # Required API + maintained caller census: adding a forgotten call fails here
+    # without relying on optional runtime tests happening to execute that branch.
+    root = Path(__file__).resolve().parents[1]
+    production = []
+    for folder in ('amplifier_web', 'tests'):
+        for path in (root / folder).rglob('*.py'):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id == 'install_app_access'):
+                    continue
+                if path == Path(__file__).resolve():
+                    continue  # Deliberate missing/invalid API probes above.
+                assert any(k.arg == 'execution_role' for k in node.keywords), (path, node.lineno)
+                if folder == 'amplifier_web':
+                    production.append(path.relative_to(root).as_posix())
+    assert production == ['amplifier_web/runtime_worker.py'] * 3
 
 
 def test_collaboration_guidance_does_not_require_an_optional_skill():
@@ -96,14 +149,15 @@ from amplifier_web.surface_delivery import SurfaceProvider
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_real_core_receives_canvas_tool_and_ephemeral_instructions():
+@pytest.mark.parametrize('injection_mode', ['persist', 'tail'])
+def test_real_core_receives_canvas_tool_and_ephemeral_instructions(injection_mode):
     python = os.environ.get('UNIFIED_RUNTIME_PYTHON')
     if not python:
         pytest.skip('Set UNIFIED_RUNTIME_PYTHON for the real Core canvas probe')
-    result = subprocess.run([python, str(Path(__file__).parent/'fixtures/canvas_runtime_probe.py')],capture_output=True,text=True,timeout=45)
+    result = subprocess.run([python, str(Path(__file__).parent/'fixtures/canvas_runtime_probe.py'), injection_mode],capture_output=True,text=True,timeout=45)
     assert result.returncode == 0, result.stdout+result.stderr
     assert '"canvas_guidance_in_provider_request": true' in result.stdout
-    assert '"instructions_ephemeral": true' in result.stdout
+    assert '"native_guidance_history_contract": true' in result.stdout
 
 
 def test_real_core_receives_fresh_notice_then_typed_surface_image():

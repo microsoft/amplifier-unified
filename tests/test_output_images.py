@@ -143,7 +143,7 @@ async def test_selected_provider_keeps_typed_images_and_selection_on_every_bound
             # one ULP. It must not make an exact saved-image receipt unusable.
             result['state']['createdAt']=1789888171.4219217
         return result
-    await install_app_access(coordinator,bridge)
+    await install_app_access(coordinator,bridge, execution_role='root')
     arguments={'operation':'dispatch','args':{'action':'outputs.image','args':{'id':row['id'],'sha256':row['sha256']}}}
     tool_result=await tools['app_control'].execute(arguments)
     assert 'state' not in tool_result.output

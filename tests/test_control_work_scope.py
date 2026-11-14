@@ -46,7 +46,7 @@ async def controlled(app, *, sid=None, name='control_probe'):
         requests.append(copy.deepcopy(arguments))
         return await app.app_bridge(operation, arguments, sid)
     worker.bridge = host
-    await install_app_access(c, worker.app_access_bridge(c))
+    await install_app_access(c, worker.app_access_bridge(c), execution_role='root')
     return SimpleNamespace(worker=worker, controls=controls, c=c, tools=tools,
         effects=effects, events=events, requests=requests, caps=caps, host=host)
 
@@ -217,7 +217,7 @@ async def test_child_control_uses_only_current_registered_child(app, fault, oper
     child.mount = mount
     children = SimpleNamespace(sessions={child.session_id: SimpleNamespace(coordinator=child)})
     f.caps['live.children'] = children
-    await install_app_access(child, f.worker.app_access_bridge(child))
+    await install_app_access(child, f.worker.app_access_bridge(child), execution_role='native_child')
     if fault == 'foreign': children.sessions.clear()
     async def host(operation, arguments):
         result = await f.host(operation, arguments)

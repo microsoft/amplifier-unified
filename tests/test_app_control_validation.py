@@ -18,7 +18,7 @@ async def mounted_tool(bridge):
         get=lambda kind: tools if kind == 'tools' else None,
         get_capability=capabilities.get, register_capability=capabilities.__setitem__,
         mount=mount, hooks=SimpleNamespace(register=lambda *args, **kwargs: None))
-    await install_app_access(coordinator, bridge)
+    await install_app_access(coordinator, bridge, execution_role='root')
     return tools['app_control']
 
 

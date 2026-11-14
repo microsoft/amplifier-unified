@@ -83,7 +83,7 @@ async def test_native_root_and_child_history_scope(tmp_path,monkeypatch,mode):
                 raise RuntimeError(reply['error'])
             return reply['result']
         worker.bridge=bridge
-        await install_app_access(parent.coordinator,worker.app_access_bridge(parent.coordinator))
+        await install_app_access(parent.coordinator,worker.app_access_bridge(parent.coordinator), execution_role='root')
         registry=await install_children(parent,prepared,Runtime('root'),SessionStore(tmp_path/'children'),approvals)
         async def inspect(control):
             denied=await control.execute({'operation':'history','args':{'action':'read','session_id':other['id']}})
