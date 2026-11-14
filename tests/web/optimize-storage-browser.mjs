@@ -22,6 +22,28 @@ function assertReadOnlyReconcile(requests,command){
   'The exact command identity must be read, not guessed from the latest operation');
 }
 
+function assertSafeUsageExport(content){
+ assert.doesNotMatch(content,/OPTIMIZE-SYNTHETIC-(REQUEST-ONLY|RESPONSE-KEEP)/,
+  'Raw diagnostic secrets must remain excluded');
+ const lines=content.trim().split('\n');
+ assert.ok(content.trim()&&lines.length<=30,'The inspected export must be a bounded, nonempty page');
+ const records=lines.map(line=>JSON.parse(line));
+ const calls=records.filter(row=>['llm:request','llm:response'].includes(row.event)
+  &&row.data?.model==='optimize-fixture');
+ assert.deepEqual(calls.map(row=>row.event).sort(),['llm:request','llm:response'],
+  'Both real diagnostic directions must remain represented by safe facts');
+ for(const row of calls){
+  assert.deepEqual(Object.keys(row).sort(),['data','event','timestamp','workspace']);
+  assert.equal(typeof row.workspace,'string');assert.ok(row.workspace);
+  assert.ok(typeof row.timestamp==='string'&&Number.isFinite(Date.parse(row.timestamp)),
+   'The export envelope must retain a usable timestamp');
+  assert.deepEqual(row.data,{provider:'fixture',model:'optimize-fixture',
+   usage:{input_tokens:7,output_tokens:3,cost:0.01}},
+  'Only the known safe provider/model/usage projection belongs in this fixture export');
+ }
+ return calls;
+}
+
 function sourceCheck(){
  const command={action:prefix+'apply',id:'fixed-command',args:{confirmExpiry:true}};
  const read={action:prefix+'read',args:{commandId:'fixed-command'}};
@@ -31,9 +53,27 @@ function sourceCheck(){
   /exact command identity/);
  assert.throws(()=>assertReadOnlyReconcile([command,{action:prefix+'read',args:{}}],command),
   /exact command identity/);
+ const usage=['llm:request','llm:response'].map(event=>({event,workspace:'/synthetic-workspace',
+  timestamp:'2026-11-12T00:00:00Z',data:{provider:'fixture',model:'optimize-fixture',
+   usage:{input_tokens:7,output_tokens:3,cost:0.01}}}));
+ const jsonl=rows=>rows.map(row=>JSON.stringify(row)).join('\n')+'\n';
+ assertSafeUsageExport(jsonl(usage));
+ assert.throws(()=>assertSafeUsageExport(''),/nonempty/);
+ assert.throws(()=>assertSafeUsageExport(jsonl(usage.slice(1))),/Both real diagnostic directions/);
+ assert.throws(()=>assertSafeUsageExport(jsonl(usage.map(row=>({...row,
+  data:{...row.data,provider:'wrong-provider'}})))),/known safe/);
+ assert.throws(()=>assertSafeUsageExport(jsonl(usage.map(row=>({...row,
+  data:{...row.data,usage:{input_tokens:0,output_tokens:3,cost:0.01}}})))),/known safe/);
+ assert.throws(()=>assertSafeUsageExport(jsonl(usage.map(row=>({...row,
+  data:{...row.data,event_id:'optimize-request'}})))),/known safe/);
+ assert.throws(()=>assertSafeUsageExport(jsonl(usage.map(row=>({...row,
+  data:{...row.data,raw:'OPTIMIZE-SYNTHETIC-RESPONSE-KEEP'}})))),/Raw diagnostic secrets/);
  console.log(JSON.stringify({passed:true,browserExecuted:false,checks:[
   'exact command read accepted','duplicate mutation rejected',
-  'wrong command identity rejected','latest operation is not exact reconciliation']}));
+  'wrong command identity rejected','latest operation is not exact reconciliation',
+  'sanitized request and response JSONL accepted without event IDs',
+  'empty and missing-direction exports rejected','incorrect provider or usage rejected',
+  'restored private event ID and raw diagnostic secret rejected']}));
 }
 
 async function serverIdentity(){
@@ -275,9 +315,9 @@ async function run(){
   await page.getByRole('button',{name:'Export this page',exact:true}).click();
   const usageFile=await exporting;
   const usageBytes=await readFile(await usageFile.path(),'utf8');
-  assert.match(usageBytes,/optimize-response|optimize-request/);
-  assert.match(usageBytes,/usage/);
-  assert.doesNotMatch(usageBytes,/OPTIMIZE-SYNTHETIC-(REQUEST-ONLY|RESPONSE-KEEP)/);
+  const exportedCalls=assertSafeUsageExport(usageBytes);
+  evidence.usageExport={events:exportedCalls.map(row=>row.event),
+   data:exportedCalls.map(row=>row.data),sha256:sha(usageBytes)};
   evidence.checks.push('usage page export remains available without raw diagnostic bodies');
   await Promise.all(pendingAssets);assert.ok(served.length>0,'Actual built scripts must have been served');
   for(const script of served){

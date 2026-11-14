@@ -256,7 +256,44 @@ async def main(home):
     return app, observations
 
 
-async def offline_check():
+async def check_public_usage_export(service, native):
+    """Exercise the same inspected-page export actions as the browser, unmodified."""
+    inspected = await service.dispatch('diagnostics.records',
+        {'stream': 'usage', 'sessionId': native}, include_state=False)
+    assert inspected['accepted'] is True, inspected
+    page = service.state['diagnostics']['lastResult']
+    calls = [row for row in page['items'] if row['event'] in {'llm:request', 'llm:response'}
+        and row['data'].get('model') == 'optimize-fixture']
+    assert {row['event'] for row in calls} == {'llm:request', 'llm:response'}, calls
+    safe = {'provider': 'fixture', 'model': 'optimize-fixture',
+        'usage': {'input_tokens': 7, 'output_tokens': 3, 'cost': 0.01}}
+    assert all(row['data'] == safe for row in calls), calls
+    print(json.dumps({'phase': 'public-usage-export',
+        'inspectedEvents': [row['event'] for row in calls],
+        'safeData': safe, 'privateEventIdsExcluded': True,
+        'metadataTimestampExcluded': True, 'exportOutcome': 'not_yet_observed'}), flush=True)
+    # Do not restore timestamp/event_id/raw into sanitized data to make this pass.
+    exported = await service.dispatch('diagnostics.export', {}, include_state=False)
+    assert exported['accepted'] is True, exported
+    downloads = [effect for effect in exported.get('effects', []) if effect['type'] == 'download']
+    assert len(downloads) == 1 and downloads[0]['mime'] == 'application/x-ndjson', exported
+    content = downloads[0]['content']
+    assert REQUEST_SECRET not in content and RESPONSE_SECRET not in content
+    rows = [json.loads(line) for line in content.splitlines()]
+    assert len(rows) == len(page['items']) and len(rows) <= 30
+    actual = [row for row in rows if row['event'] in {'llm:request', 'llm:response'}
+        and row['data'].get('model') == 'optimize-fixture']
+    assert len(actual) == 2
+    for row in actual:
+        assert set(row) == {'event', 'workspace', 'timestamp', 'data'}, row
+        datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00'))
+        assert row['data'] == safe
+    return {'publicUsageExport': True, 'exportedEvents': [row['event'] for row in actual],
+        'exportedData': [row['data'] for row in actual],
+        'exportSha256': hashlib.sha256(content.encode()).hexdigest()}
+
+
+async def offline_check(*, export=False):
     """Focused real-service proof; explicitly not browser or installed evidence."""
     dependency_check()
     from amplifier_web.storage_optimize import owner
@@ -338,6 +375,7 @@ async def offline_check():
             assert model.get('requestRecordingExpired') and not model.get('requestDetail'), model
             assert model.get('responseDetail') and model.get('responseRecording'), model
             assert owner(service).adapter.__class__.__name__ == 'OwnerAdapters'
+            export_result = await check_public_usage_export(service, before['nativeId']) if export else {}
             print(json.dumps({'passed': True, 'browser': False, 'listener': False,
                 'realService': True, 'realRetentionOwner': True, 'syntheticSource': True,
                 'operationId': finished['operationId'], 'status': finished['status'],
@@ -347,7 +385,7 @@ async def offline_check():
                 'actualReaderMarksRequestExpiredAndResponseAvailable': True,
                 'realImagePreviewHoldsMissingHistoricalProvenance': True,
                 'indexedRecordCount': len(before['eventIds']),
-                'deliveryRows': len(before['deliveries'])}))
+                'deliveryRows': len(before['deliveries']), **export_result}))
         finally:
             await runner.cleanup()
 
@@ -404,4 +442,5 @@ if __name__ == '__main__':
     if '--source-check' in sys.argv:
         source_check()
     else:
-        asyncio.run(offline_check() if '--offline-check' in sys.argv else serve())
+        asyncio.run(offline_check(export='--export-check' in sys.argv)
+            if '--offline-check' in sys.argv or '--export-check' in sys.argv else serve())
