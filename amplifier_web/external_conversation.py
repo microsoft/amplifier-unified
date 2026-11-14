@@ -83,8 +83,70 @@ class ExternalConversations:
         self.service = service
         self.participants = {}
         self.turns = {}
+        self.retirements = {}
         self.closing = False
         self.shared = SharedConversations(self)
+
+    def watch_retirement(self, sid, identity, participant):
+        async def available(current):
+            async with self.service.lock:
+                session = self.service._session(sid, hydrate=False)
+                self.consider_retirement(session, identity, current)
+        participant.retirement_available = available
+
+    def _can_retire(self, session, identity, participant):
+        sid, key = session['id'], (session['id'], identity)
+        if (self.closing or self.participants.get(key) is not participant
+                or sid in self.turns or key in self.shared.turns
+                or not getattr(participant, 'supports_retirement', False)):
+            return False
+        try:
+            binding, _, source = self.selected(session, identity)
+        except (AppError, ValueError):
+            return False
+        if (binding.get('status') != 'idle' or binding.get('sessionId') != participant.session_id
+                or source['cwd'] != participant.cwd
+                or binding.get('activeInputId') or session['externalAgent'].get('activeInputId')
+                or any(row.get('status') == 'pending' for row in session.get('approvals', []))):
+            return False
+        if is_shared(session):
+            room = session.get('_externalRoom')
+            # Background hints never hydrate a dormant transcript just to reap
+            # its connection. The next ordinary activity can reconsider it.
+            if room is None or any(row['agentId'] == identity and row['state'] in {
+                    'pending', 'observing', 'evaluating', 'sending', 'unknown'} for row in room['deliveries']):
+                return False
+        return True
+
+    def consider_retirement(self, session, identity, participant):
+        key = (session['id'], identity)
+        if key not in self.retirements and self._can_retire(session, identity, participant):
+            self.retirements[key] = self.service._task(self._retire(key, participant))
+
+    async def _retire(self, key, participant):
+        try:
+            async with self.service.lock:
+                if not self._can_retire(self.service._session(key[0], hydrate=False), key[1], participant):
+                    return
+            disposition = await participant.retire()
+            if disposition == 'retired':
+                # Only this reserved participant can close; queued public input
+                # and other agents stay owned by their ordinary admission path.
+                await participant.close()
+                waiting = self.turns.get(key[0])
+                if (self.participants.get(key) is participant
+                        and not (waiting is not None and waiting.participant is participant)):
+                    self.participants.pop(key)
+        except Exception:
+            pass  # Unknown cleanup retains its transport; never replay work.
+        finally:
+            async with self.service.lock:
+                if self.retirements.get(key) is asyncio.current_task():
+                    self.retirements.pop(key)
+                    session = self.service._session(key[0], hydrate=False)
+                    if is_shared(session) and '_externalRoom' in session:
+                        self.shared._schedule(session)
+                        self.service._publish_changes(sessions={key[0]})
 
     def create(self, args, workspace):
         if args.get('location', {}).get('kind') == 'managed' or any(
@@ -206,6 +268,7 @@ class ExternalConversations:
                     update=lambda update: self._update(sid, binding['id'], update),
                     permission=lambda options: self._permission(sid, binding['id'], options))
                 self.participants[key] = participant
+                self.watch_retirement(sid, binding['id'], participant)
             turn = Turn(input_id, current.get('interruptionRevision', 0), participant, binding['id'])
             self.turns[sid] = turn
             binding['status'] = 'connecting'
@@ -224,6 +287,9 @@ class ExternalConversations:
 
     async def _run(self, sid, text, turn):
         try:
+            retirement = self.retirements.get((sid, turn.agent_id))
+            if retirement is not None:
+                await asyncio.shield(retirement)
             session = self.service._session(sid)
             await asyncio.wait_for(turn.participant.connect(
                 dict(addressed(session, turn.agent_id)), lambda value: self._binding(sid, turn.agent_id, value)), 30)
@@ -246,7 +312,9 @@ class ExternalConversations:
                                'unknown' if turn.dispatched else 'stopped')
             # Keep admission owned until the SDK retires this connection. A
             # settled receipt alone does not make its attach safe to reuse.
-            await turn.participant.close()
+            if (turn.dispatched or retirement is None
+                    and not getattr(turn.participant, '_retirement_uncertain', False)):
+                await turn.participant.close()
             raise
         except Exception:
             turn.stop = True
@@ -254,10 +322,12 @@ class ExternalConversations:
                                'unknown' if turn.dispatched else 'error',
                                error=('External delivery could not be confirmed. Work was not replayed.'
                                       if turn.dispatched else 'The external agent could not connect or resume. Its binding was preserved.'))
-            await turn.participant.close()
+            if not getattr(turn.participant, '_retirement_uncertain', False):
+                await turn.participant.close()
         finally:
-            if self.turns.get(sid) is turn:
-                self.turns.pop(sid)
+            async with self.service.lock:
+                if self.turns.get(sid) is turn:
+                    self.turns.pop(sid)
 
     async def _update(self, sid, identity, update):
         turn = self.turns.get(sid)
@@ -372,5 +442,6 @@ class ExternalConversations:
         await self.shared.close()
         for sid in list(self.turns):
             await self.stop(sid)
+        await asyncio.gather(*self.retirements.values(), return_exceptions=True)
         await asyncio.gather(*(participant.close() for participant in self.participants.values()))
         self.participants.clear()
