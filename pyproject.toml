@@ -138,6 +138,8 @@ dev = [
     # source shared with the optional decisions extra.
     "amplifier-module-context-managed @ git+https://github.com/microsoft/amplifier-bundle-context-managed@12166f8effb5e26737bb5f9f7885cbb9bd4cdf43#subdirectory=modules/context-managed",
     "amplifier-module-provider-openai[native] @ git+https://github.com/microsoft/amplifier-module-provider-openai@main",
+    # Cold selected-model budget and private overflow feedback integration.
+    "amplifier-module-provider-anthropic @ git+https://github.com/microsoft/amplifier-module-provider-anthropic@3204656f784af914de2c3d7d6f7175ad904a00db",
     # Same real QuickJS dispatcher used by the maintained native-check workflow.
     "amplifier-module-tool-exec @ git+https://github.com/microsoft/amplifier-module-tool-exec@f267548ccd1b38a236a46afb96252bb6dd474dcd",
     # Ordinary-root switch fixtures retain the real local capture hook offline.
