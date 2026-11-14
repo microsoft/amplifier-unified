@@ -478,17 +478,7 @@ Reply with the fixture response.
         publish(event)
     worker_module.publish = guarded_publish if use_media else publish
     selection = media_selection(root, context_module, capture_module) if use_media else None
-    canonical_binding = None
-    if use_versioned:
-        from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
-        from amplifier_web.session_files import sessions_dir
-        destination = sessions_dir(workspace) / "warm-fixture"
-        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        destination.parent.chmod(0o700)
-        canonical_binding = VersionedSessionBinding.create_new(
-            destination, session_id="warm-fixture", operation_id="prospective-create", admit=lambda: None)
-    worker = Worker(media_graph_selection=selection, canonical_binding=canonical_binding,
-                    **({"canonical_resume": False} if use_versioned else {}))
+    worker = Worker(media_graph_selection=selection, canonical_bootstrap=use_versioned)
     workers.append(worker)
     config = {"id": "warm-fixture", "workspace": str(workspace), "bundle": str(bundle)}
     if use_versioned:
@@ -502,6 +492,11 @@ Reply with the fixture response.
             await worker.start(config)
             cold_seconds = time.monotonic() - cold_started
             assert worker.session is not None, events
+            if use_versioned:
+                canonical_binding = worker.canonical_binding
+                assert canonical_binding is not None and worker.canonical_resume is False
+                assert callable(worker.canonical_binding_factory)
+                destination = canonical_binding.directory
             first_session, first_execution = id(worker.session), id(worker.execution)
             first_writer = worker.shared_handle
             if use_media:
@@ -568,14 +563,18 @@ Reply with the fixture response.
             assert not first_writer.active
             if use_versioned:
                 committed_prefix = canonical_binding.expected  # Includes the actual terminal checkpoint.
-            resumed_binding = (VersionedSessionBinding.resume(destination, session_id="warm-fixture",
-                expected=committed_prefix) if use_versioned else None)
-            restored = Worker(media_graph_selection=selection, canonical_binding=resumed_binding,
-                              **({"canonical_resume": True} if use_versioned else {}))
+            restored = Worker(media_graph_selection=selection, canonical_bootstrap=use_versioned)
             workers.append(restored)
             sends_before_resume = len([event for event in events if event.get("type") == "assistant.message"])
             await restored.start(config)
             assert restored.session is not None, events
+            if use_versioned:
+                resumed_binding = restored.canonical_binding
+                assert resumed_binding is not None and restored.canonical_resume is True
+                assert resumed_binding is not canonical_binding
+                # Startup performs a new full-context checkpoint. The bootstrap
+                # acquires the exact genuine prior prefix before that write.
+                assert resumed_binding.expected.session_id == committed_prefix.session_id
             assert restored.session is not worker.session
             if use_media:
                 for _ in range(150):

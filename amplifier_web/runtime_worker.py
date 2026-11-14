@@ -53,7 +53,8 @@ def publish_process_identity():
 
 class Worker:
     def __init__(self, *, media_graph_selection=None, canonical_binding=None,
-                 canonical_binding_factory=None, canonical_resume=None):
+                 canonical_binding_factory=None, canonical_resume=None,
+                 canonical_bootstrap=True):
         if canonical_binding is not None and type(canonical_resume) is not bool:
             raise ValueError("A canonical Worker needs explicit new-versus-resume intent")
         self.session = self.runtime = self.execution = None
@@ -64,6 +65,9 @@ class Worker:
         self.canonical_binding = canonical_binding
         self.canonical_binding_factory = canonical_binding_factory
         self.canonical_resume = canonical_resume
+        # Ordinary packaged entry participates prospectively; isolated legacy
+        # checks may explicitly retain their existing constructor-only cohort.
+        self.canonical_bootstrap = canonical_bootstrap
         self._cleanup_settled = False
         self.approvals = {}
         self.approval_contexts = {}
@@ -970,6 +974,17 @@ class Worker:
             self.runtime = Runtime(session_id=config["id"], observer=self.observe, max_input_chars=200_000)
             self.telemetry = ExecutionEvents(config["id"], publish)
             workspace = Path(config.get("workspace") or config.get("workingDirectory") or os.getcwd()).expanduser().resolve(strict=True)
+            if self.canonical_binding is None and self.canonical_bootstrap:
+                from amplifier_web.host.canonical_bootstrap import SourceBootstrap
+                def source_admission():
+                    if self.shutdown.is_set() or self.stop_revision != stop_revision:
+                        raise RuntimeError("Source ownership admission was stopped.")
+                    if self.activation_gate is not None and self.activation is not None:
+                        self.activation_gate.check_current()
+                selected_source = SourceBootstrap.acquire(workspace, config["id"], admit=source_admission)
+                self.canonical_binding = selected_source.binding
+                self.canonical_resume = selected_source.resumed
+                self.canonical_binding_factory = selected_source.child_factory
             if self.canonical_binding is not None:
                 from amplifier_web.session_files import sessions_dir
                 if (self.canonical_binding.session_id != config["id"] or
