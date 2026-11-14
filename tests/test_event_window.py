@@ -86,6 +86,50 @@ def read(session, **kwargs):
     return windows.read_window(session, window_key='messages-latest', cursor_key=KEY, **kwargs)
 
 
+@pytest.mark.parametrize('direction,raw_key', [
+    ('request', 'raw'), ('request', 'raw_request'),
+    ('response', 'raw'), ('response', 'raw_response'),
+])
+def test_expired_provider_observation_keeps_notice_without_detail_or_body(owner, direction, raw_key):
+    session, path = owner
+    marker = {'v': 1, 'sha256': 'e' * 64, 'bytes': 321,
+              'expired_at': '2026-11-14T12:00:00Z', 'reason': 'retention'}
+    write(path, [event(1, 'llm:' + direction, request_id='paired',
+                      provider_payloads_expired={raw_key: marker})])
+    row = read(session)['items'][0]
+    assert row[direction + 'RecordingExpired'] == marker
+    assert row[direction] == '[Provider recording expired under the saved retention policy]'
+    assert direction not in row['_eventFields']
+    assert all(direction + suffix not in row for suffix in ('Detail', 'Recording', 'Capture'))
+    assert row['requestId'] == 'paired' and row['association'] == 'unverified'
+
+
+@pytest.mark.parametrize('marker', [
+    None, {}, {'v': True, 'sha256': 'e' * 64, 'bytes': 321,
+               'expired_at': '2026-11-14T12:00:00Z', 'reason': 'retention'},
+    {'v': 1, 'sha256': 'e' * 64, 'bytes': 321,
+     'expired_at': '2026-11-14T12:00:00', 'reason': 'retention'},
+])
+def test_missing_or_malformed_provider_marker_does_not_infer_expiry(owner, marker):
+    session, path = owner
+    write(path, [event(1, 'llm:request', provider_payloads_expired={'raw': marker})])
+    row = read(session)['items'][0]
+    assert 'request' not in row and 'requestRecordingExpired' not in row
+    assert 'requestDetail' not in row and 'request' not in row['_eventFields']
+
+
+def test_retained_provider_body_is_not_hidden_by_expiry_metadata(owner):
+    session, path = owner
+    marker = {'v': 1, 'sha256': 'e' * 64, 'bytes': 321,
+              'expired_at': '2026-11-14T12:00:00Z', 'reason': 'retention'}
+    write(path, [event(1, 'llm:response', raw={'body': 'kept'},
+                      provider_payloads_expired={'raw': marker})])
+    row = read(session)['items'][0]
+    assert 'responseRecordingExpired' not in row and 'response' not in row
+    assert 'responseDetail' in row
+    assert 'kept' in windows.read_field(session, row['_eventFields']['response'])['text']
+
+
 def test_last_page_and_explicit_older_pages_equal_source_order_without_gaps(owner):
     session, path = owner
     rows = [event(number) for number in range(237)]
