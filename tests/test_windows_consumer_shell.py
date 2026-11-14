@@ -1,5 +1,5 @@
 """Portable ownership/composition controls; actual COM/HKCU checks are separate."""
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import asyncio
 import hashlib
 import json
@@ -11,6 +11,14 @@ import uuid
 import pytest
 
 from amplifier_web import windows_consumer_shell as shell
+
+
+@pytest.fixture(autouse=True)
+def one_at_a_time(monkeypatch):
+    """Off Windows the installation lock has a stand-in; tests/test_windows_uninstall.py has its cases."""
+    if os.name != "nt":
+        from amplifier_web import windows_uninstall
+        monkeypatch.setattr(windows_uninstall, "single", lambda root, **options: nullcontext())
 
 
 @pytest.fixture

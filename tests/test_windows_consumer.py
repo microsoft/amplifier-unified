@@ -1,13 +1,22 @@
 """Consumer entry composition; real download/shortcut/trust is separate evidence."""
 import asyncio
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from amplifier_web import windows_consumer as consumer
+
+
+@pytest.fixture(autouse=True)
+def one_at_a_time(monkeypatch):
+    """Off Windows the installation lock has a stand-in; tests/test_windows_uninstall.py has its cases."""
+    if os.name != "nt":
+        from amplifier_web import windows_uninstall
+        monkeypatch.setattr(windows_uninstall, "single", lambda root, **options: nullcontext())
 
 
 def test_process_local_roots_preserve_accounts_and_user_git_policy(tmp_path, monkeypatch):
