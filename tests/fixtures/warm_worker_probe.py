@@ -122,7 +122,6 @@ def media_selection(root, context_module, capture_module):
     from amplifier_module_loop_live.runtime import Runtime
     from amplifier_web.host.media import SourcePolicy
     from amplifier_web.host.media_graph import NamedMediaGraph
-    from amplifier_web.memory_delivery import MemoryDelivery
     from amplifier_web.preparation_context import PreparedDelivery
     from functools import partial
     import asyncio
@@ -335,13 +334,26 @@ def source_evidence(overlay):
         return {"mode": "installed-locator"}
     imports = {}
     for package in ("amplifier_foundation", "amplifier_module_loop_live",
-                    "amplifier_module_loop_streaming"):
+                    "amplifier_module_loop_streaming",
+                    "amplifier_module_hook_context_intelligence", "context_intelligence"):
         spec = importlib.util.find_spec(package)
         assert spec and spec.origin
         path = Path(spec.origin).resolve()
         imports[package] = {"path": str(path),
                             "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
-    return {"mode": "source-only", "installed_package_parity": False, "imports": imports}
+    capture_modules = {}
+    for name, module in tuple(sys.modules.items()):
+        if not (name == "context_intelligence" or name.startswith("context_intelligence.")
+                or name == "amplifier_module_hook_context_intelligence"
+                or name.startswith("amplifier_module_hook_context_intelligence.")):
+            continue
+        filename = getattr(module, "__file__", None)
+        if filename:
+            path = Path(filename).resolve()
+            capture_modules[name] = {"path": str(path),
+                                     "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    return {"mode": "source-only", "installed_package_parity": False, "imports": imports,
+            "loaded_capture_modules": capture_modules}
 
 
 async def main():

@@ -1183,7 +1183,7 @@ class Worker:
             # Finish the actual host graph before attachment admission. The
             # live execution task is not started yet; no tool is run here.
             self.install_activity(self.session.coordinator)
-            from amplifier_web.host.media import flush_media_adapters, mount_media_adapter, seal_hook_graph
+            from amplifier_web.host.media import flush_media_adapters, mount_media_adapter
             await flush_media_adapters(self.session.coordinator)
             transform = self.session.coordinator.get_capability('web.provider_transform')
             if callable(transform):
