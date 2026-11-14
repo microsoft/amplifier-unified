@@ -49,6 +49,8 @@
 /components/workspaces/tests/** source-context=tests
 /components/workspaces/.gitignore source-context=configuration
 /components/workspaces/LICENSE source-context=documentation
+/components/workspace-metadata.source.json source-context=configuration
+/components/workspace-metadata-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /docs/** source-context=documentation
 /contracts/** source-context=contracts
 /context/** source-context=guidance

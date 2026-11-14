@@ -308,3 +308,43 @@ def test_operations_selection_preserves_modified_root_snapshot(operations_select
         assert record_path.read_bytes() == record
     else:
         assert not record_path.exists()
+
+
+@pytest.fixture
+def workspace_metadata_selection(tmp_path):
+    root, revision, dist, _ = make_candidate(tmp_path, "workspace-metadata")
+    with zipfile.ZipFile(next(dist.glob("*.whl")), "a") as archive:
+        archive.writestr("amplifier_workspace_metadata-0.1.0.dist-info/licenses/LICENSE", "MIT\n")
+    (dist / "workspace-metadata-source.json").unlink(); (dist / "SHA256SUMS").unlink()
+    release.seal(root, revision, dist, component="workspace-metadata")
+    plain = tmp_path / "consumer"; (plain / "components").mkdir(parents=True)
+    (plain / "pyproject.toml").write_text(
+        '[project]\nname="amplifier-unified"\nversion="1.0.0"\ndependencies=[]\n'
+        '[tool.hatch.build.targets.wheel]\n'
+        'packages=["components/workspace-metadata-delivery/amplifier_workspace_metadata"]\n')
+    checksum = delivery.sha((dist / "workspace-metadata-source.json").read_bytes())
+    delivery.select(plain, dist, revision, checksum, component="workspace-metadata")
+    return plain
+
+
+def test_workspace_metadata_selection_preserves_published_names_without_author_or_git(workspace_metadata_selection):
+    root = workspace_metadata_selection
+    before = delivery.verify(root, component="workspace-metadata")
+    assert before["source"]["subdirectory"] == "components/workspaces"
+    assert before["source"]["tag"] == "workspace-metadata-v0.1.0"
+    assert before["artifact"]["url"].endswith("/amplifier_workspace_metadata-0.1.0-py3-none-any.whl")
+    assert set(before["files"]) == {"LICENSE", "amplifier_workspace_metadata/__init__.py"}
+    assert before["runtimeRequirements"] == []
+    assert not (root / ".git").exists() and not (root / "components/workspaces").exists()
+    author = root / "components/workspaces/amplifier_workspace_metadata"; author.mkdir(parents=True)
+    (author / "__init__.py").write_text('raise RuntimeError("unselected author")\n')
+    assert delivery.verify(root, component="workspace-metadata") == before
+
+
+def test_workspace_metadata_selection_refuses_two_installed_owners(workspace_metadata_selection):
+    root = workspace_metadata_selection
+    project = root / "pyproject.toml"
+    project.write_text(project.read_text().replace(
+        'packages=[', 'packages=["components/workspaces/amplifier_workspace_metadata",'))
+    with pytest.raises(ValueError, match="only the selected"):
+        delivery.verify(root, component="workspace-metadata")

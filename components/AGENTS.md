@@ -3,9 +3,11 @@
 `components/workspaces/` is the temporary authoring home for the independently
 buildable `amplifier_workspace_metadata` package. Its registration and query
 mechanism tests belong here; Unified retains initialization, filesystem effects,
-history, authority and persistence. Unified includes the same runtime sources as
-the sole installed owner; do not coinstall the standalone distribution. This
-metadata boundary is not the whole workspace domain or a generated copy.
+history, authority and persistence. Unified consumes only the published artifact
+selected into `workspace-metadata-delivery/` by `workspace-metadata.source.json`,
+as the sole installed owner; do not coinstall the standalone distribution. Never
+edit that generated copy by hand. Author edits and publication do not refresh the
+app selection. This metadata boundary is not the whole workspace domain.
 
 `components/outputs/` is temporarily authored here as an independently buildable
 Python project. Preserve `amplifier_outputs` imports and its saved-body formats.

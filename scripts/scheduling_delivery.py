@@ -14,7 +14,7 @@ import tarfile
 import tomllib
 import zipfile
 
-COMPONENTS = ("scheduling", "worktrees", "portability", "operations")
+COMPONENTS = ("scheduling", "worktrees", "portability", "operations", "workspace-metadata")
 
 DELIVERY = "components/scheduling-delivery"
 RECORD = "components/scheduling.source.json"
@@ -28,12 +28,12 @@ def locations(component):
         raise ValueError("Unknown embedded component selection")
     directory = "amplifier_operations" if component == "operations" else f"components/{component}-delivery"
     return (directory, f"components/{component}.source.json",
-            f"amplifier_{component}", f"amplifier_web/component_delivery/{component}.json",
+            "amplifier_" + component.replace("-", "_"), f"amplifier_web/component_delivery/{component}.json",
             f"amplifier_web/component_delivery/{component}-LICENSE")
 
 
 def selected_files(source, component):
-    package = "amplifier_" + component
+    package = "amplifier_" + component.replace("-", "_")
     return {name: digest for name, digest in source["sourceFiles"].items()
             if name == "LICENSE" or (component == "operations" and "/" not in name and name.endswith(".py"))
             or (component != "operations" and name.startswith(package + "/"))}

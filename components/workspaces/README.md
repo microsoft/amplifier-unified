@@ -49,8 +49,8 @@ native history and shell integration tests remain in Unified; standalone checks
 do not establish those promises or untested platform/interpreter support.
 
 The package version alone does not identify published or qualified bytes; use the
-actual release source receipt and artifact hashes. Unified currently includes
-these exact runtime sources in its own distribution.
+actual release source receipt and artifact hashes. Unified includes an explicitly
+selected public artifact in its own distribution, independently of author edits.
 **Do not coinstall `amplifier-workspace-metadata` with Unified:** both would claim
 the same import package. Repository publication and independent artifact adoption
 are separate steps. The planned supporting repository name remains
@@ -76,3 +76,24 @@ failed jobs. Rebuilding is not a byte-reproducibility promise. Existing tags and
 assets must match exactly; mismatches remain for review rather than being
 overwritten. A completed release retry only verifies its existing bytes.
 Publication does not change Unified's selected package or workspace behavior.
+
+## Unified artifact selection
+
+Unified selects the four verified public release assets explicitly. From the
+Unified repository, use the published receipt's revision and checksum:
+
+```sh
+python scripts/scheduling_delivery.py select --component workspace-metadata \
+  --dist /path/to/verified-release-assets \
+  --revision 8b82dc82119ca5fc19f4be976d48f50c73754945 \
+  --receipt-sha256 e19a04e01908992dfe970bd48d14dc58e4b502b7629d9d8e145e26fcd316a911
+python scripts/scheduling_delivery.py verify --component workspace-metadata
+```
+
+The selection creates `components/workspace-metadata-delivery/` and
+`components/workspace-metadata.source.json`. Never edit the generated copy by
+hand. Normal builds verify it offline and include only its runtime package,
+provenance and license; they do not fetch artifacts or consult this author tree.
+Qualify the installed app before adopting a new selection. Ordinary app rollback
+restores the prior selected code while preserving the caller's workspace records;
+selection does not migrate identities, history or settings.
