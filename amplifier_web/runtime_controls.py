@@ -812,8 +812,10 @@ class RuntimeControls:
                 except BaseException as error:
                     primary = error
                     raise
+            if primary is not None:
+                raise primary  # A foreign suppressing context is not success.
         except BaseException as error:
-            if entered and self.coordinator.get_capability("session.media.graph_transition") is not None:
+            if entered and transition is not None:
                 state["active_mode"] = previous
                 if warnings is not None:
                     hooks.warned_tools = warnings
@@ -826,8 +828,6 @@ class RuntimeControls:
                 primary.add_note(f"Mode transition cleanup also failed: {type(error).__name__}")
                 raise primary
             raise
-        if primary is not None:
-            raise primary  # A foreign suppressing context is not success.
         await self.checkpoint()
         return result
 

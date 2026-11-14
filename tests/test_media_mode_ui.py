@@ -348,6 +348,30 @@ async def test_ui_primary_cancellation_survives_secondary_sync_exit_error(ui, mo
     assert ui.coordinator.session_state["mode_transition_failure"]
     assert_unqualified(ui, old)
 
+@pytest.mark.parametrize("remove_during_failure", [False, True])
+async def test_ui_admitted_failure_latches_even_if_factory_suppresses_or_disappears(
+        ui, monkeypatch, remove_during_failure):
+    overlay = ui.hooks._get_or_create_overlay()
+    async def cancelled(*args):
+        if remove_during_failure:
+            ui.coordinator.register_capability("session.media.graph_transition", None)
+        raise asyncio.CancelledError()
+    monkeypatch.setattr(overlay, "apply", cancelled)
+    @contextmanager
+    def suppressing():
+        try:
+            with ui.factory():
+                yield
+        except BaseException:
+            pass
+    ui.coordinator.register_capability("session.media.graph_transition", suppressing)
+    old = ui.bridge.graph_receipt
+    with pytest.raises(asyncio.CancelledError):
+        await set_mode(ui)
+    assert ui.coordinator.session_state["mode_transition_failure"]
+    assert ui.coordinator.session_state.get("active_mode") is None
+    assert_unqualified(ui, old)
+
 
 async def test_ui_named_reviewed_union_accepts_selected_capture_not_unreviewed_variant(ui):
     await set_mode(ui)
