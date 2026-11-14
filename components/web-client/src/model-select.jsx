@@ -2,6 +2,7 @@ import React,{useRef,useState} from 'react';
 import {useRegionActivity} from './activity-region';
 import {modelOptions} from './setup-data';
 import {useListFilter} from './list-filter.jsx';
+import {ModelPricing} from './model-pricing.jsx';
 
 const originNotices={configured:'Configured models — not checked against the service.',static:'Static recommendations — not a live inventory.',simulated:'Simulated models — test responses only.'};
 export function ModelOriginNotice({entry}){
@@ -30,6 +31,7 @@ export function ModelSelect({id,label='Model',value='',onChange,onCommit,entry,m
   </select></>}
   {!manual&&<button type="button" disabled={disabled} onClick={()=>setExactScope(scope)}>Enter an exact model ID</button>}
   {manual?<><label htmlFor={id}>Exact model ID</label><input id={id} aria-label={label} value={value} disabled={disabled} placeholder={placeholder} data-action="view.update" onChange={e=>{edited.current=true;onChange(e.target.value)}} onBlur={e=>{if(edited.current&&e.target.value.trim()){edited.current=false;onCommit?.(e.target.value.trim())}}} onKeyDown={e=>{if(e.key==='Enter'&&e.currentTarget.value.trim()){e.preventDefault();edited.current=false;onCommit?.(e.currentTarget.value.trim())}}}/><small>Manual ID — not verified by discovery. The connection checks it when you send.</small></>:!models.length&&<small role="status">Loading provider models…</small>}
+  {value&&<ModelPricing model={models.find(row=>row.id===value)}/>}
   {entry?.error&&<small className="a-danger" role="status">{entry.error}</small>}
   {entry?.phase==='error'&&!entry.error&&<small className="a-danger" role="status">Model list unavailable. Enter a model ID or refresh this connection.</small>}
   {entry?.loadedAt!=null&&<small>Last successful refresh: {new Date(entry.loadedAt*1000).toLocaleString()}</small>}

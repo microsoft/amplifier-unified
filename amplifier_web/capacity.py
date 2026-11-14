@@ -49,6 +49,10 @@ def aggregate(calls):
             result[key]['estimatedValue'] = sum(value for row, value in known if row.get('usage', {}).get('costType') == 'estimated')
             result[key]['estimatedCalls'] = sum(row.get('usage', {}).get('costType') == 'estimated' for row, _ in known)
             result[key]['source'] = 'provider-reported or explicitly attributed estimate; no host price table'
+            reasons = sorted({row.get('usage', {}).get('costUnavailableReason') for row, value in rows
+                              if not number(value) and isinstance(row.get('usage', {}).get('costUnavailableReason'), str)})
+            if reasons:
+                result[key]['unavailableReasons'] = reasons
         elif key in ('grossInputTokens', 'grossTotalTokens'):
             result[key]['source'] = 'Core input includes cache reads; add reported cache writes once' + (' and output' if key == 'grossTotalTokens' else '')
     # Voice duration covers session receipts only. Backend model calls do not

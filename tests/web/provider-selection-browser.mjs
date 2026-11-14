@@ -220,6 +220,26 @@ try{
  }
  await page.locator('.a-adaptive-home').getByRole('button',{name:'New chat',exact:true}).click();
  await assertDisplayed(inherited);
+ // Synthetic tier metadata traverses the production probe/catalog/DTO and the
+ // bundled model picker. Native disclosure remains keyboard usable at narrow
+ // width; prices are descriptive and do not change the selected request.
+ await activate(model);await showComposerOption(page,'model');
+ const tierPrice=dialog.getByRole('region',{name:'Pricing for cli-model',exact:true});
+ await expect(tierPrice).toContainText('Up to 100,000 prompt tokens');
+ await expect(tierPrice).toContainText('Above 100,000 prompt tokens');
+ await expect(tierPrice).toContainText('$0.1');
+ await expect(tierPrice).toContainText('$2.5');
+ await expect(tierPrice).toContainText('whole request');
+ const cacheSummary=tierPrice.locator('summary');
+ await cacheSummary.focus();await cacheSummary.press('Enter');
+ await expect(tierPrice.getByText('Cache write (1 hour)',{exact:true}).first()).toBeVisible();
+ await page.screenshot({path:`${evidence}/desktop-tiered-pricing.png`});
+ await page.setViewportSize({width:390,height:844});
+ await expect(tierPrice).toBeVisible();
+ assert.ok(await tierPrice.evaluate(node=>node.scrollWidth<=node.clientWidth+1),'Pricing reflows without horizontal clipping');
+ await page.screenshot({path:`${evidence}/narrow-tiered-pricing.png`});
+ await page.setViewportSize({width:1280,height:900});
+ await closeOptions();
  // Deliberately choose the other real synthetic connection with the SAME model
  // and effort. The normal visible-control observer must reject its connection.
  await activate(model);await showComposerOption(page,'provider');
@@ -289,6 +309,13 @@ try{
  assert.equal((await requests()).length,count);
  await page.request.post(url+'/fixture/provider-resolution/release');
  await assertDisplayed({instance:'unified',model:'unified-model',effort:'high'});
+ await activate(model);await showComposerOption(page,'model');
+ const fixedPrice=dialog.getByRole('region',{name:'Pricing for unified-model',exact:true});
+ await expect(fixedPrice).toContainText('$8');
+ await expect(fixedPrice).toContainText('$40');
+ await expect(fixedPrice).not.toContainText('Above 100,000');
+ await page.screenshot({path:`${evidence}/desktop-fixed-pricing.png`});
+ await closeOptions();
  await page.setViewportSize({width:390,height:844});
  await model.tap();await showComposerOption(page,'provider');
  await expect(page.locator('select#chat-provider')).toHaveValue('unified');
@@ -327,6 +354,7 @@ try{
   await expect.poll(async()=>(await state()).view.newSessionDraft.selection?.model).toBe('hidden-by-recommendation');
   await expect(dialog.locator('select#chat-model-catalog option[value="hidden-by-recommendation"]')).toHaveCount(0);
   await expect(dialog.getByText(/not verified by discovery/)).toBeVisible();
+  await expect(dialog.getByText('Pricing unavailable for the selected model.',{exact:true})).toBeVisible();
   await dialog.locator('input#chat-model').fill(wrong.model);
   await dialog.locator('input#chat-model').press('Tab');
   await expect.poll(async()=>(await state()).view.newSessionDraft.selection?.model).toBe(wrong.model);

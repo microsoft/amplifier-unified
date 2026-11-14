@@ -1,7 +1,7 @@
 import React,{useState} from 'react';
 import {useShellContext} from './shell/runtime';
 import {usageMetric} from './conversation-usage.js';
-import {cachedPercent,usageMetrics,usageRows} from './usage-details.js';
+import {cachedPercent,usageMetrics,usageRows,costUnavailableNotes} from './usage-details.js';
 import {selectedMetrics,metricsVisible,metricState,metricExport} from './execution-observability.js';
 import {MetricsExport} from './execution-observability.jsx';
 
@@ -22,13 +22,14 @@ export function UsageDetails({usage,metrics=usageMetrics(usage),label='Token usa
  })}</dl>;
  return <section className="a-usage-details" aria-label={label}>
   {primaryRows.length>0&&grid(primaryRows,true)}
+  {selected.includes('costUsd')&&costUnavailableNotes(metrics.costUsd).map(note=><p key={note} className="a-caption">Cost unavailable for some calls: {note} Unavailable costs are not zero.</p>)}
   {rows.some(row=>row.key==='voiceSeconds')&&<p className="a-caption">Voice seconds are reported separately from tokens. Incomplete totals retain the last observed duration.</p>}
   {record&&<MetricsExport metrics={metrics} scope={scope} record={record} observedAt={observedAt} coverage={coverage}/>}
   {!rows.length&&<p className="a-caption">No metrics selected.</p>}
   {accountingRows.length>0&&<details className="a-usage-accounting" open={open} onToggle={event=>{if(event.currentTarget.open!==open)setExpanded(event.currentTarget.open)}}>
    <summary>Cache and accounting details</summary>
    {grid(accountingRows)}
-   <p className="a-caption">Input includes cache reads and writes. Total = input + output. Reasoning is included in output.{metrics.costUsd?.value!=null&&!(metrics.costUsd.estimatedCalls>0)&&' Cost reported by the provider.'}</p>
+   <p className="a-caption">Input includes cache reads and writes. Total = input + output. Reasoning is included in output.{metrics.costUsd?.value!=null&&!(metrics.costUsd.estimatedCalls>0)&&' Cost supplied by the provider integration.'}</p>
   </details>}
  </section>;
 }

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {usageMetrics,cachedPercent,compactBreakdown,usageRows} from '../src/usage-details.js';
+import {usageMetrics,cachedPercent,compactBreakdown,usageRows,costUnavailableNotes} from '../src/usage-details.js';
 import {segmentUsage,combinedWork} from '../src/timeline-data.js';
 
 test('CLI-compatible totals include writes once and never re-add cache reads or reasoning',()=>{
@@ -11,6 +11,14 @@ test('CLI-compatible totals include writes once and never re-add cache reads or 
  assert.equal(compactBreakdown(usage),'In 100k (80% cached) · Out 1k');
 });
 test('missing usage is inspectable',()=>{assert.equal(usageMetrics(null).grossTotalTokens.value,null)});
+
+test('documented unavailable cost reasons stay visible without inventing zero or exposing raw text',()=>{
+ const metrics=usageMetrics({costType:'unavailable',costUnavailableReason:'cache_write_ttl_unavailable'});
+ assert.equal(metrics.costUsd.value,null);
+ assert.deepEqual(costUnavailableNotes(metrics.costUsd),['Cache-write duration was not reported.']);
+ assert.deepEqual(usageRows(metrics).map(row=>row.key),['costUsd']);
+ assert.deepEqual(costUnavailableNotes({unavailableReasons:['private response','__proto__',{},'model_rates_unavailable']}),['Rates are unavailable for this model.']);
+});
 
 test('zero, unavailable, pending and mismatched coverage do not invent cache percentages',()=>{
  assert.equal(cachedPercent(usageMetrics({inputTokens:10,cacheReadTokens:0})),'0%');

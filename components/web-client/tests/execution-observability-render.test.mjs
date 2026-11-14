@@ -20,8 +20,21 @@ test('scope switches remove metrics but do not disclose excluded fields',async()
  await act(async()=>root.update(details('turn',presentation)));assert.match(text(),/Output tokens/);assert.match(text(),/Elapsed seconds/);assert.ok(!text().includes('Input tokens'));assert.ok(!text().includes('Reasoning tokens'));
  await act(async()=>root.update(details('turn',{...presentation,executionMetrics:['reasoningTokens']})));assert.match(text(),/Unavailable/);assert.ok(!text().includes('$0.5'));
 });
+test('usage details attribute normalized costs to the provider integration',async()=>{
+ const usage={inputTokens:10,outputTokens:2,costUsd:.5,costType:'reported'};
+ await act(async()=>{root=create(wrap({executionMetrics:['costUsd']},React.createElement(UsageDetails,{usage})))});
+ assert.match(text(),/Cost supplied by the provider integration/);assert.doesNotMatch(text(),/Cost reported by the provider/);
+});
 test('Focused retains explicitly opened accounting unless its scope was hidden',async()=>{
  await act(async()=>{root=create(details('step',{interfaceDetail:'minimal',executionMetrics:['outputTokens']}))});assert.match(text(),/Output tokens/);
+});
+test('cost details explain documented missing-cost reasons and keep partial subtotal labels',async()=>{
+ const view=metrics=>wrap({executionMetrics:['costUsd']},React.createElement(UsageDetails,{metrics,scope:'conversation',record:{id:'session'}}));
+ await act(async()=>{root=create(view({costUsd:{value:null,status:'unknown',unavailableReasons:['cache_write_ttl_unavailable','private response']}}))});
+ assert.match(text(),/Cache-write duration was not reported/);assert.match(text(),/Unavailable costs are not zero/);
+ assert.ok(!text().includes('$0'));assert.ok(!text().includes('private response'));
+ await act(async()=>root.update(view({costUsd:{value:0.000015,status:'partial',unavailableReasons:['model_rates_unavailable']}})));
+ assert.match(text(),/\$0.000015/);assert.match(text(),/Partial/);assert.match(text(),/Rates are unavailable for this model/);
 });
 test('compact conversation is demand-only and fences late results from previous chat',async()=>{
  const pending=[],dispatch=(name,args)=>new Promise(resolve=>pending.push({name,args,resolve}));

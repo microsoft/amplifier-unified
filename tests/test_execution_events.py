@@ -109,6 +109,17 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
         result=public_usage({'input_tokens':-3,'output_tokens':float('nan'),'cost_usd':'nan','secret':'no'})
         self.assertEqual(result,{'costType':'unavailable'})
 
+    def test_unavailable_cost_projects_only_documented_reason_codes(self):
+        self.assertEqual(public_usage({'cost_usd':None},
+            metadata={'anthropic_cost_unavailable':'model_rates_unavailable','raw':'private'}),
+            {'costType':'unavailable','costUnavailableReason':'model_rates_unavailable'})
+        for reason in ('private response', 'secret_identifier', {'private':True}):
+            self.assertEqual(public_usage({'cost_usd':None},
+                metadata={'anthropic_cost_unavailable':reason}), {'costType':'unavailable'})
+        self.assertEqual(public_usage({'cost_usd':'0'},
+            metadata={'anthropic_cost_unavailable':'model_rates_unavailable'}),
+            {'costUsd':0.0,'costType':'reported'})
+
 
 class TruncationFailureTests(unittest.IsolatedAsyncioTestCase):
     """Offline typed provider boundary, not a reproduction of paid inference."""

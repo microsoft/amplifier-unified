@@ -666,6 +666,81 @@ body,
   min-width: 0;
 }
 
+#amp-one .a-model-pricing {
+  min-width: 0;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--a-line);
+  color: var(--a-muted);
+  font-size: var(--a-text-sm, 13px);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+#amp-one .a-model-pricing > p,
+#amp-one .a-model-pricing [aria-live] > p {
+  margin: 4px 0;
+}
+
+#amp-one .a-model-pricing strong,
+#amp-one .a-model-pricing dd {
+  color: var(--a-ink);
+}
+
+#amp-one .a-model-price-rates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+  gap: 3px 12px;
+  margin: 4px 0;
+}
+
+#amp-one .a-model-price-rates > div {
+  display: flex;
+  gap: 5px;
+  min-width: 0;
+}
+
+#amp-one .a-model-price-rates dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+#amp-one .a-model-pricing ol {
+  display: grid;
+  gap: 6px;
+  margin: 5px 0;
+  padding: 0;
+  list-style: none;
+}
+
+#amp-one .a-model-pricing li {
+  min-width: 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--a-line);
+}
+
+#amp-one .a-model-pricing li > p {
+  margin: 0 0 3px;
+  color: var(--a-ink);
+  font-weight: 600;
+}
+
+#amp-one .a-model-pricing details {
+  margin-top: 6px;
+}
+
+#amp-one .a-model-pricing summary {
+  cursor: pointer;
+}
+
+#amp-one .a-model-pricing details section {
+  margin-top: 8px;
+}
+
+#amp-one .a-model-pricing details h5 {
+  margin: 5px 0;
+}
+
 #amp-one.a-chat-shell .a-model-trigger {
   max-width: 100%;
   min-width: 0;
