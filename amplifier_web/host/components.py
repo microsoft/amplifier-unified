@@ -168,7 +168,8 @@ def portable_module_sources(plan, home):
     def git(root, *args):
         return subprocess.check_output(
             ['git', '--no-optional-locks', '--literal-pathspecs', '-C', str(root), *args],
-            stderr=subprocess.DEVNULL, text=True, timeout=10).strip()
+            stderr=subprocess.DEVNULL, text=True, timeout=10,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).strip()
 
     for row in declarations(result):
         source = row.get('source')

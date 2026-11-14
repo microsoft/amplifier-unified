@@ -169,7 +169,8 @@ def verify_candidate(target):
         raise ValueError('Active app installation changed; its generation was preserved')
     python = prefix / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
     result = subprocess.run([str(python), '-I', '-c', GRAPH_PROBE],
-        capture_output=True, text=True, timeout=30, check=False)
+        capture_output=True, text=True, timeout=30, check=False,
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if result.returncode or digest(normalized(json.loads(result.stdout),
             **({'artifact': artifact} if artifact is not None else {}))) != target['componentDigest']:
         raise ValueError('Active app packages changed; its generation was preserved')
