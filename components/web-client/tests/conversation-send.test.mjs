@@ -4,9 +4,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {nativeDeliverySource,freshRetrySource,deliveryScope,deliveryTargetMatches} from '../src/pending-delivery-checks.js';
+import {draftExternalAgentIds,externalParticipants,externalAgentLabel} from '../src/external-participants.js';
 const source=readFileSync(new URL('../src/main.jsx',import.meta.url),'utf8');
 function callback(name,end,bindings){
- bindings={nativeDeliverySource,freshRetrySource,deliveryTargetMatches:(state,target,id)=>deliveryTargetMatches({...state,client:{hostInstanceId:'host'}},target,id),...bindings};
+ bindings={nativeDeliverySource,freshRetrySource,draftExternalAgentIds,externalParticipants,externalAgentLabel,sharedConversation:false,deliveryTargetMatches:(state,target,id)=>deliveryTargetMatches({...state,client:{hostInstanceId:'host'}},target,id),...bindings};
  const start=source.indexOf(` async function ${name}(`),stop=source.indexOf(end,start);
  assert.ok(start>=0&&stop>start,`Find the maintained ${name} callback`);
  return new Function(...Object.keys(bindings),`${source.slice(start,stop)};return ${name};`)(...Object.values(bindings));
@@ -134,3 +135,32 @@ for(const fields of [{expectedGenerationId:'old-run',allowNextTurn:true},{allowN
   assert.equal(errors.length,1);assert.match(errors[0],/Use Check delivery.*saved message was kept/);
  });
 }
+
+for(const shared of [false,true])test(`${shared?'shared concurrent post':'directed send'} captures its original room and Stop boundary without native routing`,async()=>{
+ const room={...session,id:'room',workspace:'/original',status:'working',externalAgent:{participants:[{id:'alpha',label:'Alpha'},{id:'beta',label:'Beta'}],...(shared?{participation:'shared'}:{})}};
+ const state={view:{},sessions:[room],selectedSessionId:room.id},latest={current:state},box=outbox(),entries=[];
+ const send=callback('send','\n async function submitWorker(',{
+  dictationControl:{current:null},referenceDraftLock:{current:false},draft:'Original public input',availableAttachments:[],uploadCount:{current:0},busy:false,newChatPending:false,historyPending:false,executionUnavailable:false,
+  preserveOtherDraft(){},session:room,quoteApi:{current:null},crypto:{randomUUID:()=> 'captured-input'},externalConversation:true,sharedConversation:shared,recipientAgentId:'beta',detail:{focused:false},chatScroll:{current:null},setError(error){if(error)throw Error(error)},setQuoteNotice(){},quoteNoticeAfterSend(){},editDraft(){},clearTimeout(){},draftTimer:{current:null},stagedDraft:{current:'token'},outbox:box,deliveryScope:scope,latest,state,mode:'text',Date,stagedDraftPayload:{current:{}},
+  saveDraft:async()=>{latest.current={...state,selectedSessionId:'elsewhere',sessions:[{id:'elsewhere'}]};},reportError(error){throw error},outboxMatches:matches,ensureSession(){throw Error('Never recreate an existing room')},deliver:async entry=>entries.push(structuredClone(entry)),
+ });
+ await send();
+ assert.equal(entries.length,1);const entry=entries[0];ordinary(entry);
+ assert.equal(entry.sessionId,'room');assert.equal(entry.expectedInterruptionRevision,3);assert.equal(entry.expectedConfigurationRevision,7);assert.equal(Object.hasOwn(entry,'expectedSource'),false);
+ assert.equal(entry.recipientAgentId,shared?undefined:'beta');assert.equal(entry.recipientAgentLabel,shared?undefined:'Beta');
+ const calls=[],deliveries={current:new Set()};let finish;
+ const deliver=callback('deliver','\n function discardMessage(',{outboxMatches:matches,deliveryScope:scope,latest,deliveries,outbox:box,dispatch:async(action,args,options)=>{calls.push({action,args,options});return new Promise(resolve=>{finish=resolve})},actionErrorMessage:error=>error.message});
+ const pending=deliver(entry);await deliver(entry);assert.equal(calls.length,1);
+ assert.equal(calls[0].args.sessionId,'room');assert.equal(calls[0].args.recipientAgentId,shared?undefined:'beta');assert.equal(calls[0].args.expectedInterruptionRevision,3);ordinary(calls[0].args);
+ // A positive change to the captured source after dispatch keeps uncertainty.
+ latest.current={...state,sessions:[{...room,workspace:'/replacement'}]};finish({accepted:true,delivery:'accepted'});await pending;
+ assert.equal(box.current.current[0].status,'unknown');assert.equal(box.current.current[0].commandId,'captured-input');assert.equal(calls.length,1);
+});
+
+test('failed shared draft retry preserves the original roster and remains external after selection changes',async()=>{
+ const creation={id:'original-creation',setup:{workspace:'/original',externalAgentIds:['alpha','beta']}},entry={id:'local',commandId:'rejected',sessionId:null,scope:scope(null,null),text:'Original post',attachmentIds:[],status:'failed',creation};
+ const box=outbox(entry),sent=[];
+ const retry=callback('retryMessage','\n async function send(',{outbox:box,latest:{current:{sessions:[]}},crypto:{randomUUID:()=> 'fresh-id'},creationSetup:()=>({workspace:'/other',externalAgentId:'replacement'}),setError(error){throw Error(error)},deliver:async value=>sent.push(value)});
+ await retry({localDelivery:{id:'local'}});
+ assert.equal(sent.length,1);assert.deepEqual(sent[0].creation.setup,creation.setup);assert.equal(Object.hasOwn(sent[0],'expectedSource'),false);assert.equal(Object.hasOwn(sent[0],'recipientAgentId'),false);ordinary(sent[0]);
+});

@@ -1,5 +1,6 @@
 import React from 'react';
 import './new-chat.css';
+import {draftExternalAgentIds} from './external-participants';
 
 export function newChatSetup(state){
  const surface=state?.view?.workSurface||'chat';
@@ -7,8 +8,10 @@ export function newChatSetup(state){
  const workspace=state?.workspaces?.find(row=>row.id===id)?.path||'';
  const draft=state?.view?.newSessionDraft;
  const path=draft?.workspace??workspace;
- if(draft?.externalAgentId)return {title:draft.title||'',workspace:path,externalAgentId:draft.externalAgentId,location:{kind:'workspace'}};
- return {title:'',workspace,bundle:'',selection:{},...draft,location:draft?.location||{kind:path?'workspace':'managed'}};
+ const agents=draftExternalAgentIds(draft);
+ if(agents.length)return {title:draft.title||'',workspace:path,...(agents.length===1?{externalAgentId:agents[0]}:{externalAgentIds:agents}),location:{kind:'workspace'}};
+ const {externalAgentId,externalAgentIds,...nativeDraft}=draft||{};
+ return {title:'',workspace,bundle:'',selection:{},...nativeDraft,location:draft?.location||{kind:path?'workspace':'managed'}};
 }
 
 export function draftDefaultsKey(setup){

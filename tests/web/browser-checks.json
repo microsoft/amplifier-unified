@@ -1192,6 +1192,14 @@
       "env": {
         "EVIDENCE_DIR": "{root}/output/browser-checks/voice-work-message"
       }
+    },
+    {
+      "id": "external-multiparty",
+      "command": ["node", "tests/web/external-multiparty-browser.mjs"],
+      "env": {
+        "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python",
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/external-multiparty"
+      }
     }
   ],
   "scenarioOrder": [
@@ -1351,6 +1359,8 @@
     "chat-scroll-call-boundaries",
     "semantic-settings",
     "history-refresh",
-    "voice-work-message"
+    "voice-work-message",
+    "external-multiparty",
+    "shared-room"
   ]
 }
