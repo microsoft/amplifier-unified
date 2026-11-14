@@ -43,9 +43,12 @@ def run(base, receipt):
         actual = json.loads(tested.stdout.strip().splitlines()[-1])
         report["native"] = actual
         assert tested.returncode == 0 and actual["ok"] is True, tested.stderr[-2000:]
-        assert actual["assertions"] >= 30
-        assert actual["elevation"] in {"none", "run-as-administrator", "always-administrator"}
-        assert actual["storage"] in {"created", "refused above the folder"}
+        assert actual["assertions"] >= 50
+        assert actual["elevation"] in {"none", "run-as-administrator", "always-administrator", "administrator"}
+        # The runner has no Amplifier task. "unavailable" here would mean that
+        # setup stops on every ordinary PC, so only a proven "absent" passes.
+        assert actual["signInTask"] == "absent"
+        assert actual["ordinaryFolder"] in {"foreign", "unfinished"}
         report.update(ok=True, stage="complete")
         return 0
     finally:
