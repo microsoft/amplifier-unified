@@ -24,15 +24,18 @@ uv venv .venv
 uv pip install --python .venv/bin/python "dist/amplifier_kernels-0.1.0-py3-none-any.whl[test]"
 ```
 
-Before running the tests, install the selected `amplifier-operations` wheel and
-the public managed-process `amplifier-module-tool-bash` artifact, including that
-peer's declared dependencies, into this same environment. The current BashTool
-also imports Core: install its selected compatible `amplifier-core` wheel even
-if that peer does not declare it in package metadata. The operations project
-currently has preparation artifacts rather than an independent published release;
-build its exact selected source separately and supply that local wheel. Do not
-install Unified to obtain these peers. Record both source/artifact identities.
-The BashTool test peer may depend on Core; the kernels runtime does not.
+Before running the tests, install the public `operations-v0.1.0` wheel
+(`amplifier-operations` 0.1.0, SHA-256
+`05675519079bbfb75be9ce0bc6fcba8c4a4ba6fd06dc8105ca706aec5ac43a1a`),
+`amplifier-module-tool-bash` from public commit
+`d5bb46d24dcae8e260211bf8fb5c22de3a67f406`, and the compatible public
+`amplifier-core` 2.0.2 wheel into this same environment. BashTool imports Core
+without declaring it; this is a test-peer requirement, not a kernels runtime
+dependency. Include the peers' declared dependencies. Do not install Unified to
+obtain these peers or build Core from source. The
+[kernels workflow](../.github/workflows/kernels-release.yml) pins the Linux
+publication-test wheels by SHA-256 and uses Node 22.23.3. It installs the original
+kernels wheel outside the checkout and requires all ten cases without skips.
 
 Run `.venv/bin/python -m pytest -q tests` after installing those prerequisites.
 Python and Node must both be available to exercise all ten mechanism cases.
@@ -56,12 +59,26 @@ retain mounted tool approval, question dependencies, conversation selection,
 recovery and execution authority. The in-place layout preserves its existing
 runtime bootstrap origin checks.
 
-The ACP adapter currently carries a byte-identical temporary delivery copy under
-`amplifier_acp.native.kernels`. Changes must originate here and reach that copy
-with exact source/content provenance and separate consumer qualification. This
-preparation does not switch ACP imports or automatically synchronize that copy.
-It adds no runtime fetch, package selection or new installation path.
+Released [ACP 0.1.7](https://github.com/microsoft/amplifier-app-acp/releases/tag/v0.1.7)
+selects this public project at Git commit
+`8f4c05c53e5343a39433bc4a64f0d9e0104ce0e8`, subdirectory `amplifier_kernels`.
+Kernel changes originate here; each consumer selects and qualifies its own update.
+The standalone producer does not change that dependency or Unified's bundled
+source, fetch packages at runtime, or automatically synchronize consumers.
 
-The `0.1.0` version is preparation metadata, not a published release or a repository
-choice. Use separate environments for the standalone distribution and Unified:
-do not coinstall them while both own `amplifier_kernels` package files.
+## Standalone publication
+
+The existing component publisher accepts `--component kernels`. Its assets are
+`amplifier_kernels-0.1.0-py3-none-any.whl`, `amplifier_kernels-0.1.0.tar.gz`,
+`kernels-source.json` and `SHA256SUMS`, under `kernels-v0.1.0`. The receipt binds
+both artifacts to the exact public Git source, including `node_runner.cjs` and
+the maintained tests. The workflow builds once and qualifies that same wheel;
+PRs qualify without publishing. After review and merge, the sole release owner
+may dispatch `kernels-release.yml` on `main` with the full merged revision.
+Existing tags and asset bytes are immutable; inspect saved draft state after an
+uncertain operation before retrying the ordinary publisher.
+
+Workflow support is not a publication or consumer-adoption receipt. The `0.1.0`
+package version and repository ownership are unchanged. Use separate environments
+for the standalone distribution and Unified: do not coinstall them while both
+own `amplifier_kernels` package files.

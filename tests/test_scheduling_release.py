@@ -20,13 +20,15 @@ def make_candidate(tmp_path, component="scheduling"):
     package = "amplifier_" + component.replace("-", "_")
     root = tmp_path / "repo"; root.mkdir()
     source = root / ("components/workspaces" if component == "workspace-metadata" else
-                     package if component == "operations" else "components/" + component)
+                     package if component in {"operations", "kernels"} else "components/" + component)
     source.mkdir(parents=True)
-    runtime = "__init__.py" if component == "operations" else package + "/__init__.py"
+    runtime = "__init__.py" if component in {"operations", "kernels"} else package + "/__init__.py"
     files = {"pyproject.toml": f'[project]\nname="amplifier-{component}"\nversion="0.1.0"\n',
              runtime: 'value = "selected"\n',
              "README.md": "Scheduling\n", "LICENSE": "MIT\n", "MANIFEST.in": "include README.md\n",
              "tests/test_policy_store.py": "def test_fixture(): assert True\n", ".gitignore": "dist/\n"}
+    if component == "kernels":
+        files["node_runner.cjs"] = "const selected = true;\n"
     for name, text in files.items():
         path = source / name; path.parent.mkdir(exist_ok=True, parents=True); path.write_text(text)
     def git(*args):
@@ -39,6 +41,8 @@ def make_candidate(tmp_path, component="scheduling"):
     wheel, sdist = release.artifact_names(selected)
     with zipfile.ZipFile(dist / wheel, "w") as archive:
         archive.writestr(package + "/__init__.py", files[runtime])
+        if component == "kernels":
+            archive.writestr(package + "/node_runner.cjs", files["node_runner.cjs"])
         archive.writestr(package + "-0.1.0.dist-info/METADATA", f"Name: amplifier-{component}\nVersion: 0.1.0\n")
     with tarfile.open(dist / sdist, "w:gz") as archive:
         for name, text in files.items():
@@ -539,3 +543,77 @@ def test_operations_author_relocation_preserves_original_release_verification(tm
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Ambiguous author fixture")
     with pytest.raises(ValueError, match="one operations author"):
         release.selection(root, git("rev-parse", "HEAD"), qualification=True, component="operations")
+
+
+def test_kernels_flat_python_and_node_payload_identity(tmp_path):
+    root, revision, dist, _ = make_candidate(tmp_path, "kernels")
+    receipt = release.verify(root, revision, dist, component="kernels")
+    assert receipt["tag"] == "kernels-v0.1.0"
+    assert receipt["subdirectory"] == "amplifier_kernels"
+    assert receipt["sourceFiles"]["node_runner.cjs"]
+    assert {path.name for path in dist.iterdir()} == {
+        "amplifier_kernels-0.1.0-py3-none-any.whl",
+        "amplifier_kernels-0.1.0.tar.gz", "kernels-source.json", "SHA256SUMS",
+    }
+    with pytest.raises(subprocess.CalledProcessError):
+        release.verify(root, revision, dist)
+
+
+@pytest.mark.parametrize("artifact", ["wheel", "sdist"])
+@pytest.mark.parametrize("fault", ["missing", "changed", "unselected"])
+def test_kernels_node_runner_is_bound_before_publication(tmp_path, monkeypatch, artifact, fault):
+    root, revision, dist, _ = make_candidate(tmp_path, "kernels")
+    if artifact == "wheel":
+        path = next(dist.glob("*.whl"))
+        with zipfile.ZipFile(path) as archive:
+            files = {name: archive.read(name) for name in archive.namelist()}
+        runner = "amplifier_kernels/node_runner.cjs"
+    else:
+        path = next(dist.glob("*.tar.gz"))
+        with tarfile.open(path) as archive:
+            files = {member.name: archive.extractfile(member).read() for member in archive.getmembers()}
+        runner = "amplifier_kernels-0.1.0/node_runner.cjs"
+    if fault == "missing":
+        del files[runner]
+    elif fault == "changed":
+        files[runner] = b"const unselected = true;\n"
+    else:
+        files[runner.replace("node_runner.cjs", "other_runner.cjs")] = b"const extra = true;\n"
+    if artifact == "wheel":
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, raw in files.items():
+                archive.writestr(name, raw)
+    else:
+        with tarfile.open(path, "w:gz") as archive:
+            for name, raw in files.items():
+                info = tarfile.TarInfo(name); info.size = len(raw)
+                archive.addfile(info, io.BytesIO(raw))
+    monkeypatch.setattr(release, "api", lambda *a, **k: pytest.fail("Invalid runner reached GitHub"))
+    with pytest.raises(ValueError):
+        release.publish(root, revision, dist, component="kernels")
+
+
+@pytest.mark.parametrize("state", ["new", "partial", "complete"])
+def test_kernels_reuses_exact_draft_and_completed_publication(tmp_path, monkeypatch, state):
+    candidate = make_candidate(tmp_path, "kernels")
+    remote = Remote(candidate, exists=state != "new", draft=state != "complete")
+    if state == "partial":
+        remote.release["assets"] = remote.release["assets"][:1]
+        remote.hide_draft_by_tag = True
+    remote.install(monkeypatch)
+    result = release.publish(*candidate[:3], component="kernels")
+    assert result["tag"] == "kernels-v0.1.0"
+    assert result["status"] == ("already-published-exact-bytes" if state == "complete" else "published")
+    assert not remote.release["draft"] and len(remote.release["assets"]) == 4
+    if state == "complete":
+        assert remote.mutations == []
+
+
+def test_changed_published_kernels_asset_is_not_overwritten(tmp_path, monkeypatch):
+    candidate = make_candidate(tmp_path, "kernels")
+    remote = Remote(candidate)
+    remote.bytes[1] = b"changed kernels artifact"
+    remote.install(monkeypatch)
+    with pytest.raises(ValueError, match="bytes differ"):
+        release.publish(*candidate[:3], component="kernels")
+    assert remote.mutations == []

@@ -22,6 +22,7 @@ COMPONENTS = {
     "portability": ("components/portability", "amplifier_portability/"),
     "operations": ("components/operations", ""),
     "workspace-metadata": ("components/workspaces", "amplifier_workspace_metadata/"),
+    "kernels": ("amplifier_kernels", ""),
 }
 
 
@@ -93,7 +94,8 @@ def package_identity(dist, selected):
     prefix = COMPONENTS[component][1]
     runtime = {package + "/" + name.removeprefix(prefix): digest
                for name, digest in expected.items()
-               if name.startswith(prefix) and (prefix or "/" not in name and name.endswith(".py"))}
+               if name.startswith(prefix) and (prefix or "/" not in name and
+                   (name.endswith(".py") or component == "kernels" and name == "node_runner.cjs"))}
     info = f"{package}-{selected['version']}.dist-info/"
     with zipfile.ZipFile(dist / wheel) as archive:
         names = archive.namelist()
@@ -123,8 +125,8 @@ def package_identity(dist, selected):
                 name = member.name.removeprefix(prefix)
                 if name in expected:
                     observed[name] = sha(archive.extractfile(member).read())
-                elif name.endswith(".py"):
-                    raise ValueError("Source archive contains unselected Python code.")
+                elif name.endswith(".py") or component == "kernels" and name.endswith(".cjs"):
+                    raise ValueError("Source archive contains unselected runtime code.")
         required = {name: digest for name, digest in expected.items() if name != ".gitignore"}
         if observed != required:
             raise ValueError("Source archive differs from selected project/tests.")
@@ -242,7 +244,8 @@ def publish(root, revision, dist, *, component="scheduling"):
                                   "worktrees": "Standalone managed Git worktree mechanism.",
                                   "portability": "Standalone signed task transfer mechanism.",
                                   "operations": "Standalone durable operation observations and coordination delivery.",
-                                  "workspace-metadata": "Standalone workspace registration metadata over caller-owned records."}[component] + " Source: " + revision +
+                                  "workspace-metadata": "Standalone workspace registration metadata over caller-owned records.",
+                                  "kernels": "Standalone persistent computation through caller-owned processes and observations."}[component] + " Source: " + revision +
                       ". Unified dependency selection is unchanged. Do not co-install with a Unified version that still bundles this package.")
         release = read_release(release, tag)
     if not release["draft"]:

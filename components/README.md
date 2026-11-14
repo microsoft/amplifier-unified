@@ -13,8 +13,10 @@ not extract the full workspace domain.
 buildable computation mechanism in its existing source location, preserving
 runtime bootstrap origin checks. Its real Python/Node tests use selected process
 and operation-journal peers without starting Unified. The host retains authority,
-question and recovery tests. Unified bundles this source; the ACP adapter's
-temporary delivery copy requires a separate qualified update when it changes.
+question and recovery tests. Unified bundles this source; released ACP 0.1.7
+selects the public kernels project at an exact Git revision. The standalone
+producer workflow does not change either consumer selection; adoption remains
+separately qualified.
 
 [`outputs/`](outputs/README.md) prepares the independently buildable output
 relationship, saved-body decoder and read-only Git evidence package. Its existing
