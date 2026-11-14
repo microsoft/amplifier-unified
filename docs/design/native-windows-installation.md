@@ -587,7 +587,9 @@ environment 162, private Python 142, tools 124, private Git 68. Those fit at
 59 today.
 
 The short folder is necessary and not sufficient. The app must also keep what
-it adds below the folder inside the budget of the next section. A change to the
+it adds below the folder inside the budget of the next section. One row of that
+budget does not fit at 59: module source in the source store fits only up to a
+folder path of 54 (see the source-store item below). A change to the
 folder name must respect this number, and `tests/test_windows_setup_folder.py`
 fails when code and document disagree. Setup stops before it asks anything when
 the path would be longer.
@@ -597,8 +599,11 @@ the path would be longer.
 With long paths off Windows accepts a file path of at most 259 characters and
 creates a folder of at most 247. `tests/test_windows_path_budget.py` is the one
 table of what each store adds below the installation folder. It computes every
-path shape for the longest supported folder path, reads that number from setup
-and the names from their owners, and fails when a sum no longer fits. Print the
+path shape for the longest supported folder path and reads that number from
+setup. For the session, capture and ownership stores it reads the temporary and
+sibling names from their owners, and it fails when a sum no longer fits. For the
+source store it uses measured repository depths, which are constants in the
+test: it does not notice a deeper file in a later bundle revision. Print the
 table with `python tests/test_windows_path_budget.py`.
 
 - **The app's own chat folders use a short project name on Windows.** The shared
@@ -608,7 +613,8 @@ table with `python tests/test_windows_path_budget.py`.
   was 277 characters with an 18-character account name. The name is now
   `chat-<16 hex digits>` (21 characters). The rule and its limits are in the
   [history contract](../workspaces/contracts/history.v1.md#what-it-is).
-- **Root sessions fit in every store** at 59: the longest path is 245.
+- **Root sessions fit in the session, capture and ownership stores** at 59: the
+  longest path is 245.
 - **Worker (sub-agent) sessions have longer IDs** (34 characters plus the agent
   name). At 59 every path shape holds an ID of 50 characters. Longer IDs lose
   files in this order: the request observation (50, root sessions only), the
@@ -625,18 +631,34 @@ table with `python tests/test_windows_path_budget.py`.
   longer than the limit that was written while long paths were on. The app
   finds such history through the extended-length path form and does not start
   a second history for that chat.
-- **Source store:** Amplifier Foundation owns its layout. With the locked
-  Foundation revision its paths do not fit at 59, so the worker cannot start on
-  a default PC. Foundation's Windows change (extended-length tree walks and
-  16-digit folder names) closes that; the budget test names the two rows that
-  wait for it and fails when that state changes.
+- **Source store:** Amplifier Foundation owns its layout; the app supplies the
+  folder, `<folder>\source-store`. A Foundation revision before `7526bb55`
+  cannot stage the default bundles at any supported folder path (measured at
+  51; arithmetic for the others), so the conversation worker cannot start on a
+  default PC. From `7526bb55` the store
+  reaches every staged file itself through extended-length paths, and new
+  entries on Windows have 16-digit folder names. Repository depth then no
+  longer limits staging, sealing, cleanup or the copy into a build view.
+- **Source store, the row that does not fit at 59:** other programs still open
+  store files by ordinary paths. Python imports module source from the store
+  object: folder path + 80 (`\source-store\objects\<16>\<40>\`) + the path
+  inside the repository. The deepest module file of the default bundles is 125
+  characters (measured), so the path is folder path + 205. It fits up to a
+  folder path of **54** and is 264 at 59. Setup accepts an account whose
+  profile-folder name has 22 to 26 characters, and that account then cannot
+  load the default bundles. This is arithmetic from measured depths; it has
+  not been run on such an account. Setup owns the fix, which is not decided:
+  the store folder name `s` (11 characters shorter, 253 at 59) or a limit of
+  54. An entry that already exists under a 64-digit name stays in use and is
+  48 characters longer.
 
 `.github/workflows/windows-path-length.yml` is the native check. It turns
 `LongPathsEnabled` off on its own runner, proves in a new process that a
 260-character path is refused, runs the real session and capture stores under a
-folder path of exactly 59 characters, and restores the runner's value. It has a
-named, skipped place for the source store until the Foundation change is locked.
-It is not setup-file or clean-account acceptance.
+folder path of exactly 59 characters, and restores the runner's value. It
+installs the locked dependencies, so its source-store case needs a locked
+Foundation revision of `7526bb55` or later; before that the case is skipped by
+name. It is not setup-file or clean-account acceptance.
 
 Setup checks the PC and the folder before its first question. Each stop names
 one cause and one next step in plain language, and never shows exception text,
