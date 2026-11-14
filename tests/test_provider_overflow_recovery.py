@@ -282,5 +282,53 @@ async def test_real_anthropic_private_server_feedback_through_both_host_projecti
         await sdk.close()
 
 
+@pytest.mark.parametrize('size', [100, 4_000_000])
+async def test_successful_dispatch_witness_work_against_disabled_baseline(size, monkeypatch):
+    import time
+    import tracemalloc
+    from amplifier_web.overflow_feedback import OverflowFeedback
+    from test_context_inspection import evidence
+
+    class Success(Provider):
+        async def complete(self, request, **options):
+            return 'done'
+
+    records = []
+    encode = ChatRequest.model_dump_json
+    capture = OverflowFeedback.capture
+    for enabled in (False, True):
+        raw = Success()
+        surface = SurfaceProvider(raw, Delivery())
+        selected = SelectedProvider(raw, {'model': 'selected'}, lambda _: surface)
+        request = ChatRequest(messages=[Message(role='user', content='X' * size)])
+        work = {'encodings': 0, 'characters': 0}
+
+        def counted(value, *args, **kwargs):
+            text = encode(value, *args, **kwargs)
+            work['encodings'] += 1
+            work['characters'] += len(text)
+            return text
+
+        with monkeypatch.context() as patch:
+            patch.setattr(ChatRequest, 'model_dump_json', counted)
+            if not enabled:
+                patch.setattr(OverflowFeedback, 'capture', lambda *a, **kw: None)
+            else:
+                patch.setattr(OverflowFeedback, 'capture', capture)
+            tracemalloc.start()
+            started = time.perf_counter()
+            assert await selected.complete(request) == 'done'
+            elapsed = time.perf_counter() - started
+            current, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+        assert not selected._overflow_feedback.entries and not surface._overflow_feedback.entries
+        records.append({'enabled': enabled, **work, 'elapsedSeconds': elapsed,
+                        'retainedBytes': current, 'peakBytes': peak})
+    assert records[0]['encodings'] == 0
+    assert records[1]['encodings'] == 4
+    assert records[1]['characters'] <= (size + 1000) * 4
+    evidence(f'overflow-witness-work-{size}', {'bodyCharacters': size, 'measurements': records})
+
+
 async def _ignore(*args, **kwargs):
     pass

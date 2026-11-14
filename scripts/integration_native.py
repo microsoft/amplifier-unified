@@ -29,6 +29,7 @@ REQUIRED_MODULES = (
     "amplifier_core", "amplifier_foundation", "amplifier_module_loop_live",
     "amplifier_module_context_simple", "amplifier_module_context_managed.boundary",
     "amplifier_module_provider_openai.native", "amplifier_module_tool_bash",
+    "amplifier_module_provider_anthropic",
     "amplifier_module_tool_exec", "amplifier_module_tool_filesystem",
     "amplifier_module_tool_search.grep", "amplifier_module_tool_search.glob",
     "amplifier_module_hooks_routing.resolver",
@@ -46,6 +47,7 @@ def integration_dev_dependencies(dependencies: list[str]) -> list[str]:
         "amplifier-module-tool-filesystem": ("filesystem", r"amplifier-module-tool-filesystem@(?:main|[0-9a-f]{40})"),
         "amplifier-module-context-managed": ("context-managed", r"amplifier-bundle-context-managed@(?:main|[0-9a-f]{40})#subdirectory=modules/context-managed"),
         "amplifier-module-tool-exec": ("exec", r"amplifier-module-tool-exec@(?:main|[0-9a-f]{40})"),
+        "amplifier-module-provider-anthropic": ("anthropic", r"amplifier-module-provider-anthropic@(?:main|[0-9a-f]{40})"),
     }
     result = []
     for value in dependencies:
