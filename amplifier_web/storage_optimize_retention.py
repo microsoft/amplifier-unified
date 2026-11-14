@@ -12,6 +12,40 @@ import threading
 from .capture_index import hold_replacement, rebind_replaced_capture, CaptureDrift
 
 
+def source_owner(app, row):
+    from .session_files import capture_dir
+    source = app._session(row['_sourceId'], hydrate=False)
+    native = source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']
+    if (native != row['sessionId']
+            or capture_dir(source['workspace'], native) / 'events.jsonl' != Path(row['_path'])):
+        raise CaptureDrift('Native owner or storage placement changed after preview')
+    binding = row.get('_sourceBinding')
+    if binding and binding != [source.get('executionRevision', 0), source.get('interruptionRevision', 0)]:
+        raise CaptureDrift('Native execution binding changed after preview')
+    return source
+
+
+async def settle_owned(function, cancelled):
+    """Keep the caller's writer/flush fences through repeated cancellation."""
+    worker = asyncio.create_task(asyncio.to_thread(function))
+    was_cancelled = False
+    while not worker.done():
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancelled.set()
+            was_cancelled = True
+        except BaseException:
+            break
+    if was_cancelled:
+        try:
+            worker.result()
+        except BaseException:
+            pass
+        raise asyncio.CancelledError
+    return worker.result()
+
+
 def file_hash(path):
     result = hashlib.sha256()
     with Path(path).open('rb') as stream:
@@ -93,7 +127,7 @@ async def apply(app, row, operation, *, resume=False):
     boundary = None
     async with app.lock:
         check(app, operation.get('_authority'))
-        source = app._session(row['_sourceId'], hydrate=False)
+        source = source_owner(app, row)
         boundary = app.runtime.stopped_boundary(source)
         boundary.__enter__()
     try:
@@ -102,6 +136,7 @@ async def apply(app, row, operation, *, resume=False):
                 async with app.lock:
                     current = owner(app)._get(operation['operationId'], operation['_owner'])
                     check(app, current.get('_authority'))
+                    source_owner(app, row)
                     if current['status'] != 'applying' or cancelled.is_set():
                         raise CaptureDrift('Saved-storage work was cancelled or stopped')
                     if prepared:
@@ -134,22 +169,13 @@ async def apply(app, row, operation, *, resume=False):
                     apply=True, writers_stopped=True, before_commit=poll))
                 return result, _receipt(path)
 
-            worker = asyncio.create_task(asyncio.to_thread(perform))
-            try:
-                result, receipt = await asyncio.shield(worker)
-            except asyncio.CancelledError:
-                cancelled.set()
-                # Do not release the native fence while an owned thread can
-                # still be replacing files. It observes cancellation at its
-                # mandatory owner callback, then leaves recoverable intent.
-                await asyncio.gather(worker, return_exceptions=True)
-                raise
+            result, receipt = await settle_owned(perform, cancelled)
             if receipt and file_hash(path) == receipt['expected']['sha256']:
                 def rebind():
                     with app.diagnostics._db() as db:
                         return rebind_replaced_capture(db, path, identity, _witness(receipt),
                                                        _mapping(path, receipt))
-                await asyncio.to_thread(rebind)
+                await settle_owned(rebind, cancelled)
             if result is None:
                 return {**row, 'status': 'held', 'reason':
                     'Diagnostic reference expiry was reconciled; earlier unlink outcome remains unknown and was not replayed'}

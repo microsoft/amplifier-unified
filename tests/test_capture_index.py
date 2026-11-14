@@ -339,3 +339,37 @@ def test_identical_later_slice_never_masquerades_as_already_rebound_record(db, t
     db.commit()
     assert rebind_replaced_capture(db, path, 'same', witness, iter(mappings))['alreadyRebound']
     assert db.execute('SELECT * FROM deliveries').fetchall() == [('retained-second',)]
+
+
+@pytest.mark.parametrize('damage', ['inode', 'hash', 'legacy'])
+def test_replacement_admission_refuses_stale_reference_before_any_effect(db, tmp_path, damage):
+    _, path, _, witness, _ = replacement_fixture(db, tmp_path)
+    if damage == 'inode':
+        db.execute('UPDATE captures SET inode=1')
+    else:
+        identity, raw = db.execute('SELECT id,data FROM records LIMIT 1').fetchone()
+        reference = json.loads(raw)
+        if damage == 'legacy':
+            reference.pop('sha256')
+        else:
+            reference['sha256'] = '0' * 64
+        db.execute('UPDATE records SET data=? WHERE id=?', (json.dumps(reference), identity))
+    before = path.read_bytes()
+    deliveries = db.execute('SELECT * FROM deliveries').fetchall()
+    with pytest.raises(CaptureDrift):
+        hold_replacement(db, path, 'rejected', witness)
+    assert path.read_bytes() == before
+    assert db.execute('SELECT * FROM deliveries').fetchall() == deliveries
+    assert db.execute('SELECT count(*) FROM capture_maintenance').fetchone()[0] == 0
+
+
+def test_unindexed_unterminated_source_is_held_before_replacement(db, tmp_path):
+    import hashlib
+    path = tmp_path / 'events.jsonl'
+    original = b'{"event":"llm:request","data":{"raw":"retain"}}'
+    path.write_bytes(original)
+    facts = {'bytes': len(original), 'sha256': hashlib.sha256(original).hexdigest()}
+    with pytest.raises(CaptureDrift, match='unterminated'):
+        hold_replacement(db, path, 'no-final-newline', {'old': facts, 'new': facts})
+    assert path.read_bytes() == original
+    assert db.execute('SELECT count(*) FROM capture_maintenance').fetchone()[0] == 0

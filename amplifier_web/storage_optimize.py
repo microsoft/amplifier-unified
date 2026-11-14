@@ -150,6 +150,9 @@ class SavedStorageOptimize:
             operation = self.journal.db.execute(
                 'SELECT value FROM storage_optimize_operations WHERE id=?', (identity,)).fetchone()
             operation = json.loads(operation[0])
+            if 'operationId' in value and value['operationId'] != identity:
+                raise ValueError('File outcome belongs to another saved-storage operation')
+            value = {**value, 'operationId': identity}
             summary = operation['summary']
             accounting = operation.setdefault('_accounting', {})
             old = self.journal.db.execute(
@@ -162,7 +165,13 @@ class SavedStorageOptimize:
                 coverage[key] = coverage.get(key, 0) + sign
                 if row.get('bytes') is not None:
                     size = summary['bytes']
-                    size['source'] = (size.get('source') or 0) + sign * row['bytes']
+                    source = accounting.setdefault('source', {'known': 0, 'unknown': 0, 'sum': 0})
+                    source['known'] += sign
+                    source['sum'] += sign * row['bytes']
+                else:
+                    source = accounting.setdefault('source', {'known': 0, 'unknown': 0, 'sum': 0})
+                    source['unknown'] += sign
+                summary['bytes']['source'] = source['sum'] if source['known'] and not source['unknown'] else None
                 # A measured zero is distinct from unknown. Replacing a file
                 # outcome subtracts its old contribution before adding the new
                 # one; resume/read never double-counts logical or actual bytes.
@@ -222,7 +231,13 @@ class SavedStorageOptimize:
                         self._update(identity, owner, status='cancelled')
                         return
                     ordinal += 1
-                    row = await adapter.preview(row, value)
+                    try:
+                        row = await adapter.preview(row, value)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        row = {**row, 'status': 'failed',
+                               'reason': 'This file could not be qualified; original content was kept'}
                     self._file(identity, ordinal, row)
                     self._update(identity, owner, summary=self._summary(identity, owner, complete=False))
                 value = self._get(identity, owner)
@@ -258,7 +273,17 @@ class SavedStorageOptimize:
                 # file. An interrupted attempt is reconciled only by that owner.
                 prior = row['status']
                 self._file(identity, after, {**row, 'status': 'attempting'})
-                result = await adapter.apply(row, value, resume=phase == 'resume' or prior == 'attempting')
+                try:
+                    result = await adapter.apply(row, value, resume=phase == 'resume' or prior == 'attempting')
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # An admitted owner may have reached an effect. Leave the
+                    # attempting row and interrupt; a later resume reconciles
+                    # that exact owner journal, never skips/replays it.
+                    self._update(identity, owner, status='interrupted',
+                                 error='A file outcome is unconfirmed. Explicit resume reconciles its saved owner receipt.')
+                    return
                 self._file(identity, after, result)
                 self._update(identity, owner, summary=self._summary(identity, owner, complete=False))
         except asyncio.CancelledError:
