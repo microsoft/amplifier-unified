@@ -99,6 +99,63 @@ The read does not reset retention, change policy, or delete anything.
 | Publishing and outputs | No general age expiry | Current/pinned/referenced content; unlink/remove does not imply content deletion |
 | Diagnostics | 30 days / 25,000 records by default | Native transcripts and event files are separate owners |
 
+### Optimize saved session storage
+
+The opt-in `maintenance.optimize.*` actions are separate from automatic cleanup,
+diagnostic routing, and scheduled CI retention. Saving manual choices does not
+change any schedule or enable a background prune. Request and response diagnostic
+ages are independent; `null` means keep that direction. A preview freezes the
+saved policy revision, selected current/workspace/all scope and UTC cutoffs.
+Scope discovery uses the configured native/capture roots, not the process cwd.
+
+Preview produces a durable operation and paged file outcomes. Apply requires its
+observed revision and explicit expiry confirmation when expiry was selected.
+Stable command IDs have exact outcome reads, including an operation association
+when admission remains unknown. Latest-operation state is not proof that a
+particular command succeeded. Restart and cancellation preserve intent; they
+never automatically replay a file replacement, image ingest or sidecar unlink.
+
+The host uses format-owner APIs, native stopped-writer exclusion and CI's
+maintenance/recovery guards. An absent worker, an old timestamp or an advisory
+lock alone is not a writer fence. Unsupported formats, unqualified workers,
+unknown writers, malformed sources and source drift are explicit protected
+outcomes. Canonical conversion additionally requires its actual Foundation
+activation/checkpoint adapter; a candidate or asset publication is not a
+canonical checkpoint. Original generations and backups remain recovery evidence.
+
+Historical image policy cannot be inferred from a digest, a path or migration
+time. Old UUID attachment display metadata lacks original admission/expiry
+receipts, and the legacy screenshot marker relied on memory-only issuance.
+These bare historical images stay unchanged with an original-receipt hold.
+Modern accepted refs retain their actual original provenance and expiry; this
+feature does not renew screen consent or create a cross-session lookup grant.
+
+Known provider diagnostic expiry records an exact
+`data.provider_payloads_expired.<raw|raw_request|raw_response>` tombstone before
+any corresponding file unlink. Downloads distinguish expired detail from missing
+or changed data, even if an orphan file remains. Unknown/shared/recovery
+references pin sidecars. Capture replacement preserves diagnostic record IDs and
+all delivery/outbox outcomes by rebinding exact physical byte references in a
+separate transaction. Unqualified inode/truncation changes hold the old index;
+they do not delete receipts and enroll rewritten history for network delivery.
+The hold is per capture, not a global diagnostics failure. Its exact records and
+outbox outcomes also remain excluded from ordinary age/count retirement until
+qualified reconciliation; unrelated capture/app records continue normally.
+
+When both choices apply, image extraction precedes diagnostic expiry through
+CI's exact verified-generation continuation, without clearing its permanent
+replay fence. Each stage has its own durable map and outcome; this is not a
+whole-file atomic promise. An interrupted second stage cannot repeat the first,
+and an unknown unlink is never retried as if no effect occurred. Recovery
+originals still pin sidecars, and newly unreferenced media is not automatically
+reclaimed. No inline images means no conversion is staged before ordinary expiry.
+
+Reports separate logical inline removal, new assets/reference/journal bytes,
+retained recovery bytes, observed unlink bytes and filesystem change. Unknown
+measurements remain unknown rather than zero or estimated reclaimed space.
+Reader/dependency/activation gates can leave a selected stage held; a preview or
+button alone is not completion of historical conversion.
+
 Current policy, grants, Work records and unsettled effects also live in the
 `commands` table. A table-wide TTL would remove current authority or let an old
 request look new; it is not a retention mechanism.

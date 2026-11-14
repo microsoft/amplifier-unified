@@ -259,6 +259,8 @@ from .storage_usage import definitions as storage_definitions
 ACTION_DEFINITIONS.update(storage_definitions(schema, string))
 from .operations import definitions as operation_definitions
 ACTION_DEFINITIONS.update(operation_definitions())
+from .storage_optimize import definitions as storage_optimize_definitions
+ACTION_DEFINITIONS.update(storage_optimize_definitions())
 from .computation import definitions as computation_definitions
 ACTION_DEFINITIONS.update(computation_definitions())
 
@@ -2383,6 +2385,9 @@ class AppService:
             return await dispatch(self, action, args, origin)
         if action.startswith("operations."):
             return await self.operations.dispatch(action, args, origin, command_id)
+        if action.startswith('maintenance.optimize.'):
+            from .storage_optimize import owner
+            return await owner(self).dispatch(action, args, origin, command_id, caller_session_id)
         if action.startswith("computer.visual."):
             return await self.computer_visual.dispatch(action, args, command_id, origin)
         if action.startswith("voice.visual."):
@@ -5992,6 +5997,8 @@ class AppService:
         self._close_started = True
         self.begin_shutdown()
         await self.external_conversations.close()
+        if getattr(self, '_saved_storage_optimize', None):
+            await self._saved_storage_optimize.close()
         lifecycle_tasks = [task for task in self._runtime_lifecycle_tasks
                            if task is not asyncio.current_task()]
         for task in lifecycle_tasks:
