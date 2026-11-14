@@ -262,7 +262,11 @@ class SavedStorageOptimize:
                         'ORDER BY ordinal LIMIT 1', (identity, after)).fetchone()
                 if record is None:
                     summary = self._summary(identity, owner, complete=True)
-                    issues = sum(summary['coverage'].get(key, 0) for key in ('held', 'unsupported', 'malformed', 'drift', 'failed'))
+                    # A complete ledger scan is not confirmation of an owner's
+                    # pending physical outcome. Keep exact reconciliation
+                    # available instead of hiding Resume behind "completed".
+                    issues = sum(summary['coverage'].get(key, 0) for key in
+                                 ('held', 'unsupported', 'malformed', 'drift', 'failed', 'attempting'))
                     self._update(identity, owner, status='partial' if issues else 'completed', summary=summary)
                     return
                 after, raw = record

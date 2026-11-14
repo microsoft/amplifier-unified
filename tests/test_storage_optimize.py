@@ -131,6 +131,45 @@ async def test_restart_observes_does_not_replay_and_keeps_command_association(ow
     assert outcome['status'] == 'unknown' and outcome['operationId'] == value['operationId']
 
 
+@pytest.mark.parametrize('restart', [False, True])
+async def test_unconfirmed_owner_result_remains_resumable_without_replay(owner, restart):
+    owner.adapter.count = 1
+    value = await preview(owner)
+    identity = value['operationId']
+
+    async def apply(row, operation, *, resume=False):
+        owner.adapter.effects.append((row['sessionId'], resume))
+        return {**row, 'status': 'completed' if resume else 'attempting'}
+
+    owner.adapter.apply = apply
+    args = {'operationId': identity, 'expectedRevision': value['revision'], 'confirmExpiry': False}
+    await command(owner, 'apply', args, 'apply')
+    await asyncio.gather(*owner.tasks.values())
+    current = owner.read('user', identity)
+    assert current['status'] == 'partial'
+    assert current['summary']['coverage']['complete'] is True
+    assert current['summary']['coverage']['attempting'] == 1
+    assert current['canResume'] and not current['canApply'] and not current['canCancel']
+    assert owner.adapter.effects == [('0', False)]
+    # A retained command receipt is not permission to run the physical owner again.
+    await command(owner, 'apply', args, 'apply')
+    assert owner.adapter.effects == [('0', False)]
+    if restart:
+        owner = SavedStorageOptimize(owner.app, adapter=owner.adapter)
+        current = owner.read('user', identity)
+        assert current['status'] == 'partial' and current['canResume']
+        assert not owner.tasks and owner.adapter.effects == [('0', False)]
+    await command(owner, 'resume', {'operationId': identity,
+        'expectedRevision': current['revision']}, 'resume')
+    await asyncio.gather(*owner.tasks.values())
+    confirmed = owner.read('user', identity)
+    assert owner.adapter.effects == [('0', False), ('0', True)]
+    assert confirmed['status'] == 'completed' and not confirmed['canResume']
+    assert confirmed['summary']['coverage']['attempting'] == 0
+    assert confirmed['summary']['coverage']['completed'] == 1
+    assert confirmed['cutoffs'] == value['cutoffs']
+
+
 @pytest.mark.parametrize('hours', [True, 0, -1, 1.5, '12', 2**53])
 def test_invalid_expiry_is_not_coerced(hours):
     with pytest.raises(AppError):
