@@ -162,6 +162,7 @@ of the active app generation:
 It is keyed on the owned task, not on setup's files: the task names the
 launcher folder and the data folder. It therefore also fits an installation
 that setup did not make. `--check` reports the plan and changes nothing.
+`--recover` only settles a refresh that did not finish.
 
 **It must run outside the app.** The normal stop ends every process in the
 host's Job. The command runs with the active generation's Python (never the
@@ -175,44 +176,85 @@ Steps, in order:
    launcher that the task starts, no update handoff is in flight, the launcher
    is not newer than the app, and the generation still passes its own checks
    (installation identity, package list, release file by digest).
-2. Stop the app with the normal owner stop. Decide again with the app stopped.
-3. Save the launch record. Copy the generation's verified release file beside
-   the installation. Rename the launcher folder aside; it is kept.
-4. Install the launcher at the same path with the generation's exact package
+2. Take the refresh lock (one refresh per installation). Save one private
+   record, `config/services/launcher-refresh-journal.json`, with everything a
+   rollback needs: the launcher path, the planned name of the set-aside
+   folder, the old launcher identity, the launch record's bytes, setup's
+   receipts, the start-program paths and whether the app was running.
+3. Stop the app with the normal owner stop. Decide again with the app stopped.
+4. Copy the generation's verified release file beside the installation.
+   Confirm that the app is stopped, then rename the launcher folder aside. It
+   is kept.
+5. Install the launcher at the same path with the generation's exact package
    list and the launcher's own interpreter. The task, the shortcuts and the
    private Python do not change.
-5. Check the new launcher: its probe, its package list against the
+6. Check the new launcher: its probe, its package list against the
    generation's, and its own reader against the active generation.
-6. Bind the launch record to the new launcher in one private write
-   (`application_generations.rebind`). The write refuses unless the stored
-   identity is exactly the replaced launcher's and the folder is the same.
-7. For a setup-made installation, rewrite setup's receipt and rerun setup's
+7. Confirm that the app is stopped, then bind the launch record to the new
+   launcher in one private write (`application_generations.rebind`). The write
+   refuses unless the stored identity is exactly the replaced launcher's and
+   the folder is the same.
+8. For a setup-made installation, rewrite setup's receipt and rerun setup's
    audit with the new launcher.
-8. Start the app and require the normal readiness result.
+9. Start the app and require the normal readiness result, with one more wait
+   while the task still runs. Then remove the saved record.
 
 It does not touch `config/server.yaml`, the port, the TLS files, the trusted
 certificate, the task definition, settings, chats or app generations.
 
-Any failure after step 2 puts back what the run changed: the saved launch
-record, setup's receipts, the previous launcher folder at its original path and
-its start programs. It then restores the app's running state and reports in
-plain words whether the app runs. It never reports "running" for an app that
-does not answer. If the previous state cannot be restored, the result says
-that the app is not running, where the previous launcher and the saved launch
-record are, and what to do. `config/services/launcher-refresh.json` records
-the outcome and the failed step, never output or paths from child programs.
+**Rollback and recovery.** Any failure after step 2 runs one rollback. It works
+only from the saved record and from what is on disk, so it can run again after
+it was itself ended:
+
+- It stops whatever runs from the new launcher.
+- It puts the launch record back first, under the pointer lock, and only over
+  this refresh's own change (`application_generations.restore_binding`): a
+  record that changed in any other way belongs to a later update and is never
+  overwritten. This also covers a rebind whose write landed and whose own
+  check then failed.
+- It puts back setup's receipts, the previous launcher folder at its original
+  path, and the start programs (copies of the launcher's own), and removes
+  start programs that only the new launcher added.
+- It requires that the launch record, the launcher and the saved old identity
+  agree before it removes the saved record and the unused launcher folder.
+- It then restores the app's running state.
+
+If the command is ended part-way (a closed window, a lost connection, a
+restart of the PC), the saved record remains. The next run of the command, or
+`--recover`, runs the same rollback first. The active generation's Python is
+never replaced, so the command can always run. The launcher itself never
+rebinds the record to itself at start: an unchecked launcher must not claim
+the app.
+
+**The result says what is true.** It reports "running" only for an app that
+answers; an app that runs but does not answer, an app that is not running, and
+a state that could not be read are separate statements. An incomplete rollback
+reports `changed: true`, names what could not be restored and where the
+previous launcher is, and points to `--recover`.
+`config/services/launcher-refresh.json` records the outcome and the failed
+step, never output or paths from child programs.
 
 Evidence and limits. The `Windows launcher refresh` workflow installs a
 published earlier release (0.93.2) as the launcher and the candidate as the
 active generation with real uv installations, in setup's layout. It runs the
-command's own code through a refused installation, an app that does not become
-ready (full rollback after the rebind), a successful refresh and a second run.
-After the refresh the new launcher's own code accepts the active generation
-and setup's records, and a later update's rollback check passes with the
-rebound record. A runner registers no Scheduled Task: stop, start and readiness
-are a recorded stand-in there. The real task on a setup-made installation, a
-restart of the PC afterwards, and the installation that setup did not make are
-clean-room and owner checks, and are not claimed here.
+command's own code through: a refused installation; an app that does not
+become ready (full rollback after the rebind and after setup's audit); a run
+that is ended after the real installation and the rebind, with none of its own
+rollback, followed by the next run's recovery; a successful refresh; and a
+second run. After the refresh the new launcher's own code accepts the active
+generation and setup's records, and a later update's rollback check passes
+with the rebound record. A runner registers no Scheduled Task: stop, start and
+readiness are a recorded stand-in there. The real task on a setup-made
+installation, a restart of the PC afterwards, and the installation that setup
+did not make are clean-room and owner checks, and are not claimed here.
+
+Known limits. A refresh in the seconds between an update's rollback and the
+old host's own confirmation of that rollback is not detected. A person who
+starts the app from the Start menu during the refresh meets a missing or
+unbound launcher; the refresh then stops with "the app is running" and rolls
+back. The launcher's refusal of a launch record that names another launcher
+is still silent at start (it writes `task-launcher-error.json`); this command
+never leaves that state without saying so, but another cause still would.
 
 The Apps-list version stays at the setup version, as it already does after
 every in-app update. Setup's Repair and Update will call this command and

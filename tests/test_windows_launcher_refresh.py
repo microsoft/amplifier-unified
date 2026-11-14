@@ -41,13 +41,14 @@ def install(prefix, version, revision, source, base):
         "schema": 1, "repository": "microsoft/amplifier-unified", "revision": revision, "version": version}))
     (prefix / "bin").mkdir()
     (prefix / "bin/python").write_text("launcher " + version)
+    (prefix / "bin/amplifier-unified").write_text("entry " + version)
     (prefix / "pyvenv.cfg").write_text(f"home = {base}\n")
 
 
 class Service:
     """The task's facts and controls, without a Scheduled Task."""
 
-    def __init__(self, root, *, up=True, ready=(True,)):
+    def __init__(self, root, *, up=True, ready=()):
         self.launcher = root / "tools/amplifier-unified"
         self.tool_path, self.launch_roots = str(root / "uv"), {"UV_TOOL_BIN_DIR": str(root / "tool-bin")}
         self.github_access, self.up, self.results, self.events = "anonymous", up, list(ready), []
@@ -71,7 +72,8 @@ class Service:
         self.up = True
 
     async def ready(self, wait):
-        return self.results.pop(0)
+        # Scripted answers first; after them the app answers when it runs.
+        return self.results.pop(0) if self.results else self.up
 
 
 @pytest.fixture
@@ -131,12 +133,18 @@ def installed(tmp_path, monkeypatch):
                 (launcher / "half").mkdir(parents=True)
                 raise RuntimeError("uv failed with private output")
             install(launcher, *NEW, root / source.name, base)
-            (launcher / "uv-receipt.toml").write_text("[tool]\nentrypoints = []\n")
+            added = root / "tool-bin/amplifier-unified-new"
+            (launcher / "uv-receipt.toml").write_text(
+                "[tool]\nentrypoints = [{ name = \"a\", install-path = " + json.dumps(str(entry))
+                + " }, { name = \"b\", install-path = " + json.dumps(str(added)) + " }]\n")
             entry.write_text("entry " + NEW[0])
+            added.write_text("a start program that only the new version has")
             return ""
         if "amplifier_web.windows_consumer" in args:
             calls.append("audit")
             assert args[0] == str(launcher / "bin/python") and args[-3:] == ["--root", str(root), "--audit"]
+            if fail.get("audit"):
+                raise fail["audit"]
             (root / "consumer-qualified.json").write_text("proof of the new launcher")
             return ""
         script = args[args.index("-c") + 1]
@@ -174,6 +182,8 @@ def unchanged(installed, pointer):
     assert json.loads((installed.root / "consumer-install.json").read_text())["version"] == OLD[0]
     assert not list(installed.root.glob("launcher-*"))
     assert not (installed.root / f"amplifier_unified-{NEW[0]}-py3-none-any.whl").exists()
+    assert not (installed.root / "tool-bin/amplifier-unified-new").exists()
+    assert refresher.unfinished(installed.home) is None  # nothing is left to recover
 
 
 def test_check_reports_the_plan_and_changes_nothing(installed):
@@ -208,8 +218,7 @@ def test_refresh_replaces_the_launcher_at_its_path_and_keeps_everything_else(ins
     assert (installed.root / "consumer-qualified.json").read_text() == "proof of the new launcher"
     record = json.loads((installed.home / "config/services" / refresher.RECORD).read_text())
     assert record["result"] == "refreshed" and record["to"]["version"] == NEW[0]
-    saved = installed.home / "config/services" / refresher.SAVED
-    assert json.loads(saved.read_text())["bootstrap"] == installed.old
+    assert refresher.unfinished(installed.home) is None
     # A second run finds nothing to do and does not stop the app.
     again = run(installed, service)
     assert again["ok"] and again["action"] == "none" and "already has the app's version" in again["message"]
@@ -227,6 +236,7 @@ def test_a_failed_refresh_puts_the_previous_launcher_back_and_restarts_the_app(i
     installed.fail.update(failure)
     result = run(installed, service)
     assert not result["ok"] and result["rolledBack"] and result["running"] and result["state"] == "rolled-back"
+    assert result["changed"] is False and result["ready"] is True
     assert result["step"] == step and installed.calls == calls
     assert result["message"] == (f"The launcher refresh did not finish. It stopped at this step: {step}. "
                                  "The previous launcher is back. Amplifier is running.")
@@ -239,7 +249,8 @@ def test_a_failed_refresh_puts_the_previous_launcher_back_and_restarts_the_app(i
 
 def test_an_app_that_is_not_ready_after_the_refresh_is_rolled_back_completely(installed):
     pointer = installed.pointer.read_bytes()
-    service = Service(installed.root, ready=(False, True))
+    # Not ready in the first wait and not in the one extra wait for a slow first start.
+    service = Service(installed.root, ready=(False, False))
     result = run(installed, service)
     assert not result["ok"] and result["rolledBack"] and result["running"]
     assert result["step"] == "starting Amplifier"
@@ -259,35 +270,149 @@ def test_an_app_that_was_stopped_stays_stopped_after_a_failed_refresh(installed)
     unchanged(installed, pointer)
 
 
-def test_an_incomplete_rollback_never_claims_that_the_app_runs(installed):
+def test_a_slow_first_start_gets_one_more_wait(installed):
     service = Service(installed.root, ready=(False,))
-    stops = []
+    result = run(installed, service)
+    assert result["ok"] and result["changed"] and service.events == ["stop", "start"]
 
-    def stop():
+
+def test_an_undo_that_cannot_stop_the_app_says_what_is_true_and_can_be_finished_later(installed):
+    pointer, service = installed.pointer.read_bytes(), Service(installed.root, ready=(False, False))
+    stop, stops = service.stop, []
+
+    def failing():
         stops.append(1)
         if len(stops) == 2:
             raise RuntimeError("the task did not stop")
-        service.up = False
-    service.stop = stop
+        stop()
+    service.stop = failing
     result = run(installed, service)
-    assert not result["ok"] and result["rolledBack"] is False and result["state"] == "rollback-incomplete"
-    assert result["running"] is False and "Amplifier is NOT running." in result["message"]
-    assert "the app could not be stopped" in result["message"]
-    assert str(installed.home / "config/services" / refresher.SAVED) in result["message"]
+    # The app still runs from the new launcher. Nothing claims otherwise.
+    assert not result["ok"] and result["state"] == "rollback-incomplete" and result["rolledBack"] is False
+    assert result["changed"] is True and result["running"] is True and result["ready"] is True
+    assert "the app could not be stopped" in result["message"] and "Amplifier is running." in result["message"]
+    assert "NOT running" not in result["message"] and "--recover" in result["message"]
     assert "launcher-" + OLD[0] in result["message"]
+    assert refresher.unfinished(installed.home)["old"] == installed.old
+    # The next run finishes the rollback from the saved record.
+    service.stop = stop
+    again = run(installed, service, recover=True)
+    assert again["ok"] and again["action"] == "recover" and again["state"] == "rolled-back" and again["running"]
+    assert again["message"].startswith("An earlier launcher refresh did not finish. The previous launcher is back.")
+    unchanged(installed, pointer)
+
+
+class Ended(BaseException):
+    """The process was ended: nothing after this point runs."""
+
+
+@pytest.mark.parametrize("point", ["during the installation", "after the rebind", "during the rollback"])
+def test_a_run_that_was_ended_is_put_back_by_the_next_run(installed, monkeypatch, point):
+    pointer, service = installed.pointer.read_bytes(), Service(installed.root)
+    undo, move = refresher._undo, refresher._move
+
+    async def ended(*args, **kwargs):
+        raise Ended()
+
+    async def dying_move(source, target):
+        if Path(target) == installed.launcher:  # the rollback's own move of the previous launcher
+            raise Ended()
+        await move(source, target)
+
+    if point == "during the installation":
+        installed.fail["install"] = True
+        monkeypatch.setattr(refresher, "_undo", ended)
+    elif point == "after the rebind":
+        installed.fail["audit"] = Ended()
+        monkeypatch.setattr(refresher, "_undo", ended)
+    else:
+        installed.fail["audit"] = RuntimeError("audit failed")
+        monkeypatch.setattr(refresher, "_move", dying_move)
+    with pytest.raises(Ended):
+        run(installed, service)
+    monkeypatch.setattr(refresher, "_undo", undo)
+    monkeypatch.setattr(refresher, "_move", move)
+    # The app is down, the launcher is missing, half installed or new, and the record says so.
+    journal = refresher.unfinished(installed.home)
+    assert journal["old"] == installed.old and journal["wasRunning"] is True and not service.up
+    assert Path(journal["previous"]).is_dir() or point == "during the rollback"
+    if point == "after the rebind":
+        assert generations.active(installed.home)["bootstrap"] != installed.old
+    check = run(installed, service, check=True)
+    assert check["action"] == "recover" and "Nothing was changed now." in check["message"] and not service.up
+    result = run(installed, service)  # a plain run settles the earlier one first
+    assert result["ok"] and result["action"] == "recover" and result["state"] == "rolled-back"
+    assert result["running"] and service.up and service.events[-1] == "start"
+    unchanged(installed, pointer)
+    assert run(installed, service, recover=True)["message"] == (
+        "No unfinished launcher refresh was found. Nothing was changed.")
+    # And the refresh itself then works.
+    installed.fail.clear()
+    assert run(installed, service)["changed"]
+
+
+def test_a_rebind_whose_write_landed_and_whose_check_failed_is_still_put_back(installed, monkeypatch):
+    pointer, service, rebind = installed.pointer.read_bytes(), Service(installed.root), generations.rebind
+
+    def landed(*args):
+        rebind(*args)
+        raise ValueError("the check after the write failed")
+    monkeypatch.setattr(generations, "rebind", landed)
+    result = run(installed, service)
+    assert not result["ok"] and result["state"] == "rolled-back" and result["running"]
+    assert result["step"] == "binding the app to the new launcher"
+    unchanged(installed, pointer)
+
+
+def test_a_launch_record_that_something_else_changed_is_never_overwritten(installed):
+    service = Service(installed.root)
+    installed.fail["audit"] = RuntimeError("audit failed")
+    undo = refresher._undo
+
+    async def later_update(*args, **kwargs):
+        record = json.loads(installed.pointer.read_text())
+        record["version"] = "9.9.9"  # a promotion by the app, not this refresh's change
+        installed.pointer.write_text(json.dumps(record))
+        return await undo(*args, **kwargs)
+    refresher._undo = later_update
+    try:
+        result = run(installed, service)
+    finally:
+        refresher._undo = undo
+    assert not result["ok"] and result["state"] == "rollback-incomplete" and result["changed"] is True
+    assert "launch record was changed by something else" in result["message"]
+    assert json.loads(installed.pointer.read_text())["version"] == "9.9.9"
+    # The new launcher stays with the record that names it; nothing was half restored.
+    assert refresher.launcher_facts(installed.launcher)["revision"] == NEW[1]
+    assert result["running"] is False and "Amplifier is NOT running." in result["message"]
+    with pytest.raises(ValueError, match="changed after the launcher refresh"):
+        generations.restore_binding(installed.home, b'{"bootstrap": {"prefix": "x"}}')
+
+
+def test_only_one_refresh_runs_for_an_installation(installed):
+    pointer, service = installed.pointer.read_bytes(), Service(installed.root)
+    with refresher._lock(installed.home):
+        with pytest.raises(refresher.Refused, match="Another launcher refresh is running"):
+            run(installed, service)
+    assert service.events == [] and installed.calls == []
+    unchanged(installed, pointer)
 
 
 def test_a_stop_that_is_not_confirmed_changes_nothing_and_reports_an_app_that_answers(installed):
-    pointer, service = installed.pointer.read_bytes(), Service(installed.root, ready=(True,))
+    pointer, service, asked = installed.pointer.read_bytes(), Service(installed.root), []
 
     def stop():
         raise RuntimeError("Task still has a running instance; no force-stop attempted.")
-    service.stop = stop
+
+    async def ready(wait):
+        asked.append(wait)
+        return True
+    service.stop, service.ready = stop, ready
     result = run(installed, service)
     assert not result["ok"] and result["state"] == "unchanged" and result["running"] is True
-    assert result["step"] == "stopping Amplifier" and installed.calls == []
+    assert result["changed"] is False and result["step"] == "stopping Amplifier" and installed.calls == []
     assert result["message"].endswith("Nothing was changed. Amplifier is running.")
-    assert service.events == [] and service.results == []  # the app was asked whether it answers
+    assert service.events == [] and asked  # "running" is reported only for an app that answers
     unchanged(installed, pointer)
 
 
@@ -304,7 +429,11 @@ def test_refusals_change_nothing_and_say_why(installed, monkeypatch):
     service = Service(installed.root)
     service.inside = True
     assert "from inside the running app" in refused(installed, service)
-    service.inside, service.handoff = False, True
+    service.inside = False
+    monkeypatch.setattr(sys, "prefix", str(installed.launcher))
+    assert "the launcher's own Python" in refused(installed, service)
+    monkeypatch.setattr(sys, "prefix", str(installed.prefix))
+    service.handoff = True
     assert "An app update is still finishing" in refused(installed, service)
     service.handoff = False
     monkeypatch.setattr(sys, "prefix", str(installed.root / "another"))
@@ -377,4 +506,5 @@ def test_task_service_reads_the_owned_task_and_uses_the_normal_stop(tmp_path, mo
 def test_help_says_where_the_command_must_run():
     assert "from a process outside the\napp" in refresher.__doc__
     assert "refuses to run from inside it" in refresher.__doc__
-    assert "-I -m amplifier_web.windows_launcher_refresh --data-dir <data> [--check]" in refresher.__doc__
+    assert "-I -m amplifier_web.windows_launcher_refresh --data-dir <data> [--check | --recover]" in refresher.__doc__
+    assert "run it again" in refresher.__doc__

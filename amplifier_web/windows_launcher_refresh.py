@@ -9,19 +9,26 @@ app (a terminal, setup, a remote shell). The normal stop ends every process
 inside the app, so the command refuses to run from inside it:
 
     <data>\\updates\\a\\<generation>\\tools\\amplifier-unified\\Scripts\\python.exe
-        -I -m amplifier_web.windows_launcher_refresh --data-dir <data> [--check]
+        -I -m amplifier_web.windows_launcher_refresh --data-dir <data> [--check | --recover]
 
 It installs the launcher again at the same path, from the active version's own
 verified release file and exact package list. The previous launcher folder is
 kept beside it. The task definition, port, certificates, settings, chats and
-the private Python are not touched. After any failure it puts the previous
-launcher and launch record back, starts the app again if it was running, and
-says in plain words what is true.
+the private Python are not touched.
+
+Before its first effect it saves everything that a rollback needs in one
+private record. After any failure it puts the previous launcher and launch
+record back, restores the app's running state, and says in plain words what is
+true. If this command itself is ended part-way (a closed window, a lost
+connection), run it again: it finds that record and first puts the previous
+state back. --recover does only that. --check reports and changes nothing.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+from contextlib import ExitStack, contextmanager
 import hashlib
 import json
 import os
@@ -32,7 +39,9 @@ import time
 import tomllib
 
 RECORD = "launcher-refresh.json"
-SAVED = "launcher-refresh-pointer.json"
+JOURNAL = "launcher-refresh-journal.json"
+LOCK = "launcher-refresh.lock"
+RECEIPTS = ("consumer-install.json", "consumer-qualified.json")
 _WINDOWS = os.name == "nt"
 
 
@@ -141,9 +150,6 @@ def plan(service, home):
     home, prefix = Path(home), Path(service.launcher)
     if prefix.name != "amplifier-unified" or not _python(prefix, windowless=True).is_file():
         raise Refused("The start-at-sign-in task does not start an Amplifier launcher that this command knows.")
-    if service.inside_host():
-        raise Refused("This command was started from inside the running app. The refresh stops the app, "
-                      "which would end this command too. Start it from outside the app.")
     old = launcher_facts(prefix)
     target = generations.active(home)
     if target is None:
@@ -203,6 +209,10 @@ def _consumer(home, prefix):
     return None
 
 
+def _services(home):
+    return Path(home) / "config/services"
+
+
 def _write(owner, path, raw):
     from .deployment import write_private
     write_private(Path(path), raw, **({"owned_root": Path(owner)} if _WINDOWS else {}))
@@ -210,56 +220,152 @@ def _write(owner, path, raw):
 
 def _record(home, value):
     try:
-        _write(home, Path(home) / "config/services" / RECORD, json.dumps({"schema": 1, "at": time.time(), **value}))
+        _write(home, _services(home) / RECORD, json.dumps({"schema": 1, "at": time.time(), **value}))
     except (OSError, ValueError, RuntimeError):
         pass  # A support record must never change the outcome.
 
 
-async def refresh(service, home, *, check=False, wait=120, process=None):
-    """Run the plan. The result has a plain `message` and says whether the app runs."""
+def unfinished(home):
+    """The saved record of a refresh that did not finish, or None."""
+    path = _services(home) / JOURNAL
+    try:
+        value = json.loads(path.read_bytes())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as error:
+        raise Refused(f"The record of an earlier, unfinished launcher refresh cannot be read: {path}") from error
+    if (not isinstance(value, dict) or value.get("schema") != 1
+            or not all(isinstance(value.get(key), str) for key in ("prefix", "previous", "pointer"))):
+        raise Refused(f"The record of an earlier, unfinished launcher refresh cannot be read: {path}")
+    return value
+
+
+@contextmanager
+def _lock(home):
+    """One refresh per installation, from its saved record to its settled result."""
+    from filelock import FileLock, Timeout
+    folder = _services(home)
+    with ExitStack() as stack:
+        if _WINDOWS:
+            from .windows_files import directory
+            stack.enter_context(directory(folder, owned_root=home, create=True))
+        else:
+            folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        lock = FileLock(folder / LOCK, timeout=0, mode=0o600)
+        try:
+            lock.acquire()
+        except Timeout:
+            raise Refused("Another launcher refresh is running for this installation.") from None
+        try:
+            yield
+        finally:
+            lock.release()
+
+
+async def _observe(service, wait):
+    """What is true now: (running, answers). None means that it could not be read."""
+    try:
+        running = await asyncio.to_thread(service.running)
+        return running, (await service.ready(wait) if running else False)
+    except Exception:
+        return None, None
+
+
+def _state_text(running, ready):
+    if running is None:
+        return "It could not be read whether Amplifier is running."
+    if not running:
+        return "Amplifier is NOT running."
+    return "Amplifier is running." if ready else "Amplifier is running, but it does not answer yet."
+
+
+async def refresh(service, home, *, check=False, recover=False, wait=180, process=None):
+    """Refresh, or first settle an unfinished refresh. The result has a plain `message`."""
+    home = Path(home)
+    if service.inside_host():
+        raise Refused("This command was started from inside the running app. The refresh stops the app, "
+                      "which would end this command too. Start it from outside the app.")
+    if _same(sys.prefix, service.launcher):
+        raise Refused("This command was started with the launcher's own Python. Start it with the Python "
+                      "of the active app version.")
+    if check:
+        if unfinished(home) is not None:
+            return {"ok": True, "changed": False, "action": "recover",
+                    "message": "An earlier launcher refresh did not finish. The next run of this command "
+                               "first puts the previous launcher back. Nothing was changed now."}
+        return _report(plan(service, home))
+    with _lock(home):
+        journal = unfinished(home)  # Read under the lock: another run may have settled it.
+        if journal is not None:
+            result = await _undo(service, home, journal, wait)
+            _record(home, {"result": "recovered:" + result["state"], "from": journal.get("from"),
+                           "to": journal.get("to")})
+            return {"ok": result["state"] != "rollback-incomplete" and result["settled"], "action": "recover",
+                    **result, "message": "An earlier launcher refresh did not finish. " + result["message"]
+                    + (" Run this command again to refresh the launcher." if result["state"] != "rollback-incomplete" else "")}
+        if recover:
+            return {"ok": True, "changed": False, "action": "none",
+                    "message": "No unfinished launcher refresh was found. Nothing was changed."}
+        return await _run(service, home, wait, process)
+
+
+def _report(selected):
+    old = selected["old"]
+    facts = {"launcher": {"version": old["version"], "revision": old["revision"]}, "app": selected.get("new")}
+    if selected["action"] == "none":
+        return {"ok": True, "changed": False, "action": "none", **facts, "message": selected["reason"]}
+    return {"ok": True, "changed": False, "action": "refresh", **facts,
+            "message": f"The launcher has version {old['version']}. The app has version "
+                       f"{selected['new']['version']}. A refresh will stop Amplifier, replace the launcher "
+                       "and start Amplifier again. Nothing was changed now."}
+
+
+async def _run(service, home, wait, process):
     from . import app_component_graph as components, application_generations as generations
     from .app_updates import PROBE, install_requirement
     from .update_diagnostics import probe_record
     if process is None:
         from .updates import process
-    home = Path(home)
     selected = plan(service, home)
-    old = selected["old"]
-    facts = {"launcher": {"version": old["version"], "revision": old["revision"]}, "app": selected.get("new")}
+    report = _report(selected)
     if selected["action"] == "none":
-        return {"ok": True, "changed": False, "action": "none", **facts, "message": selected["reason"]}
-    if check:
-        return {"ok": True, "changed": False, "action": "refresh", **facts,
-                "message": f"The launcher has version {old['version']}. The app has version "
-                           f"{selected['new']['version']}. A refresh will stop Amplifier, replace the launcher "
-                           "and start Amplifier again. Nothing was changed now."}
+        return report
+    old, facts = selected["old"], {key: report[key] for key in ("launcher", "app")}
     prefix, target, validated = Path(service.launcher), selected["target"], selected["validated"]
-    pointer = home / "updates/application-active.json"
+    pointer, wheel = home / "updates/application-active.json", selected["wheel"]
     root = _consumer(home, prefix)
-    saved = {"pointer": pointer.read_bytes(), "consumer": {},
-             "entries": {path: path.read_bytes() for path in selected["entries"] if path.is_file()}}
-    if root is not None:
-        saved["consumer"] = {name: (root / name).read_bytes() if (root / name).is_file() else None
-                             for name in ("consumer-install.json", "consumer-qualified.json")}
-    state = {"step": "stopping Amplifier", "moved": None, "rebound": False, "wheel": None}
-    was_running = await asyncio.to_thread(service.running)
-    # A trace before the first effect: if this process is ended, the record says so.
-    _record(home, {"result": "started", "from": facts["launcher"], "to": facts["app"]})
-    try:
-        if was_running:
-            await asyncio.to_thread(service.stop)
+    receipts = {name: (root / name).read_bytes() if (root / name).is_file() else None
+                for name in RECEIPTS} if root is not None else {}
+    previous = _free(selected["store"] / f"launcher-{old['version']}-{old['identity']['digest'][:8]}")
+    journal = {"schema": 1, "prefix": str(prefix), "previous": str(previous), "old": old["identity"],
+               "from": facts["launcher"], "to": facts["app"],
+               "wasRunning": await asyncio.to_thread(service.running),
+               "pointer": base64.b64encode(pointer.read_bytes()).decode("ascii"),
+               "root": str(root) if root is not None else None,
+               "consumer": {name: None if raw is None else base64.b64encode(raw).decode("ascii")
+                            for name, raw in receipts.items()},
+               "entries": [str(path) for path in selected["entries"]],
+               "wheel": None if wheel.exists() else str(wheel)}
+    # Everything that a rollback needs is saved before the first effect. If this
+    # process is ended, the next run puts the previous state back from it.
+    _write(home, _services(home) / JOURNAL, json.dumps(journal))
+    state = {"step": "stopping Amplifier"}
+
+    async def stopped():
         if await asyncio.to_thread(service.running):
-            raise RuntimeError("The app did not stop.")
+            raise RuntimeError("The app is running.")
+
+    try:
+        if journal["wasRunning"]:
+            await asyncio.to_thread(service.stop)
+        await stopped()
         # Decide again with the app stopped: an update could have finished meanwhile.
         state["step"] = "checking again after the stop"
         again = plan(service, home)
-        if (again["action"] != "refresh" or again["new"] != selected["new"]
-                or again["old"] != old or pointer.read_bytes() != saved["pointer"]):
+        if (again["action"] != "refresh" or again["new"] != selected["new"] or again["old"] != old
+                or pointer.read_bytes() != base64.b64decode(journal["pointer"])):
             raise Refused("The installation changed while Amplifier stopped.")
-        state["step"] = "saving the launch record"
-        _write(home, home / "config/services" / SAVED, saved["pointer"])
         state["step"] = "copying the release file"
-        wheel = selected["wheel"]
         if wheel.exists():
             if _sha(wheel) != selected["source"]["sha256"]:
                 raise ValueError("Another file has the release file's name.")
@@ -267,12 +373,10 @@ async def refresh(service, home, *, check=False, wait=120, process=None):
             partial = wheel.with_name(wheel.name + ".part")
             shutil.copyfile(selected["source"]["path"], partial)
             os.replace(partial, wheel)
-            state["wheel"] = wheel
         artifact = {**{key: selected["source"][key] for key in ("url", "sha256")}, "path": str(wheel)}
         state["step"] = "keeping the previous launcher"
-        previous = _free(selected["store"] / f"launcher-{old['version']}-{old['identity']['digest'][:8]}")
+        await stopped()
         await _move(prefix, previous)
-        state["moved"] = previous
         state["step"] = "installing the launcher"
         from .reset import repository_environment
         environment = repository_environment({
@@ -289,8 +393,8 @@ async def refresh(service, home, *, check=False, wait=120, process=None):
         python = _python(prefix)
         if not python.is_file() or not _python(prefix, windowless=True).is_file():
             raise ValueError("The new launcher has no Python entry.")
-        report = probe_record(await process(python, "-I", "-c", PROBE, env=environment, timeout=120))
-        if not report or report.get("ok") is not True or report.get("version") != selected["new"]["version"]:
+        probe = probe_record(await process(python, "-I", "-c", PROBE, env=environment, timeout=120))
+        if not probe or probe.get("ok") is not True or probe.get("version") != selected["new"]["version"]:
             raise ValueError("The new launcher does not start as the expected version.")
         if await components.read_graph(process, python, artifact=artifact) != selected["graph"]:
             raise ValueError("The new launcher's packages differ from the app's packages.")
@@ -302,11 +406,11 @@ async def refresh(service, home, *, check=False, wait=120, process=None):
         if fresh["revision"] != selected["new"]["revision"] or fresh["identity"] == old["identity"]:
             raise ValueError("The new launcher identity is not the expected one.")
         state["step"] = "binding the app to the new launcher"
+        await stopped()
         generations.rebind(home, old["identity"], prefix)
-        state["rebound"] = True
         if root is not None:
             state["step"] = "updating setup's records"
-            receipt = json.loads(saved["consumer"]["consumer-install.json"])
+            receipt = json.loads(receipts["consumer-install.json"])
             receipt.update(version=selected["new"]["version"], revision=selected["new"]["revision"],
                            artifact=artifact, graph=selected["graph"])
             _write(root, root / "consumer-install.json", json.dumps(receipt))
@@ -314,15 +418,18 @@ async def refresh(service, home, *, check=False, wait=120, process=None):
                           "--audit", env=environment, timeout=300)
         state["step"] = "starting Amplifier"
         await asyncio.to_thread(service.start)
-        if not await service.ready(wait):
+        # A first start of new files can be slow: one more wait while the task still runs.
+        if not (await service.ready(wait) or (await asyncio.to_thread(service.running)
+                                              and await service.ready(wait))):
             raise RuntimeError("The app did not become ready with the new launcher.")
+        (_services(home) / JOURNAL).unlink()
     except BaseException as error:
-        result = await _undo(service, home, prefix, saved, state, root, was_running, wait)
+        result = await _undo(service, home, journal, wait)
         _record(home, {"result": result["state"], "step": state["step"], "errorType": type(error).__name__,
                        "from": facts["launcher"], "to": facts["app"]})
         if not isinstance(error, Exception):
             raise
-        return {"ok": False, "changed": False, "action": "refresh", **facts, "step": state["step"],
+        return {"ok": False, "action": "refresh", **facts, "step": state["step"],
                 "errorType": type(error).__name__, **result,
                 "message": (str(error) + " " if isinstance(error, Refused) else
                             f"The launcher refresh did not finish. It stopped at this step: {state['step']}. ")
@@ -330,19 +437,51 @@ async def refresh(service, home, *, check=False, wait=120, process=None):
     fresh = {"version": selected["new"]["version"], "revision": selected["new"]["revision"]}
     _record(home, {"result": "refreshed", "from": facts["launcher"], "to": fresh, "previous": str(previous)})
     return {"ok": True, "changed": True, "action": "refresh", "launcher": fresh, "app": fresh,
-            "previousLauncher": str(previous), "state": "refreshed", "running": True,
+            "previousLauncher": str(previous), "state": "refreshed", "running": True, "ready": True,
             "message": f"The launcher now has version {fresh['version']} (it had {old['version']}). "
                        "Amplifier is running. The previous launcher is kept in this folder, which you "
                        f"can delete later: {previous}"}
 
 
-async def _undo(service, home, prefix, saved, state, root, was_running, wait):
-    """Put back what this run changed, restore the app's running state, and say what is true."""
+def _restore_entries(prefix, entries, added):
+    """The start programs are copies of the launcher's own; take them from the restored launcher."""
+    known = {os.path.normcase(str(path)) for path in entries}
+    for path in map(Path, entries):
+        source = _python(prefix).parent / path.name
+        if source.is_file() and (not path.is_file() or path.read_bytes() != source.read_bytes()):
+            shutil.copyfile(source, path)
+    for path in added:
+        if os.path.normcase(str(path)) not in known:
+            Path(path).unlink(missing_ok=True)
+
+
+async def _undo(service, home, journal, wait):
+    """Put back what a refresh changed, from its saved record and what is on disk now.
+
+    Every step looks at the actual state first, so it can run again after it
+    was itself ended. The saved record is removed only when the previous state
+    is confirmed.
+    """
     from . import application_generations as generations
-    problems, changed, leftover = [], state["moved"] is not None, None
+    home = Path(home)
+    prefix, previous = Path(journal["prefix"]), Path(journal["previous"])
+    root = Path(journal["root"]) if journal.get("root") else None
+    pointer, saved = home / "updates/application-active.json", base64.b64decode(journal["pointer"])
+    receipts = {name: None if text is None else base64.b64decode(text)
+                for name, text in (journal.get("consumer") or {}).items()}
+    was_running, problems, leftover = bool(journal.get("wasRunning")), [], None
+
+    def current(path):
+        return path.read_bytes() if path.is_file() else None
+
+    try:
+        changed = (previous.exists() or current(pointer) != saved
+                   or any(current(root / name) != raw for name, raw in receipts.items()))
+    except OSError:
+        changed = True
     if changed:
         try:
-            # Only this run can have started the app from the new launcher.
+            # Whatever runs now runs from a launcher that is about to be replaced.
             if await asyncio.to_thread(service.running):
                 await asyncio.to_thread(service.stop)
             if await asyncio.to_thread(service.running):
@@ -351,62 +490,70 @@ async def _undo(service, home, prefix, saved, state, root, was_running, wait):
             problems.append("the app could not be stopped")
         if not problems:
             try:
-                if state["rebound"]:
-                    _write(home, home / "updates/application-active.json", saved["pointer"])
-                for name, raw in saved["consumer"].items():
-                    path = root / name
+                # First, and only over this refresh's own change: a record that
+                # changed in another way belongs to a later update.
+                generations.restore_binding(home, saved)
+            except Exception:
+                problems.append("the app's launch record was changed by something else")
+        if not problems:
+            try:
+                for name, raw in receipts.items():
                     if raw is None:
-                        path.unlink(missing_ok=True)
-                    elif not path.is_file() or path.read_bytes() != raw:
-                        _write(root, path, raw)
-                unused = None
-                if prefix.exists():
-                    unused = _free(prefix.parent.parent / "launcher-not-used")
-                    await _move(prefix, unused)
-                await _move(state["moved"], prefix)
-                for path, raw in saved["entries"].items():
-                    if not path.is_file() or path.read_bytes() != raw:
-                        path.write_bytes(raw)
-                pointer = generations.active(home)
-                if pointer is None or pointer["bootstrap"] != generations.bootstrap_identity(prefix):
+                        (root / name).unlink(missing_ok=True)
+                    elif current(root / name) != raw:
+                        _write(root, root / name, raw)
+                store = prefix.parent.parent
+                if previous.exists():
+                    if prefix.exists():
+                        await _move(prefix, _free(store / "launcher-not-used"))
+                    await _move(previous, prefix)
+                # The new launcher is set aside now, by this run or by an earlier
+                # rollback that was ended. Its record names the start programs it added.
+                added = [path for unused in store.glob("launcher-not-used*") for path in _entry_points(unused)]
+                _restore_entries(prefix, journal.get("entries") or [], added)
+                target, identity = generations.active(home), generations.bootstrap_identity(prefix)
+                if target is None or target["bootstrap"] != identity or identity != journal["old"]:
                     raise ValueError("The previous launcher and the launch record disagree.")
-                if unused is not None:
-                    leftover = await _discard(unused)
+                # Only this command makes folders of this name; none was ever started.
+                for unused in list(store.glob("launcher-not-used*")):
+                    leftover = await _discard(unused) or leftover
             except Exception:
                 problems.append("the previous launcher could not be put back")
-    if state["wheel"] is not None and not problems:
+    if problems:
+        running, ready = await _observe(service, min(wait, 10))
+        return {"rolledBack": False, "state": "rollback-incomplete", "changed": True, "settled": False,
+                "running": running, "ready": ready,
+                "message": "The previous state could not be restored: " + "; ".join(problems) + ". "
+                           + _state_text(running, ready)
+                           + (f" The previous launcher is in {previous}." if previous.exists() else "")
+                           + " Run this command again with --recover. It changes only what this refresh changed."}
+    if journal.get("wheel"):
         try:
-            Path(state["wheel"]).unlink(missing_ok=True)
+            Path(journal["wheel"]).unlink(missing_ok=True)
         except OSError:
             pass
-    running = False
-    if not problems:
+    try:
+        (_services(home) / JOURNAL).unlink(missing_ok=True)
+    except OSError:
+        pass
+    # The previous state is confirmed on disk. Now the app's own running state.
+    running, ready = await _observe(service, wait if was_running else min(wait, 10))
+    if was_running and running is not None and not (running and ready):
+        # A stop that was asked for and not confirmed can still take effect.
         try:
-            running = await asyncio.to_thread(service.running)
-            if was_running:
-                # A stop that was asked for and not confirmed can still take effect:
-                # report "running" only for an app that answers.
-                if not (running and await service.ready(wait)):
-                    if await asyncio.to_thread(service.running):
-                        problems.append("the app does not answer")
-                    else:
-                        await asyncio.to_thread(service.start)
-                        if not await service.ready(wait):
-                            problems.append("the app did not become ready again")
-                running = not problems
+            if not await asyncio.to_thread(service.running):
+                await asyncio.to_thread(service.start)
+                running, ready = await _observe(service, wait)
         except Exception:
-            problems.append("the app could not be started again")
-    if problems:
-        return {"rolledBack": False, "state": "rollback-incomplete", "running": False,
-                "message": "The previous state could not be fully restored: " + "; ".join(problems) + ". "
-                           "Amplifier is NOT running. "
-                           + (f"The previous launcher is in {state['moved']}. " if changed else "")
-                           + f"The saved launch record is {home / 'config/services' / SAVED}. "
-                           "Start Amplifier from the Start menu. If it does not start, run setup again."}
-    return {"rolledBack": changed, "state": "rolled-back" if changed else "unchanged", "running": running,
-            "message": ("The previous launcher is back. " if changed else "Nothing was changed. ")
-                       + ("Amplifier is running." if running else
-                          "Amplifier was not running before and is not running now.")
+            running, ready = None, None
+    settled = bool(running and ready) if was_running else running is not None
+    if not was_running and running is False:
+        text = "Amplifier was not running before and is not running now."
+    else:
+        text = _state_text(running, ready) + ("" if settled else " Start Amplifier from the Start menu.")
+    return {"rolledBack": changed, "state": "rolled-back" if changed else "unchanged", "changed": False,
+            "settled": settled, "running": running, "ready": ready,
+            "message": ("The previous launcher is back. " if changed else "Nothing was changed. ") + text
                        + (f" You can delete this unused folder: {leftover}" if leftover else "")}
 
 
@@ -464,8 +611,11 @@ class TaskService:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data-dir", type=Path, required=True, help="Amplifier's data folder (the task's data folder)")
-    parser.add_argument("--check", action="store_true", help="Say what a refresh would do; change nothing")
-    parser.add_argument("--wait", type=int, default=120, help="Seconds to wait for the app to become ready")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true", help="Say what a run would do; change nothing")
+    mode.add_argument("--recover", action="store_true",
+                      help="Only put back the previous state after a refresh that did not finish")
+    parser.add_argument("--wait", type=int, default=180, help="Seconds to wait for the app to become ready")
     args = parser.parse_args(argv)
     if sys.platform != "win32":
         raise SystemExit("The launcher refresh is for native Windows installations.")
@@ -474,7 +624,7 @@ def main(argv=None):
         # The same private roots as the task's own host, for this process only.
         os.environ.update(AMPLIFIER_WEB_HOME=str(args.data_dir), AMPLIFIER_SESSION_STATE_HOME=service.spec.state_home,
                           AMPLIFIER_GITHUB_ACCESS=service.github_access, **service.launch_roots)
-        result = asyncio.run(refresh(service, args.data_dir, check=args.check, wait=args.wait))
+        result = asyncio.run(refresh(service, args.data_dir, check=args.check, recover=args.recover, wait=args.wait))
     except Refused as reason:
         result = {"ok": False, "changed": False, "refused": True, "message": str(reason) + " Nothing was changed."}
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:

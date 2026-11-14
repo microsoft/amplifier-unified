@@ -5,8 +5,9 @@ generation of the candidate are installed with uv in one private folder below
 the runner's temporary folder, in setup's layout. The product command's own
 code then refreshes the launcher. No Scheduled Task exists on a runner, so the
 task's stop, start and readiness are a recorded stand-in; every file
-operation, uv installation, package check, launch-record rebind and rollback is
-real. The clean room proves the task part on a setup-made installation.
+operation, uv installation, package check, launch-record rebind, rollback and
+recovery after an ended run is real. The clean room proves the task part on a
+setup-made installation.
 """
 from __future__ import annotations
 
@@ -166,7 +167,8 @@ class Service:
         self.up = True
 
     async def ready(self, wait):
-        return self.results.pop(0)
+        # Scripted answers first; after them the app answers when it runs.
+        return self.results.pop(0) if self.results else self.up
 
 
 # Run by the refreshed launcher's own Python: the checks that the task's
@@ -240,7 +242,8 @@ def run():
                 need(not list(root.glob("launcher-" + old["version"] + "-*")), label + ": previous launcher is not set aside")
                 need(not (root / "consumer-qualified.json").exists(), label + ": no new setup proof")
                 need(not (root / Path(new["wheel"]).name).exists(), label + ": no copied release file")
-                report["unusedLauncherLeft"] = bool(list(root.glob("launcher-not-used*")))
+                need(not list(root.glob("launcher-not-used*")), label + ": no unused launcher folder")
+                need(refresher.unfinished(home) is None, label + ": nothing is left to recover")
                 version = subprocess.run([str(launcher / "Scripts/python.exe"), "-I", "-c",
                                           "import amplifier_web; print(amplifier_web.__version__)"],
                                          capture_output=True, text=True, timeout=120)
@@ -248,7 +251,7 @@ def run():
 
             def refresh(service, **options):
                 started = time.monotonic()
-                result = asyncio.run(refresher.refresh(service, home, wait=5, **options))
+                result = asyncio.run(refresher.refresh(service, home, wait=1, **options))
                 report.setdefault("seconds", []).append(round(time.monotonic() - started))
                 return result
 
@@ -262,7 +265,7 @@ def run():
                 if [str(item) for item in args[1:3]] == ["tool", "install"]:
                     raise RuntimeError("fixture: installation refused")
                 return await process(*args, **options)
-            service = Service(root, [True])
+            service = Service(root, [])
             result = refresh(service, process=refused)
             need(not result["ok"] and result["state"] == "rolled-back" and result["running"]
                  and result["step"] == "installing the launcher" and service.events == ["stop", "start"],
@@ -270,7 +273,7 @@ def run():
             untouched("failed installation")
 
             # The real installation succeeds, then the app does not become ready.
-            service = Service(root, [False, True])
+            service = Service(root, [False, False])
             result = refresh(service)
             need(not result["ok"] and result["state"] == "rolled-back" and result["running"]
                  and result["step"] == "starting Amplifier"
@@ -278,7 +281,42 @@ def run():
                  "an app that is not ready is rolled back")
             untouched("not ready")
 
-            service = Service(root, [True])
+            # The command itself is ended after the real installation and the
+            # rebind: nothing of its own rollback runs. The next run recovers.
+            class Ended(BaseException):
+                pass
+
+            async def ended_at_audit(*args, **options):
+                if "amplifier_web.windows_consumer" in [str(item) for item in args]:
+                    raise Ended()
+                return await process(*args, **options)
+
+            async def no_rollback(*args, **options):
+                raise Ended()
+            undo, service = refresher._undo, Service(root, [])
+            refresher._undo = no_rollback
+            try:
+                refresh(service, process=ended_at_audit)
+                need(False, "the ended run must not return")
+            except Ended:
+                pass
+            finally:
+                refresher._undo = undo
+            journal = refresher.unfinished(home)
+            need(journal is not None and Path(journal["previous"]).is_dir() and not service.up,
+                 "an ended run leaves its saved record and the previous launcher")
+            need(generations.active(home)["bootstrap"] != earlier["identity"]
+                 and refresher.launcher_facts(launcher)["revision"] == new["revision"],
+                 "the ended run had installed and bound the new launcher")
+            result = refresh(service, check=True)
+            need(result["action"] == "recover" and not service.up, "check sees the unfinished refresh and changes nothing")
+            result = refresh(service)
+            need(result["ok"] and result["action"] == "recover" and result["state"] == "rolled-back"
+                 and result["running"] and service.events == ["stop", "start"],
+                 "the next run puts the previous launcher back")
+            untouched("ended run")
+
+            service = Service(root, [])
             result = refresh(service)
             need(result["ok"] and result["changed"] and result["running"] and service.events == ["stop", "start"],
                  "refresh succeeds")
