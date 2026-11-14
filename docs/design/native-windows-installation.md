@@ -166,10 +166,16 @@ Consequences and limits:
   key on disk. Amplifier **never** adds such a root; the person can still review
   it in the Windows certificate viewer as before. Moving it to a key-less
   identity is a later, explicit owner action.
-- A key-less identity cannot be renewed in place. `setup-tls force`, a missing
-  server certificate, or a new configured address refuses with existing
-  material unchanged. A new identity (not yet automated) needs one new Windows
-  confirmation. Day 825 needs that renewal path before it arrives.
+- No key can reissue a key-less identity's server certificate. A new configured
+  address makes the host refuse to start, and a missing server certificate
+  refuses, both with existing material unchanged. The owner's explicit
+  `setup-tls force` replaces the whole identity with a new one for the
+  currently configured names (root published last, so an interrupted renewal
+  never serves and can be repeated). The next open then shows the Amplifier
+  message and the one Windows confirmation for the new root, and every other
+  device must import the new root. Run it while the host is stopped. The earlier
+  root stays in the Windows store and is inert. Renewal before day 825 is this
+  same command; nothing reminds the owner yet.
 - The step runs in the launcher that setup installs. An in-app update does not
   replace that launcher, so only a setup file built from this change has it.
 - `windows_trust.remove_root` is the removal call for uninstall. Windows asks
@@ -199,7 +205,10 @@ account on the same PC on a different port even while the first app is stopped.
 `amplifier_web/windows_ports.py` owns selection.
 
 Setup saves the port and its `https://127.0.0.1:<port>` origin together, in one
-write, in the existing private `config/server.yaml`. Restart, the sign-in task,
+write, in the existing private `config/server.yaml`. A port counts as saved when
+that origin is present, or when the port is not the default and app-owned HTTPS
+is configured, so an owner who later lists only a remote address keeps it.
+Restart, the sign-in task,
 an in-app update and every shortcut read that file; nothing selects again. The
 browser origin includes the port, so a changed port means a new site for an
 installed app window and its unsent drafts. An installation that already saved a

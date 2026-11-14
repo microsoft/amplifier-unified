@@ -8,7 +8,8 @@ on a stable private lock. Same-TokenUser processes remain trusted.
 A key-less identity (create_identity) has no ca.key: its root's signing key is
 never written, so nothing can sign under that root afterwards. Its ca.crt
 carries critical name constraints; that is how it differs from a partial pair.
-windows_trust.py owns asking Windows to trust such a root.
+Its server certificate cannot be reissued, so `force` replaces the whole
+identity with a new one. windows_trust.py owns asking Windows to trust a root.
 """
 from __future__ import annotations
 
@@ -409,13 +410,19 @@ def setup(data_dir, config, *, force=False):
             encoded = _encoded_pair(ca, ca_key)
             _publish_pair(pinned, "ca", *encoded)
         elif keyless:
+            if force:
+                # No key can reissue the server certificate. The owner's
+                # explicit request replaces the whole identity; Windows must
+                # confirm the new root, and other devices must import it.
+                _publish_identity(pinned, config, {name: value is not None for name, value in contents.items()})
+                configured = {**config, "tls": {"method": "ca", **_LAYOUT}}
+                save_server_config(data_dir, configured)
+                return configured
             ca, ca_key = _ca(contents["ca.crt"])
-            if contents["leaf.crt"] is None or force:
-                # Only a whole new identity can follow, and Windows must
-                # confirm its new root. Nothing here creates one silently.
+            if contents["leaf.crt"] is None:
                 raise ValueError(
-                    "This installation's certificate cannot be renewed in place: its root has no "
-                    "signing key. Existing material was not changed")
+                    "This installation's server certificate is missing and its root has no signing "
+                    "key. Run setup-tls force to create a new certificate; nothing was changed")
         else:
             ca, ca_key = _ca(contents["ca.crt"], contents["ca.key"])
         if contents["leaf.crt"] is not None:
@@ -442,25 +449,36 @@ def create_identity(data_dir, config):
     (DER) for the caller to hand to Windows from memory, or None when any
     material already exists: an existing identity is never replaced.
     """
-    from cryptography.hazmat.primitives import serialization
     from .deployment import save_server_config
     with _storage(data_dir, create=True) as pinned:
         if any(_present(pinned, name) for name in ("ca.crt", "ca.key", "leaf.crt", "leaf.key")):
             return None
-        root, leaf, key = _new_identity(config)
-        root_pem = root.public_bytes(serialization.Encoding.PEM)
-        encoded = _encoded_pair(leaf, key)
-        _leaf(_ca(root_pem)[0], *encoded, config)
-        _publish_pair(pinned, "leaf", *encoded)
-        try:
-            pinned.publish_private("ca.crt", root_pem)
-        except Exception as exc:
-            raise OSError(
-                "Windows TLS publication failed; material may be partial. "
-                "No regeneration, destination deletion or rollback was attempted") from exc
-        _context(pinned, config)
+        der = _publish_identity(pinned, config, {})
         save_server_config(data_dir, {**config, "tls": {"method": "ca", **_LAYOUT}})
-        return root.public_bytes(serialization.Encoding.DER)
+        return der
+
+
+def _publish_identity(pinned, config, present):
+    """Publish a new key-less identity; `present` names the files it replaces.
+
+    The root goes last. If publication stops part-way, the old root does not
+    match the new server certificate: the host refuses to start, and the same
+    request can be repeated. Returns the new root (DER).
+    """
+    from cryptography.hazmat.primitives import serialization
+    root, leaf, key = _new_identity(config)
+    root_pem = root.public_bytes(serialization.Encoding.PEM)
+    cert, private = _encoded_pair(leaf, key)
+    _leaf(_ca(root_pem)[0], cert, private, config)
+    try:
+        for name, content in (("leaf.key", private), ("leaf.crt", cert), ("ca.crt", root_pem)):
+            pinned.publish_private(name, content, replace=bool(present.get(name)))
+    except Exception as exc:
+        raise OSError(
+            "Windows TLS publication failed; material may be partial. "
+            "No destination deletion or rollback was attempted") from exc
+    _context(pinned, config)
+    return root.public_bytes(serialization.Encoding.DER)
 
 
 def keyless_identity(data_dir):
