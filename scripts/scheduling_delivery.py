@@ -10,10 +10,11 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import tempfile
+import tarfile
 import tomllib
 import zipfile
 
-COMPONENTS = ("scheduling", "worktrees")
+COMPONENTS = ("scheduling", "worktrees", "portability")
 
 DELIVERY = "components/scheduling-delivery"
 RECORD = "components/scheduling.source.json"
@@ -96,9 +97,25 @@ def verify(root, *, component="scheduling"):
     if [path for path in packages if path.rstrip("/").endswith(package)] != [directory + "/" + package]:
         raise ValueError("Unified must package only the selected component owner")
     declared = {requirement_key(value) for value in project["project"]["dependencies"]}
-    if not {requirement_key(value) for value in record["runtimeRequirements"]} <= declared:
+    required = {requirement_key(value) for value in record["runtimeRequirements"]}
+    if component == "portability":
+        dependency = record["dependencySources"]["worktrees"]
+        verify_worktrees_dependency(root, source, dependency)
+        embedded = "amplifier-worktrees==" + dependency["version"]
+        if embedded not in required:
+            raise ValueError("Portability must retain its exact worktrees requirement")
+        required.remove(embedded)
+    if not required <= declared:
         raise ValueError("Unified omits a selected component runtime requirement")
     return record
+
+
+def verify_worktrees_dependency(root, source, dependency):
+    """One published dependency edge, bound to bytes rather than a version label."""
+    if (sha((json.dumps(dependency, indent=2) + "\n").encode()) !=
+            source["sourceFiles"]["worktrees-source.json"] or
+            dependency != verify(root, component="worktrees")["source"]):
+        raise ValueError("Portability requires its exact selected worktrees artifact")
 
 
 def verify_wheel(root, artifact, *, editable=False, component="scheduling"):
@@ -158,6 +175,13 @@ def select(root, dist, revision, receipt_sha256, *, component="scheduling"):
                            **receipt["artifacts"][wheel]},
               "sourceReceiptSha256": receipt_sha256, "runtimeRequirements": runtime,
               "files": {name: sha(raw) for name, raw in files.items()}}
+    if component == "portability":
+        _, source_archive = publisher.artifact_names(receipt)
+        with tarfile.open(dist / source_archive) as archive:
+            member = f"{package}-{receipt['version']}/worktrees-source.json"
+            dependency = json.loads(archive.extractfile(member).read())
+        verify_worktrees_dependency(root, receipt, dependency)
+        record["dependencySources"] = {"worktrees": dependency}
     destination = root / directory
     temporary = Path(tempfile.mkdtemp(prefix=f".{component}-selection-", dir=root / "components"))
     retain = False

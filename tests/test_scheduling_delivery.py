@@ -189,3 +189,62 @@ def test_worktrees_artifact_remains_selected_without_author_or_git(worktrees_sel
         '"filelock>=4.2.1,<5"', '"filelock>=4.2.1,<6"'))
     with pytest.raises(ValueError, match="runtime requirement"):
         delivery.verify(plain, component="worktrees")
+
+
+@pytest.fixture
+def selected_pair(tmp_path):
+    """The app-selected records suffice; future authoring trees are not inputs."""
+    project = Path(__file__).parents[1]
+    root = tmp_path / "consumer"; (root / "components").mkdir(parents=True)
+    shutil.copy2(project / "pyproject.toml", root / "pyproject.toml")
+    for component in ("worktrees", "portability"):
+        shutil.copy2(project / f"components/{component}.source.json", root / "components")
+        shutil.copytree(project / f"components/{component}-delivery", root / f"components/{component}-delivery")
+    return root
+
+
+def test_portability_selection_is_independent_of_author_dependency_selection(selected_pair):
+    root = selected_pair
+    before = delivery.verify(root, component="portability")
+    author = root / "components/portability"; author.mkdir()
+    (author / "worktrees-source.json").write_text('{"future": "unpublished dependency"}')
+    runtime = author / "amplifier_portability"; runtime.mkdir()
+    (runtime / "__init__.py").write_text('future = "not the app default"\n')
+    assert delivery.verify(root, component="portability") == before
+    assert before["dependencySources"]["worktrees"] == delivery.verify(root, component="worktrees")["source"]
+    assert not (root / ".git").exists()
+
+
+@pytest.mark.parametrize("change", ["artifact", "runtime", "revision"])
+def test_portability_refuses_other_worktrees_bytes_at_same_version(selected_pair, change):
+    root = selected_pair
+    path = root / "components/worktrees.source.json"
+    record = json.loads(path.read_bytes())
+    original_version = record["source"]["version"]
+    wheel = f"amplifier_worktrees-{original_version}-py3-none-any.whl"
+    if change == "artifact":
+        record["artifact"]["sha256"] = "a" * 64
+        record["source"]["artifacts"][wheel]["sha256"] = "a" * 64
+    elif change == "runtime":
+        name = "amplifier_worktrees/__init__.py"
+        raw = b'future = "different implementation"\n'
+        (root / "components/worktrees-delivery" / name).write_bytes(raw)
+        record["files"][name] = record["source"]["sourceFiles"][name] = delivery.sha(raw)
+    else:
+        record["source"]["revision"] = "a" * 40
+    record["sourceReceiptSha256"] = delivery.sha((json.dumps(record["source"], indent=2) + "\n").encode())
+    path.write_text(json.dumps(record, indent=2) + "\n")
+    # A coherent different worktrees selection cannot silently satisfy portability.
+    assert delivery.verify(root, component="worktrees")["source"]["version"] == original_version
+    with pytest.raises(ValueError, match="exact selected worktrees artifact"):
+        delivery.verify(root, component="portability")
+
+
+def test_portability_dependency_receipt_is_bound_to_published_source(selected_pair):
+    root = selected_pair
+    path = root / "components/portability.source.json"
+    record = json.loads(path.read_bytes())
+    record["dependencySources"]["worktrees"]["tree"] = "a" * 40
+    path.write_text(json.dumps(record, indent=2) + "\n")
+    with pytest.raises(ValueError, match="exact selected worktrees artifact"):
+        delivery.verify(root, component="portability")

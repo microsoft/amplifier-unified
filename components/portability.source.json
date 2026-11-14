@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "source": {
+    "schema": 1,
+    "repository": "microsoft/amplifier-unified",
+    "revision": "797cc8ef7bc080c4d5bc0390291dd19864933f50",
+    "subdirectory": "components/portability",
+    "tree": "503b63777bdd72480c523ddb69cc33ae81ad8a14",
+    "version": "0.1.0",
+    "tag": "portability-v0.1.0",
+    "sourceFiles": {
+      ".gitignore": "91ff24eaa65a89ef74d692e164233422924a556a07666dd471ceefc6a31f331f",
+      "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "MANIFEST.in": "c21ea71ee4d41a67942d672e3ccdd2900423f60b8d29f1522f8c66337ccfddbb",
+      "README.md": "08cc9712436199023ca7c8984362f295a5c054ff09689146dac0993fb0476b1a",
+      "amplifier_portability/__init__.py": "9559ebf86856b5b4327a3a5baa0ab7a4d4da7e0b69480d894707bf5543948ec5",
+      "amplifier_portability/capsule.py": "5d801f00e2c5aa5993186634aa0aefcafe2dd976c9edaa74c9579c0ba3b41a44",
+      "amplifier_portability/protocol.py": "199092e2cc8091eda7fb8b6adffd3f637eab46da4e60d71797eb6e49c6e211ba",
+      "pyproject.toml": "738caa96df556f19047a90d69245f08ddbd020189cf4a8e6c034184c7f818cc0",
+      "tests/test_portability_capsule.py": "21dbe73b78f07ac9cf16b68a8ef6be4476881cfe9e7809930e18e7e935c4d898",
+      "tests/test_portability_protocol.py": "d0a1963748fc834247324b94b384bd55ac7219f70ba118e94dc08827b2fe23db",
+      "worktrees-source.json": "7ff65c88c379039d2cc67b473a095665bc31d5383d9cd25f8dd8e375dfb83107"
+    },
+    "artifacts": {
+      "amplifier_portability-0.1.0-py3-none-any.whl": {
+        "sha256": "d6a86a4232d9e985d0f02a17fb7adcdb8635879c303827aae7930d22a6f454e3",
+        "bytes": 17127
+      },
+      "amplifier_portability-0.1.0.tar.gz": {
+        "sha256": "eaeeba7c6112e8ed27310f201e0af5269b1c9fe65b03a26eb538a7d89773f302",
+        "bytes": 30565
+      }
+    }
+  },
+  "artifact": {
+    "url": "https://github.com/microsoft/amplifier-unified/releases/download/portability-v0.1.0/amplifier_portability-0.1.0-py3-none-any.whl",
+    "sha256": "d6a86a4232d9e985d0f02a17fb7adcdb8635879c303827aae7930d22a6f454e3",
+    "bytes": 17127
+  },
+  "sourceReceiptSha256": "6c7bb7242632c73ec7f8cde15993de57d8e3545c97921037bbb0b27027d890f2",
+  "runtimeRequirements": [
+    "amplifier-worktrees==0.1.0",
+    "cryptography<51,>=44",
+    "filelock<5,>=4.2.1"
+  ],
+  "files": {
+    "amplifier_portability/__init__.py": "9559ebf86856b5b4327a3a5baa0ab7a4d4da7e0b69480d894707bf5543948ec5",
+    "amplifier_portability/capsule.py": "5d801f00e2c5aa5993186634aa0aefcafe2dd976c9edaa74c9579c0ba3b41a44",
+    "amplifier_portability/protocol.py": "199092e2cc8091eda7fb8b6adffd3f637eab46da4e60d71797eb6e49c6e211ba",
+    "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  },
+  "dependencySources": {
+    "worktrees": {
+      "schema": 1,
+      "repository": "microsoft/amplifier-unified",
+      "revision": "eb124aed0de8bb93d92271a17b0230d038fdb908",
+      "subdirectory": "components/worktrees",
+      "tree": "4e684fe301fb40c5077a64f8455a961fa2970329",
+      "version": "0.1.0",
+      "tag": "worktrees-v0.1.0",
+      "sourceFiles": {
+        ".gitignore": "91ff24eaa65a89ef74d692e164233422924a556a07666dd471ceefc6a31f331f",
+        "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+        "MANIFEST.in": "ca4d086a2960c7e0254208f08bf99f5db67adb33599085574b1155e859c7fb0a",
+        "README.md": "3e52f8b17f3be33ce1ef544adf51ef62f22ba59d11bf7327816dc2024869ecc4",
+        "amplifier_worktrees/__init__.py": "f20ae179647e8e5fbdb298242127ce3715b70f20fc1beb31d56282365f5874d2",
+        "amplifier_worktrees/git.py": "1ce3209a65d8cda17c131e694a3174f00433043e981fd21fd06b74e84d83d00c",
+        "pyproject.toml": "c72d0712380174f51a25bd6072c3230462277829e4c210f9b6fecc234e0270df",
+        "tests/test_worktree_archive_library.py": "5e9d2b2664a8343727f8567efeb2a6457047aa18405a41ca10d9e449c33891bf",
+        "tests/test_worktree_concurrency.py": "f2902e1f31c6e3aacf4d245610f761f01f556eaf4ae05cb51e6c880d24a222ad",
+        "tests/test_worktree_filters.py": "a943eab5a6cc7cd2db5412ab594e5de075b9f033dd2b06d9ff88a6c82b317372",
+        "tests/test_worktree_library.py": "9e16ffbcce1b64ec2d2fb57f4f25f123c960873c805226aab8501ecbcdbcf31e",
+        "tests/worktree_fixtures.py": "d3a9ed306db27bed69550542bb831e50ee8c658bcb480ff44f18cfaa48ea8d58"
+      },
+      "artifacts": {
+        "amplifier_worktrees-0.1.0-py3-none-any.whl": {
+          "sha256": "bc946924d7b8b9d70c8c8f4d8a7d4a4436420596877c4259c8b07e6cd133927f",
+          "bytes": 12279
+        },
+        "amplifier_worktrees-0.1.0.tar.gz": {
+          "sha256": "98390e4b68403d10ec479c6158665379be12271a706483b0c34884026e2015cc",
+          "bytes": 18893
+        }
+      }
+    }
+  }
+}
