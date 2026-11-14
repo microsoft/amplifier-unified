@@ -8,6 +8,7 @@ from .host.config import app_home, write_private
 from .host.storage import SessionStore
 from .session_store import fork_session
 from .session_files import validate_id
+from contextlib import nullcontext
 
 
 def receipt_path(home, identity, operation_id):
@@ -21,7 +22,7 @@ def same(left, right):
     return json.dumps(left, sort_keys=True, ensure_ascii=False) == json.dumps(right, sort_keys=True, ensure_ascii=False)
 
 
-def recover_pending(home, workspace, identity):
+def recover_pending(home, workspace, identity, *, canonical_binding=None):
     """Classify an interrupted atomic transcript save while holding writer ownership.
 
     Never overwrite a transcript that another owner may have changed. A crash
@@ -33,7 +34,7 @@ def recover_pending(home, workspace, identity):
     if not pointer.exists():
         return
     operation_id = json.loads(pointer.read_text())['operationId']
-    store = SessionStore.for_app(home, workspace)
+    store = SessionStore.for_app(home, workspace, canonical_binding=canonical_binding)
     for path in [receipt_path(home, identity, operation_id)]:
         receipt = json.loads(path.read_text())
         if receipt.get('phase') != 'prepared':
@@ -51,7 +52,7 @@ def recover_pending(home, workspace, identity):
         pointer.unlink(missing_ok=True)
 
 
-async def rewind(controls, args):
+async def rewind(controls, args, *, canonical_binding=None):
     controls.require_idle()
     identity = controls.session.session_id
     path = receipt_path(app_home(), identity, args['operationId'])
@@ -64,9 +65,11 @@ async def rewind(controls, args):
         raise ValueError('An interrupted edit needs the session to be reloaded before accepting more work.')
     source = copy.deepcopy(args['source'])
     source['status'] = 'idle'
-    store = SessionStore.for_app(app_home(), source['workspace'])
+    store = SessionStore.for_app(app_home(), source['workspace'], canonical_binding=canonical_binding)
+    binding = store._binding(identity)
     from .committed_source import refuse_legacy_write
-    refuse_legacy_write(store.directory(identity))
+    if binding is None:
+        refuse_legacy_write(store.directory(identity))
     prepared = fork_session(app_home(), source, identity,
                             before_message_id=args['messageId'], prepare_only=True,
                             expected_context_digest=source.get('historyEditContextDigest'))
@@ -96,7 +99,14 @@ async def rewind(controls, args):
         await context.set_messages(after)
         controls.coordinator.session_state['goal'] = None
         await controls.checkpoint()
-    except BaseException:
+    except BaseException as error:
+        if binding is not None:
+            # An owned checkpoint may have published before a later ACK/exit
+            # failed. The prepared receipt is durable; do not issue a rollback
+            # rewrite, replay an input, or imply that no canonical effect exists.
+            error.add_note('The owned history edit may have committed. Prepared evidence was retained; '
+                           'reconcile the exact checkpoint before another edit.')
+            raise
         # Still under ownership; rollback failure leaves the prepared evidence
         # for classification on next mount, never an automatic input replay.
         await context.set_messages(before)
@@ -105,10 +115,19 @@ async def rewind(controls, args):
         write_private(path, json.dumps({**receipt, 'phase': 'aborted'}, ensure_ascii=False))
         pointer.unlink(missing_ok=True)
         raise
-    stamp = store.history(identity).transcript_path.stat()
-    result['nativeRevision'] = [stamp.st_mtime_ns, stamp.st_size]
-    write_private(path, json.dumps({**receipt, 'phase': 'committed'}, ensure_ascii=False))
-    pointer.unlink(missing_ok=True)
+    with binding.publication() if binding is not None else nullcontext():
+        if binding is None:
+            stamp = store.history(identity).transcript_path.stat()
+            result['nativeRevision'] = [stamp.st_mtime_ns, stamp.st_size]
+        else:
+            from .committed_source import revision
+            # Verify the selected source after the actual caller-owned
+            # checkpoint; cheap revision alone is only an invalidation stamp.
+            if not same(binding.load_messages(), native_after):
+                raise ValueError('The owned history checkpoint differs from this edit; prepared evidence retained.')
+            result['nativeRevision'] = revision(binding.directory)
+        write_private(path, json.dumps({**receipt, 'phase': 'committed'}, ensure_ascii=False))
+        pointer.unlink(missing_ok=True)
     return result
 
 

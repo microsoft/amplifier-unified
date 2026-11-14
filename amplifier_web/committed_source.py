@@ -199,21 +199,6 @@ def background_sources():
     return _background_sources
 
 
-def checkpoint_refs(receipt):
-    """Exact-type dispatch preserves old generations without duck authority."""
-    from amplifier_foundation.session.checkpoint import verified_checkpoint_refs
-    try:
-        from amplifier_foundation.session.versioned_checkpoint import (
-            VersionedCheckpointReceipt, verified_versioned_checkpoint_refs)
-    except ImportError:
-        yield from verified_checkpoint_refs(receipt)
-        return
-    if type(receipt) is VersionedCheckpointReceipt:
-        yield from verified_versioned_checkpoint_refs(receipt)
-    else:
-        yield from verified_checkpoint_refs(receipt)
-
-
 def commit_identity(source, owner):
     value = asdict(source.commit)
     revision = hashlib.sha256(json.dumps([owner, value], sort_keys=True,
