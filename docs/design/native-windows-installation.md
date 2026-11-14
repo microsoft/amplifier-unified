@@ -310,7 +310,11 @@ so that one link always gives the current setup file:
 That file is a copy, not another build: it embeds exactly its own release's
 plan, the publisher refuses a copy whose bytes differ, and the checksum file
 lists both names. A release that is not marked latest (a repair of an older
-line) does not move the link. The link gives the current file at download
+line) does not move the link. The link depends on one rule: only the
+application publisher marks a release as latest. Component releases in this
+repository (`scripts/scheduling_release.py`) publish with `make_latest=false`;
+a component release marked latest would break the link, because it carries no
+setup file. The link gives the current file at download
 time; a file that a person saved earlier still installs its own release, and
 the installed app then updates itself.
 

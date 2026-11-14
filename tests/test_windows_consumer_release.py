@@ -109,6 +109,22 @@ def test_changed_consumer_build_refuses_before_publication(built, changed):
         release.verify(directory, wheel, revision, "1.2.3")
 
 
+def test_only_the_application_release_can_become_latest():
+    # The stable setup link is releases/latest/download/<name>. A component
+    # release that became "latest" has no setup file and would break the link.
+    component = (SCRIPTS / "scheduling_release.py").read_text()
+    assert component.count("make_latest=false") == 2 and "make_latest=true" not in component
+    assert component.index('"draft=true", "-f", "make_latest=false"') < component.index(
+        '"draft=false", "-f", "make_latest=false"')
+    application = (SCRIPTS / "release.py").read_text()
+    # The app publisher uploads every asset to a draft before it publishes, so
+    # the link never points at a release without the file.
+    upload = application.index('run("gh", "release", "upload", tag')
+    publish = application.index('"--draft=false", "--latest=" + str(not newer).lower()')
+    assert application.index('"--verify-tag", "--draft"') < upload < publish
+    assert "*windows]" in application[application.rindex("assets = [", 0, upload):upload]
+
+
 def test_producer_is_build_only_no_target_compiler_or_trust_mutation():
     text = (SCRIPTS / "windows_consumer_release.py").read_text()
     assert 'def build(' in text and 'def verify(' in text
