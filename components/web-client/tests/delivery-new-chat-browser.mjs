@@ -202,7 +202,7 @@ async function runCase(kind){
    await expect(closed.getByText(submitted,{exact:true})).toBeVisible();
    await closed.getByRole('button',{name:'Reopen delivery item',exact:true}).click();
    assert.equal(count('session.create'),0);assert.equal(count('conversation.send'),0);
-   await page.getByRole('button',{name:'Retry',exact:true}).click();
+   await page.locator('[data-input-id="old-failed"]').getByRole('button',{name:'Retry',exact:true}).click();
   }else{
    await composer.fill(submitted);
    const sendButton=page.getByRole('button',{name:'Send message',exact:true});
