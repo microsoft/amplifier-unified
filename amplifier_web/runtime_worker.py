@@ -974,6 +974,27 @@ class Worker:
             self.runtime = Runtime(session_id=config["id"], observer=self.observe, max_input_chars=200_000)
             self.telemetry = ExecutionEvents(config["id"], publish)
             workspace = Path(config.get("workspace") or config.get("workingDirectory") or os.getcwd()).expanduser().resolve(strict=True)
+            media_assembly_root = None
+            if self.media_graph_selection is None and resolved_root is None and self.canonical_bootstrap:
+                from amplifier_web.host.config import load_config, prepare_registry
+                from amplifier_web.host.bundle_paths import canonical_bundle_reference
+                from amplifier_web.host.session import load_root_bundle, live_plan, ResolvedRoot
+                from amplifier_web.host.media_assembly import select_from_declaration
+                authored = load_config(workspace, session_id=config["id"],
+                    **({"owner_session_id": config["ownerSessionId"]}
+                       if config.get("ownerSessionId") is not None else {}))
+                prepare_registry(authored)
+                chosen = canonical_bundle_reference(authored, config.get("bundle") or authored.active_bundle)
+                cwd = Path(config.get("workingDirectory") or workspace).expanduser().resolve(strict=True)
+                root = await load_root_bundle(authored, chosen, execution_workspace=cwd)
+                loaded = root[1]
+                declaration, _ = live_plan(loaded.to_mount_plan())
+                from amplifier_web.host.components import required_components
+                components = getattr(loaded, "_host_components", None) or required_components()
+                declaration = components.normalize(declaration)
+                self.media_graph_selection = select_from_declaration(declaration,
+                    workspace=workspace, session_id=config["id"], bundle_name=root[2])
+                media_assembly_root = ResolvedRoot(authored, chosen, root, execution_workspace=cwd)
             if self.canonical_binding is None and self.canonical_bootstrap:
                 from amplifier_web.host.canonical_bootstrap import SourceBootstrap
                 def source_admission():
@@ -1043,6 +1064,7 @@ class Worker:
                     owner_session_id=config.get("ownerSessionId"),
                     ephemeral_mcp_servers=config.get("ephemeralMcpServers"),
                     media_graph_selection=self.media_graph_selection,
+                    **({"media_assembly_root": media_assembly_root} if media_assembly_root is not None else {}),
                     **({"canonical_binding": self.canonical_binding} if self.canonical_binding is not None else {}),
                     **({"canonical_resume": self.canonical_resume}
                        if self.canonical_binding is not None else {}),

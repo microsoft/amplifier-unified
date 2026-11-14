@@ -338,3 +338,39 @@ def test_linked_root_or_missing_parent_below_link_never_mutates_target(tmp_path)
     with pytest.raises(OSError):
         SourceBootstrap.acquire(other, 'root', admit=StartGuard())
     assert snapshot(target) == before
+
+
+@pytest.mark.parametrize("carrier", ["request-only", "null-envelope", "bad-refs"])
+def test_bootstrapped_store_refuses_invalid_durable_admission_before_source_commit(tmp_path, carrier):
+    """Exercise the actual bootstrap -> host store -> Foundation write caller."""
+    import io
+    from PIL import Image
+    from amplifier_foundation.session.media import SessionMediaStore
+    from amplifier_foundation.session.checkpoint import verified_media_checkpoint_refs
+
+    selected = SourceBootstrap.acquire(tmp_path / "workspace", "root", admit=StartGuard())
+    with closing(selected.binding) as binding:
+        host = SessionStore.for_app(tmp_path / "home", tmp_path / "workspace",
+                                    canonical_binding=binding)
+        before = binding.expected
+        with closing(SessionMediaStore(binding.directory / "media", "root",
+                     checkpoint_verifier=verified_media_checkpoint_refs)) as media:
+            if carrier == "request-only":
+                png = io.BytesIO()
+                Image.new("RGB", (2, 2), (13, 54, 83)).save(png, "PNG")
+                origin = {"kind": "tool", "session_id": "root", "id": "request-only"}
+                ref = media.ingest_sync(png.getvalue(), source_format="image-bytes",
+                    origin=origin, policy={"retention": "request-only"})["value"]
+                media.publish_sync([ref], origin=origin, disposition="retain")
+                assert media.validate_published_ref(ref) == ref
+                metadata = {"experimental.media.v1": {"refs": [ref]}}
+            elif carrier == "null-envelope":
+                metadata = {"experimental.media.v1": None}
+            else:
+                metadata = {"experimental.media.v1": {"refs": False}}
+            with pytest.raises(ValueError):
+                host.save("root", [{"role": "user", "content": "unchanged", "metadata": metadata}], {},
+                    expected=before, operation_id="refused-input", admit=StartGuard(), media_store=media)
+            with open_committed_source(binding.directory, expected=before) as source:
+                assert source.commit == before and source.commit.message_count == 0
+            assert binding.last_receipt is None

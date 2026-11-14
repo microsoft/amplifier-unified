@@ -1088,7 +1088,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                           shared_handle_getter=None, shared_snapshot=None,
                           write_guard=None, resolved_root=None, execution_workspace=None, owner_session_id=None,
                           refresh_dependencies=False, install_overrides=None, qualification_readonly=False, global_only=False, runtime_plan=None, startup_timing=None, ephemeral_mcp_servers=None, media_graph_selection=None,
-                          canonical_binding=None, canonical_binding_factory=None, canonical_resume=None, **kwargs):
+                          canonical_binding=None, canonical_binding_factory=None, canonical_resume=None,
+                          media_assembly_root=None, **kwargs):
     from ..worker_diagnostics import StartupTimings
     startup_timing = startup_timing or StartupTimings()
     if refresh_dependencies and resume:
@@ -1166,6 +1167,17 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     bundle_identity = chosen
     directory = Path(report_dir or config.home / "runtime-reports" / runtime.session_id)
     with startup_timing.phase('manager.bundle.load'):
+        if media_assembly_root is not None:
+            # A preflight composition is reusable only for the actual selected
+            # root. Saved history may select a different bundle; it never turns
+            # that other bundle into the approved preflight recipe.
+            if (resolved_root is None and media_assembly_root.root is not None
+                    and media_assembly_root.config == config
+                    and media_assembly_root.bundle == chosen
+                    and media_assembly_root.execution_workspace == execution_workspace):
+                resolved_root = media_assembly_root
+            else:
+                media_graph_selection = None
         registry, loaded, chosen = (resolved_root.take(config, chosen, execution_workspace=execution_workspace) if resolved_root is not None
                                    else await load_root_bundle(config, chosen, execution_workspace=execution_workspace))
     with startup_timing.phase('manager.plan'):
@@ -1175,6 +1187,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         if runtime_plan is not None or edited_path.exists():
             edited = runtime_plan if runtime_plan is not None else json.loads(edited_path.read_text())
             loaded = apply_runtime_plan(loaded, edited, config, execution_workspace)
+            if media_assembly_root is not None:
+                # A runtime edit is a new authored graph, not authority inherited
+                # from the preflight root. Unknown edits stay neutral.
+                media_graph_selection = None
         if not snapshot:
             from .mentions import include_instruction_files
             loaded = include_instruction_files(loaded, config_home=config.settings_file.parent,
