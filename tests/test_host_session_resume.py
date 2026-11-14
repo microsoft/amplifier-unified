@@ -38,11 +38,12 @@ def mounted_host(tmp_path, monkeypatch):
     loop = SimpleNamespace(_select_provider=lambda _: provider, load_failures=[])
     capabilities = {}
     mounted_config = {}
-    coordinator = SimpleNamespace(get=lambda key: {"context": context, "orchestrator": loop,
+    coordinator = SimpleNamespace(session_id=runtime.session_id, get=lambda key: {"context": context, "orchestrator": loop,
         "providers": {"fixture": provider}, "tools": {}}.get(key), get_capability=capabilities.get,
         register_capability=lambda key, value: capabilities.update({key: value}),
         hooks=SimpleNamespace(register=Mock()), register_cleanup=Mock(), config=mounted_config)
-    session = SimpleNamespace(coordinator=coordinator, config=mounted_config, cleanup=AsyncMock(), execute=AsyncMock())
+    session = SimpleNamespace(session_id=runtime.session_id, coordinator=coordinator,
+                              config=mounted_config, cleanup=AsyncMock(), execute=AsyncMock())
     prepared = SimpleNamespace(mount_plan={"session": {"orchestrator": {"module": "loop-live"}}},
                                create_session=AsyncMock(return_value=session))
     loaded = SimpleNamespace(hooks=[], to_mount_plan=lambda: copy.deepcopy(prepared.mount_plan),

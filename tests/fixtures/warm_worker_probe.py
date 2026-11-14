@@ -80,7 +80,17 @@ Reply with the fixture response.
         if event.get('op') == 'bridge':
             owner = next(worker for worker in workers if event['id'] in worker.bridges)
             operation = event['operation']
-            if operation == 'context.manifest':
+            if operation == 'context.prepare':
+                result = {
+                    'context.manifest': {'available': True, 'value': {
+                        'surfaces': [], 'inputIds': event['args'].get('_contextInputs', [])}},
+                    'message.reactions.context': {'available': False},
+                    'coordination.current': {'available': True, 'value': {
+                        'sessionId': owner.session.session_id, 'grants': [],
+                        'requests': [], 'bounded': True}},
+                    'memory.context': {'available': True, 'value': {'items': []}},
+                }
+            elif operation == 'context.manifest':
                 result = {'surfaces': [], 'inputIds': event['args'].get('_contextInputs', [])}
             elif operation == 'coordination.current':
                 result = {'sessionId': owner.session.session_id, 'grants': [], 'requests': [], 'bounded': True}

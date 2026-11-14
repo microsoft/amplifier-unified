@@ -199,10 +199,12 @@ class OutputImageDelivery:
             +REQUEST_SCOPE+'\n'+json.dumps({**(value or {}), **manifest})}]
         if pixels is not None:
             blocks.append({'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': pixels}})
-        return request.model_copy(update={'messages': [*request.messages, Message(role='user', content=blocks,
+        from .host.media import record_request_only
+        return request.model_copy(update={'messages': [*request.messages, record_request_only(Message(role='user', content=blocks,
             metadata={'ephemeral': True, 'outputImageObservation': {**identity,
                 'toolCallId': tool_call_id, 'epoch': copy.deepcopy(observation['epoch'])},
-                'contextAnchorToolCalls': [tool_call_id] if tool_call_id else []})]})
+                'contextAnchorToolCalls': [tool_call_id] if tool_call_id else []}),
+                validate=lambda: self.observation is observation and self.previous.epoch == observation['epoch'])]})
 
     def _pair_message(self, request, observation, *, value=None, reason_code=None):
         from amplifier_core.message_models import Message
@@ -219,10 +221,12 @@ class OutputImageDelivery:
                            {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': row['_image']}}])
         identity = {'images': requested, 'receipt': saved['inspection']['receipt'],
                     'epoch': copy.deepcopy(observation['epoch'])}
-        return request.model_copy(update={'messages': [*request.messages, Message(role='user', content=blocks,
+        from .host.media import record_request_only
+        return request.model_copy(update={'messages': [*request.messages, record_request_only(Message(role='user', content=blocks,
             metadata={'ephemeral': True, 'outputImagePairObservation': identity,
                       'contextAnchorToolCalls': [observation['tool_call_id']]
-                      if observation.get('tool_call_id') else []})]})
+                      if observation.get('tool_call_id') else []}),
+                validate=lambda: self.observation is observation and self.previous.epoch == observation['epoch'])]})
 
     async def revalidate(self, request):
         from amplifier_core.message_models import Message

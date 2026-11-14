@@ -195,8 +195,10 @@ async def mount(coordinator, config=None):
     class ObserveOnly(BundleLiveOrchestrator):
         async def execute(self, prompt, context, providers, tools, hooks, coordinator):
             selected = self._select_provider(providers)
+            from amplifier_web.host.media import _provider_owner
             underlying = getattr(selected, 'original', selected)
-            instance, = [key for key, provider in providers.items() if provider is underlying]
+            instance, = [key for key, provider in providers.items()
+                         if _provider_owner(provider) is _provider_owner(underlying)]
             executions.append({'instance': instance, 'model': selected.default_model})
             assert all(not provider.calls for provider in providers.values())
             return 'selector observed; no inference'

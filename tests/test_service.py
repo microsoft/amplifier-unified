@@ -854,3 +854,54 @@ async def test_manager_failure_corrects_earlier_idle_receipt_for_only_its_input(
         await service.on_runtime_event('runtime.error', {'sessionId': sid, 'error': 'Manager turn failed'})
         assert session['status'] == 'error'
         assert session['failure']['countFailure']['httpStatus'] == 500
+
+
+async def test_optimize_public_actions_keep_manual_policy_and_reconcile_exact_command(service):
+    """Exercise the shared dispatch boundary, not just the controller directly."""
+    prefix = 'maintenance.optimize.'
+    sid = service.get_state()['selectedSessionId']
+    initial = (await service.dispatch(prefix + 'policy.read', {}, include_state=False))['result']
+    assert initial == {'revision': 0, 'requestKeepHours': None, 'responseKeepHours': None}
+    assert not service._saved_storage_optimize.tasks
+    args = {'expectedRevision': 0, 'requestKeepHours': 12, 'responseKeepHours': None}
+    saved = await service.dispatch(prefix + 'policy.save', args, command_id='manual-expiry',
+                                   include_state=False)
+    assert saved['result'] == {'revision': 1, 'requestKeepHours': 12, 'responseKeepHours': None}
+    repeated = await service.dispatch(prefix + 'policy.save', args, command_id='manual-expiry',
+                                      include_state=False)
+    assert repeated['duplicate'] and repeated['result'] == saved['result']
+    assert not service._saved_storage_optimize.tasks  # Saving is not automatic cleanup.
+    with pytest.raises((AppError, ValueError)):
+        await service.dispatch(prefix + 'policy.save', {**args, 'responseKeepHours': 24},
+                               command_id='manual-expiry', include_state=False)
+    with pytest.raises(AppError):
+        await service.dispatch(prefix + 'preview', {'scope': 'current', 'sessionId': sid,
+            'extractImages': True, 'policyRevision': 0}, command_id='stale-preview',
+            include_state=False)
+    preview_args = {'scope': 'current', 'sessionId': sid, 'extractImages': True,
+                    'policyRevision': 1}
+    submitted = await service.dispatch(prefix + 'preview', preview_args,
+                                       command_id='exact-preview', include_state=False)
+    controller = service._saved_storage_optimize
+    await asyncio.gather(*tuple(controller.tasks.values()))
+    identity = submitted['result']['operationId']
+    current = (await service.dispatch(prefix + 'read', {'operationId': identity},
+                                      include_state=False))['result']
+    assert current['status'] == 'previewed' and current['summary']['coverage']['complete']
+    assert current['policy'] == saved['result']
+    assert current['cutoffs']['requestBefore'].endswith('Z')
+    assert current['cutoffs']['responseBefore'] is None
+    assert not current['rows'] and not current['canApply']
+    exact = (await service.dispatch(prefix + 'read', {'commandId': 'exact-preview'},
+                                    include_state=False))['result']
+    assert exact['status'] == 'recorded' and exact['operationId'] == identity
+    replay = await service.dispatch(prefix + 'preview', preview_args,
+                                    command_id='exact-preview', include_state=False)
+    assert replay['duplicate'] and replay['result'] == submitted['result']
+    assert not controller.tasks
+    unknown = (await service.dispatch(prefix + 'read', {'commandId': 'never-submitted'},
+                                      include_state=False))['result']
+    assert unknown['status'] == 'unknown' and unknown['operationId'] is None
+    with pytest.raises(AppError):
+        await service.dispatch(prefix + 'preview', preview_args, origin='agent',
+                               command_id='unscoped-agent', include_state=False)

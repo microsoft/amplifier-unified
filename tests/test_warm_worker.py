@@ -12,6 +12,35 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize('fixture', ['warm_worker_probe.py', 'history_edit_probe.py'])
+async def test_worker_probe_answers_current_preparation_batch(fixture):
+    """Check the fixture bridge without starting its opt-in real runtime."""
+    import ast
+    import asyncio
+    from types import SimpleNamespace
+    from amplifier_web.preparation_context import OPERATIONS
+
+    tree = ast.parse((ROOT / 'tests' / 'fixtures' / fixture).read_text())
+    main = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
+                and node.name == 'main')
+    publish = next(node for node in main.body if isinstance(node, ast.FunctionDef)
+                   and node.name == 'publish')
+    future = asyncio.get_running_loop().create_future()
+    worker = SimpleNamespace(session=SimpleNamespace(session_id='fixture-session'),
+                             bridges={'request': future})
+    scope = {'events': [], 'workers': [worker]}
+    exec(compile(ast.Module(body=[publish], type_ignores=[]), fixture, 'exec'), scope)
+    scope['publish']({'op': 'bridge', 'id': 'request', 'operation': 'context.prepare',
+                      'args': {'_contextInputs': ['original-input']}})
+    result = await future
+    assert set(result) == set(OPERATIONS)
+    assert result['context.manifest'] == {
+        'available': True, 'value': {'surfaces': [], 'inputIds': ['original-input']}}
+    assert result['coordination.current']['value']['sessionId'] == 'fixture-session'
+    assert result['memory.context'] == {'available': True, 'value': {'items': []}}
+    assert result['message.reactions.context'] == {'available': False}
+
+
 def test_actual_worker_parks_and_reuses_with_real_shared_state(tmp_path):
     python = os.environ.get("UNIFIED_RUNTIME_PYTHON")
     foundation = os.environ.get("WARM_FOUNDATION_PATH")
