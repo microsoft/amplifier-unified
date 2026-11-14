@@ -12,7 +12,7 @@ from collections import deque
 
 from aiohttp import web
 
-from .auth import SESSION_COOKIE, _verified
+from .auth import SESSION_COOKIE, valid_session
 from .terminal_devices import MAX_DEVICES, digest
 from .terminal_setup import require_safe_transport
 
@@ -160,7 +160,7 @@ def setup_routes(app):
 
     def browser_session(request):
         cookie = request.cookies.get(SESSION_COOKIE)
-        if not _verified(app['session_secret'], cookie, app['server_config']['session_ttl_seconds'], 'session'):
+        if not valid_session(app, cookie):
             raise web.HTTPForbidden(text='Sign in with your browser to manage devices.')
         return cookie
 

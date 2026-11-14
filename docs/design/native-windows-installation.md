@@ -1474,6 +1474,10 @@ This delegates existing OS-session authority; it does not prove a fresh Hello
 challenge. A new native Hello challenge is a different product/security promise.
 Keep PAM authentication unchanged for existing POSIX deployments.
 
+The owner can end every browser session with `amplifier-unified browsers sign-out`
+(see the deployment guide). All browser session checks go through one function,
+`auth.valid_session`, so that no check can ignore that sign-out.
+
 Remote browsers need an explicit owner-approved browser-pairing design over
 trusted configured HTTPS. Do not silently reuse terminal/companion grants with
 broader authority. Until that path is qualified, report its limitation rather
