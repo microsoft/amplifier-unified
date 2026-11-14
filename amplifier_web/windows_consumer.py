@@ -65,7 +65,8 @@ def audit(root):
     _payload({"artifact": artifact, "binding": {
         "version": value["version"], "revision": value["revision"]}})
     result = subprocess.run([sys.executable, "-I", "-c", GRAPH_PROBE],
-                            capture_output=True, text=True, timeout=30, check=False)
+                            capture_output=True, text=True, timeout=30, check=False,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     graph = normalized(json.loads(result.stdout), artifact=artifact) if result.returncode == 0 else None
     if graph != validate_graph(value["graph"]):
         raise ValueError("The installed application graph differs from setup's qualified selection.")

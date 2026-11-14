@@ -51,6 +51,31 @@ def evidence():
     return Path(os.environ['RUNNER_TEMP']).resolve() / 'manual-handoff-evidence'
 
 
+def pending_audits():
+    """Fixed labels only: no paths, local values, task names or exception text."""
+    names = {'reconcile', 'qualify', '_verify_installation', '_published_artifact',
+             '_native_binding', '_staged', '_payload', '_save_proof', '_final_verify',
+             'verify_payload', '_offloop', '_health', 'installed_target'}
+    found = set()
+    for task in asyncio.all_tasks():
+        pending = task.get_coro()
+        for _ in range(32):
+            if pending is None:
+                break
+            code = getattr(pending, 'cr_code', None)
+            if code and code.co_name in names:
+                found.add(code.co_name)
+            pending = getattr(pending, 'cr_await', None)
+    for frame in sys._current_frames().values():
+        for _ in range(64):
+            if frame is None:
+                break
+            if frame.f_code.co_name in names:
+                found.add(frame.f_code.co_name)
+            frame = frame.f_back
+    return sorted(found)
+
+
 def canonical_temp():
     # Same existing-ancestor check as windows_user_trial_probe.canonical_temp.
     original = Path(os.environ['TEMP']).absolute()
@@ -534,9 +559,17 @@ async def controlled_flow(manager, wheel, proof, report):
         save(Path(os.environ['HANDOFF_ROOT']) / 'child.json', report)
         receipt = await manager.service.dispatch('updates.reconcileManualHandoff', args, command_id='native-controlled')
         assert receipt['accepted']
-        async with asyncio.timeout(240):
-            while state.get(handoff.RESULTS, {}).get('native-controlled', {}).get('status') == 'queued':
-                await asyncio.sleep(.05)
+        # The outer owned-job deadline covers all four full installed audits.
+        # Do not put a shorter competing deadline around only reconciliation.
+        started = time.monotonic()
+        checkpoint = started + 30
+        while state.get(handoff.RESULTS, {}).get('native-controlled', {}).get('status') == 'queued':
+            await asyncio.sleep(.05)
+            if time.monotonic() >= checkpoint:
+                report['queuedSeconds'] = round(time.monotonic() - started, 3)
+                report['pendingAudits'] = pending_audits()
+                save(Path(os.environ['HANDOFF_ROOT']) / 'child.json', report)
+                checkpoint = time.monotonic() + 30
         result = state[handoff.RESULTS]['native-controlled']
         assert result['status'] == 'succeeded', result['status']
         assert state['pendingApp'] is None and state['sequence']['install'] is False
@@ -604,9 +637,10 @@ async def contained():
             counts[index] += len(chunk)
     readers = [asyncio.create_task(drain(stream, i)) for i, stream in enumerate((job.stdout, job.stderr))]
     try:
-        # 939 shipped files each receive retained native path/handle checks;
-        # qualification, final commit and reload audit are distinct passes.
-        await asyncio.wait_for(job.wait(), 480)
+        # 967 shipped files receive repeated retained native path/handle checks.
+        # Existing runs measured 306s total and a 1.7x slower file-audit runner.
+        # One 600s fixture budget covers that workload; product deadlines do not change.
+        await asyncio.wait_for(job.wait(), 600)
     finally:
         result = await job.close()
         await asyncio.gather(*readers)

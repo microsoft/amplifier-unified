@@ -131,7 +131,8 @@ def restore(spec, restart):
         generations.verify_candidate(previous)
     # Verify the actual old graph, including archive provenance, before selection.
     result = subprocess.run([str(prefix / "Scripts/python.exe"), "-I", "-c", components.GRAPH_PROBE],
-                            capture_output=True, text=True, timeout=30, check=False)
+                            capture_output=True, text=True, timeout=30, check=False,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     graph = components.normalized(json.loads(result.stdout),
         **({"artifact": value["artifact"]} if value["artifact"] is not None else {})) if result.returncode == 0 else None
     if graph != value["graph"]:
