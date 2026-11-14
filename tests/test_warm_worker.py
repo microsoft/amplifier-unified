@@ -14,6 +14,18 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_actual_worker_file_entry_bootstraps_canonical_package_without_outer_path(tmp_path):
+    # RuntimeManager launches a FILE, not ``python -m`` or an imported Worker.
+    # EOF is an ordinary no-start shutdown; no session, provider or socket opens.
+    existing = [str(Path(value).resolve()) for value in os.environ.get("PYTHONPATH", "").split(os.pathsep)
+                if value and Path(value).resolve() != ROOT]
+    result = subprocess.run([sys.executable, str(ROOT / "amplifier_web/runtime_worker.py")],
+        input="", text=True, capture_output=True, cwd=tmp_path, timeout=15, check=False,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(existing)})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "" and "Traceback" not in result.stderr
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["unsupported-authored-loop", "unavailable-tentative-root", "saved-override"])
 async def test_media_preflight_cannot_preempt_authoritative_saved_configuration(tmp_path, monkeypatch, failure):

@@ -2161,6 +2161,21 @@ class Worker:
                 self._cleanup_settled = True
 
 
-if __name__ == "__main__":
+def main():
+    """Run only the canonical packaged module's Worker and protocol owner."""
     configure_protocol()
     asyncio.run(Worker().run())
+
+
+if __name__ == "__main__":
+    # RuntimeManager intentionally executes this file without adding the outer
+    # host environment to sys.path. Bootstrap app code only, then enter the
+    # canonical module: its Worker class, relative imports and publish globals
+    # must be the same objects selected by the packaged media assembly.
+    if __package__:
+        from .runtime_bootstrap import bootstrap_app_package
+    else:
+        from runtime_bootstrap import bootstrap_app_package
+    bootstrap_app_package()
+    from amplifier_web.runtime_worker import main as canonical_main
+    canonical_main()
