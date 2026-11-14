@@ -233,6 +233,30 @@ References: [Ubuntu trust-store guide](https://ubuntu.com/server/docs/how-to/sec
 and [Edge root-store policy history](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/microsoftrootstoreenabled).
 The obsolete Edge root-store policy is not a workaround.
 
+## Sign out all browsers
+
+To end every browser session on every device at once, for example after a
+phone is lost, run this on the host as the account that owns Unified:
+
+```sh
+amplifier-unified browsers sign-out
+```
+
+Pass the same `--data-dir` value if Unified uses a non-default data directory.
+The command saves a time in the owner's private configuration
+(`config/auth/session-epoch`). It needs no running host, no password and no
+network request: the ability to write that private folder is the authority.
+A running host applies the change within a few seconds. It then refuses every
+session from before that time, drops pending sign-in tickets, and ends open
+live-update connections so that a signed-out browser cannot keep watching.
+Sign in again in the usual way for your platform.
+
+Limits: this signs out **all** browsers; there is no sign-out for one device.
+Connected terminals, apps and devices with their own access are not browser
+sessions and stay connected; remove those in the app. The saved time never
+moves backward. If the record is damaged, the host signs everyone out once and
+repairs it.
+
 ## Keep the host running
 
 On Linux, including a WSL distribution with systemd enabled, install and manage

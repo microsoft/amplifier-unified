@@ -186,7 +186,9 @@ terminal. Keep explicit `CREATE_NO_WINDOW` at known call sites. After a late
 `AttachConsole`, Python signal settings do not protect the host from a child's
 Ctrl+C; keep the explicit console control handler and the standard-handle
 restore. The stable launcher keeps the code that setup installed; an in-app
-update cannot change it.
+update cannot change it. `amplifier_web.windows_launcher_refresh` is the only
+supported replacement: it runs with the active generation's Python from outside
+the host's Job, and it rolls back fully on failure.
 While a conversation worker is alive, Windows refuses a new or replaced file
 directly in a consumer installation folder (error 32); `app\config\services`
 still accepts writes. Launcher maintenance stops the app before such a write

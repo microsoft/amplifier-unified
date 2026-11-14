@@ -289,6 +289,7 @@ jobs:
           name: windows-consumer
           path: |
             windows-consumer/AmplifierUnifiedSetup-*-windows-x64.exe
+            windows-consumer/AmplifierUnifiedSetup-windows-x64.exe
             windows-consumer/windows-consumer-plan.json
             windows-consumer/windows-consumer-release.json
             windows-consumer/WINDOWS_SHA256SUMS

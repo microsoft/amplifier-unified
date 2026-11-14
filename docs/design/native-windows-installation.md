@@ -140,9 +140,159 @@ unconfirmed-Stop path. Changed expected birth is an argument-refusal control,
 not actual PID reuse. These results do not establish every failure interleaving,
 browser trust or sign-in/out.
 
+### Why the background app stopped
+
+When the app host or the launcher ends with an error, it saves one private
+record (`config/services/task-failure.json`): the time, the error class, and a
+sentence, only when that sentence is fixed text that this product wrote. Any
+other error keeps its class name alone, so no path, address or argument text
+is copied. The CLI's own exit text is not saved, because it names the data
+folder, the address and the port. A busy address gets one fixed sentence.
+
+`service status`, and the Start-menu status entry, add the record to the
+not-ready message in one sentence when the task is not running, for example:
+"Amplifier's background app stopped on November 14 at 9:05 AM: Another program
+is using the address or port that Amplifier saved for this app." A task that
+runs without a listening host yet is a host that is starting; an older failure
+is not shown there. The record is also not shown after a later host start.
+
+Saving and reading the record never changes a start, a stop or a status
+result. Limits: a host that ends without running any of its own code (for
+example, it was ended from outside) has only the launcher's general record
+with the exit code, and a launcher from before this change leaves none. A
+later start that leaves neither a receipt nor a record keeps the earlier
+reason visible, with its time.
+
 The human waived the clean-machine check for the current delivery and selected
 the existing Windows test host only. That coverage is **waived / not executed**,
 not a prerequisite-free installation pass. Signing is deferred separately.
+
+### Launcher refresh
+
+An in-app update never replaces the stable launcher, so launcher code stays at
+the version that setup installed. A defect there cannot be repaired by an
+update: one measured installation kept a 0.87.0 launcher under a 0.92.5 app,
+and that launcher opened a terminal window at every start. The Start-menu
+entries run launcher code too.
+
+`amplifier_web.windows_launcher_refresh` replaces the launcher with the version
+of the active app generation:
+
+```text
+<data>\updates\a\<generation>\tools\amplifier-unified\Scripts\python.exe -I -m amplifier_web.windows_launcher_refresh --data-dir <data> [--check]
+```
+
+It is keyed on the owned task, not on setup's files: the task names the
+launcher folder and the data folder. It therefore also fits an installation
+that setup did not make. `--check` reports the plan and changes nothing.
+`--recover` only settles a refresh that did not finish.
+
+**It must run outside the app.** The normal stop ends every process in the
+host's Job. The command runs with the active generation's Python (never the
+launcher's own), and refuses when it is a descendant of the running host. A
+terminal, a remote shell and setup qualify. The app itself cannot run it
+without a helper that Windows starts outside that Job; none exists yet.
+
+Steps, in order:
+
+1. Decide, changing nothing. Refuse unless the launch record names exactly the
+   launcher that the task starts, no update handoff is in flight, the launcher
+   is not newer than the app, and the generation still passes its own checks
+   (installation identity, package list, release file by digest).
+2. Take the refresh lock (one refresh per installation). Save one private
+   record, `config/services/launcher-refresh-journal.json`, with everything a
+   rollback needs: the launcher path, the planned name of the set-aside
+   folder, the old launcher identity, the launch record's bytes, setup's
+   receipts, the start-program paths and whether the app was running.
+3. Stop the app with the normal owner stop. Decide again with the app stopped.
+4. Copy the generation's verified release file beside the installation.
+   Confirm that the app is stopped, then rename the launcher folder aside. It
+   is kept.
+5. Install the launcher at the same path with the generation's exact package
+   list and the launcher's own interpreter. The task, the shortcuts and the
+   private Python do not change.
+6. Check the new launcher: its probe, its package list against the
+   generation's, and its own reader against the active generation.
+7. Confirm that the app is stopped, then bind the launch record to the new
+   launcher in one private write (`application_generations.rebind`). The write
+   refuses unless the stored identity is exactly the replaced launcher's and
+   the folder is the same.
+8. For a setup-made installation, rewrite setup's receipt and rerun setup's
+   audit with the new launcher.
+9. Start the app and require the normal readiness result, with one more wait
+   while the task still runs. Mark the saved record as done, then remove it. A
+   record that says done is never rolled back, even if it could not be removed.
+
+It does not touch `config/server.yaml`, the port, the TLS files, the trusted
+certificate, the task definition, settings, chats or app generations.
+
+**Rollback and recovery.** Any failure after step 2 runs one rollback. It works
+only from the saved record and from what is on disk, so it can run again after
+it was itself ended:
+
+- One gate decides whether anything is left to put back. It reads only the
+  disk: the set-aside folders, setup's receipts, the launcher's identity, the
+  launch record's launcher binding and the start programs. The saved record is
+  removed only when that gate finds nothing, so a rollback that was ended after
+  one of its steps is never taken for finished.
+- It stops whatever runs from the new launcher.
+- It puts the launch record's launcher binding back first, under the pointer
+  lock (`application_generations.restore_binding`). A record that already
+  names the previous launcher needs nothing, even if an app update changed the
+  rest meanwhile. A record that names another launcher and also changed in
+  another way belongs to a later update and is never overwritten. This also
+  covers a rebind whose write landed and whose own check then failed.
+- It puts back setup's receipts, the previous launcher folder at its original
+  path, and the start programs (copies of the launcher's own), and removes
+  start programs that only the new launcher added. The set-aside new launcher
+  goes last: until then its record is the list of those start programs.
+- It then restores the app's running state.
+
+One case has no rollback: the app updated itself after the new launcher was
+installed and bound. The result says so, and names the saved record to delete
+if the new launcher shall stay. A failure to write the launch record is
+reported as such, not as a change by something else.
+
+If the command is ended part-way (a closed window, a lost connection, a
+restart of the PC), the saved record remains. The next run of the command, or
+`--recover`, runs the same rollback first. The active generation's Python is
+never replaced, so the command can always run. The launcher itself never
+rebinds the record to itself at start: an unchecked launcher must not claim
+the app.
+
+**The result says what is true.** It reports "running" only for an app that
+answers; an app that runs but does not answer, an app that is not running, and
+a state that could not be read are separate statements. An incomplete rollback
+reports `changed: true`, names what could not be restored and where the
+previous launcher is, and points to `--recover`.
+`config/services/launcher-refresh.json` records the outcome and the failed
+step, never output or paths from child programs.
+
+Evidence and limits. The `Windows launcher refresh` workflow installs a
+published earlier release (0.93.2) as the launcher and the candidate as the
+active generation with real uv installations, in setup's layout. It runs the
+command's own code through: a refused installation; an app that does not
+become ready (full rollback after the rebind and after setup's audit); a run
+that is ended after the real installation and the rebind, with none of its own
+rollback, followed by the next run's recovery; a successful refresh; and a
+second run. After the refresh the new launcher's own code accepts the active
+generation and setup's records, and a later update's rollback check passes
+with the rebound record. A runner registers no Scheduled Task: stop, start and
+readiness are a recorded stand-in there. The real task on a setup-made
+installation, a restart of the PC afterwards, and the installation that setup
+did not make are clean-room and owner checks, and are not claimed here.
+
+Known limits. A refresh in the seconds between an update's rollback and the
+old host's own confirmation of that rollback is not detected. A person who
+starts the app from the Start menu during the refresh meets a missing or
+unbound launcher; the refresh then stops with "the app is running" and rolls
+back. The launcher's refusal of a launch record that names another launcher
+is still silent at start (it writes `task-launcher-error.json`); this command
+never leaves that state without saying so, but another cause still would.
+
+The Apps-list version stays at the setup version, as it already does after
+every in-app update. Setup's Repair and Update will call this command and
+refresh the private tools; that is separate work.
 
 ### Consumer release asset
 
@@ -154,6 +304,32 @@ closed consumer plan in the native WinExe. The publisher verifies the retained
 EXE, plan, source/compiler-input hashes and checksums against the same wheel.
 It publishes `AmplifierUnifiedSetup-<version>-windows-x64.exe`, its plan/build
 receipt and `WINDOWS_SHA256SUMS` through the existing single release owner.
+It also publishes the identical bytes as `AmplifierUnifiedSetup-windows-x64.exe`,
+so that one link always gives the current setup file:
+`https://github.com/microsoft/amplifier-unified/releases/latest/download/AmplifierUnifiedSetup-windows-x64.exe`.
+That file is a copy, not another build: it embeds exactly its own release's
+plan, the publisher refuses a copy whose bytes differ, and the checksum file
+lists both names. A release that is not marked latest (a repair of an older
+line) does not move the link. The link depends on one rule: only the
+application publisher marks a release as latest. Component releases in this
+repository (`scripts/scheduling_release.py`) publish with `make_latest=false`;
+a component release marked latest would break the link, because it carries no
+setup file. The link gives the current file at download
+time; a file that a person saved earlier still installs its own release, and
+the installed app then updates itself.
+
+Weighed and not done: a version-independent setup file that reads the latest
+release plan at run time. Its bytes would stay the same across releases, which
+might build download reputation while the file is unsigned; that effect is not
+verified. It would give up the one integrity property that the unsigned file
+has: the downloaded bytes fix exactly what is installed, and the published
+receipt attests that chain (setup digest, plan digest, wheel digest). Every
+saved copy would also follow the moving latest pointer for ever, and an old
+copy would have to understand every later plan. A signed plan would need a
+signing key in CI and its custody, and an unsigned file's embedded public key
+proves little. Two independent reviews gave the same answer. Revisit only with
+evidence that reputation attaches to an unchanged unsigned file at this
+project's download volume.
 No target-side compiler, PowerShell invocation or extra agent publisher is used.
 Historical selected sources without the consumer producer retain their original
 Python-only asset set.
@@ -194,12 +370,21 @@ connection untrusted, it:
    with this name; Amplifier uses it only for the connection between this PC's
    browser and Amplifier on this PC; select Yes. It shows the thumbprint that
    Windows will show. This is one extra click in the first-run journey.
+   Every launcher message is a system-modal message box, which Windows creates
+   in front of other windows. The person's last click has usually gone to
+   another window by then (about 40 seconds pass after setup ends), and Windows
+   keeps an ordinary new window of the launcher behind it: in the first
+   clean-room run the message waited behind the browser, with only a taskbar
+   button to show for it. The foreground and topmost message-box flags did not
+   prevent that, and raising the window afterwards did not either.
 2. Adds the root to the person's **Current User** trusted roots with
    `CertAddCertificateContextToStore`. Windows shows its one standard
    confirmation. For a new identity the launcher passes the exact in-memory
-   certificate it created, not a copy read back from a file. Windows can open
-   its confirmation behind other windows; the launcher brings it to the front
-   and never answers it.
+   certificate it created, not a copy read back from a file. The confirmation
+   follows the person's OK on the launcher's message, so Windows lets it open in
+   front. The launcher also asks Windows to bring it forward and never answers
+   it; that request has no effect when the person has moved to another window
+   in between.
 3. Requires that the store really holds the root, then repeats its own check: a
    TLS handshake against the Windows roots must return the pinned server
    certificate. Only then does it request a browser grant.
@@ -1525,6 +1710,10 @@ listener-authentication requirement, not a new Windows Hello challenge.
 This delegates existing OS-session authority; it does not prove a fresh Hello
 challenge. A new native Hello challenge is a different product/security promise.
 Keep PAM authentication unchanged for existing POSIX deployments.
+
+The owner can end every browser session with `amplifier-unified browsers sign-out`
+(see the deployment guide). All browser session checks go through one function,
+`auth.valid_session`, so that no check can ignore that sign-out.
 
 Remote browsers need an explicit owner-approved browser-pairing design over
 trusted configured HTTPS. Do not silently reuse terminal/companion grants with

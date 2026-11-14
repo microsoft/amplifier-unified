@@ -1,5 +1,7 @@
 # Working on the web client
 
+This codebase is yours: what it's for and how it's built are your call, and you'll keep building on it.
+
 Read [README](README.md) for the current HTTP/SSE boundary, pinned upstream
 vision/contracts and build/test scopes. The repository is private; preserve its
 visibility. Unified selects a client revision and qualifies its packaged pairing;

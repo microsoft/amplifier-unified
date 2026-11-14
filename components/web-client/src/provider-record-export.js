@@ -1,4 +1,5 @@
 // Export only the explicitly loaded provider event, never reconstructed input.
+export const providerRecordMediaNote='Extracted images remain references, not embedded files. This diagnostic JSON is not a self-contained media archive.';
 export function providerRecordExport(node,field,text){
  if(!['request','response'].includes(field)||text==null)throw Error('Load a recorded request or response first.');
  const capture=node[field+'Capture']||{},reference=node[field+'Detail']||{};
@@ -9,7 +10,7 @@ export function providerRecordExport(node,field,text){
   capture:{redacted:typeof capture.redacted==='boolean'?capture.redacted:null,
    truncated:typeof capture.truncated==='boolean'?capture.truncated:null,
    limitCharacters:capture.limit_chars??null,recordDigest:reference.digest??null,
-   note:'Saved provider event. May contain a provider summary; omitted capture content cannot be recovered by exporting.'},
+   note:'Saved provider event. May contain a provider summary; omitted capture content cannot be recovered by exporting. '+providerRecordMediaNote},
   format,payload};
  const id=String(node.id||'call').replace(/[^a-zA-Z0-9_-]/g,'-').slice(0,100);
  return {filename:`amplifier-${id}-${field}${capture.truncated?'-partial':''}.json`,content};

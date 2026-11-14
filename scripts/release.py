@@ -313,12 +313,13 @@ def consumer_assets(root, dist, version, revision):
                            "--wheel", str(next(dist.glob("*.whl"))),
                            "--revision", revision, "--version", version,
                            "--output", str(dist), cwd=root))
-    expected = [f"AmplifierUnifiedSetup-{version}-windows-x64.exe",
-                "windows-consumer-plan.json", "windows-consumer-release.json", "WINDOWS_SHA256SUMS"]
-    if (not isinstance(value, list)
-            or value != [str(dist / name) for name in expected]):
-        raise ValueError("Consumer publisher received an unexpected asset set.")
-    return [dist / name for name in expected]
+    setup = f"AmplifierUnifiedSetup-{version}-windows-x64.exe"
+    rest = ["windows-consumer-plan.json", "windows-consumer-release.json", "WINDOWS_SHA256SUMS"]
+    # Selected sources from before the version-less copy keep their original set.
+    for expected in ([setup, "AmplifierUnifiedSetup-windows-x64.exe", *rest], [setup, *rest]):
+        if isinstance(value, list) and value == [str(dist / name) for name in expected]:
+            return [dist / name for name in expected]
+    raise ValueError("Consumer publisher received an unexpected asset set.")
 
 
 def publish(root, repository, tag, revision, dist):

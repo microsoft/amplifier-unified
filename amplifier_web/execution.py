@@ -244,6 +244,9 @@ def rollup(calls):
             result['unknownCalls']+=1
             result['costPendingCalls']+=int(pending)
     result['costType']='unavailable' if not result['pricedCalls'] else 'partial' if result['unknownCalls'] else 'estimated' if result['estimatedCalls'] else 'reported'
+    reasons=sorted({node['usage']['costUnavailableReason'] for node in calls
+        if isinstance((node.get('usage') or {}).get('costUnavailableReason'),str)})
+    if reasons:result['costUnavailableReasons']=reasons
     return result
 
 

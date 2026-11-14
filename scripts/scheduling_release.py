@@ -15,12 +15,18 @@ import zipfile
 REPOSITORY = "microsoft/amplifier-unified"
 PROJECT = "components/scheduling"
 RECEIPT = "scheduling-source.json"
-COMPONENTS = ("scheduling", "worktrees", "portability")
+# Explicit project path and source prefix for the one installed package.
+COMPONENTS = {
+    "scheduling": ("components/scheduling", "amplifier_scheduling/"),
+    "worktrees": ("components/worktrees", "amplifier_worktrees/"),
+    "portability": ("components/portability", "amplifier_portability/"),
+    "operations": ("amplifier_operations", ""),
+}
 
 
 def component_name(selected):
     for name in COMPONENTS:
-        if selected["subdirectory"] == "components/" + name:
+        if selected["subdirectory"] == COMPONENTS[name][0]:
             return name
     raise ValueError("Unknown standalone component selection.")
 
@@ -40,7 +46,7 @@ def sha(raw):
 def selection(root, revision, *, qualification=False, component="scheduling"):
     if component not in COMPONENTS:
         raise ValueError("Unknown standalone component selection.")
-    project_path = "components/" + component
+    project_path = COMPONENTS[component][0]
     if not re.fullmatch(r"[a-f0-9]{40}", revision):
         raise ValueError("Select a full merged commit SHA.")
     if not qualification:
@@ -74,7 +80,10 @@ def package_identity(dist, selected):
     package = "amplifier_" + component
     wheel, source = artifact_names(selected)
     expected = selected["sourceFiles"]
-    runtime = {name: digest for name, digest in expected.items() if name.startswith(package + "/")}
+    prefix = COMPONENTS[component][1]
+    runtime = {package + "/" + name.removeprefix(prefix): digest
+               for name, digest in expected.items()
+               if name.startswith(prefix) and (prefix or "/" not in name and name.endswith(".py"))}
     info = f"{package}-{selected['version']}.dist-info/"
     with zipfile.ZipFile(dist / wheel) as archive:
         names = archive.namelist()
@@ -221,7 +230,8 @@ def publish(root, revision, dist, *, component="scheduling"):
                       "-f", "name=" + component.title() + " " + receipt["version"], "-F", "draft=true", "-f", "make_latest=false",
                       "-f", "body=" + {"scheduling": "Standalone scheduling policy/store package.",
                                   "worktrees": "Standalone managed Git worktree mechanism.",
-                                  "portability": "Standalone signed task transfer mechanism."}[component] + " Source: " + revision +
+                                  "portability": "Standalone signed task transfer mechanism.",
+                                  "operations": "Standalone durable operation observations and coordination delivery."}[component] + " Source: " + revision +
                       ". Unified dependency selection is unchanged. Do not co-install with a Unified version that still bundles this package.")
         release = read_release(release, tag)
     if not release["draft"]:

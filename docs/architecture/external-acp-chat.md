@@ -206,6 +206,25 @@ Cancellation has a bounded wait; losing confirmation leaves delivery unknown.
 Closing an attach process is not a promise that remote effects were rolled back
 or background work survived. Instance/backend lifecycle rules still apply.
 
+For peers that advertise exact resume and the optional policy-driven
+`_amplifier/retirementRequested` extension, Unified can close a settled attachment
+after the peer's conditional native retirement acknowledgement. Ordinary turn
+completion and older `retirementAvailable` advertisements do not trigger this
+cleanup. The supported Unified backend retains its existing warm-worker budget
+and idle timeout; confirmed cleanup also retires that worker, so a later message
+pays startup cost while resuming the same saved session.
+
+Cleanup reserves only that participant. New public messages remain accepted;
+other room participants can progress while the reserved participant finishes
+cleanup. In-flight awareness, approvals and pending work prevent cleanup. The
+transport stays open after a refused, malformed, lost or timed-out retirement
+response. A later explicit input can reconcile the same retirement result before
+any prompt is sent; it never replays earlier work or creates a replacement
+session. Room context capabilities remain bound to the room and participant.
+Hints received during a turn or cleanup may be ignored; the producer's existing
+retention sweep can ask again, without a client polling or retry loop. Dormant
+room history is not loaded solely to close an attachment.
+
 ## Validation scope
 
 Maintained tests use a real SDK stdio peer without a model and the actual host

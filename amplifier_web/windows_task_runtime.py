@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 import ctypes as C
+import errno
 import io
 import json
 import os
@@ -27,6 +28,14 @@ RECOVERY_STOP = "task-recovery-stop.json"
 RESTART = "task-restart.json"
 RESTART_EXIT = 75
 LOG = "task-output.log"
+FAILURE = "task-failure.json"
+# Error classes whose text is a FIXED sentence that this product wrote for the
+# owner. Do not add a class whose text can hold a path, an address or another
+# value: the CLI's SystemExit text, for example, names the data folder.
+_OWNER_SENTENCES = {"WindowsServiceError", "HiddenConsoleError", "MissingHostDependency"}
+# The one start failure that a person can cause and repair. A fixed sentence:
+# the address and the port themselves are not saved.
+_ADDRESS_IN_USE = "Another program is using the address or port that Amplifier saved for this app."
 LOG_LIMIT = 128 * 1024
 _FIELDS = {"schema", "registration", "run", "pid", "created", "image", "phase"}
 _PHASES = {"starting", "listening", "stopping", "stopped", "failed"}
@@ -105,6 +114,80 @@ def publish(spec, value, name=RECEIPT):
     root = _root(spec)
     with directory(root / "config/services", owned_root=root, create=True) as pinned:
         pinned.publish_private(name, json.dumps(value).encode("utf-8"), replace=True)
+
+
+def record_failure(spec, error, source, *, unless_since=None):
+    """Save why the launcher or the host stopped, for the owner's status command.
+
+    Best effort, never raises: the caller is already ending with this error.
+    Only a sentence that this product wrote is saved. Any other error keeps
+    its class name alone, so no path, address or argument text is copied.
+    unless_since keeps a record that is at least that new (the host's own,
+    more exact reason) in place of the launcher's. The launcher passes its own
+    start time. After an update restart in the same launcher run, an earlier
+    host's record can therefore keep out the reason for a later host that
+    ended without saving one. Status then shows no reason, not a wrong one,
+    because that later host's receipt hides the earlier record.
+    """
+    try:
+        name = type(error).__name__
+        text = None
+        if name in _OWNER_SENTENCES:
+            text = "".join(c for c in " ".join(str(error).split()) if c.isprintable())[:400] or None
+        elif (isinstance(error, SystemExit) and isinstance(error.__context__, OSError)
+                and error.__context__.errno == errno.EADDRINUSE):
+            # The CLI reports a failed bind as SystemExit raised from that OSError.
+            text = _ADDRESS_IN_USE
+        from .windows_files import directory
+        root = _root(spec)
+        with directory(root / "config/services", owned_root=root, create=True) as pinned:
+            if unless_since is not None:
+                try:
+                    old = json.loads(pinned.read_private(FAILURE, limit=LIMIT))
+                    if (isinstance(old, dict) and old.get("registration") == spec.registration_id
+                            and type(old.get("at")) in (int, float) and old["at"] >= unless_since):
+                        return
+                except Exception:
+                    pass  # No usable earlier record: save this one.
+            pinned.publish_private(FAILURE, json.dumps({
+                "schema": 1, "registration": spec.registration_id, "source": source,
+                "at": time.time(), "errorType": name[:80], "message": text}).encode("utf-8"), replace=True)
+    except Exception:
+        pass
+
+
+def last_failure(spec):
+    """The saved failure, unless a host was started after it. Read-only.
+
+    Never raises: the reason is extra help and must not break a status read.
+    """
+    try:
+        from .windows_files import directory
+        root = _root(spec)
+        with directory(root / "config/services", owned_root=root, create=False) as pinned:
+            value = json.loads(pinned.read_private(FAILURE, limit=LIMIT))
+        message = value.get("message") if isinstance(value, dict) else None
+        if (not isinstance(value, dict)
+                or set(value) != {"schema", "registration", "source", "at", "errorType", "message"}
+                or type(value["schema"]) is not int or value["schema"] != 1
+                or value["registration"] != spec.registration_id
+                or value["source"] not in ("host", "launcher")
+                or type(value["at"]) not in (int, float) or not 0 < value["at"] < 2**32
+                or not isinstance(value["errorType"], str)
+                or not re.fullmatch("[A-Za-z_][A-Za-z0-9_]{0,79}", value["errorType"])
+                or not (message is None or isinstance(message, str) and 0 < len(message) <= 400
+                        and message.isprintable())):
+            return None
+        try:
+            run = read(spec)
+        except (OSError, ValueError):
+            run = None
+        # A receipt holds the host's creation time (100 ns ticks since 1601).
+        if run and (int(run["created"]) - 116444736000000000) / 10_000_000 > value["at"]:
+            return None
+        return {key: value[key] for key in ("source", "at", "errorType", "message")}
+    except Exception:
+        return None
 
 
 def restart_record(value, registration):

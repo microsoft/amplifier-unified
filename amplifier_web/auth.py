@@ -161,22 +161,155 @@ def _signed(secret: str, payload: dict) -> str:
     return encoded + "." + signature
 
 
-def _verified(secret: str, value: str | None, ttl: int, kind: str) -> bool:
+def _issued(secret: str, value: str | None, ttl: int, kind: str) -> int | None:
+    """Return the signed issue second of a valid, unexpired value, else None."""
     if not value or "." not in value:
-        return False
+        return None
     encoded, signature = value.rsplit(".", 1)
     expected = hmac.new(secret.encode(), encoded.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(signature, expected):
-        return False
+        return None
     try:
         payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
         issued = payload["issued"]
         if type(issued) is not int:
-            return False
+            return None
         age = time.time() - issued
-        return payload["kind"] == kind and 0 <= age <= ttl
+        return issued if payload["kind"] == kind and 0 <= age <= ttl else None
     except (OverflowError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _verified(secret: str, value: str | None, ttl: int, kind: str) -> bool:
+    return _issued(secret, value, ttl, kind) is not None
+
+
+def valid_session(app, value: str | None) -> bool:
+    """The one check for a browser session cookie.
+
+    A session from before the owner's last "sign out all browsers" is refused,
+    whatever its remaining lifetime. A session issued in the same second as
+    that sign-out is refused as well.
+    """
+    issued = _issued(app["session_secret"], value, app["server_config"]["session_ttl_seconds"], "session")
+    return issued is not None and issued > app.get("session_epoch", 0)
+
+
+_EPOCH = "session-epoch"
+
+
+def _epoch_path(data_dir: Path) -> Path:
+    if _WINDOWS:
+        from . import windows_files
+        return windows_files.address(data_dir) / "config" / "auth" / _EPOCH
+    return Path(data_dir).expanduser().resolve() / "config" / "auth" / _EPOCH
+
+
+def _read_epoch(data_dir: Path) -> int:
+    """Read the saved sign-out second. Missing means no sign-out yet (0)."""
+    try:
+        if _WINDOWS:
+            from . import windows_files
+            root = windows_files.address(data_dir)
+            with windows_files.directory(root / "config" / "auth", owned_root=root) as pinned:
+                content = pinned.read_private(_EPOCH, limit=32)
+        else:
+            content = _epoch_path(data_dir).read_bytes()[:33]
+    except FileNotFoundError:
+        return 0
+    if not re.fullmatch(rb"[0-9]{1,12}\n?", content):
+        raise ValueError("The saved sign-out time is malformed.")
+    return int(content)
+
+
+def _write_epoch(data_dir: Path, value: int) -> None:
+    if _WINDOWS:
+        write_private(_epoch_path(data_dir), f"{value}\n", owned_root=validated_data_dir(data_dir, create=True))
+    else:
+        auth_dir(data_dir)
+        write_private(_epoch_path(data_dir), f"{value}\n")
+
+
+def session_epoch(data_dir: Path) -> int:
+    """The second before which every browser session is refused.
+
+    An unreadable or malformed record never revives a session: it is replaced
+    by the present moment, once, so that everyone signs in again. A missing
+    record means no sign-out has happened. Anyone who could delete it can also
+    read the session secret, so its absence is not treated as an attack.
+    """
+    try:
+        return _read_epoch(data_dir)
+    except (OSError, ValueError):
+        now = int(time.time())
+        try:
+            _write_epoch(data_dir, now)
+        except OSError:
+            pass  # Still refused in memory; the next read repeats this.
+        return now
+
+
+def sign_out_all(data_dir: Path) -> int:
+    """Sign out every browser of this installation; return the saved second.
+
+    Authority is the owner's own private folder: no network request and no
+    credential are involved. A running host applies the change within a few
+    seconds. The time never moves backward, and a write failure is an error,
+    never a silent success.
+    """
+    try:
+        saved = _read_epoch(data_dir)
+    except (OSError, ValueError):
+        saved = 0
+    value = max(int(time.time()), saved)
+    _write_epoch(data_dir, value)
+    if _read_epoch(data_dir) != value:
+        raise OSError("The sign-out time was not saved.")
+    return value
+
+
+def _epoch_hint(data_dir: Path):
+    """A cheap change hint for the saved record; never its value."""
+    try:
+        info = os.stat(_epoch_path(data_dir))
+        return info.st_mtime_ns, info.st_size
+    except OSError:
+        return None
+
+
+def refresh_sessions(app, streams=()) -> bool:
+    """Apply a newer saved sign-out to the running host; True when applied.
+
+    Pending sign-in tickets are dropped, and open state streams are ended so
+    that a signed-out browser cannot keep watching. A stream that reconnects
+    must pass the session check again.
+    """
+    data_dir = app["service"].data_dir
+    hint = _epoch_hint(data_dir)
+    if hint == app.get("session_epoch_hint", ...):
         return False
+    app["session_epoch_hint"] = hint
+    value = session_epoch(data_dir)
+    if value <= app.get("session_epoch", 0):
+        return False
+    app["session_epoch"] = value
+    store = app.get("browser_entry")
+    if store is not None:
+        store.clear()
+    for task in list(streams):
+        task.cancel()
+    return True
+
+
+async def watch_sessions(app, streams, *, interval=2.0):
+    """Notice the owner's sign-out while the host runs."""
+    import asyncio
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            refresh_sessions(app, streams)
+        except Exception:  # A watcher fault must never stop the host.
+            continue
 
 
 def new_session(secret: str) -> str:
@@ -329,7 +462,7 @@ async def auth_required(request: web.Request, handler):
                     return web.json_response({'error': 'Device access was removed.'}, status=401)
                 return await handler(request)
         return web.json_response({'error': 'Device access was removed or is invalid.'}, status=401)
-    if _verified(request.app["session_secret"], request.cookies.get(SESSION_COOKIE), request.app["server_config"]["session_ttl_seconds"], "session"):
+    if valid_session(request.app, request.cookies.get(SESSION_COOKIE)):
         return await authenticated(request.cookies[SESSION_COOKIE])
     if is_api_request(request):
         return web.json_response({"error": "Authentication required."}, status=401)
