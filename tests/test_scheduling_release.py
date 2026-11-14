@@ -16,9 +16,11 @@ SPEC.loader.exec_module(release)
 
 
 def make_candidate(tmp_path, component="scheduling"):
-    package = "amplifier_" + component
+    package = "amplifier_" + component.replace("-", "_")
     root = tmp_path / "repo"; root.mkdir()
-    source = root / (package if component == "operations" else "components/" + component); source.mkdir(parents=True)
+    source = root / ("components/workspaces" if component == "workspace-metadata" else
+                     package if component == "operations" else "components/" + component)
+    source.mkdir(parents=True)
     runtime = "__init__.py" if component == "operations" else package + "/__init__.py"
     files = {"pyproject.toml": f'[project]\nname="amplifier-{component}"\nversion="0.1.0"\n',
              runtime: 'value = "selected"\n',
@@ -469,3 +471,45 @@ def test_flat_project_tests_cannot_become_installed_runtime(tmp_path, monkeypatc
     monkeypatch.setattr(release, "api", lambda *a, **k: pytest.fail("Invalid flat package reached GitHub"))
     with pytest.raises(ValueError, match="second package or non-runtime"):
         release.publish(root, revision, dist, component="operations")
+
+
+def test_workspace_metadata_preserves_distribution_import_and_source_identity(tmp_path):
+    root, revision, dist, _ = make_candidate(tmp_path, "workspace-metadata")
+    selected = release.verify(root, revision, dist, component="workspace-metadata")
+    assert selected["tag"] == "workspace-metadata-v0.1.0"
+    assert selected["subdirectory"] == "components/workspaces"
+    assert "amplifier_workspace_metadata/__init__.py" in selected["sourceFiles"]
+    assert {path.name for path in dist.iterdir()} == {
+        "amplifier_workspace_metadata-0.1.0-py3-none-any.whl",
+        "amplifier_workspace_metadata-0.1.0.tar.gz", "workspace-metadata-source.json", "SHA256SUMS",
+    }
+    with pytest.raises(subprocess.CalledProcessError):
+        release.verify(root, revision, dist, component="worktrees")
+    with pytest.raises(ValueError, match="Unknown standalone"):
+        release.selection(root, revision, component="workspaces")
+
+
+@pytest.mark.parametrize("state", ["new", "partial", "complete"])
+def test_workspace_metadata_uses_existing_exact_publication_recovery(tmp_path, monkeypatch, state):
+    candidate = make_candidate(tmp_path, "workspace-metadata")
+    remote = Remote(candidate, exists=state != "new", draft=state != "complete")
+    if state == "partial":
+        remote.release["assets"] = remote.release["assets"][:1]
+        remote.hide_draft_by_tag = True
+    remote.install(monkeypatch)
+    result = release.publish(*candidate[:3], component="workspace-metadata")
+    assert result["tag"] == "workspace-metadata-v0.1.0"
+    assert result["status"] == ("already-published-exact-bytes" if state == "complete" else "published")
+    assert not remote.release["draft"] and len(remote.release["assets"]) == 4
+    if state == "complete":
+        assert remote.mutations == []
+
+
+def test_workspace_metadata_changed_asset_remains_an_immutable_conflict(tmp_path, monkeypatch):
+    candidate = make_candidate(tmp_path, "workspace-metadata")
+    remote = Remote(candidate)
+    remote.bytes[1] = b"changed workspace metadata artifact"
+    remote.install(monkeypatch)
+    with pytest.raises(ValueError, match="bytes differ"):
+        release.publish(*candidate[:3], component="workspace-metadata")
+    assert remote.mutations == []

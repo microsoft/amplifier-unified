@@ -48,9 +48,31 @@ are absent. The source distribution includes the same direct tests. Host action,
 native history and shell integration tests remain in Unified; standalone checks
 do not establish those promises or untested platform/interpreter support.
 
-`0.1.0` is a preparation version, not a published release or a new repository.
-Unified currently includes these exact runtime sources in its own distribution.
+The package version alone does not identify published or qualified bytes; use the
+actual release source receipt and artifact hashes. Unified currently includes
+these exact runtime sources in its own distribution.
 **Do not coinstall `amplifier-workspace-metadata` with Unified:** both would claim
 the same import package. Repository publication and independent artifact adoption
 are separate steps. The planned supporting repository name remains
 `amplifier-platform-workspaces`; this package covers only metadata.
+
+## Component artifact delivery
+
+The `Workspace metadata package` workflow qualifies pull requests on
+Linux/Python 3.13. The release owner can dispatch it from `main` with an exact
+merged source commit. It builds the wheel and source archive once, then installs
+that same wheel in a separate environment and runs the existing metadata tests
+outside the checkout. This does not establish native Windows or macOS acceptance.
+
+Publication produces four assets under `workspace-metadata-vX.Y.Z`: the wheel,
+source archive, `workspace-metadata-source.json`, and `SHA256SUMS`. The receipt
+binds the exact source revision, project files and artifact hashes. Verify the
+checksums before installing into a separate standalone environment. No app,
+Core, Foundation, sibling checkout or runtime dependency is required. A PR never
+publishes; the component release never replaces the application latest release.
+
+For interrupted publication, retain the original build artifact and rerun only
+failed jobs. Rebuilding is not a byte-reproducibility promise. Existing tags and
+assets must match exactly; mismatches remain for review rather than being
+overwritten. A completed release retry only verifies its existing bytes.
+Publication does not change Unified's selected package or workspace behavior.

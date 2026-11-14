@@ -21,6 +21,7 @@ COMPONENTS = {
     "worktrees": ("components/worktrees", "amplifier_worktrees/"),
     "portability": ("components/portability", "amplifier_portability/"),
     "operations": ("amplifier_operations", ""),
+    "workspace-metadata": ("components/workspaces", "amplifier_workspace_metadata/"),
 }
 
 
@@ -64,7 +65,7 @@ def selection(root, revision, *, qualification=False, component="scheduling"):
 
 
 def artifact_names(selected):
-    stem = "amplifier_" + component_name(selected) + "-" + selected["version"]
+    stem = "amplifier_" + component_name(selected).replace("-", "_") + "-" + selected["version"]
     return stem + "-py3-none-any.whl", stem + ".tar.gz"
 
 
@@ -77,7 +78,7 @@ def safe(name):
 def package_identity(dist, selected):
     """Bind built payload and sdist inputs to Git, not merely their version labels."""
     component = component_name(selected)
-    package = "amplifier_" + component
+    package = "amplifier_" + component.replace("-", "_")
     wheel, source = artifact_names(selected)
     expected = selected["sourceFiles"]
     prefix = COMPONENTS[component][1]
@@ -231,7 +232,8 @@ def publish(root, revision, dist, *, component="scheduling"):
                       "-f", "body=" + {"scheduling": "Standalone scheduling policy/store package.",
                                   "worktrees": "Standalone managed Git worktree mechanism.",
                                   "portability": "Standalone signed task transfer mechanism.",
-                                  "operations": "Standalone durable operation observations and coordination delivery."}[component] + " Source: " + revision +
+                                  "operations": "Standalone durable operation observations and coordination delivery.",
+                                  "workspace-metadata": "Standalone workspace registration metadata over caller-owned records."}[component] + " Source: " + revision +
                       ". Unified dependency selection is unchanged. Do not co-install with a Unified version that still bundles this package.")
         release = read_release(release, tag)
     if not release["draft"]:
