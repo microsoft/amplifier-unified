@@ -389,6 +389,18 @@ connection untrusted, it:
    TLS handshake against the Windows roots must return the pinned server
    certificate. Only then does it request a browser grant.
 
+The check has three answers, not two. A listener that answers and is not
+verified is **untrusted**. A listener that does not answer is **unreachable**,
+and that says nothing about trust. The host can restart while the two dialogs
+are open: a new installation finds a newer release at its first start and
+restarts into it. So the launcher waits up to 60 seconds for the listener,
+before the step and after the Windows confirmation. If the host is still away,
+the message says that Amplifier is restarting and to open it again in a minute.
+It never says that the PC does not trust the connection. (In a clean-room run
+of 0.94.1 that updated itself to 0.95.0 at first start, the earlier two-answer
+check showed the "this PC still does not trust the connection" message two
+seconds after Yes, although the root was in the store.)
+
 Outcomes: **No** keeps the app running, says so in one plain message, and the
 next open (always started by the person) explains and asks again. A refusal by
 Windows, device policy that disables user roots (read first, so no pointless
