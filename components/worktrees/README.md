@@ -71,9 +71,24 @@ establish Windows or macOS acceptance.
 
 The package version alone does not identify published or qualified bytes; use the
 actual release source receipt and artifact hashes.
-Unified already includes this same runtime source in its normal install; do not
-coinstall the standalone distribution into that environment. A separate repository
-and dependency-delivery transition require their own reviewed handoff.
+Unified consumes an explicitly selected published artifact through
+`components/worktrees-delivery/` and `components/worktrees.source.json`, with
+Unified as the sole installed distribution owner. Author edits and publication
+do not change that selected default. Do not coinstall the standalone distribution
+into Unified or edit its generated copy by hand. Returning to an older selection
+uses ordinary app rollback; this assembly is not independent pip replacement.
+
+To deliberately select verified release assets, run from the Unified root:
+
+```sh
+python scripts/scheduling_delivery.py select --component worktrees \
+  --dist /path/to/downloaded-assets --revision FULL_SOURCE_SHA \
+  --receipt-sha256 EXACT_WORKTREES_SOURCE_SHA256
+python scripts/scheduling_delivery.py verify --component worktrees
+```
+
+Normal wheel, sdist and editable builds verify the committed selection offline;
+they do not download artifacts or require the component author tree to match.
 
 
 ## Component artifact delivery

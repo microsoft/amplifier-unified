@@ -7,7 +7,7 @@ import zipfile
 
 import pytest
 
-from test_scheduling_release import candidate, release  # Existing real Git/artifact fixture.
+from test_scheduling_release import candidate, release, make_candidate  # Existing real Git/artifact fixture.
 
 SPEC = importlib.util.spec_from_file_location("scheduling_delivery", Path(__file__).parents[1] / "scripts/scheduling_delivery.py")
 delivery = importlib.util.module_from_spec(SPEC)
@@ -148,3 +148,44 @@ def test_interrupted_swap_restores_original_selection(selected, monkeypatch):
         delivery.select(root, dist, revision, checksum)
     assert delivery.inventory(destination) == before
     assert (root / delivery.RECORD).read_bytes() == record
+
+
+@pytest.fixture
+def worktrees_selection(tmp_path):
+    root, revision, dist, _ = make_candidate(tmp_path, "worktrees")
+    wheel = next(dist.glob("*.whl"))
+    with zipfile.ZipFile(wheel) as archive:
+        members = {name: archive.read(name) for name in archive.namelist()}
+    info = "amplifier_worktrees-0.1.0.dist-info/"
+    members[info + "licenses/LICENSE"] = b"MIT\n"
+    members[info + "METADATA"] += b"Requires-Dist: filelock<5,>=4.2.1\n"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, raw in members.items():
+            archive.writestr(name, raw)
+    (dist / "worktrees-source.json").unlink(); (dist / "SHA256SUMS").unlink()
+    release.seal(root, revision, dist, component="worktrees")
+    (root / "pyproject.toml").write_text(
+        '[project]\nname="amplifier-unified"\nversion="1.0.0"\n'
+        'dependencies=["filelock>=4.2.1,<5"]\n'
+        '[tool.hatch.build.targets.wheel]\n'
+        'packages=["components/worktrees-delivery/amplifier_worktrees"]\n')
+    checksum = delivery.sha((dist / "worktrees-source.json").read_bytes())
+    delivery.select(root, dist, revision, checksum, component="worktrees")
+    return root, revision, dist, checksum
+
+
+def test_worktrees_artifact_remains_selected_without_author_or_git(worktrees_selection, tmp_path):
+    root, revision, dist, checksum = worktrees_selection
+    before = delivery.verify(root, component="worktrees")
+    (root / "components/worktrees/amplifier_worktrees/__init__.py").write_text("future = True\n")
+    assert delivery.verify(root, component="worktrees") == before
+    plain = tmp_path / "consumer"; (plain / "components").mkdir(parents=True)
+    shutil.copy2(root / "pyproject.toml", plain / "pyproject.toml")
+    delivery.select(plain, dist, revision, checksum, component="worktrees")
+    assert delivery.verify(plain, component="worktrees") == before
+    assert not (plain / "components/worktrees").exists() and not (plain / ".git").exists()
+    assert before["runtimeRequirements"] == ["filelock<5,>=4.2.1"]
+    (plain / "pyproject.toml").write_text((plain / "pyproject.toml").read_text().replace(
+        '"filelock>=4.2.1,<5"', '"filelock>=4.2.1,<6"'))
+    with pytest.raises(ValueError, match="runtime requirement"):
+        delivery.verify(plain, component="worktrees")

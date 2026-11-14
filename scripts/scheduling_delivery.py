@@ -1,4 +1,4 @@
-"""Select published scheduling bytes; verify their embedded delivery offline."""
+"""Select published component bytes; verify their embedded delivery offline."""
 from __future__ import annotations
 
 import argparse
@@ -13,11 +13,21 @@ import tempfile
 import tomllib
 import zipfile
 
+COMPONENTS = ("scheduling", "worktrees")
+
 DELIVERY = "components/scheduling-delivery"
 RECORD = "components/scheduling.source.json"
 PACKAGE = "amplifier_scheduling"
 INSTALLED_RECORD = "amplifier_web/component_delivery/scheduling.json"
 INSTALLED_LICENSE = "amplifier_web/component_delivery/scheduling-LICENSE"
+
+
+def locations(component):
+    if component not in COMPONENTS:
+        raise ValueError("Unknown embedded component selection")
+    return (f"components/{component}-delivery", f"components/{component}.source.json",
+            f"amplifier_{component}", f"amplifier_web/component_delivery/{component}.json",
+            f"amplifier_web/component_delivery/{component}-LICENSE")
 
 
 def sha(raw):
@@ -49,15 +59,19 @@ def inventory(root):
 
 def requirement_key(value):
     # Keep the published marker; quote/spacing differences are metadata formatting.
-    return re.sub(r"\s+", "", value).replace('"', "'")
+    value = re.sub(r"\s+", "", value).replace('"', "'")
+    requirement, separator, marker = value.partition(";")
+    name, constraints = re.fullmatch(r"([A-Za-z0-9_.-]+)(.*)", requirement).groups()
+    return name.lower().replace("_", "-") + ",".join(sorted(constraints.split(","))) + separator + marker
 
 
-def verify(root):
+def verify(root, *, component="scheduling"):
     """The authoring tree is deliberately not an input to app delivery."""
-    record = json.loads(regular(root, RECORD))
+    directory, record_path, package, _, _ = locations(component)
+    record = json.loads(regular(root, record_path))
     source = record["source"]
     version = source["version"]
-    wheel = f"amplifier_scheduling-{version}-py3-none-any.whl"
+    wheel = f"{package}-{version}-py3-none-any.whl"
     expected_url = (f"https://github.com/{source['repository']}/releases/download/"
                     f"{source['tag']}/{wheel}")
     if (record.get("schema") != 1 or
@@ -69,70 +83,73 @@ def verify(root):
             not re.fullmatch(r"[a-f0-9]{64}", record["artifact"]["sha256"]) or
             {key: record["artifact"][key] for key in ("sha256", "bytes")} != source["artifacts"][wheel] or
             sha((json.dumps(source, indent=2) + "\n").encode()) != record["sourceReceiptSha256"]):
-        raise ValueError("Invalid scheduling artifact selection")
+        raise ValueError("Invalid component artifact selection")
     files = record["files"]
     if (not isinstance(files, dict) or "LICENSE" not in files or
-            PACKAGE + "/__init__.py" not in files or
+            package + "/__init__.py" not in files or
             files != {name: digest for name, digest in source["sourceFiles"].items()
-                      if name == "LICENSE" or name.startswith(PACKAGE + "/")} or
-            inventory(root / DELIVERY) != files):
-        raise ValueError("Scheduling delivery differs from its selected artifact")
+                      if name == "LICENSE" or name.startswith(package + "/")} or
+            inventory(root / directory) != files):
+        raise ValueError("Component delivery differs from its selected artifact")
     project = tomllib.loads((root / "pyproject.toml").read_text())
     packages = project["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"]
-    if [path for path in packages if path.rstrip("/").endswith(PACKAGE)] != [DELIVERY + "/" + PACKAGE]:
-        raise ValueError("Unified must package only the selected scheduling owner")
+    if [path for path in packages if path.rstrip("/").endswith(package)] != [directory + "/" + package]:
+        raise ValueError("Unified must package only the selected component owner")
     declared = {requirement_key(value) for value in project["project"]["dependencies"]}
     if not {requirement_key(value) for value in record["runtimeRequirements"]} <= declared:
-        raise ValueError("Unified omits a selected scheduling runtime requirement")
+        raise ValueError("Unified omits a selected component runtime requirement")
     return record
 
 
-def verify_wheel(root, artifact, *, editable=False):
-    record = verify(root)
+def verify_wheel(root, artifact, *, editable=False, component="scheduling"):
+    directory, record_path, package, installed_record, installed_license = locations(component)
+    record = verify(root, component=component)
     with zipfile.ZipFile(artifact) as archive:
         names = archive.namelist()
         metadata = [name for name in names if name.endswith(".dist-info/METADATA")]
         if len(metadata) != 1 or not metadata[0].startswith("amplifier_unified-"):
-            raise ValueError("Scheduling must not introduce another distribution owner")
+            raise ValueError("Embedded delivery must not introduce another distribution owner")
         if editable:
             return  # The editable path mapping is tested by its installed import.
-        expected = {name: regular(root / DELIVERY, name) for name in record["files"] if name != "LICENSE"}
-        if {name for name in names if name.startswith(PACKAGE + "/")} != set(expected):
-            raise ValueError("Wheel scheduling membership differs from selection")
-        expected.update({INSTALLED_RECORD: regular(root, RECORD),
-                         INSTALLED_LICENSE: regular(root / DELIVERY, "LICENSE")})
+        expected = {name: regular(root / directory, name) for name in record["files"] if name != "LICENSE"}
+        if {name for name in names if name.startswith(package + "/")} != set(expected):
+            raise ValueError("Wheel component membership differs from selection")
+        expected.update({installed_record: regular(root, record_path),
+                         installed_license: regular(root / directory, "LICENSE")})
         if any(names.count(name) != 1 or archive.read(name) != raw for name, raw in expected.items()):
-            raise ValueError("Wheel scheduling bytes differ from selection")
+            raise ValueError("Wheel component bytes differ from selection")
 
 
-def select(root, dist, revision, receipt_sha256):
+def select(root, dist, revision, receipt_sha256, *, component="scheduling"):
     """Explicit maintainer operation. Builds never fetch, select, or refresh."""
-    receipt_bytes = regular(dist, "scheduling-source.json")
+    directory, record_name, package, _, _ = locations(component)
+    receipt_name = component + "-source.json"
+    receipt_bytes = regular(dist, receipt_name)
     if sha(receipt_bytes) != receipt_sha256:
         raise ValueError("Published source receipt checksum changed")
     spec = importlib.util.spec_from_file_location("scheduling_release", Path(__file__).with_name("scheduling_release.py"))
     publisher = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(publisher)
     receipt = json.loads(receipt_bytes)
-    if receipt["revision"] != revision:
+    if publisher.component_name(receipt) != component or receipt["revision"] != revision:
         raise ValueError("Source receipt differs from the requested published revision")
     wheel, _ = publisher.artifact_names(receipt)
-    names = (*publisher.artifact_names(receipt), publisher.RECEIPT)
+    names = (*publisher.artifact_names(receipt), receipt_name)
     if set(path.name for path in dist.iterdir()) != {*names, "SHA256SUMS"}:
-        raise ValueError("Unexpected scheduling release asset set")
+        raise ValueError("Unexpected component release asset set")
     if publisher.package_identity(dist, receipt) != receipt["artifacts"]:
-        raise ValueError("Published scheduling artifact checksums changed")
+        raise ValueError("Published component artifact checksums changed")
     if (dist / "SHA256SUMS").read_text() != "".join(f"{sha(regular(dist, name))}  {name}\n" for name in names):
-        raise ValueError("Published scheduling checksums differ")
+        raise ValueError("Published component checksums differ")
     with zipfile.ZipFile(dist / wheel) as archive:
-        info = f"amplifier_scheduling-{receipt['version']}.dist-info/"
+        info = f"{package}-{receipt['version']}.dist-info/"
         metadata = BytesParser().parsebytes(archive.read(info + "METADATA"))
         requirements = metadata.get_all("Requires-Dist", [])
-        # Scheduling's optional test runner is not an app runtime requirement.
+        # The component's optional test runner is not an app runtime requirement.
         runtime = [value for value in requirements if not value.endswith('; extra == "test"')]
         if any("extra" in value for value in runtime):
-            raise ValueError("Review new scheduling extras before selecting delivery")
-        files = {name: archive.read(name) for name in receipt["sourceFiles"] if name.startswith(PACKAGE + "/")}
+            raise ValueError("Review new component extras before selecting delivery")
+        files = {name: archive.read(name) for name in receipt["sourceFiles"] if name.startswith(package + "/")}
         files["LICENSE"] = archive.read(info + "licenses/LICENSE")
     if sha(files["LICENSE"]) != receipt["sourceFiles"]["LICENSE"]:
         raise ValueError("Wheel license differs from selected source")
@@ -141,15 +158,15 @@ def select(root, dist, revision, receipt_sha256):
                            **receipt["artifacts"][wheel]},
               "sourceReceiptSha256": receipt_sha256, "runtimeRequirements": runtime,
               "files": {name: sha(raw) for name, raw in files.items()}}
-    destination = root / DELIVERY
-    temporary = Path(tempfile.mkdtemp(prefix=".scheduling-selection-", dir=root / "components"))
+    destination = root / directory
+    temporary = Path(tempfile.mkdtemp(prefix=f".{component}-selection-", dir=root / "components"))
     retain = False
     try:
         ready = temporary / "ready"; ready.mkdir()
         for name, raw in files.items():
             path = ready / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(raw)
         previous = temporary / "previous"
-        record_path = root / RECORD
+        record_path = root / record_name
         old_record = record_path.read_bytes() if record_path.exists() else None
         if old_record is not None:
             (temporary / "previous-record.json").write_bytes(old_record)
@@ -158,7 +175,7 @@ def select(root, dist, revision, receipt_sha256):
         if destination.exists():
             # New dependencies may differ; only require the old snapshot itself clean.
             if old_record is None or inventory(destination) != json.loads(old_record)["files"]:
-                raise ValueError("Preserve locally modified scheduling delivery")
+                raise ValueError("Preserve locally modified component delivery")
         try:
             if destination.exists():
                 destination.rename(previous)
@@ -176,7 +193,7 @@ def select(root, dist, revision, receipt_sha256):
                     record_path.unlink()
             except OSError as error:
                 retain = True
-                raise ValueError(f"Restore the prior scheduling selection from {temporary}") from error
+                raise ValueError(f"Restore the prior component selection from {temporary}") from error
             raise
     finally:
         if not retain:
@@ -187,6 +204,7 @@ def select(root, dist, revision, receipt_sha256):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("select", "verify"))
+    parser.add_argument("--component", choices=COMPONENTS, default="scheduling")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--dist", type=Path)
     parser.add_argument("--revision")
@@ -195,9 +213,9 @@ def main():
     if args.action == "select":
         if not all((args.dist, args.revision, args.receipt_sha256)):
             parser.error("select requires --dist, --revision and --receipt-sha256")
-        select(args.root, args.dist, args.revision, args.receipt_sha256)
+        select(args.root, args.dist, args.revision, args.receipt_sha256, component=args.component)
     else:
-        verify(args.root)
+        verify(args.root, component=args.component)
 
 
 if __name__ == "__main__":

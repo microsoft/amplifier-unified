@@ -57,7 +57,7 @@ artifacts = ["/amplifier_web/release-source.json"]
 path = "scripts/scheduling_build_hook.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "components/scheduling-delivery/amplifier_scheduling", "amplifier_recall", "components/outputs/amplifier_outputs", "components/workspaces/amplifier_workspace_metadata", "components/worktrees/amplifier_worktrees", "components/publishing/amplifier_publishing", "components/portability/amplifier_portability"]
+packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "components/scheduling-delivery/amplifier_scheduling", "amplifier_recall", "components/outputs/amplifier_outputs", "components/workspaces/amplifier_workspace_metadata", "components/worktrees-delivery/amplifier_worktrees", "components/publishing/amplifier_publishing", "components/portability/amplifier_portability"]
 # Standalone projects share these same runtime sources; test/build inputs do not ship.
 exclude = [
     "/amplifier_kernels/tests/**", "/amplifier_kernels/build/**",
@@ -96,6 +96,8 @@ exclude = [
 [tool.hatch.build.targets.wheel.force-include]
 "components/scheduling.source.json" = "amplifier_web/component_delivery/scheduling.json"
 "components/scheduling-delivery/LICENSE" = "amplifier_web/component_delivery/scheduling-LICENSE"
+"components/worktrees.source.json" = "amplifier_web/component_delivery/worktrees.json"
+"components/worktrees-delivery/LICENSE" = "amplifier_web/component_delivery/worktrees-LICENSE"
 "bundle.yaml" = "amplifier_web/bundle_data/bundle.yaml"
 "behaviors" = "amplifier_web/bundle_data/behaviors"
 "context" = "amplifier_web/bundle_data/context"
@@ -154,4 +156,4 @@ artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "re
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "amplifier_kernels/tests", "amplifier_operations/tests", "components/publishing/tests", "components/worktrees/tests", "components/portability/tests", "components/outputs/tests", "components/workspaces/tests"]
+testpaths = ["tests", "amplifier_kernels/tests", "amplifier_operations/tests", "components/publishing/tests", "components/portability/tests", "components/outputs/tests", "components/workspaces/tests"]
