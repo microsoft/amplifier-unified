@@ -24,6 +24,17 @@ sessionId = the native session directory name
 presentation[SessionRef] = { pinned, unread, canvasReferences }
 ```
 
+**Windows exception for the app's own chat folders.** On Windows, a folder that
+Unified allocated for a chat (`<app data>\chats\<chat id>\files`) uses the project
+name `chat-<first 16 hex digits of the chat id>` instead of the path slug. The
+path slug of such a folder repeats the installation path, and its session paths
+exceed the Windows path limit while long paths are off, which is the Windows
+default. A chat that already has history under the path slug keeps that folder;
+nothing is moved. Every folder that a person chooses, and every folder on other
+platforms, uses the path slug. `nativeProject` carries the name in use, so
+SessionRef is unchanged. Limit: a CLI or TUI started inside such a folder on
+Windows computes the path slug and does not list that chat.
+
 ## The promises
 
 1. **Native sessions define saved conversations.** Existing native records decide

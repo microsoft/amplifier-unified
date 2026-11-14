@@ -13,6 +13,7 @@ paths the stores really create have those lengths, and that Windows accepts them
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 from pathlib import Path
@@ -45,11 +46,19 @@ def base():
     return path
 
 
+def length_refusal(error):
+    """How Windows refuses a path over its limit when every parent folder exists.
+
+    The Win32 calls answer path-not-found (3) or name-too-long (206). Python's
+    own ``open`` reports the same refusal as "no such file" without a Windows code.
+    """
+    return error.winerror in (3, 206) or (error.winerror is None and error.errno == errno.ENOENT)
+
+
 def refused_for_length(action):
-    """Windows answers path-not-found (3) or name-too-long (206) for a path over its limit."""
     with pytest.raises(OSError) as error:
         action()
-    return error.value.winerror in (3, 206)
+    return length_refusal(error.value)
 
 
 @pytest.fixture(scope='module')
@@ -66,7 +75,7 @@ def long_paths_off(base):
         try:
             over.write_text('over')
         except OSError as error:
-            assert error.winerror in (3, 206), error
+            assert length_refusal(error), error
         else:
             unavailable('Windows accepted a 260-character path: long paths are on for this process.')
         # Folders: 247 characters are created, 248 are refused.
