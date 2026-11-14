@@ -69,6 +69,7 @@ class Worker:
         # checks may explicitly retain their existing constructor-only cohort.
         self.canonical_bootstrap = canonical_bootstrap
         self._cleanup_settled = False
+        self.retiring = False
         self.approvals = {}
         self.approval_contexts = {}
         self.approval_deliveries = {}
@@ -925,6 +926,36 @@ class Worker:
                 raise RuntimeError('Bundle application was stopped before commit.')
         replacement.commit()
 
+    async def media_preflight(self, config, workspace):
+        """A tentative positive recipe must never replace normal root selection."""
+        try:
+            from amplifier_web.runtime_controls import override_path
+            if override_path(config["id"]).exists() or config.get("bundleReplacement") is not None:
+                return None, None
+            from amplifier_web.host.config import load_config, prepare_registry
+            from amplifier_web.host.bundle_paths import canonical_bundle_reference
+            from amplifier_web.host.session import load_root_bundle, live_plan, ResolvedRoot, required_components
+            from amplifier_web.host.media_assembly import select_from_declaration
+            authored = load_config(workspace, session_id=config["id"],
+                **({"owner_session_id": config["ownerSessionId"]}
+                   if config.get("ownerSessionId") is not None else {}))
+            prepare_registry(authored)
+            chosen = canonical_bundle_reference(authored, config.get("bundle") or authored.active_bundle)
+            cwd = Path(config.get("workingDirectory") or workspace).expanduser().resolve(strict=True)
+            root = await load_root_bundle(authored, chosen, execution_workspace=cwd)
+            loaded = root[1]
+            declaration, _ = live_plan(loaded.to_mount_plan())
+            components = getattr(loaded, "_host_components", None) or required_components()
+            declaration = components.normalize(declaration)
+            selected = select_from_declaration(declaration,
+                workspace=workspace, session_id=config["id"], bundle_name=root[2])
+            return selected, ResolvedRoot(authored, chosen, root, execution_workspace=cwd)
+        except Exception:
+            # This is an optional media-only probe, not authoritative bundle
+            # resolution. The manager still resolves saved history/overrides
+            # and reports their actual errors. Cancellation is not suppressed.
+            return None, None
+
     async def start(self, config, *, raise_errors=False, recover_bundle=True, resolved_root=None):
         started = (time.monotonic_ns(), time.process_time_ns())
         startup_timing = None
@@ -976,24 +1007,7 @@ class Worker:
             workspace = Path(config.get("workspace") or config.get("workingDirectory") or os.getcwd()).expanduser().resolve(strict=True)
             media_assembly_root = None
             if self.media_graph_selection is None and resolved_root is None and self.canonical_bootstrap:
-                from amplifier_web.host.config import load_config, prepare_registry
-                from amplifier_web.host.bundle_paths import canonical_bundle_reference
-                from amplifier_web.host.session import load_root_bundle, live_plan, ResolvedRoot, required_components
-                from amplifier_web.host.media_assembly import select_from_declaration
-                authored = load_config(workspace, session_id=config["id"],
-                    **({"owner_session_id": config["ownerSessionId"]}
-                       if config.get("ownerSessionId") is not None else {}))
-                prepare_registry(authored)
-                chosen = canonical_bundle_reference(authored, config.get("bundle") or authored.active_bundle)
-                cwd = Path(config.get("workingDirectory") or workspace).expanduser().resolve(strict=True)
-                root = await load_root_bundle(authored, chosen, execution_workspace=cwd)
-                loaded = root[1]
-                declaration, _ = live_plan(loaded.to_mount_plan())
-                components = getattr(loaded, "_host_components", None) or required_components()
-                declaration = components.normalize(declaration)
-                self.media_graph_selection = select_from_declaration(declaration,
-                    workspace=workspace, session_id=config["id"], bundle_name=root[2])
-                media_assembly_root = ResolvedRoot(authored, chosen, root, execution_workspace=cwd)
+                self.media_graph_selection, media_assembly_root = await self.media_preflight(config, workspace)
             if self.canonical_binding is None and self.canonical_bootstrap:
                 from amplifier_web.host.canonical_bootstrap import SourceBootstrap
                 def source_admission():
@@ -1592,6 +1606,16 @@ class Worker:
                     settled = await self.checkpoint_idle()
                     # No await between final recheck and closing admission.
                     if settled:
+                        self.retiring = True
+                        if (self.execution is not None and not self.execution.done()
+                                and self.session is not None
+                                and self.session.coordinator.get_capability("live.runtime") is self.runtime):
+                            # Finish the actual idle LIVE owner before cancelling
+                            # Core's outer execute future. That future is not a
+                            # physical-inner-task cleanup acknowledgement.
+                            from amplifier_module_loop_live.runtime import Input
+                            await self.runtime.submit(Input("stop", target="finish"))
+                            await asyncio.shield(self.execution)
                         self.shutdown.set()
                     publish({"op": "reply", "id": data.get("id"), "result": {"retired": settled}})
             except Exception as error:
@@ -1609,7 +1633,7 @@ class Worker:
                         'accepted': False, 'delivery': 'failed', 'effect': 'none',
                         'reason': 'This input was stopped before admission. Nothing was sent.'}})
                     return
-                if self.ownership.yielding or self.shutdown.is_set():
+                if self.ownership.yielding or self.retiring or self.shutdown.is_set():
                     from amplifier_foundation.session import SessionBusyError
                     raise SessionBusyError(self.shared_handle.owner if self.shared_handle else None)
                 # A memory call can finish admission while a foreground command

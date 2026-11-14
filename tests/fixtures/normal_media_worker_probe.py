@@ -402,6 +402,10 @@ async def main():
             assert worker.shutdown.is_set()
             await worker.run()
             assert not shared.active
+            assert any(event.get("type") == "session.closed" for event in bridge.events)
+            assert not [task for task in asyncio.all_tasks() if not task.done()
+                        and getattr(task.get_coro(), "cr_code", None) is not None
+                        and task.get_coro().cr_code.co_filename.endswith("/amplifier_core/_session_exec.py")]
             prefix = binding.expected
             with closing(SessionMediaStore(media.root, media.session_id)):
                 pass
@@ -440,6 +444,10 @@ async def main():
             await restored.command({"op": "retire", "id": "retire-two"})
             await restored.run()
             assert not final_shared.active
+            assert len([event for event in bridge.events if event.get("type") == "session.closed"]) == 2
+            assert not [task for task in asyncio.all_tasks() if not task.done()
+                        and getattr(task.get_coro(), "cr_code", None) is not None
+                        and task.get_coro().cr_code.co_filename.endswith("/amplifier_core/_session_exec.py")]
             with closing(SessionMediaStore(new_media.root, new_media.session_id)):
                 pass
             reopened = VersionedSessionBinding.resume(final_binding.directory, session_id=final_binding.session_id,

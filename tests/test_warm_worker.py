@@ -13,6 +13,61 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["unsupported-authored-loop", "unavailable-tentative-root", "saved-override"])
+async def test_media_preflight_cannot_preempt_authoritative_saved_configuration(tmp_path, monkeypatch, failure):
+    from types import SimpleNamespace
+    from amplifier_web.runtime_worker import Worker
+    from amplifier_web.host import session as host
+    from amplifier_web import runtime_controls
+    override = tmp_path / "configuration.json"
+    if failure == "saved-override":
+        override.write_text("{}")
+    monkeypatch.setattr(runtime_controls, "override_path", lambda _: override)
+    monkeypatch.setattr(host, "load_config", lambda *args, **kwargs: SimpleNamespace(active_bundle="tentative"))
+    monkeypatch.setattr("amplifier_web.host.config.load_config", host.load_config)
+    monkeypatch.setattr("amplifier_web.host.config.prepare_registry", lambda _: None)
+    monkeypatch.setattr("amplifier_web.host.bundle_paths.canonical_bundle_reference", lambda _, value: value)
+    called = []
+    async def load(*args, **kwargs):
+        called.append(True)
+        if failure == "unavailable-tentative-root":
+            raise FileNotFoundError("tentative declaration no longer exists")
+        if failure == "saved-override":
+            pytest.fail("A saved override must reach manager resolution without tentative media loading")
+        return None, SimpleNamespace(to_mount_plan=lambda: {
+            "session": {"orchestrator": {"module": "loop-basic"}}}), "tentative"
+    monkeypatch.setattr(host, "load_root_bundle", load)
+    selected, root = await Worker().media_preflight({"id": "saved", "workspace": str(tmp_path)}, tmp_path)
+    assert selected is root is None
+    assert bool(called) is (failure != "saved-override")
+
+
+@pytest.mark.asyncio
+async def test_idle_retirement_joins_actual_runtime_close_before_shutdown(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from amplifier_web import runtime_worker
+    worker = runtime_worker.Worker(canonical_bootstrap=False)
+    closed = asyncio.Event()
+    async def execute():
+        await closed.wait()
+    worker.execution = asyncio.create_task(execute())
+    async def submit(command):
+        assert command.kind == "stop" and command.target == "finish"
+        assert worker.retiring and not worker.shutdown.is_set()
+        await asyncio.sleep(0)
+        closed.set()
+    worker.runtime = SimpleNamespace(submit=submit)
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(get_capability=lambda _: worker.runtime))
+    worker.checkpoint_idle = AsyncMock(return_value=True)
+    monkeypatch.setattr(runtime_worker, "publish", lambda _: None)
+    await worker.command({"op": "retire", "id": "retire"})
+    assert worker.execution.done() and closed.is_set() and worker.shutdown.is_set()
+
+
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform != "linux", reason="Prospective lifetime is qualified on Linux")
 async def test_cancelled_worker_run_retains_physical_binding_until_cleanup_owner_settles(tmp_path):
