@@ -6,21 +6,16 @@ or establish native desktop-platform support.
 
 ## Observed acceptance
 
+Current Docker direction is the thin installed Smart Tool path documented in
+[the contract](../workspaces/managed-test-runner.md). The target-local Docker
+certification driver and its tests were removed with their consumers; the
+historical evidence below remains historical, not a current execution gate or
+an instruction to recreate a qualifier. Incus/controller qualification remains.
+The maintained opt-in `tests/test_thin_docker_smart_tool.py` exercises actual
+owned Docker lifecycle, dirty-worktree wheel installation and URL handoff without
+requiring a model campaign or mutating a shared installation.
+
 ### Smart Tool migration check (2026-11-08)
-
-The new setup default is Docker, not a conversion of saved installations. The
-bootstrap remains reviewed core `5235833098d9a630791452a46558d92f58af0389`;
-its app-owned moving-source policy upgrades through the existing qualifier.
-Static historical acceptance was not extended to a new commit.
-
-The opt-in `scripts/qualify_managed_runner.py` drives those same setup/update
-owners from an installed candidate and an empty private app home. It requires
-the already-observed local daemon ID. It never installs a daemon or edits live
-app settings. Retain the same private directory on failure or uncertainty;
-re-entry refuses unfinished installation and observes the original qualification
-owner instead of replacing it. Its small persistence adapter is test-only;
-the actual package installation, admission, snapshot, durable job, isolation
-inspection and cleanup are the production implementations.
 
 On native Linux ARM64 Spark-2, the installed candidate qualified exact Smart Tool
 `88d9d84149eee914372c1ca8d68e9eb9f4ba3290` (0.6.9), Python 3.13.12,
@@ -49,17 +44,6 @@ Its first attempt exposed the fixture's stale setup callback signature; acceptin
 the production `origin`/`authority` arguments repaired that fixture. The separate
 first component-test invocation used the wrong working directory; the corrected
 frontend-directory invocation passed. Both failures remain retained evidence.
-
-Follow-up review found two test-driver boundary defects, not an observed failure
-of that native run: a second setup discovery could choose a different daemon,
-and concurrent CLI invocations could race staging in one private home. The
-driver now checks the actual selected target before native setup, its retained
-setup and prepared/final qualification identities, and holds a nonblocking
-same-home process lock through final persistence. A busy loser changes no JSON
-journal. Deterministic regressions reproduce both on the original driver
-(including two staging dispatches), then pass on the corrected driver.
-The production runtime and built frontend are unchanged by this correction.
-The recorded native lifecycle remains original-run evidence; it was not replayed.
 
 ### Earlier managed-runner acceptance
 

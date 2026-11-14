@@ -402,3 +402,38 @@ async def test_pwa_metadata_is_public_but_conversations_and_canvas_stay_private(
     login = await client.get('/login?error=1')
     assert login.headers['Cache-Control'] == 'no-store'
     assert 'Could not sign in.' in await login.text()
+
+
+async def test_real_host_applies_sign_out_all_browsers_to_requests_and_open_streams(aiohttp_client, tmp_path, monkeypatch):
+    import asyncio
+    from amplifier_web import auth
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=Runtime(),
+                           voice=False, background_updates=False)
+    client = await aiohttp_client(app)
+    assert app["session_epoch"] == 0 and not app["session_watch"].done()
+    cookie = {"Cookie": f"amplifier_unified_session={new_session(app['session_secret'])}"}
+    assert (await client.get("/api/state", headers=cookie)).status == 200
+    stream = await client.get("/api/events", headers=cookie)
+    assert stream.status == 200
+    assert await stream.content.readany()  # The stream is open and delivering.
+    # The owner's command writes the private record; it sends the host nothing.
+    real = time.time
+    monkeypatch.setattr(auth.time, "time", lambda: real() + 5)
+    saved = auth.sign_out_all(tmp_path)
+    # The running host notices by itself (its watcher looks every two seconds).
+    for _ in range(100):
+        if app["session_epoch"] == saved:
+            break
+        await asyncio.sleep(0.1)
+    assert app["session_epoch"] == saved
+    # The same cookie is refused, for the API and for a page.
+    assert (await client.get("/api/state", headers=cookie)).status == 401
+    page = await client.get("/", headers=cookie, allow_redirects=False)
+    assert page.status == 307 and page.headers["Location"].startswith("/login")
+    # The open stream was ended by the host.
+    await asyncio.wait_for(stream.content.read(), 5)
+    assert stream.content.at_eof()
+    # A sign-in after the sign-out works.
+    monkeypatch.setattr(auth.time, "time", lambda: real() + 10)
+    fresh = {"Cookie": f"amplifier_unified_session={new_session(app['session_secret'])}"}
+    assert (await client.get("/api/state", headers=fresh)).status == 200

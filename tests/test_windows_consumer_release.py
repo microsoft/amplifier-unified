@@ -125,7 +125,8 @@ def test_real_compiler_inputs_are_identical_across_checkout_line_endings(tmp_pat
     lf, crlf = tmp_path / "lf", tmp_path / "crlf"
     lf.mkdir()
     crlf.mkdir()
-    for name in ("install.ps1", "windows_bootstrap_native.cs", "windows_bootstrap_capsule.py"):
+    for name in ("install.ps1", "windows_bootstrap_native.cs", "windows_bootstrap_capsule.py",
+                 "windows_private_git.py"):
         raw = (SCRIPTS / name).read_text(encoding="utf-8").encode("utf-8")
         (lf / name).write_bytes(raw)
         (crlf / name).write_bytes(raw.replace(b"\n", b"\r\n"))

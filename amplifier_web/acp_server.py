@@ -25,6 +25,8 @@ from .execution_owner import ExecutionOwner, ensure_observers
 from .errors import AppError
 from .runtime_protocol import MAX_MESSAGE_BYTES
 
+RETIREMENT = 'com.microsoft.amplifier.retirement'
+
 
 def _http_servers(servers):
     """Translate standard HTTP descriptors without accepting process launches."""
@@ -126,6 +128,8 @@ class HostAgent:
 
     def on_connect(self, connection):
         self.client = connection
+        self.owner.retirement_hint = lambda identity: connection.ext_notification(
+            'amplifier/retirementRequested', {'sessionId': identity})
 
     def require_initialized(self):
         if not self.initialized:
@@ -137,7 +141,9 @@ class HostAgent:
         self.initialized = True
         return InitializeResponse(protocol_version=1, agent_capabilities=AgentCapabilities(
             load_session=False, mcp_capabilities=McpCapabilities(http=True, sse=False),
-            session_capabilities=SessionCapabilities(resume=SessionResumeCapabilities())))
+            session_capabilities=SessionCapabilities(resume=SessionResumeCapabilities())),
+            field_meta={RETIREMENT: {'version': 1, 'method': '_amplifier/retire',
+                'notification': '_amplifier/retirementRequested'}})
 
     async def new_session(self, cwd, mcp_servers=None, **kwargs):
         self.require_initialized()
@@ -226,6 +232,20 @@ class HostAgent:
     async def cancel(self, session_id, **kwargs):
         self.require_initialized()
         await self.owner.cancel(session_id)
+
+    async def ext_method(self, method, params):
+        self.require_initialized()
+        if method != 'amplifier/retire':
+            raise RequestError(-32601, 'Unsupported ACP extension.')
+        if (not isinstance(params, dict) or set(params) != {'sessionId'}
+                or not isinstance(params['sessionId'], str) or not params['sessionId']):
+            raise RequestError.invalid_params({'details': 'An exact attached sessionId is required.'})
+        try:
+            async with self.creation:
+                disposition = await self.owner.retire(params['sessionId'])
+        except (AppError, ValueError, RuntimeError) as error:
+            raise RequestError(-32000, str(error)) from None
+        return {'sessionId': params['sessionId'], 'disposition': disposition}
 
 
 async def attach(request):

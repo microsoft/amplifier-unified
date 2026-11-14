@@ -25,6 +25,65 @@ rollback. Private runtime receipts still identify the actual host PID, exact
 creation time, process image and listening identity. Native windowless worker
 containment and full background lifetime remain affected qualification boundaries.
 
+### One console without a window for the host's child programs
+
+`pythonw.exe` has no console. Windows creates a new, visible console for every
+console program that such a process starts with default creation flags. A
+no-window flag at each known call site cannot cover code that the application
+does not own.
+
+The app host therefore attaches a console that has no window as its first step
+(`amplifier_web/windows_hidden_console.py`). A console program started with
+default flags inherits that console, and so do the console programs it starts.
+The mechanism lives in the app generation, so an in-app update delivers it. The
+stable launcher is not changed by it: a launcher keeps the code that setup
+installed.
+
+Rules that the mechanism depends on (measured on native Windows 11, CPython 3.13):
+
+- A console attached after process start resets the process's console control
+  handlers. Python's signal settings then give no protection: one Ctrl+C event
+  from a child on the shared console ends the host with `0xC000013A`. The host
+  registers an explicit handler for Ctrl+C and Ctrl+Break.
+- The host's standard handles are restored to their earlier values after the
+  attach. A child must not inherit console input that nobody can type.
+- Both steps follow the attach at once, before the helper process is released.
+  If either fails, the host releases the console and continues without it.
+- A failure of this mechanism does not stop host startup, with one exception.
+  If the host stays attached to a console that it could neither protect nor
+  release, it does not start. The release is confirmed by state. Continuing
+  would leave a host that one child's Ctrl+C ends later, without notice.
+- Known call sites keep their explicit no-window flag. Such a child gets its own
+  console and does not share the host's.
+
+Normal Stop is unchanged. The host stops through its private stop request and
+never through a console event. No host code sends a console control event.
+
+Sign-out is unchanged in effect. Before, Windows ended the windowless host at
+sign-out with no notice. Now the host is attached to a console, so Windows can
+send it the sign-out console event first. The handler does not handle that
+event (or close or shutdown), so Windows ends the process at once. In both
+cases the host ends without its normal stop sequence, and the launcher's
+lifetime job closes its descendants. This case is not measured yet.
+
+Limits. This is a default, not a sandbox:
+
+- A program that requests a new console still gets a window.
+- A windowed (GUI) child and a detached child have no console. Their console
+  children get a new window unless that child prevents it.
+- Children that share the host's console also share its control events, code
+  page and input. Measured: a Ctrl+C event that one child sent to the whole
+  console ended a sibling child that had default handling; the host continued.
+  This applies to the host's own default-flag children only. The worker tree
+  is not affected: the launch guard starts each payload with the no-window
+  flag, so each worker has a console of its own, and its tools (the shell
+  tool's bash, Git, MCP servers) inherit that one.
+- A child that asks a question on its console (a Git or SSH credential prompt)
+  now waits unseen until its caller's time limit. Before, an unflagged child
+  showed a console window. Host-side Git calls that can reach a remote should
+  set `GIT_TERMINAL_PROMPT=0` or a time limit.
+- Ending the hidden console's `conhost.exe` ends the host.
+
 ### Stable launcher and update recovery
 
 The supervised candidate keeps the owner-logon task's `pythonw.exe` as a stable
@@ -81,6 +140,29 @@ unconfirmed-Stop path. Changed expected birth is an argument-refusal control,
 not actual PID reuse. These results do not establish every failure interleaving,
 browser trust or sign-in/out.
 
+### Why the background app stopped
+
+When the app host or the launcher ends with an error, it saves one private
+record (`config/services/task-failure.json`): the time, the error class, and a
+sentence, only when that sentence is fixed text that this product wrote. Any
+other error keeps its class name alone, so no path, address or argument text
+is copied. The CLI's own exit text is not saved, because it names the data
+folder, the address and the port. A busy address gets one fixed sentence.
+
+`service status`, and the Start-menu status entry, add the record to the
+not-ready message in one sentence when the task is not running, for example:
+"Amplifier's background app stopped on November 14 at 9:05 AM: Another program
+is using the address or port that Amplifier saved for this app." A task that
+runs without a listening host yet is a host that is starting; an older failure
+is not shown there. The record is also not shown after a later host start.
+
+Saving and reading the record never changes a start, a stop or a status
+result. Limits: a host that ends without running any of its own code (for
+example, it was ended from outside) has only the launcher's general record
+with the exit code, and a launcher from before this change leaves none. A
+later start that leaves neither a receipt nor a record keeps the earlier
+reason visible, with its time.
+
 The human waived the clean-machine check for the current delivery and selected
 the existing Windows test host only. That coverage is **waived / not executed**,
 not a prerequisite-free installation pass. Signing is deferred separately.
@@ -102,9 +184,8 @@ Python-only asset set.
 This asset is explicitly an **unsigned preview**. An executable checksum is not
 Authenticode or SmartScreen reputation. Consumer browser entry separately checks
 Windows ROOT trust and the private leaf fingerprint before requesting a browser
-grant. If verification fails, the app offers public-certificate review with its
-fingerprint. It never imports trust or bypasses browser policy. Declining keeps
-the background app running and sends no browser-entry command. A successful
+grant. It never bypasses browser policy or a browser warning. Declining trust
+keeps the background app running and sends no browser-entry command. A successful
 system TLS check is not proof that every browser's policy accepts the connection.
 
 Exact installed-package checks cover real Start-menu entry, refusal of a live
@@ -112,6 +193,145 @@ untrusted listener, certificate-review decline and rendered data-preserving
 uninstall. Public artifact availability, a new installation's human trust
 decision/authenticated browser onboarding, and real sign-out/sign-in remain
 distinct acceptance boundaries; source admission does not label them passed.
+
+### Local HTTPS trust without a manual import
+
+A new consumer installation gets a **key-less identity**
+(`windows_tls.create_identity`). The launcher makes one root certificate and one
+server certificate in one call, in its own process. The root's signing key is
+never written and is dropped when that call returns, so no key that can sign
+under the root exists afterwards. That is the main protection: a root that
+Windows trusts cannot be used to impersonate another site when nobody can sign
+with it. The private store holds `ca.crt`, `leaf.crt` and `leaf.key`, and no
+`ca.key`.
+
+| Certificate | Shape |
+| --- | --- |
+| Root | `Amplifier Unified (this PC only)`, path length 0, server-authentication use only, 825 days. Critical name constraints permit only `localhost`, `127.0.0.1`, `::1` and addresses the owner configured, as exact hosts and full-length address masks. The constraints are a second barrier. |
+| Server | No subject name. A critical subject alternative name with the same names, so every name lies inside the root's constraints. Valid exactly as long as the root. Its key stays on disk because the host needs it. The computer name is left out: nothing opens the app by that name, and a renamed PC must not need a certificate that cannot be issued. |
+
+`windows_trust.py` owns the Windows step. When the launcher's check finds the
+connection untrusted, it:
+
+1. Shows one short message: Windows will ask one question about a certificate
+   with this name; Amplifier uses it only for the connection between this PC's
+   browser and Amplifier on this PC; select Yes. It shows the thumbprint that
+   Windows will show. This is one extra click in the first-run journey.
+   Every launcher message is a system-modal message box, which Windows creates
+   in front of other windows. The person's last click has usually gone to
+   another window by then (about 40 seconds pass after setup ends), and Windows
+   keeps an ordinary new window of the launcher behind it: in the first
+   clean-room run the message waited behind the browser, with only a taskbar
+   button to show for it. The foreground and topmost message-box flags did not
+   prevent that, and raising the window afterwards did not either.
+2. Adds the root to the person's **Current User** trusted roots with
+   `CertAddCertificateContextToStore`. Windows shows its one standard
+   confirmation. For a new identity the launcher passes the exact in-memory
+   certificate it created, not a copy read back from a file. The confirmation
+   follows the person's OK on the launcher's message, so Windows lets it open in
+   front. The launcher also asks Windows to bring it forward and never answers
+   it; that request has no effect when the person has moved to another window
+   in between.
+3. Requires that the store really holds the root, then repeats its own check: a
+   TLS handshake against the Windows roots must return the pinned server
+   certificate. Only then does it request a browser grant.
+
+Outcomes: **No** keeps the app running, says so in one plain message, and the
+next open (always started by the person) explains and asks again. A refusal by
+Windows, device policy that disables user roots (read first, so no pointless
+question appears), or trust that has no effect gives one plain message that
+names the PC's security settings and its IT support, and saves the public
+certificate in `export/local-ca.cer`. There is no prompt loop, no elevation, no
+Local Machine store and no policy change.
+
+What this does **not** protect against: changed launcher code, or any other
+program that runs as the same person, can ask Windows for the same confirmation
+itself. A later retry reads the root through the owner-only store and adds it
+only if it is exactly this shape and issued the pinned server certificate. That
+guards against a defective identity, not a hostile one: a certificate cannot
+show that nobody kept its key.
+
+Consequences and limits:
+
+- An installation from an earlier setup keeps its identity, which has a signing
+  key on disk. Amplifier **never** adds such a root; the person can still review
+  it in the Windows certificate viewer as before. Moving it to a key-less
+  identity is a later, explicit owner action.
+- No key can reissue a key-less identity's server certificate. A new configured
+  address makes the host refuse to start, and a missing server certificate
+  refuses, both with existing material unchanged. The owner's explicit
+  `setup-tls force` replaces the whole identity with a new one for the
+  currently configured names (root published last, so an interrupted renewal
+  never serves and can be repeated). The next open then shows the Amplifier
+  message and the one Windows confirmation for the new root, and every other
+  device must import the new root. Run it while the host is stopped. The earlier
+  root stays in the Windows store and is inert. Renewal before day 825 is this
+  same command; nothing reminds the owner yet.
+- The step runs in the launcher that setup installs. An in-app update does not
+  replace that launcher, so only a setup file built from this change has it.
+- `windows_trust.remove_root` is the removal call for uninstall. Windows asks
+  again there, and its default button is No, so "declined" is an ordinary
+  outcome: the root stays and is inert.
+- The launcher's check uses OpenSSL with the Windows roots. It does not prove
+  that a browser accepts the certificate. The `windows-local-connection` job
+  of the focused Windows workflow asks the Windows chain builder about the
+  shape and about a name outside the constraints, and asks Edge the same two
+  questions on a disposable runner (with the test root in the machine store,
+  which the product never uses). The Windows confirmation, and Edge on an
+  ordinary PC with the root in the person's own store, are clean-room
+  acceptance.
+- The retained prototype launcher is unchanged: it keeps the earlier CA with a
+  key on disk and the person's own certificate-viewer action.
+
+### Saved local address
+
+The consumer installation no longer uses the fixed port 8942. First setup reads
+this computer's dynamic TCP range and its excluded ranges
+(`netsh int ipv4 show dynamicport tcp` and `show excludedportrange`), and selects
+a random free loopback port outside both, from 20000 to 39999 when that block is
+available. Hyper-V and WSL reserve blocks inside the dynamic range, and those
+blocks move at each restart; some computers set the dynamic range to start at
+1024, so the range is read, not assumed. Random selection keeps a second Windows
+account on the same PC on a different port even while the first app is stopped.
+`amplifier_web/windows_ports.py` owns selection.
+
+Setup saves the port and its `https://127.0.0.1:<port>` origin together, in one
+write, in the existing private `config/server.yaml`. A port counts as saved when
+that origin is present, or when the port is not the default and app-owned HTTPS
+is configured, so an owner who later lists only a remote address keeps it.
+Restart, the sign-in task,
+an in-app update and every shortcut read that file; nothing selects again. The
+browser origin includes the port, so a changed port means a new site for an
+installed app window and its unsent drafts. An installation that already saved a
+port (including 8942 from an earlier setup) keeps it and its other settings when
+its task is registered again.
+
+A test bind filters candidates. It is not ownership: the host's own listener
+claims the port when it starts. Before a later start, and after a start that did
+not become ready, the launcher classifies the saved port:
+
+- **Another program listens there.** The launcher never adopts or stops it.
+- **Windows refuses the bind with access denied (10013) and nothing listens.**
+  A Windows feature reserved the port. There is no program to close, and the
+  message says so.
+
+Both cases offer the same repair, only on the person's confirmation: select and
+save a new port while this installation's host is stopped. Origins that named
+the old port move with it. The message states the cost: chats, settings and
+accounts stay; an installed app window must be installed again; typed but unsent
+messages are not carried over. The certificate names no port, so its trust is
+unchanged. A start without a browser (`--no-open`) receives the refusal and
+shows no dialog. This installation's own recorded host is never treated as
+another program.
+
+Limits: the retained prototype launcher keeps 8942. Two installations under one
+Windows account share the browser's cookies for `127.0.0.1`, because cookies are
+not scoped by port; signing in to one signs the other out. The focused Windows
+workflow's `windows-local-connection` job checks selection against the runner's
+real ranges, a real listening first installation, a real Windows port
+reservation and a real listed exclusion.
+Two real setups on one PC and the port across a real update remain clean-room
+acceptance.
 
 Windows app preparation uses a compact `updates/a/<generation>` directory.
 Qualification and pointers retain the full source revision and attempt. The
@@ -121,6 +341,151 @@ bootstrap preflight must prove it resolves the same folder before promotion.
 This addresses Windows DLL loading's filename-length refusal, which can occur
 even after a successful Git checkout and Python package installation. It changes
 no registry long-path policy, package origins, source pins or user data roots.
+
+### Private Git and the agent's shell
+
+The agent's shell tool needs `bash.exe` and core utilities. MinGit has neither:
+on a PC without developer tools every shell call failed, and on a PC with WSL
+the tool took System32's `bash.exe`, which only starts WSL. Consumer setup
+therefore acquires the complete official **Git for Windows 2.56.0.windows.4**
+(`Git-2.56.0.4-64-bit.tar.bz2`, about 119 MB, about 425 MB unpacked) in place of
+MinGit. `scripts/windows_private_git.py` owns its pinned publisher digest and
+its unpacker. The retained prototype entry and `install.ps1` keep MinGit.
+
+The complete distribution has no ZIP, and the in-box .NET Framework reads no
+tar.bz2. Setup verifies the archive's SHA-256, installs its private Python, and
+runs the embedded standard-library unpacker with `-I -S`. No other tool is
+acquired. The unpacker creates every entry exclusively below setup's private
+directory and refuses unsafe names, repeated entries, special files and any link
+other than the archive's five known runtime links. It writes those as the MSYS2
+runtime's own system-file links, never as reparse points that Windows follows,
+and writes archive hard links as separate copies. Git's own license comes from
+the exact tagged source commit by digest. Setup then starts the private
+`bin\bash.exe` and requires that its `git` is this installation's Git, by
+location and pinned version, so a shell that cannot start stops setup instead
+of failing in a first chat. Setup children do not inherit `BASH_ENV` or exported
+shell functions. Setup records the result in `private-git.json` and removes the
+unpacked archive.
+
+Each host start puts this installation's `git\bin` first on PATH; workers
+inherit it. The order is derived at start, not only read from the saved task
+definition. Each Windows host start also sets `NoDefaultCurrentDirectoryInExePath`.
+Python's program lookup on Windows otherwise tries the current folder first, and
+the shell tool's folder is a workspace: a file named `bash` in a cloned
+repository would have been chosen and run. The shell tool's own `AMPLIFIER_BASH_WINDOWS_SHELL=wsl` choice still
+selects WSL for a person who wants it. An installation made by an earlier setup
+file keeps MinGit, and nothing is added to its PATH, until setup refreshes its
+private tools; an in-app update does not replace them.
+
+The `Windows private shell` workflow runs on a native runner with a new PC's
+PATH (Windows folders only). It unpacks the pinned archive with the same
+isolated invocation, checks the runtime links and the app's own file reader,
+and requires the real shell tool to resolve the private bash and run `echo`, a
+pipe, `git --version` and a file write, with no model request. A decoy
+`bash.cmd` in the workspace must be selected without the guard and never with
+it. The unpacker runs with a uv-managed CPython, as in setup. It also compiles
+consumer setup with the embedded pin and unpacker. It does not run setup:
+setup refuses administrator and server accounts. The real setup file on a clean
+ordinary account, the task's actual PATH, and windows during shell use remain
+clean-room acceptance and are not claimed here.
+
+### One installation folder and plain stops
+
+Consumer setup installs into one fixed folder, `%LOCALAPPDATA%\Amplifier`.
+Earlier setup files created a new `amplifier-install-<32 hex>` folder at every
+run. That name cost 50 characters, and the app repeats the installation path
+inside its own data paths. Windows refuses a path of 260 characters or more
+(248 for a folder) unless long paths are enabled, which is not the default. With
+the long name no setup-made installation could chat on a default PC.
+
+The longest supported installation folder path is **59 characters**
+(`MaxRootLength` in `scripts/windows_bootstrap_native.cs`). The fixed folder is
+33 characters plus the account's profile-folder name, so a name of up to 26
+characters fits. The path-length work in the app owns this number. It measured
+the whole tree below the folder in a clean-room installation: 59 is the root
+that its design supports under both of its variants, and it may raise the
+number in its own change when its budget test proves a larger one. Worst
+observed depths below the folder: app generation 169 characters, worker
+environment 162, private Python 142, tools 124, private Git 68. Those fit at
+59 today.
+
+The short folder is necessary and not sufficient. Until the path-length work
+ships, the session folder and the source store still exceed the Windows limit
+for every folder path, so 59 is the number that stays true afterwards, not a
+claim that a first chat works on this release. A change to the folder name
+must respect this number, and `tests/test_windows_setup_folder.py` fails when
+code and document disagree. Setup stops before it asks anything when the path
+would be longer.
+
+Setup checks the PC and the folder before its first question. Each stop names
+one cause and one next step in plain language, and never shows exception text,
+child output or network values:
+
+| Found | Result |
+| --- | --- |
+| Setup was started with "Run as administrator" | Stop: close, open the file again with a double-click |
+| The sign-in always runs as administrator (User Account Control off) | Stop: use a standard sign-in or turn User Account Control on |
+| Not Windows 11 on a 64-bit Intel or AMD processor | Stop |
+| A folder above the installation folder lets other accounts change it | Stop: names that folder. The storage check is unchanged |
+| Less than 4 GB free | Stop |
+| The folder exists and setup did not create it | Stop. Setup never changes it |
+| The folder holds a finished installation | "Amplifier is already installed." Yes opens it. Nothing is installed or changed |
+| The folder holds setup's own unfinished attempt, or is empty | Setup removes it and installs |
+| The folder has setup's first marker and app data, but no completion record | Stop. Setup never removes it |
+| Another installation already starts at sign-in for this account | Stop: remove it first. One sign-in task exists per account |
+| A sign-in entry remains for an installation whose files were deleted | Stop: exact steps to delete that entry in Task Scheduler |
+| Task Scheduler cannot be read | Stop: restart Windows |
+
+Setup removes or starts only what it made, and marker files alone do not prove
+that. An existing folder is first pinned and checked by the storage owner with
+the checks of every private folder that setup creates: the person is its owner,
+no other account has access, it is not a link, and every folder above it passes
+the existing ancestor checks. `InstallStorage` gains only that create-nothing
+form and a create-nothing check of the folders above a new folder. A folder
+that fails is "not setup's": it is never removed and never started.
+
+Inside a checked folder two marker files make the states exact.
+`unified-setup-started.json` is the first file setup writes.
+`unified-setup-complete.json` is written after the installed-package audit and
+before the Start-menu step; setup then deletes the first marker. A finished
+installation therefore never carries the mark of unfinished work, and a lost
+completion record makes the folder "not setup's", not removable. As a second
+guard, a folder whose app data folders hold anything is never "unfinished".
+
+Removal has one path. It pins the folder and the folders above it, classifies
+the folder again at that moment, copies the small private log files to a new
+private folder that the storage owner creates exclusively in the person's
+temporary folder, and removes the contents while the pins hold. It uses
+extended-length paths, clears read-only attributes, removes a link without
+entering its target, and deletes the marker last, so a removal that stops
+part-way leaves a folder that the next run still recognizes. A failed run
+removes the folder that it created unless the completion record exists; it
+deletes nothing that it did not create. Opening an installation pins the
+folder, the folders above it and the program file while Windows starts it.
+One setup runs per Windows account at a time.
+
+Setup reads the sign-in task and changes no task. Only "not found" counts as
+absence.
+
+Downloads retry twice in the same exclusive private file after a dropped
+connection. A refused, oversized or checksum-failed file is not retried. The
+progress window names each step in plain words and says which steps take
+minutes.
+
+Not in this change: Repair and Update on a second run, refresh of the launcher
+and private tools, removal of program files at uninstall, removal of a leftover
+sign-in entry, the setup file's icon and version information, and a restart of
+an elevated setup without elevation. A person who removed Amplifier through the
+Apps list keeps the folder; a later setup run says so and starts that
+installation again, and its Start-menu entry returns only with the Repair step.
+An installation in an earlier long folder is not moved or read: setup asks the
+person to remove it and then installs into the short folder. The real setup
+file on a clean ordinary account remains clean-room acceptance. The native
+`windows-setup-folder` check compiles the actual sources and exercises, on a
+Windows runner, folder states, a planted marker in a folder that other accounts
+can change, a link in place of the folder, removal, the held installation, the
+named folder above, elevation detection and the stop text. It shows no setup
+window and installs nothing.
 
 ## Process-local Proactor cleanup backport
 
@@ -1131,6 +1496,10 @@ listener-authentication requirement, not a new Windows Hello challenge.
 This delegates existing OS-session authority; it does not prove a fresh Hello
 challenge. A new native Hello challenge is a different product/security promise.
 Keep PAM authentication unchanged for existing POSIX deployments.
+
+The owner can end every browser session with `amplifier-unified browsers sign-out`
+(see the deployment guide). All browser session checks go through one function,
+`auth.valid_session`, so that no check can ignore that sign-out.
 
 Remote browsers need an explicit owner-approved browser-pairing design over
 trusted configured HTTPS. Do not silently reuse terminal/companion grants with

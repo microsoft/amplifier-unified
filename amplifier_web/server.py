@@ -108,6 +108,9 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         for host in ("localhost", "127.0.0.1", "[::1]")
     )
     app["session_secret"] = session_secret(data_dir)
+    from .auth import _epoch_hint, session_epoch
+    app["session_epoch_hint"] = _epoch_hint(data_dir)
+    app["session_epoch"] = session_epoch(data_dir)
     app["control_token"] = control_token(data_dir)
     service = AppService(data_dir, runtime=runtime, workspace=workspace)
     service.port = config["port"]
@@ -838,6 +841,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     async def shutdown(app):
         service.begin_shutdown()
+        watch = app.get("session_watch")
+        if watch is not None:
+            watch.cancel()
+            await asyncio.gather(watch, return_exceptions=True)
         waiting = list(streams | call_waiters | action_waiters)
         for task in waiting:
             task.cancel()
@@ -846,6 +853,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.on_shutdown.append(shutdown)
 
     async def confirm_started(app):
+        from .auth import watch_sessions
+        app["session_watch"] = asyncio.create_task(watch_sessions(app, streams))
         if background_work:
             # Resume only durable, positively unsubmitted shared-room work.
             # Configuration and runtime ownership are installed before attach.

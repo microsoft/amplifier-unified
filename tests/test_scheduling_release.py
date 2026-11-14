@@ -15,12 +15,13 @@ release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(release)
 
 
-@pytest.fixture
-def candidate(tmp_path):
+def make_candidate(tmp_path, component="scheduling"):
+    package = "amplifier_" + component
     root = tmp_path / "repo"; root.mkdir()
-    source = root / release.PROJECT; source.mkdir(parents=True)
-    files = {"pyproject.toml": '[project]\nname="amplifier-scheduling"\nversion="0.1.0"\n',
-             "amplifier_scheduling/__init__.py": 'value = "selected"\n',
+    source = root / (package if component == "operations" else "components/" + component); source.mkdir(parents=True)
+    runtime = "__init__.py" if component == "operations" else package + "/__init__.py"
+    files = {"pyproject.toml": f'[project]\nname="amplifier-{component}"\nversion="0.1.0"\n',
+             runtime: 'value = "selected"\n',
              "README.md": "Scheduling\n", "LICENSE": "MIT\n", "MANIFEST.in": "include README.md\n",
              "tests/test_policy_store.py": "def test_fixture(): assert True\n", ".gitignore": "dist/\n"}
     for name, text in files.items():
@@ -30,19 +31,24 @@ def candidate(tmp_path):
     git("init", "-q"); git("add", ".")
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "selected")
     revision = git("rev-parse", "HEAD"); git("update-ref", "refs/remotes/origin/main", revision)
-    selected = release.selection(root, revision)
+    selected = release.selection(root, revision, component=component)
     dist = tmp_path / "dist"; dist.mkdir()
     wheel, sdist = release.artifact_names(selected)
     with zipfile.ZipFile(dist / wheel, "w") as archive:
-        archive.writestr("amplifier_scheduling/__init__.py", files["amplifier_scheduling/__init__.py"])
-        archive.writestr("amplifier_scheduling-0.1.0.dist-info/METADATA", "Name: amplifier-scheduling\nVersion: 0.1.0\n")
+        archive.writestr(package + "/__init__.py", files[runtime])
+        archive.writestr(package + "-0.1.0.dist-info/METADATA", f"Name: amplifier-{component}\nVersion: 0.1.0\n")
     with tarfile.open(dist / sdist, "w:gz") as archive:
         for name, text in files.items():
             if name == ".gitignore": continue
-            raw = text.encode(); info = tarfile.TarInfo("amplifier_scheduling-0.1.0/" + name); info.size = len(raw)
+            raw = text.encode(); info = tarfile.TarInfo(package + "-0.1.0/" + name); info.size = len(raw)
             archive.addfile(info, io.BytesIO(raw))
-    release.seal(root, revision, dist)
+    release.seal(root, revision, dist, component=component)
     return root, revision, dist, git
+
+
+@pytest.fixture
+def candidate(tmp_path):
+    return make_candidate(tmp_path)
 
 
 def test_exact_source_and_built_payload_round_trip(candidate):
@@ -90,7 +96,7 @@ def test_changed_local_bytes_cannot_reach_publication(candidate, monkeypatch, fa
 class Remote:
     def __init__(self, candidate, *, exists=True, draft=False):
         self.root, self.revision, self.dist, _ = candidate
-        self.tag = "scheduling-v0.1.0"
+        self.tag = json.loads(next(self.dist.glob("*-source.json")).read_text())["tag"]
         self.ref = {"object": {"type": "commit", "sha": self.revision}} if exists else None
         self.release = {"id": 10, "tag_name": self.tag, "draft": draft, "prerelease": False, "assets": []} if exists else None
         self.bytes = {}; self.mutations = []; self.swap_on_upload = False
@@ -354,3 +360,112 @@ def test_unknown_mutation_reply_is_not_retried(candidate, monkeypatch, phase):
         release.publish(*candidate[:3])
     expected = {"create": ["git/refs", "releases"], "upload": ["upload"], "patch": ["releases/10"]}[phase]
     assert [path for path, _ in remote.mutations] == expected
+
+
+def test_explicit_scheduling_selection_preserves_default_receipt(candidate):
+    root, revision, dist, _ = candidate
+    assert release.verify(root, revision, dist) == release.verify(
+        root, revision, dist, component="scheduling")
+    assert {path.name for path in dist.iterdir()} == {
+        "amplifier_scheduling-0.1.0-py3-none-any.whl",
+        "amplifier_scheduling-0.1.0.tar.gz", "scheduling-source.json", "SHA256SUMS"}
+
+
+def test_worktrees_artifact_identity_and_explicit_selection(tmp_path):
+    root, revision, dist, _ = make_candidate(tmp_path, "worktrees")
+    receipt = release.verify(root, revision, dist, component="worktrees")
+    assert receipt["tag"] == "worktrees-v0.1.0"
+    assert receipt["subdirectory"] == "components/worktrees"
+    assert {path.name for path in dist.iterdir()} == {
+        "amplifier_worktrees-0.1.0-py3-none-any.whl",
+        "amplifier_worktrees-0.1.0.tar.gz", "worktrees-source.json", "SHA256SUMS"}
+    # An omitted selection still means scheduling, never whichever files exist.
+    with pytest.raises(subprocess.CalledProcessError):
+        release.verify(root, revision, dist)
+
+
+@pytest.mark.parametrize("state", ["new", "partial", "complete"])
+def test_worktrees_uses_existing_immutable_publication_policy(tmp_path, monkeypatch, state):
+    selected = make_candidate(tmp_path, "worktrees")
+    remote = Remote(selected, exists=state != "new", draft=state != "complete")
+    if state == "partial":
+        remote.release["assets"] = remote.release["assets"][:1]
+        remote.hide_draft_by_tag = True
+    remote.install(monkeypatch)
+    result = release.publish(*selected[:3], component="worktrees")
+    assert result["tag"] == "worktrees-v0.1.0"
+    assert result["status"] == ("already-published-exact-bytes" if state == "complete" else "published")
+    assert not remote.release["draft"] and len(remote.release["assets"]) == 4
+    if state == "complete":
+        assert remote.mutations == []
+
+
+def test_changed_worktrees_public_asset_is_never_overwritten(tmp_path, monkeypatch):
+    selected = make_candidate(tmp_path, "worktrees")
+    remote = Remote(selected)
+    remote.bytes[1] = b"different release"
+    remote.install(monkeypatch)
+    with pytest.raises(ValueError, match="bytes differ"):
+        release.publish(*selected[:3], component="worktrees")
+    assert remote.mutations == []
+
+
+def test_component_selection_is_finite_and_cannot_relabel_scheduling(candidate, monkeypatch):
+    root, revision, dist, _ = candidate
+    monkeypatch.setattr(release, "api", lambda *a, **k: pytest.fail("Wrong component reached GitHub"))
+    with pytest.raises(ValueError, match="Unknown standalone"):
+        release.selection(root, revision, component="../unselected")
+    with pytest.raises(subprocess.CalledProcessError):
+        release.publish(root, revision, dist, component="worktrees")
+
+
+def test_portability_uses_distinct_source_and_asset_identity(tmp_path):
+    root, revision, dist, _ = make_candidate(tmp_path, "portability")
+    selected = release.verify(root, revision, dist, component="portability")
+    assert selected["tag"] == "portability-v0.1.0"
+    assert selected["subdirectory"] == "components/portability"
+    assert set(path.name for path in dist.iterdir()) == {
+        "amplifier_portability-0.1.0-py3-none-any.whl",
+        "amplifier_portability-0.1.0.tar.gz", "portability-source.json", "SHA256SUMS",
+    }
+    with pytest.raises(subprocess.CalledProcessError):
+        release.verify(root, revision, dist, component="worktrees")
+
+
+def test_completed_portability_release_retry_is_read_only(tmp_path, monkeypatch):
+    candidate = make_candidate(tmp_path, "portability")
+    remote = Remote(candidate)
+    remote.install(monkeypatch)
+    root, revision, dist, _ = candidate
+    assert release.publish(root, revision, dist, component="portability") == {
+        "tag": "portability-v0.1.0", "status": "already-published-exact-bytes",
+    }
+    assert remote.mutations == []
+
+
+def test_operations_flat_project_matches_wheel_and_completed_release_identity(tmp_path, monkeypatch):
+    candidate = make_candidate(tmp_path, "operations")
+    root, revision, dist, _ = candidate
+    selected = release.verify(root, revision, dist, component="operations")
+    assert selected["tag"] == "operations-v0.1.0"
+    assert selected["subdirectory"] == "amplifier_operations"
+    assert "__init__.py" in selected["sourceFiles"]
+    assert "amplifier_operations/__init__.py" not in selected["sourceFiles"]
+    assert set(path.name for path in dist.iterdir()) == {
+        "amplifier_operations-0.1.0-py3-none-any.whl",
+        "amplifier_operations-0.1.0.tar.gz", "operations-source.json", "SHA256SUMS",
+    }
+    remote = Remote(candidate); remote.install(monkeypatch)
+    assert release.publish(root, revision, dist, component="operations") == {
+        "tag": "operations-v0.1.0", "status": "already-published-exact-bytes",
+    }
+    assert remote.mutations == []
+
+
+def test_flat_project_tests_cannot_become_installed_runtime(tmp_path, monkeypatch):
+    root, revision, dist, _ = make_candidate(tmp_path, "operations")
+    with zipfile.ZipFile(next(dist.glob("*.whl")), "a") as archive:
+        archive.writestr("amplifier_operations/tests/test_policy_store.py", "assert True\n")
+    monkeypatch.setattr(release, "api", lambda *a, **k: pytest.fail("Invalid flat package reached GitHub"))
+    with pytest.raises(ValueError, match="second package or non-runtime"):
+        release.publish(root, revision, dist, component="operations")

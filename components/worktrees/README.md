@@ -69,7 +69,38 @@ required. These tests create synthetic repositories in temporary directories.
 Current packaging qualification covers Linux ARM64 with Python 3.13; it does not
 establish Windows or macOS acceptance.
 
-Version `0.1.0` identifies package preparation, not a separate published release.
+The package version alone does not identify published or qualified bytes; use the
+actual release source receipt and artifact hashes.
 Unified already includes this same runtime source in its normal install; do not
 coinstall the standalone distribution into that environment. A separate repository
 and dependency-delivery transition require their own reviewed handoff.
+
+
+## Component artifact delivery
+
+The `Worktrees package` workflow qualifies a standalone wheel outside the source
+checkout with the existing real-Git tests. The current qualification is Linux
+with Python 3.13; it does not establish Windows or macOS support. The app's
+installed files, dependency graph and worktree authorization policy are unchanged.
+
+The release owner dispatches `worktrees-release.yml` on `main` with a full merged
+source SHA in `revision`. It builds the wheel and source archive once, verifies
+their payload against that source, tests that same wheel, then publishes four
+assets under `worktrees-vX.Y.Z`: the wheel, source archive, `worktrees-source.json`
+and `SHA256SUMS`. The component release is never selected as the application
+latest release. This workflow does not reserve a version or publish on a PR.
+
+After an actual release, download all four assets from its public Unified release
+page, verify `SHA256SUMS`, and retain the source receipt and exact wheel hash.
+Install the downloaded wheel into a separate environment; no Unified, Core,
+Foundation or sibling source checkout is required. Do not coinstall it into a
+Unified installation that already owns `amplifier_worktrees`. Portability's
+standalone installation can supply this exact public wheel alongside its own
+artifact; a preparation version alone is not evidence of matching bytes or PyPI
+availability.
+
+For a failed publication, retain the original build artifact and rerun only failed
+jobs so the publisher sees those same bytes. A full rebuild is not promised to
+be byte-reproducible. An existing tag, draft or published release must match the
+selected source and assets; mismatches stop without moving tags or replacing
+assets. A completed retry validates the existing publication without rewriting it.

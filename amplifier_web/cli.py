@@ -89,6 +89,7 @@ def _parse() -> argparse.Namespace:
     config_commands.add_parser("list")
     get = config_commands.add_parser("get"); get.add_argument("key")
     set_value = config_commands.add_parser("set"); set_value.add_argument("key"); set_value.add_argument("value")
+    set_value.add_argument("more", nargs="*", metavar="KEY VALUE", help="More settings to save in the same write")
     reset = config_commands.add_parser("reset"); reset.add_argument("key", nargs="?", default="all")
     service = subcommands.add_parser("service", help="Manage the systemd or launchd user service")
     service.add_argument("service_command", choices=["install", "uninstall", "start", "stop", "restart", "status", "logs"])
@@ -96,6 +97,9 @@ def _parse() -> argparse.Namespace:
     runtime = subcommands.add_parser("runtime", help="Prepare or inspect the default installation runtime without a conversation")
     runtime.add_argument("runtime_command", choices=["prepare", "status"])
     runtime.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    browsers = subcommands.add_parser("browsers", help="Manage signed-in browsers")
+    browsers.add_argument("browsers_command", choices=["sign-out"],
+                          help="sign-out: sign out every browser on every device")
     setup_tls = subcommands.add_parser("setup-tls", help="Create or inspect the app-owned local CA")
     setup_tls.add_argument("mode", nargs="?", choices=["status", "default", "force", "export"], default="default")
     reset = subcommands.add_parser("reset", help="Reinstall a clean app and runtime while preserving user data")
@@ -145,13 +149,13 @@ def _server_overrides(args: argparse.Namespace) -> dict:
 
 
 def _print_completion(shell: str) -> None:
-    words = "serve open tui acp run continue tool access doctor reset config service setup-tls completion --port --workspace --data-dir --no-open --bind --host --public-origin --tls-cert --tls-key --session-ttl --version"
+    words = "serve open tui acp run continue tool access doctor reset config service setup-tls browsers completion --port --workspace --data-dir --no-open --bind --host --public-origin --tls-cert --tls-key --session-ttl --version"
     if shell == "bash":
         print('complete -W "' + words + '" amplifier-unified')
     elif shell == "zsh":
-        print('#compdef amplifier-unified\n_arguments "1:command:(serve open tui acp run continue tool access doctor reset config service setup-tls)"')
+        print('#compdef amplifier-unified\n_arguments "1:command:(serve open tui acp run continue tool access doctor reset config service setup-tls browsers)"')
     else:
-        print('complete -c amplifier-unified -f -a "serve open tui acp run continue tool access doctor reset config service setup-tls"')
+        print('complete -c amplifier-unified -f -a "serve open tui acp run continue tool access doctor reset config service setup-tls browsers"')
 
 
 def _config(args, data_dir: Path) -> None:
@@ -167,7 +171,14 @@ def _config(args, data_dir: Path) -> None:
         else:
             print(value)
     elif args.config_command == "set":
-        save_server_config(data_dir, setting_set(config, args.key, yaml.safe_load(args.value)))
+        # Related settings (a port and the origins that name it) change in one
+        # validated write, so an interrupted command cannot leave them apart.
+        more = getattr(args, "more", None) or []
+        if len(more) % 2:
+            raise SystemExit("config set needs a value for every setting.")
+        for key, value in ((args.key, args.value), *zip(more[::2], more[1::2])):
+            config = setting_set(config, key, yaml.safe_load(value))
+        save_server_config(data_dir, config)
     else:
         if args.key == "all":
             save_server_config(data_dir, DEFAULT_SERVER)
@@ -222,6 +233,12 @@ def _setup_tls(data_dir: Path, mode: str) -> None:
     setup_local_ca(data_dir, config, force=mode == "force")
     print("Created app-owned local CA and leaf certificate. Restart the service to use HTTPS.")
     print("CA SHA-256 fingerprint:", ca_fingerprint(data_dir))
+    if mode == "force" and browser_entry.is_windows():
+        from .windows_tls import keyless_identity
+        if keyless_identity(data_dir) is not None:
+            # No key can reissue this installation's certificate, so force made a new one.
+            print("This is a new certificate. Windows asks you to confirm it the next time you open "
+                  "Amplifier on this PC. Other devices must import it again (setup-tls export).")
 
 
 def _serve(args, data_dir: Path, *, task_runner=None) -> None:
@@ -488,6 +505,16 @@ def main():
         return
     if args.command == "config":
         _config(args, data_dir)
+        return
+    if args.command == "browsers":
+        from .auth import sign_out_all
+        try:
+            sign_out_all(data_dir)
+        except (OSError, ValueError):
+            raise SystemExit("Browsers were NOT signed out: the sign-out time could not be saved in "
+                             f"{data_dir}. Nothing was changed.") from None
+        print("All browsers on all devices are signed out. A running Amplifier applies this within a few seconds.")
+        print("To use Amplifier in a browser again, open it from this computer.")
         return
     if args.command == "doctor":
         from .installation_health import doctor, display
