@@ -526,6 +526,50 @@ def test_windows_health_requires_full_receipt_listener_and_pinned_authenticated_
     assert state["credentialReads"] == 1 and len(state["requests"]) == 1
 
 
+def test_windows_status_says_why_the_background_app_stopped(windows_health_chain, monkeypatch):
+    from datetime import datetime
+    from amplifier_web import windows_task_runtime
+    state = windows_health_chain
+    state["task"].update(state=3, instances=0)  # The task is not running.
+    failure = {"source": "host", "at": datetime(2026, 11, 14, 9, 5).timestamp(),
+               "errorType": "WindowsServiceError", "message": "The saved reason."}
+    monkeypatch.setattr(windows_task_runtime, "last_failure", lambda spec: dict(failure))
+    result = asyncio.run(health._windows_status(state["home"],
+                         {"version": "1.2.3", "revision": None}, "stopped"))
+    assert not result["ok"] and not result["processVerified"]
+    assert result["message"] == ("Windows background host is not ready. Amplifier's background app "
+                                 "stopped on November 14 at 9:05 AM: The saved reason.")
+    assert result["lastFailure"] == failure
+    assert state["credentialReads"] == 0 and state["requests"] == []
+    # An error that the product did not word keeps its class name only.
+    failure.update(message=None, errorType="OSError", at=datetime(2026, 11, 14, 15, 30).timestamp())
+    result = asyncio.run(health._windows_status(state["home"],
+                         {"version": "1.2.3", "revision": None}, "stopped"))
+    assert result["message"].endswith("stopped on November 14 at 3:30 PM with an unexpected error (OSError).")
+    # No saved failure: the message is unchanged.
+    monkeypatch.setattr(windows_task_runtime, "last_failure", lambda spec: None)
+    result = asyncio.run(health._windows_status(state["home"],
+                         {"version": "1.2.3", "revision": None}, "stopped"))
+    assert result["message"] == "Windows background host is not ready." and "lastFailure" not in result
+
+
+def test_windows_status_of_a_running_or_starting_host_does_not_read_an_old_failure(windows_health_chain, monkeypatch):
+    from amplifier_web import windows_task_runtime
+    monkeypatch.setattr(windows_task_runtime, "last_failure",
+                        lambda spec: pytest.fail("a running task has no earlier failure to show"))
+    state = windows_health_chain
+    result = asyncio.run(health._windows_status(state["home"],
+                         {"version": "1.2.3", "revision": None}, "running"))
+    assert result["ok"] and "lastFailure" not in result
+    # The task runs but no host listens yet: it is starting.
+    for record in (None, {**state["record"], "phase": "starting"}):
+        state["record"] = record
+        result = asyncio.run(health._windows_status(state["home"],
+                             {"version": "1.2.3", "revision": None}, "running"))
+        assert not result["ok"] and result["message"] == "Windows background host is not ready."
+        assert "lastFailure" not in result
+
+
 @pytest.mark.parametrize("missing", ["record", "listener", "task"])
 def test_windows_health_rejects_unverified_process_before_credential_read(windows_health_chain, missing):
     state = windows_health_chain

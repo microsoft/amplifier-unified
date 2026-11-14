@@ -77,11 +77,21 @@ def _bounded_json(raw):
 class TranscriptWindowReader:
     """One host-owned cursor signer. No file handles, rows or history are retained."""
 
-    def __init__(self):
+    def __init__(self, *, source_pool=None):
         self._key = os.urandom(32)
+        from .committed_source import SourcePool
+        self._committed = source_pool if source_pool is not None else SourcePool()
+        self._owns_sources = source_pool is None
 
-    @staticmethod
-    def source_revision(directory, owner):
+    def close(self):
+        if self._owns_sources:
+            self._committed.close()
+
+    def source_revision(self, directory, owner):
+        from .committed_source import versioned, commit_identity
+        if versioned(directory):
+            with self._committed.source(directory, owner) as source:
+                return commit_identity(source, owner)[1]
         root = Path(directory).resolve()
         paths = [root / name for name in
                  ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending')]
@@ -154,6 +164,9 @@ class TranscriptWindowReader:
         if (not isinstance(owner, dict) or set(owner) != {'project', 'nativeId'}
                 or any(not isinstance(v, str) or not 0 < len(v) <= 512 for v in owner.values())):
             raise ValueError('A canonical transcript owner is required.')
+        from .committed_source import versioned
+        if versioned(directory):
+            return self._read_committed(directory, owner, after, limit, forward=True)
         root = Path(directory).resolve()
         paths = [root / name for name in
                  ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending')]
@@ -249,6 +262,9 @@ class TranscriptWindowReader:
         if (not isinstance(owner, dict) or set(owner) != {'project', 'nativeId'}
                 or any(not isinstance(v, str) or not 0 < len(v) <= 512 for v in owner.values())):
             raise ValueError('A canonical transcript owner is required.')
+        from .committed_source import versioned
+        if versioned(directory):
+            return self._read_committed(directory, owner, before, limit, visible=visible)
         root = Path(directory).resolve()
         names = ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending')
         paths = [root / name for name in names]
@@ -318,6 +334,72 @@ class TranscriptWindowReader:
             return {'status': 'retry', 'reason': 'source_changed'}
         except OSError:
             return {'status': 'unavailable', 'reason': 'source_unreadable'}
+
+    def _read_committed(self, directory, owner, token, limit, *, forward=False, visible=None):
+        from .committed_source import commit_identity
+        try:
+            cursor = self._parse(token) if token is not None else None
+            with self._committed.source(directory, owner) as source:
+                commit, revision = commit_identity(source, owner)
+                kind = 't2-forward' if forward else 't2-window'
+                if cursor and (cursor.get('kind') != kind or cursor.get('owner') != owner
+                               or cursor.get('source') != revision or cursor.get('commit') != commit):
+                    return {'status': 'retry', 'reason': 'source_changed'}
+                position = cursor.get('position') if cursor else (0 if forward else source.commit.message_count)
+                if type(position) is not int or not 0 <= position <= source.commit.message_count:
+                    raise _Invalid()
+                initial, rows, gaps, scanned, records = position, [], [], 0, 0
+                while (position < source.commit.message_count if forward else position > 0):
+                    index = position if forward else position - 1
+                    bounds = source.message_range(index)
+                    size = bounds.end - bounds.start
+                    if scanned + min(size, RECORD_LIMIT) > READ_LIMIT or records >= RAW_LIMIT:
+                        break
+                    records += 1
+                    if size > RECORD_LIMIT:
+                        if forward:
+                            return {'status': 'unavailable', 'reason': 'record_limit'}
+                        gaps.append({'start': bounds.start, 'end': bounds.end, 'reason': 'record_limit'})
+                    else:
+                        raw = b''.join(source.iter_bytes(bounds.start, bounds.end))
+                        value = _bounded_json(raw)
+                        scanned += size
+                        if value is _OBJECT_LIMIT:
+                            if forward:
+                                return {'status': 'unavailable', 'reason': 'object_limit'}
+                            gaps.append({'start': bounds.start, 'end': bounds.end, 'reason': 'object_limit'})
+                        elif forward or visible is None or visible(value):
+                            digest = hashlib.sha256(_encode([owner, commit['generation'], bounds.start, value])).hexdigest()[:32]
+                            rows.append({'value': value, 'byteOffset': bounds.start, 'nativeIndex': index,
+                                         'displayId': 'native-window:' + digest})
+                    position = index + 1 if forward else index
+                    if len(rows) >= limit:
+                        break
+                source.read_range(0, 0)
+                def cursor_at(at):
+                    return self._token({'kind': kind, 'owner': owner, 'source': revision,
+                                        'commit': commit, 'position': at})
+                if forward:
+                    return {'status': 'ready', 'rows': rows,
+                            'after': cursor_at(position) if position < source.commit.message_count else None,
+                            'revision': revision, 'source': 'committed',
+                            'coverage': {'scannedBytes': scanned, 'rangeStart': initial,
+                                         'rangeEnd': position, 'validation': 'committed-prefix'}}
+                rows.reverse()
+                gaps.reverse()
+                return {'status': 'ready', 'rows': rows, 'unavailableRanges': gaps,
+                        'coverage': {'scannedBytes': scanned, 'scannedRecords': records,
+                                     'rangeStart': position, 'rangeEnd': initial},
+                        'messageWindow': {'mode': 'cursor', 'before': cursor_at(position) if position else None,
+                            'hasEarlier': bool(position), 'restoreCursor': cursor_at(initial),
+                            'total': None, 'offset': None, 'scope': 'recent', 'revision': revision,
+                            'windowKey': hashlib.sha256(_encode([revision, initial, position])).hexdigest(),
+                            'validation': 'committed-prefix', 'globalInputUniqueness': 'unknown',
+                            'source': 'committed', 'recoveredBackup': False, 'committedPrefix': commit}}
+        except _Invalid:
+            return {'status': 'retry', 'reason': 'invalid_cursor'}
+        except (ValueError, OSError, UnicodeError, RecursionError):
+            return {'status': 'unavailable', 'reason': 'committed_source_unreadable'}
 
     def _read(self, path, owner, expected, end, aligned, limit, visible, budget):
         rows, gaps = [], []

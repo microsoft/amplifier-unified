@@ -3,6 +3,19 @@ import {boundedPreview,retainedInputPreview} from './tool-input-preview.js';
 export const textValue=value=>typeof value==='string'?value:value==null?'':JSON.stringify(value,null,2);
 export function parsed(value){if(typeof value!=='string')return value;try{return JSON.parse(value)}catch{return value}}
 export const record=value=>value&&typeof value==='object'&&!Array.isArray(value)?value:{};
+// Recognize only the retention owner's explicit tombstone. Missing recordings,
+// arbitrary text and future marker versions are not evidence of expiry.
+export function recordingExpiredAt(value){
+ const row=record(value),keys=['v','sha256','bytes','expired_at','reason'];
+ if(Object.keys(row).length!==keys.length||!keys.every(key=>Object.hasOwn(row,key)))return null;
+ if(row.v!==1||row.reason!=='retention'||typeof row.sha256!=='string'||!/^[0-9a-f]{64}$/.test(row.sha256)||!Number.isSafeInteger(row.bytes)||row.bytes<=0)return null;
+ if(typeof row.expired_at!=='string'||!/^(?!0000)\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(row.expired_at))return null;
+ // Date.parse normalizes some invalid calendar dates instead of refusing them.
+ const day=row.expired_at.slice(0,10),calendar=new Date(day+'T00:00:00Z');
+ if(Number.isNaN(calendar.valueOf())||calendar.toISOString().slice(0,10)!==day)return null;
+ const date=new Date(row.expired_at);
+ return Number.isNaN(date.valueOf())?null:date.toISOString();
+}
 export function resultValue(value){const row=record(value);return Object.hasOwn(row,'output')?row.output:value}
 export function cleanSummary(value){
  const text=typeof value==='string'?value:'';

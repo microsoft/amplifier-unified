@@ -86,3 +86,65 @@ def test_doctor_names_missing_helpers_and_uses_linux_guidance(isolated_tools):
     assert not result['ok']
     assert 'setup helper (uv)' in messages and 'sudo apt-get install git' in messages
     assert 'xcode' not in messages
+
+
+GUARD = 'NoDefaultCurrentDirectoryInExePath'
+
+
+@pytest.fixture
+def consumer_shell(isolated_tools, monkeypatch):
+    """A Windows consumer installation's layout; path logic only, not native."""
+    root = isolated_tools / 'install'
+    (root / 'app').mkdir(parents=True)
+    (root / 'consumer-install.json').write_text('{}')
+    bash = root / 'git/bin/bash.exe'
+    bash.parent.mkdir(parents=True)
+    bash.write_bytes(b'MZ')
+    monkeypatch.setattr(sys, 'platform', 'win32')
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(root / 'app'))
+    # Recorded so the guard that preparation sets does not outlive the test.
+    monkeypatch.setenv(GUARD, 'recorded')
+    monkeypatch.delenv(GUARD)
+    return root
+
+
+def test_windows_installation_shell_precedes_the_wsl_launcher_at_every_host_start(consumer_shell, monkeypatch):
+    shell = str(consumer_shell / 'git/bin')
+    # The saved task PATH of an installation made before setup supplied a shell.
+    saved = os.pathsep.join(['/windows/system32', '/install/git/cmd'])
+    monkeypatch.setenv('PATH', saved)
+    assert dependencies.private_shell() == shell
+    dependencies.prepare_environment()
+    entries = os.environ['PATH'].split(os.pathsep)
+    assert entries[:3] == [shell, '/windows/system32', '/install/git/cmd']
+    dependencies.prepare_environment()
+    assert os.environ['PATH'].split(os.pathsep).count(shell) == 1
+    assert os.environ['PATH'].split(os.pathsep)[0] == shell
+
+
+@pytest.mark.parametrize('missing', ['platform', 'home', 'receipt', 'bash'])
+def test_only_this_windows_installations_complete_shell_is_added(consumer_shell, monkeypatch, missing):
+    if missing == 'platform':
+        monkeypatch.setattr(sys, 'platform', 'linux')
+    elif missing == 'home':
+        monkeypatch.delenv('AMPLIFIER_WEB_HOME')
+    elif missing == 'receipt':
+        (consumer_shell / 'consumer-install.json').unlink()
+    else:
+        # An installation that still has MinGit: no bash.exe, nothing is added.
+        (consumer_shell / 'git/bin/bash.exe').unlink()
+    monkeypatch.setenv('PATH', '/windows/system32')
+    assert dependencies.private_shell() is None
+    assert str(consumer_shell / 'git/bin') not in dependencies.tool_path().split(os.pathsep)
+
+
+def test_windows_hosts_never_resolve_a_program_from_the_current_workspace(consumer_shell, monkeypatch):
+    # Python's own Windows lookup tries the current folder first unless this
+    # documented Windows variable exists; workers inherit the host environment.
+    assert GUARD not in os.environ
+    dependencies.prepare_environment()
+    assert os.environ[GUARD] == '1'
+    monkeypatch.setattr(sys, 'platform', 'linux')
+    monkeypatch.delenv(GUARD)
+    dependencies.prepare_environment()
+    assert GUARD not in os.environ

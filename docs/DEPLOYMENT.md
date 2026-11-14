@@ -72,6 +72,42 @@ hostname.
 
 If Unified uses a non-default data directory, pass the same `--data-dir` value to `setup-tls` and `doctor`.
 
+## Sign in with the installing host owner's account
+
+On Unix, the default login checks PAM for the account running Unified. An
+isolated service can instead use the installing human's existing host account
+through the [Constellation owner-login bridge](https://github.com/microsoft/amplifier-constellation-instance/blob/main/ops/container/README.md).
+This keeps the service's OS identity, data directory and conversation ownership
+separate from the account checking the password.
+
+Run the canonical bridge as the intended host owner, with a private installation
+configuration and socket directory. Expose **only its `owner-login.sock`** through
+the container runtime's private Unix-socket forwarding. The guest socket must be
+owned by root or the Unified service account, with no group/other permissions,
+inside a private directory. Do not mount the host password database, copy a
+password, expose this socket on TCP, or share another installation's bridge.
+No optional bridge TCP routes are needed for login.
+
+Configure the existing Unified installation, then restart it at a safe boundary:
+
+```sh
+amplifier-unified --data-dir /path/to/instance config set host_pam '{owner: your-host-account, socket: /run/your-installation/owner-login.sock}'
+```
+
+The normal HTTPS login page accepts that one host username and its normal PAM
+password. The canonical bridge applies host authentication, account policy and
+attempt limits. A missing, unavailable or rejecting bridge denies the login;
+there is no fallback to the guest password. The app never saves or logs the
+submitted password. TLS, Origin, CSRF, signed-session cookies and control-token
+rules remain unchanged. This grants access to the same single-owner installation;
+it does not create a multi-user workspace, impersonate the user for tools, or
+change filesystem/agent permissions.
+
+Set `host_pam` to `null` and restart to restore the default process-owner PAM
+login. Windows keeps its existing native sign-in and does not accept this option.
+Existing browser sessions retain their normal lifetime through this setting
+change; changing the login backend is not a session-revocation operation.
+
 ## Trust the CA on each client
 
 On the Unified host, export the public CA and record the fingerprint:
@@ -196,6 +232,30 @@ References: [Ubuntu trust-store guide](https://ubuntu.com/server/docs/how-to/sec
 [Firefox certificate policies](https://firefox-admin-docs.mozilla.org/reference/policies/certificates/),
 and [Edge root-store policy history](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/microsoftrootstoreenabled).
 The obsolete Edge root-store policy is not a workaround.
+
+## Sign out all browsers
+
+To end every browser session on every device at once, for example after a
+phone is lost, run this on the host as the account that owns Unified:
+
+```sh
+amplifier-unified browsers sign-out
+```
+
+Pass the same `--data-dir` value if Unified uses a non-default data directory.
+The command saves a time in the owner's private configuration
+(`config/auth/session-epoch`). It needs no running host, no password and no
+network request: the ability to write that private folder is the authority.
+A running host applies the change within a few seconds. It then refuses every
+session from before that time, drops pending sign-in tickets, and ends open
+live-update connections so that a signed-out browser cannot keep watching.
+Sign in again in the usual way for your platform.
+
+Limits: this signs out **all** browsers; there is no sign-out for one device.
+Connected terminals, apps and devices with their own access are not browser
+sessions and stay connected; remove those in the app. The saved time never
+moves backward. If the record is damaged, the host signs everyone out once and
+repairs it.
 
 ## Keep the host running
 

@@ -23,10 +23,13 @@ Stop or cancellation). An explicit wait limit and already-accepted deadlines kee
 their original meaning; changing defaults never rewrites a queued receipt. The
 host saves the request in the existing command journal, waits for physical
 backend capacity, takes a working-folder snapshot when admitted, executes the
-command once, stops the exact owned environment, exports source and artifacts,
-then removes the environment. Export or removal uncertainty preserves ownership
-and evidence. Docker exports the working folder and artifact directory; do not
-put unique output elsewhere. The first Incus adapter retains a bounded complete
+command once, stops the exact owned environment, preserves its selected evidence,
+then removes the environment. New disposable Docker owners export `/artifacts`
+by default; `preserveSource: true` additionally exports `/workspace`. The original
+source snapshot, results and receipts remain retained. Existing owners keep their
+original preservation contract. Export or removal uncertainty preserves ownership
+and evidence; keep unique output in the selected retained roots. The first Incus
+adapter retains a bounded complete
 instance archive, with its storage cost described in
 [Incus test environments](workspaces/incus-test-environments.md).
 
@@ -220,9 +223,13 @@ open for the duration.
 
 The supervisor's control directory is root-owned and separate from writable
 source/artifacts. Commands run as uid/gid 65534 with no supplementary groups.
-Docker retains a read-only root, no-new-privileges, no host mounts and no exposed
-ports; only CHOWN, SETUID, SETGID and KILL capabilities are available to its root
-supervisor. Incus remains unprivileged and offline. Prepared dependencies must
+The default Docker Compose preset retains a read-only root, no-new-privileges,
+no host mounts and no exposed ports; only CHOWN, SETUID, SETGID and KILL
+capabilities are available to its root supervisor. Trusted ordinary Compose
+profiles and app-preview can select images/builds and loopback ports; copied
+source and explicit offline/source-retention choices follow the
+[managed runner contract](workspaces/managed-test-runner.md). Docker no longer
+requires per-operation runtime hashing or a target-local qualifier. Incus remains unprivileged and offline. Prepared dependencies must
 be readable by the workload user; writable project dependencies are initialized
 inside the owned source snapshot.
 

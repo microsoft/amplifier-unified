@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager, ExitStack
 import json
 from pathlib import Path
 import threading
 
 from .capture_index import CaptureDrift, hold_replacement, rebind_replaced_capture
-from .storage_optimize_retention import file_hash, source_owner, settle_owned
+from .storage_optimize_retention import file_hash, source_owner
 
 
 def operation_directory(row, operation):
@@ -50,7 +52,78 @@ def journal_read(directory):
     return value
 
 
-async def apply(app, row, operation, *, resume=False, media=None):
+@asynccontextmanager
+async def _capture_lifetime(app, row, operation, *, resume, media):
+    """One native/flush fence and one thread own the complete source lifetime.
+
+    CI's indexed group source is thread-affine. Cancellation requests a poll
+    stop, but cannot release the descriptor, index or native writer boundary
+    before the last worker call and the context's final checks have settled.
+    """
+    from .storage_cleanup import check
+    from .storage_optimize import owner
+    cancelled = threading.Event()
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='capture-optimize')
+    stack = ExitStack()
+
+    async def run(function):
+        work = loop.run_in_executor(executor, function)
+        interrupted = False
+        while not work.done():
+            try:
+                await asyncio.shield(work)
+            except asyncio.CancelledError:
+                cancelled.set()
+                interrupted = True
+            except BaseException:
+                break
+        if interrupted:
+            try:
+                work.result()
+            except BaseException:
+                pass
+            raise asyncio.CancelledError
+        return work.result()
+
+    async def admission():
+        async with app.lock:
+            current = owner(app)._get(operation['operationId'], operation['_owner'])
+            check(app, current.get('_authority'))
+            source_owner(app, row)
+            if cancelled.is_set() or current['status'] != 'applying':
+                raise CaptureDrift('Historical conversion was cancelled or stopped')
+
+    def poll():
+        asyncio.run_coroutine_threadsafe(admission(), loop).result()
+
+    boundary = None
+    try:
+        async with app.lock:
+            check(app, operation.get('_authority'))
+            boundary = app.runtime.stopped_boundary(source_owner(app, row))
+            boundary.__enter__()
+        async with app.diagnostics.flush_lock:
+            try:
+                def open_binding():
+                    poll()
+                    if media is not None:
+                        return media
+                    from .storage_optimize_media import capture_owner
+                    return stack.enter_context(capture_owner(
+                        app, row, operation, resume=resume, poll=poll))
+                binding = await run(open_binding)
+                yield {'media': binding, 'run': run, 'poll': poll,
+                       'cancelled': cancelled}
+            finally:
+                await run(stack.close)
+    finally:
+        executor.shutdown(wait=True)
+        if boundary is not None:
+            boundary.__exit__(None, None, None)
+
+
+async def apply(app, row, operation, *, resume=False, media=None, _lifetime=None):
     """Use the real CI stage/apply/resume APIs; no local rewrite algorithm.
 
     The media binding is an actual Foundation CaptureMediaOwner with original
@@ -58,78 +131,57 @@ async def apply(app, row, operation, *, resume=False, media=None):
     historical image is held, not assigned durable policy from its timestamp.
     """
     from context_intelligence.optimize import stage, apply as commit, resume as reconcile
-    from .storage_cleanup import check
-    from .storage_optimize import owner
-    if media is None:
-        from .storage_optimize_media import capture_owner
-        media = capture_owner(app, row, operation)
+    if _lifetime is None:
+        async with _capture_lifetime(app, row, operation, resume=resume, media=media) as lifetime:
+            return await apply(app, row, operation, resume=resume, _lifetime=lifetime)
+    media = _lifetime['media']
     path = Path(row['_path'])
     directory = operation_directory(row, operation)
-    cancelled = threading.Event()
-    loop = asyncio.get_running_loop()
-    async with app.lock:
-        check(app, operation.get('_authority'))
-        source = source_owner(app, row)
-        boundary = app.runtime.stopped_boundary(source)
-        boundary.__enter__()
-    try:
-        async with app.diagnostics.flush_lock:
-            async def admission():
-                async with app.lock:
-                    current = owner(app)._get(operation['operationId'], operation['_owner'])
-                    check(app, current.get('_authority'))
-                    source_owner(app, row)
-                    if cancelled.is_set() or current['status'] != 'applying':
-                        raise CaptureDrift('Historical conversion was cancelled or stopped')
-            def poll():
-                asyncio.run_coroutine_threadsafe(admission(), loop).result()
+    poll = _lifetime['poll']
+    def perform():
+        poll()
+        if directory.exists():
+            if not resume:
+                raise CaptureDrift('Historical operation already exists; inspect and explicitly resume')
+            journal = journal_read(directory)
+        else:
+            if resume:
+                # No staged operation is positively known: no historical
+                # mutation is repeated merely because a directory is missing.
+                raise CaptureDrift('Historical staging receipt is unavailable')
+            if file_hash(path) != row['_sourceSha256']:
+                raise CaptureDrift('Capture changed after preview')
+            journal = stage(path, directory, session_id=row['sessionId'],
+                            media=media, writers_stopped=True, poll=poll)
+        if (journal['source_sha256'] != row['_sourceSha256']
+                or journal['source'] != str(path) or journal['session_id'] != row['sessionId']):
+            raise CaptureDrift('Historical operation belongs to another source')
+        witness = {'old': {'sha256': journal['source_sha256'], 'bytes': journal['source_bytes']},
+                   'new': {'sha256': journal['candidate_sha256'], 'bytes': journal['candidate_bytes']}}
+        with app.diagnostics._db() as db:
+            hold_replacement(db, path, operation['operationId'], witness)
+        journal = (reconcile if resume else commit)(
+            directory, media=media, writers_stopped=True, poll=poll)
+        # Commit and exact index rebind have distinct journals. A crash
+        # here leaves a durable hold which ordinary indexing cannot erase.
+        with app.diagnostics._db() as db:
+            rebind_replaced_capture(db, path, operation['operationId'], witness,
+                                    record_mapping(directory, journal))
+        return journal
 
-            def perform():
-                poll()
-                if directory.exists():
-                    if not resume:
-                        raise CaptureDrift('Historical operation already exists; inspect and explicitly resume')
-                    journal = journal_read(directory)
-                else:
-                    if resume:
-                        # No staged operation is positively known: no historical
-                        # mutation is repeated merely because a directory is missing.
-                        raise CaptureDrift('Historical staging receipt is unavailable')
-                    if file_hash(path) != row['_sourceSha256']:
-                        raise CaptureDrift('Capture changed after preview')
-                    journal = stage(path, directory, session_id=row['sessionId'],
-                                    media=media, writers_stopped=True, poll=poll)
-                if (journal['source_sha256'] != row['_sourceSha256']
-                        or journal['source'] != str(path) or journal['session_id'] != row['sessionId']):
-                    raise CaptureDrift('Historical operation belongs to another source')
-                witness = {'old': {'sha256': journal['source_sha256'], 'bytes': journal['source_bytes']},
-                           'new': {'sha256': journal['candidate_sha256'], 'bytes': journal['candidate_bytes']}}
-                with app.diagnostics._db() as db:
-                    hold_replacement(db, path, operation['operationId'], witness)
-                journal = (reconcile if resume else commit)(
-                    directory, media=media, writers_stopped=True, poll=poll)
-                # Commit and exact index rebind have distinct journals. A crash
-                # here leaves a durable hold which ordinary indexing cannot erase.
-                with app.diagnostics._db() as db:
-                    rebind_replaced_capture(db, path, operation['operationId'], witness,
-                                            record_mapping(directory, journal))
-                return journal
-
-            journal = await settle_owned(perform, cancelled)
-            accounting = journal['accounting']
-            return {**row, 'status': 'completed', 'reason': 'Image copies externalized; exact original recovery generation retained',
-                    '_captureOperation': str(directory),
-                    '_installedSha256': journal['candidate_sha256'],
-                    '_accounting': {'inlineRemoved': accounting['inline_bytes_removed'],
-                        'assetsAdded': accounting['new_asset_bytes'],
-                        'refsAndJournalAdded': None,
-                        'recoveryRetained': accounting['retained_recovery_bytes'],
-                        'unlinked': 0, 'filesystemDelta': None}}
-    finally:
-        boundary.__exit__(None, None, None)
+    journal = await _lifetime['run'](perform)
+    accounting = journal['accounting']
+    return {**row, 'status': 'completed', 'reason': 'Image copies externalized; exact original recovery generation retained',
+            '_captureOperation': str(directory),
+            '_installedSha256': journal['candidate_sha256'],
+            '_accounting': {'inlineRemoved': accounting['inline_bytes_removed'],
+                'assetsAdded': accounting['new_asset_bytes'],
+                'refsAndJournalAdded': None,
+                'recoveryRetained': accounting['retained_recovery_bytes'],
+                'unlinked': 0, 'filesystemDelta': None}}
 
 
-async def apply_combined(app, row, operation, *, resume=False, media=None):
+async def apply_combined(app, row, operation, *, resume=False, media=None, _lifetime=None):
     """Two owner transactions, not a fictitious atomic whole-file operation.
 
     Checkpoint the image stage before entering expiry. Both maps, the original,
@@ -138,13 +190,14 @@ async def apply_combined(app, row, operation, *, resume=False, media=None):
     """
     from .storage_optimize import owner
     from .storage_optimize_retention import apply as expire
-    if media is None:
-        from .storage_optimize_media import capture_owner
-        media = capture_owner(app, row, operation)
+    if _lifetime is None:
+        async with _capture_lifetime(app, row, operation, resume=resume, media=media) as lifetime:
+            return await apply_combined(app, row, operation, resume=resume, _lifetime=lifetime)
+    media = _lifetime['media']
     stages = row.get('_stages', {})
     current = row
     if 'images' not in stages:
-        converted = await apply(app, row, operation, resume=resume, media=media)
+        converted = await apply(app, row, operation, resume=resume, _lifetime=_lifetime)
         if converted['status'] != 'completed':
             return converted
         current = {**converted, 'status': 'attempting',
@@ -164,7 +217,8 @@ async def apply_combined(app, row, operation, *, resume=False, media=None):
     def acknowledge_final():
         media.acknowledge(directory / 'assets.jsonl', source=Path(row['_path']),
                           sha256=file_hash(Path(row['_path'])))
-    expired = await expire(app, current, operation, resume=resume, after_rebind=acknowledge_final)
+    expired = await expire(app, current, operation, resume=resume,
+                           after_rebind=acknowledge_final, _lifetime=_lifetime)
     capture_bytes, expiry_bytes = stages['images'], expired.get('_accounting', {})
     accounting = combine_accounting(capture_bytes, expiry_bytes)
     public_stages = {'images': capture_bytes, 'diagnosticExpiry': expiry_bytes}

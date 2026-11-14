@@ -1,7 +1,9 @@
 """Installed consumer entry; native setup owns acquisition, not this shortcut.
 
 The entry only composes the existing installer/service/browser boundaries. It
-never downloads on reopen, copies accounts, edits trust or force-stops a host.
+never downloads on reopen, copies accounts or force-stops a host. Its one trust
+step asks Windows, with the person's own confirmation, to trust this
+installation's key-less local certificate; it never changes trust silently.
 """
 from __future__ import annotations
 
@@ -141,19 +143,42 @@ def environment(root, value):
         with directory(root / suffix, owned_root=root, create=False):
             pass
         env[name] = str(root / suffix)
-    env["PATH"] = os.pathsep.join([str(Path(value["uv"]).parent), str(Path(value["git"]).parent),
+    from .host_dependencies import private_shell
+    shell = private_shell(root / "app")
+    env["PATH"] = os.pathsep.join([*([shell] if shell else []),
+        str(Path(value["uv"]).parent), str(Path(value["git"]).parent),
         str(root / "tool-bin"), str(root / "tools/amplifier-unified/Scripts"),
         str(Path(sys._base_executable).parent), env.get("PATH", "")])
     return env
 
 
 async def launch(root, *, open_browser=True):
-    from .windows_installation import prepare_background, owner_notice, review_browser_trust
+    from .windows_installation import (AddressUnavailable, address_message, change_address,
+                                       prepare_background, owner_notice, review_browser_trust)
     root, value = installation(root)
     env = environment(root, value)
     os.environ.update(env)  # Own shortcut process only; no saved settings.
     launcher = root / "tools/amplifier-unified/Scripts/amplifier-unified.exe"
-    result = await prepare_background(root, launcher, env)
+    created = []
+
+    def identity():
+        # First setup only, in THIS process: the root that Windows is asked to
+        # trust below is this exact in-memory certificate, and its signing key
+        # is gone when this call returns. Existing material is never replaced.
+        from . import windows_tls
+        from .deployment import load_server_config
+        created.append(windows_tls.create_identity(root / "app", load_server_config(root / "app")))
+    try:
+        result = await prepare_background(root, launcher, env, identity=identity)
+    except AddressUnavailable as problem:
+        # Another owner holds the saved address. Never adopt or stop it; only
+        # the person's own Yes moves this installation to a new address.
+        if not open_browser:
+            raise  # A non-interactive caller gets the refusal, not a dialog.
+        if not owner_notice(address_message(problem), confirm=True):
+            return {"background": False, "address": {"available": False, "reason": problem.kind}}
+        await change_address(root, launcher, env)
+        result = await prepare_background(root, launcher, env, identity=identity)
     if open_browser:
         # Never silently import a CA or tell a user to bypass a browser warning.
         from . import browser_entry
@@ -162,7 +187,8 @@ async def launch(root, *, open_browser=True):
         urls, pin = browser_entry._owner_probe_targets(root / "app", config)
         if pin is None:
             raise RuntimeError("The installation's private HTTPS identity is unavailable.")
-        if not await asyncio.to_thread(review_browser_trust, root, urls, pin):
+        fresh = next((value for value in created if value is not None), None)
+        if not await asyncio.to_thread(lambda: review_browser_trust(root, urls, pin, fresh=fresh)):
             return {**result, "browser": {"opened": False, "reason": "certificate-review-pending"}}
         # The normal owner entry controls browser authentication and trust
         # behavior. Do not print or expose its transient grant in this process.

@@ -106,7 +106,7 @@ class SharedConversations:
         sid = session['id']
         for delivery in self.room(session)['deliveries']:
             key = (sid, delivery['agentId'])
-            if delivery['state'] != 'pending' or key in self.turns:
+            if delivery['state'] != 'pending' or key in self.turns or key in self.owner.retirements:
                 continue
             source = self.message(session, delivery['sourceMessageId'])
             if source is None:
@@ -134,6 +134,7 @@ class SharedConversations:
                     update=lambda update, agent=delivery['agentId']: self._update(sid, agent, update),
                     permission=lambda options, agent=delivery['agentId']: self._permission(sid, agent, options))
                 self.owner.participants[key] = participant
+                self.owner.watch_retirement(sid, delivery['agentId'], participant)
             turn = Participation(delivery['id'], delivery['inputId'], delivery['agentId'],
                                  delivery['interruptionRevision'], participant)
             self.turns[key] = turn
@@ -331,13 +332,15 @@ class SharedConversations:
             turn.stop = turn.retiring = True
             async with self.service.lock:
                 self._settle(self.service._session(sid), turn, 'unknown' if turn.attempted else 'cancelled')
-            await turn.participant.close()
+            if turn.attempted or not getattr(turn.participant, '_retirement_uncertain', False):
+                await turn.participant.close()
             raise
         except Exception:
             turn.stop = turn.retiring = True
             async with self.service.lock:
                 self._settle(self.service._session(sid), turn, 'unknown' if turn.attempted else 'failed')
-            await turn.participant.close()
+            if not getattr(turn.participant, '_retirement_uncertain', False):
+                await turn.participant.close()
         finally:
             async with self.service.lock:
                 if self.turns.get((sid, turn.agent_id)) is turn:

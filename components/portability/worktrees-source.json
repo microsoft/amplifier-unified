@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "repository": "microsoft/amplifier-unified",
+  "revision": "eb124aed0de8bb93d92271a17b0230d038fdb908",
+  "subdirectory": "components/worktrees",
+  "tree": "4e684fe301fb40c5077a64f8455a961fa2970329",
+  "version": "0.1.0",
+  "tag": "worktrees-v0.1.0",
+  "sourceFiles": {
+    ".gitignore": "91ff24eaa65a89ef74d692e164233422924a556a07666dd471ceefc6a31f331f",
+    "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+    "MANIFEST.in": "ca4d086a2960c7e0254208f08bf99f5db67adb33599085574b1155e859c7fb0a",
+    "README.md": "3e52f8b17f3be33ce1ef544adf51ef62f22ba59d11bf7327816dc2024869ecc4",
+    "amplifier_worktrees/__init__.py": "f20ae179647e8e5fbdb298242127ce3715b70f20fc1beb31d56282365f5874d2",
+    "amplifier_worktrees/git.py": "1ce3209a65d8cda17c131e694a3174f00433043e981fd21fd06b74e84d83d00c",
+    "pyproject.toml": "c72d0712380174f51a25bd6072c3230462277829e4c210f9b6fecc234e0270df",
+    "tests/test_worktree_archive_library.py": "5e9d2b2664a8343727f8567efeb2a6457047aa18405a41ca10d9e449c33891bf",
+    "tests/test_worktree_concurrency.py": "f2902e1f31c6e3aacf4d245610f761f01f556eaf4ae05cb51e6c880d24a222ad",
+    "tests/test_worktree_filters.py": "a943eab5a6cc7cd2db5412ab594e5de075b9f033dd2b06d9ff88a6c82b317372",
+    "tests/test_worktree_library.py": "9e16ffbcce1b64ec2d2fb57f4f25f123c960873c805226aab8501ecbcdbcf31e",
+    "tests/worktree_fixtures.py": "d3a9ed306db27bed69550542bb831e50ee8c658bcb480ff44f18cfaa48ea8d58"
+  },
+  "artifacts": {
+    "amplifier_worktrees-0.1.0-py3-none-any.whl": {
+      "sha256": "bc946924d7b8b9d70c8c8f4d8a7d4a4436420596877c4259c8b07e6cd133927f",
+      "bytes": 12279
+    },
+    "amplifier_worktrees-0.1.0.tar.gz": {
+      "sha256": "98390e4b68403d10ec479c6158665379be12271a706483b0c34884026e2015cc",
+      "bytes": 18893
+    }
+  }
+}

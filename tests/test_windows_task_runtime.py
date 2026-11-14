@@ -183,6 +183,129 @@ def test_reinstall_ignores_valid_prior_registration_but_not_malformed_records(mo
 
 
 @pytest.fixture
+def private_files(monkeypatch):
+    from amplifier_web import windows_files
+    files = {}
+    monkeypatch.setattr(windows_files, "address", PureWindowsPath)
+
+    class Pinned:
+        def read_private(self, name, *, limit):
+            if name not in files:
+                raise FileNotFoundError(name)
+            return files[name]
+
+        def publish_private(self, name, value, *, replace):
+            assert replace is True
+            files[name] = value
+
+    @contextmanager
+    def directory(path, **kwargs):
+        assert path == PureWindowsPath(spec().data_dir) / "config/services"
+        yield Pinned()
+
+    monkeypatch.setattr(windows_files, "directory", directory)
+    return files
+
+
+def test_failure_record_keeps_only_sentences_that_the_product_wrote(private_files):
+    from amplifier_web.windows_service import WindowsServiceError
+    assert runtime.last_failure(spec()) is None
+    runtime.record_failure(spec(), WindowsServiceError("The host  did not\nstart."), "host")
+    saved = runtime.last_failure(spec())
+    assert saved["source"] == "host" and saved["errorType"] == "WindowsServiceError"
+    assert saved["message"] == "The host did not start."
+    assert abs(saved["at"] - runtime.time.time()) < 60
+    # The CLI's exit text names the data folder, the address and the port.
+    # None of it is saved: only the class name.
+    for text in ("Could not start Amplifier on 10.1.2.3, port 21603.\nThe address or port is already in use.",
+                 "This Amplifier state folder is already in use: C:\\Users\\name\\data\n"
+                 "Configured address: https://10.1.2.3:21603"):
+        runtime.record_failure(spec(), SystemExit(text), "host")
+        saved = runtime.last_failure(spec())
+        assert (saved["errorType"], saved["message"]) == ("SystemExit", None)
+        for private in (b"10.1.2.3", b"21603", b"name", b"data"):
+            assert private not in private_files[runtime.FAILURE]
+    runtime.record_failure(spec(), SystemExit(1), "host")
+    assert runtime.last_failure(spec())["message"] is None
+    # A failed bind gets one fixed sentence, without the address or the port.
+    import errno
+    try:
+        try:
+            raise OSError(errno.EADDRINUSE, "address in use: 10.1.2.3:21603")
+        except OSError:
+            raise SystemExit("Could not start Amplifier on 10.1.2.3, port 21603.") from None
+    except SystemExit as ended:
+        runtime.record_failure(spec(), ended, "host")
+    assert runtime.last_failure(spec())["message"] == runtime._ADDRESS_IN_USE
+    assert b"10.1.2.3" not in private_files[runtime.FAILURE] and b"21603" not in private_files[runtime.FAILURE]
+    try:
+        try:
+            raise OSError(errno.EACCES, "denied")
+        except OSError:
+            raise SystemExit("Could not start Amplifier on 10.1.2.3, port 80.") from None
+    except SystemExit as ended:
+        runtime.record_failure(spec(), ended, "host")
+    assert runtime.last_failure(spec())["message"] is None
+    # Any other error keeps its class name only: its text can hold a path.
+    runtime.record_failure(spec(), FileNotFoundError(2, "No such file", r"C:\Users\name\private.txt"), "launcher")
+    saved = runtime.last_failure(spec())
+    assert saved == {"source": "launcher", "at": saved["at"], "errorType": "FileNotFoundError", "message": None}
+    assert b"private.txt" not in private_files[runtime.FAILURE]
+
+
+def test_failure_record_is_not_shown_after_a_later_host_start(private_files):
+    from amplifier_web.windows_service import WindowsServiceError
+    runtime.record_failure(spec(), WindowsServiceError("It stopped."), "host")
+    private_files[runtime.RECEIPT] = json.dumps(record()).encode()  # A host created before the failure.
+    assert runtime.last_failure(spec())["message"] == "It stopped."
+    later = int((runtime.time.time() + 60) * 10_000_000) + 116444736000000000
+    private_files[runtime.RECEIPT] = json.dumps(record(created=str(later))).encode()
+    assert runtime.last_failure(spec()) is None
+
+
+@pytest.mark.parametrize("change", [
+    {"registration": "f" * 32}, {"schema": 2}, {"source": "other"}, {"at": "now"}, {"at": True},
+    {"errorType": "Bad Name"}, {"message": "line one\nline two"}, {"message": ""}, {"extra": 1}])
+def test_malformed_or_foreign_failure_record_is_ignored(private_files, change):
+    value = {"schema": 1, "registration": "a" * 32, "source": "host", "at": 1794670000.0,
+             "errorType": "OSError", "message": None, **change}
+    private_files[runtime.FAILURE] = json.dumps(value).encode()
+    assert runtime.last_failure(spec()) is None
+    private_files[runtime.FAILURE] = b"not json"
+    assert runtime.last_failure(spec()) is None
+
+
+def test_launcher_keeps_the_hosts_own_newer_reason(private_files):
+    from amplifier_web.windows_service import WindowsServiceError
+    started = runtime.time.time() - 5
+    # No earlier record, or one that cannot be read: the launcher's reason is saved.
+    runtime.record_failure(spec(), WindowsServiceError("General reason."), "launcher", unless_since=started)
+    assert runtime.last_failure(spec())["message"] == "General reason."
+    private_files[runtime.FAILURE] = b"not json"
+    runtime.record_failure(spec(), WindowsServiceError("General reason."), "launcher", unless_since=started)
+    assert runtime.last_failure(spec())["message"] == "General reason."
+    runtime.record_failure(spec(), WindowsServiceError("The host's own reason."), "host")
+    runtime.record_failure(spec(), WindowsServiceError("General reason."), "launcher", unless_since=started)
+    assert runtime.last_failure(spec())["message"] == "The host's own reason."
+    # A record from before this launcher start is replaced.
+    runtime.record_failure(spec(), WindowsServiceError("General reason."), "launcher",
+                           unless_since=runtime.time.time() + 5)
+    assert runtime.last_failure(spec())["source"] == "launcher"
+
+
+def test_saving_a_failure_never_raises(monkeypatch):
+    from amplifier_web import windows_files
+
+    def refused(*args, **kwargs):
+        raise PermissionError("private directory is not available")
+
+    monkeypatch.setattr(windows_files, "address", PureWindowsPath)
+    monkeypatch.setattr(windows_files, "directory", refused)
+    runtime.record_failure(spec(), RuntimeError("anything"), "host")
+    assert runtime.last_failure(spec()) is None
+
+
+@pytest.fixture
 def controls(monkeypatch):
     state = {"record": record(), "exited": False, "writes": [], "actual": record()}
     monkeypatch.setattr(runtime, "read", lambda *a: copy.deepcopy(state["record"]))
@@ -356,6 +479,55 @@ def test_private_log_bounds_tail_and_coalesces_writes(monkeypatch):
         assert snapshots[-1].endswith("café / 日本語\n".encode())
         log.write("final")
     assert snapshots[-1].endswith(b"final") and len(snapshots) == 3
+
+
+def test_error_classes_whose_text_reaches_status_are_raised_with_fixed_text():
+    """The failure record copies the text of these classes. Keep it free of values."""
+    import ast
+    root = Path(__file__).resolve().parents[1] / "amplifier_web"
+    allowed = {"WindowsServiceError(f'Its background process ended unexpectedly (exit code {code}).')",
+               "HiddenConsoleError(_UNSAFE)"}
+    found = 0
+    for path in sorted(root.rglob("*.py")):
+        if "static" in path.parts:
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, (ast.Name, ast.Attribute)):
+                continue
+            name = node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+            if name not in runtime._OWNER_SENTENCES:
+                continue
+            found += 1
+            fixed = (len(node.args) == 1 and not node.keywords
+                     and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str))
+            assert fixed or ast.unparse(node) in allowed, (
+                f"{path.name}:{node.lineno}: this text can reach the owner's status output; "
+                "use fixed text, or remove the class from _OWNER_SENTENCES")
+    assert found > 50  # The scan really saw the raise sites.
+    assert "SystemExit" not in runtime._OWNER_SENTENCES
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native private-file boundary required")
+def test_native_failure_record_round_trip_through_the_real_private_files(tmp_path):
+    # Saving never raises, so only a real read-back proves that the record exists.
+    import time
+    from amplifier_web.windows_service import WindowsServiceError
+    value = SimpleNamespace(data_dir=str(tmp_path / "owner-data"), registration_id="a" * 32)
+    assert runtime.last_failure(value) is None
+    runtime.record_failure(value, WindowsServiceError("The saved reason."), "host")
+    saved = runtime.last_failure(value)
+    assert saved is not None, "the failure record was not written through the private boundary"
+    assert (saved["source"], saved["errorType"], saved["message"]) == (
+        "host", "WindowsServiceError", "The saved reason.")
+    assert (tmp_path / "owner-data/config/services" / runtime.FAILURE).is_file()
+    # A later failure replaces it; another class keeps its name only.
+    runtime.record_failure(value, FileNotFoundError(2, "No such file", str(tmp_path / "private.txt")), "launcher")
+    saved = runtime.last_failure(value)
+    assert (saved["source"], saved["errorType"], saved["message"]) == ("launcher", "FileNotFoundError", None)
+    # The launcher keeps a record that is newer than its own start.
+    runtime.record_failure(value, WindowsServiceError("General reason."), "launcher",
+                           unless_since=time.time() - 60)
+    assert runtime.last_failure(value)["errorType"] == "FileNotFoundError"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Native passive Windows process handle required")

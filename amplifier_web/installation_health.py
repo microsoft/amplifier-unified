@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import json
 from pathlib import Path
 import subprocess
@@ -185,10 +186,26 @@ async def _windows_status(home, expected, state):
               "probeAttempted": False, "processVerified": False,
               "message": "Windows background host is not ready.",
               "nextStep": "Run amplifier-unified service status --verbose; preserve the failed stage before retrying."}
+    async def stopped(spec):
+        """The task is not running: add the saved reason, if no later start exists.
+
+        A task that runs without a listening host yet is a host that is starting.
+        An older failure is not its reason, so that case returns the plain result.
+        """
+        from .windows_task_runtime import last_failure
+        failure = await asyncio.to_thread(last_failure, spec) if spec else None
+        if not failure:
+            return result
+        at = datetime.fromtimestamp(failure["at"])  # This computer's local time.
+        when = f"{at:%B} {at.day} at {at.hour % 12 or 12}:{at:%M} {'AM' if at.hour < 12 else 'PM'}"
+        reason = (": " + failure["message"] if failure["message"]
+                  else f" with an unexpected error ({failure['errorType']}).")
+        return {**result, "lastFailure": failure,
+                "message": f"{result['message']} Amplifier's background app stopped on {when}{reason}"}
     try:
         task, spec = await asyncio.to_thread(windows_service._read, home)
         if not spec or task.get("state") != 4 or task.get("instances") != 1:
-            return result
+            return await stopped(spec)
         record = await asyncio.to_thread(observe, spec)
         if not record or record["phase"] != "listening":
             return result

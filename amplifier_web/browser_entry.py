@@ -157,6 +157,11 @@ class GrantStore:
                 now + self.ttl, binding, validate_next_path(next_path))
             return ticket
 
+    def clear(self) -> None:
+        """Drop every pending ticket: a sign-out must not be followed by an old one."""
+        with self._lock:
+            self._grants.clear()
+
     def consume(self, ticket: str, binding: Binding) -> str | None:
         if not isinstance(ticket, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", ticket):
             return None

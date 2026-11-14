@@ -6,7 +6,7 @@ import {create} from 'react-test-renderer';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {InstallationRepair,installationRepairHealthy}=await server.ssrLoadModule('/src/installation-repair.jsx');
+const {InstallationRepair,installationRepairHealthy,installationRepairClosedWithoutReplacement}=await server.ssrLoadModule('/src/installation-repair.jsx');
 const {MaintenanceSettings}=await server.ssrLoadModule('/src/maintenance.jsx');
 const {SettingsPageContext}=await server.ssrLoadModule('/src/settings-ui.jsx');
 const {UpdateDiagnostics,diagnosticReceipt}=await server.ssrLoadModule('/src/update-diagnostics.jsx');
@@ -113,24 +113,26 @@ test('storage failure prevents confirm, explicit refusal permits fresh review, m
  }
 });
 
-test('independent lifecycle candidate defers installation controls while retaining backup/runtime and reset guidance',()=>{
+test('backup/runtime controls remain distinct from installation and destructive reset',()=>{
  const html=renderToStaticMarkup(React.createElement(SettingsPageContext.Provider,{value:'repair'},React.createElement(MaintenanceSettings,{state:state(),act:()=>{}})));
- assert.match(html,/Repair runtime/);assert.match(html,/Create full backup/);assert.match(html,/Data reset is separate/);
- assert.doesNotMatch(html,/Repair installation|Verify repaired installation|data-action="maintenance.installationRepair|data-part="installation-repair"|data-action="maintenance.reset"/);
+ assert.match(html,/Repair runtime/);assert.match(html,/Create full backup/);assert.match(html,/Repair installation/);assert.match(html,/Data reset is separate/);
+ assert.doesNotMatch(html,/data-action="maintenance.reset"/);
 });
 
-test('deferred maintenance never mounts installation actions even when a host advertises them',async()=>{
+test('maintenance mounts advertised repair controls without automatically mutating; registry retains current journeys',async()=>{
  const calls=[];let root;
  const advertised=state({preview,operation:{...operation,status:'reinstalled',reinstalled:true,healthVerified:false},verifyTarget:{operationId:operation.operationId,hostInstanceId:'current-host',confirm:true}});
- await act(()=>{root=create(React.createElement(SettingsPageContext.Provider,{value:'repair'},React.createElement(MaintenanceSettings,{state:advertised,act:(...args)=>calls.push(args)})))});
- assert.deepEqual(calls,[]);
- assert.equal(root.root.findAllByProps({'data-part':'installation-repair'}).length,0);
- assert.equal(root.root.findAllByType('button').filter(button=>button.props['data-action']?.startsWith('maintenance.installationRepair')).length,0);
+ await act(()=>{root=create(React.createElement(SettingsPageContext.Provider,{value:'repair'},React.createElement(MaintenanceSettings,{state:advertised,act:async(...args)=>{calls.push(args);return{accepted:true,result:{operation:advertised.maintenance.installationRepair.operation}}}})))});
+ assert.deepEqual(calls.map(([name])=>name),['maintenance.installationRepairStatus']);
+ assert.equal(root.root.findAllByProps({'data-part':'installation-repair'}).length,1);
+ assert.equal(root.root.findAllByProps({'data-action':'maintenance.installationRepairVerify'}).length,1);
  await act(()=>root.unmount());
  const source=await readFile(new URL('../src/maintenance.jsx',import.meta.url),'utf8');
- assert.doesNotMatch(source,/InstallationRepair|installation-repair/,'feature source remains unimported by the maintenance entry');
+ assert.match(source,/<InstallationRepair state=\{state\} act=\{act\}\/>/);
  const registry=JSON.parse(await readFile(new URL('./browser-checks.json',import.meta.url),'utf8'));
- assert.equal(registry.scenarios.some(row=>row.id==='installation-repair'||row.command?.some(value=>value.includes('installation-repair'))),false);
+ assert.deepEqual(registry.scenarios.find(row=>row.id==='installation-repair')?.command,['node','tests/installation-repair-browser.mjs']);
+ assert.equal(registry.scenarios.some(row=>row.id==='shared-room'),true);
+ assert.equal(new Set(registry.scenarios.map(row=>row.id)).size,registry.scenarios.length);
 });
 
 test('status for a projected operation uses current exact preview; fresh status wins timestamp ties',async()=>{
@@ -212,4 +214,249 @@ for(const [reason,pattern] of Object.entries({'package-index-auth-failed':/crede
  const exported=JSON.parse(diagnosticReceipt(diagnostics));assert.equal(exported.lastFailure.constraint,'>=1.0,<2');
  assert.equal(JSON.stringify(exported).includes('SECRET'),false);
  assert.equal(JSON.parse(diagnosticReceipt({lastFailure:{...failure,constraint:'https://SECRET/private'}})).lastFailure.constraint,undefined);
+});
+
+const reinstalled={...operation,status:'reinstalled',reinstalled:true,healthVerified:false};
+const verifyTarget={operationId:operation.operationId,hostInstanceId:'current-successor',confirm:true};
+const verifyProjection=(op=reinstalled,target=verifyTarget)=>({preview:null,operation:op,verifyTarget:target});
+const verificationStatus=root=>root.root.findByProps({'data-part':'installation-repair-verification'}).findAllByType('button').find(button=>button.children.join('')==='Check verification status');
+test('verification is health-only, uses current projected successor identity and never auto-submits',async()=>{
+ const {root,calls}=await mounted(verifyProjection(),name=>({accepted:true,result:name.endsWith('Status')?{operation:reinstalled}:reinstalled}));
+ assert.equal(calls.some(([name])=>name.endsWith('Verify')),false);
+ assert.match(content(root),/does not install packages, stop or restart the service/);
+ const click=byAction(root,'Verify').props.onClick;
+ await act(()=>Promise.all([click(),click()]));await act(()=>click());
+ assert.deepEqual(calls.filter(([name])=>name.endsWith('Verify')),[['maintenance.installationRepairVerify',verifyTarget,{propagateError:true}]]);
+ assert.match(content(root),/did not establish a healthy installation/);
+ assert.doesNotMatch(content(root),/Installation repair verified healthy/);
+ await act(()=>byAction(root,'Verify').props.onClick());
+ assert.equal(calls.filter(([name])=>name.endsWith('Verify')).length,2,'fresh deliberate click after known failed check');
+ await act(()=>root.unmount());await click();assert.equal(calls.filter(([name])=>name.endsWith('Verify')).length,2);
+});
+test('verify eligibility fails closed for other statuses, contradictory facts, missing or unrelated target',async()=>{
+ for(const op of [{...reinstalled,status:'accepted'},{...reinstalled,status:'running'},{...reinstalled,status:'unknown'},{...reinstalled,status:'ready'},{...reinstalled,reinstalled:false},{...reinstalled,healthVerified:undefined},{...reinstalled,healthVerified:true}]){
+  const {root}=await mounted(verifyProjection(op));
+  assert.equal(root.root.findAllByProps({'data-action':'maintenance.installationRepairVerify'}).length,0);
+  await act(()=>root.unmount());
+ }
+ for(const target of [null,{...verifyTarget,operationId:'c'.repeat(32)},{...verifyTarget,hostInstanceId:''},{...verifyTarget,confirm:false}]){
+  const {root}=await mounted(verifyProjection(reinstalled,target));
+  assert.equal(root.root.findAllByProps({'data-action':'maintenance.installationRepairVerify'}).length,0);
+  await act(()=>root.unmount());
+ }
+});
+test('old verify gesture cannot retarget a new host or operation',async()=>{
+ for(const patch of [{verifyTarget:{...verifyTarget,hostInstanceId:'changed'}},{operation:{...reinstalled,operationId:'c'.repeat(32)},verifyTarget:{...verifyTarget,operationId:'c'.repeat(32)}}]){
+  const {root,calls,dispatch}=await mounted(verifyProjection());
+  const click=byAction(root,'Verify').props.onClick;
+  await act(()=>root.update(React.createElement(InstallationRepair,{state:state({...verifyProjection(),...patch}),act:dispatch})));
+  await act(()=>click());assert.equal(calls.filter(([name])=>name.endsWith('Verify')).length,0);
+  await act(()=>root.unmount());
+ }
+});
+test('unknown verification persists across reload and reconciles by explicit status only',async()=>{
+ const handler=name=>{if(name.endsWith('Verify')){assert.ok(storage.get('amplifier.installation-repair-verification.v1'));throw Error('lost ack')}return{accepted:true,result:{operation:reinstalled}}};
+ let {root,calls,dispatch}=await mounted(verifyProjection(),handler);
+ await act(()=>byAction(root,'Verify').props.onClick());assert.match(content(root),/Verification outcome is unknown/);
+ assert.equal(byAction(root,'Verify').props.disabled,true);
+ await act(()=>root.unmount());await act(()=>{root=create(React.createElement(InstallationRepair,{state:state(verifyProjection()),act:dispatch}))});
+ assert.equal(byAction(root,'Verify').props.disabled,true);
+ assert.equal(calls.filter(([name])=>name.endsWith('Verify')).length,1,'remount/status is not a verify gesture');
+ await act(()=>verificationStatus(root).props.onClick());
+ assert.deepEqual(calls.at(-1).slice(0,2),['maintenance.installationRepairStatus',{operationId:operation.operationId}]);
+ assert.match(content(root),/still unverified/);assert.equal(byAction(root,'Verify').props.disabled,false);
+ assert.equal(calls.filter(([name])=>name.endsWith('Verify')).length,1);
+ await act(()=>root.unmount());
+});
+test('malformed or unrelated verification result cannot claim health or unlock; exact ready can',async()=>{
+ for(const result of [undefined,{...reinstalled,operationId:'c'.repeat(32),status:'ready',healthVerified:true,serviceState:'running'},{...reinstalled,status:'ready',healthVerified:false}]){
+  const {root}=await mounted(verifyProjection(),name=>({accepted:true,result:name.endsWith('Status')?{operation:reinstalled}:result}));
+  await act(()=>byAction(root,'Verify').props.onClick());
+  assert.equal(byAction(root,'Verify').props.disabled,true);assert.doesNotMatch(content(root),/Installation repair verified healthy/);
+  await act(()=>root.unmount());storage.clear();
+ }
+ const ready={...reinstalled,status:'ready',healthVerified:true,serviceState:'running',updatedAt:2};
+ const {root}=await mounted(verifyProjection(),name=>({accepted:true,result:name.endsWith('Status')?{operation:reinstalled}:ready}));
+ await act(()=>byAction(root,'Verify').props.onClick());assert.match(content(root),/Installation repair verified healthy/);
+ await act(()=>root.unmount());
+});
+test('storage denial prevents a health-check request and explicit refusal is not recovery',async()=>{
+ for(const denied of [true,false]){
+  const {root,calls}=await mounted(verifyProjection(),name=>name.endsWith('Verify')?{accepted:false,error:'Stale successor.'}:{accepted:true,result:{operation:reinstalled}});
+  if(denied)globalThis.sessionStorage.setItem=()=>{throw Error('denied')};
+  await act(()=>byAction(root,'Verify').props.onClick());
+  assert.equal(calls.filter(([name])=>name.endsWith('Verify')).length,denied?0:1);
+  assert.doesNotMatch(content(root),/Installation repair verified healthy/);
+  await act(()=>root.unmount());storage.clear();globalThis.sessionStorage.setItem=(key,value)=>storage.set(key,value);
+ }
+});
+test('matching canonical healthy projection settles pending verification without a probe',async()=>{
+ storage.set('amplifier.installation-repair-verification.v1',JSON.stringify({operationId:operation.operationId,previewId:operation.previewId,hostInstanceId:verifyTarget.hostInstanceId}));
+ const ready={...reinstalled,status:'ready',healthVerified:true,serviceState:'running',updatedAt:2};
+ const {root,calls}=await mounted(verifyProjection(ready,null),()=>({accepted:true,result:{operation:ready}}));
+ assert.match(content(root),/Installation repair verified healthy/);
+ assert.equal(root.root.findAllByProps({'data-part':'installation-repair-verification'}).length,0);
+ assert.equal(calls.some(([name])=>name.endsWith('Verify')),false);
+ await act(()=>root.unmount());
+});
+
+const reconcileTarget={operationId:operation.operationId,hostInstanceId:'current-reconcile-host',confirm:true};
+const unresolved={...operation,status:'unknown',reinstalled:false,healthVerified:false};
+const noReplacement={...unresolved,status:'failed',stage:'reconciled-no-effect',serviceState:'running',updatedAt:3,reconciliation:{noReplacement:true,verifiedAt:123,hostInstanceId:reconcileTarget.hostInstanceId}};
+const reconcileProjection=(op=unresolved,target=reconcileTarget)=>({preview:null,operation:op,reconcileTarget:target});
+const reconciliationStatus=root=>root.root.findByProps({'data-part':'installation-repair-reconciliation'}).findAllByType('button').find(button=>button.children.join('')==='Check reconciliation status');
+test('explicit reconciliation uses exact advertised current host once and never claims repaired health',async()=>{
+ const {root,calls}=await mounted(reconcileProjection(),name=>({accepted:true,result:name.endsWith('Status')?{operation:unresolved}:noReplacement}));
+ assert.deepEqual(calls.map(([action])=>action),['maintenance.installationRepairStatus']);
+ assert.match(content(root),/Eligibility is not proof/);assert.match(content(root),/cannot install, stop or restart/);
+ const click=byAction(root,'Reconcile').props.onClick;
+ await act(()=>Promise.all([click(),click()]));await act(()=>click());
+ assert.deepEqual(calls.filter(([name])=>name.endsWith('Reconcile')),[['maintenance.installationRepairReconcile',reconcileTarget,{propagateError:true}]]);
+ assert.match(content(root),/Repair closed without installation replacement/);
+ assert.doesNotMatch(content(root),/Installation repair verified healthy/);
+ assert.equal(byAction(root,'Preview').props.disabled,false,'exact positive receipt settles the same stale unresolved projection');
+ await act(()=>root.unmount());await click();
+ assert.equal(calls.filter(([name])=>name.endsWith('Reconcile')).length,1);
+});
+test('reconciliation eligibility requires explicit matching target and unresolved nonreinstalled facts',async()=>{
+ for(const [op,target] of [[unresolved,null],[unresolved,{...reconcileTarget,hostInstanceId:''}],[unresolved,{...reconcileTarget,operationId:'c'.repeat(32)}],[unresolved,{...reconcileTarget,confirm:false}],[{...unresolved,reinstalled:true},reconcileTarget],[{...unresolved,status:'failed'},reconcileTarget],[{...unresolved,status:'reinstalled'},reconcileTarget]]){
+  const {root,calls}=await mounted(reconcileProjection(op,target));
+  assert.equal(root.root.findAllByProps({'data-action':'maintenance.installationRepairReconcile'}).length,0);
+  assert.equal(calls.some(([name])=>name.endsWith('Reconcile')),false);
+  await act(()=>root.unmount());
+ }
+});
+test('reconciliation does not infer positive proof from generic failure, incomplete proof or another host',async()=>{
+ for(const found of [{...unresolved,status:'failed'}, {...noReplacement,reconciliation:undefined},{...noReplacement,reconciliation:{...noReplacement.reconciliation,noReplacement:false}},{...noReplacement,reconciliation:{...noReplacement.reconciliation,verifiedAt:0}},{...noReplacement,reconciliation:{...noReplacement.reconciliation,hostInstanceId:'other-host'}},{...noReplacement,operationId:'c'.repeat(32)},undefined]){
+  const {root}=await mounted(reconcileProjection(),name=>({accepted:true,result:name.endsWith('Status')?{operation:unresolved}:found}));
+  await act(()=>byAction(root,'Reconcile').props.onClick());
+  assert.equal(byAction(root,'Reconcile').props.disabled,true);
+  assert.doesNotMatch(content(root),/Repair closed without installation replacement|Installation repair verified healthy/);
+  assert.match(content(root),/repair remains held/);
+  await act(()=>root.unmount());storage.clear();
+ }
+ assert.equal(installationRepairClosedWithoutReplacement({...noReplacement,healthVerified:true}),false);
+});
+test('unknown reconciliation persists across remount; status cannot settle without exact positive proof',async()=>{
+ let found=unresolved;
+ const handler=name=>{if(name.endsWith('Reconcile')){assert.ok(storage.get('amplifier.installation-repair-reconciliation.v1'));throw Error('lost response')}return{accepted:true,result:{operation:found}}};
+ let {root,calls,dispatch}=await mounted(reconcileProjection(),handler);
+ await act(()=>byAction(root,'Reconcile').props.onClick());assert.match(content(root),/Reconciliation outcome is unknown/);
+ await act(()=>root.unmount());await act(()=>{root=create(React.createElement(InstallationRepair,{state:state(reconcileProjection()),act:dispatch}))});
+ assert.equal(byAction(root,'Reconcile').props.disabled,true);assert.equal(calls.filter(([name])=>name.endsWith('Reconcile')).length,1);
+ await act(()=>reconciliationStatus(root).props.onClick());assert.equal(byAction(root,'Reconcile').props.disabled,true);
+ assert.deepEqual(calls.at(-1).slice(0,2),['maintenance.installationRepairStatus',{operationId:operation.operationId}]);
+ found=noReplacement;await act(()=>reconciliationStatus(root).props.onClick());
+ assert.match(content(root),/Repair closed without installation replacement/);
+ assert.equal(calls.filter(([name])=>name.endsWith('Reconcile')).length,1);
+ await act(()=>root.unmount());
+});
+test('stale reconciliation gesture cannot bind a replacement operation or current host',async()=>{
+ for(const patch of [{reconcileTarget:{...reconcileTarget,hostInstanceId:'new-host'}},{operation:{...unresolved,operationId:'c'.repeat(32)},reconcileTarget:{...reconcileTarget,operationId:'c'.repeat(32)}}]){
+  const {root,calls,dispatch}=await mounted(reconcileProjection());const click=byAction(root,'Reconcile').props.onClick;
+  await act(()=>root.update(React.createElement(InstallationRepair,{state:state({...reconcileProjection(),...patch}),act:dispatch})));
+  await act(()=>click());assert.equal(calls.filter(([name])=>name.endsWith('Reconcile')).length,0);await act(()=>root.unmount());
+ }
+});
+test('reconciliation storage denial prevents request; explicit refusal leaves repair held',async()=>{
+ for(const denied of [true,false]){
+  const {root,calls}=await mounted(reconcileProjection(),name=>{if(name.endsWith('Reconcile'))throw Object.assign(Error('No evidence.'),{accepted:false});return{accepted:true,result:{operation:unresolved}}});
+  if(denied)globalThis.sessionStorage.setItem=()=>{throw Error('denied')};
+  await act(()=>byAction(root,'Reconcile').props.onClick());
+  assert.equal(calls.filter(([name])=>name.endsWith('Reconcile')).length,denied?0:1);
+  assert.equal(byAction(root,'Preview').props.disabled,true);
+  if(!denied){assert.equal(byAction(root,'Reconcile').props.disabled,true);assert.ok(storage.get('amplifier.installation-repair-reconciliation.v1'))}
+  assert.doesNotMatch(content(root),/Repair closed without installation replacement|Installation repair verified healthy/);
+  await act(()=>root.unmount());storage.clear();globalThis.sessionStorage.setItem=(key,value)=>storage.set(key,value);
+ }
+});
+test('generic failure or wrong-host canonical proof cannot bypass a pending reconciliation hold',async()=>{
+ for(const projected of [{...unresolved,status:'failed',updatedAt:10},{...noReplacement,updatedAt:10,reconciliation:{...noReplacement.reconciliation,hostInstanceId:'wrong-host'}}]){
+  const {root,dispatch}=await mounted(reconcileProjection(),name=>{if(name.endsWith('Reconcile'))throw Error('lost response');return{accepted:true,result:{operation:unresolved}}});
+  await act(()=>byAction(root,'Reconcile').props.onClick());
+  await act(()=>root.update(React.createElement(InstallationRepair,{state:state(reconcileProjection(projected,null)),act:dispatch})));
+  assert.equal(byAction(root,'Preview').props.disabled,true);
+  assert.doesNotMatch(content(root),/Repair closed without installation replacement/);
+  assert.equal(root.root.findAllByProps({'data-action':'maintenance.installationRepairConfirm'}).length,0);
+  await act(()=>root.unmount());storage.clear();
+ }
+});
+test('the exact original repair completing healthy settles a lost or refused reconciliation without replay',async()=>{
+ for(const transport of ['lost','refused'])for(const delivery of ['projection','status']){
+  const running={...unresolved,status:'running'};
+  let canonical=running;
+  const handler=name=>{
+   if(name.endsWith('Reconcile'))throw Object.assign(Error('Reconcile did not settle'),transport==='refused'?{accepted:false}:{});
+   return{accepted:true,result:{operation:canonical}};
+  };
+  const {root,calls,dispatch}=await mounted(reconcileProjection(running),handler);
+  await act(()=>byAction(root,'Reconcile').props.onClick());
+  assert.equal(byAction(root,'Preview').props.disabled,true);
+  canonical={...running,status:'ready',stage:'ready',reinstalled:true,healthVerified:true,serviceState:'running',hostInstanceId:'authenticated-successor',updatedAt:10};
+  if(delivery==='projection')await act(()=>root.update(React.createElement(InstallationRepair,{state:state(reconcileProjection(canonical,null)),act:dispatch})));
+  else await act(()=>reconciliationStatus(root).props.onClick());
+  assert.match(content(root),/Installation repair verified healthy/);
+  assert.doesNotMatch(content(root),/Repair closed without installation replacement/);
+  assert.equal(root.root.findAllByProps({'data-part':'installation-repair-reconciliation'}).length,0);
+  assert.equal(byAction(root,'Preview').props.disabled,false);
+  assert.equal(storage.get('amplifier.installation-repair-reconciliation.v1'),'null');
+  assert.equal(calls.filter(([name])=>name.endsWith('Reconcile')).length,1);
+  assert.equal(calls.some(([name])=>name.endsWith('Confirm')||name.endsWith('Verify')),false);
+  await act(()=>root.unmount());storage.clear();
+ }
+});
+test('unrelated or incomplete healthy outcomes cannot settle pending reconciliation',async()=>{
+ const ready={...unresolved,status:'ready',reinstalled:true,healthVerified:true,serviceState:'running',updatedAt:10};
+ for(const projected of [{...ready,operationId:'c'.repeat(32)},{...ready,previewId:'c'.repeat(32)},{...ready,healthVerified:false},{...ready,reinstalled:false},{...ready,serviceState:'unknown'}]){
+  const {root,dispatch}=await mounted(reconcileProjection(),name=>{if(name.endsWith('Reconcile'))throw Error('lost response');return{accepted:true,result:{operation:unresolved}}});
+  await act(()=>byAction(root,'Reconcile').props.onClick());
+  await act(()=>root.update(React.createElement(InstallationRepair,{state:state(reconcileProjection(projected,null)),act:dispatch})));
+  assert.equal(byAction(root,'Preview').props.disabled,true);
+  assert.notEqual(storage.get('amplifier.installation-repair-reconciliation.v1'),'null');
+  assert.doesNotMatch(content(root),/Repair closed without installation replacement/);
+  await act(()=>root.unmount());storage.clear();
+ }
+});
+
+test('pending reconciliation retains exact identity across unrelated or absent projection and reload',async()=>{
+ for(const projected of [null,{...unresolved,operationId:'c'.repeat(32),previewId:'d'.repeat(32),updatedAt:10}]){
+  let found=unresolved;
+  const handler=name=>{if(name.endsWith('Reconcile'))throw Error('lost response');return{accepted:true,result:{operation:found}}};
+  let {root,calls,dispatch}=await mounted(reconcileProjection(),handler);
+  await act(()=>byAction(root,'Reconcile').props.onClick());
+  const journal=storage.get('amplifier.installation-repair-reconciliation.v1');
+  const next=reconcileProjection(projected,projected?{...reconcileTarget,operationId:projected.operationId}:null);
+  await act(()=>root.update(React.createElement(InstallationRepair,{state:state(next),act:dispatch})));
+  assert.equal(byAction(root,'Preview').props.disabled,true);
+  for(const button of root.root.findAllByProps({'data-action':'maintenance.installationRepairReconcile'}))assert.equal(button.props.disabled,true);
+  await act(()=>root.unmount());
+  await act(()=>{root=create(React.createElement(InstallationRepair,{state:state(next),act:dispatch}))});
+  assert.deepEqual(calls.at(-1).slice(0,2),['maintenance.installationRepairStatus',{operationId:operation.operationId}]);
+  await act(()=>reconciliationStatus(root).props.onClick());
+  assert.equal(storage.get('amplifier.installation-repair-reconciliation.v1'),journal);
+  assert.equal(calls.filter(([name])=>name.endsWith('Reconcile')).length,1);
+  assert.equal(calls.some(([name])=>name.endsWith('Confirm')||name.endsWith('Verify')),false);
+  found=noReplacement;await act(()=>reconciliationStatus(root).props.onClick());
+  assert.doesNotMatch(content(root),/Installation repair verified healthy/);
+  assert.equal(storage.get('amplifier.installation-repair-reconciliation.v1'),'null');
+  if(projected){
+   assert.match(content(root),/backend proved no installation replacement/);
+   assert.match(content(root),new RegExp(`closed repair operation ${operation.operationId} \\(preview ${operation.previewId}\\)`));
+   assert.doesNotMatch(content(root),/closed this repair/);
+   assert.doesNotMatch(content(root),new RegExp(`closed repair operation ${projected.operationId}`));
+   assert.equal(byAction(root,'Preview').props.disabled,true,'another current repair remains held');
+   assert.match(content(root),/Repair outcome unknown/);
+  }else assert.match(content(root),/Repair closed without installation replacement/);
+  await act(()=>root.unmount());storage.clear();
+ }
+});
+
+test('mounted repair Reconcile is explicit and unrelated settings pages never read repair status',async()=>{
+ for(const page of ['repair','reset','history']){
+  const calls=[];let root;
+  await act(()=>{root=create(React.createElement(SettingsPageContext.Provider,{value:page},React.createElement(MaintenanceSettings,{state:state(reconcileProjection()),act:async(...args)=>{calls.push(args);return{accepted:true,result:{operation:unresolved}}}})))});
+  assert.equal(root.root.findAllByProps({'data-action':'maintenance.installationRepairReconcile'}).length,page==='repair'?1:0);
+  assert.deepEqual(calls.map(([name])=>name),page==='repair'?['maintenance.installationRepairStatus']:[]);
+  await act(()=>root.unmount());
+ }
 });

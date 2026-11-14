@@ -8,7 +8,9 @@ from amplifier_web.native_history import NativeHistory
 
 
 FILES = ('metadata.json', 'metadata.json.backup', 'transcript.jsonl',
-         'transcript.jsonl.backup', 'naming.json', 'context-intelligence/metadata.json')
+         'transcript.jsonl.backup', 'naming.json', 'context-intelligence/metadata.json',
+         'transcript.v2', 'transcript.v2/current.json', 'transcript.v2/ready.json',
+         'transcript.v2/migration.json')
 
 
 @pytest.mark.parametrize('relative', [False, True])

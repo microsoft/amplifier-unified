@@ -5,11 +5,19 @@ import hashlib
 import json
 import stat
 
-from .session_files import capture_sessions_dir, validate_capture, validate_id
+from .session_files import capture_sessions_dir, source_change_time, validate_capture, validate_id
 
 
 class CaptureDrift(ValueError):
     """A changed capture must not erase delivery evidence or enroll old events."""
+
+
+def _content_stamp(info):
+    # Reading a replacement can update atime. It is not source mutation.
+    # Keep identity, permission/link ownership and nanosecond write/change facts.
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+            info.st_uid, info.st_gid, info.st_size, info.st_mtime_ns,
+            source_change_time(info))
 
 
 def maintenance_schema(db):
@@ -84,7 +92,9 @@ def hold_replacement(db, path, operation_id, witness):
     stamp = source.lstat()
     if not stat.S_ISREG(stamp.st_mode) or source.is_symlink():
         raise CaptureDrift('Capture source is not an owned regular file')
-    if stamp.st_size != witness['old']['bytes'] or _replacement_source_digest(source) != witness['old']['sha256'] or source.lstat() != stamp:
+    if (stamp.st_size != witness['old']['bytes']
+            or _replacement_source_digest(source) != witness['old']['sha256']
+            or _content_stamp(source.lstat()) != _content_stamp(stamp)):
         raise CaptureDrift('Capture source changed before replacement admission')
     cursor = db.execute('SELECT offset,inode FROM captures WHERE path=?', (path,)).fetchone()
     if cursor and (cursor[0] != witness['old']['bytes'] or cursor[1] != stamp.st_ino):
@@ -110,7 +120,7 @@ def hold_replacement(db, path, operation_id, witness):
                 remaining -= len(block)
             if digest.hexdigest() != reference['sha256']:
                 raise CaptureDrift('Indexed capture reference is stale before replacement')
-    if source.lstat() != stamp:
+    if _content_stamp(source.lstat()) != _content_stamp(stamp):
         raise CaptureDrift('Capture source changed during reference admission')
     db.execute('INSERT OR IGNORE INTO capture_maintenance VALUES(?,?,?)', (path, operation_id, encoded))
 
@@ -198,7 +208,7 @@ def rebind_replaced_capture(db, path, operation_id, witness, mappings):
                 raise CaptureDrift('Retained event reference does not match the qualified old source')
             reference.update(offset=match[2], bytes=match[3], sha256=match[4])
             db.execute('UPDATE records SET data=? WHERE id=?', (json.dumps(reference), identity))
-        if path.stat() != stamp:
+        if _content_stamp(path.lstat()) != _content_stamp(stamp):
             raise CaptureDrift('Replacement changed during index reconciliation')
         db.execute('INSERT INTO captures VALUES(?,?,?) ON CONFLICT(path) DO UPDATE SET '
                    'offset=excluded.offset,inode=excluded.inode', (str(path), new_end, stamp.st_ino))
