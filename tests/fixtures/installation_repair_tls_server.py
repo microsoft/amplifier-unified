@@ -101,9 +101,16 @@ def synthetic_installation(stack, parent):
     metadata = prefix / 'lib/python3.13/site-packages/amplifier_unified-99.0.0.dist-info/METADATA'
     write_private(metadata, 'Name: amplifier-unified\nVersion: 99.0.0\n')
     uv, launcher = parent / 'synthetic-bin/uv', parent / 'synthetic-bin/amplifier-unified'
-    for path in (uv, launcher):
+    base = parent / 'synthetic-bin/base-python-not-executed'
+    for path in (uv, launcher, base):
         write_private(path, 'Synthetic identity only; never execute.\n')
         path.chmod(0o700)
+    # This fixture already substitutes installation/service ownership. Bind its
+    # never-executed base identity to a private fixture file too: a shared uv
+    # CPython may correctly fail the product's writable-executable guard before
+    # reaching TLS. Do not chmod shared Python or relax executable_identity.
+    stack.enter_context(patch.object(repair, 'sys', SimpleNamespace(
+        platform=sys.platform, prefix=sys.prefix, _base_executable=str(base))))
     installed = stack.enter_context(patch.object(app_updates, 'installed_target', AsyncMock(
         return_value=(str(uv), str(launcher), str(prefix / 'bin/python'),
                       {'installation': str(prefix)}))))
