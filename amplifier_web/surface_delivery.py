@@ -386,6 +386,8 @@ class SurfaceProvider:
                     finally:
                         WORK_ATTEMPT.reset(token)
                 iterator, emitted = None, False
+                feedback = self._overflow_feedback.capture(original_request, request,
+                                                           kwargs, kwargs, self.original)
                 try:
                     token = WORK_ATTEMPT.set((self.delivery, attempt) if attempt else None)
                     try:
@@ -403,8 +405,7 @@ class SurfaceProvider:
                         self.delivery.finish_work(attempt, streaming=True)
                 except BaseException as error:
                     if not emitted:
-                        self._overflow_feedback.remember(original_request, request, error,
-                                                         kwargs, kwargs, self.original)
+                        self._overflow_feedback.remember(feedback, error)
                     if attempt:
                         self.delivery.finish_work(attempt, failed=True)
                     raise
@@ -459,6 +460,8 @@ class SurfaceProvider:
             if ticket is not None:ticket.close()
             raise
         token = WORK_ATTEMPT.set((self.delivery, attempt) if attempt else None)
+        feedback = self._overflow_feedback.capture(original_request, request,
+                                                   kwargs, kwargs, self.original)
         try:
             from .request_projection import dispatch as projection_dispatch
             with projection_dispatch(self.original, request, *projection, kwargs), capture.dispatch(ticket, self.original, request, trace):
@@ -467,8 +470,7 @@ class SurfaceProvider:
                 self.delivery.finish_work(attempt, response)
             return response
         except BaseException as error:
-            self._overflow_feedback.remember(original_request, request, error,
-                                             kwargs, kwargs, self.original)
+            self._overflow_feedback.remember(feedback, error)
             if attempt:
                 self.delivery.finish_work(attempt, failed=True)
             raise

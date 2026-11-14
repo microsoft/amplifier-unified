@@ -168,6 +168,66 @@ async def test_explicit_new_budget_invalidates_previous_error_binding():
     assert not value.raw.consumed
 
 
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('changed', ['original', 'prepared', 'selection', 'options'])
+async def test_dispatch_inflight_changes_cannot_become_the_feedback_snapshot(stream, changed):
+    import asyncio
+    value = case('selected_surface')
+    entered, release = asyncio.Event(), asyncio.Event()
+    options = {'custom': {'value': 1}}
+
+    async def suspended(request, **kwargs):
+        value.raw.sent.append((request, kwargs))
+        entered.set()
+        await release.wait()
+        raise value.raw.error
+
+    value.raw.complete = suspended
+
+    async def invoke():
+        if stream:
+            async for _ in value.wrapped.stream(value.request, **options):
+                pass
+        else:
+            await value.wrapped.complete(value.request, **options)
+
+    pending = asyncio.create_task(invoke())
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    if changed == 'original':
+        value.request.max_output_tokens = 7
+    elif changed == 'prepared':
+        value.raw.sent[-1][0].max_output_tokens = 7
+    elif changed == 'selection':
+        value.wrapped.selection['model'] = 'changed-selection'
+    else:
+        options['custom']['value'] = 2
+    release.set()
+    with pytest.raises(ContextLengthError) as caught:
+        await pending
+    assert value.wrapped.recover_context_overflow(value.request, caught.value,
+        context_estimate=600_000, request_options=options) is None
+    assert not value.raw.consumed and len(value.raw.sent) == 1
+
+
+@pytest.mark.parametrize('size', [100, 1_000_000])
+def test_feedback_witness_keeps_only_fixed_hashes_not_request_body_copies(size, monkeypatch):
+    from amplifier_web import overflow_feedback
+    raw = Provider()
+    request = ChatRequest(messages=[Message(role='user', content='X' * size)])
+    original = overflow_feedback.copy.deepcopy
+
+    def copy_small(value):
+        assert not isinstance(value, ChatRequest)
+        return original(value)
+
+    monkeypatch.setattr(overflow_feedback.copy, 'deepcopy', copy_small)
+    feedback = overflow_feedback.OverflowFeedback()
+    row = feedback.capture(request, request, {}, {}, raw)
+    assert len(row.original_snapshot) == len(row.prepared_snapshot) == 32
+    assert row.original is request and row.prepared is request
+    assert feedback.entries == []  # Success does not retain a historical binding.
+
+
 async def test_real_anthropic_private_server_feedback_through_both_host_projections():
     import json
     from anthropic import _base_client
@@ -183,7 +243,7 @@ async def test_real_anthropic_private_server_feedback_through_both_host_projecti
                 'created_at': '2026-11-09T00:00:00Z'})
         body = json.loads(request.content)
         assert body['model'] == 'claude-fable-5-2'
-        return sdk_httpx.Response(400, json={
+        return sdk_httpx.Response(400, headers={'request-id': 'synthetic-overflow-1'}, json={
             'type': 'error', 'error': {'type': 'invalid_request_error',
                 'message': 'prompt is too long: 1005207 tokens > 1000000 maximum'}})
 

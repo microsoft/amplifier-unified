@@ -1,5 +1,6 @@
 """Bounded identity translation, never classification, fitting or inference."""
 import copy
+import hashlib
 from dataclasses import dataclass
 
 
@@ -9,7 +10,7 @@ class _Feedback:
     original_snapshot: object
     prepared: object
     prepared_snapshot: object
-    error: Exception
+    error: Exception | None
     options: dict
     dispatch_options: dict
     owner: object
@@ -24,18 +25,28 @@ class OverflowFeedback:
     def forget(self, request):
         self.entries = [row for row in self.entries if row.original is not request]
 
-    def remember(self, request, prepared, error, options, dispatch_options, owner, *, binding=None):
-        from amplifier_core.llm_errors import ContextLengthError
-        self.forget(request)
+    @staticmethod
+    def fingerprint(request):
+        return hashlib.sha256(request.model_dump_json().encode('utf-8')).digest()
+
+    def capture(self, request, prepared, options, dispatch_options, owner, *, binding=None):
+        """Witness dispatch inputs before any provider await; retain no body copy."""
         method = getattr(owner, 'recover_context_overflow', None)
-        if not isinstance(error, ContextLengthError) or not callable(method):
-            return
+        if not callable(method):
+            return None
         try:
-            row = _Feedback(request, copy.deepcopy(request), prepared, copy.deepcopy(prepared),
-                            error, copy.deepcopy(options), copy.deepcopy(dispatch_options),
-                            owner, method, copy.deepcopy(binding))
+            return _Feedback(request, self.fingerprint(request), prepared, self.fingerprint(prepared),
+                             None, copy.deepcopy(options), copy.deepcopy(dispatch_options),
+                             owner, method, copy.deepcopy(binding))
         except Exception:
-            return  # Opaque inputs cannot be proven unchanged; preserve the error.
+            return None  # Opaque inputs cannot be proven unchanged.
+
+    def remember(self, row, error):
+        from amplifier_core.llm_errors import ContextLengthError
+        if row is None or not isinstance(error, ContextLengthError):
+            return
+        row.error = error
+        self.forget(row.original)
         self.entries = ([item for item in self.entries if item.error is not error] + [row])[-4:]
 
     def recover(self, request, error, *, context_estimate, request_options, owner, binding=None):
@@ -45,8 +56,14 @@ class OverflowFeedback:
             return None
         self.entries = [item for item in self.entries if item is not row]
         # Even a refused matching attempt is not replayable.
-        if (row.owner is not owner or row.binding != binding or row.options != (request_options or {})
-                or request != row.original_snapshot or row.prepared != row.prepared_snapshot):
+        try:
+            unchanged = (row.owner is owner and row.binding == binding
+                and row.options == (request_options or {})
+                and self.fingerprint(request) == row.original_snapshot
+                and self.fingerprint(row.prepared) == row.prepared_snapshot)
+        except Exception:
+            return None
+        if not unchanged:
             return None
         # This synchronous optional protocol belongs to the native loop/provider.
         # The provider still validates and consumes its own private server proof.

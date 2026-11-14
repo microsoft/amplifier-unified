@@ -267,6 +267,8 @@ class SelectedProvider:
         self._overflow_feedback.forget(request)
         selected, kwargs = self._selected_request(request, kwargs)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
+        feedback = self._overflow_feedback.capture(request, selected, options, kwargs,
+                                                   execution, binding=self.selection)
         retained, emitted, iterator = False, False, None
         try:
             iterator = aiter(method(selected, **kwargs))
@@ -276,8 +278,7 @@ class SelectedProvider:
         except BaseException as error:
             if not emitted:
                 retained = self._retain_refusal(request, selected, execution, error)
-                self._overflow_feedback.remember(request, selected, error, options, kwargs,
-                                                 execution, binding=self.selection)
+                self._overflow_feedback.remember(feedback, error)
             raise
         finally:
             if not retained:
@@ -291,13 +292,14 @@ class SelectedProvider:
         selected, kwargs = self._selected_request(request, kwargs)
         execution = self._execution_provider()
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
+        feedback = self._overflow_feedback.capture(request, selected, options, kwargs,
+                                                   execution, binding=self.selection)
         retained = False
         try:
             return await execution.complete(selected, **kwargs)
         except BaseException as error:
             retained = self._retain_refusal(request, selected, execution, error)
-            self._overflow_feedback.remember(request, selected, error, options, kwargs,
-                                             execution, binding=self.selection)
+            self._overflow_feedback.remember(feedback, error)
             raise
         finally:
             if not retained:
