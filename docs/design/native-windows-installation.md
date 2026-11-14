@@ -586,13 +586,57 @@ observed depths below the folder: app generation 169 characters, worker
 environment 162, private Python 142, tools 124, private Git 68. Those fit at
 59 today.
 
-The short folder is necessary and not sufficient. Until the path-length work
-ships, the session folder and the source store still exceed the Windows limit
-for every folder path, so 59 is the number that stays true afterwards, not a
-claim that a first chat works on this release. A change to the folder name
-must respect this number, and `tests/test_windows_setup_folder.py` fails when
-code and document disagree. Setup stops before it asks anything when the path
-would be longer.
+The short folder is necessary and not sufficient. The app must also keep what
+it adds below the folder inside the budget of the next section. A change to the
+folder name must respect this number, and `tests/test_windows_setup_folder.py`
+fails when code and document disagree. Setup stops before it asks anything when
+the path would be longer.
+
+### Path budget below the installation folder
+
+With long paths off Windows accepts a file path of at most 259 characters and
+creates a folder of at most 247. `tests/test_windows_path_budget.py` is the one
+table of what each store adds below the installation folder. It computes every
+path shape for the longest supported folder path, reads that number from setup
+and the names from their owners, and fails when a sum no longer fits. Print the
+table with `python tests/test_windows_path_budget.py`.
+
+- **The app's own chat folders use a short project name on Windows.** The shared
+  CLI name of `<folder>\app\chats\<chat id>\files` is the folder path plus 53
+  characters, so the folder path appears twice in every session path. Release
+  0.94.1 failed its first chat on this: a temporary file beside the saved view
+  was 277 characters with an 18-character account name. The name is now
+  `chat-<16 hex digits>` (21 characters). The rule and its limits are in the
+  [history contract](../workspaces/contracts/history.v1.md#what-it-is).
+- **Root sessions fit in every store** at 59: the longest path is 245.
+- **Worker (sub-agent) sessions have longer IDs** (34 characters plus the agent
+  name). At 59 every path shape holds an ID of 50 characters. Longer IDs lose
+  files in this order: the request observation (50, root sessions only), the
+  oversized-request diagnostic copy (51; the app records "unavailable" and the
+  turn continues), background-job records (68), the saved view (93). A shorter
+  folder path adds the same number of characters to each limit.
+- **Not covered:** a chat that a person starts in the default workspace folder
+  (`<folder>\workspace`) keeps the CLI name, like every folder a person chooses.
+  Its background-job records fit only up to a folder path of 51, and its request
+  diagnostics up to 42. An installation made by an earlier setup file (folder
+  path of 74 characters plus the account name) has no budget; new chats there
+  get the short name, which is necessary and not always sufficient. A chat
+  there with saved history under the CLI name stays under it, including history
+  longer than the limit that was written while long paths were on. The app
+  finds such history through the extended-length path form and does not start
+  a second history for that chat.
+- **Source store:** Amplifier Foundation owns its layout. With the locked
+  Foundation revision its paths do not fit at 59, so the worker cannot start on
+  a default PC. Foundation's Windows change (extended-length tree walks and
+  16-digit folder names) closes that; the budget test names the two rows that
+  wait for it and fails when that state changes.
+
+`.github/workflows/windows-path-length.yml` is the native check. It turns
+`LongPathsEnabled` off on its own runner, proves in a new process that a
+260-character path is refused, runs the real session and capture stores under a
+folder path of exactly 59 characters, and restores the runner's value. It has a
+named, skipped place for the source store until the Foundation change is locked.
+It is not setup-file or clean-account acceptance.
 
 Setup checks the PC and the folder before its first question. Each stop names
 one cause and one next step in plain language, and never shows exception text,
