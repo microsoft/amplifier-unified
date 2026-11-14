@@ -1,10 +1,13 @@
 """Host intent joins against the prospective Foundation lifetime owner."""
 from contextlib import closing
 from pathlib import Path
+import sys
 
 import pytest
 
 from amplifier_web.host.storage import SessionStore
+
+pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='Prospective owner joins qualify Linux renameat2 only.')
 
 
 def test_explicit_rewrite_preserves_filtering_metadata_and_exact_owner(tmp_path):
