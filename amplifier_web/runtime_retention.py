@@ -57,24 +57,44 @@ class WorkerRetention:
                 and not row.get("closing") and not row.get("yielding")
                 and not row.get("inflight") and not row.get("bridge_tasks"))
 
+    def due(self, sid, row, *, rank=None, count=None, now=None):
+        """The existing warm-worker policy, also rechecked by attached owners."""
+        if (self.manager.workers.get(sid) is not row or not self.eligible(row)
+                or self.protected(sid)):
+            return False
+        if rank is None:
+            candidates = sorted(((key, value) for key, value in self.manager.workers.items()
+                                 if self.eligible(value)), key=lambda pair: pair[1]['idle_at'])
+            rank = next(index for index, (key, value) in enumerate(candidates)
+                        if key == sid and value is row)
+            count = len(candidates)
+        if now is None:
+            now = self.clock()
+        excess = max(0, count - self.settings['max_warm_workers'])
+        return (bool(row.get('update_pending'))
+                or now - row['idle_at'] >= self.settings['idle_timeout_hours'] * 3600
+                or rank < excess)
+
     async def sweep(self):
         async with self.sweep_lock:
             candidates = sorted(((sid, row) for sid, row in self.manager.workers.items()
                                  if self.eligible(row)), key=lambda pair: pair[1]["idle_at"])
-            excess = max(0, len(candidates) - self.settings["max_warm_workers"])
-            ttl = self.settings["idle_timeout_hours"] * 3600
             now = self.clock()
-            for index, (sid, row) in enumerate(candidates):
-                if self.protected(sid) or sid in self.manager._ephemeral_mcp:
-                    continue
-                if not row.get("update_pending") and index >= excess and now - row["idle_at"] < ttl:
+            for rank, (sid, row) in enumerate(candidates):
+                if not self.due(sid, row, rank=rank, count=len(candidates), now=now):
                     continue
                 # Serialize the final idle check with command admission/start.
                 async with self.manager._locks.setdefault(sid, asyncio.Lock()):
                     if (self.manager.workers.get(sid) is not row or not self.eligible(row)
-                            or self.protected(sid) or sid in self.manager._ephemeral_mcp):
+                            or self.protected(sid)):
                         continue
-                    task = self.schedule(sid, row)
+                    attached = sid in self.manager._ephemeral_mcp
+                    task = None if attached else self.schedule(sid, row)
+                if attached:
+                    # Request cooperation; never release connection tools here.
+                    # The owner rechecks current policy and native quiescence.
+                    await row['emit']('runtime.retirement_requested', {'sessionId': sid})
+                    continue
                 try:
                     await asyncio.wait_for(asyncio.shield(task), self.reply_timeout)
                 except TimeoutError:

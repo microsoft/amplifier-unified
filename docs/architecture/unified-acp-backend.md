@@ -79,7 +79,7 @@ not a portable upstream ACP network protocol; external clients use ACP stdio.
 
 Initialization metadata `com.microsoft.amplifier.retirement` version `1`
 advertises `_amplifier/retire` and advisory notification
-`_amplifier/retirementAvailable`. These are private optional extensions over the
+`_amplifier/retirementRequested`. These are private optional extensions over the
 existing ACP connection, not upstream ACP session-close semantics or a blanket
 claim that a wrapper can be killed safely.
 
@@ -95,16 +95,25 @@ timeout, caller cancellation or changed ownership does not release those tools.
 An exact successful result can be read again after a lost response, without
 creating a session or replaying an input.
 
-The advisory notification contains only `sessionId`. Existing root idle or
-background completion observations can produce it, including outside a prompt;
-it only suggests attempting the conditional operation. It is neither an idle
-guarantee nor an instruction to retry work. Retirement replies do not trigger
-another advisory notification. No timer or new retention limit is added.
-Naming emits its completion advisory after its owning future and persistence
-settle. Some other final resource-release paths, including closing the last
-kernel or settling computer custody, do not yet emit a later advisory. Their
-connections may remain attached until another legitimate activity; active or
-uncertain resources still refuse retirement safely.
+The advisory notification contains only `sessionId`. The existing worker-retention
+sweep requests cleanup only when its warm-worker budget, idle timeout or pending
+generation update calls for it. The defaults remain 32 warm workers and 12 idle
+hours. Finishing a turn does not itself request attachment cleanup. Policy is
+checked again under native admission before retirement: a delayed pressure hint
+cannot evict a worker that is now within its warm budget. Older
+`retirementAvailable` advertisements do not negotiate automatic cleanup.
+
+The request is neither an idle guarantee nor an instruction to retry work.
+Retirement replies do not produce another notification. This reuses the existing
+retention sweep and settings; no client timer or second retention policy is added.
+Naming completion wakes that owner after its future and persistence settle.
+Background resources, kernel or computer custody and uncertain operations can
+still refuse cleanup. A demand arriving while the attachment is busy or already
+checking retirement can be ignored; subsequent existing retention sweeps can ask
+again. There is no guaranteed immediate retirement at every resource transition.
+Confirmed cleanup retires the native warm worker as well as its attachment, so
+the next real message resumes saved history with worker startup cost. It trades
+idle resources for later startup, rather than promising a performance gain.
 
 ## Scope and qualification
 

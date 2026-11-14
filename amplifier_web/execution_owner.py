@@ -311,10 +311,7 @@ class ExecutionOwner:
 
     async def observe(self, kind, payload):
         identity = payload.get("sessionId")
-        candidate = (kind == 'session.naming.finished'
-                     or kind == 'runtime.status' and payload.get('event') == 'session.idle'
-                     or kind == 'execution.event' and payload.get('lifecycle') == 'background'
-                     and payload.get('phase') in {'completed', 'error', 'cancelled'})
+        candidate = kind == 'runtime.retirement_requested'
         if (candidate and self.attached == {identity} and not self._disconnected
                 and not self._retiring and self.retirement_hint is not None
                 and (self._retirement_hint_task is None or self._retirement_hint_task.done())):

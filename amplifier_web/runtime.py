@@ -439,7 +439,7 @@ class RuntimeManager:
             if row is not None:
                 if row.get('closing') or row.get('stop_task'):
                     return 'unknown'
-                if not self.retention.eligible(row):
+                if not self.retention.due(session_id, row):
                     return 'busy'
                 mounted = row.get('ephemeral_mcp_binding')
                 if mounted and (not binding or mounted != attachment_id):
@@ -1435,6 +1435,8 @@ class RuntimeManager:
                         if data.get("type") == "session.idle":
                             row["idle"] = True
                             row["idle_at"] = self.retention.clock()
+                            self.retention.wake()
+                        elif data.get('type') == 'session.naming.finished':
                             self.retention.wake()
                         elif data.get("type") in {"generation.started", "input.delivered"}:
                             row["idle"] = False

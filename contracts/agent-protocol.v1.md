@@ -78,7 +78,9 @@ reply; an agent's supported triggers and outcome channels belong to its implemen
    timeout never authorizes killing work. New input and retirement are fenced
    against each other. Durable conversation, endpoint, workspace and native
    session identities survive; waking uses exact resume without replay.
-   Advisory idle events request a fresh owner check and confer no closure authority.
+   Automatic cleanup follows the owner's existing warm-worker retention policy,
+   not every completed turn. Advisory retention requests require a fresh policy
+   and native-owner check and confer no closure authority.
 
 5. **AP5 — Keep advanced behavior optional.** Standard config options expose supported
    session controls. Composition administration and advanced runtime controls have

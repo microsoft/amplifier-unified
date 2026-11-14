@@ -135,6 +135,57 @@ async def test_idle_deadline_and_navigation_do_not_extend_retention(manager):
     assert first.returncode == 0
 
 
+@pytest.mark.parametrize('reason', ['count', 'ttl', 'update'])
+async def test_attached_retention_requests_existing_policy_and_rechecks_stale_demand(manager, reason):
+    servers = {'fixture': {'type': 'http', 'url': 'http://127.0.0.1:1/unused'}}
+    await manager.bind_ephemeral_mcp('attached', 'attachment', servers)
+    process = await warm(manager, 'attached')
+    row = manager.workers['attached']
+    await manager.retention.sweep()
+    assert not [event for event in manager.events if event[0] == 'runtime.retirement_requested']
+    assert await manager.retire_attachment('attached', 'attachment', guard=lambda: False) == 'busy'
+    assert process.returncode is None  # Default warm budget retains the ordinary settled worker.
+    if reason == 'count':
+        manager.retention.settings['max_warm_workers'] = 1
+        manager.now = 10
+        await warm(manager, 'newer')
+    elif reason == 'ttl':
+        manager.now = 12 * 3600
+    else:
+        row['update_pending'] = True
+    await manager.retention.sweep()
+    assert [event for event in manager.events if event[0] == 'runtime.retirement_requested'] == [
+        ('runtime.retirement_requested', {'sessionId': 'attached'})]
+    assert manager._ephemeral_mcp['attached'] == ('attachment', servers)
+    assert process.returncode is None and not row.get('closing')
+    # A delivered hint is not a lasting policy grant: pressure or idle age can change.
+    if reason == 'count':
+        await manager.stop('newer', reason='retention')
+    elif reason == 'ttl':
+        row['idle_at'] = manager.now
+    else:
+        row['update_pending'] = False
+    assert await manager.retire_attachment('attached', 'attachment', guard=lambda: False) == 'busy'
+    assert process.returncode is None and manager._ephemeral_mcp['attached'][0] == 'attachment'
+    row['update_pending'] = True
+    assert await manager.retire_attachment('attached', 'attachment', guard=lambda: False) == 'retired'
+    assert process.returncode == 0 and 'attached' not in manager._ephemeral_mcp
+
+
+async def test_protected_or_active_attachment_does_not_receive_policy_request(manager):
+    await manager.bind_ephemeral_mcp('attached', 'attachment', {
+        'fixture': {'type': 'http', 'url': 'http://127.0.0.1:1/unused'}})
+    process = await warm(manager, 'attached')
+    manager.retention.settings['max_warm_workers'] = 0
+    manager.retention.protected = lambda _: True
+    await manager.retention.sweep()
+    manager.retention.protected = lambda _: False
+    await manager.send({'id': 'attached'}, 'original work', 'once', manager.emit)
+    await manager.retention.sweep()
+    assert not [event for event in manager.events if event[0] == 'runtime.retirement_requested']
+    assert process.returncode is None and 'attached' in manager._ephemeral_mcp
+
+
 async def test_active_and_unanswered_commands_are_protected(manager):
     first = await warm(manager, 'a')
     await manager.send({'id': 'a'}, 'work', 'one', manager.emit)
@@ -427,9 +478,9 @@ async def test_selecting_six_chats_starts_no_workers_but_explicit_warm_and_send_
     app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
     starts = []
     original = runtime.start
-    async def start(session, emit):
+    async def start(session, emit, *, guard=None):
         starts.append(session['id'])
-        return await original(session, emit)
+        return await original(session, emit, guard=guard)
     monkeypatch.setattr(runtime, 'start', start)
     try:
         ids = []

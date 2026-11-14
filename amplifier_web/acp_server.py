@@ -129,7 +129,7 @@ class HostAgent:
     def on_connect(self, connection):
         self.client = connection
         self.owner.retirement_hint = lambda identity: connection.ext_notification(
-            'amplifier/retirementAvailable', {'sessionId': identity})
+            'amplifier/retirementRequested', {'sessionId': identity})
 
     def require_initialized(self):
         if not self.initialized:
@@ -143,7 +143,7 @@ class HostAgent:
             load_session=False, mcp_capabilities=McpCapabilities(http=True, sse=False),
             session_capabilities=SessionCapabilities(resume=SessionResumeCapabilities())),
             field_meta={RETIREMENT: {'version': 1, 'method': '_amplifier/retire',
-                'notification': '_amplifier/retirementAvailable'}})
+                'notification': '_amplifier/retirementRequested'}})
 
     async def new_session(self, cwd, mcp_servers=None, **kwargs):
         self.require_initialized()

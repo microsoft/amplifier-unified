@@ -48,6 +48,7 @@ async def mounted(tmp_path, aiohttp_server):
     manager = RuntimeManager(command=[sys.executable, '-u', '-c', WORKER], startup_timeout=3)
     manager.home = tmp_path / 'app'
     manager.retention.wake = lambda: None
+    manager.retention.settings['max_warm_workers'] = 0  # Exercise safety after policy requests cleanup.
     writes = []
     original = manager._write
     async def write(row, value):
@@ -184,11 +185,13 @@ async def test_retirement_hint_is_advisory_outside_prompt_and_not_an_ack_loop(ho
     service = app['service']
     await service.on_runtime_event('runtime.status', {
         'sessionId': sid, 'status': 'idle', 'event': 'session.idle'})
+    owner = next(iter(service._execution_observers.attachments))
+    assert owner._retirement_hint_task is None  # A finished turn is not a retention request.
+    await service.on_runtime_event('runtime.retirement_requested', {'sessionId': sid})
     event = await asyncio.wait_for(peer.socket.receive_json(), 3)
-    assert event == {'jsonrpc': '2.0', 'method': '_amplifier/retirementAvailable',
+    assert event == {'jsonrpc': '2.0', 'method': '_amplifier/retirementRequested',
                      'params': {'sessionId': sid}}
     assert sid in runtime.bindings and not runtime.stopped
-    owner = next(iter(service._execution_observers.attachments))
     previous = owner._retirement_hint_task
     await owner.observe('runtime.warmth', {'sessionId': sid, 'status': 'cold'})
     assert owner._retirement_hint_task is previous
