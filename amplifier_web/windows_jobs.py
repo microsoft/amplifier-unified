@@ -367,6 +367,7 @@ class WindowsOwnedProcess:
                     env=self._native.bootstrap_env(), close_fds=True,
                     startupinfo=startup, stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
             finally:
                 os.close(write_fd)

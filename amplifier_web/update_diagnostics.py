@@ -64,12 +64,33 @@ def failure_location(value):
         r'(?:amplifier_web|amplifier_foundation|amplifier_core)(?:\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*:[0-9]{1,7}', value)
 
 
+def decision_catalog_facts(value):
+    """Closed, credential-free child status. Never keep subprocess output/args."""
+    if not isinstance(value, dict) or not isinstance(value.get('category'), str) or value['category'] not in {
+            'spawn', 'timeout', 'nonzero-exit', 'subprocess-error',
+            'oversized-output', 'invalid-json', 'non-object'}:
+        return None
+    safe = {'category': value['category']}
+    for key in ('elapsedMs', 'stdoutBytes'):
+        if type(value.get(key)) is int and 0 <= value[key] <= 2**63 - 1:
+            safe[key] = value[key]
+    if type(value.get('exitCode')) is int and -(2**31) <= value['exitCode'] <= 2**32 - 1:
+        safe['exitCode'] = value['exitCode']
+    if value.get('osError') in errno.errorcode.values():
+        safe['osError'] = value['osError']
+    return safe
+
+
 def exception_facts(error):
     """Fixed OS codes and code location; no error messages or file paths."""
     facts = {'errorType': exception_type(error)}
     current, seen = error, set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
+        detail = getattr(current, 'diagnostic_facts', {})
+        catalog = decision_catalog_facts(detail.get('decisionCatalog')) if isinstance(detail, dict) else None
+        if catalog:
+            facts['decisionCatalog'] = catalog
         if isinstance(current, OSError) and current.errno in errno.errorcode:
             facts['osError'] = errno.errorcode[current.errno]
             if current.errno in STORAGE_REASONS:
@@ -149,6 +170,8 @@ def probe_record(output):
         if isinstance(value.get('package'),str) and len(value['package']) <= 128 and re.fullmatch(r'amplifier-[a-z0-9]+(?:-[a-z0-9]+)*',value['package']):safe['package']=value['package']
         if failure_location(value.get('failureLocation')):safe['failureLocation']=value['failureLocation']
         if value.get('osError') in errno.errorcode.values():safe['osError']=value['osError']
+        catalog = decision_catalog_facts(value.get('decisionCatalog'))
+        if catalog:safe['decisionCatalog']=catalog
         for key in ('version','pythonVersion'):
             if isinstance(value.get(key),str) and re.fullmatch(r'\d+\.\d+\.\d+',value[key]):safe[key]=value[key]
         for key in ('elapsedMs', 'sources', 'packages', 'resolverTransactions', 'profileIndex'):
@@ -229,6 +252,10 @@ class UpdateDiagnostics:
         if 'probe' in cause:
             cause['probe'] = {key: value for key, value in cause['probe'].items()
                               if key not in {'elapsedMs', 'profileIndex'}}
+            if 'decisionCatalog' in cause['probe']:
+                cause['probe']['decisionCatalog'] = {
+                    key: value for key, value in cause['probe']['decisionCatalog'].items()
+                    if key not in {'elapsedMs', 'stdoutBytes'}}
         cause['tier'] = self.state.get('batch', {}).get('tier')
         if kind == 'application':
             cause['revision'] = event.get('revision')
