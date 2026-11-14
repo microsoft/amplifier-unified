@@ -223,13 +223,13 @@ def blocks_action(action, args):
         'configuration.', 'runtime.', 'bundle.', 'bundles.', 'sources.',
         'modules.', 'providers.', 'routing.', 'permissions.', 'locations.',
         'updates.', 'schedule.', 'coordination.', 'assignment.'))
-        or action in {'session.create', 'session.fork', 'session.recover',
+        or action in {'session.create', 'session.fork', 'session.recover', 'session.warm',
                       'workspace.create', 'workspace.remove', 'workspace.initialize',
                       'maintenance.reset', 'maintenance.repair', 'maintenance.resetCleanup',
                       'settings.update', 'externalAgents.save', 'externalAgents.remove',
                       'operations.submit', 'operations.write', 'kernels.create',
                       'kernels.execute', 'kernels.reset', 'voice.preview', 'voice.configure',
-                      'conversation.configure'})
+                      'conversation.configure', 'memory.consolidate', 'message.edit'})
 
 
 def _pointer(home):
@@ -400,6 +400,10 @@ def require_idle(service):
         raise ValueError('Finish or inspect the existing update operation before installation repair.')
     if assess(service, application=True)['blockers']:
         raise ValueError('Finish active work before confirming installation repair.')
+    if any(session.get('naming', {}).get('status') == 'working'
+           or session.get('configurationBusy') and session.get('historyEdit', {}).get('phase') == 'working'
+           for session in service.state.get('sessions', [])):
+        raise ValueError('Finish conversation naming or history editing before installation repair.')
     runtime = service.runtime
     if (runtime is None or not callable(getattr(runtime, 'has_pending_operations', None))
             or runtime.has_pending_operations() or getattr(runtime, '_preparations', None)):
@@ -410,6 +414,9 @@ def require_idle(service):
         raise ValueError('Finish configuration management before installation repair.')
     if service.runtime_lifecycle_lock.locked():
         raise ValueError('Finish runtime lifecycle work before installation repair.')
+    personalization = getattr(getattr(service, 'recall', None), 'personalization', None)
+    if personalization and any(not task.done() for task in personalization.tasks.values()):
+        raise ValueError('Finish workspace memory consolidation before installation repair.')
     operations = getattr(service, 'operations', None)
     if operations:
         if operations.pending or operations.journal.db.execute(

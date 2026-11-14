@@ -4318,8 +4318,11 @@ class AppService:
                 return
             await self.on_runtime_event(kind, payload)
         try:
-            await self.runtime.start(source, emit, preserve_emit=True)
-            candidate = await self.runtime.control(identity, 'session.naming', {})
+            from .installation_repair import guard as repair_guard
+            guard = lambda: repair_guard(self)
+            guard()
+            await self.runtime.start(source, emit, preserve_emit=True, guard=guard)
+            candidate = await self.runtime.control(identity, 'session.naming', {}, guard=guard)
             async with self.lock:
                 session = self._session(identity)
                 # Preparation can be slow. Protect edits made after the click,
@@ -4380,11 +4383,14 @@ class AppService:
         from .runtime import SessionInUseError
         try:
             from .session_store import capture_edit_context
+            from .installation_repair import guard as repair_guard
+            guard = lambda: repair_guard(self)
+            guard()
             source['historyEditContextDigest'] = await asyncio.to_thread(capture_edit_context, self.data_dir, source)
-            await self.runtime.start(source, self.on_runtime_event)
+            await self.runtime.start(source, self.on_runtime_event, guard=guard)
             result = await self.runtime.control(source['id'], 'history.edit', {
                 'source':source,'messageId':edit['messageId'],'operationId':edit['operationId'],
-                'text':edit['text'],'reply_context':edit.get('replyTo'),'attachments':edit['attachments']})
+                'text':edit['text'],'reply_context':edit.get('replyTo'),'attachments':edit['attachments']}, guard=guard)
             async with self.lock:
                 current = self._session(source['id'])
                 apply_revision(self, current, result)

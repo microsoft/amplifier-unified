@@ -94,6 +94,42 @@ async def test_exact_retry_before_preview_does_not_rearm_and_conflict_rejected(t
     finally: await app.close()
 
 
+async def test_repair_hold_retains_exact_unsubmitted_handoff_but_never_unknown(tmp_path, monkeypatch):
+    from amplifier_web import installation_repair as repair
+    app, runtime, now, sid, args, data, _, _ = await fixture(tmp_path, monkeypatch)
+    try:
+        watch = await create(app, args)
+        record(data / 'record.json', 'actionable', 'repair-pending')
+        app._installation_repair_gate = 'a' * 32
+        await app.observations.tick()
+        assert not app.observations.store.rows('run')
+        app._installation_repair_gate = None
+        async def pre_admission_hold(*values):
+            app._installation_repair_gate = 'a' * 32
+            values[-1]()  # Real runtime invokes the retained host guard before transport.
+            pytest.fail('No native handoff may be written')
+        runtime.observation_input.side_effect = pre_admission_hold
+        await app.observations.tick()
+        item = app.observations.store.rows('outbox')[0]
+        assert item['phase'] == 'waiting_worker'
+        assert app.observations.store.get('watch', watch['id'])['status'] == 'ended'
+        assert repair.held(app)
+        await app.observations.handoffs()
+        assert runtime.observation_input.await_count == 1
+        app._installation_repair_gate = None
+        runtime.observation_input.side_effect = None
+        await app.observations.handoffs()
+        assert runtime.observation_input.await_count == 2
+        assert app.observations.store.get('outbox', item['id'])['phase'] == 'accepted'
+        # A retained unknown is never made eligible by clearing the repair hold.
+        app.observations.store.outbox_phase(item['id'], ['accepted'], 'unknown', now[0])
+        await app.observations.handoffs()
+        assert runtime.observation_input.await_count == 2
+    finally:
+        app._installation_repair_gate = None
+        await app.close()
+
+
 @pytest.mark.parametrize('change', ['task', 'stop', 'execution', 'pause', 'cancel', 'expiry', 'activation'])
 async def test_read_return_race_cannot_restore_authority(tmp_path, monkeypatch, change):
     app, runtime, now, sid, args, data, control, _ = await fixture(tmp_path, monkeypatch)

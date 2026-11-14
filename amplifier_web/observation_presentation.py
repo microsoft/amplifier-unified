@@ -109,6 +109,8 @@ async def present(observations, watch, item):
         check_grant(observations, watch)
         if not permitted(value, watch['presentationGrant']['policy']): raise ValueError('Unapproved presentation origin')
         def guard():
+            from .installation_repair import guard as repair_guard
+            repair_guard(app)
             current = store.get('watch', watch['id'])
             if current['status'] != 'ended' or current['revision'] != watch['revision']:
                 raise ValueError('The watch changed before presentation')

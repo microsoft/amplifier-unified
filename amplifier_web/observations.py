@@ -223,9 +223,12 @@ class Observations:
     async def tick(self):
         # This timer owns only observation state. It never publishes app snapshots.
         if not self.store.acquire(self.clock()): return
+        from .installation_repair import held, guard as repair_guard
+        if held(self.app): return
         from .updates import work_paused
         if work_paused(self.app.state): return
         for watch in self.store.rows('watch', status='active'):
+            if held(self.app): return
             if not self.store.acquire(self.clock()): return
             try: reason = self.reason(watch)
             except (ValueError, OSError) as exc: reason = str(exc)
@@ -235,6 +238,7 @@ class Observations:
             run = self.store.claim(watch['id'], self.clock())
             if not run: continue
             def guard():
+                repair_guard(self.app)
                 current = self.store.get('watch', watch['id'])
                 if current['revision'] != run['watchRevision'] or current['status'] != 'active' or self.clock() >= current['expiresAt']:
                     raise ValueError('The watch was revoked or expired before dispatch')
@@ -286,7 +290,10 @@ class Observations:
         return {'admitted': reason is None, 'reason': reason}
 
     async def handoffs(self):
+        from .installation_repair import held, guard as repair_guard, RepairHeld
+        if held(self.app): return
         for item in self.store.rows('outbox', phases=('pending', 'waiting_worker')):
+            if held(self.app): return
             watch = self.store.get('watch', item['watchId'])
             if watch['status'] != 'ended':
                 self.store.outbox_phase(item['id'], ['pending', 'waiting_worker'], 'suppressed', self.clock()); continue
@@ -305,6 +312,7 @@ class Observations:
             current = self.store.outbox_phase(item['id'], ['pending', 'waiting_worker'], 'submitting', self.clock())
             if not current: continue
             def guard():
+                repair_guard(self.app)
                 latest = self.store.get('watch', watch['id'])
                 if latest['status'] != 'ended' or self.store.get('outbox', item['id'])['phase'] != 'submitting': return 'The watch was revoked before admission'
                 return self.reason(latest)
@@ -315,6 +323,11 @@ class Observations:
                 receipt = await self.app.runtime.observation_input(watch['sessionId'], args, guard)
                 phase = 'accepted' if receipt.get('accepted') else 'suppressed'
                 self.store.outbox_phase(item['id'], ['submitting'], phase, self.clock(), receipt=bounded(receipt))
+            except RepairHeld:
+                # Positive pre-transport refusal: retain this known-unsubmitted
+                # identity. Unknown/accepted handoffs are never selected here.
+                self.store.outbox_phase(item['id'], ['submitting'], 'waiting_worker', self.clock(),
+                    detail='Installation repair holds new input; no handoff was submitted.')
             except asyncio.CancelledError:
                 self.store.outbox_phase(item['id'], ['submitting'], 'unknown', self.clock(), detail='Admission interrupted; no replay.')
                 raise

@@ -82,6 +82,108 @@ async def test_admitting_process_request_blocks_repair_without_rewriting_receipt
     assert not host.launched
 
 
+async def test_optional_warm_and_memory_refuse_before_task_or_claim(host, monkeypatch):
+    service = host.service
+    await service.dispatch('session.create', {})
+    sid = service._session()['id']
+    service._installation_repair_gate = 'a' * 32
+    for action, args in [('session.warm', {'id': sid}), ('memory.consolidate', {'sessionId': sid})]:
+        with pytest.raises(AppError, match='Installation repair owns'):
+            await service.dispatch(action, args)
+    service.runtime.prewarm = AsyncMock()
+    await service.warmup.run(sid)
+    service.runtime.prewarm.assert_not_awaited()
+    memory = service.recall.personalization
+    memory.data.claim = lambda *args: pytest.fail('No durable memory attempt may be claimed')
+    memory.idle(service._session())
+    with pytest.raises(repair.RepairHeld):
+        memory.start(service._session(), [sid])
+    assert not memory.tasks and not service.warmup.pending
+
+
+async def test_prewarm_wait_rechecks_repair_without_starting_worker(host):
+    from types import SimpleNamespace
+    service = host.service
+    runtime = RuntimeManager()
+    runtime.retention = SimpleNamespace(settings={'max_warm_workers': 1, 'idle_timeout_hours': 1},
+                                        background=asyncio.Lock())
+    runtime.update_input_gate = lambda: repair.guard(service)
+    runtime._check_execution = lambda *args: None
+    runtime._start_locked = AsyncMock(side_effect=AssertionError('No startup after repair hold'))
+    await runtime.retention.background.acquire()
+    task = asyncio.create_task(runtime.prewarm({'id': 'waiting-warm'}, AsyncMock()))
+    await asyncio.sleep(0)
+    service._installation_repair_gate = 'a' * 32
+    runtime.retention.background.release()
+    with pytest.raises(repair.RepairHeld):
+        await task
+    runtime._start_locked.assert_not_awaited()
+
+
+async def test_active_memory_owner_blocks_confirm_until_settled(host):
+    memory = host.service.recall.personalization
+    pending = asyncio.get_running_loop().create_future()
+    memory.tasks['workspace'] = pending
+    try:
+        with pytest.raises(ValueError, match='memory consolidation'):
+            repair.require_idle(host.service)
+    finally:
+        pending.set_result(None)
+        memory.tasks.clear()
+
+
+async def test_memory_native_waiter_rechecks_host_guard_before_model_transport(host):
+    service = host.service
+    runtime = RuntimeManager()
+    runtime.retention.wake = lambda: None
+    pending = asyncio.get_running_loop().create_future()
+    runtime.workers['memory-owner'] = {'retirement_task': pending}
+    runtime._check_preparation_cleanup = lambda sid: None
+    runtime._admit = AsyncMock(side_effect=AssertionError('No model transport may occur'))
+    task = asyncio.create_task(runtime.control('memory-owner', 'memory.consolidate', {'prompt': 'local'},
+        guard=lambda: repair.guard(service)))
+    try:
+        await until(lambda: runtime._locks.get('memory-owner') is not None)
+        service._installation_repair_gate = 'a' * 32
+        runtime.workers.clear()
+        pending.set_result(None)
+        with pytest.raises(repair.RepairHeld):
+            await task
+        runtime._admit.assert_not_awaited()
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        runtime.workers.clear()
+        await runtime.close()
+
+
+@pytest.mark.parametrize('owner', ['naming', 'history-edit'])
+async def test_queued_conversation_owner_blocks_repair_before_startup(host, owner):
+    service = host.service
+    await service.dispatch('session.create', {})
+    session = service._session()
+    if owner == 'naming':
+        session['naming'] = {'status': 'working'}
+    else:
+        session.update(configurationBusy=True, historyEdit={'phase': 'working'})
+    with pytest.raises(ValueError, match='naming or history editing'):
+        repair.require_idle(service)
+    assert not host.launched
+
+
+async def test_queued_naming_after_hold_refuses_runtime_start_and_transport(host):
+    service = host.service
+    await service.dispatch('session.create', {})
+    service._installation_repair_gate = 'a' * 32
+    service.runtime.start = AsyncMock()
+    service.runtime.control = AsyncMock()
+    await service._regenerate_name(copy.deepcopy(service._session()), {})
+    service.runtime.start.assert_not_awaited()
+    service.runtime.control.assert_not_awaited()
+    assert repair.blocks_action('message.edit', {})
+
+
 async def test_direct_voice_fresh_admission_is_held_but_exact_receipt_remains_readable(host):
     service = host.service
     await service.dispatch('session.create', {})
