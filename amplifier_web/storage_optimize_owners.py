@@ -131,9 +131,6 @@ class OwnerAdapters:
             return {**row, 'reason': 'Writer exclusion for this historical or worker capture is unqualified'}
         row['_sourceId'] = source['id']
         row['_sourceBinding'] = [source.get('executionRevision', 0), source.get('interruptionRevision', 0)]
-        if operation['extractImages'] and any(operation['cutoffs'].values()):
-            return {**row, 'status': 'held', 'reason':
-                'Combined image extraction and diagnostic expiry await both qualified stages; neither choice was silently dropped'}
         if not operation['extractImages'] and any(operation['cutoffs'].values()):
             try:
                 from .storage_optimize_retention import inspect
@@ -151,6 +148,16 @@ class OwnerAdapters:
             return {**row, 'status': 'malformed', 'reason': 'Capture format or source could not be verified'}
         if _stamp(Path(row['_path'])) != row['_stamp']:
             return {**row, 'status': 'drift', 'reason': 'Source changed during preview'}
+        row['_imageCount'] = result.get('images')
+        row['_protectedStrings'] = result.get('protected_strings')
+        if result.get('images') == 0:
+            if any(operation['cutoffs'].values()):
+                from .storage_optimize_retention import inspect
+                return await asyncio.to_thread(inspect, row, operation)
+            return {**row, 'status': 'held', 'reason': 'No known inline images require extraction'}
+        if any(operation['cutoffs'].values()):
+            return {**row, 'status': 'held', 'reason':
+                'Combined image extraction and diagnostic expiry await both qualified stages; neither choice was silently dropped'}
         # A preview cannot assert writers stopped from an absent catalog entry
         # or from an advisory lock. Actual apply must acquire native ownership.
         row['_sourceSha256'] = result['source_sha256']
