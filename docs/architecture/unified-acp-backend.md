@@ -6,6 +6,13 @@ host. Closing one does not shut down the host or stop accepted work. This text
 backend uses the public ACP SDK shipped with Unified, without the private ACP
 application or a second writer for Unified's data directory.
 
+This is an execution attachment in the
+[five-boundary composition](VISION.md#constellation-boundaries).
+When it serves another Agent Instance, that agent supplies its continuing identity
+and accepted-work interface; connected experiences retain their source conversations.
+The adapter's advertised capabilities below describe its scope, not complete
+ecosystem conformance.
+
 ## Setup
 
 Install and start Unified normally, connect its model account, and choose its

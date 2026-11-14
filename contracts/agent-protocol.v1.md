@@ -25,9 +25,16 @@ ACP's session is not assumed to be the experience's shared conversation. Adapter
 own that mapping and their context/memory strategy, including whether one instance
 uses separate native contexts or retrieves connected conversations into a shared
 working context. Standard protocol behavior remains intact; no invented ACP field
-is required merely by this distinction. [HP7](host-protocol.v1.md) owns the shared
-conversation boundary. External work or an event response need not produce a chat
-reply; an agent's supported triggers and outcome channels belong to its implementation.
+is required merely by this distinction. [HP7](host-protocol.v1.md) maps the shared
+conversation boundary within Unified. External work or an event response need not
+produce a chat reply; an agent's supported triggers and outcome channels belong to
+its implementation.
+
+For Constellation participation, the
+[Agent Instance contract](https://github.com/microsoft/amplifier-constellation/blob/main/contracts/agent-instance.md)
+owns the continuing participant's outward promises. AP governs this native
+execution adapter; the [composition mapping](../docs/architecture/VISION.md#constellation-boundaries)
+identifies the other owners without requiring this adapter to implement every role.
 
 ## The promises
 
