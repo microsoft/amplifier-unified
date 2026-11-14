@@ -164,13 +164,15 @@ async def test_attachment_http_images_inline_documents_download(authenticated_cl
     assert (await client.get('/api/attachments/' + '0' * 32)).status == 404
 
 
-def test_real_core_loop_live_missing_media_is_truthfully_unavailable():
+def test_real_core_loop_live_receives_multimodal_message():
     python = os.environ.get('UNIFIED_RUNTIME_PYTHON')
     if not python:
-        pytest.skip('Set UNIFIED_RUNTIME_PYTHON for real Core/loop-live unavailable-media verification')
+        pytest.skip('Set UNIFIED_RUNTIME_PYTHON for real Core/loop-live admitted-media verification')
     result = subprocess.run([python, str(Path(__file__).parent / 'fixtures/attachments_runtime_probe.py')], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert '"image_unavailable_without_capability": true' in result.stdout
+    assert '"image_received": true' in result.stdout
+    assert '"canonical_reference_only": true' in result.stdout
+    assert '"actual_checkpoint_before_provider": true' in result.stdout
 
 
 def test_pasted_text_metadata_and_content_survive_reload(tmp_path):

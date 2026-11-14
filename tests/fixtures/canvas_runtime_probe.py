@@ -1,4 +1,4 @@
-"""Real Core/Foundation/loop-live multimodal turn against a local stub provider."""
+"""Real Core/loop-live canvas guidance against a local stub provider."""
 import asyncio
 import base64
 import importlib.util
@@ -51,10 +51,9 @@ async def run():
     try:
         with tempfile.TemporaryDirectory() as home:
             os.environ['AMPLIFIER_WEB_HOME'] = home
-            attachment = save(home, 'tiny.png', PNG)
             task = asyncio.create_task(session.execute(''))
             await runtime.wait_for(lambda e: e['type'] == 'session.ready', timeout=8)
-            await runtime.submit(Input('user', 'Please review the attached files.', id='image-only', attachments=(attachment,)))
+            await runtime.submit(Input('user', 'Please show the result on Canvas.', id='canvas-input'))
             event = await runtime.wait_for(lambda e: e['type'] in {'generation.finished', 'generation.failed'}, timeout=8)
             assert event['type'] == 'generation.finished', event
             assert provider.requests
@@ -84,10 +83,6 @@ async def run():
             if artifacts := os.environ.get('AMPLIFIER_TEST_ARTIFACTS'):
                 (Path(artifacts) / 'canvas-provider-request.json').write_text(serialized, encoding='utf-8')
 
-            request = provider.requests[0]
-            user = next(message for message in request.messages if message.role == 'user' and isinstance(message.content, list))
-            assert not any(block.type == 'image' for block in user.content)
-            assert 'compatible media handling is not installed' in user.model_dump_json()
             assert PNG not in json.dumps(runtime.events)
             await runtime.submit(Input('stop'))
             await asyncio.wait_for(task, 5)
