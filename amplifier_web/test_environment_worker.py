@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import tarfile
 from contextlib import contextmanager, ExitStack
 from pathlib import Path
 
@@ -55,6 +56,20 @@ def selected_profile(payload):
     profiles = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(profiles)
     return profiles.resources(payload.get('profileId', 'linux-python'), payload.get('resourceRequest'))
+
+
+def prepared_runtime(payload):
+    # An explicit custom Compose file owns dependency setup. Ordinary presets
+    # retain the maintained prepared image/initializer, regardless of networking.
+    return payload.get('preparedRuntime', selected_profile(payload)['preparationRequired'] and not payload.get('composeFile'))
+
+
+def job_environment(payload):
+    value = dict(selected_profile(payload)['environment']) if prepared_runtime(payload) else {}
+    if payload.get('offline') is False:
+        for key in ('UV_OFFLINE', 'PIP_NO_INDEX', 'npm_config_offline'):
+            value.pop(key, None)
+    return value
 
 
 def read_private_record(path, *, max_bytes=4096):
@@ -445,6 +460,7 @@ def remove_owned(payload, identity, backend, config, lib, backend_error, binding
     archive_rejected = False
     verification = None
     try:
+        selected_only = payload.get('preserveSource') is False
         archive_only = recovering or prepared_archive_custody(payload)
         universe = lib.status(identity, config=config)
         if universe.state != 'stopped' or any(item.state == 'running' for item in universe.services):
@@ -462,7 +478,7 @@ def remove_owned(payload, identity, backend, config, lib, backend_error, binding
         destination = removal_directory(payload)
         original = removal_binding(payload, identity, backend)
         cleanup = 'preserving'
-        if archive_only:
+        if archive_only and not selected_only:
             cleanup_phase(payload, cleanup)
             if shutil.disk_usage(Path(payload['root'])).free < 2 * retention.RECOVERY_LIMIT + 1024 ** 3:
                 return {**cleanup_failure(payload, cleanup, identity, 'retention_storage'),
@@ -474,19 +490,26 @@ def remove_owned(payload, identity, backend, config, lib, backend_error, binding
         started = True
         archives = []
         options = {'max_bytes': retention.RECOVERY_LIMIT, 'timeout_seconds': 300} if archive_only else {}
-        for source, name in [('/workspace', 'workspace.tar'), ('/artifacts', 'artifacts.tar')]:
+        selections = [('/artifacts', 'artifacts.tar')] if selected_only else [('/workspace', 'workspace.tar'), ('/artifacts', 'artifacts.tar')]
+        for source, name in selections:
             phase = 'export-' + source.strip('/')
             archives.append(serialize(lib.export_files(identity, source, destination / name, config=config, **options)))
         phase = 'verify-exports'
         cleanup = 'verifying'
         if archive_only:
             cleanup_phase(payload, cleanup)
-        for archive, source, name in zip(archives, ('/workspace', '/artifacts'), ('workspace.tar', 'artifacts.tar')):
+        for archive, (source, name) in zip(archives, selections):
             if (archive.get('id') != identity or archive.get('source') != source
                     or archive.get('destination') != str(destination / name)):
                 raise ValueError('The exported selection does not match the original removal.')
         try:
-            retained = retention.verify_retention(Path(payload['root']), archives, 'archive-only' if archive_only else 'files')
+            if selected_only:
+                source_transfer.preflight(Path(payload['root']) / 'source.tar', payload['snapshot'])
+                retained = {**retention.verify_artifacts(archives), 'policy': 'selected-artifacts',
+                            'sourceSha256': payload['snapshot']['archive_sha256']}
+                retention.publish_record(destination / 'retention.json', retained)
+            else:
+                retained = retention.verify_retention(Path(payload['root']), archives, 'archive-only' if archive_only else 'files')
         except (ValueError, retention.tarfile.TarError) as exc:
             # A synchronous validation rejection precedes destroy. Do not turn
             # filesystem/publication errors or helper loss into this receipt.
@@ -611,22 +634,27 @@ def inspect_removal(payload):
             if intent.get(name + 'Sha256') != retention.digest(directory / (name + '.json'))[0]:
                 return held
         archives = read_private_record(directory / 'manifest.json')
-        if (not isinstance(archives, list) or len(archives) != 2
+        selections = ['/artifacts'] if payload.get('preserveSource') is False else ['/workspace', '/artifacts']
+        if (not isinstance(archives, list) or len(archives) != len(selections)
                 or any(not isinstance(a, dict) for a in archives)
-                or [a.get('source') for a in archives] != ['/workspace', '/artifacts']):
+                or [a.get('source') for a in archives] != selections):
             return held
-        for a, name in zip(archives, ('workspace.tar', 'artifacts.tar')):
+        for a, selection in zip(archives, selections):
             # Never follow a receipt's arbitrary path, foreign guest or source.
-            if (a.get('destination') != str(directory / name) or a.get('id') != expected['universeId']
+            if (a.get('destination') != str(directory / (selection.strip('/') + '.tar')) or a.get('id') != expected['universeId']
                     or a.get('verified') is not True):
                 return held
         if intent.get('archives') != [{k: a[k] for k in ('source', 'sha256', 'bytes')} for a in archives]:
             return held
         accounting = read_private_record(directory / 'retention.json')
         mode = accounting.get('policy') if isinstance(accounting, dict) else None
-        if mode not in {'files', 'archive-only'}:
+        if mode not in {'files', 'archive-only', 'selected-artifacts'}:
             return held
-        checked = retention.verify_retention(Path(payload['root']), archives, mode, publish=False)
+        if mode == 'selected-artifacts':
+            source_transfer.preflight(Path(payload['root']) / 'source.tar', payload['snapshot'])
+        checked = ({**retention.verify_artifacts(archives, publish=False), 'policy': mode,
+                    'sourceSha256': payload['snapshot']['archive_sha256']} if mode == 'selected-artifacts'
+                   else retention.verify_retention(Path(payload['root']), archives, mode, publish=False))
         if checked != accounting:
             return held
         confirmed = read_private_record(directory / 'destroy-confirmed.json')
@@ -692,7 +720,7 @@ def profile(image, payload=None):
             'user': '0:0',
         }},
         'volumes': {'workspace': {}, 'artifacts': {}, 'control': {}},
-        'networks': {'default': {'internal': True}},
+        'networks': {'default': {'internal': (payload or {}).get('offline', True)}},
         'x-dtu': {'twin_machine': 'twin'},
     }
     if payload is not None:
@@ -700,7 +728,137 @@ def profile(image, payload=None):
         value['services']['twin']['labels'] = dict(labels)
         for definition in [*value['volumes'].values(), *value['networks'].values()]:
             definition['labels'] = dict(labels)
+        if payload.get('profileId') == 'app-preview':
+            value['services']['twin']['ports'] = [{'target': 8000, 'published': '0', 'host_ip': '127.0.0.1'}]
+            value['x-dtu']['urls'] = [{'port': 8000, 'label': 'App preview'}]
     return value
+
+
+def compose_file(root, payload):
+    """An ordinary Compose file, with build inputs only in the copied source."""
+    if not payload.get('composeFile'):
+        path = root / 'compose.json'
+        path.write_text(json.dumps(profile(payload['image'], payload)))
+        return path
+    source = root / 'compose-source'
+    source.mkdir(mode=0o700)
+    with tarfile.open(root / 'source.tar') as archive:
+        archive.extractall(source, filter='data')
+    path = source / payload['composeFile']
+    if not path.resolve().is_relative_to(source) or not path.is_file():
+        raise ValueError('The Compose file must exist inside the copied source.')
+    # Compose resolves env_file/include before returning normalized config.
+    # Constrain those file reads first, so normalization cannot read a host
+    # credential and hide its origin inside a resulting environment mapping.
+    import yaml
+    visited = set()
+    def copied_file(value, parent):
+        if not isinstance(value, str) or '$' in value:
+            raise ValueError('Compose file references must be literal paths within copied source.')
+        candidate = (parent / value).resolve()
+        if not candidate.is_relative_to(source):
+            raise ValueError('Compose references must stay within copied source.')
+        return candidate
+    def inspect_inputs(candidate):
+        if candidate in visited:
+            return
+        visited.add(candidate)
+        try:
+            document = yaml.safe_load(candidate.read_text())
+        except yaml.YAMLError as error:
+            raise ValueError('The copied Compose YAML is invalid.') from error
+        if not isinstance(document, dict):
+            raise ValueError('The Compose file must contain an object.')
+        for include in document.get('include', []):
+            paths = include.get('path') if isinstance(include, dict) else include
+            for included in paths if isinstance(paths, list) else [paths]:
+                inspect_inputs(copied_file(included, candidate.parent))
+            if isinstance(include, dict):
+                for env in include.get('env_file', []) if isinstance(include.get('env_file', []), list) else [include['env_file']]:
+                    copied_file(env, candidate.parent)
+                if include.get('project_directory'):
+                    copied_file(include['project_directory'], candidate.parent)
+        for service in document.get('services', {}).values():
+            files = service.get('env_file', [])
+            for env in files if isinstance(files, list) else [files]:
+                copied_file(env['path'] if isinstance(env, dict) else env, candidate.parent)
+            extends = service.get('extends', {})
+            if isinstance(extends, dict) and extends.get('file'):
+                inspect_inputs(copied_file(extends['file'], candidate.parent))
+    inspect_inputs(path)
+    # Let Docker own Compose parsing, interpolation, includes and normalization.
+    # The helper's sanitized environment contains no provider/host credentials.
+    result = subprocess.run(['docker', '--host', payload['dockerHost'], 'compose', '-f', str(path),
+                             'config', '--format', 'json'], check=True, capture_output=True, text=True, timeout=30)
+    value = json.loads(result.stdout)
+    for section in ('secrets', 'configs'):
+        for definition in value.get(section, {}).values():
+            if definition.get('external') or (definition.get('file') and
+                    not Path(definition['file']).resolve().is_relative_to(source)):
+                raise ValueError('Compose configuration and secret files must be explicit copied-source inputs.')
+    labels = {'io.amplifier.root-owner': payload['rootOwner'], 'io.amplifier.operation-id': payload['operationId']}
+    for service in value.get('services', {}).values():
+        if service.get('volumes_from'):
+            raise ValueError('Declare task-owned volumes explicitly; inherited container/service mounts are not copied-source inputs.')
+        service['labels'] = {**service.get('labels', {}), **labels}
+        service.pop('container_name', None)
+        build = service.get('build')
+        if build:
+            context = Path(build['context'])
+            if not context.resolve().is_relative_to(source):
+                raise ValueError('Compose builds must use the copied source, not host paths or remote contexts.')
+            if build.get('dockerfile') and not (context / build['dockerfile']).resolve().is_relative_to(source):
+                raise ValueError('The Dockerfile must remain within copied source.')
+            if build.get('additional_contexts') or build.get('ssh'):
+                raise ValueError('Additional host build contexts and SSH forwarding are not implicit test inputs.')
+        # A trusted custom profile can choose images and networks, but never
+        # implicitly receives host source, Docker sockets or host credentials.
+        for mount in service.get('volumes', []):
+            if mount.get('type') == 'bind':
+                if not Path(mount['source']).resolve().is_relative_to(source) or not mount.get('read_only'):
+                    raise ValueError('Host mounts must be explicit read-only copied-source inputs.')
+        if service.get('privileged') or any(service.get(key) == 'host' for key in ('network_mode', 'pid', 'ipc')):
+            raise ValueError('Host namespace or privileged Compose services are not supported.')
+        if payload.get('offline') and service.get('network_mode') not in (None, 'none'):
+            raise ValueError('Offline Compose services must use task-owned internal networks or none.')
+    if payload.get('offline'):
+        for network in value.setdefault('networks', {'default': {}}).values():
+            network['internal'] = True
+    for section in ('volumes', 'networks'):
+        for definition in value.get(section, {}).values():
+            if definition.get('external'):
+                raise ValueError('Use task-owned Compose resources, not external networks or volumes.')
+            if section == 'volumes' and (definition.get('driver_opts') or definition.get('driver', 'local') != 'local'):
+                raise ValueError('Host filesystem volume drivers are not copied-source inputs.')
+            definition['labels'] = {**definition.get('labels', {}), **labels}
+            definition.pop('name', None)
+    services = value.get('services', {})
+    twin_name = value.setdefault('x-dtu', {}).get('twin_machine') or (next(iter(services)) if len(services) == 1 else 'twin')
+    if twin_name not in services:
+        raise ValueError('Choose an existing Compose twin service.')
+    value['x-dtu']['twin_machine'] = twin_name
+    if value['x-dtu'].get('repositories'):
+        raise ValueError('Copied source has no Git history. Use DTU repository publishing explicitly for Git-derived installs.')
+    twin = value['services'][value['x-dtu']['twin_machine']]
+    if str(twin.get('user', '0')) not in {'0', '0:0', 'root', 'root:root'}:
+        raise ValueError('The twin supervisor requires root; commands run as the unprivileged workload user.')
+    twin['user'] = '0:0'  # Never inherit an image's USER for the root supervisor.
+    limits = selected_profile(payload)
+    twin.update(mem_limit=str(limits['memoryMiB']) + 'm', cpus=limits['cpus'],
+                pids_limit=limits['pids'], shm_size=str(limits['shmMiB']) + 'm')
+    required = {'CHOWN', 'SETUID', 'SETGID', 'KILL'}
+    dropped = {cap.removeprefix('CAP_') for cap in twin.get('cap_drop', [])}
+    added = {cap.removeprefix('CAP_') for cap in twin.get('cap_add', [])}
+    if ('ALL' in dropped and not required <= added) or (dropped & required) - added:
+        raise ValueError('The twin must retain CHOWN, SETUID, SETGID and KILL for its root supervisor.')
+    targets = {mount['target'] for mount in twin.get('volumes', [])}
+    for name, target in [('workspace', '/workspace'), ('artifacts', '/artifacts'), ('control', '/var/lib/unified-jobs')]:
+        if target not in targets:
+            twin.setdefault('volumes', []).append({'type': 'volume', 'source': 'unified-' + name, 'target': target})
+            value.setdefault('volumes', {})['unified-' + name] = {'labels': dict(labels)}
+    path = source / 'unified.compose.json'
+    path.write_text(json.dumps(value))
+    return path
 
 
 def execute_call(payload):
@@ -751,8 +909,11 @@ def execute_call(payload):
                     return {'ok': False, 'status': 'not-started', 'effectAdmitted': False,
                             'universeId': identity, 'snapshot': snapshot, 'code': 'source-transfer-invalid',
                             'message': 'The frozen source could not be prepared for transfer. No environment or test command was started; source and preparation evidence are retained.'}
-                compose = root / 'compose.json'
-                compose.write_text(json.dumps(profile(payload['image'], payload)))
+                try:
+                    compose = compose_file(root, payload)
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    return {'ok': False, 'effectAdmitted': False, 'status': 'not-started',
+                            'code': 'compose-invalid', 'message': 'The copied Compose profile could not be prepared. No environment was launched.'}
                 try:
                     with docker_admission(payload) as capacity:
                         if capacity['scope']['daemon'] != backend['daemon']:
@@ -775,14 +936,15 @@ def execute_call(payload):
                 if unpack.exit_code != 0:
                     return {'ok': False, 'universeId': identity, 'snapshot': snapshot, 'status': 'unknown',
                             'message': 'The environment launched but source preparation did not complete. Inspect it; launch was not replayed.', 'result': serialize(unpack)}
-                initialized = lib.execute(identity, jobs.initialize_command(selected_profile(payload)['preparationRequired']),
+                initialized = lib.execute(identity, jobs.initialize_command(prepared_runtime(payload)),
                     workdir='/', timeout_seconds=120, max_output_bytes=32768, config=config)
                 if initialized.exit_code != 0:
                     return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
                             'message': 'The owned source and dependency initialization did not complete. It was not repeated.'}
                 retain_source_ready(root, identity, snapshot)
                 return {'ok': True, 'universeId': identity, 'sourceReady': True,
-                        'status': universe.state, 'services': [serialize(item) for item in universe.services]}
+                        'status': universe.state, 'services': [serialize(item) for item in universe.services],
+                        'urls': [serialize(item) for item in universe.urls]}
         if not identity:
             # One resource has its own backend root. Exact launch identity is the
             # recovery key when the host lost the original helper response.
@@ -793,7 +955,8 @@ def execute_call(payload):
             if not source_ready(root, identity, snapshot):
                 return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
                         'message': 'The exact source preparation is not confirmed; no job was started.'}
-            payload = {**payload, 'universeId': identity, 'jobEnvironment': selected_profile(payload)['environment']}
+            payload = {**payload, 'universeId': identity,
+                       'jobEnvironment': job_environment(payload)}
             result = lib.execute(identity, jobs.command(payload), workdir='/', timeout_seconds=15,
                 max_output_bytes=262144, config=config)
             return jobs.result(payload, serialize(result))
@@ -808,7 +971,7 @@ def execute_call(payload):
             if not source_ready(root, identity, snapshot):
                 return {'ok': False, 'universeId': identity, 'sourceReady': False, 'status': 'unknown',
                         'message': 'Source preparation is not confirmed for this exact snapshot. No check was started and source was not installed again.'}
-            command = jobs.command({**payload, 'jobEnvironment': selected_profile(payload)['environment']})
+            command = jobs.command({**payload, 'jobEnvironment': job_environment(payload)})
             result = lib.execute(identity, command, workdir='/workspace',
                 timeout_seconds=payload['timeoutSeconds'], max_output_bytes=32768, config=config)
             return {'ok': True, 'universeId': identity, 'result': serialize(result)}
@@ -864,8 +1027,9 @@ def main():
         value = execute_call(payload)
     except RemovalFailure as exc:
         value = exc.receipt
-    except Exception:  # noqa: BLE001 - subprocess boundary returns uncertainty, never raw private diagnostics.
+    except Exception as error:  # noqa: BLE001 - subprocess boundary returns uncertainty, never raw private diagnostics.
         value = {'ok': False, 'status': 'unknown',
+                 'errorType': type(error).__name__,
                  'message': 'The managed backend failed before returning a confirmed result. Inspect retained state; this request will not replay.'}
     try:
         encoded = json.dumps(value)

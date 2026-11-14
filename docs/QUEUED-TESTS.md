@@ -220,9 +220,13 @@ open for the duration.
 
 The supervisor's control directory is root-owned and separate from writable
 source/artifacts. Commands run as uid/gid 65534 with no supplementary groups.
-Docker retains a read-only root, no-new-privileges, no host mounts and no exposed
-ports; only CHOWN, SETUID, SETGID and KILL capabilities are available to its root
-supervisor. Incus remains unprivileged and offline. Prepared dependencies must
+The default Docker Compose preset retains a read-only root, no-new-privileges,
+no host mounts and no exposed ports; only CHOWN, SETUID, SETGID and KILL
+capabilities are available to its root supervisor. Trusted ordinary Compose
+profiles and app-preview can select images/builds and loopback ports; copied
+source and explicit offline/source-retention choices follow the
+[managed runner contract](workspaces/managed-test-runner.md). Docker no longer
+requires per-operation runtime hashing or a target-local qualifier. Incus remains unprivileged and offline. Prepared dependencies must
 be readable by the workload user; writable project dependencies are initialized
 inside the owned source snapshot.
 

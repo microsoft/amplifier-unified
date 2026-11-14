@@ -422,6 +422,12 @@ existing updater maintenance triggers; update/activation work takes priority.
 Successful runner selection only wakes this policy owner; it cannot bypass the
 global off setting or retention grace. Explicit user uninstall and Skip actions
 retain their separate existing authorization and exact-owner guards.
+Docker now uses ordinary Smart Tool package updates, not purpose-installed
+certification candidates. Historical candidate/install references and unresolved
+owners remain protected; this change neither rewrites old proofs nor retires
+old environments. New disposable Docker copies retain selected `/artifacts`
+and the original source snapshot, with full guest-source export only when
+`preserveSource: true` is explicit. Old owners retain their preservation contract.
 
 The policy never deletes chats, project folders, Git worktrees, saved test source
 or result archives, the only copy of an artifact, dependency stores owned by other components, or

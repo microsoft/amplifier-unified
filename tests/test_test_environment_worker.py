@@ -52,7 +52,7 @@ def library(monkeypatch):
     lib = SimpleNamespace(
         export_repository_snapshot=record('snapshot', Value(snapshot_commit='exact', snapshot_tree='tree', archive_sha256=hashlib.sha256(b'source').hexdigest())),
         launch_id=record('identity', 'owned'),
-        launch=record('launch', Value(id='owned', state='running', services=[])),
+        launch=record('launch', Value(id='owned', state='running', services=[], urls=[])),
         push_files=record('push', Value()),
         execute=record('execute', Value(stdout='ok', stderr='', exit_code=0)),
         status=record('status', Value(id='owned', state='stopped', services=[])),
@@ -1331,6 +1331,25 @@ def test_manual_host_payload_selects_resource_profile_without_caller_environment
     assert not {'environment', 'jobEnvironment', 'uid'} & result.keys()
 
 
+@pytest.mark.parametrize('prepared', [False, True])
+def test_owned_receipt_selects_prepared_image_and_initializer_payload(tmp_path, monkeypatch, prepared):
+    home, row = allocated(tmp_path)
+    row.update(profileId='browser-test', resourceRequest=profiles.freeze('browser-test'),
+               composeFile=None, offline=False)
+    if prepared:
+        row.update(snapshot={}, preparedDependencies={'version': 1, 'status': 'ready',
+            'profileId': 'browser-test', 'sourceSha256': None, 'backend': 'docker', 'image': 'sha256:' + 'a' * 64})
+    monkeypatch.setattr(owner, '__file__', str(tmp_path / 'owner.py'))
+    (tmp_path / 'test_environment_worker.py').write_text(
+        "import json,sys\np=json.load(sys.stdin)\nprint(json.dumps({'ok':True,**p}))\n")
+    value = owner.invoke({'python': sys.executable, 'image': owner.APPROVED_IMAGE,
+                          'dockerHost': 'unix:///owned.sock'}, home, row, 'execute', {'requestId': 'owned'})
+    assert value['preparedRuntime'] is prepared
+    assert value['image'] == ('sha256:' + 'a' * 64 if prepared else owner.APPROVED_IMAGE)
+    assert worker.prepared_runtime(value) is prepared
+    assert bool(worker.job_environment(value)) is prepared
+
+
 def test_manual_backend_uncertainty_dispatches_once(library, tmp_path):
     lib, calls = library
     value = payload(tmp_path, 'execute')
@@ -1512,3 +1531,17 @@ def test_retention_storage_refusal_precedes_exports_and_removal(library, tmp_pat
     assert result['removal']['phase'] == 'prepare-retention'
     assert not worker.removal_directory(value).exists()
     assert not any(name in {'export', 'destroy'} for name, *_ in calls)
+
+
+@pytest.mark.parametrize('damage', ['missing', 'changed'])
+def test_selected_artifact_disposal_requires_retained_original_source(library, tmp_path, monkeypatch, damage):
+    _, calls = library
+    value = {**payload(tmp_path, 'remove'), 'preserveSource': False}
+    if damage == 'missing':
+        (tmp_path / 'source.tar').unlink()
+    else:
+        (tmp_path / 'source.tar').write_bytes(b'changed')
+    result = removal_main(monkeypatch, value)
+    assert not result['ok']
+    assert result['removal']['destroyEffect'] == 'not_dispatched'
+    assert not any(name == 'destroy' for name, *_ in calls)

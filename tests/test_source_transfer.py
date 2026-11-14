@@ -23,6 +23,23 @@ def snapshot(path):
     return {'archive_sha256': digest, 'archive_bytes': path.stat().st_size}
 
 
+def test_copied_source_rejects_untraversed_submodule_before_export(tmp_path):
+    source = tmp_path / 'source'
+    source.mkdir()
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(source), *args], text=True).strip()
+    git('init', '-q')
+    (source / 'input').write_text('original')
+    git('add', 'input')
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Source')
+    commit = git('rev-parse', 'HEAD')
+    git('update-index', '--add', '--cacheinfo', '160000,' + commit + ',dependency')
+    before = git('ls-files', '--stage')
+    with pytest.raises(ValueError, match='do not traverse submodules'):
+        transfer.export_snapshot(source, tmp_path / 'source.tar', lambda: pytest.fail('incomplete export'))
+    assert git('ls-files', '--stage') == before and not (tmp_path / 'source.tar').exists()
+
+
 def archive(tmp_path, name='saved.txt', data=b'exact saved source'):
     path = tmp_path / 'source.tar'
     with tarfile.open(path, 'w') as target:

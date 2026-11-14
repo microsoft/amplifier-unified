@@ -1,4 +1,4 @@
-"""Application-owned test profiles; callers never provide a container recipe."""
+"""Resource presets and ordinary Compose selection for task-owned tests."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -37,6 +37,13 @@ _PROFILES = {
         'tmpMiB': 1024, 'shmMiB': 1024, 'defaultTimeoutSeconds': 1200,
         'maxTimeoutSeconds': 1800, 'environment': _ENVIRONMENT,
     },
+    'app-preview': {
+        'id': 'app-preview', 'label': 'App preview',
+        'description': 'Retained Python-capable Compose workspace with a loopback preview port; start the app with its normal command.',
+        'preparationRequired': False, 'memoryMiB': 4096, 'cpus': 2, 'pids': 512,
+        'tmpMiB': 512, 'shmMiB': 128, 'defaultTimeoutSeconds': 1200,
+        'maxTimeoutSeconds': 1800, 'environment': {},
+    },
 }
 
 
@@ -63,6 +70,26 @@ def execution_contract(profile_id, source=None):
 
 def catalog():
     return [{**get(identity), **({'executionContract': execution_contract(identity)} if get(identity)['preparationRequired'] else {})} for identity in _PROFILES]
+
+
+def compose_fields(string):
+    return {
+        'composeFile': {**string(2000), 'minLength': 1,
+                        'description': 'Trusted ordinary Compose YAML/JSON file relative to the selected source. Explicit custom Compose takes over dependency preparation; no prepared Python/Node/browser runtime is promised. Without this option, Python/browser presets prepare their maintained locked dependencies automatically.'},
+        'offline': {'type': 'boolean', 'description': 'Disable external networking. Default false permits ordinary dependency commands and Docker build cache.'},
+        'preserveSource': {'type': 'boolean', 'description': 'Export the full disposable guest source before removal. Default false retains selected /artifacts and the original source snapshot, not a mandatory multi-GB workspace export.'},
+    }
+
+
+def compose_options(args):
+    from pathlib import PurePosixPath
+    file = args.get('composeFile')
+    if file is not None and (not isinstance(file, str) or not file or len(file) > 2000
+            or '\\' in file or PurePosixPath(file).is_absolute() or '..' in PurePosixPath(file).parts):
+        raise ValueError('Choose a Compose file relative to the selected source.')
+    if any(key in args and type(args[key]) is not bool for key in ('offline', 'preserveSource')):
+        raise ValueError('Compose network and source retention choices must be boolean.')
+    return {'composeFile': file, 'offline': args.get('offline', False), 'preserveSource': args.get('preserveSource', False)}
 
 
 def validate_timeout(profile_id, seconds, timing_request=None):

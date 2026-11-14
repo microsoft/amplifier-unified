@@ -328,6 +328,10 @@ class Lifecycle:
                     dependents.append(server["name"])
             if dependents:
                 raise ValueError("Remove these connection registrations before uninstalling: " + ", ".join(dependents)[:500])
+            from .task_environments import local_configuration
+            selected, _, _ = local_configuration(self.service)
+            if selected and selected.get('installationId') == identity:
+                raise ValueError('This installed Smart Tool is selected for future test environments. Disable or select another runner before uninstalling it.')
             from .task_environments import remove_installation
             try:
                 await asyncio.to_thread(remove_installation, self.service.data_dir, identity, folder, cleanup_inventory=cleanup_inventory, cleanup_guard=cleanup_guard)

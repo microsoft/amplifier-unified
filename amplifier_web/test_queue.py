@@ -44,9 +44,10 @@ def binding(source):
 def definitions(schema, string):
     scope = {'workspaceId': string(100), 'sessionId': string(200)}
     return {
-        ACTION: ('Queue one isolated check. The host waits for capacity, snapshots the working folder when admitted, runs the command once, stops its environment, exports source and artifacts and removes the owned environment. Source and results are retained; the full temporary workspace follows Storage retention unless keepWorkspace is true. Save useful generated changes to /artifacts. Continue independent work while waiting. Unknown effects never replay. A guarded completion notification can resume this chat.', schema({
+        ACTION: ('Queue one isolated check. The host waits for capacity, snapshots the working folder when admitted, prepares default Python/browser dependencies, runs once, stops, exports selected evidence and removes only its owned environment. Original source and results stay; preserveSource adds a full disposable guest workspace export. Custom composeFile explicitly owns dependency setup. Save useful generated changes to /artifacts. Continue independent work while waiting. Unknown effects never replay. A guarded completion notification can resume this chat.', schema({
             **scope, 'requestId': {**string(200), 'minLength': 1}, 'profileId': {'enum': [row['id'] for row in profiles.catalog()]},
             'command': {**string(16384), 'minLength': 1},
+            **profiles.compose_fields(string),
             'timeoutSeconds': {'type': 'integer', 'minimum': 1, 'maximum': profiles.MAX_SECONDS},
             'waitSeconds': {'type': 'integer', 'minimum': 0, 'maximum': profiles.MAX_SECONDS},
             'independent': {'type': 'boolean', 'description': 'Allow this check to overlap other independent checks in this chat within the global environment limit. Use only when no earlier check result is required. Default false preserves ordered execution.'},
@@ -418,6 +419,7 @@ class TestQueue:
                     'binding': binding(source), 'authority': authority,
                     'backendKey': environments.config_key(config), 'command': args['command'],
                     'timeoutSeconds': seconds, 'profileId': args['profileId'], 'resourceRequest': resource_request, 'timingRequest': timing_request, 'durableVersion': 1,
+                    'composeOptions': {key: args[key] for key in ('composeFile', 'offline', 'preserveSource') if key in args},
                     'actor': {'sessionId': source['id'],
                         'principal': source.get('runtimeSessionId') or source.get('nativeIdentity') or source['id']}}}
             from . import storage_cleanup, workspace_archive_retention
@@ -655,7 +657,8 @@ class TestQueue:
                     workspace = next(w['id'] for w in self.app.state['workspaces'] if w['path'] == receipt['workspace'])
                 row = await asyncio.to_thread(environments.prepare, self.app.data_dir,
                     receipt['senderSessionId'], workspace,
-                    job['actor'], job['source'], job['backendKey'], identity+':start:'+str(job.get('attempt', 0)), config.get('installationId'), config, job.get('profileId', environments.PROFILE), job.get('resourceRequest'), job.get('timingRequest'), job.get('workspaceArchivePolicy'))
+                    job['actor'], job['source'], job['backendKey'], identity+':start:'+str(job.get('attempt', 0)), config.get('installationId'), config, job.get('profileId', environments.PROFILE), job.get('resourceRequest'), job.get('timingRequest'), job.get('workspaceArchivePolicy'),
+                    **({'compose_options': job['composeOptions']} if job.get('composeOptions') else {}))
                 async with self.app.lock:
                     # Cancellation may arrive while local allocation is persisted.
                     # Never overwrite the newer cancellation/subscription record.
