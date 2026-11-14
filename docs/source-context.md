@@ -58,6 +58,11 @@ selected copy; a client-only merge is not delivery here. Follow the mandatory
 Its selection and maintenance guide stay visible; use `--all --under components/web-client`
 to inspect the copy. Generated-context classification does not make synchronization
 optional. The copy is the selected production build source, not another authored owner.
+The scheduling artifact snapshot follows the same author/delivery distinction:
+`components/scheduling` is authored, while `components/scheduling-delivery` is
+generated and opt-in. Its visible `components/scheduling.source.json` records the
+selected public wheel. Use `--all --under components/scheduling-delivery` to inspect
+it; a new component source edit or publication does not silently refresh the copy.
 Source bootstrap files in the canonical client's `public/` remain authored inputs;
 their delivery copy has the same generated-context classification as other copied
 client source. Shipped documentation in `docs/shell` is authored here. Frozen UX inventory/control

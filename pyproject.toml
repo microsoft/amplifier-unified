@@ -18,6 +18,7 @@ dependencies = [
     "six>=1.16,<2",
     "jsonschema>=4.23,<5",
     "tinycss2>=1.4,<2",
+    "tzdata; sys_platform == 'win32'",
     "pyyaml>=6.0.3,<7",
     "filelock>=4.2.1,<5",
     "qrcode>=8.2,<9",
@@ -52,8 +53,11 @@ allow-direct-references = true
 # Produced by the release owner; retained unchanged when rebuilding an sdist.
 artifacts = ["/amplifier_web/release-source.json"]
 
+[tool.hatch.build.hooks.custom]
+path = "scripts/scheduling_build_hook.py"
+
 [tool.hatch.build.targets.wheel]
-packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "components/scheduling/amplifier_scheduling", "amplifier_recall", "components/outputs/amplifier_outputs", "components/worktrees/amplifier_worktrees", "components/publishing/amplifier_publishing", "components/portability/amplifier_portability"]
+packages = ["amplifier_web", "amplifier_operations", "amplifier_kernels", "components/scheduling-delivery/amplifier_scheduling", "amplifier_recall", "components/outputs/amplifier_outputs", "components/worktrees/amplifier_worktrees", "components/publishing/amplifier_publishing", "components/portability/amplifier_portability"]
 # Standalone projects share these same runtime sources; test/build inputs do not ship.
 exclude = [
     "/amplifier_kernels/tests/**", "/amplifier_kernels/build/**",
@@ -88,6 +92,8 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
+"components/scheduling.source.json" = "amplifier_web/component_delivery/scheduling.json"
+"components/scheduling-delivery/LICENSE" = "amplifier_web/component_delivery/scheduling-LICENSE"
 "bundle.yaml" = "amplifier_web/bundle_data/bundle.yaml"
 "behaviors" = "amplifier_web/bundle_data/behaviors"
 "context" = "amplifier_web/bundle_data/context"
@@ -146,4 +152,4 @@ artifacts = ["python-docx>=1.1,<2", "python-pptx>=1,<2", "openpyxl>=3.1,<4", "re
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests", "amplifier_kernels/tests", "components/scheduling/tests", "amplifier_operations/tests", "components/publishing/tests", "components/worktrees/tests", "components/portability/tests", "components/outputs/tests"]
+testpaths = ["tests", "amplifier_kernels/tests", "amplifier_operations/tests", "components/publishing/tests", "components/worktrees/tests", "components/portability/tests", "components/outputs/tests"]
