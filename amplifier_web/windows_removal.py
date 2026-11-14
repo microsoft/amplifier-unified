@@ -22,13 +22,200 @@ Requires Windows 10 1809 or later on local NTFS. There is no fallback.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import base64
 import ctypes as C
+import json
+import ntpath
+import os
+from pathlib import PureWindowsPath
+import subprocess
 import time
 
 from .windows_files import _INVALID, DWORD, FILE_INFO, HANDLE
 from .windows_read_files import _Attributes, _ReadAPI, _Status, _Unicode
 
 _DIRECTORY, _LINK = 0x10, 0x400  # FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT
+
+
+# All variable data travels on stdin, never in this program. Unlike the pinned
+# in-process walk below, this path-based last step deliberately leaves links.
+# It cannot prevent a same-account program swapping an entry between cmdlets.
+FINISH_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+$p = $null
+$passes = 0
+$removed = $false
+$script:left = @()
+$script:leftCount = 0
+$reason = ''
+function Keep($path) {
+    $script:leftCount++
+    if ($script:left.Count -lt 20) { $script:left += $path }
+}
+function Real-Folder($item) {
+    return ($item.PSIsContainer -and "$($item.Attributes)" -notmatch 'ReparsePoint')
+}
+function Authorized {
+    try {
+        $root = Get-Item -LiteralPath $p.root -Force
+        if (-not (Real-Folder $root)) { return $false }
+        $journal = Get-Item -LiteralPath (Join-Path $p.root 'unified-uninstall.json') -Force
+        if ($journal.PSIsContainer -or "$($journal.Attributes)" -match 'ReparsePoint') {
+            return $false
+        }
+        $record = Get-Content -LiteralPath $journal.FullName -Raw | ConvertFrom-Json
+        return ($record.token -is [string] -and $record.token -ceq $p.token)
+    } catch { return $false }
+}
+function Clear-Entry($path) {
+    try {
+        $entry = Get-Item -LiteralPath $path -Force
+        if ("$($entry.Attributes)" -match 'ReparsePoint') { Keep $path; return }
+        if ($entry.PSIsContainer) {
+            $children = @(Get-ChildItem -LiteralPath $path -Force)
+            foreach ($child in $children) { Clear-Entry $child.FullName }
+            $entry = Get-Item -LiteralPath $path -Force
+            if (-not (Real-Folder $entry)) { Keep $path; return }
+            if (@(Get-ChildItem -LiteralPath $path -Force).Count) { Keep $path; return }
+        }
+        Remove-Item -LiteralPath $path -Force
+    } catch { Keep $path }
+}
+try {
+    # Enumerate the entire stdin pipeline before parsing or touching the tree.
+    $text = $input | Out-String
+    $p = ConvertFrom-Json -InputObject $text
+    if ($p.root -isnot [string] -or -not $p.root -or
+        $p.token -isnot [string] -or -not $p.token) { throw 'Invalid root or token' }
+    $names = @($p.contents) + @($p.folders) + @($p.files)
+    foreach ($name in $names) {
+        if ($name -isnot [string] -or -not $name -or $name -in @('.', '..') -or
+            $name -match '[\\/:\x00]' -or $name -ieq 'unified-uninstall.json') {
+            throw 'Not a single entry name'
+        }
+    }
+    if ($p.seconds -lt 0 -or $p.seconds -gt 3600) { throw 'Invalid duration' }
+    if (-not (Authorized)) { throw 'Root or token refused' }
+    $until = (Get-Date) + (New-TimeSpan -Seconds 30)
+    do {
+        $alive = @($p.wait_for | ForEach-Object {
+            Get-Process -Id $_ -ErrorAction SilentlyContinue
+        })
+        if (-not $alive.Count -or (Get-Date) -ge $until) { break }
+        Start-Sleep -Seconds 1
+    } while ($true)
+    $until = (Get-Date) + (New-TimeSpan -Seconds $p.seconds)
+    do {
+        if (-not (Authorized)) { throw 'Root or token refused' }
+        $passes++
+        $script:left = @()
+        $script:leftCount = 0
+        $entries = @(Get-ChildItem -LiteralPath $p.root -Force)
+        foreach ($entry in $entries) {
+            if (@($p.contents) -ccontains $entry.Name) { Clear-Entry $entry.FullName }
+        }
+        foreach ($entry in @(Get-ChildItem -LiteralPath $p.root -Force)) {
+            if (@($p.folders) -ccontains $entry.Name) {
+                if ((Real-Folder $entry) -and
+                    -not @(Get-ChildItem -LiteralPath $entry.FullName -Force).Count) {
+                    try { Remove-Item -LiteralPath $entry.FullName -Force }
+                    catch { Keep $entry.FullName }
+                } else { Keep $entry.FullName }
+            }
+        }
+        foreach ($entry in @(Get-ChildItem -LiteralPath $p.root -Force)) {
+            if (@($p.files) -ccontains $entry.Name) {
+                if (-not $entry.PSIsContainer -and "$($entry.Attributes)" -notmatch 'ReparsePoint') {
+                    try { Remove-Item -LiteralPath $entry.FullName -Force }
+                    catch { Keep $entry.FullName }
+                } else { Keep $entry.FullName }
+            }
+        }
+        $remaining = @(Get-ChildItem -LiteralPath $p.root -Force |
+            Where-Object { $names -ccontains $_.Name })
+        if (-not $remaining.Count -or (Get-Date) -ge $until) { break }
+        Start-Sleep -Seconds 1
+    } while ($true)
+    if (-not (Authorized)) { throw 'Root or token refused' }
+    $remaining = @(Get-ChildItem -LiteralPath $p.root -Force)
+    if ($remaining.Count -eq 1 -and $remaining[0].Name -ceq 'unified-uninstall.json') {
+        Remove-Item -LiteralPath $remaining[0].FullName -Force
+        Remove-Item -LiteralPath $p.root -Force
+        $removed = $true
+    } else {
+        foreach ($entry in $remaining) {
+            if ($entry.Name -cne 'unified-uninstall.json' -and
+                $script:left -cnotcontains $entry.FullName) { Keep $entry.FullName }
+        }
+    }
+} catch { $reason = $_.Exception.Message }
+finally {
+    if ($p.report) {
+        @{ passes = $passes; left = @($script:left); leftCount = $script:leftCount
+           folderRemoved = $removed; reason = $reason } |
+            ConvertTo-Json -Compress -Depth 4 |
+            Set-Content -LiteralPath $p.report -Encoding UTF8
+    }
+}
+"""
+
+
+def finish_after_exit(root, token, *, contents, folders, files, wait_for=(), seconds=60, report=None):
+    """Start the token-guarded last step outside the installation and its Job.
+
+    A successful return means only that the payload was written, not that the
+    folder was removed. Failure to escape a Job retries process creation alone;
+    no already-started helper is replayed. Links and unnamed entries stay.
+    """
+    from .windows_service import _powershell
+
+    groups = [list(group) for group in (contents, folders, files)]
+    for group in groups:
+        for name in group:
+            if (not isinstance(name, str) or not name or name in {".", ".."}
+                    or any(mark in name for mark in "\\/:\0")
+                    or name.casefold() == "unified-uninstall.json"):
+                raise ValueError("Not a single entry name.")
+    if not isinstance(token, str) or not token:
+        raise ValueError("A nonempty token is required.")
+    if type(seconds) not in (int, float) or not 0 <= seconds <= 3600:
+        raise ValueError("Duration must be between zero and 3600 seconds.")
+    wait_for = list(wait_for)
+    if any(type(pid) is not int or pid <= 0 for pid in wait_for):
+        raise ValueError("Wait targets must be positive process IDs.")
+    payload = json.dumps({
+        "root": os.fspath(root), "token": token,
+        "contents": groups[0], "folders": groups[1], "files": groups[2],
+        "wait_for": wait_for, "seconds": seconds,
+        "report": os.fspath(report) if report is not None else None,
+    }, ensure_ascii=True).encode("ascii")
+    program = _powershell()
+    environment = os.environ.copy()
+    for key, value in list(environment.items()):
+        if key.upper() not in {"TEMP", "TMP"}:
+            continue
+        try:
+            inside = ntpath.commonpath((os.fspath(root), value)).casefold() == ntpath.normpath(root).casefold()
+        except ValueError:  # Another drive, or a relative value.
+            inside = False
+        if inside:
+            if not environment.get("LOCALAPPDATA"):
+                raise OSError("Cannot relocate the helper's temporary folder.")
+            environment[key] = ntpath.join(environment["LOCALAPPDATA"], "Temp")
+    arguments = [program, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                 base64.b64encode(FINISH_SCRIPT.encode("utf-16-le")).decode("ascii")]
+    options = dict(cwd=str(PureWindowsPath(program).parents[2]), env=environment,
+                   stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    flags = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+    try:
+        process = subprocess.Popen(arguments, creationflags=flags | 0x01000000, **options)
+    except OSError:
+        process = subprocess.Popen(arguments, creationflags=flags, **options)
+    try:
+        process.stdin.write(payload)
+    finally:
+        process.stdin.close()
+    return process.pid
 
 
 class _Entry(C.Structure):

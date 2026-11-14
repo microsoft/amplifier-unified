@@ -1,9 +1,16 @@
 """Link-safe folder removal: portable walk logic, and the real thing on native Windows."""
 from contextlib import contextmanager
+import base64
+import io
+import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
+import subprocess
+import sys
+import time
 import uuid
 
 import pytest
@@ -199,6 +206,108 @@ def test_many_leftovers_are_counted_in_full_and_named_in_part(opened):
     with removal.folder(opened["path"]) as owned:
         result = owned.remove(["cache"])
     assert result["leftCount"] == 50 and len(result["left"]) == 20 and result["removed"] == 0
+
+
+@pytest.fixture
+def finish_start(monkeypatch):
+    from amplifier_web import windows_service
+
+    class Pipe(io.BytesIO):
+        def close(self):
+            if not self.closed and self.getvalue():
+                self.payload = json.loads(self.getvalue())
+            super().close()
+
+    class Process:
+        pid = 4321
+
+        def __init__(self):
+            self.stdin = Pipe()
+
+    calls, process = [], Process()
+    monkeypatch.setattr(windows_service, "_powershell",
+                        lambda: r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+    def start(args, **kwargs):
+        calls.append((args, kwargs))
+        return process
+    monkeypatch.setattr(removal.subprocess, "Popen", start)
+    return calls, process, start
+
+
+def test_finish_static_program_and_stdin_only_payload(finish_start):
+    calls, process, _ = finish_start
+    token = "data, not code: ' ` $(&exit); \u2603"
+    assert removal.finish_after_exit(
+        r"C:\My [private]\Amplifier", token, contents=["tools"], folders=["workspace"],
+        files=["receipt.json"], wait_for=(12, 34), seconds=3, report=r"C:\proof.json",
+    ) == 4321
+    args, options = calls[0]
+    assert args[1:5] == ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand"]
+    assert base64.b64decode(args[-1]).decode("utf-16-le") == removal.FINISH_SCRIPT
+    assert len(removal.FINISH_SCRIPT) < 9000
+    assert "-recurse" not in removal.FINISH_SCRIPT.lower()
+    assert "]::" not in removal.FINISH_SCRIPT
+    assert not re.search(r"\.\w+\s*\(", removal.FINISH_SCRIPT)
+    assert token not in removal.FINISH_SCRIPT
+    assert options["cwd"] == r"C:\Windows\System32"
+    assert options["creationflags"] == 0x09000200
+    assert options["stdin"] == subprocess.PIPE
+    assert options["stdout"] == options["stderr"] == subprocess.DEVNULL
+    assert process.stdin.closed
+    assert process.stdin.payload == {
+        "root": r"C:\My [private]\Amplifier", "token": token, "contents": ["tools"],
+        "folders": ["workspace"], "files": ["receipt.json"], "wait_for": [12, 34],
+        "seconds": 3, "report": r"C:\proof.json",
+    }
+
+
+@pytest.mark.parametrize("name", ["", ".", "..", "a/b", "a\\b", "a:b", "a\0b",
+                                      "unified-uninstall.json", "UNIFIED-UNINSTALL.JSON", None, 2])
+@pytest.mark.parametrize("group", ["contents", "folders", "files"])
+def test_finish_refuses_the_whole_payload_before_start(finish_start, name, group):
+    calls, _, _ = finish_start
+    groups = dict(contents=["tools"], folders=["workspace"], files=["receipt.json"])
+    groups[group].append(name)
+    with pytest.raises(ValueError):
+        removal.finish_after_exit(r"C:\Amplifier", "token", **groups)
+    assert not calls
+
+
+def test_finish_retries_only_a_refused_process_start(finish_start, monkeypatch):
+    calls, _, start = finish_start
+    def refuse_breakaway(args, **kwargs):
+        if kwargs["creationflags"] & 0x01000000:
+            calls.append((args, kwargs))
+            raise OSError("Breakaway refused")
+        return start(args, **kwargs)
+    monkeypatch.setattr(removal.subprocess, "Popen", refuse_breakaway)
+    assert removal.finish_after_exit(r"C:\Amplifier", "x", contents=[], folders=[], files=[]) == 4321
+    assert [kwargs["creationflags"] for _, kwargs in calls] == [0x09000200, 0x08000200]
+    assert calls[0][0] == calls[1][0]
+    def refuse_both(*args, **kwargs):
+        raise OSError("Cannot start")
+    monkeypatch.setattr(removal.subprocess, "Popen", refuse_both)
+    with pytest.raises(OSError, match="Cannot start"):
+        removal.finish_after_exit(r"C:\Amplifier", "x", contents=[], folders=[], files=[])
+
+
+@pytest.mark.parametrize("temp,tmp,expected_temp,expected_tmp", [
+    (r"C:\Amplifier\cache", r"c:\AMPLIFIER", r"C:\Users\Me\AppData\Local\Temp",
+     r"C:\Users\Me\AppData\Local\Temp"),
+    (r"C:\Amplifier-other", r"D:\temp", r"C:\Amplifier-other", r"D:\temp"),
+])
+def test_finish_moves_only_temporary_paths_inside_root(
+    finish_start, monkeypatch, temp, tmp, expected_temp, expected_tmp,
+):
+    calls, _, _ = finish_start
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\Me\AppData\Local")
+    monkeypatch.setenv("TEMP", temp)
+    monkeypatch.setenv("TMP", tmp)
+    before = os.environ.copy()
+    removal.finish_after_exit(r"C:\Amplifier", "x", contents=[], folders=[], files=[])
+    env = calls[0][1]["env"]
+    assert (env["TEMP"], env["TMP"]) == (expected_temp, expected_tmp)
+    assert os.environ == before and env is not os.environ
 
 
 LINKS_REQUIRED = os.environ.get("AMPLIFIER_REQUIRE_LINK_CHECKS") == "1"
