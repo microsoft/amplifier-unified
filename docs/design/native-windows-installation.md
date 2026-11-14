@@ -140,6 +140,20 @@ unconfirmed-Stop path. Changed expected birth is an argument-refusal control,
 not actual PID reuse. These results do not establish every failure interleaving,
 browser trust or sign-in/out.
 
+### Why the background app stopped
+
+When the app host or the launcher ends with an error, it saves one private
+record (`config/services/task-failure.json`): the time, the error class, and the
+sentence, only if this product wrote that sentence. Any other error keeps its
+class name alone, so no path or argument text is copied. `service status`, and
+the Start-menu status entry, add it to the not-ready message in one sentence,
+for example: "Amplifier's background app stopped on November 14 at 9:05 AM:
+Could not start Amplifier on 127.0.0.1, port 21603. ...". The record is not
+shown after a later host start. Saving and reading it never changes a start,
+a stop or a status result. A host that ends without running any of its own
+code (for example, it was ended from outside) has only the launcher's general
+record with the exit code.
+
 The human waived the clean-machine check for the current delivery and selected
 the existing Windows test host only. That coverage is **waived / not executed**,
 not a prerequisite-free installation pass. Signing is deferred separately.
