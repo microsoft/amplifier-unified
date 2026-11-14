@@ -187,9 +187,9 @@ test('model selector shows selected fixed, tiered and flat prices without guessi
   assert.match(text(),/Listed price for Tiered model · Standard global · USD per 1M tokens/);
   assert.match(text(),/Up to 100,000 prompt tokens/);assert.match(text(),/Above 100,000 prompt tokens/);
   assert.match(text(),/whole request, including output tokens/);assert.match(text(),/fresh input \+ cache reads \+ cache writes, counted once/);
-  assert.match(text(),/Cache write \(5 minutes\)/);assert.match(text(),/US inference modifier ×1\.1/);assert.match(text(),/Confirmed fast modifier ×2/);
+  assert.match(text(),/Cache write \(5 minutes\)/);assert.match(text(),/US inference modifier\s*×1\.1/);assert.match(text(),/Confirmed fast modifier\s*×2/);
   assert.equal(root.root.findByType('details').props.open,undefined,'Cache details use a native, collapsed disclosure');
-  assert.deepEqual(root.root.findAllByType('option').slice(1).map(option=>renderedText(option.toJSON())),['Tiered model','Fixed model','Core model','Future model'],'Prices are not repeated in every option');
+  assert.deepEqual(root.root.findAllByType('option').slice(1).map(option=>renderedText(option.children)),['Tiered model','Fixed model','Core model','Future model'],'Prices are not repeated in every option');
   value='fixed';await renderAct(async()=>root.update(render()));
   assert.match(text(),/Listed price for Fixed model/);assert.match(text(),/Input\$2/);assert.match(text(),/Output\$8/);
   assert.match(text(),/Cache write \(1 hour\)\$4/);
