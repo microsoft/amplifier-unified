@@ -2828,9 +2828,16 @@ class AppService:
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from exc
             elif action == 'diagnostics.export':
+                from datetime import datetime as export_datetime, timezone as export_timezone
                 page=self.state.get('diagnostics',{}).get('lastResult',{})
                 if page.get('action')!='diagnostics.records':raise AppError('Inspect the records to export first.')
-                lines=[json.dumps({'event':r['event'],'workspace':r['workspace'],'timestamp':r['data']['timestamp'],'data':r['data']}) for r in reversed(page.get('items',[]))]
+                # Captured metadata deliberately omits payload timestamps. Its
+                # indexed envelope retains the original event time; do not
+                # restore private payload fields or invent the export time.
+                lines=[json.dumps({'event':r['event'],'workspace':r['workspace'],
+                                   'timestamp':r['data'].get('timestamp') or
+                                       export_datetime.fromtimestamp(r['at'], export_timezone.utc).isoformat(),
+                                   'data':r['data']}) for r in reversed(page.get('items',[]))]
                 effects.append({'type':'download','filename':'amplifier-diagnostics.jsonl','mime':'application/x-ndjson','content':'\n'.join(lines)+'\n'})
             elif action=='diagnostics.test':
                 if not any(row['id']==args['id'] for row in self.diagnostics.config['destinations']):

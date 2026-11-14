@@ -259,6 +259,51 @@ async def test_content_opt_in_redaction_and_bounded_agent_read(service,monkeypat
     assert transcript.messages[0].content=='Hello [REDACTED]'
 
 
+async def test_export_indexed_usage_keeps_envelope_time_without_restoring_private_fields(service):
+    from datetime import datetime, timedelta, timezone
+    from amplifier_web.capture_index import index_shared
+    from amplifier_web.session_files import capture_dir
+
+    await service.dispatch('session.create', {})
+    session = service._session()
+    directory = capture_dir(session['workspace'], session['id'])
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / 'metadata.json').write_text(json.dumps({
+        'format': 'context-intelligence', 'version': '1.0.0'}))
+    when = datetime.now(timezone.utc) - timedelta(days=2)
+    timestamp = when.isoformat()
+    usage = {'input_tokens': 7, 'output_tokens': 3, 'cost': 0.01}
+    rows = [{'event': event, 'timestamp': timestamp, 'data': {
+        'event_id': 'private-event-' + event, 'provider': 'fixture',
+        'model': 'export-fixture', 'usage': usage, 'raw': 'private-raw-payload'}}
+        for event in ('llm:request', 'llm:response')]
+    path = directory / 'events.jsonl'
+    path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    original = path.read_bytes()
+    await service.diagnostics.flush()
+    with service.diagnostics._db() as db:
+        index_shared(db, [(session['workspace'], session['id'])], {'streams': ['usage']})
+    page = await service.dispatch('diagnostics.records',
+                                 {'sessionId': session['id'], 'stream': 'usage'})
+    captured = [row for row in page['result']['items'] if row['id'].startswith('capture-')]
+    assert len(captured) == 2
+    assert all('timestamp' not in row['data'] and 'event_id' not in row['data']
+               and 'raw' not in row['data'] for row in captured)
+    exported = await service.dispatch('diagnostics.export')
+    content = exported['effects'][0]['content']
+    values = [json.loads(line) for line in content.splitlines()]
+    assert {row['event'] for row in values} == {'llm:request', 'llm:response'}
+    assert all(row['workspace'] == session['workspace'] for row in values)
+    assert all(datetime.fromisoformat(row['timestamp']).timestamp() == when.timestamp()
+               for row in values)
+    assert all(row['data'] == {'provider': 'fixture', 'model': 'export-fixture',
+                               'usage': usage} for row in values)
+    assert 'private-event-' not in content and 'private-raw-payload' not in content
+    # Public actions may append their own diagnostic events, but cannot rewrite
+    # the two original capture records while exporting their safe projection.
+    assert path.read_bytes().startswith(original)
+
+
 async def test_child_session_correlates_with_app_session_and_parent(service):
     await service.dispatch('session.create',{})
     session=service._session();session['runtimeSessionId']='runtime-root'
