@@ -570,7 +570,11 @@ table with `python tests/test_windows_path_budget.py`.
   Its background-job records fit only up to a folder path of 51, and its request
   diagnostics up to 42. An installation made by an earlier setup file (folder
   path of 74 characters plus the account name) has no budget; new chats there
-  get the short name, which is necessary and not always sufficient.
+  get the short name, which is necessary and not always sufficient. A chat
+  there with saved history under the CLI name stays under it, including history
+  longer than the limit that was written while long paths were on. The app
+  finds such history through the extended-length path form and does not start
+  a second history for that chat.
 - **Source store:** Amplifier Foundation owns its layout. With the locked
   Foundation revision its paths do not fit at 59, so the worker cannot start on
   a default PC. Foundation's Windows change (extended-length tree walks and

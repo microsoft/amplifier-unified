@@ -29,11 +29,24 @@ Unified allocated for a chat (`<app data>\chats\<chat id>\files`) uses the proje
 name `chat-<first 16 hex digits of the chat id>` instead of the path slug. The
 path slug of such a folder repeats the installation path, and its session paths
 exceed the Windows path limit while long paths are off, which is the Windows
-default. A chat that already has history under the path slug keeps that folder;
-nothing is moved. Every folder that a person chooses, and every folder on other
+default. Every folder that a person chooses, and every folder on other
 platforms, uses the path slug. `nativeProject` carries the name in use, so
-SessionRef is unchanged. Limit: a CLI or TUI started inside such a folder on
-Windows computes the path slug and does not list that chat.
+SessionRef is unchanged.
+
+- The short name needs proof that the folder is the app's: its allocation record,
+  or, after the chat folder is deleted, saved history under the short name that
+  records this exact folder. The folder shape and the chat id alone are not
+  proof; a copy of a chat folder in another place uses the path slug.
+- Nothing is moved. A chat whose saved history is only under the path slug keeps
+  that folder. That includes history longer than the Windows limit, written
+  while long paths were on.
+- When both names hold saved history for one chat (possible only after an update
+  rollback), the chat uses the short name. The other folder is kept and stays
+  listed, read-only, as a project without a folder.
+- Saved history means a transcript or session metadata. Capture files alone, such
+  as those of a first message that failed, do not keep a chat on the path slug.
+- A CLI or TUI started inside such a folder on Windows computes the path slug. It
+  lists a chat kept under the path slug and does not list one under the short name.
 
 ## The promises
 

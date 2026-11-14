@@ -55,6 +55,20 @@ def length_refusal(error):
     return error.winerror in (3, 206) or (error.winerror is None and error.errno == errno.ENOENT)
 
 
+EXTENDED = '\\\\?\\'  # The path form that Windows accepts at any length, valid with long paths off.
+
+
+def remove_tree(path):
+    """Remove a tree by extended-length paths; only for folders this file created."""
+    with os.scandir(path) as entries:
+        for entry in list(entries):
+            if entry.is_dir(follow_symlinks=False):
+                remove_tree(entry.path)
+            else:
+                os.remove(entry.path)
+    os.rmdir(path)
+
+
 def refused_for_length(action):
     with pytest.raises(OSError) as error:
         action()
@@ -130,7 +144,7 @@ def installation(base, long_paths_off, monkeypatch):
 
     yield create
     for item in created:
-        shutil.rmtree(item.root)  # Ordinary removal works: nothing here is over the limit.
+        remove_tree(EXTENDED + str(item.root))  # Also removes what a test wrote over the limit.
         assert not item.root.exists()
 
 
@@ -300,6 +314,34 @@ def test_chat_with_history_under_the_cli_name_keeps_working_where_it_is(installa
     write_view(after)
     assert capture_events(workspace, identity).parents[2].name == project
     assert not (install.root / 'shared' / 'projects' / ('chat-' + identity.replace('-', '')[:16])).exists()
+
+
+def test_history_longer_than_the_limit_is_found_and_the_chat_stays_under_its_name(installation):
+    from amplifier_web import session_files
+    # An installation from an earlier setup file: folder path of 92 characters.
+    # Its chat was saved while long paths were on. They are off now.
+    install = installation(92)
+    identity, workspace = install.chat()
+    project = '-' + str(workspace).replace('\\', '-').replace(':', '')
+    session = install.root / 'shared' / 'projects' / project / 'sessions' / identity
+    assert len(str(session)) == 300 > budget.FOLDER_LIMIT
+    os.makedirs(EXTENDED + str(session))
+    for name in ('metadata.json', 'transcript.jsonl'):
+        with open(EXTENDED + str(session / name), 'w', encoding='utf-8') as stream:
+            stream.write(json.dumps({'session_id': identity, 'working_dir': str(workspace)}) + '\n')
+    # Ordinary paths cannot see it: an ordinary check reads this history as absent.
+    assert not (session / 'metadata.json').exists()
+    assert refused_for_length(lambda: os.scandir(str(session.parent)))
+    # The name rule sees it. The chat stays where it is: its history is not
+    # split into a second folder, and nothing is created under the short name.
+    assert session_files._has_history(session.parents[1])
+    assert session_files.project_slug(workspace) == project
+    assert session_files.sessions_dir(workspace) / identity == session
+    assert os.listdir(install.root / 'shared' / 'projects') == [project]
+    # A new chat in the same installation gets the short name and works.
+    other, folder = install.chat()
+    assert session_files.project_slug(folder) == 'chat-' + other.replace('-', '')[:16]
+    write_view(save_session(install.root / 'app', folder, other))
 
 
 @pytest.mark.skip(reason='Enabled by the Amplifier Foundation lock change: needs Foundation\'s Windows source-store '

@@ -54,20 +54,63 @@ def chat_project_name(path):
     return 'chat-' + identity.replace('-', '')[:16]
 
 
-def _has_history(project):
-    """A session folder with a transcript or metadata. An empty leftover is not history."""
+def _unlimited(path):
+    """The same absolute path in the form that Windows accepts at any length; unchanged elsewhere.
+
+    Only for this module's own read-only checks. It is never returned to a caller.
+    """
+    text = str(path)
+    if not _WINDOWS or text.startswith('\\\\?\\'):
+        return text
+    return '\\\\?\\UNC\\' + text[2:] if text.startswith('\\\\') else '\\\\?\\' + text
+
+
+def _present(path):
     try:
-        with os.scandir(project / 'sessions') as entries:
+        os.lstat(path)
+        return True
+    except (FileNotFoundError, NotADirectoryError):
+        return False  # Absent. Any other error is not absence and is raised.
+
+
+def _has_history(project):
+    """A session folder with a transcript or metadata. An empty leftover is not history.
+
+    Reads through the extended-length form, so history that was written while
+    Windows long paths were on is still found after they are turned off.
+    """
+    if len(project.name.encode('utf-16-le')) > 510:
+        return False  # Longer than any Windows folder name (255), so no such folder exists.
+    try:
+        with os.scandir(_unlimited(project / 'sessions')) as entries:
             return any(entry.is_dir(follow_symlinks=False) and any(
-                os.path.lexists(os.path.join(entry.path, name)) for name in _HISTORY) for entry in entries)
+                _present(os.path.join(entry.path, name)) for name in _HISTORY) for entry in entries)
     except (FileNotFoundError, NotADirectoryError):
         return False
-    except OSError as error:
-        # Windows refuses a path over its limit while long paths are off (the
-        # default). Nothing usable can be under such a name.
-        if getattr(error, 'winerror', None) in (3, 206):
-            return False
-        raise
+
+
+def _names_folder(project, identity, folder):
+    """A saved session record in this project folder names exactly this chat folder.
+
+    The chat's own session is read first; the first record with a folder decides.
+    """
+    sessions = project / 'sessions'
+    try:
+        with os.scandir(_unlimited(sessions)) as entries:
+            names = sorted(entry.name for entry in entries if entry.is_dir(follow_symlinks=False))
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    for name in sorted(names, key=lambda name: name != identity):
+        for record in ('metadata.json', 'metadata.json.backup'):
+            try:
+                with open(_unlimited(sessions / name / record), 'rb') as stream:
+                    value = json.loads(stream.read(1024 * 1024 + 1))
+            except (OSError, ValueError):
+                continue
+            saved = (value.get('working_dir') or value.get('workspace')) if isinstance(value, dict) else None
+            if isinstance(saved, str) and saved:
+                return os.path.normcase(saved) == os.path.normcase(str(folder))
+    return False
 
 
 def project_slug(workspace):
@@ -82,17 +125,19 @@ def project_slug(workspace):
         return slug  # Every folder a person chose: no file access beyond resolve().
     # A folder shaped like the app's own chat folder. Its CLI name repeats the
     # installation path inside every session path, which then exceeds the
-    # Windows path limit. Existing history decides first; nothing is moved.
+    # Windows path limit.
     projects = amplifier_home() / 'projects'
+    from .managed_chats import metadata
+    # The shape and the chat ID do not prove that the app owns this folder. Its
+    # allocation record does. After the chat folder is deleted, the saved
+    # history must name this exact folder. A copy of a chat folder has neither.
+    if not metadata(resolved) and not _names_folder(projects / short, resolved.parent.name.lower(), resolved):
+        return slug
+    # Existing history decides, and nothing is moved: a chat that began under
+    # the CLI name stays there.
     if _has_history(projects / short):
         return short
-    if _has_history(projects / slug):
-        return slug  # A chat that began under the CLI name stays there.
-    if (projects / short).is_dir():
-        return short  # Still addressable after the chat folder is deleted.
-    from .managed_chats import metadata
-    # The shape does not prove that the app owns the folder. Its allocation record does.
-    return short if metadata(resolved) else slug
+    return slug if _has_history(projects / slug) else short
 
 
 def validate_id(identity):

@@ -94,11 +94,13 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
           if ($env:ORIGINAL -eq 'absent') {
-            Remove-ItemProperty -Path $key -Name LongPathsEnabled -ErrorAction SilentlyContinue
+            Remove-ItemProperty -Path $key -Name LongPathsEnabled
           } else {
             Set-ItemProperty -Path $key -Name LongPathsEnabled -Value ([int]$env:ORIGINAL) -Type DWord
           }
           $now = (Get-ItemProperty -Path $key -Name LongPathsEnabled -ErrorAction SilentlyContinue).LongPathsEnabled
+          if ($null -eq $now) { $now = 'absent' }
+          if ("$now" -ne $env:ORIGINAL) { throw "LongPathsEnabled is $now; the runner had $env:ORIGINAL." }
           Write-Host "LongPathsEnabled is restored to $env:ORIGINAL (read back: $now)."
   path-budget:
     name: Path budget and naming rule

@@ -115,6 +115,33 @@ def test_folder_shape_alone_is_not_the_apps_folder(chat, windows_rule, tmp_path)
     assert project_slug(workspace.parent) == cli_name(workspace.parent)
 
 
+def test_a_copy_of_a_chat_folder_never_takes_over_the_original_history(chat, windows_rule, tmp_path):
+    import shutil
+    identity, workspace = chat
+    original = history(short_name(identity), identity, workspace)
+    # The whole chat folder is copied or restored somewhere else: same chat ID,
+    # same allocation record, another path. A person then opens the copy.
+    copy = tmp_path / 'restored' / 'chats' / identity / 'files'
+    shutil.copytree(workspace.parent, copy.parent)
+    assert chat_project_name(copy) == short_name(identity)  # the shape and the ID are equal
+    assert project_slug(copy) == cli_name(copy)             # the saved history names another folder
+    assert sessions_dir(copy) != sessions_dir(workspace)
+    # The copy's own history under its CLI name keeps its place as well.
+    own = history(cli_name(copy), identity, copy)
+    assert project_slug(copy) == cli_name(copy) and sessions_dir(copy) / identity == own
+    # The original is unchanged, and it still resolves after its folder is deleted.
+    assert project_slug(workspace) == short_name(identity)
+    shutil.rmtree(workspace.parent)
+    assert project_slug(workspace) == short_name(identity) and (original / 'metadata.json').is_file()
+    assert project_slug(copy) == cli_name(copy)
+    # An empty folder under the short name proves nothing either.
+    other = str(uuid.uuid4())
+    (amplifier_home() / 'projects' / short_name(other) / 'sessions').mkdir(parents=True)
+    unowned = tmp_path / 'elsewhere' / 'chats' / other / 'files'
+    unowned.mkdir(parents=True)
+    assert project_slug(unowned) == cli_name(unowned)
+
+
 def test_chat_with_history_under_the_cli_name_stays_there(chat, windows_rule):
     identity, workspace = chat
     for name in ('metadata.json', 'transcript.jsonl', 'transcript.jsonl.backup'):
@@ -132,9 +159,16 @@ def test_chat_with_history_under_the_cli_name_stays_there(chat, windows_rule):
 
 def test_empty_leftover_of_a_failed_first_chat_is_not_history(chat, windows_rule):
     identity, workspace = chat
-    # A first message that failed on the long path left only folders behind.
+    # A first message that failed on the long path left only folders behind,
+    # and the capture hook's first events (the state of both clean-room PCs).
     (amplifier_home() / 'projects' / cli_name(workspace) / 'sessions' / identity / 'unified').mkdir(parents=True)
+    capture = amplifier_home() / 'projects' / cli_name(workspace) / 'sessions' / identity / 'context-intelligence'
+    capture.mkdir()
+    (capture / 'metadata.json').write_text('{"format": "context-intelligence"}')
+    (capture / 'events.jsonl').write_text('{}\n')
+    # No conversation was saved there, so this chat must work under the short name.
     assert project_slug(workspace) == short_name(identity)
+    assert (capture / 'events.jsonl').is_file()  # kept where it is; it is diagnostic data, not history
     history(short_name(identity), identity, workspace)
     assert project_slug(workspace) == short_name(identity)
 
@@ -156,10 +190,12 @@ def test_history_stays_addressable_after_the_chat_folder_is_deleted(chat, window
     assert project_slug(workspace) == short_name(identity)
     # The saved path may differ in letter case from the folder that existed.
     assert chat_project_name(str(workspace).upper()) == short_name(identity)
+    # The backup record alone is enough to identify the folder.
+    (directory / 'metadata.json').rename(directory / 'metadata.json.backup')
+    (directory / 'transcript.jsonl').write_text('{"role":"user","content":"saved"}\n')
+    assert project_slug(workspace) == short_name(identity)
     shutil.rmtree(directory)
-    assert project_slug(workspace) == short_name(identity)  # the project folder itself remains
-    shutil.rmtree(amplifier_home() / 'projects' / short_name(identity))
-    assert project_slug(workspace) == cli_name(workspace)  # nothing left that the app owns
+    assert project_slug(workspace) == cli_name(workspace)  # no saved history names this folder now
 
 
 def test_only_chat_shaped_folders_cost_file_access(chat, windows_rule, tmp_path, monkeypatch):
@@ -172,20 +208,42 @@ def test_only_chat_shaped_folders_cost_file_access(chat, windows_rule, tmp_path,
         scans.append(str(path))
         return real_scandir(path)
 
-    def no_record(path):
-        raise AssertionError('Existing history decides before the allocation record is read.')
+    from amplifier_web import managed_chats
+    records, real_metadata = [], managed_chats.metadata
+
+    def metadata(path):
+        records.append(str(path))
+        return real_metadata(path)
+
+    def no_access(*args):
+        raise AssertionError('A folder a person chose is decided from the path string alone.')
 
     monkeypatch.setattr(session_files.os, 'scandir', scandir)
-    monkeypatch.setattr('amplifier_web.managed_chats.metadata', no_record)
-    # The settled case, however many sessions the chat has: one folder listing.
+    monkeypatch.setattr(managed_chats, 'metadata', metadata)
+    # The settled case, however many sessions the chat has: the allocation
+    # record once and one folder listing. No session record is opened.
+    monkeypatch.setattr('builtins.open', no_access)
     assert project_slug(workspace) == short_name(identity)
-    assert len(scans) == 1
-    # A folder a person chose is decided from the path string alone.
-    scans.clear()
-    monkeypatch.setattr(session_files, 'amplifier_home', no_record)
+    assert len(scans) == 1 and len(records) == 1
+    scans.clear(); records.clear()
+    monkeypatch.setattr(session_files, 'amplifier_home', no_access)
     assert project_slug(tmp_path / 'project') == cli_name(tmp_path / 'project')
     assert project_slug(workspace.parent) == cli_name(workspace.parent)
-    assert not scans
+    assert not scans and not records
+
+
+def test_existence_checks_use_the_form_that_windows_accepts_at_any_length(monkeypatch):
+    # History written while long paths were on must still be found after they
+    # are turned off. Native proof: tests/test_windows_long_paths_off.py.
+    assert session_files._unlimited(Path('/home/a/projects')) == str(Path('/home/a/projects')) or os.name == 'nt'
+    monkeypatch.setattr(session_files, '_WINDOWS', True)
+    assert session_files._unlimited('C:\\Users\\a\\shared\\projects') == '\\\\?\\C:\\Users\\a\\shared\\projects'
+    assert session_files._unlimited('\\\\server\\share\\projects') == '\\\\?\\UNC\\server\\share\\projects'
+    assert session_files._unlimited('\\\\?\\C:\\already') == '\\\\?\\C:\\already'
+    monkeypatch.setattr(session_files, '_WINDOWS', False)
+    assert session_files._unlimited('/home/a/projects') == '/home/a/projects'
+    # A name longer than any folder name is confirmed absent, not an error.
+    assert session_files._has_history(Path('/home/a/projects') / ('n' * 300)) is False
 
 
 # Callers that compare a saved or scanned project name with project_slug(workspace).
