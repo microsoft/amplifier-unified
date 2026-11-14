@@ -209,6 +209,9 @@ class SurfaceProvider:
         self.refused = []
         self.refusal_overflow = False
         self._active_media = {}
+        self._graph_lifetimes = {}
+        self._private_lifetimes = {}
+        self._busy_candidates = set()
         if coordinator is not None and callable(getattr(coordinator, 'register_cleanup', None)):
             async def close_media():
                 for row in self.prepared:
@@ -222,6 +225,10 @@ class SurfaceProvider:
                 for ticket in self._capture_tickets:
                     ticket.close()
                 self._capture_tickets.clear()
+                for _, lifetime in self._graph_lifetimes.values():
+                    lifetime.release()
+                self._graph_lifetimes.clear()
+                self._private_lifetimes.clear()
             coordinator.register_cleanup(close_media)
         from .performance_diagnostics import TIMING_ENABLED, time_preparation
         self.timing_coordinator = coordinator if TIMING_ENABLED else None
@@ -229,7 +236,35 @@ class SurfaceProvider:
             self._prepare = time_preparation(coordinator, 'surface.prepare', self._prepare)
             self.refit_request = time_preparation(coordinator, 'provider.refit', self.refit_request)
 
-    async def _prepare(self, request, commit=False, *, explicit_budget=False, refit_binding=None,
+    async def _prepare(self, request, commit=False, **kwargs):
+        """Own a single graph scope before overlays through fitted dispatch."""
+        from .host.media import request_graph_lifetime
+        row = self._graph_lifetimes.get(id(request))
+        lifetime = row[1] if row is not None and row[0] is request and not row[1].closed else None
+        if lifetime is None:
+            lifetime = request_graph_lifetime(self.coordinator)
+            if lifetime is not None:
+                self._graph_lifetimes[id(request)] = (request, lifetime)
+        try:
+            if lifetime is not None:
+                lifetime.validate()
+            prepared = await self._prepare_inner(request, commit=commit, **kwargs)
+            if lifetime is not None:
+                lifetime.validate()
+                self._private_lifetimes[id(prepared)] = lifetime
+                candidate = next((item[5] for item in self.prepared if item[0] is request
+                                  and len(item) > 5), None)
+                candidate = candidate or self._active_media.get(id(prepared))
+                if candidate is not None:
+                    candidate.graph_lifetime = lifetime
+            return prepared
+        except BaseException:
+            if lifetime is not None:
+                lifetime.release()
+            self._graph_lifetimes.pop(id(request), None)
+            raise
+
+    async def _prepare_inner(self, request, commit=False, *, explicit_budget=False, refit_binding=None,
                        projection_out=None, request_options=None, media_only=False):
         entry = next((row for row in self.prepared if row[0] is request), None)
         if entry is not None and len(entry) > 5 and entry[5] is not None:
@@ -391,6 +426,11 @@ class SurfaceProvider:
         return cached
 
     def _release_media(self, request):
+        lifetime = self._private_lifetimes.pop(id(request), None)
+        if lifetime is not None:
+            lifetime.release()
+            self._graph_lifetimes = {key: row for key, row in self._graph_lifetimes.items()
+                                     if row[1] is not lifetime}
         projection = self._active_media.pop(id(request), None)
         if projection is not None:
             projection.release()
@@ -561,6 +601,7 @@ class SurfaceProvider:
                     from .performance_diagnostics import time_preparation
                     actual = time_preparation(self.timing_coordinator, 'provider.budget', actual)
                 try:
+                    self._busy_candidates.add(id(original_request))
                     row = next((row for row in self.prepared if row[0] is original_request), None)
                     if row is not None and len(row) > 5 and row[5] is not None:
                         row[5].validate()
@@ -573,6 +614,8 @@ class SurfaceProvider:
                     self._discard_prepared(original_request)
                     row = request = None
                     raise
+                finally:
+                    self._busy_candidates.discard(id(original_request))
             return budget
         return method
 
@@ -584,10 +627,28 @@ class SurfaceProvider:
                                    if key not in {'context_estimate', 'request_options'}}}
 
     def _discard_prepared(self, request):
+        row = self._graph_lifetimes.pop(id(request), None)
+        if row is not None and row[0] is request:
+            row[1].release()
         for row in self.prepared:
             if row[0] is request and len(row) > 5 and row[5] is not None:
                 row[5].release()
         self.prepared = [row for row in self.prepared if row[0] is not request]
+
+    def release_media_request(self, canonical, *, request_options=None):
+        """Cleanup exact fitted identity/options without live witness queries."""
+        if id(canonical) in self._busy_candidates or self._active_media:
+            raise ValueError("A media operation is active")
+        entry = next((row for row in self.prepared if row[0] is canonical), None)
+        if entry is None:
+            return False
+        media = entry[5] if len(entry) > 5 else None
+        if media is not None and not media.matches_options(request_options):
+            return False
+        self._discard_prepared(canonical)
+        from . import provider_capture as capture
+        capture.observe(capture.invalidate, self, canonical)
+        return True
 
     async def complete(self, request, **kwargs):
         from . import provider_capture as capture

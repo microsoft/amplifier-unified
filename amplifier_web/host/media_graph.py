@@ -17,7 +17,8 @@ from types import CodeType, FunctionType, MethodType, ModuleType
 
 class NamedMediaGraph:
     """Host-only selection. Never construct from session/config/imported metadata."""
-    def __init__(self, name, *, plans, sources, bindings=(), observations=(), dependencies=()):
+    def __init__(self, name, *, plans, sources, bindings=(), observations=(), dependencies=(),
+                 captures=(), owner_rules=()):
         if not isinstance(name, str) or not name or not plans or not sources:
             raise ValueError("A named graph needs reviewed plans and sources")
         if len(sources) > 128:
@@ -30,6 +31,9 @@ class NamedMediaGraph:
         self._bindings = tuple((obj, self._fields(obj)) for obj in bindings)
         self._observations = tuple(observations)
         self._dependencies = tuple(dependencies)
+        self._captures = tuple(copy.deepcopy(value) for value in captures)
+        self._owner_rules = tuple(owner_rules)
+        self._owners = []
         self._codes = {}
         self._stamps = {}
         total = 0
@@ -57,6 +61,21 @@ class NamedMediaGraph:
     def accepts_plan(self, config):
         return json.dumps(config, sort_keys=True, separators=(",", ":")) in self._plans
 
+    def mint_owner(self, obj, *, kind, associations=()):
+        """Called only by the selected actual host constructor, not hook evidence.
+
+        A rule is (literal factory kind, exact class, protected field names).
+        Mutable implementation state stays with that reviewed source owner;
+        protected source/delegate fields cannot be rebound by ordinary settings.
+        """
+        rule = next((rule for rule in self._owner_rules
+                     if rule[0] == kind and type(obj) is rule[1]), None)
+        if rule is None:
+            return False
+        protected = tuple((name, getattr(obj, name)) for name in rule[2])
+        self._owners.append((obj, type(obj), protected, tuple(associations)))
+        return True
+
     @property
     def name(self):
         return self._name
@@ -82,6 +101,11 @@ class NamedMediaGraph:
         return value(vars(obj) if hasattr(obj, "__dict__") else obj)
 
     def _binding_valid(self, obj):
+        for original, cls, protected, associations in self._owners:
+            if original is obj:
+                return (type(obj) is cls and
+                        all(getattr(obj, name, None) is value for name, value in protected) and
+                        all(getattr(owner, name, None) is value for owner, name, value in associations))
         for original, fields in self._bindings:
             if original is obj:
                 current = self._fields(obj)
@@ -154,7 +178,9 @@ class NamedMediaGraph:
                     if not check(item):
                         return False
                 elif item is None or type(item) in (str, int, float, bool, bytes):
-                    continue
+                    if not any(type(item) is type(expected) and item == expected
+                               for expected in self._captures):
+                        return False
                 elif type(item) in (dict, tuple, list):
                     def plain(child):
                         if child is None or type(child) in (str, int, float, bool, bytes):
@@ -164,7 +190,8 @@ class NamedMediaGraph:
                         if type(child) in (tuple, list):
                             return all(plain(val) for val in child)
                         return False
-                    if not plain(item) and not self._binding_valid(item):
+                    if not (plain(item) and any(type(item) is type(expected) and item == expected
+                                               for expected in self._captures)) and not self._binding_valid(item):
                         return False
                 elif not self._binding_valid(item):
                     return False

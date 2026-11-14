@@ -18,6 +18,7 @@ _HOOK_BRIDGE = "web.media.hook_bridge"
 _HOOK_GRAPH = "web.media.hook_graph"
 _HOST_PARTICIPANT = "unified-host"
 _REQUEST_ONLY = ContextVar("unified_request_only_images", default=None)
+_CONSTRUCTIONS = {}
 
 
 def registration_coordinator(coordinator):
@@ -32,6 +33,46 @@ def registration_coordinator(coordinator):
 def registration_hooks(coordinator):
     """Select the construction-owned registration view, never replace Core."""
     return getattr(registration_coordinator(coordinator), "hooks", None)
+
+
+def mint_graph_owner(coordinator, obj, *, kind, associations=()):
+    selection = coordinator.get_capability("web.media.graph_selection")
+    if selection is not None:
+        return selection.mint_owner(obj, kind=kind, associations=associations)
+    return False
+
+class RequestGraphLifetime:
+    """Synchronous detached validator; no ContextVar token crosses a yield."""
+    def __init__(self, factory):
+        self.context = factory()
+        self.validator = self.context.__enter__()
+        self.closed = False
+        try:
+            self.validate()
+        except BaseException:
+            self.release()
+            raise
+
+    def validate(self):
+        validator = self.validator if callable(self.validator) else getattr(self.validator, "validate", None)
+        if self.closed or not callable(validator) or validator() is not True:
+            raise ValueError("Prepared media graph generation is unavailable")
+        return True
+
+    def release(self):
+        if not self.closed:
+            self.closed = True
+            self.context.__exit__(None, None, None)
+
+
+def request_graph_lifetime(coordinator):
+    if coordinator is None:
+        return None
+    state = _CONSTRUCTIONS.get(id(coordinator))
+    if state is None or state[0] is not coordinator:
+        return None
+    bridge = state[1]
+    return RequestGraphLifetime(bridge.request_scope)
 
 
 def neutral_control_media(coordinator):
@@ -79,15 +120,19 @@ def begin_hook_graph(session, *, selection=None):
     coordinator.register_capability(_HOOK_BRIDGE, bridge)
     coordinator.register_capability(_HOOK_GRAPH, graph)
     coordinator.register_capability("web.media.graph_selection", selection)
+    _CONSTRUCTIONS[id(coordinator)] = [coordinator, bridge, graph, selection, None]
 
 
 def seal_hook_graph(coordinator):
     """Called by the actual final host preparation phase, never a readiness hook."""
-    graph = coordinator.get_capability(_HOOK_GRAPH)
-    bridge = coordinator.get_capability(_HOOK_BRIDGE)
-    if graph is None or bridge is None:
+    state = _CONSTRUCTIONS.get(id(coordinator))
+    if state is None or state[0] is not coordinator:
         return False
-    selection = coordinator.get_capability("web.media.graph_selection")
+    _, bridge, graph, selection, _ = state
+    if (coordinator.get_capability(_HOOK_GRAPH) is not graph or
+            coordinator.get_capability(_HOOK_BRIDGE) is not bridge or
+            coordinator.get_capability("web.media.graph_selection") is not selection):
+        return False
     if (selection is None or not selection.accepts_plan(coordinator.config)
             or not selection.accepts_construction(graph)):
         coordinator.register_capability("web.media.source_join", None)
@@ -100,6 +145,7 @@ def seal_hook_graph(coordinator):
             return False
     coordinator.register_capability("web.media.source_join", (
         bridge, graph, bridge.graph_receipt, selection))
+    state[4] = bridge.graph_receipt
     enable_media(coordinator)
     return bridge.validate_receipt(bridge.graph_receipt) is True
 
@@ -121,6 +167,10 @@ def hook_configuration(coordinator):
             yield
     else:
         with graph.transition() as successor:
+            state = _CONSTRUCTIONS.get(id(coordinator))
+            if state is None or state[0] is not coordinator or state[2] is not graph:
+                raise ValueError("Media construction ownership changed")
+            state[2], state[4] = successor, None
             coordinator.register_capability(_HOOK_GRAPH, successor)
             yield
         seal_hook_graph(coordinator)
@@ -382,6 +432,7 @@ def bind_media(session, store, *, selection=None):
         from amplifier_foundation.session.media import NeutralSessionMediaStore
         media = NeutralSessionMediaStore(session.session_id)
     policy.store = media
+    mint_graph_owner(coordinator, policy, kind="media-source-policy")
     # Module readiness reports describe compatibility, never execution authority.
     # Enable only after the selected loop and actual checkpoint seam are mounted.
     capability = bind_session_media(coordinator, store=media, enabled=False)
@@ -440,6 +491,9 @@ def bind_media(session, store, *, selection=None):
             request_only.requests.clear()
             projected.clear()
             media.close()
+            state = _CONSTRUCTIONS.get(id(coordinator))
+            if state is not None and state[0] is coordinator:
+                _CONSTRUCTIONS.pop(id(coordinator), None)
         cleanup(close)
 
 
@@ -457,7 +511,10 @@ def enable_media(coordinator):
     join = coordinator.get_capability("web.media.source_join")
     selection = coordinator.get_capability("web.media.graph_selection")
     graph = coordinator.get_capability(_HOOK_GRAPH)
+    state = _CONSTRUCTIONS.get(id(coordinator))
     qualified = (bridge is not None and isinstance(join, tuple) and len(join) == 4 and
+                 state is not None and state[0] is coordinator and state[1] is bridge and
+                 state[2] is graph and state[3] is selection and state[4] is join[2] and
                  join[0] is bridge and join[1] is graph and
                  join[2] is bridge.graph_receipt and join[3] is selection and
                  bridge.validate_receipt(join[2]) is True and
@@ -499,14 +556,43 @@ def _scope(coordinator):
     return copy.deepcopy(value)
 
 
-def _live_binding(coordinator, provider, model, options):
-    from ..provider_capture import normalized_options
+def _media_support(provider, source, model, options):
+    """Use indexed eligibility when present; never broaden it through v1."""
+    missing = object()
+    indexed = getattr(provider, "get_media_request_support_for_request", missing)
+    if indexed is not missing:
+        if not callable(indexed):
+            raise ValueError("Indexed media request support must be synchronous")
+        snapshot, selected_options = source.model_copy(deep=True), copy.deepcopy(options)
+        before, frozen_options = snapshot.model_dump_json(), copy.deepcopy(selected_options)
+        try:
+            support = indexed(request=snapshot, model=model, request_options=selected_options)
+            if inspect.isawaitable(support):
+                if inspect.iscoroutine(support):
+                    support.close()
+                raise ValueError("Indexed media request support must be synchronous")
+            if snapshot.model_dump_json() != before or selected_options != frozen_options:
+                raise ValueError("Indexed media support mutated its read-only input")
+            from amplifier_foundation.session.media_projection import _indexed_support
+            return _indexed_support(support, source)
+        finally:
+            for message in snapshot.messages:
+                for block in message.content if isinstance(message.content, list) else ():
+                    if getattr(block, "type", None) == "image":
+                        block.source.clear()
+            snapshot.messages = []
     support = getattr(provider, "get_media_request_support", None)
-    value = support(model=model, request_options=options) if callable(support) else None
+    value = support(model=model, request_options=copy.deepcopy(options)) if callable(support) else None
     if inspect.isawaitable(value):
         if inspect.iscoroutine(value):
             value.close()
         raise ValueError("Media support must be synchronously verifiable")
+    return value if isinstance(value, dict) and value.get("v") == 1 else {"v": 1, "positions": []}
+
+
+def _live_binding(coordinator, provider, model, options, source):
+    from ..provider_capture import normalized_options
+    value = _media_support(provider, source, model, options)
     return (
         normalized_options({"config": getattr(_provider_owner(provider), "config", None),
                             "support": value, "default_model": getattr(provider, "default_model", None)}),
@@ -533,7 +619,8 @@ class HostMediaProjection:
         self.transport_started = False
         self.model = model
         self.canonical = self.canonical_snapshot = None
-        self.live_binding = _live_binding(coordinator, provider, model, options)
+        self.graph_lifetime = None
+        self.live_binding = _live_binding(coordinator, provider, model, options, self.snapshot)
         install = getattr(prepared, "set_binding_validator", None)
         if callable(install):
             install(self.validate_binding)
@@ -542,13 +629,15 @@ class HostMediaProjection:
             projected[id(self.request)] = self
 
     def validate_binding(self):
+        if self.graph_lifetime is not None:
+            self.graph_lifetime.validate()
         if (self.prepared is None or self.source != self.snapshot
                 or self.canonical is not None and self.canonical != self.canonical_snapshot
                 or self.coordinator.get_capability(NAMESPACE) is not self.capability
                 or _provider_owner(self.provider) is not self.owner
                 or any(_provider_owner((self.coordinator.get("providers") or {}).get(name))
                        is not self.owner for name in self.mounts)
-                or _live_binding(self.coordinator, self.provider, self.model, self.options) != self.live_binding
+                or _live_binding(self.coordinator, self.provider, self.model, self.options, self.snapshot) != self.live_binding
                 or _scope(self.coordinator) != self.scope):
             raise ValueError("Prepared media request identity changed")
         return True
@@ -565,6 +654,9 @@ class HostMediaProjection:
         return normalized_options(effective_options(self.source, options)) == normalized_options(self.options)
 
     def release(self):
+        if self.graph_lifetime is not None:
+            self.graph_lifetime.release()
+            self.graph_lifetime = None
         projected = self.coordinator.get_capability("web.media.projections")
         if projected is not None:
             projected.pop(id(self.request), None)
@@ -585,7 +677,8 @@ async def prepare_media(coordinator, provider, request, *, request_options=None,
     capability = coordinator.get_capability(NAMESPACE) if coordinator is not None else None
     if not has_media(request) and not (
             getattr(capability, "version", None) == 1
-            and callable(getattr(provider, "get_media_request_support", None))):
+            and (callable(getattr(provider, "get_media_request_support", None))
+                 or hasattr(provider, "get_media_request_support_for_request"))):
         return None
     if capability is None or getattr(capability, "version", None) != 1:
         capability = NeutralMedia(coordinator)
@@ -595,15 +688,10 @@ async def prepare_media(coordinator, provider, request, *, request_options=None,
         raise ValueError("Prepared media request options are unsupported")
     owner = _provider_owner(provider)
     model = options.get("model") or request.model or getattr(provider, "default_model", None)
-    support = getattr(provider, "get_media_request_support", None)
-    support = support(model=model, request_options=options) if callable(support) else None
-    if inspect.isawaitable(support):
-        if inspect.iscoroutine(support):
-            support.close()
-        raise ValueError("Media support must be synchronously verifiable")
+    support = _media_support(provider, request, model, options)
     # Unknown support is explicitly no-vision. Do not infer tool placement from
     # a general vision model tag or change the user's selected account/model.
-    if not isinstance(support, dict) or support.get("v") != 1:
+    if not isinstance(support, dict) or support.get("v") not in {1, 2}:
         support = {"v": 1, "positions": []}
     scope = _scope(coordinator)
     from ..execution_events import CALL_PURPOSE

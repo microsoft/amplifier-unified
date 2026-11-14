@@ -170,7 +170,8 @@ async def test_named_actual_core_construction_final_result_ack_private_pixels(tm
                                        base64.b64encode(pixels).decode())
     selected = NamedMediaGraph("actual-core-media-fixture", plans=[plan], sources={
         __file__: hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
-        bindings=(fixture_loader,), observations=(actual_calls,), dependencies=(HookResult,))
+        bindings=(fixture_loader,), observations=(actual_calls,), dependencies=(HookResult,),
+        captures=(None, redact, "fixture-loop", "fixture-context", "fixture-provider", "fixture-hooks"))
     session = AmplifierSession(plan, session_id="named-root")
     session.coordinator.loader = fixture_loader
     store = SessionStore(tmp_path / "sessions")
