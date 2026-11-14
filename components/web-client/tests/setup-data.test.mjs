@@ -18,7 +18,12 @@ test('routing candidate updates preserve fallback configuration and other roles'
  assert.equal(updateRole(changed,'new',{candidates:[]}).roles.coding.description,'Code');
 });
 test('provider model catalogs accept native records and string identifiers',()=>{
- assert.deepEqual(modelOptions({models:['one',{id:'two',display_name:'Two'},{}]}),[{id:'one',name:'one'},{id:'two',name:'Two'}]);
+ assert.deepEqual(modelOptions({models:['one',{id:'two',display_name:'Two'},{}]}),[{id:'one',name:'one'},{id:'two',display_name:'Two',name:'Two'}]);
+});
+test('provider model options retain pricing and unknown model metadata',()=>{
+ const details={version:1,kind:'fixed',currency:'USD',unit:'per_million_tokens',basis:'standard_global',rates:{input:'1',output:'2'}};
+ const model={id:'priced',display_name:'Priced model',input:1,output:2,pricing_details:details,extension:{future:true}};
+ assert.deepEqual(modelOptions([model]),[{...model,id:'priced',name:'Priced model'}]);
 });
 
 import {providerFields} from '../src/setup-data.js';

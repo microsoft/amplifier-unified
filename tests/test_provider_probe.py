@@ -2,6 +2,80 @@ import pytest
 from amplifier_web import provider_probe
 
 
+@pytest.mark.parametrize('surface', ['probe', 'mounted'])
+@pytest.mark.parametrize('kind', ['fixed', 'tiered'])
+async def test_model_subclass_pricing_survives_catalog_surfaces_and_restart(
+    monkeypatch, tmp_path, surface, kind,
+):
+    """Provider-local additive metadata stays descriptive, never inference config."""
+    from types import SimpleNamespace
+    from amplifier_core import ModelInfo
+    from amplifier_web.provider_catalog import ProviderCatalog, model_key
+    from amplifier_web.runtime_controls import RuntimeControls
+
+    class PricedModelInfo(ModelInfo):
+        pricing_details: dict | None = None
+
+    rates = {'input': '0.10', 'output': '0.50', 'cache_read': '0.01',
+             'cache_write_5m': '0.125', 'cache_write_1h': '0.20'}
+    details = {'version': 1, 'kind': kind, 'currency': 'USD',
+               'unit': 'per_million_tokens', 'basis': 'standard_global',
+               'modifiers': {'us_inference': '1.1'}}
+    if kind == 'fixed':
+        details['rates'] = rates
+    else:
+        details.update(threshold_tokens=100000,
+            threshold_basis='input_tokens+cache_read_input_tokens+cache_creation_input_tokens',
+            tiers=[{'up_to': 100000, 'rates': rates},
+                   {'above': 100000, 'rates': {key: '1.00' for key in rates}}])
+    defaults = {'temperature': 0.7, 'max_tokens': 1024}
+    flat = ({'pricing': {'input_per_million': 0.1, 'output_per_million': 0.5,
+                        'cache_read_per_million': 0.01, 'cache_write_per_million': 0.125,
+                        'currency': 'USD'}} if kind == 'fixed' and 'pricing' in ModelInfo.model_fields else {})
+    model = PricedModelInfo(id='Exact/Model', display_name='Exact Model',
+        context_window=200000, max_output_tokens=1024, capabilities=[],
+        defaults=defaults, pricing_details=details, **flat)
+
+    class Provider:
+        def __init__(self, config=None): self.config = config or {}
+        def get_info(self): return {'config_fields': []}
+        def get_model_list_info(self): return {'version': 1, 'source': 'provider-api'}
+        async def list_models(self): return [model]
+        async def complete(self, request): raise AssertionError('Catalog browsing never infers')
+
+    if surface == 'probe':
+        monkeypatch.setattr(provider_probe, 'provider_class', lambda module: Provider)
+        result = await provider_probe.query({'module': 'fixture', 'action': 'providers.models',
+                                             'config': {}})
+    else:
+        provider = Provider()
+        coordinator = SimpleNamespace(config={'providers': []}, session_state={},
+            get=lambda name: {'one': provider} if name == 'providers' else
+                SimpleNamespace(_select_provider=lambda providers: provider),
+            get_capability=lambda name: None, register_capability=lambda *args: None)
+        controls = RuntimeControls(
+            SimpleNamespace(coordinator=coordinator, config={}, session_id='fixture'),
+            SimpleNamespace(generation=None, queued_inputs=0))
+        try:
+            result = await controls.perform('configuration.providerModels', {'instance': 'one'})
+        finally:
+            await controls.close()
+    public_model = result['models'][0]
+    assert public_model['pricing_details'] == details
+    assert public_model['defaults'] == defaults
+    if kind == 'tiered':
+        assert public_model.get('pricing') is None, 'Never flatten tiers to a universal cheap price'
+    elif flat:
+        assert public_model['pricing']['input_per_million'] == 0.1
+    cache = ProviderCatalog(tmp_path / 'pricing-catalog.json')
+    try:
+        key = model_key('pricing-fixture')
+        cache.put(key, result)
+        assert ProviderCatalog(cache.path).entry(key)['models'] == result['models']
+    finally:
+        await cache.close()
+
+
 async def test_native_metadata_and_catalog_materialize_config_close_providers_and_hide_secrets(monkeypatch):
     closed=[]
     class Provider:
