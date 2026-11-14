@@ -167,7 +167,7 @@ def finish_after_exit(root, token, *, contents, folders, files, wait_for=(), sec
     folder was removed. Failure to escape a Job retries process creation alone;
     no already-started helper is replayed. Links and unnamed entries stay.
     """
-    from .windows_service import _powershell
+    from .windows_service import WindowsServiceError, _powershell
 
     groups = [list(group) for group in (contents, folders, files)]
     for group in groups:
@@ -189,14 +189,18 @@ def finish_after_exit(root, token, *, contents, folders, files, wait_for=(), sec
         "wait_for": wait_for, "seconds": seconds,
         "report": os.fspath(report) if report is not None else None,
     }, ensure_ascii=True).encode("ascii")
-    program = _powershell()
+    try:
+        program = _powershell()
+    except WindowsServiceError as error:
+        raise OSError("Cannot locate Windows PowerShell.") from error
     environment = os.environ.copy()
+    root_path = ntpath.abspath(root)
     for key, value in list(environment.items()):
         if key.upper() not in {"TEMP", "TMP"}:
             continue
         try:
-            inside = ntpath.commonpath((os.fspath(root), value)).casefold() == ntpath.normpath(root).casefold()
-        except ValueError:  # Another drive, or a relative value.
+            inside = ntpath.commonpath((root_path, ntpath.abspath(value))).casefold() == root_path.casefold()
+        except ValueError:  # Another drive.
             inside = False
         if inside:
             if not environment.get("LOCALAPPDATA"):

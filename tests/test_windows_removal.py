@@ -291,10 +291,24 @@ def test_finish_retries_only_a_refused_process_start(finish_start, monkeypatch):
         removal.finish_after_exit(r"C:\Amplifier", "x", contents=[], folders=[], files=[])
 
 
+def test_finish_reports_a_missing_system_powershell_as_an_os_error(finish_start, monkeypatch):
+    from amplifier_web import windows_service
+
+    calls, _, _ = finish_start
+    def missing():
+        raise windows_service.WindowsServiceError("No system folder")
+    monkeypatch.setattr(windows_service, "_powershell", missing)
+    with pytest.raises(OSError, match="Cannot locate Windows PowerShell"):
+        removal.finish_after_exit(r"C:\Amplifier", "x", contents=[], folders=[], files=[])
+    assert not calls
+
+
 @pytest.mark.parametrize("temp,tmp,expected_temp,expected_tmp", [
     (r"C:\Amplifier\cache", r"c:\AMPLIFIER", r"C:\Users\Me\AppData\Local\Temp",
      r"C:\Users\Me\AppData\Local\Temp"),
     (r"C:\Amplifier-other", r"D:\temp", r"C:\Amplifier-other", r"D:\temp"),
+    (r"C:\Elsewhere\..\Amplifier\cache", r"C:\Amplifier\..\outside",
+     r"C:\Users\Me\AppData\Local\Temp", r"C:\Amplifier\..\outside"),
 ])
 def test_finish_moves_only_temporary_paths_inside_root(
     finish_start, monkeypatch, temp, tmp, expected_temp, expected_tmp,
