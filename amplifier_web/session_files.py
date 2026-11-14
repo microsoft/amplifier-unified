@@ -31,10 +31,68 @@ def amplifier_home():
     return Path(os.environ.get('AMPLIFIER_HOME') or Path.home() / '.amplifier').expanduser().resolve()
 
 
+# On Windows the app's own chat folders get a short project name (see project_slug).
+# A separate name lets tests exercise that rule on any platform.
+_SHORT_CHAT_PROJECTS = _WINDOWS
+_CHAT_ID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
+_HISTORY = ('transcript.jsonl', 'transcript.jsonl.backup', 'metadata.json')
+
+
+def chat_project_name(path):
+    """Short project name for a path shaped ``<any>/chats/<UUID>/files``, else None.
+
+    A string test only; it reads no file. The name comes from the chat UUID in
+    the path, so it does not depend on letter case, the drive or how the path
+    was resolved. A CLI name starts with '-' and this name does not, so the two
+    are never equal.
+    """
+    path = Path(path)
+    identity = path.parent.name.lower()
+    if (path.name.lower() != 'files' or path.parent.parent.name.lower() != 'chats'
+            or not _CHAT_ID.fullmatch(identity)):
+        return None
+    return 'chat-' + identity.replace('-', '')[:16]
+
+
+def _has_history(project):
+    """A session folder with a transcript or metadata. An empty leftover is not history."""
+    try:
+        with os.scandir(project / 'sessions') as entries:
+            return any(entry.is_dir(follow_symlinks=False) and any(
+                os.path.lexists(os.path.join(entry.path, name)) for name in _HISTORY) for entry in entries)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError as error:
+        # Windows refuses a path over its limit while long paths are off (the
+        # default). Nothing usable can be under such a name.
+        if getattr(error, 'winerror', None) in (3, 206):
+            return False
+        raise
+
+
 def project_slug(workspace):
+    resolved = Path(workspace).expanduser().resolve()
     # Exact app-cli convention: spaces, periods and underscores are significant.
-    slug = str(Path(workspace).expanduser().resolve()).replace('/', '-').replace('\\', '-').replace(':', '')
-    return slug if slug.startswith('-') else '-' + slug
+    slug = str(resolved).replace('/', '-').replace('\\', '-').replace(':', '')
+    slug = slug if slug.startswith('-') else '-' + slug
+    # Other platforms keep the CLI name for every folder: Foundation writes its
+    # transfer fence under that name there. On Windows it only reads it.
+    short = chat_project_name(resolved) if _SHORT_CHAT_PROJECTS else None
+    if short is None:
+        return slug  # Every folder a person chose: no file access beyond resolve().
+    # A folder shaped like the app's own chat folder. Its CLI name repeats the
+    # installation path inside every session path, which then exceeds the
+    # Windows path limit. Existing history decides first; nothing is moved.
+    projects = amplifier_home() / 'projects'
+    if _has_history(projects / short):
+        return short
+    if _has_history(projects / slug):
+        return slug  # A chat that began under the CLI name stays there.
+    if (projects / short).is_dir():
+        return short  # Still addressable after the chat folder is deleted.
+    from .managed_chats import metadata
+    # The shape does not prove that the app owns the folder. Its allocation record does.
+    return short if metadata(resolved) else slug
 
 
 def validate_id(identity):
@@ -72,9 +130,11 @@ def append_event(workspace, identity, event, data):
     """
     from .host.storage import SessionStore
     directory = capture_dir(workspace, identity)
+    # The name of the folder actually used: one decision for the path and the records.
+    project = directory.parents[2].name
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = directory / 'events.jsonl'
-    record = {'event': event, 'workspace': project_slug(workspace),
+    record = {'event': event, 'workspace': project,
               'timestamp': data['timestamp'], 'data': data}
     raw = (json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(',', ':')) + '\n').encode()
     with FileLock(str(directory / '.unified-append.lock')):
@@ -84,7 +144,7 @@ def append_event(workspace, identity, event, data):
         else:
             SessionStore._atomic(metadata, json.dumps({
                 'format': 'context-intelligence', 'version': '1.0.0',
-                'session_id': identity, 'workspace': project_slug(workspace),
+                'session_id': identity, 'workspace': project,
                 'working_dir': str(workspace), 'parent_id': data.get('parent_id', ''),
                 'started_at': data['timestamp'], 'last_event_at': data['timestamp'], 'status': 'running',
             }))
