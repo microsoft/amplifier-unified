@@ -90,20 +90,21 @@ def test_symbolic_links_cannot_escape_private_store(tmp_path, part):
         attachments.file_path(home, row['id'])
 
 
-def test_encoder_reads_authoritative_metadata_and_limits_inline_text(tmp_path, monkeypatch):
+async def test_encoder_reads_authoritative_metadata_and_limits_inline_text(tmp_path, monkeypatch):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
     rows = [upload(tmp_path), upload(tmp_path, 'notes.txt', b'a' * 60000), upload(tmp_path, 'more.txt', b'b' * 60000)]
-    content = attachments.encode(SimpleNamespace(text='Review these', attachments=rows))
+    encoded = await attachments.encode(SimpleNamespace(text='Review these', attachments=rows))
+    content = encoded['content']
     assert content[0]['text'] == 'Review these'
-    image = next(item for item in content if item['type'] == 'image')
-    assert base64.b64decode(image['source']['data']) == PNG
-    assert image['source']['media_type'] == 'image/png'
+    assert not any(item['type'] == 'image' for item in content)
+    assert 'compatible media handling' in content[2]['text']
+    assert encoded['metadata']['amplifier_attachments']['items'] == rows
     assert sum(item.get('text', '').startswith('Attached file contents:') for item in content) == 1
     assert 'appropriate tool' in content[-1]['text']
     path, _ = attachments.file_path(tmp_path, rows[0]['id'])
     path.write_bytes(b'changed')
     with pytest.raises(ValueError, match='unavailable'):
-        attachments.encode(SimpleNamespace(text='Review', attachments=[rows[0]]))
+        await attachments.encode(SimpleNamespace(text='Review', attachments=[rows[0]]))
 
 
 async def test_draft_attachment_send_is_durable_and_private(tmp_path):
@@ -163,13 +164,13 @@ async def test_attachment_http_images_inline_documents_download(authenticated_cl
     assert (await client.get('/api/attachments/' + '0' * 32)).status == 404
 
 
-def test_real_core_loop_live_receives_multimodal_message():
+def test_real_core_loop_live_missing_media_is_truthfully_unavailable():
     python = os.environ.get('UNIFIED_RUNTIME_PYTHON')
     if not python:
-        pytest.skip('Set UNIFIED_RUNTIME_PYTHON for real Core/loop-live multimodal verification')
+        pytest.skip('Set UNIFIED_RUNTIME_PYTHON for real Core/loop-live unavailable-media verification')
     result = subprocess.run([python, str(Path(__file__).parent / 'fixtures/attachments_runtime_probe.py')], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert '"image_received": true' in result.stdout
+    assert '"image_unavailable_without_capability": true' in result.stdout
 
 
 def test_pasted_text_metadata_and_content_survive_reload(tmp_path):
