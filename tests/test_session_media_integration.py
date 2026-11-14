@@ -51,12 +51,12 @@ async def test_readiness_requires_positive_loop_report_and_actual_checkpoint(ses
                details={"role": "loop", "contract": 1})
     enable_media(session.coordinator)
     assert cap.enabled is False  # Handler names/readiness cannot qualify a graph.
-    session.caps["web.media.graph_qualified"] = True
+    session.caps["web.media.graph_qualified"] = True  # Obsolete booleans remain inert.
     for outcome in ("failed", "rejected", "ready"):
         cap.report("fixture-loop", event="consumer-ready", outcome=outcome,
                    details={"role": "loop", "contract": 1})
         enable_media(session.coordinator)
-        assert cap.enabled is (outcome == "ready")
+        assert cap.enabled is False  # Requires a named source join + issuer receipt.
     session.caps.pop("session.durable_checkpoint")
     enable_media(session.coordinator)
     assert cap.enabled is False

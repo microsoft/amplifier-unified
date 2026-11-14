@@ -725,7 +725,9 @@ class Children:
             from .media import bind_media
             initialization = initialization_hooks(isolation=isolation, decision_accounts=decision_accounts,
                                                   routing=routing, retain=retain_child,
-                                                  media=partial(bind_media, store=self.store))
+                                                  media=partial(bind_media, store=self.store,
+                                                      selection=parent.coordinator.get_capability(
+                                                          "web.media.graph_selection")))
             from .approvals import Approvals
             approvals = (self.approvals.for_context(lambda: child.coordinator.get('context') if child else None)
                          if isinstance(self.approvals, Approvals) else self.approvals)
@@ -819,6 +821,9 @@ class Children:
             checkpoint_ready = True
             from .media import enable_media
             enable_media(coordinator)
+            if not persistent or not callable(getattr(coordinator.get("orchestrator"), "_select_provider", None)):
+                from .media import seal_hook_graph
+                seal_hook_graph(coordinator)
             row["status"] = "running"
             self._emit(row)
             await checkpoint()

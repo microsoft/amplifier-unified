@@ -34,7 +34,7 @@ def registration_hooks(coordinator):
     return getattr(registration_coordinator(coordinator), "hooks", None)
 
 
-def begin_hook_graph(session):
+def begin_hook_graph(session, *, selection=None):
     """Capture this actual construction, before any host/module registration.
 
     Participant IDs select the supplied cooperative registration views. They are
@@ -42,6 +42,9 @@ def begin_hook_graph(session):
     witnesses can qualify a result. Unknown raw/native registrations stay out.
     """
     coordinator = session.coordinator
+    from .media_graph import NamedMediaGraph
+    if type(selection) is not NamedMediaGraph or not selection.accepts_plan(session.config):
+        return
     try:
         from amplifier_core import AmplifierSession
         from amplifier_foundation.session.media_hook_bridge import (
@@ -67,6 +70,7 @@ def begin_hook_graph(session):
     graph = begin(session, owner=_HOST_PARTICIPANT, participants=tuple(dict.fromkeys(participants)))
     coordinator.register_capability(_HOOK_BRIDGE, bridge)
     coordinator.register_capability(_HOOK_GRAPH, graph)
+    coordinator.register_capability("web.media.graph_selection", selection)
 
 
 def seal_hook_graph(coordinator):
@@ -74,6 +78,9 @@ def seal_hook_graph(coordinator):
     graph = coordinator.get_capability(_HOOK_GRAPH)
     bridge = coordinator.get_capability(_HOOK_BRIDGE)
     if graph is None or bridge is None:
+        return False
+    selection = coordinator.get_capability("web.media.graph_selection")
+    if selection is None or not selection.accepts_construction(graph):
         return False
     if bridge.graph_receipt is None:
         try:
@@ -103,11 +110,6 @@ async def control_tool_post(coordinator, event):
         # Core's aggregate can lose replacement/null/Continue-after-mutation.
         # Without the structural owner there is no truthful effective result.
         value = None if handlers else event["result"]
-    capability = coordinator.get_capability(NAMESPACE)
-    if capability is not None and callable(getattr(capability, "publish", None)):
-        origin = {"kind": "tool", "session_id": coordinator.session_id,
-                  "id": event["tool_call_id"]}
-        await capability.publish([], origin=origin, disposition="drop")
     if processed.action == "deny":
         return {"success": False, "error": {"message": processed.reason or "Denied by session policy"}}
     if isinstance(value, dict):
@@ -118,6 +120,32 @@ async def control_tool_post(coordinator, event):
             value["mediaDelivery"] = {"available": False,
                 "reason": "Control invocations do not append canonical media history"}
     return value
+
+
+async def drop_control_media(capability, session_id, call_id):
+    """Settle the captured actual origin, never mutable post-event identity."""
+    if capability is not None and callable(getattr(capability, "publish", None)):
+        await capability.publish([], origin={"kind": "tool", "session_id": session_id,
+                                             "id": call_id}, disposition="drop")
+
+
+async def prepare_control_result(coordinator, result, call_id):
+    """Externalize typed Core image parts before any post observer can see them."""
+    from amplifier_core import ToolResult
+    from amplifier_core.message_models import ImageBlock, TextBlock
+    if not isinstance(result, ToolResult):
+        return result
+    images = any(isinstance(block, ImageBlock) for block in result.content or ())
+    capability = coordinator.get_capability(NAMESPACE)
+    if images and capability is not None and getattr(capability, "enabled", False):
+        admitted = await capability.ingest(result, source_format="core-tool-result",
+            origin={"kind": "tool", "session_id": coordinator.session_id, "id": call_id}, policy=None)
+        return admitted["value"].model_dump()
+    if images:
+        result = result.model_copy(deep=True)
+        result.content = [TextBlock(text="[Image unavailable: control invocation has no durable media admission]")
+                          if isinstance(block, ImageBlock) else block for block in result.content]
+    return result.model_dump()
 
 
 def record_request_only(message, *, validate=None):
@@ -257,7 +285,7 @@ def _durable_media_supported():
     return os.name == "posix"
 
 
-def bind_media(session, store):
+def bind_media(session, store, *, selection=None):
     """Run before initialization, including for every newly resumed coordinator."""
     coordinator = session.coordinator
     try:
@@ -269,7 +297,7 @@ def bind_media(session, store):
         # as if it were vision. prepare_media refuses their ref-bearing requests.
         coordinator.register_capability("web.media.unavailable", True)
         return
-    begin_hook_graph(session)
+    begin_hook_graph(session, selection=selection)
     policy = SourcePolicy(coordinator)
     request_only = RequestOnlyRegistry()
     coordinator.register_capability("web.media.request_only", request_only)
@@ -287,6 +315,20 @@ def bind_media(session, store):
     # Module readiness reports describe compatibility, never execution authority.
     # Enable only after the selected loop and actual checkpoint seam are mounted.
     capability = bind_session_media(coordinator, store=media, enabled=False)
+    original_publish = capability.publish
+    async def publish(refs, *, origin, disposition):
+        if (origin.get("kind") == "tool" and origin.get("session_id") == coordinator.session_id
+                and origin.get("id") in policy.pending):
+            for ref in refs:
+                provenance = ref.get("provenance") or {}
+                if (provenance.get("kind"), provenance.get("session_id"), provenance.get("id")) != (
+                        origin["kind"], origin["session_id"], origin["id"]):
+                    raise ValueError("Media publication does not match the actual tool origin")
+                # Publish validates bytes before the canonical append; bind the
+                # genuine observed tool owner before that source-policy check.
+                media.classify_origin(ref, classification=policy.pending[origin["id"]])
+        return await original_publish(refs, origin=origin, disposition=disposition)
+    capability.publish = publish
     if coordinator.get_capability(_HOOK_BRIDGE) is not None:
         original_ingest = capability.ingest
         async def ingest(*args, **kwargs):

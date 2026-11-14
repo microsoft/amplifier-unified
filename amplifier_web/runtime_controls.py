@@ -852,6 +852,10 @@ class RuntimeControls:
             raise ValueError("A policy modification cannot redirect an identity-bound operation")
         from amplifier_module_loop_live.scope import JOB_CALL
         ownership = JOB_CALL.set(call)
+        from .host.media import NAMESPACE
+        media_capability = coordinator.get_capability(NAMESPACE)
+        media_session_id = coordinator.session_id
+        primary_error = None
         try:
             if integration_id is not None:
                 admit = coordinator.get_capability('integration.admit')
@@ -876,14 +880,26 @@ class RuntimeControls:
                     checker(*expected_process_owner)
             with invocation(arguments):
                 result = await tool.execute(arguments)
-            from .host.media import control_tool_post
+            from .host.media import control_tool_post, prepare_control_result
+            result = await prepare_control_result(coordinator, result, call)
             result = await control_tool_post(coordinator, {
-                **data, "result": result.model_dump() if hasattr(result, "model_dump") else result})
+                **data, "result": result})
             if checkpoint:
                 await self.checkpoint()
             return {"callId":call,"result":public_config(result)}
-        except Exception as exc:
+        except BaseException as exc:
+            primary_error = exc
+            if not isinstance(exc, Exception):
+                raise
             await hooks.emit("tool:error",{**data,"error":{"type":type(exc).__name__}})
             raise
         finally:
             JOB_CALL.reset(ownership)
+            from .host.media import drop_control_media
+            try:
+                await drop_control_media(media_capability, media_session_id, call)
+            except BaseException as cleanup_error:
+                if primary_error is None:
+                    raise
+                primary_error.add_note("Control media origin settlement failed: " +
+                                       type(cleanup_error).__name__)

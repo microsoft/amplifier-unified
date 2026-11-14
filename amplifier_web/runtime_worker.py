@@ -52,8 +52,10 @@ def publish_process_identity():
 
 
 class Worker:
-    def __init__(self):
+    def __init__(self, *, media_graph_selection=None):
         self.session = self.runtime = self.execution = None
+        # Assembly-owned object, never a worker command/configuration field.
+        self.media_graph_selection = media_graph_selection
         self.approvals = {}
         self.approval_contexts = {}
         self.approval_deliveries = {}
@@ -1002,6 +1004,7 @@ class Worker:
                     execution_workspace=config.get("workingDirectory"), install_overrides=install_overrides,
                     owner_session_id=config.get("ownerSessionId"),
                     ephemeral_mcp_servers=config.get("ephemeralMcpServers"),
+                    media_graph_selection=self.media_graph_selection,
                     startup_timing=startup_timing)
             if qualified_overrides is not None:
                 with startup_timing.phase('worker.runtime.verify.after_prepare'):
@@ -1081,6 +1084,8 @@ class Worker:
                         if isinstance(getattr(loop,'root_provider',None), SelectedProvider):
                             loop.root_provider.execution_adapter = transform
                         runtime, selected, scope = result
+                        from amplifier_web.host.media import seal_hook_graph
+                        seal_hook_graph(coordinator)
                         return runtime, {name: transform(value) for name, value in selected.items()}, scope
                     return result
             # loop-live propagates this host through its existing ContextVar to
