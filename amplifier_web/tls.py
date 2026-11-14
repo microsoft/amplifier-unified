@@ -21,12 +21,13 @@ def tls_dir(data_dir: Path) -> Path:
     return Path(data_dir).expanduser().resolve() / "config" / "tls"
 
 
-def _names(config: dict) -> tuple[list[str], list[str]]:
+def _names(config: dict, *, computer: bool = True) -> tuple[list[str], list[str]]:
     hosts = ["localhost"]
-    try:
-        hosts.append(canonical_host(socket.gethostname()))
-    except ValueError:
-        pass
+    if computer:
+        try:
+            hosts.append(canonical_host(socket.gethostname()))
+        except ValueError:
+            pass
     ips = ["127.0.0.1", "::1"]
     for origin in config["public_origins"]:
         host = canonical_host(urlsplit(origin).hostname)

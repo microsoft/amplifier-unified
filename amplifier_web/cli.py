@@ -230,6 +230,12 @@ def _setup_tls(data_dir: Path, mode: str) -> None:
     setup_local_ca(data_dir, config, force=mode == "force")
     print("Created app-owned local CA and leaf certificate. Restart the service to use HTTPS.")
     print("CA SHA-256 fingerprint:", ca_fingerprint(data_dir))
+    if mode == "force" and browser_entry.is_windows():
+        from .windows_tls import keyless_identity
+        if keyless_identity(data_dir) is not None:
+            # No key can reissue this installation's certificate, so force made a new one.
+            print("This is a new certificate. Windows asks you to confirm it the next time you open "
+                  "Amplifier on this PC. Other devices must import it again (setup-tls export).")
 
 
 def _serve(args, data_dir: Path, *, task_runner=None) -> None:

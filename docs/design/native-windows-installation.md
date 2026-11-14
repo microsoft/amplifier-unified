@@ -102,9 +102,8 @@ Python-only asset set.
 This asset is explicitly an **unsigned preview**. An executable checksum is not
 Authenticode or SmartScreen reputation. Consumer browser entry separately checks
 Windows ROOT trust and the private leaf fingerprint before requesting a browser
-grant. If verification fails, the app offers public-certificate review with its
-fingerprint. It never imports trust or bypasses browser policy. Declining keeps
-the background app running and sends no browser-entry command. A successful
+grant. It never bypasses browser policy or a browser warning. Declining trust
+keeps the background app running and sends no browser-entry command. A successful
 system TLS check is not proof that every browser's policy accepts the connection.
 
 Exact installed-package checks cover real Start-menu entry, refusal of a live
@@ -112,6 +111,86 @@ untrusted listener, certificate-review decline and rendered data-preserving
 uninstall. Public artifact availability, a new installation's human trust
 decision/authenticated browser onboarding, and real sign-out/sign-in remain
 distinct acceptance boundaries; source admission does not label them passed.
+
+### Local HTTPS trust without a manual import
+
+A new consumer installation gets a **key-less identity**
+(`windows_tls.create_identity`). The launcher makes one root certificate and one
+server certificate in one call, in its own process. The root's signing key is
+never written and is dropped when that call returns, so no key that can sign
+under the root exists afterwards. That is the main protection: a root that
+Windows trusts cannot be used to impersonate another site when nobody can sign
+with it. The private store holds `ca.crt`, `leaf.crt` and `leaf.key`, and no
+`ca.key`.
+
+| Certificate | Shape |
+| --- | --- |
+| Root | `Amplifier Unified (this PC only)`, path length 0, server-authentication use only, 825 days. Critical name constraints permit only `localhost`, `127.0.0.1`, `::1` and addresses the owner configured, as exact hosts and full-length address masks. The constraints are a second barrier. |
+| Server | No subject name. A critical subject alternative name with the same names, so every name lies inside the root's constraints. Valid exactly as long as the root. Its key stays on disk because the host needs it. The computer name is left out: nothing opens the app by that name, and a renamed PC must not need a certificate that cannot be issued. |
+
+`windows_trust.py` owns the Windows step. When the launcher's check finds the
+connection untrusted, it:
+
+1. Shows one short message: Windows will ask one question about a certificate
+   with this name; Amplifier uses it only for the connection between this PC's
+   browser and Amplifier on this PC; select Yes. It shows the thumbprint that
+   Windows will show. This is one extra click in the first-run journey.
+2. Adds the root to the person's **Current User** trusted roots with
+   `CertAddCertificateContextToStore`. Windows shows its one standard
+   confirmation. For a new identity the launcher passes the exact in-memory
+   certificate it created, not a copy read back from a file. Windows can open
+   its confirmation behind other windows; the launcher brings it to the front
+   and never answers it.
+3. Requires that the store really holds the root, then repeats its own check: a
+   TLS handshake against the Windows roots must return the pinned server
+   certificate. Only then does it request a browser grant.
+
+Outcomes: **No** keeps the app running, says so in one plain message, and the
+next open (always started by the person) explains and asks again. A refusal by
+Windows, device policy that disables user roots (read first, so no pointless
+question appears), or trust that has no effect gives one plain message that
+names the PC's security settings and its IT support, and saves the public
+certificate in `export/local-ca.cer`. There is no prompt loop, no elevation, no
+Local Machine store and no policy change.
+
+What this does **not** protect against: changed launcher code, or any other
+program that runs as the same person, can ask Windows for the same confirmation
+itself. A later retry reads the root through the owner-only store and adds it
+only if it is exactly this shape and issued the pinned server certificate. That
+guards against a defective identity, not a hostile one: a certificate cannot
+show that nobody kept its key.
+
+Consequences and limits:
+
+- An installation from an earlier setup keeps its identity, which has a signing
+  key on disk. Amplifier **never** adds such a root; the person can still review
+  it in the Windows certificate viewer as before. Moving it to a key-less
+  identity is a later, explicit owner action.
+- No key can reissue a key-less identity's server certificate. A new configured
+  address makes the host refuse to start, and a missing server certificate
+  refuses, both with existing material unchanged. The owner's explicit
+  `setup-tls force` replaces the whole identity with a new one for the
+  currently configured names (root published last, so an interrupted renewal
+  never serves and can be repeated). The next open then shows the Amplifier
+  message and the one Windows confirmation for the new root, and every other
+  device must import the new root. Run it while the host is stopped. The earlier
+  root stays in the Windows store and is inert. Renewal before day 825 is this
+  same command; nothing reminds the owner yet.
+- The step runs in the launcher that setup installs. An in-app update does not
+  replace that launcher, so only a setup file built from this change has it.
+- `windows_trust.remove_root` is the removal call for uninstall. Windows asks
+  again there, and its default button is No, so "declined" is an ordinary
+  outcome: the root stays and is inert.
+- The launcher's check uses OpenSSL with the Windows roots. It does not prove
+  that a browser accepts the certificate. The `windows-local-connection` job
+  of the focused Windows workflow asks the Windows chain builder about the
+  shape and about a name outside the constraints, and asks Edge the same two
+  questions on a disposable runner (with the test root in the machine store,
+  which the product never uses). The Windows confirmation, and Edge on an
+  ordinary PC with the root in the person's own store, are clean-room
+  acceptance.
+- The retained prototype launcher is unchanged: it keeps the earlier CA with a
+  key on disk and the person's own certificate-viewer action.
 
 ### Saved local address
 
@@ -126,7 +205,10 @@ account on the same PC on a different port even while the first app is stopped.
 `amplifier_web/windows_ports.py` owns selection.
 
 Setup saves the port and its `https://127.0.0.1:<port>` origin together, in one
-write, in the existing private `config/server.yaml`. Restart, the sign-in task,
+write, in the existing private `config/server.yaml`. A port counts as saved when
+that origin is present, or when the port is not the default and app-owned HTTPS
+is configured, so an owner who later lists only a remote address keeps it.
+Restart, the sign-in task,
 an in-app update and every shortcut read that file; nothing selects again. The
 browser origin includes the port, so a changed port means a new site for an
 installed app window and its unsent drafts. An installation that already saved a
@@ -154,8 +236,9 @@ another program.
 Limits: the retained prototype launcher keeps 8942. Two installations under one
 Windows account share the browser's cookies for `127.0.0.1`, because cookies are
 not scoped by port; signing in to one signs the other out. The focused Windows
-workflow checks selection against the runner's real ranges, a real listening
-first installation, a real Windows port reservation and a real listed exclusion.
+workflow's `windows-local-connection` job checks selection against the runner's
+real ranges, a real listening first installation, a real Windows port
+reservation and a real listed exclusion.
 Two real setups on one PC and the port across a real update remain clean-room
 acceptance.
 
