@@ -197,7 +197,8 @@ Steps, in order:
 8. For a setup-made installation, rewrite setup's receipt and rerun setup's
    audit with the new launcher.
 9. Start the app and require the normal readiness result, with one more wait
-   while the task still runs. Then remove the saved record.
+   while the task still runs. Mark the saved record as done, then remove it. A
+   record that says done is never rolled back, even if it could not be removed.
 
 It does not touch `config/server.yaml`, the port, the TLS files, the trusted
 certificate, the task definition, settings, chats or app generations.
@@ -206,18 +207,28 @@ certificate, the task definition, settings, chats or app generations.
 only from the saved record and from what is on disk, so it can run again after
 it was itself ended:
 
+- One gate decides whether anything is left to put back. It reads only the
+  disk: the set-aside folders, setup's receipts, the launcher's identity, the
+  launch record's launcher binding and the start programs. The saved record is
+  removed only when that gate finds nothing, so a rollback that was ended after
+  one of its steps is never taken for finished.
 - It stops whatever runs from the new launcher.
-- It puts the launch record back first, under the pointer lock, and only over
-  this refresh's own change (`application_generations.restore_binding`): a
-  record that changed in any other way belongs to a later update and is never
-  overwritten. This also covers a rebind whose write landed and whose own
-  check then failed.
+- It puts the launch record's launcher binding back first, under the pointer
+  lock (`application_generations.restore_binding`). A record that already
+  names the previous launcher needs nothing, even if an app update changed the
+  rest meanwhile. A record that names another launcher and also changed in
+  another way belongs to a later update and is never overwritten. This also
+  covers a rebind whose write landed and whose own check then failed.
 - It puts back setup's receipts, the previous launcher folder at its original
   path, and the start programs (copies of the launcher's own), and removes
-  start programs that only the new launcher added.
-- It requires that the launch record, the launcher and the saved old identity
-  agree before it removes the saved record and the unused launcher folder.
+  start programs that only the new launcher added. The set-aside new launcher
+  goes last: until then its record is the list of those start programs.
 - It then restores the app's running state.
+
+One case has no rollback: the app updated itself after the new launcher was
+installed and bound. The result says so, and names the saved record to delete
+if the new launcher shall stay. A failure to write the launch record is
+reported as such, not as a change by something else.
 
 If the command is ended part-way (a closed window, a lost connection, a
 restart of the PC), the saved record remains. The next run of the command, or

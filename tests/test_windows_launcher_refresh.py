@@ -306,7 +306,8 @@ class Ended(BaseException):
     """The process was ended: nothing after this point runs."""
 
 
-@pytest.mark.parametrize("point", ["during the installation", "after the rebind", "during the rollback"])
+@pytest.mark.parametrize("point", ["during the installation", "after the rebind", "during the rollback",
+                                   "after the rollback moved the launcher back"])
 def test_a_run_that_was_ended_is_put_back_by_the_next_run(installed, monkeypatch, point):
     pointer, service = installed.pointer.read_bytes(), Service(installed.root)
     undo, move = refresher._undo, refresher._move
@@ -316,6 +317,8 @@ def test_a_run_that_was_ended_is_put_back_by_the_next_run(installed, monkeypatch
 
     async def dying_move(source, target):
         if Path(target) == installed.launcher:  # the rollback's own move of the previous launcher
+            if point == "after the rollback moved the launcher back":
+                await move(source, target)
             raise Ended()
         await move(source, target)
 
@@ -335,7 +338,21 @@ def test_a_run_that_was_ended_is_put_back_by_the_next_run(installed, monkeypatch
     # The app is down, the launcher is missing, half installed or new, and the record says so.
     journal = refresher.unfinished(installed.home)
     assert journal["old"] == installed.old and journal["wasRunning"] is True and not service.up
-    assert Path(journal["previous"]).is_dir() or point == "during the rollback"
+    if point == "after the rollback moved the launcher back":
+        # The launcher, the launch record and setup's receipts are back. Only the
+        # start programs are not. That alone must keep the rollback unfinished,
+        # even if the set-aside new launcher is already gone.
+        assert not Path(journal["previous"]).exists() and installed.pointer.read_bytes() == pointer
+        assert generations.bootstrap_identity(installed.launcher) == installed.old
+        assert installed.entry.read_text() == "entry " + NEW[0]
+        added = installed.root / "tool-bin/amplifier-unified-new"
+        assert added.exists()
+        import shutil
+        shutil.rmtree(journal["unused"])
+        assert refresher._pending(installed.home, journal) is True
+        added.unlink()  # nothing names it any more; the start program itself is the open item
+    else:
+        assert Path(journal["previous"]).is_dir() or point == "during the rollback"
     if point == "after the rebind":
         assert generations.active(installed.home)["bootstrap"] != installed.old
     check = run(installed, service, check=True)
@@ -381,12 +398,95 @@ def test_a_launch_record_that_something_else_changed_is_never_overwritten(instal
         refresher._undo = undo
     assert not result["ok"] and result["state"] == "rollback-incomplete" and result["changed"] is True
     assert "launch record was changed by something else" in result["message"]
+    # No retry can help here, so the message names the way out instead of --recover.
+    assert str(installed.home / "config/services" / refresher.JOURNAL) in result["message"]
+    assert "--recover" not in result["message"]
     assert json.loads(installed.pointer.read_text())["version"] == "9.9.9"
+    assert refresher.unfinished(installed.home) is not None  # the saved record stays
     # The new launcher stays with the record that names it; nothing was half restored.
     assert refresher.launcher_facts(installed.launcher)["revision"] == NEW[1]
     assert result["running"] is False and "Amplifier is NOT running." in result["message"]
     with pytest.raises(ValueError, match="changed after the launcher refresh"):
         generations.restore_binding(installed.home, b'{"bootstrap": {"prefix": "x"}}')
+
+
+def test_an_app_update_that_finished_while_the_app_stopped_ends_cleanly(installed):
+    service = Service(installed.root)
+    stop = service.stop
+
+    def stop_after_an_update():
+        # The app promoted a version under the same launcher just before it stopped.
+        generations.promote(installed.home, installed.validated, installed.launcher)
+        stop()
+    service.stop = stop_after_an_update
+    result = run(installed, service)
+    assert not result["ok"] and result["state"] == "unchanged" and result["changed"] is False
+    assert result["message"] == ("The installation changed while Amplifier stopped. Nothing was changed. "
+                                 "Amplifier is running.")
+    # The update's own launch record stays, nothing waits for a recovery, and a new run can decide again.
+    assert "previous" in json.loads(installed.pointer.read_text())
+    assert refresher.unfinished(installed.home) is None and service.up and installed.calls == []
+    assert generations.bootstrap_identity(installed.launcher) == installed.old
+    assert run(installed, service, check=True)["action"] == "refresh"
+
+
+def test_a_finished_refresh_is_never_rolled_back_because_its_record_stayed(installed, monkeypatch):
+    service, retire = Service(installed.root), refresher._retire
+    monkeypatch.setattr(refresher, "_retire", lambda home: None)  # the record cannot be removed
+    result = run(installed, service)
+    assert result["ok"] and result["changed"]
+    record = installed.home / "config/services" / refresher.JOURNAL
+    assert json.loads(record.read_text())["done"] is True and refresher.unfinished(installed.home) is None
+    assert run(installed, service, check=True)["action"] == "none"
+    monkeypatch.setattr(refresher, "_retire", retire)
+    again = run(installed, service)
+    assert again["ok"] and again["action"] == "none" and service.events == ["stop", "start"]
+    assert not record.exists() and refresher.launcher_facts(installed.launcher)["revision"] == NEW[1]
+
+
+def test_the_end_state_text_matches_what_was_measured(installed):
+    service, answers = Service(installed.root), []
+    installed.fail["install"] = True
+
+    async def never(wait):
+        answers.append(wait)
+        return False
+    service.ready = never
+    result = run(installed, service)
+    # The previous launcher is back and the app runs, but it does not answer.
+    assert result["state"] == "rolled-back" and result["running"] is True and result["ready"] is False
+    assert result["message"].endswith("The previous launcher is back. Amplifier is running, but it does not "
+                                      "answer yet. Wait a minute, then open Amplifier.")
+    assert "Start menu" not in result["message"]
+
+
+def test_a_launch_record_that_cannot_be_written_is_not_blamed_on_something_else(installed, monkeypatch):
+    service = Service(installed.root)
+    installed.fail["audit"] = RuntimeError("audit failed")
+
+    def denied(home, saved):
+        raise PermissionError("the file is in use")
+    monkeypatch.setattr(generations, "restore_binding", denied)
+    result = run(installed, service)
+    assert result["state"] == "rollback-incomplete" and result["changed"] is True
+    assert "the app's launch record could not be put back" in result["message"]
+    assert "changed by something else" not in result["message"]
+    assert refresher.unfinished(installed.home) is not None
+
+
+def test_the_saved_record_goes_only_when_the_disk_shows_the_previous_state(installed, monkeypatch):
+    pointer, service = installed.pointer.read_bytes(), Service(installed.root)
+    installed.fail["audit"] = RuntimeError("audit failed")
+    monkeypatch.setattr(refresher, "_restore_entries", lambda *args: None)  # a step that silently does nothing
+    result = run(installed, service)
+    assert result["state"] == "rollback-incomplete" and "could not be put back" in result["message"]
+    assert refresher.unfinished(installed.home) is not None
+    monkeypatch.undo()
+    monkeypatch.setattr(refresher, "_WINDOWS", False)
+    monkeypatch.setattr(sys, "prefix", str(installed.prefix))
+    again = run(installed, service, recover=True)
+    assert again["ok"] and again["state"] == "rolled-back"
+    unchanged(installed, pointer)
 
 
 def test_only_one_refresh_runs_for_an_installation(installed):
@@ -459,6 +559,29 @@ def test_a_pointer_of_another_launcher_is_never_rebound(installed):
         generations.rebind(installed.home, installed.old, other)  # a different folder
     with pytest.raises(ValueError, match="does not belong to the replaced launcher"):
         generations.rebind(installed.home, installed.old, installed.launcher)  # nothing was replaced
+
+
+def test_restore_binding_puts_back_only_the_launcher_binding(installed):
+    saved = installed.pointer.read_bytes()
+    assert generations.restore_binding(installed.home, saved) is False  # nothing differs
+    # A later app update under the same launcher: the binding is already the saved one.
+    generations.promote(installed.home, installed.validated, installed.launcher)
+    later = installed.pointer.read_bytes()
+    assert later != saved and generations.restore_binding(installed.home, saved) is False
+    assert installed.pointer.read_bytes() == later  # the update's record is not overwritten
+    # This refresh's own change: only the binding differs, at the same folder.
+    record = json.loads(saved)
+    record["bootstrap"] = {"prefix": installed.old["prefix"], "digest": "f" * 64}
+    installed.pointer.write_text(json.dumps(record))
+    assert generations.restore_binding(installed.home, saved) is True
+    assert installed.pointer.read_bytes() == saved
+    # Another folder, or another change beside the binding, is never overwritten.
+    for change in ({"bootstrap": {"prefix": "/another/folder", "digest": "f" * 64}},
+                   {"bootstrap": record["bootstrap"], "version": "9.9.9"}):
+        installed.pointer.write_text(json.dumps({**json.loads(saved), **change}))
+        with pytest.raises(generations.BindingChanged):
+            generations.restore_binding(installed.home, saved)
+        assert json.loads(installed.pointer.read_text())["bootstrap"] == change["bootstrap"]
 
 
 def test_nothing_to_refresh_without_an_app_update_or_with_a_newer_launcher(installed):

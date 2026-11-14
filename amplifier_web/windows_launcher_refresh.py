@@ -225,8 +225,15 @@ def _record(home, value):
         pass  # A support record must never change the outcome.
 
 
+def _retire(home):
+    try:
+        (_services(home) / JOURNAL).unlink(missing_ok=True)
+    except OSError:
+        pass  # A record that says "done" is ignored; one that does not is settled again.
+
+
 def unfinished(home):
-    """The saved record of a refresh that did not finish, or None."""
+    """The saved record of a refresh that did not finish, or None. Reads only."""
     path = _services(home) / JOURNAL
     try:
         value = json.loads(path.read_bytes())
@@ -234,8 +241,11 @@ def unfinished(home):
         return None
     except (OSError, ValueError) as error:
         raise Refused(f"The record of an earlier, unfinished launcher refresh cannot be read: {path}") from error
+    if isinstance(value, dict) and value.get("done") is True:
+        return None  # That refresh finished; only its record could not be removed.
     if (not isinstance(value, dict) or value.get("schema") != 1
-            or not all(isinstance(value.get(key), str) for key in ("prefix", "previous", "pointer"))):
+            or not all(isinstance(value.get(key), str) for key in ("prefix", "previous", "unused", "pointer"))
+            or not isinstance(value.get("old"), dict) or not isinstance(value.get("entries"), dict)):
         raise Refused(f"The record of an earlier, unfinished launcher refresh cannot be read: {path}")
     return value
 
@@ -297,12 +307,13 @@ async def refresh(service, home, *, check=False, recover=False, wait=180, proces
     with _lock(home):
         journal = unfinished(home)  # Read under the lock: another run may have settled it.
         if journal is not None:
-            result = await _undo(service, home, journal, wait)
+            result = await _undo(service, home, journal, wait, earlier=True)
             _record(home, {"result": "recovered:" + result["state"], "from": journal.get("from"),
                            "to": journal.get("to")})
             return {"ok": result["state"] != "rollback-incomplete" and result["settled"], "action": "recover",
                     **result, "message": "An earlier launcher refresh did not finish. " + result["message"]
                     + (" Run this command again to refresh the launcher." if result["state"] != "rollback-incomplete" else "")}
+        _retire(home)  # Only the record of a finished refresh can be here now.
         if recover:
             return {"ok": True, "changed": False, "action": "none",
                     "message": "No unfinished launcher refresh was found. Nothing was changed."}
@@ -344,7 +355,8 @@ async def _run(service, home, wait, process):
                "root": str(root) if root is not None else None,
                "consumer": {name: None if raw is None else base64.b64encode(raw).decode("ascii")
                             for name, raw in receipts.items()},
-               "entries": [str(path) for path in selected["entries"]],
+               "entries": {str(path): _digest(path) for path in selected["entries"]},
+               "unused": str(_free(selected["store"] / "launcher-not-used")),
                "wheel": None if wheel.exists() else str(wheel)}
     # Everything that a rollback needs is saved before the first effect. If this
     # process is ended, the next run puts the previous state back from it.
@@ -422,7 +434,10 @@ async def _run(service, home, wait, process):
         if not (await service.ready(wait) or (await asyncio.to_thread(service.running)
                                               and await service.ready(wait))):
             raise RuntimeError("The app did not become ready with the new launcher.")
-        (_services(home) / JOURNAL).unlink()
+        # From here the refresh stands. A record that says so is never rolled
+        # back, even if it cannot be removed afterwards.
+        state["step"] = "recording the result"
+        _write(home, _services(home) / JOURNAL, json.dumps({**journal, "done": True}))
     except BaseException as error:
         result = await _undo(service, home, journal, wait)
         _record(home, {"result": result["state"], "step": state["step"], "errorType": type(error).__name__,
@@ -434,6 +449,7 @@ async def _run(service, home, wait, process):
                 "message": (str(error) + " " if isinstance(error, Refused) else
                             f"The launcher refresh did not finish. It stopped at this step: {state['step']}. ")
                            + result["message"]}
+    _retire(home)
     fresh = {"version": selected["new"]["version"], "revision": selected["new"]["revision"]}
     _record(home, {"result": "refreshed", "from": facts["launcher"], "to": fresh, "previous": str(previous)})
     return {"ok": True, "changed": True, "action": "refresh", "launcher": fresh, "app": fresh,
@@ -443,42 +459,78 @@ async def _run(service, home, wait, process):
                        f"can delete later: {previous}"}
 
 
+def _current(path):
+    return path.read_bytes() if path.is_file() else None
+
+
+def _digest(path):
+    return _sha(path) if Path(path).is_file() else None
+
+
 def _restore_entries(prefix, entries, added):
     """The start programs are copies of the launcher's own; take them from the restored launcher."""
-    known = {os.path.normcase(str(path)) for path in entries}
-    for path in map(Path, entries):
+    known = {os.path.normcase(name) for name in entries}
+    for name, digest in entries.items():
+        path = Path(name)
         source = _python(prefix).parent / path.name
-        if source.is_file() and (not path.is_file() or path.read_bytes() != source.read_bytes()):
+        if _digest(path) != digest and source.is_file() and _digest(path) != _digest(source):
             shutil.copyfile(source, path)
     for path in added:
         if os.path.normcase(str(path)) not in known:
             Path(path).unlink(missing_ok=True)
 
 
-async def _undo(service, home, journal, wait):
+def _entries_restored(prefix, entries):
+    """Each start program has its saved bytes, or is a copy of the launcher's own."""
+    for name, digest in entries.items():
+        now = _digest(name)
+        if now != digest and (now is None or now != _digest(_python(prefix).parent / Path(name).name)):
+            return False
+    return True
+
+
+def _pending(home, journal, *, unused=True):
+    """Whether anything that a rollback puts back still differs. Read from the disk only.
+
+    This is the one gate for "the previous state is back": the saved record is
+    removed only when it returns False. It never trusts that an earlier
+    rollback finished because one of its steps did. The launch record counts by
+    its launcher binding: an app update that finished meanwhile under the
+    previous launcher is not this refresh's change.
+    """
+    from . import application_generations as generations
+    home, prefix = Path(home), Path(journal["prefix"])
+    root = Path(journal["root"]) if journal.get("root") else None
+    try:
+        if Path(journal["previous"]).exists() or (unused and Path(journal["unused"]).exists()):
+            return True
+        for name, text in (journal.get("consumer") or {}).items():
+            if _current(root / name) != (None if text is None else base64.b64decode(text)):
+                return True
+        target = generations.active(home)
+        return (generations.bootstrap_identity(prefix) != journal["old"] or target is None
+                or target["bootstrap"] != journal["old"]
+                or not _entries_restored(prefix, journal["entries"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        return True
+
+
+async def _undo(service, home, journal, wait, *, earlier=False):
     """Put back what a refresh changed, from its saved record and what is on disk now.
 
     Every step looks at the actual state first, so it can run again after it
-    was itself ended. The saved record is removed only when the previous state
-    is confirmed.
+    was itself ended. The saved record is removed only when the disk shows the
+    previous state again.
     """
     from . import application_generations as generations
     home = Path(home)
-    prefix, previous = Path(journal["prefix"]), Path(journal["previous"])
+    prefix, previous, unused = Path(journal["prefix"]), Path(journal["previous"]), Path(journal["unused"])
     root = Path(journal["root"]) if journal.get("root") else None
-    pointer, saved = home / "updates/application-active.json", base64.b64decode(journal["pointer"])
+    saved = base64.b64decode(journal["pointer"])
     receipts = {name: None if text is None else base64.b64decode(text)
                 for name, text in (journal.get("consumer") or {}).items()}
-    was_running, problems, leftover = bool(journal.get("wasRunning")), [], None
-
-    def current(path):
-        return path.read_bytes() if path.is_file() else None
-
-    try:
-        changed = (previous.exists() or current(pointer) != saved
-                   or any(current(root / name) != raw for name, raw in receipts.items()))
-    except OSError:
-        changed = True
+    was_running, problems, leftover, conflict = bool(journal.get("wasRunning")), [], None, False
+    changed = _pending(home, journal)
     if changed:
         try:
             # Whatever runs now runs from a launcher that is about to be replaced.
@@ -493,32 +545,33 @@ async def _undo(service, home, journal, wait):
                 # First, and only over this refresh's own change: a record that
                 # changed in another way belongs to a later update.
                 generations.restore_binding(home, saved)
-            except Exception:
+            except generations.BindingChanged:
+                conflict = True
                 problems.append("the app's launch record was changed by something else")
+            except Exception:
+                problems.append("the app's launch record could not be put back")
         if not problems:
             try:
                 for name, raw in receipts.items():
                     if raw is None:
                         (root / name).unlink(missing_ok=True)
-                    elif current(root / name) != raw:
+                    elif _current(root / name) != raw:
                         _write(root, root / name, raw)
-                store = prefix.parent.parent
                 if previous.exists():
                     if prefix.exists():
-                        await _move(prefix, _free(store / "launcher-not-used"))
+                        await _move(prefix, unused)
                     await _move(previous, prefix)
                 # The new launcher is set aside now, by this run or by an earlier
                 # rollback that was ended. Its record names the start programs it added.
-                added = [path for unused in store.glob("launcher-not-used*") for path in _entry_points(unused)]
-                _restore_entries(prefix, journal.get("entries") or [], added)
-                target, identity = generations.active(home), generations.bootstrap_identity(prefix)
-                if target is None or target["bootstrap"] != identity or identity != journal["old"]:
-                    raise ValueError("The previous launcher and the launch record disagree.")
-                # Only this command makes folders of this name; none was ever started.
-                for unused in list(store.glob("launcher-not-used*")):
-                    leftover = await _discard(unused) or leftover
+                _restore_entries(prefix, journal["entries"], _entry_points(unused) if unused.exists() else [])
             except Exception:
                 problems.append("the previous launcher could not be put back")
+        if not problems and _pending(home, journal, unused=False):
+            problems.append("the previous launcher could not be put back")
+        # The set-aside new launcher goes only after the disk shows the previous
+        # state: until then its record is the list of start programs to remove.
+        if not problems and unused.exists():
+            leftover = await _discard(unused)
     if problems:
         running, ready = await _observe(service, min(wait, 10))
         return {"rolledBack": False, "state": "rollback-incomplete", "changed": True, "settled": False,
@@ -526,16 +579,16 @@ async def _undo(service, home, journal, wait):
                 "message": "The previous state could not be restored: " + "; ".join(problems) + ". "
                            + _state_text(running, ready)
                            + (f" The previous launcher is in {previous}." if previous.exists() else "")
-                           + " Run this command again with --recover. It changes only what this refresh changed."}
+                           + (" The app updated itself after the new launcher was installed, so the launcher "
+                              "cannot be put back. If Amplifier works, the new launcher can stay: delete the file "
+                              f"{_services(home) / JOURNAL} to end this refresh." if conflict else
+                              " Run this command again with --recover. It changes only what this refresh changed.")}
     if journal.get("wheel"):
         try:
             Path(journal["wheel"]).unlink(missing_ok=True)
         except OSError:
             pass
-    try:
-        (_services(home) / JOURNAL).unlink(missing_ok=True)
-    except OSError:
-        pass
+    _retire(home)
     # The previous state is confirmed on disk. Now the app's own running state.
     running, ready = await _observe(service, wait if was_running else min(wait, 10))
     if was_running and running is not None and not (running and ready):
@@ -550,10 +603,15 @@ async def _undo(service, home, journal, wait):
     if not was_running and running is False:
         text = "Amplifier was not running before and is not running now."
     else:
-        text = _state_text(running, ready) + ("" if settled else " Start Amplifier from the Start menu.")
+        text = _state_text(running, ready)
+        if running is False:
+            text += " Open Amplifier from the Start menu, or sign out of Windows and sign in again."
+        elif running and not ready:
+            text += " Wait a minute, then open Amplifier."
     return {"rolledBack": changed, "state": "rolled-back" if changed else "unchanged", "changed": False,
             "settled": settled, "running": running, "ready": ready,
-            "message": ("The previous launcher is back. " if changed else "Nothing was changed. ") + text
+            "message": ("The previous launcher is back. " if changed else
+                        "The previous launcher is in place. " if earlier else "Nothing was changed. ") + text
                        + (f" You can delete this unused folder: {leftover}" if leftover else "")}
 
 

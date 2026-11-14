@@ -157,26 +157,31 @@ def rebind(home, expected, bootstrap):
         return result
 
 
+class BindingChanged(ValueError):
+    """The launch record changed in a way that the launcher refresh did not make."""
+
+
 def restore_binding(home, saved):
     """Put back the launch record that a launcher refresh saved before its rebind.
 
-    Only the launcher binding may differ from the saved bytes, at the same
-    folder. A record that changed in any other way belongs to a later promotion
-    and is never overwritten. Returns whether a write was needed.
+    Only the launcher binding is put back, at the same folder. A record that
+    already names the saved launcher needs nothing, even if a later promotion
+    changed the rest. A record that names another launcher and also changed in
+    another way belongs to a later promotion and is never overwritten
+    (`BindingChanged`). Returns whether a write was needed.
     """
     with _pointer_lock(home):
         from .deployment import write_private
 
         path = Path(home) / "updates/application-active.json"
-        raw = path.read_bytes()
-        if raw == saved:
+        current, original = json.loads(path.read_bytes()), json.loads(saved)
+        if isinstance(current, dict) and current.get("bootstrap") == original["bootstrap"]:
             return False
-        current, original = json.loads(raw), json.loads(saved)
         rest = lambda record: {key: value for key, value in record.items() if key != "bootstrap"}
         if (not isinstance(current, dict) or rest(current) != rest(original)
                 or not isinstance(current.get("bootstrap"), dict)
                 or current["bootstrap"].get("prefix") != original["bootstrap"].get("prefix")):
-            raise ValueError("The application launch target changed after the launcher refresh")
+            raise BindingChanged("The application launch target changed after the launcher refresh")
         write_private(path, saved, **({"owned_root": home} if os.name == "nt" else {}))
         if path.read_bytes() != saved:
             raise ValueError("The application launch target was not restored")
