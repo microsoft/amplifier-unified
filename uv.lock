@@ -217,7 +217,7 @@ wheels = [
 [[package]]
 name = "amplifier-foundation"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#05082c89a171758f8d0fb9d8df630ea581e5bdb5" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#15e1e5d283982a5a9103a11cb1004a35c7f85d76" }
 dependencies = [
     { name = "amplifier-core" },
     { name = "filelock" },
@@ -276,7 +276,7 @@ dependencies = [
 [[package]]
 name = "amplifier-module-hooks-session-naming"
 version = "0.2.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=05082c89a171758f8d0fb9d8df630ea581e5bdb5#05082c89a171758f8d0fb9d8df630ea581e5bdb5" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main#15e1e5d283982a5a9103a11cb1004a35c7f85d76" }
 
 [[package]]
 name = "amplifier-module-loop-live"
@@ -492,9 +492,9 @@ requires-dist = [
     { name = "amplifier-bundle-ui-use", git = "https://github.com/microsoft/amplifier-bundle-ui-use?rev=main" },
     { name = "amplifier-bundle-ui-use", extras = ["browser"], marker = "extra == 'managed-browser'", git = "https://github.com/microsoft/amplifier-bundle-ui-use?rev=main" },
     { name = "amplifier-core", specifier = ">=2.0.2" },
-    { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=05082c89a171758f8d0fb9d8df630ea581e5bdb5" },
+    { name = "amplifier-foundation", git = "https://github.com/microsoft/amplifier-foundation?rev=main" },
     { name = "amplifier-memory", git = "https://github.com/microsoft/amplifier-bundle-memory?rev=main" },
-    { name = "amplifier-module-hooks-session-naming", git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=05082c89a171758f8d0fb9d8df630ea581e5bdb5" },
+    { name = "amplifier-module-hooks-session-naming", git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main" },
     { name = "amplifier-module-provider-azure-openai", extras = ["decisions"], marker = "extra == 'decisions-azure'", git = "https://github.com/microsoft/amplifier-module-provider-azure-openai?rev=main" },
     { name = "amplifier-module-provider-jev", marker = "extra == 'decisions-jev'", git = "https://github.com/microsoft/amplifier-module-provider-jev?rev=main" },
     { name = "amplifier-module-provider-local-decisions", marker = "extra == 'decisions-local'", git = "https://github.com/microsoft/amplifier-module-provider-local-decisions?rev=main" },

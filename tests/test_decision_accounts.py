@@ -14,6 +14,7 @@ from test_runtime_controls import managed_module_source
 
 DEFINITIONS = {"provider-fixture": "hooks-fixture-decisions"}
 SOURCE = "git+https://example.test/fixture@exact"
+REAL_CATALOGS = accounts.catalogs
 
 
 def account(name="one", *, enabled=True, key="synthetic-secret-one"):
@@ -25,6 +26,11 @@ def account(name="one", *, enabled=True, key="synthetic-secret-one"):
 @pytest.fixture(autouse=True)
 def definitions(monkeypatch):
     monkeypatch.setattr(accounts, "catalogs", lambda: DEFINITIONS)
+
+
+@pytest.fixture
+def real_catalogs(definitions, monkeypatch):
+    monkeypatch.setattr(accounts, "catalogs", REAL_CATALOGS)
 
 
 def project(plan, *, sources=None):
@@ -429,7 +435,7 @@ print(json.dumps({'coldProviderImports': len(after), 'declaredHooks': value}))
     assert '"coldProviderImports": 0' in result.stdout
 
 
-def test_catalog_helper_failure_is_cached_without_credentials_or_parent_imports(monkeypatch):
+def test_catalog_helper_failure_is_cached_without_credentials_or_parent_imports(monkeypatch, real_catalogs):
     import subprocess
     accounts._catalog_snapshot.cache_clear()
     calls = []
@@ -439,9 +445,106 @@ def test_catalog_helper_failure_is_cached_without_credentials_or_parent_imports(
     monkeypatch.setenv("SYNTHETIC_PRIVATE_API_KEY", "must-not-cross")
     monkeypatch.setattr(accounts.subprocess, "run", fail)
     try:
-        assert accounts._catalog_snapshot() is None
-        assert accounts._catalog_snapshot() is None
+        for _ in range(2):
+            with pytest.raises(ValueError) as caught:
+                accounts.catalogs()
+            assert caught.value.diagnostic_facts['decisionCatalog']['category'] == 'timeout'
         assert len(calls) == 1 and calls[0][0][1] == "-I"
         assert "SYNTHETIC_PRIVATE_API_KEY" not in calls[0][1]["env"]
+    finally:
+        accounts._catalog_snapshot.cache_clear()
+
+
+@pytest.mark.parametrize("case,category", [
+    ("spawn", "spawn"), ("timeout", "timeout"), ("exit", "nonzero-exit"),
+    ("large", "oversized-output"), ("json", "invalid-json"),
+    ("unicode", "invalid-json"), ("list", "non-object"),
+    ("subprocess", "subprocess-error"),
+])
+def test_catalog_failure_facts_survive_probe_without_private_output(monkeypatch, real_catalogs, case, category):
+    import errno
+    import json
+    import subprocess
+    from amplifier_web import update_diagnostics as diagnostics
+    secret = b"/private/provider/token-DO-NOT-RETAIN"
+    calls = []
+    def run(command, **kwargs):
+        calls.append(kwargs)
+        assert kwargs["timeout"] == 10 and kwargs["check"] is True
+        assert kwargs["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if case == "spawn":
+            raise OSError(errno.EACCES, secret.decode())
+        if case == "timeout":
+            raise subprocess.TimeoutExpired(command, 10, output=secret, stderr=secret)
+        if case == "exit":
+            raise subprocess.CalledProcessError(37, command, output=secret, stderr=secret)
+        if case == "subprocess":
+            raise subprocess.SubprocessError(secret.decode())
+        output = {"large": secret * 20000, "json": secret,
+                  "unicode": b"\xff", "list": b"[]"}[case]
+        return subprocess.CompletedProcess(command, 0, stdout=output)
+    monkeypatch.setattr(accounts.subprocess, "run", run)
+    accounts._catalog_snapshot.cache_clear()
+    try:
+        for _ in range(2):
+            with pytest.raises(ValueError) as caught:
+                accounts.catalogs()
+            facts = diagnostics.probe_failure(caught.value, "prepare")
+            record = diagnostics.probe_record(diagnostics.PROBE_PREFIX + json.dumps(facts))
+            assert record["decisionCatalog"]["category"] == category
+            assert record["decisionCatalog"]["elapsedMs"] >= 0
+            assert "DO-NOT-RETAIN" not in json.dumps(record)
+            if case == "exit":
+                assert record["decisionCatalog"]["exitCode"] == 37
+            if case == "spawn":
+                assert record["decisionCatalog"]["osError"] == "EACCES"
+            # A caller cannot mutate the cached failure shared by later calls.
+            caught.value.diagnostic_facts["decisionCatalog"]["category"] = "changed"
+        assert len(calls) == 1
+    finally:
+        accounts._catalog_snapshot.cache_clear()
+
+
+def test_catalog_valid_empty_and_copy_semantics(monkeypatch, real_catalogs):
+    import subprocess
+    for output in (b"{}", b'{"provider-test": {"module": "hooks-test"}}'):
+        calls = []
+        def run(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout=output)
+        monkeypatch.setattr(accounts.subprocess, "run", run)
+        accounts._catalog_snapshot.cache_clear()
+        try:
+            value = accounts.catalogs()
+            value.clear()
+            import json
+            assert accounts.catalogs() == json.loads(output)
+            assert len(calls) == 1
+        finally:
+            accounts._catalog_snapshot.cache_clear()
+
+
+@pytest.mark.parametrize("value", [
+    {"category": []}, {"category": "/secret"}, {"category": "timeout", "elapsedMs": True,
+    "stdoutBytes": -1, "exitCode": "/secret", "osError": "/secret", "stderr": "/secret"},
+])
+def test_untrusted_catalog_probe_record_is_closed(value):
+    import json
+    from amplifier_web import update_diagnostics as diagnostics
+    record = diagnostics.probe_record(diagnostics.PROBE_PREFIX + json.dumps({"ok": False, "decisionCatalog": value}))
+    assert record == ({"ok": False, "decisionCatalog": {"category": "timeout"}}
+                      if value.get("category") == "timeout" else {"ok": False})
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="native Windows console observation")
+def test_real_catalog_child_does_not_allocate_console(monkeypatch, real_catalogs, tmp_path):
+    script = tmp_path / "catalog.py"
+    script.write_text("import ctypes as c,json\n"
+                      "k=c.WinDLL('kernel32'); k.GetConsoleWindow.restype=c.c_void_p\n"
+                      "print(json.dumps({'console': int(k.GetConsoleWindow() or 0)}))\n")
+    monkeypatch.setattr(accounts, "Path", lambda _: SimpleNamespace(with_name=lambda _: script))
+    accounts._catalog_snapshot.cache_clear()
+    try:
+        assert accounts.catalogs() == {"console": 0}
     finally:
         accounts._catalog_snapshot.cache_clear()

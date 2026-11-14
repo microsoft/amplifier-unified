@@ -244,7 +244,8 @@ def _recorded_cache(source, tracked):
     """
     def git(*args):
         return subprocess.check_output(['git', '--no-optional-locks', *args],
-                                       cwd=source, stderr=subprocess.DEVNULL)
+                                       cwd=source, stderr=subprocess.DEVNULL,
+                                       creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     try:
         metadata = json.loads((source / '.amplifier_cache_meta.json').read_text())
         commit = metadata.get('commit', '')
