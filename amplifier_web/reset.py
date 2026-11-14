@@ -6,7 +6,7 @@ never classified as disposable. Successful resets replace the recovery point.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager, ExitStack, suppress
+from contextlib import closing, contextmanager, ExitStack, suppress
 import hashlib
 import json
 import os
@@ -496,8 +496,12 @@ def reset_update_state(home, backup):
         return
     if path.is_symlink():
         raise ValueError("The application database is external; refusing to alter it.")
-    with sqlite3.connect(path, timeout=5) as db:
-        with sqlite3.connect(backup / "app.sqlite3") as saved:
+    # A connection's own `with` block ends its transaction; it does not close
+    # the files. Close both: a caller that stays alive (the Windows launcher's
+    # kept-data take-back) must be able to rename this folder afterwards, and
+    # Windows refuses that while a file in it is open.
+    with closing(sqlite3.connect(path, timeout=5)) as db, db:
+        with closing(sqlite3.connect(backup / "app.sqlite3")) as saved, saved:
             db.backup(saved)
         (backup / "app.sqlite3").chmod(0o600)
         db.execute("BEGIN IMMEDIATE")

@@ -331,7 +331,7 @@ def test_link_or_file_with_a_data_folder_name_stays_and_is_reported(tmp_path):
     folder = kept.kept_folder(root)
     assert result["state"] == "complete" and result["left"] == ["capture", "import"]
     assert kept._kind(root / "capture") == "link" and (root / "import").read_text() == "a file\n"
-    assert tree(outside) == {"theirs.txt": hashlib.sha256(b"not Amplifier's\n").hexdigest()}
+    assert os.listdir(outside) == ["theirs.txt"] and (outside / "theirs.txt").read_text() == "not Amplifier's\n"
     assert not {"capture", "import"} & set(os.listdir(folder))
 
 
@@ -458,6 +458,23 @@ def test_first_start_offers_once_and_yes_takes_everything_back(tmp_path, notices
     assert backup.name.startswith(f"kept-{T1}-") and saved_state(backup)[0]["updates"] == FENCE
     notices.shown.clear()
     assert kept.first_start(root, VERSION, ask=True) is None and notices.shown == []
+
+
+def test_take_back_leaves_no_database_open(tmp_path, monkeypatch):
+    """Windows refuses to rename a folder while this program holds a file in it open.
+
+    A `with` block of a database connection ends its transaction and leaves the
+    files open. An uninstall that finishes a take-back and then moves the data
+    out could not move `app`. Measured on a Windows runner.
+    """
+    root, folder, _ = kept_then_installed(tmp_path)
+    opened, real = [], sqlite3.connect
+    monkeypatch.setattr(sqlite3, "connect", lambda *args, **kw: (opened.append(real(*args, **kw)), opened[-1])[1])
+    assert kept.take_back(root, VERSION)["updateState"] == "retired"
+    assert len(opened) == 2  # The database and its copy.
+    for connection in opened:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
 
 
 def test_no_keeps_the_set_untouched_and_does_not_ask_again(tmp_path, notices):
@@ -913,7 +930,8 @@ def test_native_round_trip_with_current_folders_a_held_file_a_junction_and_an_in
     assert kept.read(folder)[0] == "adopting"
     assert kept.first_start(root, VERSION, ask=False) is None  # Finished without a second question.
     assert [confirm for confirm, _ in notices.shown] == [True]
-    assert person(data(root)) == expected and not folder.exists()
+    assert "capture" not in expected  # It was a junction and never moved: setup's own empty folder stays.
+    assert person(data(root)) == {**expected, "capture": "folder"} and not folder.exists()
     assert sorted(os.listdir(root / "workspace")) == ["notes.txt", "project"]  # Filled, not replaced.
     end()
 
@@ -933,30 +951,29 @@ def test_native_round_trip_with_current_folders_a_held_file_a_junction_and_an_in
 
 
 @native
-def test_native_refusals_change_nothing_and_a_kept_folder_of_another_owner_is_not_trusted(installation, notices):
+def test_native_kept_folder_that_another_account_can_use_is_never_trusted(installation, notices):
+    """A record that looks right in a folder that is not private: never read, never used, never changed."""
     from amplifier_web import windows_files
     root = installation.root
     folder = kept.kept_folder(root)
     native_used(root)
-    # A folder that this boundary did not create privately, with a record that looks right.
-    os.mkdir(folder)
-    (folder / kept.RECORD).write_text(json.dumps(
-        {"schema": 1, "root": str(root), "version": VERSION, "keptAt": "2026-11-14T20:00:00Z",
-         "state": "complete", "transfer": T1}))
-    private = True
-    try:
-        with windows_files.directory(folder, owned_root=folder) as owned:
-            owned.read_private(kept.RECORD, limit=kept.LIMIT)
-    except (OSError, ValueError):
-        private = False
+    with windows_files.directory(folder, owned_root=folder, create=True):
+        pass
+    record(folder, root=str(root))
+    # Everyone (S-1-1-0) gets full access to the folder and to what is in it.
+    subprocess.run(["icacls", str(folder), "/grant", "*S-1-1-0:(OI)(CI)F"], check=True, capture_output=True)
     snapshot = tree(root), tree(folder)
-    if private:  # An ordinary account: its own plain folder is private. It is a complete set and is set aside.
-        kept.check(root, VERSION)
-    else:  # An elevated runner: the folder belongs to the Administrators group and is never trusted.
-        assert kept.read(folder) == ("unreadable", None)
+    assert kept.read(folder) == ("unreadable", None)
+    for attempt in (lambda: kept.check(root, VERSION),
+                    lambda: kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)):
         with pytest.raises(kept.Refused) as refused:
-            kept.check(root, VERSION)
+            attempt()
         assert refused.value.kind == "kept-folder" and str(folder) in refused.value.notice
-        with pytest.raises(kept.Refused):
-            kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)
     assert (tree(root), tree(folder)) == snapshot
+    # A later installation does not use it either. It starts fresh only on the person's Yes.
+    shutil.rmtree(root)
+    native_folders(root)
+    notices.answers.append(False)
+    result = kept.first_start(root, VERSION, ask=True)
+    assert result["reason"] == "unreadable" and "cannot read them" in notices.shown[0][1]
+    assert tree(folder) == snapshot[1] and data(root) == {name: "folder" for name in SETUP}
