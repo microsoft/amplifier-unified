@@ -119,6 +119,7 @@ async def apply(app, row, operation, *, resume=False, media=None):
             accounting = journal['accounting']
             return {**row, 'status': 'completed', 'reason': 'Image copies externalized; exact original recovery generation retained',
                     '_captureOperation': str(directory),
+                    '_installedSha256': journal['candidate_sha256'],
                     '_accounting': {'inlineRemoved': accounting['inline_bytes_removed'],
                         'assetsAdded': accounting['new_asset_bytes'],
                         'refsAndJournalAdded': None,
@@ -126,3 +127,61 @@ async def apply(app, row, operation, *, resume=False, media=None):
                         'unlinked': 0, 'filesystemDelta': None}}
     finally:
         boundary.__exit__(None, None, None)
+
+
+async def apply_combined(app, row, operation, *, resume=False, media=None):
+    """Two owner transactions, not a fictitious atomic whole-file operation.
+
+    Checkpoint the image stage before entering expiry. Both maps, the original,
+    and the permanent replay fence remain. On an unknown second stage, explicit
+    resume skips the completed first stage and only reconciles its exact receipt.
+    """
+    from .storage_optimize import owner
+    from .storage_optimize_retention import apply as expire
+    if media is None:
+        from .storage_optimize_media import capture_owner
+        media = capture_owner(app, row, operation)
+    stages = row.get('_stages', {})
+    current = row
+    if 'images' not in stages:
+        converted = await apply(app, row, operation, resume=resume, media=media)
+        if converted['status'] != 'completed':
+            return converted
+        current = {**converted, 'status': 'attempting',
+            '_stages': {'images': converted['_accounting']},
+            '_sourceSha256': converted['_installedSha256'],
+            '_accounting': combine_accounting(converted['_accounting'], {}),
+            'stageAccounting': {'images': converted['_accounting'], 'diagnosticExpiry': {}},
+            'stages': {'images': 'completed', 'diagnosticExpiry': 'pending'}}
+        # The admitted row ordinal is host-owned; no client path or cursor can
+        # choose which file's durable checkpoint is replaced.
+        owner(app)._file(operation['operationId'], row['_ordinal'], current)
+        stages = current['_stages']
+    # Expiry can remove a reference as well as change the installed file hash.
+    # Its actual diagnostic owner must verify the final closure again, never
+    # promote the original diagnostic ACK into canonical transcript authority.
+    directory = Path(current['_captureOperation'])
+    def acknowledge_final():
+        media.acknowledge(directory / 'assets.jsonl', source=Path(row['_path']),
+                          sha256=file_hash(Path(row['_path'])))
+    expired = await expire(app, current, operation, resume=resume, after_rebind=acknowledge_final)
+    capture_bytes, expiry_bytes = stages['images'], expired.get('_accounting', {})
+    accounting = combine_accounting(capture_bytes, expiry_bytes)
+    public_stages = {'images': capture_bytes, 'diagnosticExpiry': expiry_bytes}
+    if expired['status'] != 'completed':
+        return {**current, 'status': 'held', 'reason':
+            'Image stage completed; diagnostic expiry is held for exact reconciliation',
+            '_accounting': accounting, 'stageAccounting': public_stages,
+            'stages': {'images': 'completed', 'diagnosticExpiry': 'held'}}
+    return {**current, 'status': 'completed', 'reason':
+        'Image and diagnostic expiry stages completed; original recovery bytes remain retained',
+        'stageAccounting': public_stages,
+        'stages': {'images': 'completed', 'diagnosticExpiry': 'completed'}, '_accounting': accounting}
+
+
+def combine_accounting(first, second):
+    """Unknown stage contributions cannot become image-only aggregate facts."""
+    return {key: first[key] + second[key]
+            if type(first.get(key)) is int and type(second.get(key)) is int else None
+            for key in ('inlineRemoved', 'assetsAdded', 'refsAndJournalAdded',
+                        'recoveryRetained', 'unlinked', 'filesystemDelta')}

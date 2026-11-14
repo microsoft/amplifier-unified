@@ -161,7 +161,8 @@ async def test_accounting_replaces_previous_outcome_without_double_counting(owne
 
 
 @pytest.mark.asyncio
-async def test_real_ci_retention_rebinds_without_reenrolling_deliveries(owner, tmp_path, monkeypatch):
+@pytest.mark.parametrize('giant_bytes', [0, 16 * 1024 * 1024])
+async def test_real_ci_retention_rebinds_without_reenrolling_deliveries(owner, tmp_path, monkeypatch, giant_bytes, record_property):
     """Candidate-graph check; selected exact CI source is supplied by the runner."""
     from contextlib import contextmanager
     import hashlib
@@ -191,6 +192,8 @@ async def test_real_ci_retention_rebinds_without_reenrolling_deliveries(owner, t
              'session_id': 'root', 'data': {'raw': {'huge': 'secret diagnostic' * 100},
                 'provider_payloads': {'raw': ref}, 'event_id': 'same', 'status': 'failed',
                 'usage': {'cost': 0.1}}}
+    if giant_bytes:
+        event['data']['raw']['huge'] = 'x' * giant_bytes
     path = directory / 'events.jsonl'
     path.write_text(json.dumps(event) + '\n')
     os.utime(path, (1, 1))
@@ -208,6 +211,15 @@ async def test_real_ci_retention_rebinds_without_reenrolling_deliveries(owner, t
             'CREATE TABLE records(id TEXT PRIMARY KEY,at REAL,stream TEXT,session TEXT,workspace TEXT,event TEXT,data TEXT);'
             'CREATE TABLE deliveries(record_id TEXT,status TEXT,payload TEXT);')
         rows = index_shared(connection, [(str(tmp_path), 'root')], {'streams': ['usage']})
+        if not rows:
+            # The normal diagnostics index intentionally omits >2MB hook rows.
+            # An app-authored exact reference must still qualify/rebind without
+            # loading that giant physical line during host maintenance.
+            reference = {'$event': str(path), 'offset': 0, 'bytes': path.stat().st_size,
+                         'sha256': retention.file_hash(path), 'eventId': 'same'}
+            connection.execute('INSERT INTO records VALUES(?,?,?,?,?,?,?)',
+                ('app-giant-reference', 1, 'usage', 'root', str(tmp_path), 'llm:request', json.dumps(reference)))
+            rows = [('app-giant-reference',)]
         connection.execute('INSERT INTO deliveries VALUES(?,?,?)', (rows[0][0], 'accepted', '{"exact":"receipt"}'))
         original_records = connection.execute('SELECT id FROM records').fetchall()
     fake_runtime = SimpleNamespace(_closed=False, _locks={}, _preparations={}, workers={},
@@ -233,8 +245,20 @@ async def test_real_ci_retention_rebinds_without_reenrolling_deliveries(owner, t
         assert threading.get_ident() != loop_thread
         return old_hash(*args, **kwargs)
     from unittest.mock import patch
-    with patch.object(retention, 'hold_replacement', off_loop_hold), patch.object(retention, 'file_hash', off_loop_hash):
-        result = await retention.apply(owner.app, row, operation)
+    import tracemalloc
+    if giant_bytes:
+        tracemalloc.start()
+    try:
+        with patch.object(retention, 'hold_replacement', off_loop_hold), patch.object(retention, 'file_hash', off_loop_hash):
+            result = await retention.apply(owner.app, row, operation)
+    finally:
+        if giant_bytes:
+            _, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+    if giant_bytes:
+        record_property('giant_input_bytes', giant_bytes)
+        record_property('maintenance_python_peak_bytes', peak)
+        assert peak < 8 * 1024 * 1024, peak
     assert result['status'] == 'completed', result
     assert not asset.exists()
     changed = json.loads(path.read_text())
