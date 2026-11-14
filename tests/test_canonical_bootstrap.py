@@ -374,3 +374,46 @@ def test_bootstrapped_store_refuses_invalid_durable_admission_before_source_comm
             with open_committed_source(binding.directory, expected=before) as source:
                 assert source.commit == before and source.commit.message_count == 0
             assert binding.last_receipt is None
+
+
+def test_new_parent_links_are_fsynced_before_source_acquisition(tmp_path, monkeypatch):
+    from amplifier_web.host import canonical_bootstrap as bootstrap
+    real_mkdir, real_fsync = bootstrap.os.mkdir, bootstrap.os.fsync
+    events = []
+    def mkdir(name, mode=0o777, *, dir_fd=None):
+        result = real_mkdir(name, mode=mode, dir_fd=dir_fd)
+        if dir_fd is not None:
+            events.append(("mkdir", str(Path(f"/proc/self/fd/{dir_fd}").resolve()), name))
+        return result
+    def fsync(fd):
+        events.append(("fsync", str(Path(f"/proc/self/fd/{fd}").resolve())))
+        return real_fsync(fd)
+    real_acquire = bootstrap._acquire
+    def acquire(*args, **kwargs):
+        events.append(("acquire",))
+        return real_acquire(*args, **kwargs)
+    monkeypatch.setattr(bootstrap.os, "mkdir", mkdir)
+    monkeypatch.setattr(bootstrap.os, "fsync", fsync)
+    monkeypatch.setattr(bootstrap, "_acquire", acquire)
+    selected = SourceBootstrap.acquire(tmp_path / "workspace", "root", admit=StartGuard())
+    with closing(selected.binding):
+        first_acquire = events.index(("acquire",))
+        parent_events = events[:first_acquire]
+        creations = [(i, item) for i, item in enumerate(parent_events) if item[0] == "mkdir"]
+        assert creations
+        for index, item in creations:
+            assert parent_events[index + 1] == ("fsync", item[1])
+
+
+def test_failed_parent_link_fsync_refuses_before_source_acquisition(tmp_path, monkeypatch):
+    from amplifier_web.host import canonical_bootstrap as bootstrap
+    def failed(fd):
+        raise OSError("fixture containing-directory fsync failure")
+    def forbidden(*args, **kwargs):
+        pytest.fail("Source acquisition ran before new parent links settled")
+    monkeypatch.setattr(bootstrap.os, "fsync", failed)
+    monkeypatch.setattr(bootstrap, "_acquire", forbidden)
+    root = sessions_dir(tmp_path / "workspace") / "root"
+    with pytest.raises(OSError, match="containing-directory fsync"):
+        SourceBootstrap.acquire(tmp_path / "workspace", "root", admit=StartGuard())
+    assert not root.exists()

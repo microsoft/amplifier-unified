@@ -41,16 +41,27 @@ def _prepare_parent(path: Path) -> None:
     descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         for part in path.parts[1:]:
+            created = False
             try:
                 child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                                 dir_fd=descriptor)
             except FileNotFoundError:
                 try:
                     os.mkdir(part, mode=0o700, dir_fd=descriptor)
+                    created = True
                 except FileExistsError:
                     pass  # A competitor is checked by the no-follow open below.
                 child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                                 dir_fd=descriptor)
+            if created:
+                try:
+                    # Foundation settles the final sessions directory, not the
+                    # links of ancestors this caller just created. Settle each
+                    # new link through its actual containing descriptor first.
+                    os.fsync(descriptor)
+                except BaseException:
+                    os.close(child)
+                    raise
             os.close(descriptor)
             descriptor = child
     finally:

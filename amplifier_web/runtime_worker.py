@@ -978,7 +978,7 @@ class Worker:
             if self.media_graph_selection is None and resolved_root is None and self.canonical_bootstrap:
                 from amplifier_web.host.config import load_config, prepare_registry
                 from amplifier_web.host.bundle_paths import canonical_bundle_reference
-                from amplifier_web.host.session import load_root_bundle, live_plan, ResolvedRoot
+                from amplifier_web.host.session import load_root_bundle, live_plan, ResolvedRoot, required_components
                 from amplifier_web.host.media_assembly import select_from_declaration
                 authored = load_config(workspace, session_id=config["id"],
                     **({"owner_session_id": config["ownerSessionId"]}
@@ -989,7 +989,6 @@ class Worker:
                 root = await load_root_bundle(authored, chosen, execution_workspace=cwd)
                 loaded = root[1]
                 declaration, _ = live_plan(loaded.to_mount_plan())
-                from amplifier_web.host.components import required_components
                 components = getattr(loaded, "_host_components", None) or required_components()
                 declaration = components.normalize(declaration)
                 self.media_graph_selection = select_from_declaration(declaration,
