@@ -234,7 +234,11 @@ namespace UnifiedBootstrap {
                     throw new IOException("Bootstrap path crossed a volume boundary.");
                 pin.volume=info.volume; pin.high=info.high; pin.low=info.low;
                 pins.Add(path, pin); order.Add(pin); return pin;
-            } catch { pin.handle.Dispose(); throw; }
+            } catch (Exception error) {
+                // Name the refused object for the caller's plain explanation.
+                if (!error.Data.Contains("path")) error.Data["path"] = path;
+                pin.handle.Dispose(); throw;
+            }
         }
         void Traverse(string path) {
             path = Address(path);
@@ -268,10 +272,16 @@ namespace UnifiedBootstrap {
             } finally { LocalFree(descriptor); }
             Hold(path, true, true, false);
         }
-        public InstallStorage(string parent) {
+        public InstallStorage(string parent)
+            : this(parent, "amplifier-install-" + Guid.NewGuid().ToString("N")) {}
+        public InstallStorage(string parent, string name) {
+            // A fixed name is the consumer installation's one folder. CreateExact
+            // refuses an existing folder of that name; it is never adopted.
             try {
+                if (name == null || !Regex.IsMatch(name, "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$"))
+                    throw new IOException("Unsafe bootstrap root name.");
                 parent = Address(parent); Traverse(parent);
-                Root = Path.Combine(parent, "amplifier-install-" + Guid.NewGuid().ToString("N"));
+                Root = Path.Combine(parent, name);
                 CreateExact(Root);
             } catch { Dispose(); throw; }
         }

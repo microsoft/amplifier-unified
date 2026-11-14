@@ -298,6 +298,71 @@ setup refuses administrator and server accounts. The real setup file on a clean
 ordinary account, the task's actual PATH, and windows during shell use remain
 clean-room acceptance and are not claimed here.
 
+### One installation folder and plain stops
+
+Consumer setup installs into one fixed folder, `%LOCALAPPDATA%\Amplifier`.
+Earlier setup files created a new `amplifier-install-<32 hex>` folder at every
+run. That name cost 50 characters, and the app repeats the installation path
+inside its own data paths. Windows refuses a path of 260 characters or more
+(248 for a folder) unless long paths are enabled, which is not the default. With
+the long name no setup-made installation could chat on a default PC.
+
+The longest supported installation folder path is **79 characters**
+(`MaxRootLength` in `scripts/windows_bootstrap_native.cs`). The fixed folder is
+33 characters plus the account's profile-folder name, so a name of up to 46
+characters fits. The number comes from the deepest path observed below the
+folder in a clean-room installation (180 characters, in the source store) and
+the 259-character file limit. The short folder alone does not make every path
+fit for every account name; the separate path-length work in the app owns the
+depth below the folder and may revise this number. A change to the folder name
+or to that depth must change this number, and
+`tests/test_windows_setup_folder.py` fails when the two disagree. Setup stops
+before it asks anything when the path would be longer.
+
+Setup checks the PC and the folder before its first question. Each stop names
+one cause and one next step in plain language, and never shows exception text,
+child output or network values:
+
+| Found | Result |
+| --- | --- |
+| Setup was started with "Run as administrator" | Stop: close, open the file again with a double-click |
+| The sign-in always runs as administrator (User Account Control off) | Stop: use a standard sign-in or turn User Account Control on |
+| Not Windows 11 on a 64-bit Intel or AMD processor | Stop |
+| Less than 4 GB free | Stop |
+| The folder exists and setup did not create it | Stop: move or rename it. Setup never changes it |
+| The folder holds a finished installation | "Amplifier is already installed." Yes opens it. Nothing is installed or changed |
+| The folder holds setup's own unfinished attempt | Setup removes it and installs |
+| Another installation already starts at sign-in for this account | Stop: remove it first. One sign-in task exists per account |
+| A folder above the installation folder lets other accounts change it | Stop: names that folder. The storage check is unchanged |
+
+Two marker files make the folder states exact. `unified-setup-started.json` is
+the first file setup writes. `unified-setup-complete.json` is written after the
+installed-package audit and before the Start-menu step. Without the second
+file the app has never run from the folder, so it holds no chats or settings:
+a failed run removes the folder it created (it first copies its small private
+log files to the person's temporary folder for support), and a later run
+removes an unfinished folder that a stopped run left behind. With the second
+file setup never removes or changes the folder. Removal uses extended-length
+paths, clears read-only attributes, and removes a link without entering its
+target. A second setup instance is refused while one is running.
+
+Downloads retry twice in the same exclusive private file after a dropped
+connection. A refused, oversized or checksum-failed file is not retried. The
+progress window names each step in plain words and says which steps take
+minutes.
+
+Not in this change: Repair and Update on a second run, refresh of the launcher
+and private tools, removal of program files at uninstall, the setup file's icon
+and version information, and a restart of an elevated setup without elevation.
+A person who removed Amplifier through the Apps list keeps the folder; a later
+setup run opens that installation, and its Start-menu entry returns only with
+the Repair step. An installation in an earlier long folder is not moved or
+read: setup asks the person to remove it and then installs into the short
+folder. The real setup file on a clean ordinary account remains clean-room
+acceptance. The native `windows-setup-folder` check compiles the actual sources
+and exercises folder states, removal, the fixed-name storage form, elevation
+detection and the stop text on a Windows runner; it shows no setup window.
+
 ## Process-local Proactor cleanup backport
 
 `windows_proactor.py` carries CPython gh-160429's socket-shutdown correction

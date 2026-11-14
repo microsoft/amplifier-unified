@@ -165,8 +165,8 @@ def test_consumer_setup_unpacks_checks_and_proves_the_shell_before_the_app():
     source = (SCRIPTS / "windows_bootstrap_native.cs").read_text(encoding="utf-8")
     consumer = source.split("static string InstallConsumer(", 1)[1].split("static int ConsumerWindow(", 1)[0]
     order = [consumer.index(text) for text in (
-        "CheckHash(gitArchive,NativePins.ShellGitHash)", 'Stage="private ordinary Python"',
-        "PrivateGit(basePython,gitArchive,env)", 'Stage="qualified application installation"')]
+        "CheckHash(gitArchive,NativePins.ShellGitHash)", 'Stage="Installing Python"',
+        "PrivateGit(basePython,gitArchive,env)", 'Stage="Installing Amplifier (this takes a few minutes)"')]
     assert order == sorted(order)
     assert "NativePins.GitUrl" not in consumer and "MinGit" not in consumer
     helper = source.split("static string PrivateGit(", 1)[1].split("static void Platform()", 1)[0]
