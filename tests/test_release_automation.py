@@ -542,7 +542,9 @@ print(prepare_metadata_for_build_editable(sys.argv[1]))
     assert actual['amplifier-foundation'] == base
     assert actual['amplifier-module-hooks-session-naming'] == base + '#subdirectory=modules/hooks-session-naming'
     authored = tomllib.loads((root / 'pyproject.toml').read_text())['project']['dependencies']
-    assert {Requirement(value) for value in values if not Requirement(value).marker} == {
+    # Platform markers are runtime requirements too; only optional extras are absent.
+    assert {Requirement(value) for value in values
+            if not Requirement(value).marker or 'extra' not in str(Requirement(value).marker)} == {
         Requirement(value) for value in authored}
     assert not (source / 'amplifier_web/release-source.json').exists()
     assert not (source / 'amplifier_web/static').exists()
@@ -647,6 +649,12 @@ def test_real_sdist_build_excludes_untracked_ci_checkouts(repository):
     project = Path(__file__).parents[1]
     for name in ('pyproject.toml', '.gitignore'):
         shutil.copyfile(project / name, repository / name)
+    for name in ('scripts/scheduling_build_hook.py', 'scripts/scheduling_delivery.py',
+                 'components/scheduling.source.json'):
+        target = repository / name; target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(project / name, target)
+    shutil.copytree(project / 'components/scheduling-delivery',
+                    repository / 'components/scheduling-delivery')
     (repository / 'README.md').write_text('Package build fixture')
     for dependency in ('loop-live', 'recipes'):
         checkout = repository / '.ci' / dependency
