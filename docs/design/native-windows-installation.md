@@ -304,6 +304,28 @@ closed consumer plan in the native WinExe. The publisher verifies the retained
 EXE, plan, source/compiler-input hashes and checksums against the same wheel.
 It publishes `AmplifierUnifiedSetup-<version>-windows-x64.exe`, its plan/build
 receipt and `WINDOWS_SHA256SUMS` through the existing single release owner.
+It also publishes the identical bytes as `AmplifierUnifiedSetup-windows-x64.exe`,
+so that one link always gives the current setup file:
+`https://github.com/microsoft/amplifier-unified/releases/latest/download/AmplifierUnifiedSetup-windows-x64.exe`.
+That file is a copy, not another build: it embeds exactly its own release's
+plan, the publisher refuses a copy whose bytes differ, and the checksum file
+lists both names. A release that is not marked latest (a repair of an older
+line) does not move the link. The link gives the current file at download
+time; a file that a person saved earlier still installs its own release, and
+the installed app then updates itself.
+
+Weighed and not done: a version-independent setup file that reads the latest
+release plan at run time. Its bytes would stay the same across releases, which
+might build download reputation while the file is unsigned; that effect is not
+verified. It would give up the one integrity property that the unsigned file
+has: the downloaded bytes fix exactly what is installed, and the published
+receipt attests that chain (setup digest, plan digest, wheel digest). Every
+saved copy would also follow the moving latest pointer for ever, and an old
+copy would have to understand every later plan. A signed plan would need a
+signing key in CI and its custody, and an unsigned file's embedded public key
+proves little. Two independent reviews gave the same answer. Revisit only with
+evidence that reputation attaches to an unchanged unsigned file at this
+project's download volume.
 No target-side compiler, PowerShell invocation or extra agent publisher is used.
 Historical selected sources without the consumer producer retain their original
 Python-only asset set.
