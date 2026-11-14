@@ -49,7 +49,7 @@ Never place its contents in arguments, URLs or Instance settings.
 ### Choose a profile with MCP support
 
 Transient HTTP MCP support also requires `tool-mcp` in the selected native
-profile. The default Work profile does not include it. If an attachment supplies
+profile. Work 0.4.0 does not include it. If an attachment supplies
 MCP servers without that capability, preparation refuses the request before
 model execution.
 
