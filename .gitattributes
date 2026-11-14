@@ -41,6 +41,10 @@
 /components/outputs/MANIFEST.in source-context=configuration
 /components/outputs/.gitignore source-context=configuration
 /components/outputs/LICENSE source-context=documentation
+/components/workspaces/amplifier_workspace_metadata/** source-context=source
+/components/workspaces/tests/** source-context=tests
+/components/workspaces/.gitignore source-context=configuration
+/components/workspaces/LICENSE source-context=documentation
 /docs/** source-context=documentation
 /contracts/** source-context=contracts
 /context/** source-context=guidance
