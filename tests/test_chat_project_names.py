@@ -189,14 +189,67 @@ def test_history_stays_addressable_after_the_chat_folder_is_deleted(chat, window
     directory = history(short_name(identity), identity, workspace)
     shutil.rmtree(workspace.parent)  # managed deletion removes chats/<id>, record included
     assert project_slug(workspace) == short_name(identity)
-    # The saved path may differ in letter case from the folder that existed.
+    # The name itself does not depend on letter case.
     assert chat_project_name(str(workspace).upper()) == short_name(identity)
+    if os.name == 'nt':
+        # Windows compares paths without case: another spelling of the deleted
+        # folder is the same folder, through the whole rule.
+        assert project_slug(str(workspace).upper()) == short_name(identity)
     # The backup record alone is enough to identify the folder.
     (directory / 'metadata.json').rename(directory / 'metadata.json.backup')
     (directory / 'transcript.jsonl').write_text('{"role":"user","content":"saved"}\n')
     assert project_slug(workspace) == short_name(identity)
     shutil.rmtree(directory)
     assert project_slug(workspace) == cli_name(workspace)  # no saved history names this folder now
+
+
+def test_an_unreadable_record_is_an_error_and_never_another_name(chat, windows_rule, monkeypatch):
+    import shutil
+    identity, workspace = chat
+    history(short_name(identity), identity, workspace)
+    shutil.rmtree(workspace.parent)
+    assert project_slug(workspace) == short_name(identity)
+    real_open = open
+
+    def in_use(path, *args, **kwargs):
+        if str(path).endswith('metadata.json'):
+            raise PermissionError(13, 'The record is in use by another program')
+        return real_open(path, *args, **kwargs)
+
+    # A temporary refusal (a sharing violation, access denied) is not proof
+    # that the record is missing. The same folder must not get the CLI name now
+    # and the short name a moment later.
+    with monkeypatch.context() as patch:
+        patch.setattr(session_files, 'open', in_use, raising=False)
+        with pytest.raises(PermissionError):
+            project_slug(workspace)
+    assert project_slug(workspace) == short_name(identity)
+    # The same holds for the folder listing itself.
+    def listing_refused(path):
+        raise PermissionError(13, 'Access is denied')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(session_files.os, 'scandir', listing_refused)
+        with pytest.raises(PermissionError):
+            project_slug(workspace)
+
+
+def test_a_worker_record_identifies_a_deleted_chat_folder_only_when_it_names_it(chat, windows_rule):
+    import shutil
+    identity, workspace = chat
+    worker = '0000000000000000-0123456789abcdef_helper'
+    root = history(short_name(identity), identity, workspace)
+    record = history(short_name(identity), worker, workspace) / 'metadata.json'
+    shutil.rmtree(workspace.parent)
+    shutil.rmtree(root)  # The root session's record is gone; a worker's record names the folder.
+    assert project_slug(workspace) == short_name(identity)
+    # A record that is not readable JSON is passed over, not taken as proof.
+    (record.parent.parent / identity).mkdir()
+    (record.parent.parent / identity / 'metadata.json').write_text('{not json')
+    assert project_slug(workspace) == short_name(identity)
+    # A worker that recorded another folder proves nothing about this one.
+    record.write_text(json.dumps({'session_id': worker, 'working_dir': str(workspace.parent / 'elsewhere')}))
+    assert project_slug(workspace) == cli_name(workspace)
 
 
 def test_only_chat_shaped_folders_cost_file_access(chat, windows_rule, tmp_path, monkeypatch):

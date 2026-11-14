@@ -96,6 +96,8 @@ def _names_folder(project, identity, folder):
     """A saved session record in this project folder names exactly this chat folder.
 
     The chat's own session is read first; the first record with a folder decides.
+    A record that exists and cannot be read is an error, never a missing record:
+    a temporary refusal must not give the same folder another project name.
     """
     sessions = project / 'sessions'
     try:
@@ -108,8 +110,8 @@ def _names_folder(project, identity, folder):
             try:
                 with open(_unlimited(sessions / name / record), 'rb') as stream:
                     value = json.loads(stream.read(1024 * 1024 + 1))
-            except (OSError, ValueError):
-                continue
+            except (FileNotFoundError, NotADirectoryError, ValueError):
+                continue  # Absent, or not a record. Every other read error is raised.
             saved = (value.get('working_dir') or value.get('workspace')) if isinstance(value, dict) else None
             if isinstance(saved, str) and saved:
                 return os.path.normcase(saved) == os.path.normcase(str(folder))
