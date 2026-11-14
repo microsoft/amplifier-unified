@@ -656,9 +656,13 @@ table with `python tests/test_windows_path_budget.py`.
 `LongPathsEnabled` off on its own runner, proves in a new process that a
 260-character path is refused, runs the real session and capture stores under a
 folder path of exactly 59 characters, and restores the runner's value. It
-installs the locked dependencies, so its source-store case needs a locked
-Foundation revision of `7526bb55` or later; before that the case is skipped by
-name. It is not setup-file or clean-account acceptance.
+installs the locked dependencies, and the lock selects Foundation `7526bb55`.
+Its source-store case stages a repository as deep as the default bundles
+through Foundation's real store, at folder paths of 59 and 54. It requires
+that the store seals, builds and cleans up files beyond the limit, and that
+Windows accepts or refuses each ordinary path exactly as the budget table
+says: the deepest module file is refused at 59 (264 characters) and opens at
+54 (259). It is not setup-file or clean-account acceptance.
 
 Setup checks the PC and the folder before its first question. Each stop names
 one cause and one next step in plain language, and never shows exception text,
