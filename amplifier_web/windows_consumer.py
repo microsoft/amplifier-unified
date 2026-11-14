@@ -141,7 +141,10 @@ def environment(root, value):
         with directory(root / suffix, owned_root=root, create=False):
             pass
         env[name] = str(root / suffix)
-    env["PATH"] = os.pathsep.join([str(Path(value["uv"]).parent), str(Path(value["git"]).parent),
+    from .host_dependencies import private_shell
+    shell = private_shell(root / "app")
+    env["PATH"] = os.pathsep.join([*([shell] if shell else []),
+        str(Path(value["uv"]).parent), str(Path(value["git"]).parent),
         str(root / "tool-bin"), str(root / "tools/amplifier-unified/Scripts"),
         str(Path(sys._base_executable).parent), env.get("PATH", "")])
     return env

@@ -39,6 +39,27 @@ def test_process_local_roots_preserve_accounts_and_user_git_policy(tmp_path, mon
     assert len(roots) == 13 and all(kwargs == {"owned_root": tmp_path, "create": False} for _, kwargs in roots)
 
 
+def test_shortcut_and_first_task_put_the_installations_shell_first(tmp_path, monkeypatch):
+    from amplifier_web import windows_files
+    @contextmanager
+    def directory(path, **kwargs):
+        yield
+    monkeypatch.setattr(windows_files, "directory", directory)
+    monkeypatch.setattr(consumer.sys, "platform", "win32")
+    monkeypatch.setattr(consumer.sys, "_base_executable", str(tmp_path / "python/python.exe"), raising=False)
+    monkeypatch.setenv("PATH", "system32")
+    value = {"uv": str(tmp_path / "uv/uv.exe"), "git": str(tmp_path / "git/cmd/git.exe")}
+    # An installation whose private Git is still MinGit keeps its existing order.
+    assert consumer.environment(tmp_path, value)["PATH"].split(consumer.os.pathsep)[0] == str(tmp_path / "uv")
+    (tmp_path / "consumer-install.json").write_text("{}")
+    (tmp_path / "git/bin").mkdir(parents=True)
+    (tmp_path / "git/bin/bash.exe").write_bytes(b"MZ")
+    entries = consumer.environment(tmp_path, value)["PATH"].split(consumer.os.pathsep)
+    # System32's bash.exe only starts WSL; the agent's shell tool takes the first bash.
+    assert entries[:3] == [str(tmp_path / "git/bin"), str(tmp_path / "uv"), str(tmp_path / "git/cmd")]
+    assert entries[-1] == "system32"
+
+
 def test_audit_reuses_native_archive_payload_reader_and_exact_graph(tmp_path, monkeypatch):
     from amplifier_web import app_component_graph as graph, app_release_artifacts, manual_app_handoff
     from amplifier_web import application_generations, app_updates, deployment, windows_files

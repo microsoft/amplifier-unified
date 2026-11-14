@@ -76,6 +76,8 @@ def test_pins_come_from_reviewed_capsule_and_helper_sources():
     assert 'UvVersion="0.13.7"' in pins
     assert 'UvHash="0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021"' in pins
     assert 'GitHash="e3bf78351fe777fba47ddee5950082f8a98bb0f02604fdc7ba3ee2cb68ffa877"' in pins
+    # Consumer setup's complete Git for Windows has its own owner and checks.
+    assert 'ShellGitHash="0dae059764ba7c447c9604eb6cb0f4afaf2d90b003ecf1c8cf2dbe5a13e4442c"' in pins
     assert "[REDACTED]" not in pins
 
 
