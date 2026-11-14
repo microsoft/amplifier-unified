@@ -11,7 +11,8 @@ export function usageMetrics(usage={}){
   const value=!missing&&known!==0&&count(usage[key])?usage[key]:null;
   metrics[key]={value,status:value==null?(pending>0?'pending':'unknown'):(known!=null&&known<calls)||(key==='costUsd'?usage.costType==='partial':usage.tokenUnknownCalls>0)?'partial':'known',estimatedCalls:key==='costUsd'?(usage.estimatedCalls||(usage.costType==='estimated'?1:0)):0};
  }
- if(metrics.costUsd.value==null&&usage.costUnavailableReason)metrics.costUsd.unavailableReasons=[usage.costUnavailableReason];
+ const reasons=usage.costUnavailableReasons||[usage.costUnavailableReason].filter(Boolean);
+ if(Array.isArray(reasons)&&reasons.length)metrics.costUsd.unavailableReasons=reasons;
  // Core input already includes cache reads; output already includes reasoning.
  // Only cache writes are additional tokens (the CLI uses the same convention).
  if(metrics.grossInputTokens.value==null&&metrics.inputTokens.value!=null)metrics.grossInputTokens={...metrics.inputTokens,value:metrics.inputTokens.value+(metrics.cacheWriteTokens.value||0)};

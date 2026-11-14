@@ -58,6 +58,7 @@ async def test_provider_decimal_cost_reaches_session_totals_without_repricing_hi
     for event in emitted:
         ingest(root, event['event'])
     snapshot = usage_snapshot(root)
+    assert root['execution']['aggregateUsage']['costUnavailableReasons'] == ['cache_write_ttl_unavailable']
     metric = snapshot['metrics']['costUsd']
     assert snapshot['calls'] == 3
     assert metric['value'] == 0.000015

@@ -120,6 +120,30 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
             metadata={'anthropic_cost_unavailable':'model_rates_unavailable'}),
             {'costUsd':0.0,'costType':'reported'})
 
+    async def test_streaming_cost_reason_survives_chunks_hooks_and_accounting(self):
+        from amplifier_web.session_projection import accounting_projection
+        for source in ('chunk', 'hook'):
+            events=ExecutionEvents('root',lambda value:None)
+            class Provider:
+                def get_info(self): return SimpleNamespace(id='anthropic',defaults={'model':'fixture'})
+                async def complete(self,request): raise AssertionError('stream only')
+                async def stream(self,request):
+                    data={'usage':{'input_tokens':5,'output_tokens':2,'cost_usd':None},
+                          'metadata':{'anthropic_cost_unavailable':'response_speed_unavailable',
+                                      'private':'DO NOT RETAIN'}}
+                    if source=='hook':
+                        events.hook('root','llm:response',data)
+                        yield {'text':'synthetic'}
+                    else:
+                        yield data
+            provider=events.instrument_provider('root',Provider())
+            async for _ in provider.stream(SimpleNamespace(model='fixture')): pass
+            retained=accounting_projection({'nodes':list(events.nodes.values())})
+            self.assertEqual(len(retained),1)
+            self.assertEqual(retained[0]['usage']['costUnavailableReason'],'response_speed_unavailable')
+            self.assertNotIn('costUsd',retained[0]['usage'])
+            self.assertNotIn('DO NOT RETAIN',str(retained))
+
 
 class TruncationFailureTests(unittest.IsolatedAsyncioTestCase):
     """Offline typed provider boundary, not a reproduction of paid inference."""

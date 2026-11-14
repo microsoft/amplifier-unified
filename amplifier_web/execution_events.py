@@ -417,7 +417,8 @@ class ExecutionEvents:
                     # token delta. A later snapshot replaces the receipt.
                     usage = chunk.get("usage") if isinstance(chunk, dict) else getattr(chunk, "usage", None)
                     if usage is not None:
-                        self.publish({**self.nodes[row["id"]], "usage": public_usage(usage)})
+                        metadata = chunk.get("metadata") if isinstance(chunk, dict) else getattr(chunk, "metadata", None)
+                        self.publish({**self.nodes[row["id"]], "usage": public_usage(usage, metadata=metadata)})
                     yield chunk
             except GeneratorExit:
                 phase = "interrupted"
@@ -543,7 +544,7 @@ class ExecutionEvents:
                 if row and event == "provider:retry":
                     self.publish({**row,"phase":"retrying"})
                 elif row and current in self.streaming_calls and event == "llm:response" and data.get("usage") is not None:
-                    self.publish({**row, "usage": public_usage(data["usage"])})
+                    self.publish({**row, "usage": public_usage(data["usage"], metadata=data.get("metadata"))})
                 return
             purpose = CALL_PURPOSE.get() or {}
             if purpose: parent, turn = None, purpose.get("turnId", turn)

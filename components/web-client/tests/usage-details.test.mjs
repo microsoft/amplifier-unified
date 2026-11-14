@@ -18,6 +18,11 @@ test('documented unavailable cost reasons stay visible without inventing zero or
  assert.deepEqual(costUnavailableNotes(metrics.costUsd),['Cache-write duration was not reported.']);
  assert.deepEqual(usageRows(metrics).map(row=>row.key),['costUsd']);
  assert.deepEqual(costUnavailableNotes({unavailableReasons:['private response','__proto__',{},'model_rates_unavailable']}),['Rates are unavailable for this model.']);
+ const partial=segmentUsage([{kind:'llm',usage:{costUsd:.01,costType:'reported'}},
+  {kind:'llm',usage:{costType:'unavailable',costUnavailableReason:'cache_write_ttl_unavailable'}}]);
+ const combined=usageMetrics(combinedWork([{aggregateUsage:partial}],100).usage).costUsd;
+ assert.equal(combined.value,.01);assert.equal(combined.status,'partial');
+ assert.deepEqual(costUnavailableNotes(combined),['Cache-write duration was not reported.']);
 });
 
 test('zero, unavailable, pending and mismatched coverage do not invent cache percentages',()=>{
