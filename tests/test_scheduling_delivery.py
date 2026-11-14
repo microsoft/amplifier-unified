@@ -33,13 +33,14 @@ def selected(candidate):
 
 
 def test_selection_uses_artifact_while_author_can_advance(selected):
-    root, _, _, source, _ = selected
+    root, *_ = selected
     before = delivery.verify(root)
     author = root / release.PROJECT / "amplifier_scheduling/__init__.py"
+    published = author.read_text()
     author.write_text('value = "future unpublished implementation"\n')
     assert delivery.verify(root) == before
     copied = root / delivery.DELIVERY / "amplifier_scheduling/__init__.py"
-    assert copied.read_text() == source["amplifier_scheduling/__init__.py"]
+    assert copied.read_text() == published
     assert not list((root / delivery.DELIVERY).glob("*.dist-info"))
 
 
