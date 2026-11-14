@@ -6,6 +6,58 @@ import pytest
 
 from amplifier_web.runtime_controls import public_config, restore_redactions, validate_plan
 
+@pytest.mark.parametrize("failure", [None, "callback", "cancel"])
+async def test_participating_mode_ui_verifies_owned_completion_before_state_and_checkpoint(
+        tmp_path, monkeypatch, failure):
+    import asyncio
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from test_task_continuity import controls
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path))
+    control = controls("mode-completion")
+    state, trace = control.coordinator.session_state, []
+    state["mode_discovery"] = SimpleNamespace(
+        find=lambda name: SimpleNamespace(name=name), list_modes=lambda: [])
+    @contextmanager
+    def tracker(event, *, payload):
+        trace.append(("track", event))
+        assert payload["name"] == "fixture"
+        def verify():
+            trace.append("verified")
+            if failure == "callback":
+                raise ValueError("mode callback failed")
+        yield SimpleNamespace(id="operation-local-id", verify=verify)
+    state["mode_hooks"] = SimpleNamespace(
+        warned_tools={"existing"}, track_transition=tracker, reset_warnings=lambda: trace.append("reset"))
+    @contextmanager
+    def transition():
+        yield
+    control.coordinator.register_capability("session.media.graph_transition", transition)
+    async def emit(event, payload):
+        assert state.get("active_mode") is None
+        assert payload["transition_id"] == "operation-local-id"
+        trace.append(("emit", event))
+        if failure == "cancel":
+            raise asyncio.CancelledError()
+    control.coordinator.hooks = SimpleNamespace(emit=emit)
+    control.checkpoint = AsyncMock()
+    try:
+        if failure:
+            with pytest.raises(asyncio.CancelledError if failure == "cancel" else ValueError):
+                await control.mode("mode.set", {"name": "fixture"})
+            assert state.get("active_mode") is None
+            assert state["mode_transition_failure"]["target_mode"] == "fixture"
+            assert state["mode_hooks"].warned_tools == {"existing"}
+            control.checkpoint.assert_not_awaited()
+        else:
+            await control.mode("mode.set", {"name": "fixture"})
+            assert state["active_mode"] == "fixture"
+            assert trace == [("track", "mode:activated"), ("emit", "mode:activated"), "verified", "reset"]
+            control.checkpoint.assert_awaited_once()
+    finally:
+        await control.close()
+
 
 @pytest.mark.asyncio
 async def test_explicit_recovery_control_only_arms_with_host_binding(tmp_path, monkeypatch):

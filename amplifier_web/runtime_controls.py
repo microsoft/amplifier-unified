@@ -790,9 +790,51 @@ class RuntimeControls:
         if operation not in {"mode.set", "mode.clear"}:
             return await self._mode(operation, args)
         self.require_idle()
-        from .host.media import hook_configuration
-        with hook_configuration(self.coordinator):
-            return await self._mode(operation, args)
+        transition = self.coordinator.get_capability("session.media.graph_transition")
+        if transition is not None and not callable(transition):
+            raise ValueError("Mode graph transition capability is malformed")
+        state = self.coordinator.session_state
+        previous = state.get("active_mode")
+        hooks = state.get("mode_hooks")
+        if operation == "mode.set":
+            discovery = state.get("mode_discovery")
+            if not discovery or not discovery.find(args.get("name")):
+                raise ValueError("Mode is not available in this bundle")
+        warnings = copy.deepcopy(getattr(hooks, "warned_tools", None))
+        entered = False
+        try:
+            with (transition() if transition is not None else nullcontext()):
+                entered = True
+                result = await self._mode(operation, args)
+        except BaseException as error:
+            if entered and self.coordinator.get_capability("session.media.graph_transition") is not None:
+                state["active_mode"] = previous
+                if warnings is not None:
+                    hooks.warned_tools = warnings
+                state["mode_transition_failure"] = {
+                    "previous_mode": previous,
+                    "target_mode": args.get("name") if operation == "mode.set" else None,
+                    "message": f"Mode transition incomplete: {type(error).__name__}",
+                }
+            raise
+        await self.checkpoint()
+        return result
+
+    async def _emit_mode_transition(self, event, payload):
+        factory = self.coordinator.get_capability("session.media.graph_transition")
+        if factory is None:
+            return await self.coordinator.hooks.emit(event, payload)
+        if not callable(factory):
+            raise ValueError("Mode graph transition capability is malformed")
+        hooks = self.coordinator.session_state.get("mode_hooks")
+        tracker = getattr(hooks, "track_transition", None)
+        if not callable(tracker):
+            raise ValueError("Participating mode completion tracking is unavailable")
+        with tracker(event, payload=payload) as operation:
+            result = await self.coordinator.hooks.emit(
+                event, {**payload, "transition_id": operation.id})
+            operation.verify()
+            return result
 
     async def _mode(self, operation, args):
         state = self.coordinator.session_state
@@ -807,7 +849,7 @@ class RuntimeControls:
         previous = state.get("active_mode")
         if operation == "mode.clear":
             if previous:
-                await self.coordinator.hooks.emit("mode:cleared", {"name":previous,"previous_mode":previous})
+                await self._emit_mode_transition("mode:cleared", {"name":previous,"previous_mode":previous})
             state["active_mode"] = None
         else:
             definition = discovery.find(args.get("name")) if discovery else None
@@ -817,12 +859,11 @@ class RuntimeControls:
             if name != previous:
                 payload = {key:getattr(definition,key) for key in ("description","default_action","safe_tools","warn_tools","confirm_tools","block_tools") if hasattr(definition,key)}
                 payload.update({"old":previous,"new":name,"from_mode":previous,"to_mode":name} if previous else {"name":name,"mode":name})
-                await self.coordinator.hooks.emit("mode:changed" if previous else "mode:activated",payload)
+                await self._emit_mode_transition("mode:changed" if previous else "mode:activated",payload)
                 state["active_mode"] = name
         hooks = state.get("mode_hooks")
         if hooks and hasattr(hooks, "reset_warnings"):
             hooks.reset_warnings()
-        await self.checkpoint()
         return await self.mode("mode.list", {})
 
     async def invoke(self, args, *, coordinator=None, bound_arguments=None, provenance=None, checkpoint=True, expected_process_owner=None, generic=False, integration_id=None):
