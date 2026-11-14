@@ -18,6 +18,10 @@ this walk never trusts a path twice:
   forced, and the walk continues.
 
 Requires Windows 10 1809 or later on local NTFS. There is no fallback.
+
+An installation must never be made in a folder holding unified-uninstall.json.
+Setup installs only into an absent or empty folder. The after-exit step checks
+the journal before every named top-level entry.
 """
 from __future__ import annotations
 
@@ -46,6 +50,7 @@ $p = $null
 $passes = 0
 $removed = $false
 $started = Get-Date
+$startedUtc = ([datetimeoffset]$started).UtcDateTime
 $script:left = @()
 $script:leftCount = 0
 $script:seen = @{}
@@ -60,48 +65,75 @@ function Keep($path) {
 function Real-Folder($item) {
     return ($item.PSIsContainer -and "$($item.Attributes)" -notmatch 'ReparsePoint')
 }
+function Later($entry) {
+    if ($entry.CreationTimeUtc -gt $startedUtc) { Keep $entry.FullName; return $true }
+    return $false
+}
 function Authorized {
     try {
         $root = Get-Item -LiteralPath $p.root -Force
-        if (-not (Real-Folder $root)) { return $false }
+        if (-not (Real-Folder $root) -or (Later $root)) { return $false }
         $journal = Get-Item -LiteralPath (Join-Path $p.root 'unified-uninstall.json') -Force
-        if ($journal.PSIsContainer -or "$($journal.Attributes)" -match 'ReparsePoint') {
+        if ($journal.PSIsContainer -or "$($journal.Attributes)" -match 'ReparsePoint' -or
+            (Later $journal)) {
             return $false
         }
-        $record = Get-Content -LiteralPath $journal.FullName -Raw | ConvertFrom-Json
-        return ($record.token -is [string] -and $record.token -ceq $p.token)
+        $text = Get-Content -LiteralPath $journal.FullName -Raw
+        if ($text -notmatch '^\s*\{') { return $false }
+        $record = ConvertFrom-Json -InputObject $text
+        return ($record -is [pscustomobject] -and
+            ($record.schema -is [int] -or $record.schema -is [long]) -and $record.schema -eq 1 -and
+            $record.choice -is [string] -and $record.choice -ceq $p.choice -and $record.token -is [string] -and
+            $record.token -ceq $p.token -and $record.token -cmatch '^[0-9a-f]{32}$')
     } catch { return $false }
 }
 function Clear-Link($entry) {
+    if (Later $entry) { return }
     # The only method call: nonrecursive deletion of the link itself avoids
     # Windows PowerShell's folder-link removal behavior. Constrained language
     # can refuse this call; then the link stays and prevents root removal.
     try { $entry.Delete() } catch { Keep $entry.FullName }
 }
+function Clear-File($entry) {
+    if (Later $entry) { return }
+    try {
+        if ("$($entry.Attributes)" -match 'ReadOnly|Hidden|System') {
+            if ($entry.LinkType -eq 'HardLink') { Keep $entry.FullName; return }
+            Remove-Item -LiteralPath $entry.FullName -Force
+        } else {
+            Remove-Item -LiteralPath $entry.FullName -ErrorAction SilentlyContinue
+        }
+    } catch { Keep $entry.FullName }
+}
 function Clear-Entry($entry) {
     # Type and attributes come from the parent's listing, not a per-file stat.
+    if (Later $entry) { return }
     if ("$($entry.Attributes)" -match 'ReparsePoint') { Clear-Link $entry; return }
     $path = $entry.FullName
     try {
         if ($entry.PSIsContainer) {
+            if ((Get-Date) -ge $until) { Keep $path; return }
             $children = @(Get-ChildItem -LiteralPath $path -Force)
             $plain = @($children | Where-Object {
-                -not $_.PSIsContainer -and "$($_.Attributes)" -notmatch 'ReparsePoint'
+                -not (Later $_) -and -not $_.PSIsContainer -and
+                "$($_.Attributes)" -notmatch 'ReparsePoint|ReadOnly|Hidden|System'
             })
             if ($plain.Count) {
                 # One cmdlet call per folder, even for thousands of plain files.
-                Remove-Item -LiteralPath $plain.FullName -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $plain.FullName -ErrorAction SilentlyContinue
             }
             foreach ($child in $children) {
                 if ($child.PSIsContainer -or "$($child.Attributes)" -match 'ReparsePoint') {
                     Clear-Entry $child
+                } elseif ("$($child.Attributes)" -match 'ReadOnly|Hidden|System') {
+                    Clear-File $child
                 }
             }
             $remaining = @(Get-ChildItem -LiteralPath $path -Force)
             foreach ($child in $remaining) { Keep $child.FullName }
             if ($remaining.Count) { return }
-        }
-        Remove-Item -LiteralPath $path -Force
+            Remove-Item -LiteralPath $path -Force
+        } else { Clear-File $entry }
     } catch { Keep $path }
 }
 try {
@@ -109,7 +141,8 @@ try {
     $text = $input | Out-String
     $p = ConvertFrom-Json -InputObject $text
     if ($p.root -isnot [string] -or -not $p.root -or
-        $p.token -isnot [string] -or -not $p.token) { throw 'Invalid root or token' }
+        $p.token -isnot [string] -or $p.token -cnotmatch '^[0-9a-f]{32}$' -or
+        $p.choice -cnotin @('delete', 'keep')) { throw 'Invalid root, token or choice' }
     $names = @($p.contents) + @($p.folders) + @($p.files)
     foreach ($name in $names) {
         if ($name -isnot [string] -or -not $name -or $name -in @('.', '..') -or
@@ -136,10 +169,16 @@ try {
         $script:seen = @{}
         $entries = @(Get-ChildItem -LiteralPath $p.root -Force)
         foreach ($entry in $entries) {
-            if (@($p.contents) -ccontains $entry.Name) { Clear-Entry $entry }
+            if (@($p.contents) -ccontains $entry.Name) {
+                if (-not (Authorized)) { throw 'Root or token refused' }
+                Clear-Entry $entry
+            }
         }
         foreach ($entry in @(Get-ChildItem -LiteralPath $p.root -Force)) {
             if (@($p.folders) -ccontains $entry.Name) {
+                if (-not (Authorized)) { throw 'Root or token refused' }
+                if (Later $entry) { continue }
+                if ((Get-Date) -ge $until) { Keep $entry.FullName; continue }
                 if ("$($entry.Attributes)" -match 'ReparsePoint') { Clear-Link $entry }
                 elseif ((Real-Folder $entry) -and
                     -not @(Get-ChildItem -LiteralPath $entry.FullName -Force).Count) {
@@ -150,10 +189,11 @@ try {
         }
         foreach ($entry in @(Get-ChildItem -LiteralPath $p.root -Force)) {
             if (@($p.files) -ccontains $entry.Name) {
+                if (-not (Authorized)) { throw 'Root or token refused' }
+                if (Later $entry) { continue }
                 if ("$($entry.Attributes)" -match 'ReparsePoint') { Clear-Link $entry }
                 elseif (-not $entry.PSIsContainer) {
-                    try { Remove-Item -LiteralPath $entry.FullName -Force }
-                    catch { Keep $entry.FullName }
+                    Clear-File $entry
                 } else { Keep $entry.FullName }
             }
         }
@@ -161,13 +201,15 @@ try {
             Where-Object { $names -ccontains $_.Name })
         if (-not $remaining.Count -or (Get-Date) -ge $until) { break }
         Start-Sleep -Seconds 1
-    } while ($true)
+    } while ((Get-Date) -lt $until)
     if (-not (Authorized)) { throw 'Root or token refused' }
     $remaining = @(Get-ChildItem -LiteralPath $p.root -Force)
     if ($remaining.Count -eq 1 -and $remaining[0].Name -ceq 'unified-uninstall.json') {
-        Remove-Item -LiteralPath $remaining[0].FullName -Force
-        Remove-Item -LiteralPath $p.root -Force
-        $removed = $true
+        Clear-File $remaining[0]
+        if (-not @(Get-ChildItem -LiteralPath $p.root -Force).Count) {
+            Remove-Item -LiteralPath $p.root -Force
+            $removed = $true
+        }
     } else {
         foreach ($entry in $remaining) {
             if ($entry.Name -cne 'unified-uninstall.json' -and
@@ -187,16 +229,27 @@ finally {
 """
 
 
-def finish_after_exit(root, token, *, contents, folders, files, wait_for=(), seconds=60, report=None):
+def finish_after_exit(root, token, *, contents, folders, files, wait_for=(), seconds=60, report=None,
+                      choice="delete"):
     """Start the token-guarded last step outside the installation and its Job.
 
     A successful return means only that the payload was written, not that the
     folder was removed. Failure to escape a Job retries process creation alone;
     no already-started helper is replayed. Links are deleted as links; unnamed
     entries and links whose nonrecursive deletion is refused stay.
+
+    If Windows refuses Job breakaway, the helper may end with the launcher,
+    leaving program files. The process wait ends after 30 seconds even if the
+    processes still run. Paths longer than 260 characters may stay.
     """
     from .windows_service import WindowsServiceError, _powershell
 
+    root = os.fspath(root)
+    drive, _ = ntpath.splitdrive(root)
+    if (not ntpath.isabs(root) or len(drive) != 2 or drive[1] != ":"
+            or drive[0] not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"):
+        raise ValueError("Root must be an absolute local drive path.")
+    root = ntpath.normpath(root)
     groups = [list(group) for group in (contents, folders, files)]
     for group in groups:
         for name in group:
@@ -204,15 +257,18 @@ def finish_after_exit(root, token, *, contents, folders, files, wait_for=(), sec
                     or any(mark in name for mark in "\\/:\0")
                     or name.casefold() == "unified-uninstall.json"):
                 raise ValueError("Not a single entry name.")
-    if not isinstance(token, str) or not token:
-        raise ValueError("A nonempty token is required.")
+    if (not isinstance(token, str) or len(token) != 32
+            or any(char not in "0123456789abcdef" for char in token)):
+        raise ValueError("Token must be exactly 32 lowercase hex characters.")
+    if choice not in ("delete", "keep"):
+        raise ValueError("Choice must be delete or keep.")
     if type(seconds) not in (int, float) or not 0 <= seconds <= 3600:
         raise ValueError("Duration must be between zero and 3600 seconds.")
     wait_for = list(wait_for)
     if any(type(pid) is not int or pid <= 0 for pid in wait_for):
         raise ValueError("Wait targets must be positive process IDs.")
     payload = json.dumps({
-        "root": os.fspath(root), "token": token,
+        "root": root, "token": token, "choice": choice,
         "contents": groups[0], "folders": groups[1], "files": groups[2],
         "wait_for": wait_for, "seconds": seconds,
         "report": os.fspath(report) if report is not None else None,
@@ -300,7 +356,7 @@ class _Native(_ReadAPI):
         text = C.create_unicode_buffer(name)
         size = len(name.encode("utf-16-le", "surrogatepass"))
         unicode = _Unicode(size, size + 2, C.cast(text, C.c_wchar_p))
-        # Exact name, relative to the parent handle. No OBJ_CASE_INSENSITIVE.
+        # The name comes from the parent's own listing, relative to its handle.
         attributes = _Attributes(C.sizeof(_Attributes), parent, C.pointer(unicode), 0, None, None)
         handle, status = HANDLE(), _Status()
         # SYNCHRONIZE | FILE_READ_ATTRIBUTES, plus DELETE and/or FILE_LIST_DIRECTORY.
