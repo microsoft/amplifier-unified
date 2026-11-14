@@ -167,6 +167,7 @@ async def test_typed_validation_rejects_invalid_requests(tmp_path, github, chang
 
 
 async def test_github_boundary_uses_fixed_repo_structured_stdin_and_validates_url(monkeypatch):
+    monkeypatch.setattr(feedback.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     class Child:
         returncode = 0
         async def communicate(self, raw):
@@ -179,6 +180,7 @@ async def test_github_boundary_uses_fixed_repo_structured_stdin_and_validates_ur
     title = "Literal `whoami` $(echo anything)"
     assert await feedback.create_issue(title, "Body\nline two") == feedback.ISSUES_URL + "/12"
     assert spawn.call_args.args == ("/fixture/gh", "api", "--hostname", "github.com", "--method", "POST", "repos/microsoft/amplifier-unified/issues", "--input", "-")
+    assert spawn.call_args.kwargs["creationflags"] == 0x08000000
     assert child.payload == {"title": title, "body": "Body\nline two"}
     child.communicate = AsyncMock(return_value=(b'{"html_url":"https://other.example/issue"}', b""))
     with pytest.raises(ValueError, match="invalid issue receipt"):

@@ -65,7 +65,8 @@ def audit(root):
     _payload({"artifact": artifact, "binding": {
         "version": value["version"], "revision": value["revision"]}})
     result = subprocess.run([sys.executable, "-I", "-c", GRAPH_PROBE],
-                            capture_output=True, text=True, timeout=30, check=False)
+                            capture_output=True, text=True, timeout=30, check=False,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     graph = normalized(json.loads(result.stdout), artifact=artifact) if result.returncode == 0 else None
     if graph != validate_graph(value["graph"]):
         raise ValueError("The installed application graph differs from setup's qualified selection.")
@@ -140,7 +141,10 @@ def environment(root, value):
         with directory(root / suffix, owned_root=root, create=False):
             pass
         env[name] = str(root / suffix)
-    env["PATH"] = os.pathsep.join([str(Path(value["uv"]).parent), str(Path(value["git"]).parent),
+    from .host_dependencies import private_shell
+    shell = private_shell(root / "app")
+    env["PATH"] = os.pathsep.join([*([shell] if shell else []),
+        str(Path(value["uv"]).parent), str(Path(value["git"]).parent),
         str(root / "tool-bin"), str(root / "tools/amplifier-unified/Scripts"),
         str(Path(sys._base_executable).parent), env.get("PATH", "")])
     return env

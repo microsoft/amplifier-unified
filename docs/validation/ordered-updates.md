@@ -65,7 +65,8 @@ A failed optional Smart Tool update retains its current installation, failure
 receipt and explicit Retry/Skip controls. It must not block checking or staging
 a newer application, or silently retry when the application sequence resumes.
 Unfinished ordinary tool activation still owns its existing admission gate;
-independent runner qualification keeps its own owner. Later checks exclude
+explicit Incus runner qualification keeps its own owner. Docker uses the normal
+Smart Tool package update path without a target-local qualifier. Later checks exclude
 retained failed installations until explicit recovery, and unrelated healthy
 tools may proceed. `tests/test_failed_tool_update_independence.py` covers these
 boundaries, including restart retention and preservation of foreground app state.

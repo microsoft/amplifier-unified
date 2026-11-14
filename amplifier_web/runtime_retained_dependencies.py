@@ -24,7 +24,8 @@ def verify(project):
     # the serving app. Evaluate markers against that actual interpreter.
     version = json.loads(subprocess.check_output([str(python), '-c',
         'import json,platform,sys; print(json.dumps([platform.python_version(),'
-        'platform.python_implementation(),sys.implementation.name,list(sys.implementation.version)]))'], text=True, timeout=30))
+        'platform.python_implementation(),sys.implementation.name,list(sys.implementation.version)]))'],
+        text=True, timeout=30, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)))
     implementation = '.'.join(str(part) for part in version[3][:3])
     if version[3][3] != 'final':
         implementation += version[3][3][0] + str(version[3][4])

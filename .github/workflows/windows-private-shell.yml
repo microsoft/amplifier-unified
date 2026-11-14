@@ -1,0 +1,84 @@
+name: Windows private shell
+# Native proof that consumer setup's complete Git for Windows gives the agent's
+# real shell tool a working bash. It is not clean-account or setup-file acceptance.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/windows-private-shell.yml
+      - scripts/windows_private_git.py
+      - scripts/windows_bootstrap_native.cs
+      - scripts/windows_bootstrap_native.py
+      - scripts/install.ps1
+      - amplifier_web/host_dependencies.py
+      - amplifier_web/windows_consumer.py
+      - amplifier_web/windows_files.py
+      - amplifier_web/windows_read_files.py
+      - tests/fixtures/windows_private_shell_probe.py
+      - tests/test_windows_private_git.py
+permissions:
+  contents: read
+jobs:
+  windows-private-shell:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      UV_NO_BUILD_PACKAGE: amplifier-core
+      UV_PYTHON_DOWNLOADS: never
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      # CI setup only. The probe then runs with a new PC's PATH: the runner's
+      # Git for Windows and other developer tools are not visible to the shell.
+      - name: Install the real shell tool at one exact revision
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = Join-Path $env:RUNNER_TEMP 'private-shell'
+          New-Item -ItemType Directory -Path $base -ErrorAction Stop | Out-Null
+          "SHELL_BASE=$base" >> $env:GITHUB_ENV
+          uv venv --python (Get-Command python).Source "$base/env"
+          if ($LASTEXITCODE -ne 0) { throw 'Probe environment creation failed.' }
+          uv pip install --python "$base/env/Scripts/python.exe" --only-binary amplifier-core "amplifier-core==2.0.2" "pytest>=8,<10" "amplifier-module-tool-bash @ git+https://github.com/microsoft/amplifier-module-tool-bash@d5bb46d24dcae8e260211bf8fb5c22de3a67f406"
+          if ($LASTEXITCODE -ne 0) { throw 'Shell tool installation failed.' }
+      # Setup unpacks with its private uv-managed CPython, not the runner's Python.
+      - name: Install the same kind of private Python that setup uses
+        shell: pwsh
+        env:
+          UV_PYTHON_DOWNLOADS: manual
+          UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/private-shell/python
+        run: |
+          $ErrorActionPreference = 'Stop'
+          uv python install 3.13 --no-bin --no-registry
+          if ($LASTEXITCODE -ne 0) { throw 'Private Python installation failed.' }
+          $private = uv python find --no-project --managed-python 3.13
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $private)) { throw 'Private Python was not found.' }
+          "SHELL_PRIVATE_PYTHON=$private" >> $env:GITHUB_ENV
+      - name: Check archive refusals and runtime link files on native NTFS
+        shell: pwsh
+        run: |
+          & "$env:SHELL_BASE/env/Scripts/python.exe" -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_private_git.py
+          if ($LASTEXITCODE -ne 0) { throw 'Private Git unpacking checks failed.' }
+      - name: Unpack the pinned Git and run the real shell tool without developer tools on PATH
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          & "$env:SHELL_BASE/env/Scripts/python.exe" -I -B tests/fixtures/windows_private_shell_probe.py --root "$env:SHELL_BASE/probe" --receipt "$env:SHELL_BASE/result.json" --unpack-python "$env:SHELL_PRIVATE_PYTHON"
+          if ($LASTEXITCODE -ne 0) { throw 'The private shell proof failed; inspect the stage in result.json.' }
+      - name: Retain the bounded result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-private-shell
+          path: ${{ runner.temp }}/private-shell/result.json
+          if-no-files-found: warn
+          retention-days: 7

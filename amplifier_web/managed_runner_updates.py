@@ -1,8 +1,9 @@
-"""Moving-source policy and exact qualification for the managed DTU core.
+"""Incus qualification and retained runner references.
 
 A configuration's immutable commit is evidence, not an update policy. Only an
 app-owned setup declaration or this updater's exact retained chain authorizes
 following main. Custom configurations and explicit pins remain owner-managed.
+Docker uses ordinary Smart Tool updates, without target-local certification.
 """
 from __future__ import annotations
 
@@ -82,7 +83,7 @@ def setup_policy(app, raw):
         if (value.get('state') == 'completed' and execution_binding(value.get('candidateConfiguration', {})) == execution_binding(raw)
                 and 'priorConfiguration' in value and value['priorConfiguration'] is None
                 and value.get('installationId') == raw.get('installationId')
-                and value.get('proof', {}).get('probeRemoved') is True):
+                and private.prepared(value)):
             policy = value.get('runnerSourcePolicy')
             if policy is not None:
                 return policy if isinstance(policy, dict) else None
@@ -117,6 +118,19 @@ def update_sources(app):
     policy = setup_policy(app, raw)
     eligible = bool(policy and policy.get('repository') == REPOSITORY and policy.get('version') == POLICY_VERSION
                     and isinstance(policy.get('ref'), str) and not pinned(policy['ref']))
+    if raw.get('backend', 'docker') == 'docker':
+        from .task_environments import local_configuration
+        selected, status, _ = local_configuration(app)
+        if status != 'ready' or not selected:
+            return []
+        item = next(row for row in app.smart_tools.state['installations'] if row['id'] == selected['installationId'])
+        return [{'id': 'smart-tool:' + item['id'], 'installationId': item['id'], 'kind': 'smart tool',
+                 'label': 'DTU Smart Tool', 'updateTier': 'other', 'url': REPOSITORY,
+                 'ref': policy.get('ref', '') if policy else item.get('ref', ''),
+                 'current': item['commit'], 'eligible': eligible,
+                 'status': 'not_checked' if eligible else 'pinned' if policy else 'local',
+                 'usage': 'configured', 'usageEvidence': ['Docker Compose tests'],
+                 'detail': 'Ordinary package updates apply to future work. Existing environments retain their original installation.'}]
     return [{'id': 'managed-runner:dtu', 'installationId': item['id'], 'kind': 'smart tool',
              'runnerKind': KIND, 'label': 'Managed test runner core', 'updateTier': 'other',
              'url': REPOSITORY, 'ref': policy.get('ref', '') if policy else '',
@@ -180,6 +194,8 @@ def intent_id(source):
 async def stage(app, source):
     from . import task_environments as environments
     raw = raw_configuration(app)
+    if not raw or raw.get('backend', 'docker') != 'incus':
+        raise RunnerUpdateError('managed-runner-selection-changed')
     if (not raw or key(raw) != source.get('runnerSelection') or raw.get('installationId') != source['installationId']
             or setup_policy(app, raw) != source.get('runnerPolicy')):
         raise RunnerUpdateError('managed-runner-selection-changed')
@@ -236,6 +252,11 @@ async def advance(app, identity):
         record = private.read_json(path)
         if not record or not record.get('candidate'):
             raise RunnerUpdateError()
+        if record['candidate'].get('backend', 'docker') != 'incus':
+            # A retained Docker attempt is evidence, not permission to revive
+            # its probe or promote its candidate after certification retirement.
+            # Its old resources and unknown outcomes remain untouched.
+            raise RunnerUpdateError('managed-runner-selection-changed')
         selected = raw_configuration(app)
         if selected == record['candidate'] and trusted_installation(app, selected):
             if await asyncio.to_thread(runtime_identity, installation(app, selected)) != record['runtime']:
@@ -461,6 +482,8 @@ def rollback(app, identity):
 
 
 def validate_execution(home, config):
+    if config.get('backend', 'docker') != 'incus':
+        return
     from .task_environments import QUALIFIED_DTU_COMMITS
     if not config.get('runnerQualificationRequired') and (not config.get('commit') or config.get('commit') in QUALIFIED_DTU_COMMITS):
         return

@@ -39,6 +39,7 @@ async def mount(coordinator, config=None): await coordinator.mount("providers", 
 """
     )
     from amplifier_module_context_simple import __file__ as context_module
+    from amplifier_module_hook_context_intelligence import __file__ as capture_module
 
     bundle = root / "fixture.md"
     bundle.write_text(
@@ -55,6 +56,14 @@ session:
 providers:
   - module: provider-fixture
     source: {provider.parent}
+hooks:
+  - module: hook-context-intelligence
+    source: {Path(capture_module).parent.parent}
+    config:
+      destinations: {{}}
+      context_intelligence_server_url: ''
+      context_intelligence_api_key: ''
+      base_path: {root / 'capture'}
 ---
 Reply with the fixture response.
 """
@@ -64,6 +73,7 @@ Reply with the fixture response.
         AMPLIFIER_WEB_HOME=str(root / "home"),
         AMPLIFIER_UNIFIED_IMPORT_HOME=str(root / "legacy"),
         AMPLIFIER_SESSION_STATE_HOME=str(root / "shared"),
+        AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH=str(root / "capture"),
     )
     # The fixture exercises worker lifecycle, not downloading optional community
     # behaviors. Keep its empty home and declared local provider deterministic.
