@@ -5,7 +5,7 @@ import {create} from 'react-test-renderer';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {MessageDelivery}=await server.ssrLoadModule('/src/message-delivery.jsx');
-const {useMessageOutbox}=await server.ssrLoadModule('/src/message-outbox.jsx');
+const {useMessageOutbox,outboxMessages,readOutbox,ClosedDeliveryItems}=await server.ssrLoadModule('/src/message-outbox.jsx');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
 const text=node=>typeof node==='string'?node:(node?.children||[]).map(text).join('');
@@ -182,4 +182,61 @@ test('pending delivery check survives remount without collapse, duplicate reques
  await act(async()=>{finish({accepted:true,result:{sessionId:'chat',inputId:'pending',delivery:'unknown',message:'Settled uncertain'}});await running});
  assert.match(JSON.stringify(root.toJSON()),/Settled uncertain/);
  await act(async()=>root.unmount());delete globalThis.sessionStorage;
+});
+
+test('closed local submissions retain payload but leave the active tail and remain inspectable',async()=>{
+ globalThis.sessionStorage=storage();let api,root;
+ function Harness(){api=useMessageOutbox();return null}
+ await act(async()=>{root=create(React.createElement(Harness))});
+ const entry={scope:'source',sessionId:'chat',commandId:'original',text:'  Keep exact text\n',attachmentIds:['file'],attachments:[{id:'file',name:'reference.txt'}],status:'unknown',error:'Original 500'};
+ await act(async()=>api.update('one',entry));
+ await act(async()=>api.update('one',{closed:true}));
+ assert.deepEqual(outboxMessages([],api.entries,'chat','source'),[]);
+ assert.deepEqual(readOutbox(sessionStorage),[{id:'one',...entry,closed:true}]);
+ await act(async()=>api.update('one',{status:'unknown',error:'Late read'}));
+ assert.equal(api.entries[0].closed,true);
+ let details;await act(async()=>{details=create(React.createElement(ClosedDeliveryItems,{entries:api.entries,sessionId:'chat',scope:'source',reopen:id=>api.update(id,{closed:false})}))});
+ assert.match(text(details.toJSON()),/Keep exact text/);
+ assert.match(text(details.toJSON()),/reference.txt/);
+ assert.match(text(details.toJSON()),/Delivery unconfirmed/);
+ await act(async()=>button(details,'Reopen delivery item').props.onClick());
+ assert.equal(outboxMessages([],api.entries,'chat','source')[0].inputId,'original');
+ assert.equal(api.entries[0].text,entry.text);
+ await act(async()=>api.update('one',{closed:true}));
+ await act(async()=>api.acknowledge('chat','original',{delivery:'accepted'},'source'));
+ await act(async()=>api.update('one',{status:'unknown',error:'Too late'}));
+ assert.deepEqual(api.entries,[]);
+ await act(async()=>{details.unmount();root.unmount()});delete globalThis.sessionStorage;
+});
+
+test('local close replaces cosmetic dismissal, never sends, and suppresses automatic checks',async()=>{
+ const calls=[],closes=[],message={id:'local',inputId:'original',text:'Retain'},session={id:'chat',status:'idle',messages:[]};
+ const localDelivery={id:'local',commandId:'original',status:'unknown'};
+ const props={message,session,delivery:{status:'unknown'},localDelivery,discard:m=>closes.push(m),dispatch:async()=>{calls.push('check');return {accepted:true,result:{sessionId:'chat',inputId:'original',delivery:'unknown'}}}};
+ let root;await act(async()=>{root=create(React.createElement(MessageDelivery,props))});
+ assert.equal(button(root,'Dismiss warning'),undefined);
+ await act(async()=>button(root,'Close delivery item').props.onClick());
+ assert.deepEqual(closes,[message]);assert.deepEqual(calls,[]);
+ await act(async()=>root.update(React.createElement(MessageDelivery,{...props,localDelivery:{...localDelivery,closed:true},recovery:{scope:'source',connection:'host'}})));
+ assert.equal(root.toJSON(),null);assert.deepEqual(calls,[]);
+ // A genuine active host row still wins a previously closed local presentation.
+ await act(async()=>root.update(React.createElement(MessageDelivery,{...props,localDelivery:{...localDelivery,closed:true},delivery:{status:'sending'}})));
+ assert.match(text(root.toJSON()),/Sending/);assert.equal(button(root,'Close delivery item'),undefined);
+ await act(async()=>root.unmount());
+});
+
+test('closing does not wait for a passive check or let its late reply reopen the item',async()=>{
+ let root,finish,closed=false;const calls=[];
+ const props={message:{id:'local-pending',inputId:'pending-original',text:'Retain'},session:{id:'pending-chat',status:'idle',messages:[]},
+  delivery:{status:'unknown'},localDelivery:{id:'local-pending',commandId:'pending-original',status:'unknown'},
+  recovery:{scope:'pending-source',connection:'host'},
+  dispatch:async()=>{calls.push('check');return new Promise(resolve=>{finish=resolve})},
+  discard:()=>{closed=true;root.update(React.createElement(MessageDelivery,{...props,localDelivery:{...props.localDelivery,closed:true}}))}};
+ await act(async()=>{root=create(React.createElement(MessageDelivery,props))});
+ assert.deepEqual(calls,['check']);assert.equal(button(root,'Close delivery item').props.disabled,false);
+ await act(async()=>button(root,'Close delivery item').props.onClick());
+ assert.equal(closed,true);assert.equal(root.toJSON(),null);
+ await act(async()=>finish({accepted:true,result:{sessionId:'pending-chat',inputId:'pending-original',delivery:'unknown'}}));
+ assert.equal(root.toJSON(),null);assert.deepEqual(calls,['check']);
+ await act(async()=>root.unmount());
 });

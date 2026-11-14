@@ -371,6 +371,11 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
  await historicalBubble.getByRole('button',{name:'Send this message again',exact:true}).click();
  await page.getByText('This earlier submission is still uncertain and cannot be sent again here. Use Check delivery for its original receipt. The saved message was kept.',{exact:true}).waitFor();
  assert.deepEqual(await outbox(),[historical]);assert.equal(calls.filter(call=>call.action==='conversation.send'&&call.id==='historical-input').length,0);
+ const legacyActions=calls.length;
+ await historicalBubble.getByRole('button',{name:'Close delivery item',exact:true}).click();
+ await historicalBubble.waitFor({state:'detached'});
+ assert.deepEqual(await outbox(),[{...historical,closed:true}],'Pre-change source fields need no migration to close');
+ assert.deepEqual(calls.slice(legacyActions),[],'Closing the legacy payload sends nothing');
  // The synthetic fixture now removes its seed, not a production recovery path.
  await page.evaluate(()=>sessionStorage.setItem('amplifier.messageOutbox.v1','[]'));await page.reload();await composer().waitFor();
  chat().externalAgent={id:'fixture-acp',name:'External text fixture'};
@@ -435,6 +440,35 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
  assert.deepEqual(await outbox(),[omittedFailed],'Rejected payload/identity/preconditions remain exact');
  state.sessions=[originalChat];state.selectedSessionId=originalSelection;await emit();
  await page.evaluate(()=>sessionStorage.setItem('amplifier.messageOutbox.v1','[]'));await page.reload();await composer().waitFor();
+ // Close is local presentation, not a retry, cancellation or delivery decision.
+ const closable=await send('  Keep this uncertain original.\n');
+ await closable.route.fulfill({status:500,json:{error:'Fixture lost result'}});
+ const closingBubble=page.locator(`[data-input-id="${closable.body.id}"]`);
+ await closingBubble.getByRole('button',{name:'Close delivery item',exact:true}).waitFor();
+ await until(()=>calls.some(c=>c.action==='conversation.delivery'&&c.args.inputId===closable.body.id),'Unknown mounted passive check');
+ const original=(await outbox()).find(row=>row.commandId===closable.body.id),beforeClose=calls.length;
+ await closingBubble.getByRole('button',{name:'Close delivery item',exact:true}).click();
+ await closingBubble.waitFor({state:'detached'});
+ assert.deepEqual((await outbox()).find(row=>row.commandId===closable.body.id),{...original,closed:true});
+ assert.deepEqual(calls.slice(beforeClose),[],'Closing performs no request');
+ await page.reload();await composer().waitFor();
+ await page.evaluate(()=>window.dispatchEvent(new Event('amplifier-reconnected')));
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ assert.equal(await closingBubble.count(),0);
+ assert.deepEqual(calls.slice(beforeClose).filter(c=>c.action==='conversation.delivery'&&c.args.inputId===closable.body.id),[],'Closed input is not automatically checked after reload or reconnect');
+ state.view.panel='session-details';await emit();
+ const closedItems=page.locator('details').filter({has:page.locator('summary').filter({hasText:'Closed delivery items (1)'})});
+ await closedItems.locator('summary').click();
+ await closedItems.getByText('Keep this uncertain original.',{exact:true}).waitFor();
+ await closedItems.getByRole('button',{name:'Reopen delivery item',exact:true}).click();
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ await closingBubble.waitFor();
+ assert.equal((await outbox()).find(row=>row.commandId===closable.body.id).text,original.text);
+ await closingBubble.getByRole('button',{name:'Close delivery item',exact:true}).click();
+ chat().messages.push({id:'late-closed-accepted',inputId:closable.body.id,role:'user',text:original.text,delivery:{status:'accepted'}});await emit();
+ await page.waitForFunction(id=>!JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).some(row=>row.commandId===id),closable.body.id);
+ assert.equal(await closingBubble.count(),1,'Later authoritative message renders once');
+ assert.equal(calls.filter(c=>c.id===closable.body.id).length,1,'Close/reopen/reload never resubmitted');
  await page.screenshot({path:'/tmp/amplifier-optimistic-messages.png'});await page.setViewportSize({width:390,height:844});await page.evaluate(()=>{const save=Storage.prototype.setItem;Storage.prototype.setItem=function(key,value){if(key==='amplifier.messageOutbox.v1')throw new DOMException('Fixture quota','QuotaExceededError');return save.call(this,key,value)}});const mobile=await send('Mobile failed message');await mobile.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection'}});await page.getByRole('button',{name:'Retry',exact:true}).waitFor();await page.getByText('This browser could not save the pending message. Keep this tab open until delivery is confirmed.',{exact:true}).waitFor();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:'/tmp/amplifier-message-retry-mobile.png'});
  await page.addInitScript(()=>Object.defineProperty(window,'sessionStorage',{get(){throw new DOMException('Fixture storage blocked','SecurityError')}}));await page.reload();await composer().waitFor();
  const blockedStorage=await send('Storage unavailable');await blockedStorage.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection'}});
