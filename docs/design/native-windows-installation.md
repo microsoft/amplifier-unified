@@ -812,6 +812,95 @@ sharing to get the same refusal, and it uses a stand-in for Task Scheduler,
 because a runner cannot register the sign-in task. A real stop with a live
 conversation worker remains clean-room acceptance.
 
+### Kept chats and settings of a removed installation
+
+Status: the move, the take-back and the first-start offer are built
+(`amplifier_web/windows_kept_data.py`). Nothing calls the move yet: uninstall
+still keeps the whole folder. The uninstall choice that uses it is a later
+change.
+
+Why the data leaves the installation folder. Setup installs only into a
+folder that is absent or empty, or that it classifies as its own unfinished
+attempt, and for such an attempt it removes all contents. So kept data inside
+the installation folder would stop a later installation or be deleted by it.
+"Keep my chats and settings" therefore moves the person's data folders into
+the sibling folder `<root>-kept` (for example `...\Local\Amplifier-kept`). A
+later setup run finds no folder and installs normally. No setup file changes.
+
+What moves. The exact top-level folders `shared`, `app`, `capture`,
+`ownership`, `import`, `workspace` and `export`, each with one rename on the
+same disk. Nothing is copied. When Windows refuses to rename a folder (it is
+another program's current folder, or a closing program holds a file in it),
+the entries inside move one by one into the folder's new place. An entry
+never replaces an entry. A link, or a file with one of these names, stays
+where it is and is reported.
+
+Program state inside the data. `app\updates` and `app\runtime` hold the app
+generations, the launch record and worker environments of the removed
+program. A new launcher refuses a launch record that names another launcher
+(`windows_service._launch_python`), so a kept set is `complete` only when both
+are gone. The module does not delete them itself: the caller passes its
+link-safe deleter. A set that still holds one of them is never offered.
+
+The record. `<root>-kept\amplifier-kept.json`, written as one complete
+private file: the installation folder, the newest app version that used the
+data, the time, one random transfer identity and a state.
+
+| State | Meaning | Who continues it |
+| --- | --- | --- |
+| `moving` | A move-out did not finish. | Only the uninstall that holds the same transfer identity in its own journal. Never offered. |
+| `complete` | Every data folder is moved and no program state is left. | Offered at a first start. A later uninstall with "keep" renames it whole to `<root>-kept-earlier-N` (N from 1 to 9) and never changes it. |
+| `adopting` | A take-back did not finish. | The next start finishes it before the app starts, without a second question. An uninstall finishes it before its own move-out. |
+
+A record that exists and cannot be read is not "no kept data". The person is
+told that kept data exists and cannot be read, and the app starts fresh only
+on the person's Yes.
+
+The first start of a later installation (`windows_consumer.launch`, after the
+installation check and before anything checks or writes a data folder):
+
+1. An `adopting` set of this folder is finished first.
+2. An installation that already holds data starts without a question.
+3. A set is offered only when all of these hold: the record is valid and
+   private and names exactly this folder; its state is `complete`; every kept
+   data folder is a private real folder; no top-level entry of the kept folder
+   is a link; `app\updates` and `app\runtime` are absent; the record's version
+   is not newer than the app that this launcher starts; every data folder of
+   this installation is absent or empty. Setup creates six of them, empty.
+4. One question. Yes takes the set back. No starts fresh; the set stays and
+   the person is not asked again, because the installation then holds data.
+5. Every set that is not offered is named once in one message: a set of
+   another folder, a newer set, an unfinished move, a set that holds a link,
+   and earlier sets. No chooser exists; that is a stated limit.
+6. A caller without a person (`--no-open`) gets a result and no question, and
+   the app does not start while a usable or unreadable set waits.
+
+The take-back. Before its first change, also when it continues, it runs every
+check of step 3 again and checks every folder that it will fill. A folder
+that holds anything stops it: nothing is merged and nothing is deleted. For
+each kept folder it removes the installation's empty folder and renames the
+kept folder into its place. Windows refuses to remove `workspace` at a first
+start, because it is the current folder of the launcher and of the program
+that started it. Then the kept entries move into that empty folder one by
+one; the record names that folder first, so that an interrupted fill can
+continue and still never replaces an entry. Last it retires the removed
+program's saved update status with the maintained repair step
+(`reset.reset_update_state`): an update that did not finish leaves a status
+in `app.sqlite3` that refuses every new message until that exact app proves
+itself, and that app is gone. The step copies the database first, into
+`app\reset-backups\kept-<transfer>-<time>`, and removes only that status.
+Chats, settings and accounts in the database stay.
+
+What the module deletes: empty folders and its own record. Nothing else.
+
+Limits. A person who never installs again keeps the kept folder. A kept set
+is tied to its installation folder, because saved paths inside name it. The
+native check in the `windows-local-connection` job uses real NTFS renames,
+another program's current folder, a held file, a junction and the private
+record on a Windows runner; the dialogs and the deleter are stand-ins, and no
+app, task or setup runs. A real start of the app on taken-back data remains
+clean-room acceptance.
+
 ## Process-local Proactor cleanup backport
 
 `windows_proactor.py` carries CPython gh-160429's socket-shutdown correction
