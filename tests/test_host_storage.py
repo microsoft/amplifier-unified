@@ -276,3 +276,58 @@ def test_new_app_can_checkpoint_with_pre_index_worker_foundation(tmp_path, monke
     messages = [{'role': 'user', 'content': 'Preserve this across the update'}]
     store.save('legacy-worker', messages, {})
     assert store.load('legacy-worker')[0] == messages
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='Legacy media checkpoint durability is qualified on POSIX only')
+@pytest.mark.parametrize('preserve_system', [False, True])
+def test_media_ack_uses_one_actual_save_and_preserves_nullable_provenance(tmp_path, monkeypatch, preserve_system):
+    from contextlib import closing
+    import io
+    from PIL import Image
+    from amplifier_foundation.session.checkpoint import CheckpointRefused
+    from amplifier_foundation.session.history import SessionHistoryStore
+
+    pixels = io.BytesIO()
+    Image.new('RGB', (2, 1), (12, 34, 56)).save(pixels, format='PNG')
+    original = pixels.getvalue()
+    store = SessionStore(tmp_path / 'sessions')
+    origin = {'kind': 'upload', 'session_id': 'root', 'id': 'admitted-upload',
+              'created_at': '2026-01-02T03:04:05+00:00', 'expires_at': None}
+    saves = []
+    save = SessionHistoryStore.save
+
+    def counted_save(history, *args, **kwargs):
+        saves.append(history.session_id)
+        return save(history, *args, **kwargs)
+
+    monkeypatch.setattr(SessionHistoryStore, 'save', counted_save)
+    with closing(store.media('root')) as media:
+        staged = media.ingest_sync(original, source_format='image-bytes', origin=origin, policy=None)
+        published = media.publish_sync(staged['staged_refs'], origin=origin, disposition='retain')
+        ref = published['refs'][0]
+        rows = [{'role': 'system', 'content': 'Regenerated instructions'},
+                {'role': 'user', 'content': [{'type': 'text', 'text': '[Session image ' + ref['sha256'] + ']'}],
+                 'metadata': {'experimental.media.v1': {'refs': [ref]}, 'owner_nullable': None}}]
+
+        with pytest.raises(ValueError):
+            media.resolve_ref(ref)
+        canonical = store.save('root', rows, {'status': 'idle'}, preserve_system=preserve_system)
+        receipt = store.acknowledge_media('root', canonical, media)
+        assert saves == ['root'], 'Acknowledging reachability must not checkpoint a second time'
+        assert canonical == store.load('root')[0]
+        assert canonical[-1]['metadata']['experimental.media.v1']['refs'][0]['provenance']['expires_at'] is None
+        assert canonical[-1]['metadata']['owner_nullable'] is None
+        assert receipt.verify()['kind'] == 'legacy-checkpoint-backed-v1'
+        with media.resolve_ref(ref) as source:
+            assert source.read() == original
+        with pytest.raises((ValueError, CheckpointRefused)):
+            media.acknowledge_checkpoint({'session_id': 'root', 'sha256': receipt.sha256})
+
+    # Persisted refs are data, not a resumable in-memory checkpoint grant.
+    with closing(store.media('root')) as resumed:
+        with pytest.raises(ValueError):
+            resumed.resolve_ref(ref)
+        store.acknowledge_media('root', canonical, resumed)
+        with resumed.resolve_ref(ref) as source:
+            assert source.read() == original
+    assert saves == ['root']
