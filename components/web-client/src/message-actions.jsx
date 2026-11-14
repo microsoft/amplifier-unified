@@ -15,6 +15,7 @@ import {PeerMessage,isPeerMessage} from './peer-message';
 import {VoiceWorkMessage} from './voice-work-message.jsx';
 import {isVoiceWorkMessage} from './voice-work-message.js';
 import {Markdown} from './markdown';
+import {externalAgentLabel,externalMessageAttribution,externalParticipants,isSharedExternalConversation} from './external-participants';
 
 export function newestMessageIds(messages){
  const latest=new Map();
@@ -39,11 +40,23 @@ export function completedTurnEnds(session){
 }
 
 export function StreamingMessage({session,state,embedded=false}){
+ if(isSharedExternalConversation(session))return <>{externalParticipants(session).map(agent=>{
+  const stream=session.externalStreams?.[agent.id];
+  const activity={connecting:'Connecting…',listening:'Considering…',starting:'Starting…',working:'Working…',running:'Working…',stopping:'Stopping…'}[agent.status];
+  const problem=agent.status==='unknown'?(agent.error||'Delivery could not be confirmed. Nothing was resent.'):agent.status==='error'?(agent.error||'Needs attention.'):null;
+  if(!stream?.text&&!activity&&!problem)return null;
+  return <article key={agent.id} className="a-message a-assistant" data-agent-id={agent.id} aria-label={`${externalAgentLabel(session,agent.id)} activity`}>
+   <p className="a-message-attribution">{externalAgentLabel(session,agent.id)}</p>
+   {stream?.text&&<div className="a-message-body"><Markdown text={stream.text}/></div>}
+   {activity&&<p className="a-caption" role="status">{activity}</p>}
+   {problem&&<p className="a-caption" role="alert">{problem}</p>}
+  </article>;
+ })}</>;
  if(!session?.streaming)return null;
- const message={id:session.streamingId||'streaming',role:'assistant',source:'amplifier',inputId:session.streamingInputId,streaming:true};
+ const message={id:session.streamingId||'streaming',role:'assistant',source:session.externalAgent?'external':'amplifier',inputId:session.streamingInputId,streaming:true};
  const body=<div className="a-message-body"><Markdown text={session.streaming}/></div>;
  return isVoiceWorkMessage(message)?<VoiceWorkMessage key={session.id+':'+message.id} message={message} session={session} state={state} embedded={embedded}>{body}</VoiceWorkMessage>:
-  <article className="a-message a-assistant">{body}</article>;
+  <article className="a-message a-assistant">{session.externalAgent&&<p className="a-message-attribution">{externalAgentLabel(session,session.externalAgent.activeAgentId||session.externalAgent.id)}</p>}{body}</article>;
 }
 
 export function MessageEntry({message:m,session,state,connected=true,statusCurrent=true,act,stamp,working,forkTurn,retry,discard,dispatch=act,expandedObservation=false,newest=false,omitMedia=false,workEmbedded=false}){
@@ -60,7 +73,8 @@ export function MessageEntry({message:m,session,state,connected=true,statusCurre
  const editLocked=saving||blocked||quoted||!!delivery&&delivery.status!=='failed';
  const external=m.role==='user'&&!!(m.attribution?.caption||['agent','peer','scheduler'].includes(m.inputOrigin)||m.via==='peer'||m.via==='schedule');
  const attribution=m.attribution?.caption||(m.inputOrigin==='agent'?'Sent by Amplifier':m.inputOrigin==='scheduler'?'Scheduled message':null);
- const label=m.role==='user'?(attribution||(external||m.nativeInputId?'Message':'Your message')):session.externalAgent?`${session.externalAgent.label||session.externalAgent.id} message`:'Amplifier message';
+ const participantAttribution=externalMessageAttribution(m,session);
+ const label=m.role==='user'?(attribution||(external||m.nativeInputId?'Message':'Your message')):session.externalAgent?`${participantAttribution} message`:'Amplifier message';
  const submit=async e=>{
   e.preventDefault();if(submitting.current||pendingEdit.isPending()||editLocked||!text.trim())return;
   submitting.current=true;setSaving(true);
@@ -84,6 +98,7 @@ export function MessageEntry({message:m,session,state,connected=true,statusCurre
   {m.role==='assistant'&&!session.externalAgent&&!m.displayOnly&&!editing&&!omitMedia&&<InlineMedia sessionId={session.id} messageId={m.id} mediaRevision={session.mediaRevision||0} linkedMediaAvailable={session.linkedMediaAvailable} configurationBusy={!!session.configurationBusy} dispatch={dispatch}/>}
   </div>
   <AssistantReactions message={m}/>
+  {participantAttribution&&<p className="a-message-attribution">{participantAttribution}</p>}
   {attribution&&<p className="a-message-attribution">{attribution}</p>}
   {!editing&&<InputStatus message={m} connected={connected} current={statusCurrent} act={act} sessionId={session.id} state={state}/>}
   {!editing&&<div className="a-message-actions" data-delivery-problem={!!delivery||undefined}>

@@ -32,11 +32,20 @@ def settle_stream(session):
     identity = session.pop('streamingId', None)
     input_id = session.pop('streamingInputId', None)
     if text:
+        author = {}
+        if session.get('externalAgent'):
+            from .external_conversation import addressed
+            original = next((row for row in reversed(session.get('messages', []))
+                             if row.get('inputId') == input_id and row.get('role') == 'user'), {})
+            if original or not session['externalAgent'].get('participants'):
+                binding = addressed(session, original.get('recipientAgentId'))
+                author = {'agentId': binding['id'], 'agentLabel': binding['label']}
         session.setdefault('messages', []).append({
             'id': str(uuid.uuid4()), 'role': 'assistant', 'text': '[Interrupted response]\n\n' + text, 'via': 'call' if str(input_id or '').startswith('voice:') else 'chat',
             'source': 'interrupted-stream', 'partial': True, 'createdAt': time.time(),
             **({'streamId': identity} if identity else {}),
             **({'inputId': input_id} if input_id else {}),
+            **author,
         })
 
 
@@ -519,6 +528,9 @@ for _action, (_, _spec) in ACTION_DEFINITIONS.items():
 
 
 ACTION_DEFINITIONS["session.create"][1]["properties"]["externalAgentId"] = string(100)
+ACTION_DEFINITIONS["session.create"][1]["properties"]["externalAgentIds"] = {
+    'type': 'array', 'items': string(100), 'minItems': 1, 'uniqueItems': True}
+ACTION_DEFINITIONS["conversation.send"][1]["properties"]["recipientAgentId"] = string(100)
 from .external_agent_settings import definitions as external_agent_definitions
 ACTION_DEFINITIONS.update(external_agent_definitions(schema, string))
 
@@ -669,9 +681,7 @@ class AppService:
             from .capacity import restore_observation
             restore_observation(session)
             restore(session)
-            if session.get('externalAgent', {}).get('activeInputId'):
-                session['externalAgent']['status'] = 'unknown'
-                self._delivery(session, session['externalAgent'].pop('activeInputId'), 'unknown')
+            self.external_conversations.restore(session)
             settle_stream(session)
             session["configurationBusy"]=False
             if session.get("bundleChange", {}).get("phase") == "working":
@@ -1013,6 +1023,7 @@ class AppService:
         index = self.projections.sessions(self.state)
         session = copy.deepcopy(row)
         session.pop('_externalAgentSource', None)
+        session.pop('_externalRoom', None)
         from .input_status import annotate as input_annotation, PREFIX as input_status_prefix
         session['messages'] = [input_annotation(row, message) for message in session.get('messages', [])]
         session['messageAnnotations'] = {key: value for key, value in session.get('messageAnnotations', {}).items()
@@ -1580,6 +1591,7 @@ class AppService:
                 from .capacity import restore_observation
                 restore_observation(session)
                 restore(session)
+                self.external_conversations.restore(session)
                 settle_stream(session)
                 restore_voice_usage(session)
                 interrupt_unfinished(session)
@@ -1713,7 +1725,7 @@ class AppService:
         self._require_workspace_scaffold(workspace)
         if not Path(workspace).is_dir():
             raise AppError("The workspace folder does not exist.")
-        if args.get('externalAgentId'):
+        if args.get('externalAgentId') or args.get('externalAgentIds'):
             return self.external_conversations.create(args, workspace)
         from .bundle_selection import defaults
         selected_bundle = defaults(self.data_dir, workspace, self.state["settings"].get("appBundle"))["effective"]
@@ -2458,7 +2470,7 @@ class AppService:
         prepared_draft_id = None
         from .managed_chats import is_managed, allocate, creation_identity
         managed_creation = action == 'session.create' and is_managed(args)
-        if action == 'session.create' and args.get('externalAgentId') and not (
+        if action == 'session.create' and (args.get('externalAgentId') or args.get('externalAgentIds')) and not (
                 command_id and self.db.execute('SELECT 1 FROM commands WHERE id=?', (command_id,)).fetchone()):
             # External chats use an explicitly chosen existing workspace. Check
             # before native creation can allocate a managed or new directory.
@@ -3482,12 +3494,16 @@ class AppService:
                     text = 'Please review the attached files.'
                 if not self.runtime and not session.get('externalAgent'):
                     raise AppError("The Amplifier runtime is unavailable.")
+                if args.get('recipientAgentId') and not session.get('externalAgent'):
+                    raise AppError('Choose a participant only in an external-agent conversation.')
                 stopped_generation = (recover_failed_generation(self, session, recovery_boundary)
                     if not session.get('externalAgent') and origin == 'ui' and not update_message and args.get('expectedGenerationId') is None else None)
                 # Ordinary input is conversation-addressed. Only explicit
                 # anchored callers consult the host's observed generation.
                 target_generation = (steering_target(session, args['expectedGenerationId'])
                     if not session.get('externalAgent') and args.get('expectedGenerationId') is not None else None)
+                from .external_conversation import is_shared
+                shared_room = is_shared(session)
                 input_id = command_id or str(uuid.uuid4())
                 from .chat_navigation import recent_activity, prepare_human_post, promote_human_post
                 # Origin is chosen by the host adapter, never role/via/action args.
@@ -3499,6 +3515,8 @@ class AppService:
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
                 message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), human_post=post_previous is not None,inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending'}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
                 message['interruptionRevision'] = session.get('interruptionRevision', 0)
+                if session.get('externalAgent'):
+                    self.external_conversations.capture_recipient(session, message, args.get('recipientAgentId'))
                 handoff = self.handoffs.execution(action, args, origin, command_id, caller_session_id)
                 if handoff is not None:
                     message['handoffOrigin'] = self.handoffs.lineage(handoff)
@@ -3515,17 +3533,25 @@ class AppService:
                     hold_message(self, session, message)
                     self._clear_sent_draft(session, message, text, args.get("preserveDraft", False))
                 elif not target_generation:
-                    preparing = session.get('preparation', {}).get('status') == 'preparing'
-                    self._activity(session, "runtime-setup" if preparing else "queued",
-                        (session['preparation'].get('detail') or 'Preparing this chat…') if preparing else "Your message is queued for Amplifier.",
-                        reset=session["status"] not in {"working", "starting"})
-                    session["status"] = "working"
-                    session.pop("error", None)
+                    if not shared_room:
+                        preparing = session.get('preparation', {}).get('status') == 'preparing'
+                        self._activity(session, "runtime-setup" if preparing else "queued",
+                            (session['preparation'].get('detail') or 'Preparing this chat…') if preparing else "Your message is queued for Amplifier.",
+                            reset=session["status"] not in {"working", "starting"})
+                        session["status"] = "working"
+                        session.pop("error", None)
                     if session.get('externalAgent'):
-                        ensure_turn(session,input_id,text)
-                        session['externalAgent']['activeInputId'] = input_id
+                        if not shared_room:
+                            ensure_turn(session,input_id,text)
+                        self.external_conversations.admit(session, message)
                 if not update_message:
-                    pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity, args.get('preserveDraft', False))))
+                    # Shared publication has no single native turn. Its owner
+                    # resolves participants under the lock; retain only this
+                    # accepted input's cancellation boundary across dispatch.
+                    dispatch_session = ({'id': session['id'], 'externalAgent': {'participation': 'shared'},
+                                         'interruptionRevision': session.get('interruptionRevision', 0)}
+                                        if shared_room else copy.deepcopy(session))
+                    pending.append((self._send, (dispatch_session, text, input_id, previous_activity, args.get('preserveDraft', False))))
             elif action == "conversation.retry":
                 from .message_delivery import find_message
                 session = self._session(args['sessionId'])

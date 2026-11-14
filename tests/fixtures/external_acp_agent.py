@@ -46,8 +46,9 @@ class Fixture:
         return ResumeSessionResponse()
 
     async def prompt(self, session_id, prompt, **kwargs):
-        text = ''.join(block.text for block in prompt)
-        self.record('prompt', sessionId=session_id, text=text)
+        text = prompt[-1].text
+        self.record('prompt', sessionId=session_id, text=text,
+                    **({'context': [block.text for block in prompt[:-1]]} if len(prompt) > 1 else {}))
         self.cancelled.clear()
         if text == 'drop-after-effect':
             os._exit(7)

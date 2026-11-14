@@ -36,7 +36,7 @@ test('a missing saved choice stays unavailable until the user explicitly chooses
   assert.equal(root.root.findAllByType('option').find(node=>node.props.value==='removed').children.join(''),'removed — unavailable');
   assert.equal(calls.length,1);
   await act(async()=>root.root.findByType('select').props.onChange({target:{value:''}}));
-  assert.deepEqual(calls[1][1].patch.newSessionDraft,{...state.view.newSessionDraft,externalAgentId:''});
+  assert.deepEqual(calls[1][1].patch.newSessionDraft,base.view.newSessionDraft);
  }finally{await act(async()=>root?.unmount())}
 });
 
@@ -89,5 +89,47 @@ test('disabled picker cannot change a draft or open settings; configuration navi
   await act(async()=>button(root,'Configure external agents').props.onClick());
   assert.equal(calls.length,2);assert.equal(calls[1][0],'view.update');
   assert.deepEqual(calls[1][1].patch.settingsExpanded,['external-agents']);
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('adding an independent second agent preserves the draft and cannot select a duplicate',async()=>{
+ let root;const calls=[],state={...base,view:{newSessionDraft:{...base.view.newSessionDraft,externalAgentId:'remote'}}};
+ const agents=[saved,{id:'second',label:'Second assistant'}];
+ const dispatch=async(action,args)=>{calls.push([action,args]);return action==='externalAgents.list'?result(agents):{accepted:true}};
+ try{
+  await act(async()=>{root=create(React.createElement(ExternalAgentPicker,{state,act:dispatch}))});
+  await act(async()=>button(root,'Add agent').props.onClick());
+  const extra=root.root.findByProps({'aria-label':'Additional agent 1'});
+  assert.equal(extra.findAllByType('option').find(node=>node.props.value==='remote').props.disabled,true);
+  await act(async()=>extra.props.onChange({target:{value:'remote'}}));assert.equal(calls.length,1);
+  await act(async()=>extra.props.onChange({target:{value:'second'}}));
+  assert.deepEqual(calls[1],['view.update',{patch:{newSessionDraft:{...base.view.newSessionDraft,externalAgentIds:['remote','second']}}}]);
+  assert.equal(calls.length,2,'Adding a participant does not launch an agent or create a conversation');
+  await act(async()=>root.update(React.createElement(ExternalAgentPicker,{state:{...state,view:{newSessionDraft:calls[1][1].patch.newSessionDraft}},act:dispatch})));
+  const captions=root.root.findAllByProps({className:'a-caption'}).map(node=>node.children.join('')).join(' ');
+  assert.match(captions,/shared chat/);assert.doesNotMatch(captions,/First message to|choose who replies next/);
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('a missing group member stays selected and choosing Amplifier explicitly clears the roster',async()=>{
+ let root;const calls=[],state={...base,view:{newSessionDraft:{...base.view.newSessionDraft,externalAgentId:'',externalAgentIds:['remote','missing']}}};
+ const dispatch=async(action,args)=>{calls.push([action,args]);return action==='externalAgents.list'?result([saved]):{accepted:true}};
+ try{
+  await act(async()=>{root=create(React.createElement(ExternalAgentPicker,{state,act:dispatch}))});
+  const extra=root.root.findByProps({'aria-label':'Additional agent 1'});
+  assert.equal(extra.props.value,'missing');
+  assert.equal(extra.findAllByType('option').find(node=>node.props.value==='missing').children.join(''),'missing — unavailable');
+  await act(async()=>root.root.findByProps({'aria-label':'Agent for new chat'}).props.onChange({target:{value:''}}));
+  assert.deepEqual(calls[1][1].patch.newSessionDraft,base.view.newSessionDraft);
+ }finally{await act(async()=>root?.unmount())}
+});
+
+test('removing a second participant returns to the ordinary single-agent draft',async()=>{
+ let root;const calls=[],state={...base,view:{newSessionDraft:{...base.view.newSessionDraft,externalAgentId:'',externalAgentIds:['remote','second']}}};
+ const dispatch=async(action,args)=>{calls.push([action,args]);return action==='externalAgents.list'?result([saved,{id:'second',label:'Second assistant'}]):{accepted:true}};
+ try{
+  await act(async()=>{root=create(React.createElement(ExternalAgentPicker,{state,act:dispatch}))});
+  await act(async()=>root.root.findByProps({'aria-label':'Additional agent 1'}).props.onChange({target:{value:''}}));
+  assert.deepEqual(calls[1][1].patch.newSessionDraft,{...base.view.newSessionDraft,externalAgentId:'remote'});
  }finally{await act(async()=>root?.unmount())}
 });
