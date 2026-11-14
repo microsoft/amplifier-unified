@@ -550,12 +550,21 @@ def command(name: str, data_dir=None):
         _scheduler("start", spec.sid, previous=value["xml"])
 
 
-def uninstall(data_dir=None) -> None:
+def uninstall(data_dir=None, *, progress=None) -> None:
+    """Stop the owned host normally, then remove its task. Absent is done.
+
+    `progress(name)` names the step that is about to run: `task-read`, `stop`,
+    `task-remove`. A caller that reports a failure uses the last name.
+    """
     if data_dir is None:
         raise WindowsServiceError("Windows service removal requires an explicit data directory.")
+    step = progress or (lambda name: None)
+    step("task-read")
     value, spec = _read(data_dir)
     if spec is not None:
+        step("stop")
         value = _stop(value, spec)
+        step("task-remove")
         result = _scheduler("remove", spec.sid, previous=value["xml"])
         if result["exists"]:
             raise WindowsServiceError("Task removal was not verified; reconcile status.")

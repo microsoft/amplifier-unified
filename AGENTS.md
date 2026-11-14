@@ -187,6 +187,10 @@ terminal. Keep explicit `CREATE_NO_WINDOW` at known call sites. After a late
 Ctrl+C; keep the explicit console control handler and the standard-handle
 restore. The stable launcher keeps the code that setup installed; an in-app
 update cannot change it.
+While a conversation worker is alive, Windows refuses a new or replaced file
+directly in a consumer installation folder (error 32); `app\config\services`
+still accepts writes. Launcher maintenance stops the app before such a write
+and removes the person's Start-menu and Apps-list entries last.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.

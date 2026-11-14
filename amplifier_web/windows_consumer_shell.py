@@ -3,6 +3,7 @@
 Native ShellLink COM and HKCU only: no PowerShell, administrator, machine PATH,
 trust import or external runtime. Unknown/colliding effects are retained, not
 silently overwritten. Removal unregisters this app and preserves user files.
+It can be repeated: entries that are already gone are skipped.
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import ctypes as C
 from ctypes import wintypes as W
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -246,9 +248,20 @@ def install(root, version):
 
 
 @contextmanager
-def removal(root):
+def removal(root, *, progress=None):
+    """Prepare removal of this installation's own entries; `finish` removes them.
+
+    Entering changes nothing. It checks and pins every entry that still exists,
+    so the caller can stop the app first and remove the entries last. An entry
+    that an earlier, interrupted removal already took away is skipped: a second
+    uninstall completes. An entry that differs from setup's record refuses.
+
+    `progress(name)` names the step that is about to run: `apps-entry`,
+    `shortcuts`, `receipt`.
+    """
     from .windows_files import address, directory
     from .deployment import write_private
+    step = progress or (lambda name: None)
     root = address(root)
     with directory(root, owned_root=root) as owned:
         row = json.loads(owned.read_private(FILE, limit=65536))
@@ -257,32 +270,63 @@ def removal(root):
     if (not isinstance(row, dict) or set(row) != {"schema", "root", "folder", "status", "links", "registry"}
             or type(row["schema"]) is not int or row["schema"] != 1
             or row["root"] != str(root) or row["folder"] != str(folder)
-            or row["status"] != "installed" or not isinstance(row["links"], dict)
+            or row["status"] not in {"installed", "removed"} or not isinstance(row["links"], dict)
             or set(row["links"]) != set(links) or not isinstance(row["registry"], dict)
             or row["registry"] != registration_values(root, row["registry"].get("DisplayVersion"))):
         raise ValueError("The Windows app entry receipt is incomplete; inspect before removal.")
+    result = {"shortcutsRemoved": True, "installedAppEntryRemoved": True, "userDataRetained": True}
+    if row["status"] == "removed":
+        # A completed earlier removal. Setup never recreates entries under this receipt.
+        yield lambda: dict(result)
+        return
+    finished = False
     with ExitStack() as stack:
-        owned = stack.enter_context(directory(folder, owned_root=folder))
-        removers = []
+        removers, commit = [], None
+        try:
+            owned = stack.enter_context(directory(folder, owned_root=folder))
+        except FileNotFoundError:
+            owned = None  # The whole Start-menu folder is already gone.
         # Keep ALL verified handles (deny WRITE/DELETE sharing) through effects.
-        for name, args in links.items():
+        for name, args in links.items() if owned else ():
+            if not (folder / name).exists():
+                continue
             with shell_link() as link:
                 if link.read(folder / name) != (str(python), args):
                     raise ValueError("A Windows shortcut target changed; no entries were removed.")
             # COM can open without DELETE sharing. Close it first, then pin the
             # exact audited bytes: a change between those reads is refused.
             removers.append(stack.enter_context(owned.removal_private(name, row["links"][name])))
-        commit = stack.enter_context(registry_change(root, row["registry"], remove=True))
+        try:
+            commit = stack.enter_context(registry_change(root, row["registry"], remove=True))
+        except FileNotFoundError:
+            pass  # The installed-app entry is already gone.
         def finish():
-            # Commit conflicts refuse before link/task removal. Later genuine I/O
-            # failures can leave partial effects; they do not imply rollback.
-            commit()
+            nonlocal finished
+            # The commit can refuse because another program edited the key; it
+            # runs before any shortcut is removed. Later genuine I/O failures
+            # can leave partial effects, which the next removal completes.
+            step("apps-entry")
+            if commit is not None:
+                commit()
+            step("shortcuts")
             for remove_link in removers:
                 remove_link()
+            finished = True
+            step("receipt")
             row["status"] = "removed"
-            write_private(root / FILE, json.dumps(row), owned_root=root)
-            return {"shortcutsRemoved": True, "installedAppEntryRemoved": True, "userDataRetained": True}
+            try:
+                write_private(root / FILE, json.dumps(row), owned_root=root)
+            except (OSError, ValueError, RuntimeError) as error:
+                # Every entry is gone. A receipt that still says "installed"
+                # only makes a later removal check for entries and find none.
+                return {**result, "receiptError": error}
+            return dict(result)
         yield finish
+    if finished:
+        try:
+            os.rmdir(folder)  # Only when empty; a file the person added stays.
+        except OSError:
+            pass
 
 
 def remove(root):

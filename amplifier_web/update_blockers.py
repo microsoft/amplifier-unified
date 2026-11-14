@@ -128,6 +128,26 @@ def _settings_hold(service, session, *, application=False, activity=None):
                  quiescent=True)
 
 
+def _conversation_working(session):
+    return session.get('status') in {'working', 'starting', 'stopping'} or (session.get('status') == 'ready' and
+        any(turn.get('phase') == 'running' for turn in session.get('execution', {}).get('turns', [])))
+
+
+def _worker_working(worker):
+    return worker.get('status') in {'starting', 'running', 'stopping', 'queued'}
+
+
+def working_sessions(service):
+    """Count conversations whose own or background work is running, queued or finishing.
+
+    The same two predicates as the update gate, and the same reads: a saved
+    execution record is opened only for a conversation whose status is `ready`.
+    The owner's uninstall asks this before a normal stop would interrupt work.
+    """
+    return sum(_conversation_working(row) or any(_worker_working(worker) for worker in row.get('workers', []))
+               for row in service.state.get('sessions', []))
+
+
 def assess(service, *, application=False, session_id=None):
     """One synchronous gate evaluation; diagnostic detail never grants recovery."""
     state = service.state
@@ -213,11 +233,10 @@ def assess(service, *, application=False, session_id=None):
                 # Support reports never include chat names, IDs, paths or values.
                 holds.append({'sessionRef': hashlib.sha256(sid.encode()).hexdigest()[:16],
                               **{key: hold[key] for key in ('quiescent', 'reasonCode', 'scope')}})
-        if session.get('status') in {'working', 'starting', 'stopping'} or (session.get('status') == 'ready' and
-                any(turn.get('phase') == 'running' for turn in session.get('execution', {}).get('turns', []))):
+        if _conversation_working(session):
             add('conversation', 'Conversation work is running or finishing', sid)
         for worker in session.get('workers', []):
-            if worker.get('status') in {'starting', 'running', 'stopping', 'queued'}:
+            if _worker_working(worker):
                 add('worker', 'Background worker work is running or queued', sid)
             elif worker.get('persistent') and worker.get('status') == 'idle':
                 add('worker', 'A persistent background worker is still open', sid)
