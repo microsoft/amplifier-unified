@@ -1205,6 +1205,39 @@ async def test_retry_after_restart_requires_explicit_action_and_not_outbox(recov
         await restored.close()
 
 
+async def test_cold_positive_dispatch_commits_original_receipt_and_survives_restart(recovery, tmp_path, monkeypatch):
+    app, _, _ = recovery
+    sid = app._session()['id']
+    original_texts = [(m['id'], m.get('text')) for m in app._session()['messages']]
+    await app.close()
+    app._test_closed = True
+    runtime = RecoveryRuntime()
+    runtime.evidence = 'accepted'
+    restored = AppService(tmp_path, runtime, workspace=tmp_path)
+    try:
+        with monkeypatch.context() as isolated:
+            isolated.setattr(restored.history, 'ensure_loaded', AsyncMock(side_effect=AssertionError('No native history refresh')))
+            checked = await restored.dispatch('conversation.delivery', {'sessionId': sid, 'inputId': 'original'}, command_id='cold-check')
+        assert checked['result']['delivery'] == 'accepted'
+        assert [(m['id'], m.get('text')) for m in restored._session(sid)['messages']] == original_texts
+        # Read another connection before shutdown can create a final checkpoint.
+        database = restored.db.execute('PRAGMA database_list').fetchone()[2]
+        with sqlite3.connect(database) as reader:
+            receipt = json.loads(reader.execute('SELECT receipt FROM commands WHERE id=?', ('original',)).fetchone()[0])
+            assert receipt['delivery'] == 'accepted'
+            assert reader.execute('SELECT 1 FROM commands WHERE id=?', ('cold-check',)).fetchone() is None
+        assert not runtime.sent and not runtime.retries and not runtime.started
+    finally:
+        await restored.close()
+    resumed = AppService(tmp_path, RecoveryRuntime(), workspace=tmp_path)
+    try:
+        checked = await resumed.dispatch('conversation.delivery', {'sessionId': sid, 'inputId': 'original'})
+        assert checked['result']['delivery'] == 'accepted'
+        assert [(m['id'], m.get('text')) for m in resumed._session(sid)['messages']] == original_texts
+    finally:
+        await resumed.close()
+
+
 async def test_unknown_input_not_saved_is_distinct_and_cannot_resend(recovery):
     app, runtime, _ = recovery
     args = {**recovery_args(app), 'inputId': 'missing'}

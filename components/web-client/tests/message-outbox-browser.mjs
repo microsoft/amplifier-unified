@@ -371,6 +371,11 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
  await historicalBubble.getByRole('button',{name:'Send this message again',exact:true}).click();
  await page.getByText('This earlier submission is still uncertain and cannot be sent again here. Use Check delivery for its original receipt. The saved message was kept.',{exact:true}).waitFor();
  assert.deepEqual(await outbox(),[historical]);assert.equal(calls.filter(call=>call.action==='conversation.send'&&call.id==='historical-input').length,0);
+ const legacyActions=calls.length;
+ await historicalBubble.getByRole('button',{name:'Close delivery item',exact:true}).click();
+ await historicalBubble.waitFor({state:'detached'});
+ assert.deepEqual(await outbox(),[{...historical,closed:true}],'Pre-change source fields need no migration to close');
+ assert.deepEqual(calls.slice(legacyActions),[],'Closing the legacy payload sends nothing');
  // The synthetic fixture now removes its seed, not a production recovery path.
  await page.evaluate(()=>sessionStorage.setItem('amplifier.messageOutbox.v1','[]'));await page.reload();await composer().waitFor();
  chat().externalAgent={id:'fixture-acp',name:'External text fixture'};
