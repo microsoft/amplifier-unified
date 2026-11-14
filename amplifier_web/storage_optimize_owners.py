@@ -105,7 +105,8 @@ class OwnerAdapters:
         native = row['sessionId']
         if not db.execute("SELECT 1 FROM sqlite_master WHERE name='history_local_rows'").fetchone():
             return None
-        found = db.execute('SELECT id FROM history_local_rows WHERE native_id=? LIMIT 2', (native,)).fetchall()
+        found = db.execute('SELECT id FROM history_local_rows WHERE native_project=? AND native_id=? LIMIT 2',
+                           (row['_project'], native)).fetchall()
         if len(found) != 1:
             return None
         source = self.app._session(found[0][0], hydrate=False)
@@ -116,6 +117,8 @@ class OwnerAdapters:
     async def preview(self, row, operation):
         if '_stamp' not in row:
             return row
+        if not operation['extractImages'] and not any(operation['cutoffs'].values()):
+            return {**row, 'status': 'held', 'reason': 'No image extraction or diagnostic expiry was selected'}
         if row['owner'] == 'foundation':
             try:
                 from .storage_optimize_canonical import preview
@@ -127,6 +130,7 @@ class OwnerAdapters:
         if source is None or row['kind'] != 'root':
             return {**row, 'reason': 'Writer exclusion for this historical or worker capture is unqualified'}
         row['_sourceId'] = source['id']
+        row['_sourceBinding'] = [source.get('executionRevision', 0), source.get('interruptionRevision', 0)]
         if operation['extractImages'] and any(operation['cutoffs'].values()):
             return {**row, 'status': 'held', 'reason':
                 'Combined image extraction and diagnostic expiry await both qualified stages; neither choice was silently dropped'}

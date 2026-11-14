@@ -38,6 +38,12 @@ def hold_replacement(db, path, operation_id, witness):
     path = str(path)
     old = db.execute('SELECT operation_id,value FROM capture_maintenance WHERE path=?', (path,)).fetchone()
     encoded = json.dumps(witness, sort_keys=True)
+    completed = db.execute('SELECT value FROM capture_rebindings WHERE path=? AND operation_id=?',
+                           (path, operation_id)).fetchone()
+    if completed:
+        if json.loads(completed[0]) != witness:
+            raise CaptureDrift('Completed capture replacement identity changed')
+        return  # Rebind's exact completed receipt owns the later readback.
     if old and tuple(old) != (operation_id, encoded):
         raise CaptureDrift('Another capture replacement is unresolved')
     if old:
@@ -49,9 +55,37 @@ def hold_replacement(db, path, operation_id, witness):
         raise CaptureDrift('Capture source is not an owned regular file')
     if stamp.st_size != witness['old']['bytes'] or _file_digest(source) != witness['old']['sha256'] or source.lstat() != stamp:
         raise CaptureDrift('Capture source changed before replacement admission')
+    if stamp.st_size:
+        with source.open('rb') as stream:
+            stream.seek(-1, 2)
+            if stream.read(1) != b'\n':
+                raise CaptureDrift('Capture has an unterminated tail; replacement is held')
     cursor = db.execute('SELECT offset,inode FROM captures WHERE path=?', (path,)).fetchone()
-    if cursor and cursor[0] != witness['old']['bytes']:
+    if cursor and (cursor[0] != witness['old']['bytes'] or cursor[1] != stamp.st_ino):
         raise CaptureDrift('Capture indexing has not reached the qualified source boundary')
+    # Refuse stale/legacy references BEFORE diagnostic metadata is expired or
+    # sidecars unlinked, not merely during postcommit index repair.
+    with source.open('rb') as stream:
+        for raw, in db.execute("SELECT data FROM records WHERE json_extract(data,'$.\"$event\"')=?", (path,)):
+            reference = json.loads(raw)
+            if (type(reference.get('offset')) is not int or type(reference.get('bytes')) is not int
+                    or reference['offset'] < 0 or reference['bytes'] <= 0
+                    or reference['offset'] + reference['bytes'] > stamp.st_size
+                    or not isinstance(reference.get('sha256'), str)):
+                raise CaptureDrift('Legacy or invalid capture references need qualification before replacement')
+            stream.seek(reference['offset'])
+            remaining = reference['bytes']
+            digest = hashlib.sha256()
+            while remaining:
+                block = stream.read(min(remaining, 65536))
+                if not block:
+                    raise CaptureDrift('Indexed capture reference extends beyond source')
+                digest.update(block)
+                remaining -= len(block)
+            if digest.hexdigest() != reference['sha256']:
+                raise CaptureDrift('Indexed capture reference is stale before replacement')
+    if source.lstat() != stamp:
+        raise CaptureDrift('Capture source changed during reference admission')
     db.execute('INSERT OR IGNORE INTO capture_maintenance VALUES(?,?,?)', (path, operation_id, encoded))
 
 

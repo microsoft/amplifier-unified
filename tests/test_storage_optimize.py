@@ -260,3 +260,77 @@ async def test_real_service_dispatch_exposes_preview_and_exact_command_read(tmp_
         assert result['result']['operationId']
     finally:
         await service.close()
+
+
+@pytest.mark.parametrize('change', ['native', 'workspace', 'execution'])
+def test_source_writer_fence_binds_frozen_path_and_revision(owner, tmp_path, change):
+    from amplifier_web.storage_optimize_retention import source_owner
+    from amplifier_web.session_files import capture_dir
+    source = {'id': 'root', 'workspace': str(tmp_path), 'executionRevision': 0, 'interruptionRevision': 0}
+    owner.app._session = lambda *args, **kwargs: source
+    row = {'_sourceId': 'root', 'sessionId': 'root', '_sourceBinding': [0, 0],
+           '_path': str(capture_dir(str(tmp_path), 'root') / 'events.jsonl')}
+    assert source_owner(owner.app, row) is source
+    if change == 'native':
+        source['runtimeSessionId'] = 'changed'
+    elif change == 'workspace':
+        source['workspace'] = str(tmp_path / 'moved')
+    else:
+        source['executionRevision'] += 1
+    with pytest.raises(ValueError, match='changed'):
+        source_owner(owner.app, row)
+
+
+async def test_repeated_cancellation_does_not_release_owned_thread_early():
+    import threading
+    from amplifier_web.storage_optimize_retention import settle_owned
+    started, release, finished, cancel_flag = (threading.Event() for _ in range(4))
+    def effect():
+        started.set()
+        release.wait()
+        finished.set()
+    task = asyncio.create_task(settle_owned(effect, cancel_flag))
+    while not started.is_set():
+        await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert cancel_flag.is_set() and not task.done()
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done() and not finished.is_set()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert finished.is_set()
+
+
+async def test_discovery_uses_native_roots_and_keeps_worker_coverage(owner, tmp_path, monkeypatch):
+    import json
+    from amplifier_web.storage_optimize_owners import OwnerAdapters
+    from amplifier_web.session_files import sessions_dir
+    home = sessions_dir(str(tmp_path))
+    for identity, parent in (('root', None), ('child', 'root'), ('other', None)):
+        directory = home / identity
+        directory.mkdir(parents=True)
+        (directory / 'metadata.json').write_text(json.dumps({'parent_id': parent}))
+        (directory / 'transcript.jsonl').write_text('{"role":"user","content":"original"}\n')
+    unrelated_cwd = tmp_path / 'unrelated-cwd'
+    unrelated_cwd.mkdir()
+    monkeypatch.chdir(unrelated_cwd)
+    adapter = OwnerAdapters(owner.app)
+    operation = {'scope': 'current', '_workspace': str(tmp_path), '_nativeId': 'root'}
+    rows = [row async for row in adapter.discover(operation)]
+    assert {(row['sessionId'], row['kind']) for row in rows} == {('root', 'root'), ('child', 'worker')}
+    operation['scope'] = 'workspace'
+    assert {row['sessionId'] async for row in adapter.discover(operation)} == {'root', 'child', 'other'}
+    operation.update(scope='all', _workspace=None)
+    assert {row['sessionId'] async for row in adapter.discover(operation)} == {'root', 'child', 'other'}
+
+
+async def test_source_accounting_keeps_unknown_coverage_unknown(owner):
+    value = await preview(owner)
+    identity = value['operationId']
+    owner._file(identity, 1, {'sessionId': '0', 'kind': 'root', 'status': 'held', 'bytes': None})
+    assert owner.read('user', identity)['summary']['bytes']['source'] is None
+    owner._file(identity, 1, {'sessionId': '0', 'kind': 'root', 'status': 'held', 'bytes': 100})
+    assert owner.read('user', identity)['summary']['bytes']['source'] == 300

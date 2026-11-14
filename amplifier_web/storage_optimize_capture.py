@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 from pathlib import Path
 import threading
 
 from .capture_index import CaptureDrift, hold_replacement, rebind_replaced_capture
-from .storage_optimize_retention import file_hash
+from .storage_optimize_retention import file_hash, source_owner, settle_owned
 
 
 def operation_directory(row, operation):
@@ -70,7 +69,7 @@ async def apply(app, row, operation, *, resume=False, media=None):
     loop = asyncio.get_running_loop()
     async with app.lock:
         check(app, operation.get('_authority'))
-        source = app._session(row['_sourceId'], hydrate=False)
+        source = source_owner(app, row)
         boundary = app.runtime.stopped_boundary(source)
         boundary.__enter__()
     try:
@@ -79,6 +78,7 @@ async def apply(app, row, operation, *, resume=False, media=None):
                 async with app.lock:
                     current = owner(app)._get(operation['operationId'], operation['_owner'])
                     check(app, current.get('_authority'))
+                    source_owner(app, row)
                     if cancelled.is_set() or current['status'] != 'applying':
                         raise CaptureDrift('Historical conversion was cancelled or stopped')
             def poll():
@@ -115,13 +115,7 @@ async def apply(app, row, operation, *, resume=False, media=None):
                                             record_mapping(directory, journal))
                 return journal
 
-            worker = asyncio.create_task(asyncio.to_thread(perform))
-            try:
-                journal = await asyncio.shield(worker)
-            except asyncio.CancelledError:
-                cancelled.set()
-                await asyncio.gather(worker, return_exceptions=True)
-                raise
+            journal = await settle_owned(perform, cancelled)
             accounting = journal['accounting']
             return {**row, 'status': 'completed', 'reason': 'Image copies externalized; exact original recovery generation retained',
                     '_captureOperation': str(directory),
