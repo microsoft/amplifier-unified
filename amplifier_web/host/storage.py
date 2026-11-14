@@ -142,11 +142,8 @@ class SessionStore:
         """Open a fresh owner-bound store; callers must close its lifetime lock."""
         from amplifier_foundation.session.media import MediaPolicy, SessionMediaStore
         from amplifier_foundation.session.checkpoint import verified_checkpoint_refs
-        from ..attachments import MAX_BYTES, MAX_FILES
-        from ..output_media import MAX_PIXELS
         return SessionMediaStore(self.directory(session_id).absolute() / 'media', session_id,
-                                 policy=MediaPolicy(max_bytes=MAX_BYTES, max_pixels=MAX_PIXELS,
-                                                    max_images=MAX_FILES),
+                                 policy=MediaPolicy(),
                                  checkpoint_verifier=verified_checkpoint_refs,
                                  policy_verifier=policy_verifier, read_only=read_only,
                                  source_read_verifier=source_read_verifier,
