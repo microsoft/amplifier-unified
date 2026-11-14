@@ -52,7 +52,7 @@ def library(monkeypatch):
     lib = SimpleNamespace(
         export_repository_snapshot=record('snapshot', Value(snapshot_commit='exact', snapshot_tree='tree', archive_sha256=hashlib.sha256(b'source').hexdigest())),
         launch_id=record('identity', 'owned'),
-        launch=record('launch', Value(id='owned', state='running', services=[])),
+        launch=record('launch', Value(id='owned', state='running', services=[], urls=[])),
         push_files=record('push', Value()),
         execute=record('execute', Value(stdout='ok', stderr='', exit_code=0)),
         status=record('status', Value(id='owned', state='stopped', services=[])),
@@ -1512,3 +1512,17 @@ def test_retention_storage_refusal_precedes_exports_and_removal(library, tmp_pat
     assert result['removal']['phase'] == 'prepare-retention'
     assert not worker.removal_directory(value).exists()
     assert not any(name in {'export', 'destroy'} for name, *_ in calls)
+
+
+@pytest.mark.parametrize('damage', ['missing', 'changed'])
+def test_selected_artifact_disposal_requires_retained_original_source(library, tmp_path, monkeypatch, damage):
+    _, calls = library
+    value = {**payload(tmp_path, 'remove'), 'preserveSource': False}
+    if damage == 'missing':
+        (tmp_path / 'source.tar').unlink()
+    else:
+        (tmp_path / 'source.tar').write_bytes(b'changed')
+    result = removal_main(monkeypatch, value)
+    assert not result['ok']
+    assert result['removal']['destroyEffect'] == 'not_dispatched'
+    assert not any(name == 'destroy' for name, *_ in calls)

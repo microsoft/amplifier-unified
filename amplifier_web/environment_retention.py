@@ -284,8 +284,8 @@ def filter_incus_stream(stream, destination, identity, *, selections=SELECTION, 
             for selection in selections]
 
 
-def verify_artifacts(archives):
-    """Artifacts-only evidence is never a removal or workspace-retention grant."""
+def verify_artifacts(archives, *, publish=True):
+    """Verify selected evidence; the owner separately authorizes disposal."""
     if len(archives) != 1 or archives[0].get('source') != '/artifacts':
         raise ValueError('Exactly the artifacts filesystem must be retained.')
     archive = archives[0]
@@ -297,10 +297,8 @@ def verify_artifacts(archives):
     archive.update(bytes=size, sha256=checksum, logicalBytes=logical, verified=True)
     result = {'archiveBytes': size, 'logicalBytes': logical, 'format': 'tar',
               'selection': ['/artifacts'], 'verified': True}
-    with (path.parent / 'artifacts-retention.json').open('x') as output:
-        json.dump(result, output)
-        output.flush()
-        os.fsync(output.fileno())
+    if publish:
+        publish_record(path.parent / 'artifacts-retention.json', result)
     return result
 
 

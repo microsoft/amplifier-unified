@@ -1,4 +1,4 @@
-"""Runner policy, exact selection, and lifecycle failure boundaries."""
+"""Incus-only certification, retained references and lifecycle failure boundaries."""
 import copy
 import hashlib
 import io
@@ -37,8 +37,11 @@ def app(tmp_path, monkeypatch):
     new = install('b' * 24, NEW)
     new['runnerCandidate'] = True
     value.smart_tools.install = AsyncMock(return_value=new)
-    raw = {'enabled': True, 'installationId': old['id'], 'commit': OLD,
-           'dockerHost': 'unix:///owned/docker.sock'}
+    from amplifier_web import incus_environment_worker
+    monkeypatch.setattr(incus_environment_worker, 'validate_configuration', lambda value: value)
+    raw = {'enabled': True, 'installationId': old['id'], 'commit': OLD, 'backend': 'incus',
+           'incus': {'project': 'owned', 'image': 'a' * 64, 'configDir': str(tmp_path / 'client'),
+                     'maxRunning': 0, 'maxInstances': 0, 'minFreeBytes': 0}}
     private.write_json(tmp_path / 'test-environments.json', raw)
     receipt = {'id': 'c' * 32, 'state': 'completed', 'priorConfiguration': None,
                'installationId': old['id'], 'candidateConfiguration': raw,
@@ -643,7 +646,7 @@ async def test_same_package_qualified_on_new_backend_keeps_first_owner_proof(app
     first = await updates.stage(app, source(app))
     await updates.advance(app, first['runnerUpdate'])
     first_config = environments.configuration(app)[0]
-    other = {**initial, 'dockerHost': 'unix:///owned/other.sock'}
+    other = {**initial, 'incus': {**initial['incus'], 'project': 'other'}}
     private.write_json(app.data_dir / 'test-environments.json', other)
     private.write_json(private.root(app) / ('e' * 32 + '.json'), {
         'id': 'e' * 32, 'state': 'completed', 'priorConfiguration': None,
@@ -673,46 +676,16 @@ async def test_passive_inventory_without_posix_private_file_capabilities(tmp_pat
     assert 'not been checked' in row['detail']
 
 
-@pytest.mark.parametrize('changed', [None, 'host-mount', 'extra-capability', 'extra-bind'])
-def test_native_docker_inspection_named_volumes_and_normalized_capabilities(monkeypatch, changed):
+def test_docker_has_no_target_local_isolation_certifier(monkeypatch):
     from amplifier_web import managed_runner_isolation as isolation
     from amplifier_web import test_environment_worker as worker
     from amplifier_web import test_environment_profiles as profiles
     row = {'profileId': 'linux-python', 'resourceRequest': profiles.freeze('linux-python'),
            'sessionId': 'owner', 'launchOperationId': 'operation', 'universeId': 'test-owned',
            'backendIdentity': {'daemon': 'daemon'}}
-    limits = profiles.resources(row['profileId'], row['resourceRequest'])
-    owner = {'io.amplifier.root-owner': 'owner', 'io.amplifier.operation-id': 'operation',
-             'com.docker.compose.project': 'test-owned'}
-    mounts = [{'Name': 'owned-' + str(i), 'Type': 'volume', 'Destination': value}
-              for i, value in enumerate(['/workspace', '/artifacts', '/var/lib/unified-jobs'])]
-    settings = {'Privileged': False, 'ReadonlyRootfs': True, 'CapDrop': ['ALL'],
-                'CapAdd': ['CAP_CHOWN', 'CAP_KILL', 'CAP_SETGID', 'CAP_SETUID'],
-                'SecurityOpt': ['no-new-privileges:true'],
-                'Binds': [item['Name'] + ':' + item['Destination'] + ':rw' for item in mounts],
-                'Memory': limits['memoryMiB'] * 1024**2, 'NanoCpus': int(limits['cpus'] * 10**9),
-                'PidsLimit': limits['pids'], 'ShmSize': limits['shmMiB'] * 1024**2,
-                'Tmpfs': {'/tmp': 'rw,noexec,nosuid,size=' + str(limits['tmpMiB'] * 1024**2)}}
-    if changed == 'host-mount':
-        mounts[0]['Type'] = 'bind'
-    if changed == 'extra-capability':
-        settings['CapAdd'].append('CAP_SYS_ADMIN')
-    if changed == 'extra-bind':
-        settings['Binds'].append('/private:/private:rw')
-    container = {'Config': {'Labels': owner}, 'HostConfig': settings, 'Mounts': mounts,
-                 'NetworkSettings': {'Networks': {'owned-network': {}}}}
-    def docker(payload, *args):
-        if args[0] == 'info': return {'ID': 'daemon'}
-        if args[0] == 'container': return {'ID': 'container'}
-        if args[0] == 'inspect': return [container]
-        if args[0] == 'volume': return [{'Labels': owner, 'Options': {}}]
-        if args[0] == 'network': return [{'Labels': owner, 'Internal': True}]
-        raise AssertionError(args)
-    monkeypatch.setattr(worker, 'docker_json', docker)
-    if changed:
-        with pytest.raises(ValueError): isolation.inspect({'backend': 'docker'}, '.', row)
-    else:
-        assert isolation.inspect({'backend': 'docker'}, '.', row)['hostMounts'] is False
+    monkeypatch.setattr(worker, 'docker_json', lambda *a: pytest.fail('Docker certification scan'))
+    with pytest.raises(ValueError, match='not target-local certification'):
+        isolation.inspect({'backend': 'docker'}, '.', row)
 
 
 async def test_allowlisted_new_generation_still_requires_exact_runtime_and_retained_proof(app, monkeypatch):

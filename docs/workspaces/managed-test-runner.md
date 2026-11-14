@@ -8,15 +8,15 @@ lifetime of an accepted check.
 ## Setup and readiness
 
 `workspace.environments.setup` defaults to an existing Docker service and
-installs the exact qualified deterministic tool dependencies into app-owned
-storage. This is the Compose-based **Smart Tool DTU** library, not the legacy
+reuses an installed maintained DTU Smart Tool, or installs it through ordinary
+Smart Tool package handling. This is the Compose-based **Smart Tool DTU** library, not the legacy
 Incus bundle or a raw CLI replacement for host controls. Choose `backend: incus`
 explicitly for specialized native workflows. Registered remote machines remain
 Incus-only; remote Docker registration is not supported. A default never converts
 an existing backend, resource, request or unknown outcome.
 
 Setup accepts a backend choice and stable request identity, never an
-arbitrary executable, image, socket, command or credentials. Setup does not
+arbitrary executable, socket, command or credentials. Setup does not
 install a container daemon, alter firmware, restart shared services or configure
 a model provider. Missing platform or backend requirements are reported before
 an environment is launched.
@@ -29,19 +29,19 @@ discovery and result reads do not request configuration authority.
 
 Setup retains its identity and phase before effects. Repeating a request returns
 its retained result; interrupted effects are observed, never blindly repeated.
-Ready requires an actual backend probe. Readiness includes its observation time
+Ready requires an actual daemon/Compose and image observation, not a disposable
+Docker certification guest. Readiness includes its observation time
 and does not claim every project's dependencies are prepared. Upgrading a backend
 does not replace the retained backend of an existing environment.
 
 ## Runner update policy
 
-The bootstrap revision in `task_environments.DTU_COMMIT` is a reviewed starting
-point, not the active installation's update policy. New setup records its
-app-owned moving-source provenance. The existing updater installs later exact
-commits separately and requires target-local lifecycle proof before selecting
-them. Do not add a newer commit to the historical static allowlist: a package
-import or Docker image probe does not qualify its library, dependencies or
-cleanup. Explicit pins and older retained installations are unchanged.
+Docker trusts the maintained `digital-twin-universe` distribution from
+`microsoft/amplifier-smart-tool-digital-twin-universe`, imported as
+`digital_twin_universe`. There is no per-operation whole-venv hash, runtime
+bytecode census, historical commit allowlist or target-local qualify/promote
+gate on this path. Source revision, package and image provenance remain ordinary
+installation evidence. This trust choice does not make containers an OS sandbox.
 
 App-managed runner packages follow their declared moving upstream source under
 the global update preference. A resolved commit is an installation identity,
@@ -49,25 +49,20 @@ not a standing update pin. Explicit user pins remain explicit. Existing
 app-generated pins can be migrated only with an owned setup receipt establishing
 their origin; matching a package name or a familiar commit is insufficient.
 
-A runner update installs separately and qualifies the exact package,
-dependencies, adapter protocol and configured execution target before selection.
-The qualification includes a task-owned source snapshot and actual offline
-execution, result retention and owned cleanup. Matching a version number or a
-self-reported schema does not qualify a runner. Updating package code must not
-rerun host setup, alter a daemon/project/network, or reset operator limits.
+Docker uses ordinary Smart Tool installation/update lineage for future checks,
+not another scheduler or certification journal. Updating code must not rerun host
+setup, alter a daemon/project/network, or reset operator limits. A retained old
+Docker qualification attempt cannot restart its probe or promote its candidate;
+its previous results, resources and unknown effects stay inspectable.
 
 Selection is an atomic change for future accepted checks. Existing jobs,
 environments, unknown outcomes and rollback references retain their exact
 installation, controller, configuration and execution target. A lost reply or
 restart reconciles the saved operation; it does not repeat a check or replace an
 unknown environment. Old packages remain available until all references are
-settled. Each registered machine qualifies its own configured backend; a probe
-on another machine is not acceptance evidence.
-
-The updater reports a failed qualification plainly and continues using the
-previous runner. Unsupported configured installations remain visible as
-owner-managed or explicitly pinned; they must not be reported as current merely
-because no automatic update path is implemented.
+settled. Explicit Incus and registered-machine enrollment retain their existing
+qualification and exact controller/engine bindings. A Docker default never
+converts those routes or claims fresh native-platform acceptance.
 
 ### Incus engine generations
 
@@ -100,28 +95,55 @@ unsupported; passive Updates inventory still works without POSIX modules.
 
 ## Prepared profiles
 
-`linux-python` remains available for short checks without project preparation.
-`python-project` and `browser-test` prepare locked project dependencies from the
-exact copied source. The browser profile includes Chromium and an isolated X11
-display capability, with a longer advertised execution budget. Capabilities name
-the supported profile, timeout and resource limits; unsupported lockfiles or
-dependencies fail before the check starts.
+For Docker, `linux-python`, `python-project`, `browser-test` and `app-preview`
+are resource presets over ordinary Compose. Pass `composeFile` relative to the
+selected source for an editable trusted Compose profile, including custom images,
+build contexts and loopback published ports. Build inputs are copied source,
+not writable original mounts. The twin must provide Python 3 and run its
+supervisor as root; test commands run as an unprivileged user. Browser dependencies
+and app launch use the profile's normal image/build/dependency commands rather
+than a second host-owned recipe language. Incus retains its prepared profiles.
 
 The normal path is one queued check. When admitted, the host freezes the Git
-working area, prepares its dependencies and starts the test environment. It does
+working area and starts the test environment. It does
 not require a user or agent to hand-author private backend configuration or
-manually build an image. Preparation runs separately with network access needed
-for dependency retrieval, fixed host-owned recipes, no original writable source
-mounts and no inherited provider credentials. Test execution is offline. A
+manually build an image. Docker preserves normal network access and build cache.
+`offline: true` explicitly requests internal networks; it is not an implicit
+credential or host-access grant. There are no inherited provider credentials. A
 private dependency that needs unavailable authentication is a preparation failure,
 not permission to reuse an unrelated host environment.
 
-Preparation records the source and lockfile hashes, recipe identity, dependency
-inventory, exact image identity, phase and owned builder. These are evidence,
-not permission to substitute an image by name. Temporary builders and prepared
-images have explicit owners and cleanup outcomes; failed or unknown cleanup is
-not hidden as a successful check. Repeated preparation must not accumulate
-unowned images or silently replay an interrupted build.
+Keep useful logs, reports, generated patches and build outputs in `/artifacts`.
+New Docker copies retain that selected evidence and the original source snapshot.
+`preserveSource: true` explicitly adds the complete guest workspace export; a
+multi-GB source export is not a mandatory teardown prerequisite for a disposable
+copy. Old owners keep their original preservation contract. Cleanup failure is
+reported separately from the test result and cannot become a passing check.
+
+## Preview and Reality Check
+
+The same environment may be retained for interactive preview instead of removed
+after a queued check. `app-preview` publishes a loopback port 8000; a custom
+Compose profile may declare its own `x-dtu.urls`. Start the app with its normal
+command, then use the actual returned reachable URL. Stop and remove remain
+explicit owner-scoped actions.
+
+Reality Check's `check_software(request=..., target=<reachable URL>,
+keep_running=True)` can inspect that endpoint. Unified keeps DTU lifecycle
+ownership; Reality Check cancellation is not teardown. A private DTU ID alone
+does not attach Reality Check's separate interpreter/state root. Signature and
+endpoint interoperability are deterministic evidence, not a model/browser
+campaign or an equivalent package revision merely because semver matches.
+
+Dirty local Git and linked worktrees use DTU's maintained snapshot/export path.
+It copies current tracked bytes, nonignored untracked files, deletions, modes and
+link text without host `.git`, hooks, configuration or credentials. Git-derived
+version builds instead need DTU's explicit repository-publishing path or an
+honest version override. A synthetic dirty snapshot is not the candidate SHA:
+select the actual rewritten ref when installing by Git URL, or use an artifact
+build and verify the installed sentinel outside the source/PYTHONPATH. Old tags
+and original SHAs still mean their original bytes. Unsupported submodules or
+colliding explicit repository basenames require correction, not HEAD fallback.
 
 ## Durable execution
 
@@ -155,7 +177,7 @@ Windows, WSL or a hosted-runner path is supported. Interactive access to an app
 inside the test environment requires a separately qualified preview route;
 headless browser tests inside the environment do not establish that capability.
 
-Executable bytecode is part of a dynamic runtime's exact identity, including
+For explicit Incus qualification, executable bytecode is part of a dynamic runtime's exact identity, including
 cached and sourceless Python modules. Managed helper and snapshot exports disable
 bytecode writes so normal use does not alter the qualified generation. The
 registered controller runs only the source bytes in its retained verified

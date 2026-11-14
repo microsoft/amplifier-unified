@@ -55,7 +55,7 @@ def definitions(schema, string):
     return {'workspace.environments.setup': (
         'Set up this app’s managed Smart Tool runner on an already installed local Docker daemon by default. '
         'Choose Incus explicitly for specialized native or registered-machine workflows. Existing bindings never migrate. '
-        'Downloads the approved runner and base image, verifies a disposable offline check, and saves private app configuration. '
+        'Reuses the installed DTU Smart Tool or installs it normally, checks Docker/Compose and the base image, and saves private app configuration. '
         'Does not install a daemon, change system settings, or adopt other environments. Keep requestId stable; uncertain effects never replay.',
         schema(fields, [key for key in fields if key != 'backend'])),
         'workspace.environments.setup.reconcile': ('Inspect the original setup request and settle proven saved configuration or cleanup without rerunning setup.', schema({key: value for key, value in fields.items() if key != 'backend'}, [key for key in fields if key != 'backend'])),
@@ -105,12 +105,20 @@ def write_json(path, value):
         Path(temporary).unlink(missing_ok=True)
 
 
+def prepared(record):
+    # New Docker setup has no certification guest. Only its own explicit saved
+    # observation settles that path; old uncertain probes remain old probes.
+    proof = record.get('proof', {})
+    return proof.get('probeRemoved') is True or (
+        record.get('backend') == 'docker' and proof.get('configurationReady') is True)
+
+
 def public(record):
     return {**{key: record[key] for key in ('id', 'state', 'phase', 'detail', 'backend', 'createdAt', 'updatedAt', 'proof') if key in record},
             **({'cleanup': {key: value for key, value in record['cleanup'].items()
                             if key not in {'actor', 'authority'}}} if 'cleanup' in record else {}),
             **{key: record['intent'][key] for key in ('sessionId', 'workspaceId')},
-            'canComplete': record.get('state') in {'outcome_unknown', 'failed'} and bool(record.get('candidateConfiguration') and record.get('proof', {}).get('probeRemoved')) and not record.get('cleanup')}
+            'canComplete': record.get('state') in {'outcome_unknown', 'failed'} and bool(record.get('candidateConfiguration') and prepared(record)) and not record.get('cleanup')}
 
 
 def executable(name):
@@ -241,9 +249,11 @@ async def readiness(app, *, force=False):
         if (read_json(Path(app.data_dir) / 'test-environments.json') != raw
                 or test_capacity_settings.apply(app, config) != effective):
             return {'status': 'unavailable', 'reason': 'The runner or its capacity settings changed during inspection. Refresh its status.'}
-        proof_path = root(app, create=False) / ('verified-' + hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest() + '.json')
-        proof = read_json(proof_path)
-        verified = bool(proof and proof.get('configuration') == raw and proof.get('proof', {}).get('probeRemoved'))
+        verified = config.get('backend', 'docker') == 'docker'
+        if not verified:
+            proof_path = root(app, create=False) / ('verified-' + hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest() + '.json')
+            proof = read_json(proof_path)
+            verified = bool(proof and proof.get('configuration') == raw and proof.get('proof', {}).get('probeRemoved'))
         value = {'status': 'ready' if verified else 'configured', 'reason': 'The configured runner and approved base image are reachable. Each project still needs its own dependency preparation.' if verified else 'The runner is reachable, but this configuration still needs its isolated readiness check. Run setup to verify it.', 'backendReachable': True,
                  'capacity': capacity, 'available': not blockers, 'backend': config.get('backend', 'docker'), 'observedAt': time.time()}
         app._test_setup_readiness = {'key': key, 'at': time.monotonic(), 'value': value}
@@ -309,14 +319,14 @@ async def request(app, args, actor, guard=None, *, authority=None, origin=None):
     if existing:
         if existing['intent'] != intent or not same_owner(existing, args, actor, authority, origin):
             raise ValueError('This setup request identity already belongs to another intent.')
-        if existing['state'] in {'outcome_unknown', 'failed'} and not existing.get('cleanup') and existing.get('candidateConfiguration') and existing.get('proof', {}).get('probeRemoved') and identity not in getattr(app, '_test_setup_tasks', {}):
+        if existing['state'] in {'outcome_unknown', 'failed'} and not existing.get('cleanup') and existing.get('candidateConfiguration') and prepared(existing) and identity not in getattr(app, '_test_setup_tasks', {}):
             existing = await complete_retained(app, path, existing, guard, actor=actor, authority=authority, origin=origin)
         observed = await readiness(app, force=True)
         if authority is not None and guard:
             await guard()
         # A crash after atomic publication can be settled by the exact retained
         # configuration and earlier successful disposable probe, without effects.
-        if existing.get('candidateConfiguration') and existing.get('proof', {}).get('probeRemoved') and read_json(Path(app.data_dir) / 'test-environments.json') == existing['candidateConfiguration'] and observed['status'] == 'ready':
+        if existing.get('candidateConfiguration') and prepared(existing) and read_json(Path(app.data_dir) / 'test-environments.json') == existing['candidateConfiguration'] and observed['status'] == 'ready':
             existing.update(state='completed', phase='ready', detail='The exact verified setup was already saved. No setup effects were repeated.', updatedAt=time.time())
             write_json(path, existing)
         return {'operation': public(existing), 'readiness': observed, 'duplicate': True}
@@ -446,14 +456,23 @@ async def _run(app, record, lock, guard):
         if not selected['available']:
             raise ValueError(selected['reason'])
         await step('installing_runner', 'Preparing the app’s approved test runner. This may download its package dependencies.')
-        installed = await app.smart_tools.install({'repository': owner.REPOSITORY, 'ref': owner.DTU_COMMIT, 'path': '.', 'extras': []})
-        if installed.get('commit') != owner.DTU_COMMIT or installed.get('extras'):
+        installed = None
+        if record['backend'] == 'docker':
+            installed = next((item for item in reversed(app.smart_tools.state['installations'])
+                if item.get('status') == 'installed' and not item.get('supersededBy') and not item.get('stagedFrom')
+                and item.get('repository', '').removesuffix('.git') == owner.REPOSITORY
+                and item.get('path', '.') in {'.', ''}), None)
+        if installed is None:
+            installed = await app.smart_tools.install({'repository': owner.REPOSITORY,
+                'ref': 'main' if record['backend'] == 'docker' else owner.DTU_COMMIT, 'path': '.', 'extras': []})
+        if not installed.get('commit') or (record['backend'] == 'incus' and installed.get('extras')):
             raise ValueError('The managed runner did not match the approved core.')
         record['installationId'] = installed['id']
         record['runnerSourcePolicy'] = {'version': 1, 'repository': owner.REPOSITORY,
-                                        'ref': 'main', 'origin': 'app-setup', 'setupId': record['id']}
+                                        'ref': installed.get('ref', 'HEAD') if record['backend'] == 'docker' else 'main',
+                                        'origin': 'app-setup', 'setupId': record['id']}
         write_json(path, record)
-        base = {'enabled': True, 'installationId': installed['id'], 'commit': owner.DTU_COMMIT, 'backend': record['backend']}
+        base = {'enabled': True, 'installationId': installed['id'], 'commit': installed['commit'], 'backend': record['backend']}
         owned = folder / record['id']
         owned.mkdir(mode=0o700, exist_ok=False)
         if record['backend'] == 'docker':
@@ -486,8 +505,9 @@ async def _run(app, record, lock, guard):
 
 
 def retain_verification(app, config, proof):
-    identity = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
-    write_json(root(app) / ('verified-' + identity + '.json'), {'configuration': config, 'proof': proof})
+    if config.get('backend') == 'incus':
+        identity = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
+        write_json(root(app) / ('verified-' + identity + '.json'), {'configuration': config, 'proof': proof})
     app._test_setup_readiness = None
 
 
@@ -546,23 +566,17 @@ async def setup_docker(base, selected, owned, record, step):
     target = await settled_thread(test_host_resources.local_target, endpoint, {'dockerd'})
     config = {**base, 'dockerHost': endpoint, 'image': APPROVED_IMAGE,
               **capacity_defaults(resource_admission=target.get('supported') is True)}
-    await step('preparing_image', 'Downloading the approved Python base image. Project dependencies are prepared separately.')
-    await settled_thread(command, [binary, '--host', endpoint, 'pull', APPROVED_IMAGE], timeout=600)
-    await step('checking_profile', 'Running a disposable offline Python check in the approved image.')
-    name = 'unified-setup-' + record['id'][:20]
+    try:
+        await settled_thread(inspect_base_image, config)
+    except ValueError:
+        await step('preparing_image', 'Downloading the Python base image. Docker keeps its normal image cache.')
+        await settled_thread(tracked_command, owned / 'effect-image.json', 'image',
+                             [binary, '--host', endpoint, 'pull', APPROVED_IMAGE], timeout=600)
+        await settled_thread(inspect_base_image, config)
+    await settled_thread(command, [binary, '--host', endpoint, 'compose', 'version', '--short'])
     daemon = json.loads(await settled_thread(command, [binary, '--host', endpoint, 'info', '--format', '{{json .}}']))
-    write_json(owned / 'probe.json', {'backend': 'docker', 'name': name, 'dockerHost': endpoint, 'daemon': daemon['ID']})
-    await step('checking_profile', 'Running a disposable offline Python check in the approved image.')
-    result = await settled_thread(tracked_command, owned / 'effect-docker-probe.json', 'probe', [binary, '--host', endpoint, 'run', '--rm', '--name', name,
-        '--label', 'io.amplifier.setup=' + record['id'], '--network', 'none', '--read-only', '--cap-drop', 'ALL',
-        '--security-opt', 'no-new-privileges', '--memory', '256m', '--pids-limit', '64',
-        APPROVED_IMAGE, 'python', '-c', "import json,sys,tarfile; assert hasattr(tarfile,'data_filter'); print(json.dumps({'python':sys.version.split()[0],'offline':True}))"], timeout=60)
-    proof = json.loads(result)
-    containers = await settled_thread(command, [binary, '--host', endpoint, 'ps', '-aq', '--filter', 'name=^/' + name + '$'])
-    if containers:
-        raise ValueError('The setup check finished but its container absence was not confirmed.')
-    daemon = json.loads(await settled_thread(command, [binary, '--host', endpoint, 'info', '--format', '{{json .}}']))
-    return config, {'backend': 'docker', 'daemon': daemon['ID'], 'image': APPROVED_IMAGE, 'probe': proof, 'probeRemoved': True, 'checkedAt': time.time()}
+    return config, {'backend': 'docker', 'daemon': daemon['ID'], 'image': APPROVED_IMAGE,
+                    'configurationReady': True, 'checkedAt': time.time()}
 
 
 async def setup_incus(base, selected, owned, record, step):
@@ -775,7 +789,7 @@ async def reconcile(app, args, actor, guard=None, *, authority=None, origin=None
     if record['id'] in tasks:
         return {'operation': public(record), 'active': True}
     observed = await readiness(app, force=True)
-    if record.get('candidateConfiguration') and record.get('proof', {}).get('probeRemoved') and read_json(Path(app.data_dir) / 'test-environments.json') == record['candidateConfiguration'] and observed['status'] == 'ready':
+    if record.get('candidateConfiguration') and prepared(record) and read_json(Path(app.data_dir) / 'test-environments.json') == record['candidateConfiguration'] and observed['status'] == 'ready':
         record.update(state='completed', phase='ready', detail='The exact verified setup is saved. No setup effects were repeated.', updatedAt=time.time())
     elif record['state'] != 'completed':
         cleanup_allowed(app, record)
