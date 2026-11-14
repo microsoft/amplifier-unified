@@ -184,10 +184,6 @@ def run_lane(lane, python, output, environment=None, revision=None):
     env.update(environment or {})
     command = [python, '-m', 'pytest', *spec['selectors'], '-q', '--tb=short',
                '--junitxml=' + str(junit)]
-    if lane == 'native':
-        # Diagnostic only: identify a stalled test even before its body starts
-        # or while synchronous work prevents asyncio's fixture timer firing.
-        command += ['-vv', '-o', 'faulthandler_timeout=30']
     result = {'lane': lane, 'selectors': spec['selectors'], 'exitCode': None,
               **source_identity(revision),
               'passed': False}

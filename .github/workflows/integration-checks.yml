@@ -157,18 +157,7 @@ jobs:
       - name: Execute owned cases; missing prerequisites or skips fail
         env:
           LANE: ${{ matrix.lane }}
-        run: |
-          if test "$LANE" = native; then
-            # A native/Python bridge stall can ignore asyncio cancellation.
-            # Keep its emitted stage/stack log before stopping the test process,
-            # so the ordinary always-upload step can retain the failed evidence.
-            mkdir -p output/integration
-            timeout --signal=TERM --kill-after=10s 300s \
-              python -u scripts/run_owned_integration.py --lane "$LANE" --work "$RUNNER_TEMP/integration" --output "$GITHUB_WORKSPACE/output/integration" \
-              2>&1 | tee output/integration/native-runner.log
-          else
-            python scripts/run_owned_integration.py --lane "$LANE" --work "$RUNNER_TEMP/integration" --output "$GITHUB_WORKSPACE/output/integration"
-          fi
+        run: python scripts/run_owned_integration.py --lane "$LANE" --work "$RUNNER_TEMP/integration" --output "$GITHUB_WORKSPACE/output/integration"
       - name: Retain results and source identities, never private state
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

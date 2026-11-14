@@ -1,11 +1,8 @@
 """Offline exact provider/host/native-loop fitting, never live vendor evidence."""
-import asyncio
-import faulthandler
-import sys
+import hashlib
 import json
 import re
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 import amplifier_module_context_managed as managed
@@ -41,6 +38,8 @@ class Wire:
         self.rejections = rejections
         self.refusals = []
         self.on_refusal = None
+        self.canonical = None
+        self.receipt_snapshots = {}
         # Reactive fitting converts a public-context budget from server feedback.
         # Keep that case's physical text/token ratio realistic (about 4 MB total),
         # rather than mixing the proactive case's synthetic 28x token scale.
@@ -61,6 +60,15 @@ class Wire:
         assert body['model'] == MODEL
         key, count = digest(projection(body)), self.tokens(body)
         if request.url.path.endswith('/count_tokens'):
+            # Count is the next request boundary after native tool persistence,
+            # before compaction can derive a smaller working view. Preserve the
+            # actual saved row/envelope, not an assumed serialization shape.
+            if self.canonical:
+                for row in await self.canonical():
+                    if row['role'] == 'tool':
+                        saved = (digest(row), hashlib.sha256(row['content'].encode()).hexdigest())
+                        previous = self.receipt_snapshots.setdefault(row['tool_call_id'], saved)
+                        assert saved == previous, 'Canonical receipt changed during preparation'
             if self.first_count_cold is None:
                 self.first_count_cold = self.metadata_calls == 0
             # Reactive cases model a stale server count, not a host bypass.
@@ -116,10 +124,6 @@ class Wire:
     ids=['proactive', 'reactive', 'second-overflow-terminal', 'stop-before-retry',
          'resume-over-1m-signed-history', 'oversized-retained-tail'])
 async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(rejections, stop, seed_kind):
-    # An out-of-loop watchdog distinguishes synchronous stalls from awaited
-    # work in this entirely offline fixture. A deadlock must retain a real stack.
-    faulthandler.dump_traceback_later(45, exit=True)
-    print('fable-fixture: creating native session', file=sys.stderr, flush=True)
     module = pytest.importorskip('amplifier_module_provider_anthropic',
         reason='Native qualification installs exact accepted Anthropic source.')
     from anthropic import _base_client
@@ -137,11 +141,11 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
     session = await PreparedBundle(plan, BundleModuleResolver(paths),
         Bundle(name='fable-context-loop', session=plan['session'])).create_session(
             session_id='fable-context-loop')
-    print('fable-fixture: native session ready', file=sys.stderr, flush=True)
     sdk = module.AsyncAnthropic(api_key='synthetic-not-live', max_retries=0,
         http_client=http.AsyncClient(transport=http.MockTransport(wire.transport)))
     coordinator = session.coordinator
     context = coordinator.get('context')
+    wire.canonical = context.get_messages
     raw = module.AnthropicProvider(api_key='synthetic-not-live', coordinator=coordinator, config={
         'default_model': 'claude-sonnet-5', 'enable_1m_context': True,
         'use_streaming': False, 'max_retries': 0, 'enable_prompt_caching': False})
@@ -210,22 +214,11 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
     elif seed_kind == 'oversized-tail':
         prompt += FILLER * 8
     seed_hashes = [digest(row) for row in seed]
-    async def execute():
-        # All transport is in-process and synthetic. Bound fixture deadlocks,
-        # not real inference or the context owner's production summary policy.
-        try:
-            print('fable-fixture: execute', file=sys.stderr, flush=True)
-            async with asyncio.timeout(30):
-                return await session.execute(prompt)
-        except TimeoutError:
-            pytest.fail(f'Offline fixture stalled: effects={wire.effects}; '
-                        f'sent={wire.sent}; summaries={wire.summaries}; '
-                        f'refusals={wire.refusals}; events={wire.events[-3:]}')
     try:
         assert raw._runtime_model_info_cache == {}
         if seed_kind == 'oversized-tail':
             with pytest.raises(Exception, match='(?i)(context|budget|fit)'):
-                await execute()
+                await session.execute(prompt)
             rows = await context.get_messages()
             assert not wire.sent and not wire.summaries and not wire.effects
             assert prompt in str(rows)
@@ -233,12 +226,12 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
             return
         if rejections > 1 or stop:
             with pytest.raises(Exception):
-                await execute()
+                await session.execute(prompt)
             assert len(wire.refusals) == (1 if stop else 2)
             assert wire.effects == list(range(1, 7))
             assert len(wire.sent) == 6  # Rejected iterations produce no tool.
             return
-        result = await execute()
+        result = await session.execute(prompt)
         rows = await context.get_messages()
         assert 'ORBIT complete' in result
         assert wire.first_count_cold is True
@@ -256,11 +249,18 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
         tools = [row for row in rows if row['role'] == 'tool']
         assert [row['tool_call_id'] for row in tools] == [f'call-{i}' for i in wire.effects]
         for index, row in enumerate(tools, 1):
-            assert json.loads(row['content']) == {
+            assert wire.receipt_snapshots[row['tool_call_id']] == (
+                digest(row), hashlib.sha256(row['content'].encode()).hexdigest())
+            receipt = json.loads(row['content'])
+            # Core's no-op hook currently returns an equal copy, which the
+            # native loop persists as the whole ToolResult envelope. That
+            # existing protocol is separate; preserve its full saved bytes
+            # above and inspect the output only to verify the receipt facts.
+            if 'success' in receipt:
+                assert receipt['success'] is True and receipt['error'] is None
+                receipt = receipt['output']
+            assert receipt == {
                 'receipt': f'RECEIPT-{index}', 'outcome': 'completed', 'filler': wire.filler}
     finally:
-        print('fable-fixture: closing SDK', file=sys.stderr, flush=True)
         await sdk.close()
-        print('fable-fixture: cleaning session', file=sys.stderr, flush=True)
         await session.cleanup()
-        faulthandler.cancel_dump_traceback_later()

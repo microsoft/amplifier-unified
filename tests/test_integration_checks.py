@@ -639,11 +639,10 @@ def test_native_owner_retains_request_artifacts_in_its_existing_output(tmp_path,
     observed = []
     monkeypatch.setattr(runner, 'run_lane', lambda *args: observed.append(args) or 0)
     controls = []
-    monkeypatch.setattr(runner.integration_native, 'overflow_focus', lambda *args: 0)
     monkeypatch.setattr(runner.integration_native, 'overflow_negative_controls',
                         lambda *args: controls.append(args))
     output = tmp_path / 'output'
-    assert runner.execute('native', work, output) == 0
+    assert runner.execute('native', work, output, overflow_negative_controls=True) == 0
     assert observed[0][3] == {'UNIFIED_RUNTIME_PYTHON': 'prepared-python',
                              'AMPLIFIER_TEST_ARTIFACTS': str(output / 'artifacts')}
     assert (output / 'artifacts').is_dir()
