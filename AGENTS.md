@@ -180,6 +180,13 @@ Launcher HTTP health JSON is not listener authentication: require the private
 local leaf pin and HTTPS before reading or sending a control credential. The standalone process
 guard supports ordinary CPython 3.13 only and requires explicit
 `sys._base_executable`; do not weaken PID checks to accept a venv redirector.
+The windowless app host attaches one console without a window at start
+(`windows_hidden_console.py`) so that default-flag console children open no
+terminal. Keep explicit `CREATE_NO_WINDOW` at known call sites. After a late
+`AttachConsole`, Python signal settings do not protect the host from a child's
+Ctrl+C; keep the explicit console control handler and the standard-handle
+restore. The stable launcher keeps the code that setup installed; an in-app
+update cannot change it.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.

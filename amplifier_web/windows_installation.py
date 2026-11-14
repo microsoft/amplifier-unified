@@ -63,10 +63,20 @@ def address_message(problem):
 
 
 def saved_port(home):
-    """Return the port an earlier setup saved for this installation, else None."""
-    from .deployment import load_server_config
+    """Return the port an earlier setup saved for this installation, else None.
+
+    Setup saves the port together with its loopback origin. An owner who later
+    lists only a remote address still has a saved port: it is not the default,
+    and the app-owned HTTPS that setup configured is in place. Setup must not
+    select again and overwrite that owner's addresses.
+    """
+    from .deployment import DEFAULT_SERVER, load_server_config
     config = load_server_config(home)
-    return config["port"] if f"https://127.0.0.1:{config['port']}" in config["public_origins"] else None
+    port = config["port"]
+    if (f"https://127.0.0.1:{port}" in config["public_origins"]
+            or (port != DEFAULT_SERVER["port"] and config["tls"]["method"] == "ca")):
+        return port
+    return None
 
 
 def address_kind(port, spec=None):

@@ -12,6 +12,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Management;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
@@ -28,10 +29,25 @@ using System.Drawing;
 [assembly:System.Runtime.Versioning.TargetFramework(".NETFramework,Version=v4.8")]
 
 namespace UnifiedBootstrap {
+    // A stop that the person can act on: one plain cause and one next step.
+    internal sealed class SetupStop : Exception {
+        internal readonly string Next;
+        internal SetupStop(string cause, string next) : base(cause) { Next=next; }
+    }
     internal static class NativeInstaller {
         static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength=1048576, RecursionLimit=16 };
         static InstallStorage Storage;
         static string Stage="arguments";
+        // The consumer installation's one folder: %LOCALAPPDATA%\Amplifier. The
+        // app repeats this path inside its own data paths, and Windows refuses
+        // paths of 260 characters or more unless long paths are enabled. Keep the
+        // name short. docs/design/native-windows-installation.md owns the limit.
+        internal const string RootName="Amplifier";
+        internal const int MaxRootLength=59;
+        internal const string Started="unified-setup-started.json", Complete="unified-setup-complete.json";
+        internal static string Diagnostics;
+        static string FailedStage, Aftermath="Setup changed nothing on this PC.";
+        static bool Installed;
         static string LogPath;
         static int ChildSequence;
         static readonly UTF8Encoding Utf8 = new UTF8Encoding(false, true);
@@ -85,8 +101,19 @@ namespace UnifiedBootstrap {
             Storage.AssertOwnedPath(target);
             var temporary=target+".partial";
             using(var output=Storage.CreateFile(temporary)) {
-                if(Uri.IsWellFormedUriString(source, UriKind.Absolute) && new Uri(source).Scheme=="https") Download(source,output,maximum);
-                else {
+                if(Uri.IsWellFormedUriString(source, UriKind.Absolute) && new Uri(source).Scheme=="https") {
+                    for(int attempt=1;;attempt++) {
+                        try { Download(source,output,maximum); break; }
+                        catch(Exception error) {
+                            // A dropped connection is ordinary: empty the same private
+                            // file and try again. A refused artifact is not retried.
+                            if(attempt==3 || !(error is WebException || error is IOException)) throw;
+                            Log("download attempt "+attempt.ToString(CultureInfo.InvariantCulture)+" did not finish");
+                            output.SetLength(0); output.Position=0;
+                            System.Threading.Thread.Sleep(2000*attempt);
+                        }
+                    }
+                } else {
                     Need(Path.IsPathRooted(source) && File.Exists(source) && (File.GetAttributes(source)&FileAttributes.ReparsePoint)==0,
                         "Local prototype input must be an ordinary absolute file.");
                     using(var input=new FileStream(source,FileMode.Open,FileAccess.Read,FileShare.Read)) CopyBounded(input,output,maximum);
@@ -245,15 +272,247 @@ namespace UnifiedBootstrap {
                 shell[1]=="git version "+NativePins.ShellGitVersion,"The private shell did not run its own Git.");
             return git;
         }
-        static void Platform() {
-            Need(Environment.OSVersion.Platform==PlatformID.Win32NT && Environment.Is64BitProcess,"Windows x64 required.");
-            var principal=new WindowsPrincipal(WindowsIdentity.GetCurrent());
-            Need(!principal.IsInRole(WindowsBuiltInRole.Administrator),"Run setup as your normal non-elevated account.");
+        [DllImport("advapi32.dll",SetLastError=true)]
+        static extern bool GetTokenInformation(IntPtr token,int kind,out int value,int size,out int length);
+        internal static string Elevation() {
+            // "none": an ordinary sign-in. "run-as-administrator": this one program
+            // was elevated. "always-administrator": the account runs every program
+            // elevated (User Account Control off, or the built-in Administrator).
+            using(var identity=WindowsIdentity.GetCurrent()) {
+                if(!new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator)) return "none";
+                int type,length;  // TokenElevationType: 2 is a full token beside a limited one.
+                if(!GetTokenInformation(identity.Token,18,out type,4,out length)) return "administrator";
+                return type==2 ? "run-as-administrator" : "always-administrator";
+            }
+        }
+        internal static void Platform() {
+            // Setup never continues elevated: its files would belong to the
+            // administrators group, not to the person, and it needs no such right.
+            string elevation=Elevation();
+            if(elevation=="run-as-administrator") throw new SetupStop(
+                "Setup was started with \"Run as administrator\". Amplifier installs for your own Windows account and does not need administrator rights.",
+                "Close this window. Open the setup file again with a double-click, not with \"Run as administrator\".");
+            if(elevation=="always-administrator") throw new SetupStop(
+                "This Windows sign-in runs every program as administrator. User Account Control is off, or this is the built-in Administrator account. Amplifier installs for one person without administrator rights.",
+                "Sign in to Windows with a standard account, or turn User Account Control on. Then run setup again.");
+            if(elevation!="none") throw new SetupStop(
+                "Setup is running with administrator rights. Amplifier installs for your own Windows account and does not need them.",
+                "Close this window. Open the setup file again with a double-click, from a standard Windows sign-in.");
+            var unsupported=new SetupStop("Amplifier needs Windows 11 on a PC with a 64-bit Intel or AMD processor. This PC has a different Windows version or processor.",
+                "Use a PC with Windows 11 and an Intel or AMD processor. Windows on ARM processors is not supported yet.");
+            if(Environment.OSVersion.Platform!=PlatformID.Win32NT || !Environment.Is64BitProcess) throw unsupported;
             using(var search=new ManagementObjectSearcher("SELECT BuildNumber,ProductType,OSArchitecture FROM Win32_OperatingSystem"))
-            foreach(ManagementObject os in search.Get()) Need(Int32.Parse((string)os["BuildNumber"],CultureInfo.InvariantCulture)>=22000 &&
-                Convert.ToInt32(os["ProductType"],CultureInfo.InvariantCulture)==1 && (string)os["OSArchitecture"]=="64-bit","Windows 11 x64 client required.");
+            foreach(ManagementObject os in search.Get()) if(!(Int32.Parse((string)os["BuildNumber"],CultureInfo.InvariantCulture)>=22000 &&
+                Convert.ToInt32(os["ProductType"],CultureInfo.InvariantCulture)==1 && (string)os["OSArchitecture"]=="64-bit")) throw unsupported;
             using(var search=new ManagementObjectSearcher("SELECT Architecture FROM Win32_Processor"))
-            foreach(ManagementObject cpu in search.Get()) Need(Convert.ToInt32(cpu["Architecture"],CultureInfo.InvariantCulture)==9,"AMD64 processor required.");
+            foreach(ManagementObject cpu in search.Get()) if(Convert.ToInt32(cpu["Architecture"],CultureInfo.InvariantCulture)!=9) throw unsupported;
+        }
+        static InstallStorage Existing(string root) {
+            // Pin an existing folder and every folder above it, with the checks of
+            // the private folders that setup creates. Creates and repairs nothing.
+            return new InstallStorage(Path.GetDirectoryName(root),Path.GetFileName(root),true);
+        }
+        internal static string RootState(string root) {
+            // Setup removes or starts only what it made. Marker files alone do not
+            // prove that: another account could plant them where it may create
+            // folders. They count only inside a folder that this person owns, that
+            // no other account can change, and that is not a link.
+            if(!Directory.Exists(root)) return File.Exists(root)?"foreign":"absent";
+            try { using(Existing(root)) return Marked(root); }
+            catch(IOException error) {
+                // The folder itself failed a policy check (link, owner, access for
+                // another account). A refused folder above it is a different stop,
+                // which names that folder. A folder that Windows would not open
+                // (in use) is not classified at all.
+                if(error.Data.Contains("path") && String.Equals(Path.GetFullPath((string)error.Data["path"]),
+                    Path.GetFullPath(root),StringComparison.OrdinalIgnoreCase)) return "foreign";
+                throw;
+            }
+        }
+        static string Marked(string root) {
+            // "installed" only after setup finished its installation. "unfinished"
+            // is setup's own earlier attempt, or an empty folder: the app never ran
+            // from it, so it holds no chats or settings. "damaged" has setup's first
+            // marker and app data, but no completion record: it is never removed.
+            if(File.Exists(Path.Combine(root,Complete))) return "installed";
+            bool used=new[]{"app","shared","ownership","capture","import","workspace","source-store"}.Any(name=>{
+                string folder=Path.Combine(root,name);
+                return Directory.Exists(folder) && Directory.EnumerateFileSystemEntries(folder).Any();});
+            if(File.Exists(Path.Combine(root,Started))) return used?"damaged":"unfinished";
+            return Directory.EnumerateFileSystemEntries(root).Any()?"foreign":"unfinished";
+        }
+        internal static void RemoveUnfinished(string root) {
+            // The only removal of setup's folder. Check again at the moment of
+            // removal, not from an earlier answer. The folder and every folder
+            // above it stay pinned while its contents go, so nothing can put a
+            // link in its place meanwhile. Extended-length paths reach entries
+            // beyond the ordinary Windows limit.
+            using(Existing(root)) {
+                Need(Marked(root)=="unfinished","The folder is not an unfinished setup attempt.");
+                string saved=SaveDiagnostics(root); if(saved!=null) Diagnostics=saved;
+                RemoveContents("\\\\?\\"+Path.GetFullPath(root),Started);
+            }
+            Directory.Delete(root,false);  // Empty now. A link here would go as a link.
+        }
+        static void RemoveContents(string folder, string last) {
+            // The started marker goes last: a removal that stops part-way leaves a
+            // folder that the next setup run still recognizes as its own.
+            foreach(string entry in Directory.GetFileSystemEntries(folder)) {
+                if(last!=null && String.Equals(Path.GetFileName(entry),last,StringComparison.OrdinalIgnoreCase)) continue;
+                var attributes=File.GetAttributes(entry);
+                if((attributes&FileAttributes.ReadOnly)!=0) File.SetAttributes(entry,attributes&~FileAttributes.ReadOnly);
+                if((attributes&FileAttributes.Directory)==0) File.Delete(entry);
+                // A link goes as a link; its target is never entered.
+                else if((attributes&FileAttributes.ReparsePoint)!=0) Directory.Delete(entry,false);
+                else { RemoveContents(entry,null); Directory.Delete(entry,false); }
+            }
+            string marker=last==null?null:Path.Combine(folder,last);
+            if(marker!=null && File.Exists(marker)) { File.SetAttributes(marker,FileAttributes.Normal); File.Delete(marker); }
+        }
+        internal static IDisposable PinInstalled(string root, string program) {
+            // Check again at the moment of use. The caller keeps the result while
+            // Windows starts the program: the folder, the folders above it and the
+            // program file cannot be replaced meanwhile.
+            var storage=Existing(root);
+            try {
+                Need(Marked(root)=="installed","The folder is not a finished installation.");
+                storage.TrustExecutable(program);
+                return storage;
+            } catch { storage.Dispose(); throw; }
+        }
+        internal static string SignInTask(out string program) {
+            program=null;
+            // One sign-in task exists per Windows account: "present" means that an
+            // Amplifier installation already starts for this person. The app reads
+            // the same registration with the same rule: only "not found" is absent.
+            try {
+                dynamic service=Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service",true));
+                try {
+                    service.Connect();
+                    string name;
+                    using(var identity=WindowsIdentity.GetCurrent()) name="AmplifierUnified-"+identity.User.Value;
+                    dynamic task;
+                    try { task=service.GetFolder("\\").GetTask(name); }
+                    catch(Exception error) {
+                        for(Exception inner=error;inner!=null;inner=inner.InnerException)
+                            if(inner.HResult==unchecked((int)0x80070002)) return "absent";
+                        return "unavailable";
+                    }
+                    // A registration whose program was deleted can never start.
+                    try {
+                        foreach(dynamic action in task.Definition.Actions)
+                            if((int)action.Type==0 && File.Exists((string)action.Path)) { program=(string)action.Path; return "present"; }
+                        return "leftover";
+                    } catch(Exception) { return "present"; }
+                } finally { Marshal.FinalReleaseComObject(service); }
+            } catch(Exception) { return "unavailable"; }
+        }
+        internal static string Precheck(out string state) {
+            Stage="Checking this PC";
+            Platform();
+            string parent=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string root=Path.Combine(parent,RootName);
+            if(root.Length>MaxRootLength) throw new SetupStop(
+                "Amplifier cannot install for this Windows account. Its folder would be "+root+", and that path is too long for Windows ("+
+                root.Length.ToString(CultureInfo.InvariantCulture)+" characters; the limit is "+MaxRootLength.ToString(CultureInfo.InvariantCulture)+").",
+                "Use a Windows account with a shorter name.");
+            try { InstallStorage.Check(parent); }
+            catch(IOException error) {
+                if(error.Data.Contains("path")) throw;  // Explain names the refused folder.
+                throw new SetupStop(
+                    "Amplifier cannot install for this Windows account. Setup does not accept the path of its folder: "+root,
+                    "Use a Windows account whose profile folder is on a local disk and has an ordinary name.");
+            }
+            state=RootState(root);
+            if(state!="installed" && new DriveInfo(Path.GetPathRoot(root)).AvailableFreeSpace<4L*1024*1024*1024) throw new SetupStop(
+                "The disk "+Path.GetPathRoot(root)+" has less than 4 GB of free space. Amplifier needs that space for its files.",
+                "Make at least 4 GB of disk space free. Then run setup again.");
+            if(state=="foreign") throw new SetupStop(
+                "The folder "+root+" already exists, and this setup did not create it. Setup does not change a folder that belongs to something else.",
+                "If another program uses that folder, do not change it: Amplifier cannot install for this Windows account yet. "+
+                "If you do not need the folder, move or rename it. Then run setup again.");
+            if(state=="damaged") throw new SetupStop(
+                "The folder "+root+" holds an Amplifier installation, but its setup record is incomplete. Setup does not remove it, because it can hold your chats and settings.",
+                "Move or rename that folder. Then run setup again.");
+            string program=null;
+            string task=state=="installed"?"absent":SignInTask(out program);
+            if(task=="unavailable") throw new SetupStop(
+                "Setup cannot read Windows Task Scheduler. Amplifier uses it to start when you sign in.",
+                "Restart Windows. Then run setup again.");
+            if(task=="leftover") {
+                string entry;
+                using(var identity=WindowsIdentity.GetCurrent()) entry="AmplifierUnified-"+identity.User.Value;
+                throw new SetupStop(
+                    "Windows still has a start entry for an earlier Amplifier installation whose files were deleted. Windows can start only one Amplifier for your account.",
+                    "Open the Start menu, type Task Scheduler and open it. Select Task Scheduler Library. Select the task named "+entry+
+                    ", press the Delete key and confirm. Then run setup again.");
+            }
+            if(task=="present") {
+                string earlier=Directory.GetDirectories(parent,"amplifier-install-*")
+                    .FirstOrDefault(path=>File.Exists(Path.Combine(path,"consumer-install.json")));
+                if(earlier!=null) throw new SetupStop(
+                    "An earlier Amplifier installation is on this PC, in the folder "+earlier+". Windows can start only one Amplifier for your account.",
+                    "Remove the earlier installation first: open Windows Settings, then Apps, then Installed apps. Find Amplifier Unified and select Uninstall. "+
+                    "Then run this setup file again. The new installation uses a short folder path, which Windows needs for chats. "+
+                    "The earlier folder stays on this PC; the new installation does not read its chats.");
+                throw new SetupStop(
+                    "Another Amplifier installation already starts when you sign in to this Windows account. Windows can start only one Amplifier for your account."+
+                    (program==null?"":" It starts from this program: "+program),
+                    "Remove that installation first. Then run this setup file again.");
+            }
+            return root;
+        }
+        internal static string[] Explain(Exception error, string stage, bool installed) {
+            // Cause and next step in plain language. Never exception text, child
+            // output or values from the network.
+            var stop=error as SetupStop;
+            if(stop!=null) return new[]{stop.Message,stop.Next};
+            if(installed) return new[]{"Amplifier is installed, but setup stopped at this step: "+stage+".",
+                "Run this setup file again and select Yes to open Amplifier."};
+            if(error.Data.Contains("path")) {
+                string path=(string)error.Data["path"];
+                if(error is System.ComponentModel.Win32Exception) return new[]{
+                    "Windows did not let setup check the folder "+path+". Another program may be using it.",
+                    "Restart Windows. Then run setup again."};
+                return error.Message.StartsWith("Foreign mutation",StringComparison.Ordinal)
+                    ? new[]{"Windows lets other accounts on this PC change the folder "+path+". Setup does not use a folder below it, because another account could then replace Amplifier's files.",
+                        "Ask the person who manages this PC to correct the permissions of that folder. Then run setup again."}
+                    : new[]{"Setup cannot create its private folder. Windows refused the folder "+path+", or its permissions are not the usual ones.",
+                        "Check that "+path+" is on a local disk of this PC and belongs to your account. Then run setup again."};
+            }
+            if(error.Message=="Artifact SHA-256 mismatch.") return new[]{"A file that setup downloaded was damaged or changed on the way.",
+                "Run setup again. If this message returns, download a new copy of the setup file."};
+            // ERROR_DISK_FULL and ERROR_HANDLE_DISK_FULL as Win32 HRESULTs.
+            if(error.HResult==unchecked((int)0x80070070) || error.HResult==unchecked((int)0x80070027)) return new[]{
+                "The disk of this PC is full.","Make at least 4 GB of disk space free. Then run setup again."};
+            bool network=error is WebException || stage.StartsWith("Downloading",StringComparison.Ordinal) ||
+                stage.StartsWith("Installing Python",StringComparison.Ordinal) || stage.StartsWith("Installing Amplifier",StringComparison.Ordinal);
+            return network
+                ? new[]{"Setup could not finish this step: "+stage+". It downloads files from the internet during this step.",
+                    "Check that this PC is connected to the internet. Then run setup again. If your organization filters downloads, github.com and pypi.org must be reachable."}
+                : new[]{"Setup could not finish this step: "+stage+".","Run setup again."};
+        }
+        internal static string SaveDiagnostics(string root) {
+            // The unfinished folder is removed. Keep its small private records for
+            // support in a new private folder of the same kind, created exclusively
+            // in the person's own temporary folder. Their text is never shown.
+            try {
+                var files=Directory.GetFiles(root,"install.log").Concat(Directory.GetFiles(root,"child-*")).Take(32).ToArray();
+                if(files.Length==0) return null;
+                string parent=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Temp");
+                string name="AmplifierSetupLog-"+DateTime.Now.ToString("yyyyMMdd-HHmmss",CultureInfo.InvariantCulture)+
+                    "-"+Guid.NewGuid().ToString("N").Substring(0,6);
+                using(var storage=new InstallStorage(parent,name)) {
+                    foreach(string file in files) {
+                        if(new FileInfo(file).Length>1048576) continue;
+                        using(var input=new FileStream(file,FileMode.Open,FileAccess.Read,FileShare.ReadWrite))
+                        using(var output=storage.CreateFile(Path.Combine(storage.Root,Path.GetFileName(file)))) {
+                            CopyBounded(input,output,1048576); output.Flush(true);
+                        }
+                    }
+                    return storage.Root;
+                }
+            } catch(Exception) { return null; }
         }
         static string Shortcut(string python, string launcher, bool background) {
             var entry=background?Path.Combine(Path.GetDirectoryName(python),"pythonw.exe"):python;
@@ -312,8 +571,7 @@ namespace UnifiedBootstrap {
             } finally {System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shell);}
             Storage.HoldFile(path,false);return path;
         }
-        static string InstallConsumer(string encoded) {
-            Platform();
+        static string InstallConsumer(string encoded, string root, string state) {
             byte[] planBytes=Convert.FromBase64String(encoded);
             Need(planBytes.Length<=262144,"Consumer plan exceeds limit.");
             var plan=Json.Deserialize<Dictionary<string,object>>(Utf8.GetString(planBytes));
@@ -327,14 +585,31 @@ namespace UnifiedBootstrap {
             string name="amplifier_unified-"+version+"-py3-none-any.whl";
             Need(Text(artifact,"url")=="https://github.com/microsoft/amplifier-unified/releases/download/v"+version+"/"+name &&
                 Regex.IsMatch(Text(artifact,"sha256"),"^[a-f0-9]{64}$"),"Invalid consumer artifact.");
-            string python=null,root=null,shortcut=null;
-            using(Storage=new InstallStorage(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData))) {
-                root=Storage.Root;LogPath=Path.Combine(root,"install.log");PrivateText(LogPath,"");
+            string python=null,shortcut=null;
+            bool created=false;
+            try {
+            if(state=="unfinished") {
+                Stage="Removing an unfinished earlier setup";
+                try { RemoveUnfinished(root); Aftermath="Setup removed the files of an earlier unfinished attempt."; }
+                catch(Exception) {
+                    Aftermath="Files of the earlier attempt remain in "+root+".";
+                    throw new SetupStop(
+                        "Setup could not remove the files of an earlier setup attempt in "+root+". A program may still use them.",
+                        "Restart Windows. Then run setup again.");
+                }
+            }
+            Stage="Preparing the Amplifier folder";
+            using(Storage=new InstallStorage(Path.GetDirectoryName(root),RootName)) {
+                created=true;
+                Need(String.Equals(Storage.Root,root,StringComparison.OrdinalIgnoreCase),"Installation folder differs.");
+                // The first file marks this folder as setup's own unfinished work.
+                PrivateText(Path.Combine(root,Started),"{\"schema\":1}");
+                LogPath=Path.Combine(root,"install.log");PrivateText(LogPath,"");
                 foreach(string relative in new[]{"app","shared","ownership","capture","import","source-store","workspace","cache","python","python-bin","tools","tool-bin","temp"})
                     Storage.EnsureDirectory(Path.Combine(root,relative));
                 foreach(string relative in new[]{"","cache","python","python-bin","tools","tool-bin","temp"})
                     Storage.EnableToolWrites(Path.Combine(root,relative));
-                Stage="verified private prerequisites";
+                Stage="Downloading setup tools";
                 string uv=Helper("uv",NativePins.UvUrl,NativePins.UvHash,"uv.exe");
                 foreach(var license in NativePins.UvLicenses) {
                     string notice=Path.Combine(root,"uv",license.Key);
@@ -348,21 +623,21 @@ namespace UnifiedBootstrap {
                 env["AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH"]=Path.Combine(root,"capture");
                 env["AMPLIFIER_UNIFIED_IMPORT_HOME"]=Path.Combine(root,"import");
                 env["AMPLIFIER_SOURCE_STORE"]=Path.Combine(root,"source-store");
-                Stage="private ordinary Python";
+                Stage="Installing Python";
                 string patch=Text(plan,"python");
                 Child(uv,new[]{"python","install",patch,"--no-bin","--no-registry"},env);
                 string basePython=Child(uv,new[]{"python","find","--no-project","--managed-python",patch},env);
                 Need(basePython.StartsWith(Path.Combine(root,"python")+"\\",StringComparison.OrdinalIgnoreCase),"Interpreter escaped private installation.");
                 Child(basePython,new[]{"-I","-S","-c","import sys,sysconfig,struct; assert sys.platform=='win32' and '.'.join(map(str,sys.version_info[:3]))==sys.argv[1] and sys.version_info[:2]==(3,13) and struct.calcsize('P')==8 and not sysconfig.get_config_var('Py_GIL_DISABLED')",patch},env);
-                Stage="private Git and shell";
+                Stage="Installing Git and shell tools (this takes a few minutes)";
                 Need(PrivateGit(basePython,gitArchive,env)==git,"Private Git entry differs.");
-                Stage="verified application download";
+                Stage="Downloading Amplifier";
                 string wheel=Path.Combine(root,name);CopyOrDownload(Text(artifact,"url"),wheel,134217728);
                 CheckHash(wheel,Text(artifact,"sha256"));
                 Need(artifact["bytes"] is int && new FileInfo(wheel).Length==(int)artifact["bytes"],"Consumer artifact size differs.");
                 string requirements=Path.Combine(root,"components.txt");
                 PrivateText(requirements,ConsumerRequirements(plan["graph"]));
-                Stage="qualified application installation";
+                Stage="Installing Amplifier (this takes a few minutes)";
                 Child(uv,new[]{"tool","install","--python",basePython,"--link-mode","copy",
                     "--overrides",requirements,"--with-requirements",requirements,wheel},env);
                 python=Path.Combine(root,"tools","amplifier-unified","Scripts","python.exe");
@@ -371,10 +646,15 @@ namespace UnifiedBootstrap {
                     {"schema",1},{"kind","windows-consumer-preview"},{"version",version},{"revision",Text(plan,"source")},
                     {"artifact",new Dictionary<string,object>{{"url",Text(artifact,"url")},{"sha256",Text(artifact,"sha256")},{"path",wheel}}},
                     {"graph",plan["graph"]},{"uv",uv},{"git",git}}));
-                Stage="installed source and package audit";
+                Stage="Checking the installation";
                 Child(python,new[]{"-I","-B","-m","amplifier_web.windows_consumer","--root",root,"--audit"},env);
                 Child(uv,new[]{"pip","check","--python",python},env);
-                Stage="Windows Start menu and installed-app entry";
+                // The checked installation is usable from here. After its first
+                // start it holds the person's chats and settings: a later setup
+                // run opens this folder and never removes it.
+                PrivateText(Path.Combine(root,Complete),Json.Serialize(new Dictionary<string,object>{{"schema",1},{"version",version}}));
+                Installed=true;
+                Stage="Adding Amplifier to the Start menu";
                 Child(python,new[]{"-I","-B","-m","amplifier_web.windows_consumer","--root",root,"--integrate"},env);
                 shortcut=ConsumerShortcut(python,root,"Launch Unified","");
                 ConsumerShortcut(python,root,"Amplifier status"," --status");
@@ -382,42 +662,121 @@ namespace UnifiedBootstrap {
                 ConsumerShortcut(python,root,"Remove Amplifier sign-in host"," --uninstall");
                 Storage.Validate();
             }
+            } catch(Exception) {
+                // Storage has released its pins. One fixed folder means that an
+                // unfinished attempt must not block the next one: remove what this
+                // run created, unless it already is a usable installation.
+                FailedStage=Stage;
+                if(created && !Installed) {
+                    Stage="Removing the unfinished files";
+                    try { RemoveUnfinished(root); Aftermath="Setup removed the files of this unfinished attempt."; }
+                    catch(Exception) { Aftermath="Unfinished files remain in "+root+"."; }
+                }
+                throw;
+            }
             // Storage has released its pins. The verified archive is unpacked and
             // private-git.json records it; do not keep a second 118 MB copy.
             try {File.Delete(Path.Combine(root,"git.tar.bz2"));} catch(IOException) {} catch(UnauthorizedAccessException) {}
-            Stage="background application setup";
-            var start=new ProcessStartInfo(Path.Combine(Path.GetDirectoryName(python),"pythonw.exe"),
+            // A finished installation must not keep the mark of unfinished work:
+            // if its completion record were ever lost, setup must not remove it.
+            try {File.Delete(Path.Combine(root,Started));} catch(IOException) {} catch(UnauthorizedAccessException) {}
+            Stage="Starting Amplifier";
+            Process.Start(AppStart(root));
+            return shortcut;
+        }
+        static DialogResult Say(string text, MessageBoxButtons buttons, MessageBoxIcon icon) {
+            return MessageBox.Show(text,"Amplifier Unified Setup",buttons,icon);
+        }
+        static void ShowStop(Exception error) {
+            string[] text=Explain(error,FailedStage??Stage,Installed);
+            Say("Setup did not finish.\n\nWhat happened:\n"+text[0]+"\n\nWhat to do:\n"+text[1]+
+                (Installed?"":"\n\n"+Aftermath)+(Diagnostics==null?"":"\n\nDetails for support are in:\n"+Diagnostics),
+                MessageBoxButtons.OK,MessageBoxIcon.Error);
+        }
+        static ProcessStartInfo AppStart(string root) {
+            return new ProcessStartInfo(Path.Combine(root,"tools","amplifier-unified","Scripts","pythonw.exe"),
                 "-I -m amplifier_web.windows_consumer --root "+Quote(root)) {
                     UseShellExecute=true,WorkingDirectory=Path.Combine(root,"workspace")};
-            Process.Start(start);
-            return shortcut;
+        }
+        static int OpenInstalled(string root) {
+            // A second setup run never installs again or changes the installation.
+            if(!File.Exists(AppStart(root).FileName)) {
+                Say("Amplifier is already installed in "+root+", but setup cannot open it: a program file is missing.\n\n"+
+                    "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.",
+                    MessageBoxButtons.OK,MessageBoxIcon.Warning);
+                return 1;
+            }
+            bool listed=false;  // False after the person removed Amplifier in the Windows Apps list.
+            try {
+                var receipt=Json.Deserialize<Dictionary<string,object>>(File.ReadAllText(Path.Combine(root,"consumer-shell.json")));
+                listed=receipt!=null && Text(receipt,"status")=="installed";
+            } catch(Exception) {}
+            if(Say(listed
+                ? "Amplifier is already installed on this PC.\n\nSelect Yes to open it now.\n\n"+
+                  "You can also open it from the Start menu: Amplifier Unified."
+                : "Amplifier is already installed on this PC, but it is not in the Start menu and does not start when you sign in.\n\n"+
+                  "Select Yes to start it again now. Your chats and settings are kept.\n\n"+
+                  "To open it later, run this setup file again.",
+                MessageBoxButtons.YesNo,MessageBoxIcon.Information)!=DialogResult.Yes) return 0;
+            try {
+                var start=AppStart(root);
+                using(PinInstalled(root,start.FileName)) Process.Start(start);
+                return 0;
+            } catch(Exception) {
+                Say("Setup could not start Amplifier. Open it from the Start menu: Amplifier Unified.",
+                    MessageBoxButtons.OK,MessageBoxIcon.Warning);
+                return 1;
+            }
         }
         static int ConsumerWindow() {
             Application.EnableVisualStyles();
+            // One setup per Windows account, across its sign-in sessions. A lock
+            // that cannot be read counts as held: two setups must never work in
+            // the one folder at the same time.
+            bool first=false; string account; System.Threading.Mutex single=null;
+            using(var identity=WindowsIdentity.GetCurrent()) account=identity.User.Value;
+            try { single=new System.Threading.Mutex(true,"Global\\AmplifierUnifiedSetup-"+account,out first); }
+            catch(Exception) {}
+            using(single) {
+                if(!first) {
+                    Say("Amplifier setup is already running. Use the setup window that is already open.\n\n"+
+                        "If you cannot find that window, restart Windows and run setup again.",
+                        MessageBoxButtons.OK,MessageBoxIcon.Information);
+                    return 2;
+                }
+                // Check the PC and the installation folder before asking anything:
+                // a person must not confirm an installation that cannot start.
+                string root,state;
+                try { root=Precheck(out state); }
+                catch(Exception error) { ShowStop(error); return 1; }
+                if(state=="installed") return OpenInstalled(root);
+                return InstallWindow(root,state);
+            }
+        }
+        static int InstallWindow(string root, string state) {
             if(MessageBox.Show("Install Amplifier Unified for your Windows account? Setup downloads private prerequisites. "+
                 "You do not need WSL, Python, Git or a terminal. This is an unsigned preview; Windows/browser trust "+
                 "is separate and no security policy will be bypassed.","Amplifier Unified Setup",
                 MessageBoxButtons.OKCancel,MessageBoxIcon.Information)!=DialogResult.OK) return 2;
             using(var form=new Form {Text="Amplifier Unified Setup",ClientSize=new Size(540,140),
                 FormBorderStyle=FormBorderStyle.FixedDialog,MaximizeBox=false,MinimizeBox=false}) {
-                var label=new Label {Left=20,Top=20,Width=500,Height=55,Text="Preparing your private installation..."};
+                var label=new Label {Left=20,Top=20,Width=500,Height=55,Text="Preparing the Amplifier folder..."};
                 var bar=new ProgressBar {Left=20,Top=85,Width=500,Style=ProgressBarStyle.Marquee};
                 form.Controls.Add(label);form.Controls.Add(bar);
                 var timer=new System.Windows.Forms.Timer {Interval=250};
-                timer.Tick+=(sender,e)=>{label.Text="Installing: "+Stage+"\nKeep this window open. No administrator access is requested.";};
+                timer.Tick+=(sender,e)=>{label.Text=Stage+"...\n\nKeep this window open. Setup needs no administrator rights.";};
                 Task<string> work=null; int result=1;bool settled=false;
                 form.FormClosing+=(sender,e)=>{if(!settled)e.Cancel=true;};
                 form.Shown+=async(sender,e)=>{
-                    timer.Start();work=Task.Run(()=>InstallConsumer(NativePins.ConsumerPlan));
+                    timer.Start();work=Task.Run(()=>InstallConsumer(NativePins.ConsumerPlan,root,state));
                     try {
-                        string shortcut=await work;result=0;
-                        MessageBox.Show("Installation is prepared. Background startup and browser entry were requested.\n\n"+
-                            "Your private shortcut:\n"+shortcut+"\n\nA browser/certificate decision may still need your attention.",
-                            "Amplifier Unified",MessageBoxButtons.OK,MessageBoxIcon.Information);
-                    } catch(Exception) {
-                        MessageBox.Show("Setup stopped during "+Stage+". No automatic retry was attempted.\n\n"+
-                            (Storage==null?"No installation root was created.":"Partial files and private diagnostics remain in:\n"+Storage.Root),
-                            "Amplifier Unified Setup",MessageBoxButtons.OK,MessageBoxIcon.Error);
+                        await work;result=0;
+                        Say("Amplifier is installed.\n\nAmplifier now starts in the background and then opens in your browser. "+
+                            "The first start can take a few minutes. Follow the messages that appear.\n\n"+
+                            "Later, open Amplifier from the Start menu: Amplifier Unified.",
+                            MessageBoxButtons.OK,MessageBoxIcon.Information);
+                    } catch(Exception error) {
+                        ShowStop(error);
                     } finally {settled=true;timer.Stop();form.Close();}
                 };
                 Application.Run(form);timer.Dispose();return result;
