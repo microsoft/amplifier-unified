@@ -40,6 +40,7 @@ class Wire:
         self.on_refusal = None
         self.canonical = None
         self.receipt_snapshots = {}
+        self.violations = []
         # Reactive fitting converts a public-context budget from server feedback.
         # Keep that case's physical text/token ratio realistic (about 4 MB total),
         # rather than mixing the proactive case's synthetic 28x token scale.
@@ -68,7 +69,10 @@ class Wire:
                     if row['role'] == 'tool':
                         saved = (digest(row), hashlib.sha256(row['content'].encode()).hexdigest())
                         previous = self.receipt_snapshots.setdefault(row['tool_call_id'], saved)
-                        assert saved == previous, 'Canonical receipt changed during preparation'
+                        # Provider deliberately converts counter exceptions to
+                        # unavailable; record outside that catch boundary too.
+                        if saved != previous:
+                            self.violations.append(row['tool_call_id'])
             if self.first_count_cold is None:
                 self.first_count_cold = self.metadata_calls == 0
             # Reactive cases model a stale server count, not a host bypass.
@@ -230,6 +234,11 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
             assert len(wire.refusals) == (1 if stop else 2)
             assert wire.effects == list(range(1, 7))
             assert len(wire.sent) == 6  # Rejected iterations produce no tool.
+            tools = [row for row in await context.get_messages() if row['role'] == 'tool']
+            assert [row['tool_call_id'] for row in tools] == [f'call-{i}' for i in range(1, 7)]
+            for row in tools:
+                assert wire.receipt_snapshots[row['tool_call_id']] == (
+                    digest(row), hashlib.sha256(row['content'].encode()).hexdigest())
             return
         result = await session.execute(prompt)
         rows = await context.get_messages()
@@ -264,3 +273,4 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
     finally:
         await sdk.close()
         await session.cleanup()
+        assert wire.violations == [], 'Canonical receipt changed during preparation'
