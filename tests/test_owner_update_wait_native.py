@@ -16,6 +16,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -57,13 +58,13 @@ class OwnerUpdateHost(OrderingHost):
 
     async def mount(self, row, provider, paths):
         # Unlike OrderingHost's post-mount gate, this test needs activation
-        # installed BEFORE execute captures context, for real park/reacquisition.
+        # installed BEFORE execute captures its writer-lifetime context.
         return await DirectNativeHost.mount(self, row, provider, paths)
 
     async def before_execute(self, worker):
         sid = worker.runtime.session_id
         # RuntimeManager owns this identity independently of shared-store
-        # acquisitions. Reacquiring a parked writer does not replace the process.
+        # acquisitions. The idle writer retains the same process.
         owner = self.workers[sid] = {"runtimeOwnerId": "native-probe-owner:" + sid}
         transport = worker.bridge
 
@@ -199,17 +200,16 @@ class OwnerUpdateHost(OrderingHost):
     async def checkpoint_and_park(self, worker):
         token = PUBLISH_ROOT.set(worker.runtime.session_id)
         try:
-            await worker.park(activation=worker.activation)
+            assert await worker.checkpoint_idle()
         finally:
             PUBLISH_ROOT.reset(token)
         await self.flush()
-        assert worker.parked and worker.shared_handle is None
+        assert worker.idle() and worker.shared_handle.active
 
     async def automatic_input(self, session, args, guard, steering):
         worker = self.roots[session["id"]]
         root = PUBLISH_ROOT.set(session["id"])
         try:
-            await worker.acquire_for_mutation()
             token = worker.activation_gate.bind(worker.activation)
             try:
                 return await super().automatic_input(session, args, guard, steering)
@@ -358,15 +358,20 @@ async def test_owner_update_wait_yields_then_continues_once_on_exact_healthy_ado
             assert enrolled["sourceInterruptionRevision"] == app._session(sid).get("interruptionRevision", 0)
             assert worker.controls.tasks.record()["status"] == "active"
 
-            # Native idle alone must not count as checkpoint/release proof.
+            # Native idle alone must not retire a worker with held resources.
+            # Boundary inspection now awaits its own save instead of observing
+            # an earlier park/release. A kernel remains a meaningful blocker.
+            old_kernels = worker.controls.kernels
+            worker.controls.kernels = SimpleNamespace(records={"held-kernel": {}})
+            old_handle = worker.shared_handle
             assert not await update_drain.prepare(manager, RELEASE)
             row = app.state["updates"]["drain"]["workers"][sid]
             assert not row["ready"] and "checkpoint" in row["waitingFor"]
-            old_handle = worker.shared_handle
-            await host.checkpoint_and_park(worker)
-            assert not old_handle.active
+            assert old_handle.active
+            worker.controls.kernels = old_kernels
             assert await update_drain.prepare(manager, RELEASE)
             assert row["ready"] and not row["waitingFor"]
+            assert old_handle.active and worker.shared_handle is old_handle
             assert row["yieldedGoal"] == {key: yielded_goal[key]
                                           for key in ("task_id", "cap", "turns_used", "continuations")}
             saved = json.loads(worker.controls.state_path().read_text())

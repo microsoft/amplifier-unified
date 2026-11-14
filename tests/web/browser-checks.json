@@ -1004,6 +1004,14 @@
       ]
     },
     {
+      "id": "session-health-request-failure",
+      "command": ["node", "tests/web/session-health-browser.mjs", "--request-failure"]
+    },
+    {
+      "id": "session-health-completed-runtime-fault",
+      "command": ["node", "tests/web/session-health-browser.mjs", "--completed-runtime-fault"]
+    },
+    {
       "id": "session-health-module-failure",
       "command": [
         "node",
@@ -1184,6 +1192,14 @@
       "env": {
         "EVIDENCE_DIR": "{root}/output/browser-checks/voice-work-message"
       }
+    },
+    {
+      "id": "external-multiparty",
+      "command": ["node", "tests/web/external-multiparty-browser.mjs"],
+      "env": {
+        "AMPLIFIER_TEST_PYTHON": "{root}/.venv/bin/python",
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/external-multiparty"
+      }
     }
   ],
   "scenarioOrder": [
@@ -1319,6 +1335,8 @@
     "session-health",
     "session-health-context-limit",
     "session-health-context-limit-active-worker",
+    "session-health-request-failure",
+    "session-health-completed-runtime-fault",
     "session-health-module-failure",
     "activity-feedback",
     "capacity",
@@ -1341,6 +1359,8 @@
     "chat-scroll-call-boundaries",
     "semantic-settings",
     "history-refresh",
-    "voice-work-message"
+    "voice-work-message",
+    "external-multiparty",
+    "shared-room"
   ]
 }

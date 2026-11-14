@@ -35,8 +35,12 @@ def pending_input(service, session):
     generation = session.get('collaborationGeneration') or {}
     if generation.get('id') and not generation.get('terminal'):
         return True
-    # Ordinary, voice, question and scheduled input create an execution turn
-    # before any preparation await, including sends without a command id.
+    # Ordinary input is not a new execution turn until the native owner says so.
+    # Its existing message still protects preparation without a command receipt.
+    if any(row.get('inputId') and row.get('delivery', {}).get('status') == 'sending'
+           for row in dict.get(session, 'messages', [])):
+        return True
+    # Voice, question and scheduled input retain their execution-turn evidence.
     # ColdDisplay retains the same pending-work fact with its exact body ref.
     reference = dict.get(session, '_coldFields', {}).get('execution')
     if not dict.__contains__(session, 'execution') and reference is not None:

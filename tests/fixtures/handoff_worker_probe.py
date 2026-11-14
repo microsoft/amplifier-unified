@@ -176,7 +176,7 @@ providers:
         from amplifier_foundation.session.history import SessionHistoryStore
         from amplifier_web.session_files import sessions_dir
         async with asyncio.timeout(10):
-            while sid in runtime.workers and not runtime.workers[sid].get('parked'):
+            while sid in runtime.workers and not runtime.workers[sid].get('idle'):
                 await asyncio.sleep(.05)
         messages = SessionHistoryStore(sessions_dir(workspace) / (session.get('runtimeSessionId') or sid)).load_messages()
         originals = [m for m in messages if (m.get('metadata') or {}).get('amplifier_input', {}).get('id') == 'native-original']

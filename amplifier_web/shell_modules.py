@@ -542,7 +542,7 @@ class ShellModules:
         view['navRecentLimit'] = self.recent_limits.get(self.recent_key(client, instance, identity), saved_limit)
         chat_page = projections.chats(scoped) if wants('chatNavigation') else None
         workspace = next((row for row in state.get('workspaces', []) if row['id'] == workspace_id and row.get('available') is True), None)
-        from .workspace_placement import listing
+        from amplifier_workspace_metadata import listing
         home_view = {**view, 'navChatScope': 'all', 'navArchive': 'active', 'navCollection': None,
                      'navFilter': '', 'navStatusFilter': 'all', 'navLocationFilter': 'all', 'navSort': 'activity'}
         home_view.pop('navChatPage', None)
@@ -617,7 +617,7 @@ class ShellModules:
                     activity_by_id[sid] = activity(row, bool(attention.get('sessions', {}).get(sid)),
                         error_reviewed=sid in reviewed, blocked=task_blocked(state, sid),
                         task=task_for(state, row), db=self.service.db)
-        overview = ({'items': [copy.deepcopy(workspace)] if workspace else [], 'nextOffset': None} if pinned_scope else listing(self.service, {'query': '', 'offset': 0})) if wants('workspaceOverview') else None
+        overview = ({'items': [copy.deepcopy(workspace)] if workspace else [], 'nextOffset': None} if pinned_scope else listing(self.service.state['workspaces'], {'query': '', 'offset': 0})) if wants('workspaceOverview') else None
         shortcuts = projections.workspace_shortcuts(scoped, workspace_id=workspace_id if pinned_scope else None) if wants('workspaceShortcuts') else None
         # Only summaries and the selected registration leave this query. No
         # transcripts, draft text, credentials, runtime mounts or full catalog.

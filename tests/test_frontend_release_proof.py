@@ -412,7 +412,7 @@ def test_fast_scope_selection_and_single_full_nightly_owner():
         assert 'if' not in next(step for step in fast if step.get('name') == name)
     browser = load('browser-checks.yml')['jobs']['browser']['steps']
     full, = [step for step in browser if 'npm test --prefix .build/web-client' in step.get('run', '')]
-    assert full['if'] == '${{ !inputs.multi_quote && !inputs.attachment_consumption && !inputs.app004_qualification && !inputs.mcp_boundary }}'
+    assert full['if'] == '${{ !inputs.multi_quote && !inputs.attachment_consumption && !inputs.app004_qualification && !inputs.mcp_boundary && !inputs.captured_message_delivery }}'
     assert 'pipefail' in full['run'] and 'output/browser-checks/frontend-units.log' in full['run']
     assert full['run'].count('npm test --prefix .build/web-client') == 1
     assert full['run'].count('npm test --prefix tests/web') == 1

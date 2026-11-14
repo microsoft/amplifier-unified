@@ -20,7 +20,7 @@ async def composed(directory, engine='native'):
     coordinator.hooks.register = lambda *args, **kwargs: None
     check = AsyncMock(return_value={'allowed': False})
     coordinator.register_capability('web.work_effect_check', check)
-    await install_app_access(coordinator, AsyncMock(return_value={}))
+    await install_app_access(coordinator, AsyncMock(return_value={}), execution_role='root')
     return coordinator, tools, check
 
 

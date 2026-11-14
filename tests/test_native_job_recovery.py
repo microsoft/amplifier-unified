@@ -546,7 +546,8 @@ async def test_accepted_native_state_reinstalls_in_fresh_core_without_fallback(n
         assert socket.send.await_count == 2
 
 
-async def test_full_live_loop_worker_steering_emits_final_text_once(native_host):
+@pytest.mark.parametrize('ordinary', [False, True])
+async def test_full_live_loop_worker_steering_emits_final_text_once(native_host, monkeypatch, ordinary):
     """Exercise the actual execute owner, not just provider completion calls."""
     from amplifier_web.coordination_delivery import CoordinationDelivery
     from amplifier_module_loop_live.runtime import Input
@@ -564,8 +565,29 @@ async def test_full_live_loop_worker_steering_emits_final_text_once(native_host)
     try:
         await events.put(json.dumps({"type": "response.created", "response": {"id": "parent"}}))
         await runtime.wait_for(lambda e: e["type"] == "native.response.created", 3)
-        result = await steer_from_worker(fixture)
-        assert result["accepted"] and result["disposition"] == "queued"
+        if ordinary:
+            from amplifier_web.runtime_worker import Worker
+            from amplifier_foundation.session.activation import ActivationGate
+            worker = Worker()
+            worker.session, worker.runtime, worker.execution = fixture.session, runtime, task
+            worker.shared_handle = object()
+            worker.activation_gate = ActivationGate()
+            worker.activation = worker.activation_gate.activate()
+            worker.controls = SimpleNamespace(preserve_configuration=False)
+            replies = []
+            monkeypatch.setattr('amplifier_web.runtime_worker.publish', replies.append)
+            await worker.command({'op': 'send', 'id': 'rpc', 'input_id': 'steer-input',
+                                  'text': 'Synthetic steer', 'interruptionRevision': 0})
+            assert replies[-1]['result'] == {'accepted': True, 'inputId': 'steer-input'}
+            sent = await runtime.wait_for(lambda e: e['type'] == 'steering.sent'
+                                         and e.get('input_id') == 'steer-input', 3)
+            assert sent['delivery'] == 'native'
+            assert sent['generation_id'] == runtime.generation['id']
+            assert 'target_generation_id' not in sent
+            assert runtime.accepted['steer-input'].kind == 'user'
+        else:
+            result = await steer_from_worker(fixture)
+            assert result["accepted"] and result["disposition"] == "queued"
         await events.put(json.dumps({"type": "response.steer.accepted", "steer": {"id": "steer-1"}}))
         await events.put(json.dumps({"type": "response.incomplete", "response": {
             **native_terminal("gpt-6-astra", "parent"), "status": "incomplete",

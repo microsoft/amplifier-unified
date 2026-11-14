@@ -14,7 +14,7 @@ async def inspect(worker, request_id, cancel=False, *, update=False, configurati
         if marker and marker['id'] != request_id:
             raise ValueError('Another checkout move owns this runtime boundary.')
         if not worker.session or not worker.runtime:
-            return {'ready': worker.parked, 'waitingFor': ['runtime']}
+            return {'ready': False, 'waitingFor': ['runtime']}
         coordinator = worker.session.coordinator
         if expected and expected.get('observeOnly'):
             if not marker:
@@ -112,10 +112,11 @@ async def inspect(worker, request_id, cancel=False, *, update=False, configurati
         if worker.runtime.queued_inputs or not worker.runtime.inbox.empty(): waiting.append('inputs')
         if loop and (loop.pending or loop._active_jobs()): waiting.append('children')
         if worker.naming and worker.naming.pending and not worker.naming.pending.done(): waiting.append('naming')
-        if worker.remounting or worker.ownership.yielding: waiting.append('ownership')
-        # Park is the positive checkpoint + release evidence. An idle UI event
-        # alone does not establish that children or the calling tool settled.
-        if not worker.parked: waiting.append('checkpoint')
+        if worker.ownership.yielding: waiting.append('ownership')
+        if not worker.computer_episodes.receipt()['settled']: waiting.append('computer')
+        # A positive save, followed by a fresh settlement check, is the boundary.
+        # Ownership remains with this worker until the later retirement/exit.
+        if not waiting and not await worker.checkpoint_idle(): waiting.append('checkpoint')
         marker = worker._handoff_boundary
         if configuration and not marker['updateCurrent']():
             raise ValueError('New input or changed task intent superseded the settings boundary.')
@@ -141,8 +142,8 @@ async def inspect(worker, request_id, cancel=False, *, update=False, configurati
 def checkpoint_configuration(worker):
     """Save one recovery proof while the native history writer lease is held.
 
-    Called only after the ordinary settled-worker history checkpoint, before
-    releasing its lease. A lost host reply can then read the same operation.
+    Called only after the ordinary settled-worker history checkpoint while
+    retaining its lease. A lost host reply can then read the same operation.
     """
     marker = getattr(worker, '_handoff_boundary', None) or {}
     if not marker.get('configuration') or not marker['updateCurrent']():

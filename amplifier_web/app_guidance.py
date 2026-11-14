@@ -4,11 +4,11 @@ import copy
 import weakref
 import json
 import re
-from .coordination_guidance import PLANNING_GUIDANCE, READ_GUIDANCE
+from .coordination_guidance import NATIVE_CHILD_GUIDANCE, PLANNING_GUIDANCE, READ_GUIDANCE
 
 # Historical export name retained for installed-runtime consumers. Detailed recipes
 # live in the packaged unified-app skill; this is the always-present orientation.
-CANVAS_GUIDANCE = '''You are running in Amplifier Unified. When the user says "this app", use its mounted app_control tool unless they identify another application. Use ordinary file/tools for their tasks; app controls are not a prerequisite for every step.
+COMMON_GUIDANCE = '''You are running in Amplifier Unified. When the user says "this app", use its mounted app_control tool unless they identify another application. Use ordinary file/tools for their tasks; app controls are not a prerequisite for every step.
 
 Discover the relevant current action schemas with app_control operation:list_actions and args:{prefix:"domain."}; invoke with operation:dispatch and args:{action:"domain.action",args:{...}}. Use the complete envelope, not parameters. Reuse known schemas within their catalog revision. Follow nextOffset with the same prefix/revision; an oversized schema's schemaRead and nextSchemaOffset supply the complete schemaText. Do not invent action names or fetch the whole catalog by default.
 
@@ -18,8 +18,6 @@ For detailed procedures, search for unified-app with load_skill when mounted and
 
 Full access is standing authorization within the assigned objective, including ordinary repair, delegation, checks and agreed publication. Do not ask again because a turn ended, a check failed, work moved to a child, or an old note says to wait for an already-received decision. Actual user Stop, explicit scope/limits, revoked permission and execution ownership still apply. An approval question is for a genuinely missing decision or authority; continue independent authorized work while it is pending. Resolve uncertain effects from saved receipts, not by replaying them. Accepted/queued, completed, and independently verified are distinct outcomes.
 
-Managers coordinate many independent workers when useful. Commission complete deliverables with acceptance criteria and clear ownership; workers implement, repair and test within that authority and return a result or concrete external blocker. Do not make routine acknowledgements, repeated inventories or repeated passing checks a workflow. Discover supported placement for concurrent writers; do not share a mutable checkout accidentally. A child retains its own authority and cannot impersonate its root.
-
 Managed chat folders are durable per-chat storage, not OS sandboxes or new registered workspaces. Explicit workspace associations and the actual execution folder may differ. Follow the provided workspace and repository guidance; inspect applicable subtree rules when entering new scope. Scratch is a short current shared index, not a second task database, history log or authority source. Keep detailed evidence with its owner and read it on demand. Do not autoload linked archives or add procedures merely because one previous attempt failed.
 
 Use existing file tools for ordinary reads/searches; writes follow their configured paths. Grant or configure capabilities only when an actual operation requires it. Inspect runtime.dependencies before adding a dependency; reuse the installed environment and maintained checks when suitable. Temporary capacity waits need not stop unrelated work. Verify results at the changed boundary and retain uncertainty honestly.
@@ -27,7 +25,18 @@ Use existing file tools for ordinary reads/searches; writes follow their configu
 For user-visible artifacts, use outputs. or canvas.show and present one full preview surface at a time: inline chat OR Canvas. Short text may stay inline; long or interactive content can use Canvas. Keep file/output identities from receipts, never invent client/message/artifact IDs or treat a saved receipt as observed rendering. A preview is not proof of successful execution. Image bytes belong in typed image delivery, not pasted base64 text. Discover image tool capabilities before generating or editing. Read the selected output/Canvas procedures when the task needs them.
 '''
 
-CANVAS_GUIDANCE += '\n' + READ_GUIDANCE + '\n' + PLANNING_GUIDANCE + '\n'
+COMMON_GUIDANCE += '\n' + READ_GUIDANCE + '\n'
+# Preserve the historical root export for installed-runtime consumers.
+CANVAS_GUIDANCE = COMMON_GUIDANCE + PLANNING_GUIDANCE + '\n'
+
+
+def execution_guidance(execution_role):
+    """The host installer supplies the role; names and prompt data never select it."""
+    if execution_role == 'root':
+        return CANVAS_GUIDANCE
+    if execution_role == 'native_child':
+        return COMMON_GUIDANCE + NATIVE_CHILD_GUIDANCE + '\n'
+    raise ValueError('App access requires an explicit root or native_child execution role.')
 
 
 def _app_control_input_error(value, operations):
@@ -72,8 +81,9 @@ def _app_control_input_error(value, operations):
                 'Use ' + json.dumps(recovery, separators=(',', ':')) + ' to read exact action schemas, then correct the request.'}
 
 
-async def install_app_access(coordinator, bridge):
+async def install_app_access(coordinator, bridge, *, execution_role):
     """Install exactly once per coordinator; ephemeral context also covers resumes."""
+    provider_guidance = execution_guidance(execution_role)
     if coordinator.get_capability('web.app_access'):
         return
     from .file_source_guard import install_file_source_guard
@@ -345,7 +355,7 @@ async def install_app_access(coordinator, bridge):
                 return ToolResult(success=False, error={'message':message})
 
     async def guidance(event, data):
-        return HookResult(action='inject_context', context_injection=CANVAS_GUIDANCE+'\n'+POLICY+'\n'+MEMORY_POLICY,
+        return HookResult(action='inject_context', context_injection=provider_guidance+'\n'+POLICY+'\n'+MEMORY_POLICY,
                           context_injection_role='system', ephemeral=True)
 
     async def bind_image_pair(event, data):

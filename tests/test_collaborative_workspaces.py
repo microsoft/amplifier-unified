@@ -312,8 +312,9 @@ async def test_child_identity_cannot_borrow_root_generation(app):
         await app.app_bridge("dispatch", {"action": "coordination.send", "_runtimeSessionId": "actual-child",
             "_generationId": source["collaborationGeneration"]["id"],
             "args": {"sessionId": app.state["sessions"][1]["id"], "text": "Synthetic root claim", "mode": "notify"}}, source["id"])
-    assert 'return the requested action, completed effects' in str(refused.value)
-    assert 'existing Stop, scope and permission restrictions still apply' in str(refused.value)
+    assert 'Retain the requested action, completed effects' in str(refused.value)
+    assert 'Actual Stop, stale execution, revocation, scope and permission restrictions still govern' in str(refused.value)
+    assert refused.value.status == 403
     assert app.runtime.inputs == []
 
 

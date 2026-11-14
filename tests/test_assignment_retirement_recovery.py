@@ -157,6 +157,40 @@ async def test_unfinished_task_is_not_read_before_idle_worker_retirement(app, mo
     assert (await retire(app, source, target))['reuseBinding'] is None
 
 
+async def test_unfinished_task_warm_retirement_preserves_task_stop_and_input(app, monkeypatch):
+    """Real retirement/admission locks and native lease; synthetic transport."""
+    from test_assignment_adoption import warm_idle
+    from amplifier_web.assignment_adoption import reusable_retirement
+
+    source, target, created = await setup(app)
+    target['task'] = await save_task(app, target, 'active')
+    target.update(interruptionRevision=3,
+                  lastInterruption={'at': 1, 'kind': 'user_stop'})
+    task_path = app.data_dir / 'sessions' / target['id'] / 'control-state.json'
+    saved = task_path.read_bytes()
+    manager = await warm_idle(app, target, monkeypatch)
+    before = copy.deepcopy(target)
+    inputs = copy.deepcopy(app.runtime.inputs)
+    original_receipt = copy.deepcopy(app.collaboration.receipt(created['initialInputId']))
+    try:
+        receipt = await retire(app, source, target, 'warm-unfinished-retire')
+        assert receipt['reuseBinding'] is None
+        assert receipt['result']['inputSent'] is False
+        assert app.assignments.current(source)['members'][target['id']]['status'] == 'retired'
+        assert app.assignments.current(target) is None
+        assert not reusable_retirement(app, source, target)
+        manager._request_unlocked.assert_awaited_once_with(target['id'], 'retire')
+        manager.stop.assert_awaited_once_with(target['id'], reason='retention')
+        assert target['id'] not in manager.workers
+        assert task_path.read_bytes() == saved
+        for key in ('task', 'status', 'messages', 'interruptionRevision', 'lastInterruption'):
+            assert target[key] == before[key]
+        assert app.runtime.inputs == inputs
+        assert app.collaboration.receipt(created['initialInputId']) == original_receipt
+    finally:
+        await manager.close()
+
+
 @pytest.mark.parametrize('broken', ['missing', 'json'])
 async def test_unavailable_task_cannot_reuse_full_retirement_from_cached_completion(app, broken):
     source, target, _ = await setup(app)

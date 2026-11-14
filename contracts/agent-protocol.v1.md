@@ -49,7 +49,20 @@ reply; an agent's supported triggers and outcome channels belong to its implemen
    experience conversation can have several agent participants without merging
    their native identities or becoming owned by one of them. ACP loading/resuming and lock
    acquisition preserve that authority; UI attachment neither changes engines nor takes ownership.
+   A live Amplifier worker retains its exclusive writer while busy or idle. Idle
+   retention, replacement and takeover save and retire that owner before a fresh
+   worker acquires it; there is no ownerless live parking or hot reacquisition.
    Broken: a new viewer starts a competing native writer. Affected: every session participant.
+
+   Experience-owned public context may be retrieved through standard MCP supplied
+   at the ACP boundary. Current room membership and the saved participant/source
+   binding authorize reads without another approval gate. Transport credentials
+   confer no other room, private history or host control authority. Source-owned
+   paging and text continuation preserve attribution and explicit omissions;
+   revocation is checked before reading and before returning an asynchronous result.
+   Absent HTTPS configuration or unadvertised HTTP capability leaves ordinary
+   chat unchanged. A rejected advertised attachment remains an explicit failure;
+   it does not silently remove tools or create a replacement execution session.
 
 4. **AP4 — Translate lifecycle faithfully.** Prompt completion, cancellation,
    permissions, errors, tool progress and resource callbacks retain upstream meanings.

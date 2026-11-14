@@ -98,6 +98,11 @@ async def test_passive_preparation_preserves_failed_turn_evidence_and_history(se
         'kind': 'llm', 'phase': 'error', 'endedAt': 1790182800,
         'failure': failure_details('Invalid image base64 data', 'ValueError'),
     })
+    await service.on_runtime_event('runtime.generation', {
+        'sessionId': session['id'], 'rootSessionId': session['id'],
+        'event': 'generation.failed', 'generation_id': 'failed-generation',
+        'input_ids': ['failed-input'], 'error_type': 'ValueError', 'error_category': 'unknown',
+    })
     if raw_error:
         await service.on_runtime_event('runtime.error', {
             'sessionId': session['id'], 'error': 'Manager turn failed; no automatic replay',

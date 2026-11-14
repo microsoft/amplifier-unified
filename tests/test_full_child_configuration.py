@@ -91,7 +91,7 @@ async def mounted(app, tmp_path, monkeypatch):
 
     monkeypatch.setattr(app.management, 'command', retain_authority)
     worker.bridge = transport
-    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator), execution_role='root')
     registry = await install_children(parent, prepared, Runtime('native-root'), SessionStore(tmp_path / 'children'), approvals)
     failures = []
 
@@ -193,7 +193,7 @@ async def test_mounted_full_configuration_and_own_reads_keep_actual_actor(mounte
             h.worker.context_inputs = ['later-input']
             h.worker.context_bindings = {'later-input': {'clientId': None, 'targets': []}}
             if mode == 'nested-reprepare':
-                await install_app_access(coordinator, h.worker.app_access_bridge(coordinator))
+                await install_app_access(coordinator, h.worker.app_access_bridge(coordinator), execution_role='native_child')
             await h.registry.spawn('worker', 'nested configuration', h.registry.sessions['child'], sub_session_id='grandchild')
         return 'configured'
 

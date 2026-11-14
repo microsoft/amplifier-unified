@@ -227,7 +227,7 @@ async def mount(j, source, tmp_path, monkeypatch):
             raise RuntimeError(result['error'])
         return result['result']
     worker.bridge = bridge
-    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator), execution_role='root')
     store = SessionStore(tmp_path / ('native-' + source['id']))
     async def checkpoint(*args, **kwargs):
         return store.save(source['id'], await parent.coordinator.get('context').get_messages(),

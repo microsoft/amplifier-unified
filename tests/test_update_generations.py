@@ -23,7 +23,11 @@ async def manager(tmp_path):
     async def emit(kind, data):
         events.append((kind, data))
 
-    manager = RuntimeManager(command=[sys.executable, "-c", SCRIPT])
+    script = SCRIPT.replace("    if op=='control':", """    if op=='fixture.idle':
+        idle=True
+        print(json.dumps({'type':'session.idle'}),flush=True)
+    if op=='control':""")
+    manager = RuntimeManager(command=[sys.executable, "-c", script])
     manager.home = tmp_path / "app"
     manager.home.mkdir()
     manager.retention.wake = lambda: None
@@ -48,7 +52,8 @@ async def test_running_work_keeps_generation_idle_adopts_before_send(manager):
     await manager.retention.sweep()
     assert first.returncode is None
     assert manager.generation_usage()[0]["updatePending"]
-    await manager._request("chat", "park")
+    # This fixture models the native completed-work event, not writer release.
+    await manager._request("chat", "fixture.idle")
     # No periodic sweep: admission itself must observe the pending generation.
     assert (await manager.send(session, "second", "two", manager.emit))["accepted"]
     assert first.returncode == 0

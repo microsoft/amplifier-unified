@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "source": {
+    "schema": 1,
+    "repository": "microsoft/amplifier-unified",
+    "revision": "94dc229f28e1c6dd8194782b35f7cb367fda7870",
+    "subdirectory": "components/scheduling",
+    "tree": "60c2fa772a9f2f77a66f7c146794cf767fcef858",
+    "version": "0.1.0",
+    "tag": "scheduling-v0.1.0",
+    "sourceFiles": {
+      ".gitignore": "91ff24eaa65a89ef74d692e164233422924a556a07666dd471ceefc6a31f331f",
+      "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "MANIFEST.in": "ca4d086a2960c7e0254208f08bf99f5db67adb33599085574b1155e859c7fb0a",
+      "README.md": "122a16c4267c817494aae79359ddea501f57f5f2a385906bb925fef6b823c2ec",
+      "amplifier_scheduling/__init__.py": "e6bb4a63a91e41ca20f3cff862a95d53eac72210f9f0b4ec9e36338517d2adeb",
+      "amplifier_scheduling/policy.py": "42ff0fc1a90eed3bdc1c24faa10700b8b933ea99b5f011bb04a83176b7aaa0ff",
+      "amplifier_scheduling/store.py": "d99bc8e2ee33894a28df594484985c0b72fd726008a57844c58eaa4e405a176f",
+      "pyproject.toml": "6559ec7e7275b722037cf9001611f4fbdbf71978e8704e1d161a6220ec9f0c8d",
+      "tests/test_policy_store.py": "f46fe1a554e3f6009c7807bc503dd83f2eec2bf2723f015cd992c206a867ebe0"
+    },
+    "artifacts": {
+      "amplifier_scheduling-0.1.0-py3-none-any.whl": {
+        "sha256": "df2617fcb86408e7485dd98e57535f204219cea573ce7a113ba3452ac2bc1ef9",
+        "bytes": 10838
+      },
+      "amplifier_scheduling-0.1.0.tar.gz": {
+        "sha256": "9ab55994a4f3daecb5750cd22869ab941deece7a9e5701a2f69a05d1dfb81ef7",
+        "bytes": 14288
+      }
+    }
+  },
+  "artifact": {
+    "url": "https://github.com/microsoft/amplifier-unified/releases/download/scheduling-v0.1.0/amplifier_scheduling-0.1.0-py3-none-any.whl",
+    "sha256": "df2617fcb86408e7485dd98e57535f204219cea573ce7a113ba3452ac2bc1ef9",
+    "bytes": 10838
+  },
+  "sourceReceiptSha256": "e4296e1f0f90162fe9cc4cb09bafb0eac722871344439a7498666a6f3a0029de",
+  "runtimeRequirements": [
+    "tzdata; sys_platform == \"win32\""
+  ],
+  "files": {
+    "amplifier_scheduling/__init__.py": "e6bb4a63a91e41ca20f3cff862a95d53eac72210f9f0b4ec9e36338517d2adeb",
+    "amplifier_scheduling/policy.py": "42ff0fc1a90eed3bdc1c24faa10700b8b933ea99b5f011bb04a83176b7aaa0ff",
+    "amplifier_scheduling/store.py": "d99bc8e2ee33894a28df594484985c0b72fd726008a57844c58eaa4e405a176f",
+    "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  }
+}

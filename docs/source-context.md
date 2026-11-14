@@ -58,6 +58,11 @@ selected copy; a client-only merge is not delivery here. Follow the mandatory
 Its selection and maintenance guide stay visible; use `--all --under components/web-client`
 to inspect the copy. Generated-context classification does not make synchronization
 optional. The copy is the selected production build source, not another authored owner.
+The scheduling artifact snapshot follows the same author/delivery distinction:
+`components/scheduling` is authored, while `components/scheduling-delivery` is
+generated and opt-in. Its visible `components/scheduling.source.json` records the
+selected public wheel. Use `--all --under components/scheduling-delivery` to inspect
+it; a new component source edit or publication does not silently refresh the copy.
 Source bootstrap files in the canonical client's `public/` remain authored inputs;
 their delivery copy has the same generated-context classification as other copied
 client source. Shipped documentation in `docs/shell` is authored here. Frozen UX inventory/control
@@ -83,11 +88,12 @@ guides remain visible for current direction, reproduction and evidence limits.
 | Admission, action receipts and errors | [service](../amplifier_web/service.py), domain handlers and [save scope](../amplifier_web/action_save_scope.py) | [Current wire](clients/live-sessions.md), [client state](../contracts/client-state.v1.md) |
 | Runtime and provider lifecycle | [runtime](../amplifier_web/runtime.py), [worker](../amplifier_web/runtime_worker.py), [host adapter](../amplifier_web/host) | [Agent boundary](../contracts/agent-protocol.v1.md), [request recovery](../contracts/model-request-recovery.v1.md); native Core/Foundation own native mechanisms |
 | History, catalog and display | [shared state](../amplifier_web/shared_state.py), [history directory](../amplifier_web/history_directory.py), [cold display](../amplifier_web/cold_display.py) | [Working set](../contracts/working-set.v1.md), [state/storage design](architecture/state-and-storage.md); derived views are not new history authorities |
+| Native message display and checkpoint anchors | [record projection](../amplifier_web/native_message_projection.py), [worker checkpoint](../amplifier_web/runtime_worker.py), [peer input](../amplifier_web/collaboration_input.py) | Existing raw native identities, visibility and provenance; no catalog, storage or configuration ownership |
 | Browser transport, commands and private view | Author in [amplifier-client-web](https://github.com/microsoft/amplifier-client-web); [required selected-copy refresh](../components/README.md#refresh-and-retire-the-copy): [main](../components/web-client/src/main.jsx), [state stream](../components/web-client/src/state-stream.js), [draft journal](../components/web-client/src/draft-journal.js) | [Client state](../contracts/client-state.v1.md), [client experience](../contracts/client-experience.v1.md); stream, action and optimistic state have distinct causality |
 | Agent instructions and readbacks | [app guidance](../amplifier_web/app_guidance.py), [agent state](../amplifier_web/agent_state.py), [receipts](../amplifier_web/agent_receipts.py) | [Agent results](AGENT-RESULTS.md), client privacy and receipt contracts; optional skill absence does not remove supported actions |
 | Domain capabilities | Relevant `amplifier_web` handler, portable `amplifier_*` package, frontend consumer and domain tests | Domain guide under `docs/`; [component boundaries](../contracts/component-boundaries.v1.md) |
 | Output relationships and review evidence | [portable mechanisms](../components/outputs/README.md), [host outputs](../amplifier_web/outputs.py), [transfer reader](../amplifier_web/portability_data.py) | [Output guide](OUTPUTS.md); host owns authorization, transactions, resource integrity and retention |
-| Workspace registration and selection | [host selection](../amplifier_web/workspace_selection.py), [placement](../amplifier_web/workspace_placement.py) | [Placement](workspaces/contracts/placement.v1.md), [context](workspaces/contracts/context.v1.md); selection preserves native history identity and existing Canvas visibility |
+| Workspace registration and selection | [metadata owner](../components/workspaces/README.md), [host selection](../amplifier_web/workspace_selection.py), [placement](../amplifier_web/workspace_placement.py) | [Placement](workspaces/contracts/placement.v1.md), [context](workspaces/contracts/context.v1.md); selection preserves native history identity and existing Canvas visibility |
 | Shell, canvas and appearance | [Canvas rendering](../amplifier_web/workspace_canvas.py), [shell](shell), [SDK](../packages/shell-sdk), [frontend shell](../components/web-client/src/shell) | Public extension/appearance contracts; saved user skins and independent components remain consumers |
 | Test and release mechanisms | [Python tests](../tests), [browser registry](../tests/web/browser-checks.json), [scripts](../scripts) | [Performance validation](validation/performance.md), [release qualification](validation/release-qualification.md); exact evidence and independent modes remain distinct |
 

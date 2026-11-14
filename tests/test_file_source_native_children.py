@@ -70,7 +70,7 @@ async def install_host_access(parent, app, monkeypatch, diagnostic, *, handles=N
         diagnostic['bridge'] = observation
         return result
     worker.bridge = bridge
-    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator), execution_role='root')
     return checks
 
 

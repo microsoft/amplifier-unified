@@ -213,7 +213,7 @@ async def test_real_rust_coordinator_mount_wraps_late_tools():
     c.register_capability('web.work_effect_check', check)
     async def bridge(operation, args):
         return {}
-    await install_app_access(c, bridge)
+    await install_app_access(c, bridge, execution_role='root')
     class Probe:
         name = 'late'
         async def execute(self, args):

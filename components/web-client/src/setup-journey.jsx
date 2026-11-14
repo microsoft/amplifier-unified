@@ -2,6 +2,7 @@ import React,{useEffect,useRef,useState} from 'react';
 import {Sparkles,MessageSquare,Settings,LoaderCircle} from 'lucide-react';
 import {settingsPatch} from './settings-navigation';
 import {newChatSetup} from './new-chat';
+import {draftExternalAgentIds} from './external-participants';
 import './setup-journey.css';
 import {fitPanels} from './panel-layout';
 
@@ -10,7 +11,7 @@ export function useConnectionSetup(state,session,act){
  const setup=state?.setup||{},workspace=session?.workspace||state?.settings?.workspace;
  const view=state?.view||{};
  const settingsOpen=['settings','appearance'].includes(view.panel)||(!view.panel&&state?.canvas?.kind==='settings'&&state.canvas.open&&!view.canvasDraft?.library);
- const external=!!(session?.externalAgent||(!session&&view.newSessionDraft?.externalAgentId)||(settingsOpen&&view.settingsExpanded?.includes('external-agents')));
+ const external=!!(session?.externalAgent||(!session&&draftExternalAgentIds(view.newSessionDraft).length)||(settingsOpen&&view.settingsExpanded?.includes('external-agents')));
  const loaded=setup.providersLoadedAt&&(setup.providersWorkspace===workspace||!session&&setup.providersLocation?.kind==='managed');
  const any=setup.providers?.some(row=>row.enabled!==false);
  const discovering=!external&&(!session||['welcome','connect'].includes(state?.view?.setupJourney));

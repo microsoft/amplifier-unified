@@ -297,17 +297,15 @@ async def test_real_process_output_is_durable_beyond_module_ring_and_cancel_obse
         await tool.close()
 
 
-async def test_owned_processes_fence_worker_parking_and_cancellation_releases_command_lock(
+async def test_owned_process_cancellation_releases_command_lock_not_writer(
     monkeypatch,
 ):
     from amplifier_web.runtime_worker import Worker
 
     worker = Worker()
     worker.ownership = SimpleNamespace(yielding=False)
-    worker.acquire_for_mutation = AsyncMock()
     worker.bind_activation = lambda: "token"
     worker.activation_gate = SimpleNamespace(reset=lambda token: None)
-    worker.park = AsyncMock()
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def command(data):
@@ -327,7 +325,7 @@ async def test_owned_processes_fence_worker_parking_and_cancellation_releases_co
         release.set()
     await asyncio.wait_for(task, 1)
     assert worker.operation_controls == 0
-    worker.park.assert_awaited_once()
+    assert not hasattr(worker, 'park')
 
 
 async def test_managed_process_observation_keeps_worker_owned(monkeypatch):
@@ -335,14 +333,14 @@ async def test_managed_process_observation_keeps_worker_owned(monkeypatch):
 
     worker = Worker()
     worker.ownership = SimpleNamespace(yielding=False)
-    worker.session = SimpleNamespace(coordinator=SimpleNamespace(get=lambda name: None))
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(get=lambda name: None,
+        get_capability=lambda _: None))
     worker.runtime = SimpleNamespace(
         queued_inputs=0, inbox=asyncio.Queue(), generation=None
     )
     worker.shared_handle = SimpleNamespace(release=AsyncMock())
     worker.operation_ids.add(("runtime", "live-command"))
-    await worker.park()
-    assert worker.parked is False
+    assert not worker.idle()
     worker.shared_handle.release.assert_not_awaited()
 
 

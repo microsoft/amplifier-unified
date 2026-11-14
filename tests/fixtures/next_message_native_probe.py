@@ -199,7 +199,7 @@ async def run(root, regression=False, binding=False, lifecycle=False):
             # Real ordinary startup before the pending bundle+model replacement.
             await action('conversation.send', {'sessionId': sid, 'text': 'BASELINE_INPUT'}, 'baseline-input')
             await until(lambda: current.get('collaborationGeneration', {}).get('terminal'))
-            await until(lambda: runtime.workers.get(sid, {}).get('parked'))
+            await until(lambda: runtime.workers.get(sid, {}).get('idle'))
             assert len(calls.read_text().splitlines()) == 1
             # Keep the existing exactly-once oracle focused on the next inputs.
             calls.write_text('')
@@ -217,7 +217,7 @@ async def run(root, regression=False, binding=False, lifecycle=False):
                 await action('conversation.send', {'sessionId': sid, 'text': identity,
                     'expectedConfigurationRevision': revision + 1}, identity)
                 await until(lambda: current.get('collaborationGeneration', {}).get('terminal'))
-                await until(lambda: runtime.workers.get(sid, {}).get('parked'))
+                await until(lambda: runtime.workers.get(sid, {}).get('idle'))
                 turn = next(turn for turn in current['execution']['turns'] if turn['id'] == identity)
                 observed = [json.loads(line) for line in calls.read_text().splitlines()]
                 outcomes.append({'input': identity, 'phase': turn['phase'], 'error': current.get('error'),
@@ -265,7 +265,7 @@ async def run(root, regression=False, binding=False, lifecycle=False):
         report['processes'].append(runtime.workers[sid]['process'].pid)
         await until(lambda: current.get('collaborationGeneration', {}).get('terminal'))
         assert calls.exists(), current.get('error')
-        await until(lambda: runtime.workers[sid].get('parked'))
+        await until(lambda: runtime.workers[sid].get('idle'))
         first = [json.loads(line) for line in calls.read_text().splitlines()]
         assert len(first) == 1 and first[0]['root'] == ('shared' if binding else 'b') and first[0]['model'] == 'first' and first[0]['effort'] == 'low', first
         if binding:
@@ -278,7 +278,7 @@ async def run(root, regression=False, binding=False, lifecycle=False):
         assert len(calls.read_text().splitlines()) == 1
         await action('conversation.send', {'sessionId':sid,'text':'SECOND_GENUINE_INPUT','expectedConfigurationRevision':3}, 'input-two')
         await until(lambda: current.get('collaborationGeneration', {}).get('terminal'))
-        await until(lambda: runtime.workers[sid].get('parked'))
+        await until(lambda: runtime.workers[sid].get('idle'))
         report['processes'].append(runtime.workers[sid]['process'].pid)
         observed = [json.loads(line) for line in calls.read_text().splitlines()]
         assert observed[1]['root'] == ('shared' if binding else 'a') and observed[1]['model'] == 'second' and observed[1]['effort'] == 'high', observed

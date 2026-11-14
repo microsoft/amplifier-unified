@@ -21,21 +21,58 @@ Current-conversation edits require idle execution and exclusive Foundation owner
 
 Prepared revision evidence is private and durable. After interruption, recovery classifies the saved transcript; it never overwrites a newer owner's changes or automatically retries the edited input. A committed edit with an unconfirmed response is shown as interrupted for review.
 
-Validation covers delayed admission and identical newer drafts, duplicate delivery across clients and restart, uncertain results without replay, failed local edits, current/fork selection, preserved earlier tool context, rollback and interrupted edits. `RUN_HISTORY_EDIT_WORKER=1 pytest tests/test_history_edit_worker.py` additionally runs the actual worker with a local fixture provider through edit, parking and restart. It uses isolated session files and does not contact a model provider.
+Validation covers delayed admission and identical newer drafts, duplicate delivery across clients and restart, uncertain results without replay, failed local edits, current/fork selection, preserved earlier tool context, rollback and interrupted edits. `RUN_HISTORY_EDIT_WORKER=1 pytest tests/test_history_edit_worker.py` additionally runs the actual worker with a local fixture provider through edit, exclusive worker retirement and restart. It uses isolated session files and does not contact a model provider.
 
-## Ordinary messages at turn completion
+## Ordinary messages follow the conversation
 
-The composer sends ordinary messages with `allowNextTurn: true`. It still supplies
-`expectedGenerationId` while a run is active. Admission under the service lock may
-start a new turn if that exact generation has positive normal-completion evidence
-and no active jobs. An unrelated generation, restart, failure, detached runtime,
-or uncertain steering acknowledgement does not qualify. Explicit generation-bound
-callers retain strict steering by omitting `allowNextTurn`.
+The composer sends one ordinary message with its stable input identity and payload,
+not a browser-observed generation or a route. The host forwards it unclassified
+through the existing native inbox. After quote preparation, the native owner uses
+live provider steering when supported and actually ready (mid-step); otherwise it
+inserts the input at the next model-request boundary within the current turn
+(mid-turn). Idle input begins a new turn. Earlier boundary-pending input cannot be
+overtaken by later live input. No additional mailbox, delivery queue or poller is
+introduced.
+
+The browser captures `expectedInterruptionRevision` from this conversation when
+the person presses Send, before upload/checkpoint/network waits. This existing Stop
+epoch is a cancellation fence, never a route or generation hint. Fresh admission
+after a changed epoch refuses with `input_stopped`; exact duplicate receipts are
+returned first. A deliberate new post-Stop message captures the new epoch. Unknown
+delivery keeps its original ID, payload and epoch; it never silently refreshes them.
+The host and worker also recheck captured admission after preparation awaits.
+
+`expectedGenerationId` remains an explicit strict API: an ended, changed or
+unavailable target refuses the input, never converts it into another turn. The
+former `allowNextTurn` option and host/worker completion handoff are removed
+deliberately. Independent callers must choose ordinary conversation input or strict
+anchored input, not infer a route from displayed status.
+
+Saved Next message settings do not interrupt guidance to active work. Where those
+choices require idle application, the existing worker's send admission decides
+under its lock: active input captures the mounted settings and leaves future
+choices saved; idle input returns explicit no-effect configuration readiness, then
+the host applies its existing preparation once before first admission. If normal
+completion races an active admission, that input may begin the next turn with its
+captured mounted settings. This does not claim the saved future choices were
+applied. An accepted/unknown input never takes this no-effect path again.
 
 An explicit Retry of a confirmed rejected browser submission uses a new command
-identity and the conversation's current generation. Unknown delivery retains the
+identity without a generation. Unknown delivery retains the
 original identity and arguments for reconciliation, never an automatic resend.
 The UI calls the submitted content a message without classifying its intent.
+Historical unknown submissions with removed route options remain inspectable through
+passive delivery checks; changing their payload under the old ID is refused, not
+treated as fresh work.
+
+Inbox acceptance is not provider acceptance, context insertion, a successor
+response, or model obedience. Existing identity-bound receipts distinguish local
+boundary queueing, native sent/accepted/pending, applied, held and unknown. A native
+False result is a pre-send readiness refusal; a provider-owned pre-acceptance failure
+may use its existing boundary insertion. Neither the host nor a reconnect resubmits
+an accepted/pending/unknown input. Stop fences waiting preparation and local queued
+input; an unconfirmed remote cancellation remains unknown. Ownership, configuration,
+destination, source and exact ID/content deduplication checks still apply.
 
 ## Portable failure diagnosis
 
@@ -56,10 +93,8 @@ status and timing only, never query strings, request arguments or response bodie
 Handler timing cannot measure an event-loop stall before connection acceptance;
 a fast health probe between stalls does not rule out intermittent host stalls.
 
-The owning worker repeats the completion check after input preparation. If the
-exact run finished normally during that interval, an opted-in ordinary message
-enters the next turn once, with a `next_turn` receipt rather than a false claim of
-insertion into the old context. Failed, stopped, detached or uncertain attempts do
-not qualify. Read-only media discovery similarly requalifies its entire identity
+The owning worker rechecks Stop after input preparation; the loop owns the current
+turn boundary without relying on host projections. Read-only media discovery
+requalifies its entire identity
 proof after a transient revision race, with at most three attempts; this does not
 relax byte access, mutation or identity-collision checks.
