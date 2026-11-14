@@ -249,8 +249,13 @@ class SurfaceProvider:
             project = (self.coordinator.get_capability('computer_use.prepare_request')
                        if self.coordinator is not None else None)
             prepared_input = request
+            from .attachments import project_attachment_paths, LOCATORS
+            if any(LOCATORS in (getattr(message, 'metadata', None) or {})
+                   for message in getattr(request, 'messages', ())):
+                from .host.config import app_home
+                prepared_input = project_attachment_paths(request, app_home())
             if callable(project) and not media_only:
-                prepared_input, source_validate = project(request)
+                prepared_input, source_validate = project(prepared_input)
                 if source_validate is not None:
                     def projection_validate():
                         if self.coordinator.get_capability('computer_use.prepare_request') is not project:
@@ -264,12 +269,12 @@ class SurfaceProvider:
                           if refit_binding is not None and callable(refit)
                           else await self.delivery.prepare(prepared_input, self.original))
             registry = self.coordinator.get_capability('web.media.request_only') if self.coordinator is not None else None
-            if callable(getattr(registry, 'bind', None)):
-                registry.bind(cached, issued)
             if refused and hasattr(self.delivery, "revalidate"):
                 # Stabilize revoked visual/context warnings BEFORE the new
                 # measurement. Never replace fitted bytes during transport.
                 cached = await self.delivery.revalidate(cached)
+            if callable(getattr(registry, 'bind', None)):
+                registry.bind(cached, issued)
             boundary = not media_only and hasattr(self.delivery, "finalize_work")
             binding = self.delivery.work_request(cached) if boundary else None
             from .host.media import prepare_media
@@ -279,12 +284,21 @@ class SurfaceProvider:
             if media is None and callable(getattr(registry, 'release', None)):
                 registry.release(cached)
             if media is not None:
+                media.bind_canonical(request)
                 cached = media.request
                 previous_validate = projection_validate
                 def projection_validate():
                     if previous_validate is not None:
                         previous_validate()
                     media.validate()
+                if media.request_only:
+                    async def before_transport():
+                        current = await self.delivery.revalidate(media.request)
+                        if current != media.request:
+                            raise ValueError('Request-only image consent changed before transport')
+                        media.validate()
+                        media.transport_armed = True
+                    projection_validate.before_transport = before_transport
             entry = (request, cached, cached.model_dump_json() if boundary or projection_validate is not None else None,
                      binding, projection_validate, media)
             if refit_binding is not None:
@@ -311,6 +325,8 @@ class SurfaceProvider:
                 evicted = self.prepared.pop(0)
                 if len(evicted) > 5 and evicted[5] is not None:
                     evicted[5].release()
+                    from . import provider_capture as capture
+                    capture.observe(capture.invalidate, self, evicted[0])
             self.refused = [row for row in self.refused if row[0] is not request]
         _, cached, fitted, binding = entry[:4]
         if projection_out is not None:
@@ -454,6 +470,8 @@ class SurfaceProvider:
                         return await method(prepared, **kwargs)
                 finally:
                     self._release_media(prepared)
+                    projection.clear()
+                    prepared = None
                     from . import provider_capture as capture
                     capture.observe(capture.invalidate, self, request)
             return compact
@@ -487,6 +505,9 @@ class SurfaceProvider:
                             media.validate()
                         if closing:
                             return await operation()
+                        refresh = getattr(projection[1], 'before_transport', None) if projection else None
+                        if callable(refresh):
+                            await refresh()
                         from .request_projection import dispatch as projection_dispatch
                         with projection_dispatch(self.original, request, *projection, kwargs), capture.dispatch(ticket, self.original, request, trace):
                             return await operation()
@@ -520,6 +541,8 @@ class SurfaceProvider:
                             self.delivery.close_work_stream(attempt)
                         if ticket is not None:ticket.close()
                         self._release_media(request)
+                        projection.clear()
+                        request = None
             return stream
         if name == 'request_budget' and callable(method):
             async def budget(request, *, request_options=None, **kwargs):
@@ -589,6 +612,9 @@ class SurfaceProvider:
             media = self._active_media.get(id(request))
             if media is not None:
                 media.validate()
+            refresh = getattr(projection[1], 'before_transport', None) if projection else None
+            if callable(refresh):
+                await refresh()
             with projection_dispatch(self.original, request, *projection, kwargs), capture.dispatch(ticket, self.original, request, trace):
                 response = await self.original.complete(request, **kwargs)
             if hasattr(self.delivery, 'finish_work'):
@@ -602,3 +628,5 @@ class SurfaceProvider:
             WORK_ATTEMPT.reset(token)
             if ticket is not None:ticket.close()
             self._release_media(request)
+            projection.clear()
+            request = None

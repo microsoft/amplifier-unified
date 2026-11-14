@@ -220,6 +220,7 @@ class ExecutionEvents:
             delivery, attempt = active
             delivery.admit_work(attempt, row, guarded=self.admission_guard is not None)
         try:
+            await request_projection.refresh(projection_guard, request)
             request_projection.validate(projection_guard, request, request_options or {})
         except Exception as error:
             from .session_health import exception_details

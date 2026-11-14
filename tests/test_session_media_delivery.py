@@ -131,7 +131,7 @@ async def test_exact_private_projection_count_send_and_canonical_privacy(work):
     assert c.delivery.lookups == c.delivery.commits == 1
 
 
-@pytest.mark.parametrize("mutation", ["options", "source", "capability", "scope", "expired"])
+@pytest.mark.parametrize("mutation", ["options", "source", "capability", "scope", "expired", "outer-list"])
 async def test_fitted_media_mutation_refuses_before_transport(mutation):
     c = case()
     value = request()
@@ -145,6 +145,8 @@ async def test_fitted_media_mutation_refuses_before_transport(mutation):
         c.caps[NAMESPACE] = object()
     elif mutation == "scope":
         c.scope["stopRevision"] += 1
+    elif mutation == "outer-list":
+        value.messages.append(Message(role="user", content="Later input"))
     else:
         c.prepared[0].valid = False
     with pytest.raises(ValueError):
