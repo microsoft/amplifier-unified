@@ -170,14 +170,71 @@ def test_service_exact_scope(monkeypatch, tmp_path):
         reset.service_commands(tmp_path / "dat")
 
 
-def test_environment_bypasses_contaminated_uv_and_python_configuration(monkeypatch):
-    for key in ("PYTHONPATH", "UV_CONSTRAINT", "UV_OVERRIDE", "UV_INDEX_URL", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
+def test_environment_bypasses_project_injection_not_approved_package_policy(monkeypatch):
+    for key in ("PYTHONPATH", "UV_CONSTRAINT", "UV_OVERRIDE", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
         monkeypatch.setenv(key, "bad")
+    monkeypatch.delenv("UV_NO_CONFIG", raising=False)
+    preserved = {
+        "UV_INDEX_URL": "https://synthetic-feed.invalid/simple",
+        "UV_DEFAULT_INDEX": "https://synthetic-default.invalid/simple",
+        "UV_CONFIG_FILE": "/approved/uv.toml", "UV_INDEX_CORPORATE_PASSWORD": "synthetic-secret",
+        "UV_KEYRING_PROVIDER": "subprocess", "UV_NATIVE_TLS": "true",
+        "HTTPS_PROXY": "https://synthetic-proxy.invalid", "SSL_CERT_FILE": "/approved/ca.pem",
+        "PYTHON_KEYRING_BACKEND": "synthetic.backend",
+    }
+    for key, value in preserved.items():
+        monkeypatch.setenv(key, value)
     monkeypatch.setenv("UV_TOOL_DIR", "/owned/tools")
     env = reset.environment()
-    assert env["UV_NO_CONFIG"] == env["UV_NO_CACHE"] == "1"
+    assert "UV_NO_CONFIG" not in env and env["UV_NO_CACHE"] == "1"
+    assert {key: env[key] for key in preserved} == preserved
     assert env["UV_TOOL_DIR"] == "/owned/tools"
     assert "PYTHONPATH" not in env and "UV_CONSTRAINT" not in env
+    assert "UV_OVERRIDE" not in env and "UV_PROJECT_ENVIRONMENT" not in env and "VIRTUAL_ENV" not in env
+    monkeypatch.setenv("UV_NO_CONFIG", "1")
+    assert reset.environment()["UV_NO_CONFIG"] == "1"  # deliberate operator policy
+    assert "UV_NO_CACHE" not in reset.package_environment({})
+
+def test_feed_auth_failure_does_not_retry_with_different_github_credentials():
+    env = {"GH_TOKEN": "synthetic-token", "UV_INDEX_CORPORATE_PASSWORD": "synthetic-password"}
+    argv = ["uv", "tool", "install", "git+https://github.com/microsoft/amplifier-unified"]
+    assert reset.anonymous_retry_environment(argv, env, stderr=
+        b"Failed to fetch https://synthetic-feed.invalid/simple/pkg: 401 Unauthorized") is None
+    assert env["GH_TOKEN"] == "synthetic-token"
+
+
+@pytest.mark.parametrize("repository", ["package-index", "package-registry"])
+@pytest.mark.parametrize("argv", [["git", "clone"], ["uv", "tool", "install"]])
+def test_repository_names_do_not_turn_github_auth_into_package_feed_auth(repository, argv):
+    url = f"https://github.com/acme/{repository}/"
+    env = {"GH_TOKEN": "synthetic-token", "UV_INDEX_CORPORATE_PASSWORD": "synthetic-password"}
+    retry = reset.anonymous_retry_environment([*argv, url], env,
+        stderr=f"fatal: Authentication failed for '{url}'")
+    assert retry["AMPLIFIER_GITHUB_ACCESS"] == "anonymous"
+    assert "GH_TOKEN" not in retry
+    assert retry["UV_INDEX_CORPORATE_PASSWORD"] == "synthetic-password"
+    assert env["GH_TOKEN"] == "synthetic-token"
+
+
+def test_direct_git_read_does_not_use_installer_classification():
+    argv = ["git", "clone", "https://github.com/acme/package-index/"]
+    retry = reset.anonymous_retry_environment(argv, {}, stderr=
+        b"fatal: Authentication failed for package registry https://github.com/acme/package-index/")
+    assert retry["AMPLIFIER_GITHUB_ACCESS"] == "anonymous"
+
+
+def test_cli_feed_failure_reports_requirement_without_private_installer_output(monkeypatch, tmp_path):
+    monkeypatch.setattr(reset, "service_commands", lambda home: None)
+    def fail(*args):
+        raise subprocess.CalledProcessError(1, ["uv", "tool", "install"],
+            stderr="Because there is no version of agent-client-protocol==1.0.0\nhttps://credentialuser:secret@synthetic-feed.invalid/simple")
+    monkeypatch.setattr(reset, "perform", fail)
+    args = argparse.Namespace(data_dir=str(tmp_path), source=None, yes=True, dry_run=False, no_start=True)
+    with pytest.raises(SystemExit) as caught:
+        reset.run(args)
+    assert "agent-client-protocol ==1.0.0" in str(caught.value)
+    assert "configured package indexes" in str(caught.value)
+    assert all(value not in str(caught.value) for value in ("secret", "credentialuser", "synthetic-feed.invalid"))
 
 
 def test_running_old_worker_prevents_reset(monkeypatch, tmp_path):

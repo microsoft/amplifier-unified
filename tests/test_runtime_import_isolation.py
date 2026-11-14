@@ -85,7 +85,7 @@ def test_worker_scripts_do_not_expose_host_site_packages(tmp_path, entrypoint, r
     (foundation / "transcript_guard.py").write_text(
         "class NativeTranscriptGuard: pass\nclass NativeTranscriptConflict(RuntimeError): pass\n"
     )
-    for name in (entrypoint, "runtime_protocol.py", "message_delivery.py", "response_completion.py", "ownership.py", "computer_episodes.py", "__init__.py", "runtime_bootstrap.py", "update_diagnostics.py", "runtime_qualification.py", "runtime_environment.py"):
+    for name in (entrypoint, "runtime_protocol.py", "message_delivery.py", "response_completion.py", "ownership.py", "computer_episodes.py", "__init__.py", "runtime_bootstrap.py", "update_diagnostics.py", "reset.py", "reset_retention.py", "runtime_qualification.py", "runtime_environment.py"):
         if (PACKAGE / name).exists():
             shutil.copy2(PACKAGE / name, package / name)
     shutil.copytree(PACKAGE.parent / "amplifier_operations", outer / "amplifier_operations")

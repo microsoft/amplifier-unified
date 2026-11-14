@@ -187,6 +187,10 @@ def git_environment():
     from .reset import repository_environment
     return repository_environment()
 
+def package_environment():
+    from .reset import package_environment as configured_environment
+    return configured_environment(git_environment())
+
 def installed_extras():
     """Retain known optional features without loading clients or desktop backends."""
     extras=[]
@@ -376,7 +380,9 @@ async def stage(manager, *, feature=None, request_id=None):
     except Exception:
         phase=manager.diagnostics.state.get('latest',{}).get('phase','stage')
         if manager.diagnostics.state.get('latest',{}).get('status')!='failed':manager.diagnostics.record(phase,'failed',errorType='ValueError')
-        await manager.publish(phase='error',error='Application update failed during '+phase.replace('-',' ')+'. The running host was retained.')
+        from .update_diagnostics import failure_guidance
+        await manager.publish(phase='error',error=failure_guidance(manager.diagnostics.state.get('lastFailure', {})) or
+                              'Application update failed during '+phase.replace('-',' ')+'. The running host was retained.')
         raise
 
 
@@ -393,7 +399,7 @@ async def _stage(manager, *, selected=None, extras):
     from .application_generations import directory
     folder=directory(manager.home, revision, generation)
     folder.mkdir(parents=True,exist_ok=True,mode=0o700)
-    env={**git_environment(),'UV_TOOL_DIR':str(folder/'tools'),'UV_TOOL_BIN_DIR':str(folder/'bin')}
+    env={**package_environment(),'UV_TOOL_DIR':str(folder/'tools'),'UV_TOOL_BIN_DIR':str(folder/'bin')}
     uv=shutil.which('uv')
     if not uv:raise ValueError('Install uv before updating the application')
     host_graph=manager.diagnostics.sync('host-components',components.installed_graph)
@@ -801,7 +807,7 @@ async def _activate(manager, *, force=None, holds=None):
             promoted = target
             installed_python = target['prefix'] / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
         else:
-            await manager.diagnostics.run('replacement-install',process,uv,'tool','install','--force',*resolution_args,install_requirement(release['revision'],extras,artifact),env=git_environment(),timeout=900)
+            await manager.diagnostics.run('replacement-install',process,uv,'tool','install','--force',*resolution_args,install_requirement(release['revision'],extras,artifact),env=package_environment(),timeout=900)
             # The serving interpreter may belong to an older active generation.
             # uv replaced the public bootstrap, so verify that actual destination.
             installed_python = bootstrap / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
@@ -819,7 +825,7 @@ async def _activate(manager, *, force=None, holds=None):
                               detail='The replacement outcome is unknown. No installation or conversation work will be replayed.')
         raise
     except Exception as error:
-        from .update_diagnostics import exception_type
+        from .update_diagnostics import exception_type, failure_guidance
         last=manager.diagnostics.state.get('latest',{})
         phase=last.get('phase','activation')
         if last.get('status')!='failed':
@@ -840,7 +846,9 @@ async def _activate(manager, *, force=None, holds=None):
                                            errorType=exception_type(recovery_error))
         if selected:
             await record(manager, selected['requestId'], 'error', detail='Feature replacement could not be verified. Its files may have changed; work remains paused until a new host proves the qualified installation.')
-        await manager.publish(phase='error',pendingApp=None,error='Application update failed during '+phase.replace('-',' ')+'. Its files may have changed; work remains paused. Review the diagnostic receipt and repair the qualified installation before restarting.',
+        guidance = failure_guidance(manager.diagnostics.state.get('lastFailure', {}))
+        await manager.publish(phase='error',pendingApp=None,error=(guidance + ' ' if guidance else '') +
+                              'Application update failed during '+phase.replace('-',' ')+'. Its files may have changed; work remains paused. Review the diagnostic receipt and repair the qualified installation before restarting.',
                               detail='The replacement outcome is unknown. Package presence is not verified installation success.')
         return
     # Keep the work gate closed until this process exits. Publishing installed

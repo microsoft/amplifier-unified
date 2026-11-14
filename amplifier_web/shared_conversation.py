@@ -118,9 +118,10 @@ class SharedConversations:
                 self._record(session, delivery, 'cancelled')
                 continue
             from .update_drain import input_gate, UpdateDeferred
+            from .installation_repair import RepairHeld
             try:
                 input_gate(self.service, sid, delivery['inputId'])
-            except UpdateDeferred:
+            except (UpdateDeferred, RepairHeld):
                 continue
             try:
                 binding, selected, source_binding = self.owner.selected(session, delivery['agentId'])
@@ -277,9 +278,10 @@ class SharedConversations:
                     raise asyncio.CancelledError()
                 delivery = self._delivery(session, turn)
                 from .update_drain import input_gate, UpdateDeferred
+                from .installation_repair import RepairHeld
                 try:
                     input_gate(self.service, sid, delivery['inputId'])
-                except UpdateDeferred:
+                except (UpdateDeferred, RepairHeld):
                     return  # This source is still known-unsubmitted and pending.
                 source = self.message(session, delivery['sourceMessageId'])
                 context, coverage = self._context(session, delivery)

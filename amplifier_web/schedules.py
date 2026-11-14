@@ -336,7 +336,8 @@ class Schedules:
                 self.changed()
         from .updates import work_paused
         from .update_drain import held
-        if work_paused(self.app.state) or held(self.app): return
+        from .installation_repair import held as repair_held
+        if work_paused(self.app.state) or held(self.app) or repair_held(self.app): return
         for schedule in self.store.list():
             if schedule['status'] != 'active' or schedule.get('nextDue') is None or schedule['nextDue'] > now: continue
             sid = schedule['sessionId']
@@ -357,7 +358,7 @@ class Schedules:
                     self.changed()
                 continue
             async with self.app.lock:
-                if held(self.app):
+                if held(self.app) or repair_held(self.app):
                     continue  # The occurrence has not been claimed or submitted.
                 # Refresh authoritative schedule after asynchronous runtime reads.
                 current = self.store.get(sid, schedule['id'])

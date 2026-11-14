@@ -436,6 +436,7 @@ class Operations:
         if not fresh:
             return receipt
         self.notify()
+        from .installation_repair import guard as repair_guard, RepairHeld
         try:
             if action == "operations.submit" and self.service.management is not None:
                 await self.service.management.ensure_runtime(session)
@@ -444,7 +445,9 @@ class Operations:
                 if not callable(supports) or await supports(sid) is not True:
                     return self.requests.finish(receipt, 'rejected', error={
                         'message': 'This runtime cannot enforce integration admission. No validation command was submitted.'})
-            response = await runtime.control(sid, action, {**payload, "actor": origin})
+            repair_guard(self.service)
+            response = await runtime.control(sid, action, {**payload, "actor": origin},
+                                             guard=lambda: repair_guard(self.service))
             result = response.get("result", response)
             if result.get("success") is False:
                 return self.requests.finish(receipt, "rejected", error=result.get("error", {}))
@@ -455,6 +458,9 @@ class Operations:
             return self.requests.finish(receipt, "accepted", operationId=identity,
                 callId=response.get("callId"),
                 admission={key: output[key] for key in ("process_id", "owner_id", "state", "returncode", "pty", "stdin_closed", "eof_semantics") if key in output})
+        except RepairHeld:
+            return self.requests.finish(receipt, "rejected", error={
+                "message": "Installation repair owns this host. No process input was submitted."})
         except BaseException:
             self.requests.finish(receipt, "outcome_unknown", message="The host did not confirm this request. It was not replayed; inspect saved operation evidence before deciding what to do next.")
             raise
