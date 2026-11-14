@@ -77,6 +77,11 @@ def ensure_hidden_console(*, timeout=5.0):
     except HiddenConsoleError:
         raise
     except Exception as error:  # An improvement, not a start condition.
+        if rollback.get("consoleReleased") is False:
+            # No later error, for example from helper cleanup, may hide this state.
+            raise HiddenConsoleError(
+                "This process is attached to a console that it could neither protect "
+                "nor release.") from error
         return {"status": "unavailable", "errorType": type(error).__name__,
                 "windowsError": getattr(error, "winerror", None), **rollback}
 
@@ -177,10 +182,10 @@ def _release(helper, timeout):
         except OSError:
             pass
     try:
-        helper.wait(timeout)
-    except subprocess.TimeoutExpired:
         try:
+            helper.wait(timeout)
+        except subprocess.TimeoutExpired:
             helper.kill()
             helper.wait(timeout)
-        except (OSError, subprocess.TimeoutExpired):
-            pass  # It is a child in the host's Job and ends with it.
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # It is a child in the host's Job and ends with it.

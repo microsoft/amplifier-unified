@@ -1073,6 +1073,33 @@ class HiddenConsoleTests(unittest.TestCase):
         self.assertIsNone(hidden_console._control_handler)
         helper.stdin.close.assert_called_once()  # The helper is still released.
 
+    def test_helper_cleanup_errors_cannot_hide_an_unreleased_console(self):
+        # 1. The helper wait itself fails while the fatal error is pending.
+        k, helper, popen, folder = self.native(SetConsoleCtrlHandler=0)
+        k.GetConsoleCP.side_effect = [0, 437]
+        helper.wait.side_effect = OSError("wait failed")
+        with self.assertRaises(hidden_console.HiddenConsoleError):
+            hidden_console.ensure_hidden_console()
+        # 2. Any other error that replaces the fatal one still stops the start.
+        k, helper, popen, folder = self.native(SetConsoleCtrlHandler=0)
+        k.GetConsoleCP.side_effect = [0, 437]
+        with patch.object(hidden_console, "_release", side_effect=OSError("cleanup failed")):
+            with self.assertRaises(hidden_console.HiddenConsoleError) as raised:
+                hidden_console.ensure_hidden_console()
+        self.assertEqual(str(raised.exception.__cause__), "cleanup failed")
+        # 3. The same cleanup error after a CONFIRMED release does not stop the start.
+        k, helper, popen, folder = self.native(SetConsoleCtrlHandler=0)
+        with patch.object(hidden_console, "_release", side_effect=OSError("cleanup failed")):
+            result = hidden_console.ensure_hidden_console()
+        self.assertEqual((result["status"], result["consoleReleased"]), ("unavailable", True))
+
+    def test_helper_wait_error_cannot_change_a_protected_attach(self):
+        k, helper, popen, folder = self.native()
+        helper.wait.side_effect = OSError("wait failed")
+        self.assertEqual(hidden_console.ensure_hidden_console(), {"status": "attached"})
+        k.FreeConsole.assert_not_called()
+        self.assertIsNotNone(hidden_console._control_handler)
+
     def test_helper_cleanup_errors_cannot_change_a_protected_attach(self):
         k, helper, popen, folder = self.native()
         helper.stdin.close.side_effect = BrokenPipeError()
