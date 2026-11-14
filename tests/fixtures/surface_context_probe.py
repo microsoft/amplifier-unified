@@ -32,7 +32,7 @@ async def run():
         assert op == 'context.read', op
         reads.append(args)
         return {'surfaceId': 'sketch', 'revision': '3:22', 'representation': 'image', 'digest': 'fixture', 'editVersion': 9, '_image': PNG}
-    await install_app_access(session.coordinator, bridge)
+    await install_app_access(session.coordinator, bridge, execution_role='root')
     class Provider:
         name = 'fixture'
         def get_info(self):

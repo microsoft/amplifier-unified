@@ -39,6 +39,18 @@ class Member(ScriptedProvider):
         receipt = self.host.app.collaboration.receipt('native-commission')
         worker = self.host.roots[receipt['sessionId']]
         if self.calls == 1:
+            from amplifier_web.app_guidance import COMMON_GUIDANCE
+            from amplifier_web.coordination_guidance import PLANNING_GUIDANCE, NATIVE_CHILD_GUIDANCE
+            from fixtures.collaboration_native_probe import message_text
+            text = '\n'.join(message_text(m) for m in request.messages)
+            assert text.count(COMMON_GUIDANCE) == 1
+            assert text.count(PLANNING_GUIDANCE) == 1
+            assert NATIVE_CHILD_GUIDANCE not in text
+            row = self.host.app._session(receipt['sessionId'])
+            assert row.get('sessionKind', 'root') == 'root'
+            import os
+            if artifacts := os.environ.get('AMPLIFIER_TEST_ARTIFACTS'):
+                Path(artifacts, 'commissioned-root-provider-request.json').write_text(request.model_dump_json())
             coordinator = worker.session.coordinator
             task = worker.controls.tasks.record()
             saved = json.loads((self.host.app.data_dir / 'sessions' / receipt['sessionId'] / 'control-state.json').read_text())
