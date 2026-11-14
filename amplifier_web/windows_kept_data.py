@@ -37,6 +37,7 @@ FOLDERS = ("shared", "app", "capture", "ownership", "import", "workspace", "expo
 PROGRAM_STATE = ("updates", "runtime")
 RECORD = "amplifier-kept.json"
 EARLIER = 9
+WAIT = 15.0  # Seconds to wait for a program that holds a folder for a moment.
 LIMIT = 64 * 1024
 _FIELDS = {"schema", "root", "version", "keptAt", "state", "transfer"}
 _VERSION = r"\d+\.\d+\.\d+"
@@ -179,6 +180,7 @@ def read(kept):
                 or not isinstance(record["transfer"], str) or not re.fullmatch("[a-f0-9]{32}", record["transfer"])
                 or record.get("entries") not in (None, *FOLDERS)):
             raise ValueError("The kept-data record is invalid.")
+        time.strptime(record["keptAt"], "%Y-%m-%dT%H:%M:%SZ")
     except (OSError, ValueError, RecursionError):
         return "unreadable", None
     return record["state"], record
@@ -296,8 +298,11 @@ def _move(source, target, owned):
             return True
         except OSError:
             pass  # A program's current folder, or a closing program: move what can move.
-        _private(target, owned, create=True)
     elif kind != "folder":
+        return False
+    try:
+        _private(target, owned, create=kind is None)  # Also an existing one: this person's own real folder.
+    except OSError:
         return False
     for name in _names(source):
         if _kind(target / name) is None:
@@ -418,6 +423,18 @@ def _in_the_way(root, kept, record):
     return False
 
 
+def _rename(source, target, deadline):
+    """Rename a kept folder into its place; wait for a program that holds it for a moment."""
+    while True:
+        try:
+            os.rename(source, target)
+            return
+        except OSError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.5)
+
+
 def take_back(root, version):
     """Move the kept set of this folder back into this installation's empty data folders.
 
@@ -438,7 +455,7 @@ def take_back(root, version):
     if record["state"] == "complete":
         record = {**record, "state": "adopting"}
         _write(kept, record)
-    present, taken = set(_names(root)), []
+    present, taken, deadline = set(_names(root)), [], time.monotonic() + WAIT
     for name in FOLDERS:
         source, target = kept / name, root / name
         if _kind(source) is None:
@@ -451,7 +468,7 @@ def take_back(root, version):
             except OSError:
                 pass  # A current folder: fill it instead.
         if kind is None:
-            os.rename(source, target)
+            _rename(source, target, deadline)
         elif kind != "folder":
             raise Refused("take-back-not-empty", stopped)
         else:

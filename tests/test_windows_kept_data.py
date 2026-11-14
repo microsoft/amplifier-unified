@@ -38,6 +38,7 @@ class Crash(BaseException):
 @pytest.fixture(autouse=True)
 def plain_folders(monkeypatch):
     monkeypatch.setattr(kept, "_NATIVE", False)
+    monkeypatch.setattr(kept, "WAIT", 0)  # One attempt; the wait has its own test.
 
 
 @pytest.fixture
@@ -529,7 +530,8 @@ def test_set_of_the_same_or_an_older_version_is_offered(tmp_path, notices, saved
     assert notices.shown[0][0] and person(data(root)) == expected
 
 
-@pytest.mark.parametrize("damage", ["json", "missing", "extra", "state", "version", "transfer", "folder", "deep"])
+@pytest.mark.parametrize("damage", ["json", "missing", "extra", "state", "version", "transfer", "date", "folder",
+                                    "deep"])
 @pytest.mark.parametrize("answer", [True, False])
 def test_record_that_cannot_be_read_is_never_no_kept_data(tmp_path, notices, damage, answer):
     root, folder, _ = kept_then_installed(tmp_path)
@@ -542,7 +544,9 @@ def test_record_that_cannot_be_read_is_never_no_kept_data(tmp_path, notices, dam
         path.write_text({"json": "{", "missing": json.dumps({k: v for k, v in good.items() if k != "transfer"}),
                          "extra": json.dumps({**good, "more": 1}), "state": json.dumps({**good, "state": "done"}),
                          "version": json.dumps({**good, "version": "next"}),
-                         "transfer": json.dumps({**good, "transfer": "x"}), "deep": "[" * 100000}[damage])
+                         "transfer": json.dumps({**good, "transfer": "x"}),
+                         "date": json.dumps({**good, "keptAt": "2026-13-45T99:99:99Z"}),
+                         "deep": "[" * 100000}[damage])
     before = tree(folder)
     assert kept.read(folder) == ("unreadable", None)
     notices.answers.append(answer)
@@ -596,6 +600,54 @@ def test_interrupted_take_back_is_finished_before_the_app_starts(tmp_path, monke
         if finished:
             break
     assert finished and count >= len(SETUP)
+
+
+@pytest.mark.parametrize("released", [True, False])
+def test_take_back_waits_for_a_held_folder_and_else_stops_until_the_next_start(
+        tmp_path, monkeypatch, notices, released):
+    root, folder, expected = kept_then_installed(tmp_path)
+    real, refusals, pauses = os.rename, [], []
+
+    def rename(source, target):
+        if Path(source) == folder / "app" and len(refusals) < (2 if released else 99):
+            refusals.append(source)
+            raise PermissionError(13, "The process cannot access the file", str(source))
+        return real(source, target)
+    monkeypatch.setattr(os, "rename", rename)
+    monkeypatch.setattr(kept, "WAIT", 15.0 if released else 0)
+    monkeypatch.setattr(kept.time, "sleep", pauses.append)
+    notices.answers.append(True)
+    result = kept.first_start(root, VERSION, ask=True)
+    if released:
+        assert result is None and pauses == [0.5, 0.5] and person(data(root)) == expected
+        return
+    assert result["taken"] is False and result["reason"] == "take-back"
+    assert "Reference: kept-data, PermissionError" in notices.shown[-1][1] and str(folder) in notices.shown[-1][1]
+    assert kept.read(folder)[0] == "adopting"
+    here, there = files(person(data(root))), files(person(data(folder)))
+    assert not set(here) & set(there) and {**here, **there} == files(expected)
+    monkeypatch.setattr(os, "rename", real)
+    assert kept.first_start(root, VERSION, ask=True) is None and person(data(root)) == expected
+    assert [confirm for confirm, _ in notices.shown] == [True, False]  # One question, one stop message.
+
+
+def test_continued_move_out_never_adds_to_a_kept_folder_that_is_not_private(tmp_path, monkeypatch):
+    root = used(tmp_path / "Amplifier")
+    folder = kept.kept_folder(root)
+    release = refuse(monkeypatch, "rename", root / "app", root / "app" / "config")
+    kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)
+    release()
+    real = kept._private
+
+    def private(path, owned, *, create=False):
+        if Path(path) == folder / "app" and not create:
+            raise PermissionError(13, "Another account can use this folder", str(path))
+        return real(path, owned, create=create)
+    monkeypatch.setattr(kept, "_private", private)
+    snapshot = tree(root), tree(folder)
+    result = kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)
+    assert result["state"] == "moving" and result["remaining"] == ["app"]
+    assert (tree(root), tree(folder)) == snapshot
 
 
 def test_continued_take_back_stops_at_a_folder_that_holds_anything(tmp_path, monkeypatch, notices):
