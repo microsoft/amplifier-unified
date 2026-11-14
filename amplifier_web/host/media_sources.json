@@ -7,7 +7,7 @@
     "openai": "ac9268e12a462d974fa7106178174e05cc3313ed",
     "openai_archive_sha256": "815c6db2b44e5bfe6a221318e438a4c55e59628f4971936cfa14bc7e2a03fe82",
     "context-intelligence": "1eaac57492937dbae8671ae155201eae4a6ba653",
-    "host": "eabaed100732172bda9ead6163d54c217f829dfd"
+    "host": "44604744c10933a4ca6a2f7833b62805c9ce72cf"
   },
   "sources": {
     "amplifier_foundation/session/media_hook_bridge.py": "12da0011ee2d908a97e7b2fd8a58b3358b53d3e65b4894b77a170cebd30c3186",
