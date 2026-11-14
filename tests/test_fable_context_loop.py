@@ -38,12 +38,16 @@ class Wire:
         self.rejections = rejections
         self.refusals = []
         self.on_refusal = None
+        # Reactive fitting converts a public-context budget from server feedback.
+        # Keep that case's physical text/token ratio realistic (about 4 MB total),
+        # rather than mixing the proactive case's synthetic 28x token scale.
+        self.filler = FILLER * 24 if rejections else FILLER
 
-    @staticmethod
-    def tokens(body):
+    def tokens(self, body):
         text = json.dumps(projection(body), sort_keys=True)
         # Synthetic token scale; includes fixed overhead, tools and system.
-        return 40_000 + len(text.encode()) // 4 + text.count(FILLER) * 168_000
+        scaled = 0 if self.filler != FILLER else text.count(FILLER) * 168_000
+        return 40_000 + len(text.encode()) // 4 + scaled
 
     async def transport(self, request):
         if request.method == 'GET':
@@ -149,7 +153,7 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
             assert index == len(wire.effects) + 1, 'Repeated or reordered operation'
             wire.effects.append(index)
             return ToolResult(success=True, output={
-                'receipt': f'RECEIPT-{index}', 'outcome': 'completed', 'filler': FILLER})
+                'receipt': f'RECEIPT-{index}', 'outcome': 'completed', 'filler': wire.filler})
 
     async def observe(event, data):
         wire.events.append(dict(data))
@@ -219,7 +223,7 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
         assert [row['tool_call_id'] for row in tools] == [f'call-{i}' for i in wire.effects]
         for index, row in enumerate(tools, 1):
             assert json.loads(row['content']) == {
-                'receipt': f'RECEIPT-{index}', 'outcome': 'completed', 'filler': FILLER}
+                'receipt': f'RECEIPT-{index}', 'outcome': 'completed', 'filler': wire.filler}
     finally:
         await sdk.close()
         await session.cleanup()
