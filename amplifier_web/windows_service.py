@@ -679,8 +679,16 @@ def _run(encoded: str) -> None:
     if spec.supervised:
         from .windows_jobs import contain_current_host
         contain_current_host()
+        started = time.time()
         try:
             code = _supervise(spec)
+            if code:
+                # The host ended with an error. Keep its own saved reason if it
+                # wrote one; otherwise save this general one for the status command.
+                from .windows_task_runtime import record_failure
+                record_failure(spec, WindowsServiceError(
+                    f"Its background process ended unexpectedly (exit code {code})."),
+                    "launcher", unless_since=started)
         except (OSError, ValueError, RuntimeError) as error:
             # Do not let Scheduler's crash policy replay an uncertain handoff.
             # The lifetime job closes with this process; status remains stopped,
@@ -691,6 +699,10 @@ def _run(encoded: str) -> None:
                 owned.publish_private("task-launcher-error.json", json.dumps({
                     "schema": 1, "registration": spec.registration_id,
                     "errorType": type(error).__name__, "acceptance": False}).encode(), replace=True)
+            # This path ends with exit code 0. The status command shows this reason,
+            # unless the host saved its own, more exact one in this launcher run.
+            from .windows_task_runtime import record_failure
+            record_failure(spec, error, "launcher", unless_since=started)
             code = 0
         raise SystemExit(code)
     return _host(spec)
@@ -910,6 +922,18 @@ async def _wait_updated_host(spec, finished, actual, restart):
 
 def _host(spec):
     """Run the actual application, not the stable Scheduler launcher."""
+    try:
+        return _serve_host(spec)
+    except BaseException as error:
+        # A normal stop returns. Save why this host ended, for the status command.
+        if isinstance(error, Exception) or (
+                isinstance(error, SystemExit) and error.code not in (0, None)):
+            from .windows_task_runtime import record_failure
+            record_failure(spec, error, "host")
+        raise
+
+
+def _serve_host(spec):
     # First: every console program that this host or its code starts with
     # default flags then shares one console without a window.
     from .windows_hidden_console import ensure_hidden_console

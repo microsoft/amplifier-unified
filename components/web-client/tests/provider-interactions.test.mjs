@@ -163,6 +163,87 @@ test('model selector retains only host-supplied refresh data and never unions ea
  }finally{await renderAct(async()=>root?.unmount())}
 });
 
+test('model selector keeps one live region from empty through first choice and unavailable pricing',async()=>{
+ const {ModelSelect}=await server.ssrLoadModule('/src/model-select.jsx');
+ const entry={phase:'ready',models:[{id:'priced',pricing:{input_per_million:1,output_per_million:2,currency:'USD'}}]};
+ let value='',root;
+ const render=()=>React.createElement(ModelSelect,{id:'announced-price',value,entry,state:{view:{}},act:async()=>{},onChange:()=>{}});
+ try{
+  await renderAct(async()=>root=create(render()));
+  const region=root.root.findByProps({'data-part':'model-pricing-announcement'});
+  assert.equal(region.props['aria-live'],'polite');assert.equal(region.props['aria-atomic'],'true');
+  assert.equal(renderedText(region.children),'');
+  for(const next of ['priced','unlisted','priced','']){
+   value=next;await renderAct(async()=>root.update(render()));
+   assert.equal(root.root.findByProps({'data-part':'model-pricing-announcement'}),region,'The announcement container is never replaced');
+   assert.equal(region.findAll(node=>node!==region&&node.props['aria-live']!=null).length,0,'No nested live regions');
+   if(next==='priced')assert.match(renderedText(region.children),/Input\$1/);
+   else if(next)assert.match(renderedText(region.children),/Pricing unavailable/);
+   else assert.equal(renderedText(region.children),'');
+  }
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+
+test('model selector shows selected fixed, tiered and flat prices without guessing missing metadata',async()=>{
+ const {ModelSelect}=await server.ssrLoadModule('/src/model-select.jsx');
+ const tiered={version:1,kind:'tiered',currency:'USD',unit:'per_million_tokens',basis:'standard_global',
+  threshold_tokens:100000,threshold_basis:'input_tokens+cache_read_input_tokens+cache_creation_input_tokens',
+  modifiers:{us_inference:'1.1',confirmed_fast:'2'},tiers:[
+   {up_to:100000,rates:{input:'0.25',output:'1.25',cache_read:'0.025',cache_write_5m:'0.3',cache_write_1h:'0.5'}},
+   {above:100000,rates:{input:'0.5',output:'2.5',cache_read:'0.05',cache_write_5m:'0.6',cache_write_1h:'1'}}
+  ]};
+ const fixed={version:1,kind:'fixed',currency:'USD',unit:'per_million_tokens',basis:'standard_global',
+  rates:{input:'2',output:'8',cache_read:'0.2',cache_write_5m:'2.5',cache_write_1h:'4'}};
+ const entry={phase:'ready',models:[
+  {id:'tiered',display_name:'Tiered model',pricing_details:tiered},
+  {id:'fixed',display_name:'Fixed model',pricing_details:fixed},
+  {id:'core',display_name:'Core model',pricing:{input_per_million:3,output_per_million:15,cache_read_per_million:0.3,cache_write_per_million:1.25,currency:'USD'}},
+  {id:'unsupported',display_name:'Future model',input:0,output:0,pricing_details:{...fixed,version:2}}
+ ]};
+ let value='tiered',root;
+ const render=()=>React.createElement(ModelSelect,{id:'priced-model',label:'Model',value,entry,state:{view:{}},act:async()=>{},onChange:()=>{}});
+ const text=()=>renderedText(root.toJSON());
+ try{
+  await renderAct(async()=>root=create(render()));
+  assert.match(text(),/Listed price for Tiered model · Standard global · USD per 1M tokens/);
+  assert.match(text(),/Up to 100,000 prompt tokens/);assert.match(text(),/Above 100,000 prompt tokens/);
+  assert.match(text(),/whole request, including output tokens/);assert.match(text(),/fresh input \+ cache reads \+ cache writes, counted once/);
+  assert.match(text(),/Cache write \(5 minutes\)/);assert.match(text(),/US inference modifier\s*×1\.1/);assert.match(text(),/Confirmed fast modifier\s*×2/);
+  assert.equal(root.root.findByType('details').props.open,undefined,'Cache details use a native, collapsed disclosure');
+  assert.deepEqual(root.root.findAllByType('option').slice(1).map(option=>renderedText(option.children)),['Tiered model','Fixed model','Core model','Future model'],'Prices are not repeated in every option');
+  value='fixed';await renderAct(async()=>root.update(render()));
+  assert.match(text(),/Listed price for Fixed model/);assert.match(text(),/Input\$2/);assert.match(text(),/Output\$8/);
+  assert.match(text(),/Cache write \(1 hour\)\$4/);
+  value='core';await renderAct(async()=>root.update(render()));
+  assert.match(text(),/Listed price for Core model · USD per 1M tokens/);assert.match(text(),/Input\$3/);assert.match(text(),/Output\$15/);
+  assert.match(text(),/Cache write\$1\.25/);
+  value='unlisted-id';await renderAct(async()=>root.update(render()));
+  assert.match(text(),/Pricing unavailable for the selected model/);assert.doesNotMatch(text(),/\$0/);
+  value='unsupported';await renderAct(async()=>root.update(render()));
+  assert.match(text(),/Pricing unavailable for the selected model/);assert.doesNotMatch(text(),/\$0/);
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+
+test('pricing details reject unknown bases and malformed tiers; Core pricing survives repeated option normalization',async()=>{
+ const {modelPricing}=await server.ssrLoadModule('/src/model-pricing.jsx');
+ const {modelOptions}=await server.ssrLoadModule('/src/setup-data.js');
+ const fixed={version:1,kind:'fixed',currency:'USD',unit:'per_million_tokens',basis:'standard_global',rates:{input:'0',output:'1.50'}};
+ assert.equal(modelPricing({pricing_details:fixed}).rates.input,'0');
+ for(const basis of [undefined,'batch','future_basis'])assert.equal(modelPricing({pricing_details:{...fixed,basis}}).kind,'unavailable');
+ const tiered={...fixed,kind:'tiered',threshold_tokens:100000,
+  threshold_basis:'input_tokens+cache_read_input_tokens+cache_creation_input_tokens',
+  tiers:[{up_to:100000,rates:fixed.rates},{above:100000,rates:fixed.rates}]};
+ for(const patch of [{tiers:[]},{tiers:tiered.tiers.slice(0,1)},{tiers:[tiered.tiers[1],tiered.tiers[0]]},
+  {threshold_tokens:0},{threshold_tokens:'100000'},{threshold_basis:'total_tokens'},
+  {tiers:[tiered.tiers[0],{above:99999,rates:fixed.rates}]}]){
+  assert.equal(modelPricing({pricing_details:{...tiered,...patch},pricing:{input_per_million:0,currency:'USD'}}).kind,'unavailable');
+ }
+ const model={id:'core',pricing:{input_per_million:0,output_per_million:2,currency:'USD'}};
+ assert.deepEqual(modelPricing(modelOptions(modelOptions([model]))[0]),modelPricing(model));
+ assert.equal(modelPricing(model).rates.input,'0');
+ assert.equal(modelPricing({pricing:{input_per_million:0,currency:'EUR'}}).kind,'unavailable');
+});
+
 for(const [provenance,label] of [
  ['configured','Configured models — not checked against the service.'],
  ['static','Static recommendations — not a live inventory.'],

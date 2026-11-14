@@ -340,6 +340,167 @@ def test_native_confirmation_window_is_found_and_brought_in_front():
     assert not helper.is_alive()
 
 
+def desktop():
+    """user32 calls for the window-order checks."""
+    from ctypes import wintypes as W
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.CreateWindowExW.argtypes = [W.DWORD, W.LPCWSTR, W.LPCWSTR, W.DWORD, ctypes.c_int, ctypes.c_int,
+                                     ctypes.c_int, ctypes.c_int, W.HWND, W.HMENU, W.HINSTANCE, W.LPVOID]
+    user.CreateWindowExW.restype = W.HWND
+    user.DestroyWindow.argtypes = [W.HWND]
+    user.GetWindowLongPtrW.argtypes = [W.HWND, ctypes.c_int]
+    user.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+    user.IsWindowVisible.argtypes = [W.HWND]
+    user.GetClassNameW.argtypes = [W.HWND, ctypes.c_wchar_p, ctypes.c_int]
+    user.GetWindowTextW.argtypes = [W.HWND, ctypes.c_wchar_p, ctypes.c_int]
+    user.PostMessageW.argtypes = [W.HWND, W.UINT, W.WPARAM, W.LPARAM]
+    user.GetForegroundWindow.restype = W.HWND
+    user.SetForegroundWindow.argtypes = [W.HWND]
+    user.LockSetForegroundWindow.argtypes = [W.UINT]
+    user.PeekMessageW.argtypes = [ctypes.POINTER(W.MSG), W.HWND, W.UINT, W.UINT, W.UINT]
+    user.TranslateMessage.argtypes = [ctypes.POINTER(W.MSG)]
+    user.DispatchMessageW.argtypes = [ctypes.POINTER(W.MSG)]
+    visitor = ctypes.WINFUNCTYPE(W.BOOL, W.HWND, W.LPARAM)
+    user.EnumWindows.argtypes = [visitor, W.LPARAM]
+
+    def windows():
+        """Visible top-level windows, front to back."""
+        rows = []
+        def visit(window, _):
+            if user.IsWindowVisible(window):
+                name, title = ctypes.create_unicode_buffer(64), ctypes.create_unicode_buffer(128)
+                user.GetClassNameW(window, name, 64)
+                user.GetWindowTextW(window, title, 128)
+                rows.append((window, name.value, title.value))
+            return True
+        user.EnumWindows(visitor(visit), 0)
+        return rows
+
+    def pump():
+        message = W.MSG()
+        while user.PeekMessageW(ctypes.byref(message), None, 0, 0, 1):
+            user.TranslateMessage(ctypes.byref(message))
+            user.DispatchMessageW(ctypes.byref(message))
+    return user, windows, pump
+
+
+SHOW_AFTER_A_PAUSE = """
+import ctypes, sys, threading, time
+time.sleep(4)   # The person clicks another program's window during this pause.
+result = []
+def show():
+    if sys.argv[1] == "earlier-flags":   # Foreground and topmost flags, as released in 0.94.0.
+        result.append(ctypes.WinDLL("user32").MessageBoxW(
+            None, "Measurement of the earlier flags.", "Amplifier Unified", 0x50040) == 1)
+    else:
+        from amplifier_web import windows_installation as launcher
+        result.append(launcher.owner_notice("Test of the launcher message."))
+worker = threading.Thread(target=show)   # The launcher shows its messages from a worker thread.
+worker.start()
+worker.join()
+sys.exit(0 if result == [True] else 1)
+"""
+
+def show_message(code, arguments, other):
+    """Show one message box from ANOTHER, windowless process; report its place.
+
+    The person's situation is reproduced with real input: after that process
+    has started, a mouse click goes to this test's window. Windows then no
+    longer lets the new process come to the front on its own.
+    """
+    import sys
+    import time
+    user, windows, pump = desktop()
+    user.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+    user.mouse_event.argtypes = [ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_size_t]
+    windowless = Path(sys.executable).with_name("pythonw.exe")
+    before = {row[0] for row in windows()}
+    child = subprocess.Popen([str(windowless if windowless.is_file() else sys.executable), "-B", "-c",
+                              code, *arguments], cwd=Path(__file__).resolve().parents[1])
+    facts = {"appeared": False, "windowless": windowless.is_file()}
+    try:
+        time.sleep(1.5)
+        user.SetCursorPos(200, 200)
+        user.mouse_event(0x0002, 0, 0, 0, 0)  # Left button down, then up, on the other window.
+        user.mouse_event(0x0004, 0, 0, 0, 0)
+        clicked = time.monotonic() + 0.5
+        while time.monotonic() < clicked:
+            pump()
+            time.sleep(0.02)
+        facts["otherWindowIsForegroundAfterClick"] = user.GetForegroundWindow() == other
+        deadline = time.monotonic() + 45
+        message = None
+        while message is None and time.monotonic() < deadline and child.poll() is None:
+            pump()
+            message = next((row[0] for row in windows() if row[0] not in before
+                            and row[1:] == ("#32770", "Amplifier Unified")), None)
+            time.sleep(0.01)
+        if message is None:
+            return facts
+        topmost = lambda: bool(user.GetWindowLongPtrW(message, -20) & 0x8)
+        def in_front():
+            order = [row[0] for row in windows()]
+            return order.index(message) < order.index(other)
+        facts.update(appeared=True, topmostAtFirstSight=topmost(), inFrontAtFirstSight=in_front())
+        settled = time.monotonic() + 2  # The launcher's helper looks five times per second.
+        while time.monotonic() < settled:
+            pump()
+            time.sleep(0.05)
+        facts.update(topmost=topmost(), inFront=in_front(), foreground=user.GetForegroundWindow() == message)
+        user.PostMessageW(message, 0x0010, 0, 0)  # WM_CLOSE: the same as the OK button of this box.
+        facts["exit"] = child.wait(20)
+        return facts
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(10)
+
+
+def other_program_window(user):
+    """A visible popup that receives clicks (SS_NOTIFY), like any program's window."""
+    return user.CreateWindowExW(0, "STATIC", "Another program", 0x80000000 | 0x10000000 | 0x100,
+                                0, 0, 1600, 1200, None, None, None, None)
+
+
+@native
+def test_native_launcher_message_comes_in_front_of_the_window_the_person_is_using():
+    """The real launcher message, from a windowless process, on a real desktop.
+
+    On a real PC the message opened BEHIND the browser although the launcher
+    passed the topmost and foreground flags. This test process plays the
+    browser: it owns an ordinary window and receives a real mouse click after
+    the message's process has started, so Windows no longer lets that process
+    come to the front on its own. The earlier flags are measured and printed
+    for comparison. The launcher's own message must be topmost and in front of
+    that window, and must still wait for its answer.
+    """
+    def unavailable(reason):
+        if os.environ.get("AMPLIFIER_REQUIRE_WINDOWS_TRUST_CHECKS") == "1":
+            pytest.fail("This lane must show a real message box: " + reason)
+        pytest.skip(reason)
+    user, windows, pump = desktop()
+    other = other_program_window(user)
+    if not other:
+        unavailable(f"no interactive desktop (error {ctypes.get_last_error()})")
+    try:
+        user.SetForegroundWindow(other)
+        pump()
+        earlier = show_message(SHOW_AFTER_A_PAUSE, ["earlier-flags"], other)
+        print("earlier flags (released in 0.94.0; measured for comparison):", earlier)
+        launcher = show_message(SHOW_AFTER_A_PAUSE, ["launcher"], other)
+        print("launcher message:", launcher)
+    finally:
+        user.DestroyWindow(other)
+    if not earlier["appeared"] or not launcher["appeared"]:
+        unavailable("the message box did not appear")
+    # The situation was reproduced: the click made this test's window the one in use.
+    if not launcher["otherWindowIsForegroundAfterClick"]:
+        unavailable("the test click did not make the other window the foreground window")
+    assert launcher["topmostAtFirstSight"] and launcher["inFrontAtFirstSight"]
+    assert launcher["topmost"] and launcher["inFront"]
+    assert launcher["exit"] == 0  # It waited; closing the box is its OK answer.
+
+
 @native
 def test_native_product_root_is_not_trusted_before_the_person_says_yes():
     root, _, _, _ = identity()

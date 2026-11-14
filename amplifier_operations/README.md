@@ -44,9 +44,32 @@ Unified still bundles and imports these unchanged `amplifier_operations` files.
 This preparation adds no daemon, database migration, runtime dependency, new policy
 or automatic package selection.
 
-The `0.1.0` component version is preparation metadata, not a published release.
+The package version alone does not identify published or qualified bytes; use the
+actual release source receipt and artifact hashes.
 Use a separate environment for the standalone distribution: do not coinstall it
 with `amplifier-unified` while both distributions own the same package files.
-Independent publication and Unified dependency selection are later delivery steps.
+Component publication does not change Unified dependency selection.
 The intended repository name is `amplifier-platform-operations`; repository naming
 does not rename the existing Python import or its data contracts.
+
+
+## Component artifact delivery
+
+The `Operations package` workflow qualifies pull requests on Linux/Python 3.13.
+The release owner can dispatch it from `main` with an exact merged source commit.
+It builds the wheel and source archive once, then installs that same wheel into a
+separate environment and runs the existing package tests outside the checkout.
+The copied pytest configuration keeps the asynchronous notifier case enabled.
+This qualification does not establish Windows or macOS acceptance.
+
+Publication produces four assets under `operations-vX.Y.Z`: the wheel, source
+archive, `operations-source.json`, and `SHA256SUMS`. The receipt binds the exact
+source revision, project files and artifact hashes. Verify the checksums before
+installing the wheel into a separate standalone environment. No app, native
+runtime, sibling source checkout or runtime dependency is required. A PR never
+publishes; the component release never replaces the application latest release.
+
+For interrupted publication, retain the original build artifact and rerun only
+failed jobs. Rebuilding is not a byte-reproducibility promise. Existing tags and
+assets must match exactly; mismatches remain available for review rather than
+being overwritten. A completed release retry only verifies the existing bytes.

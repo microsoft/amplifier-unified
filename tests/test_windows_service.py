@@ -911,17 +911,93 @@ def test_native_owned_background_failure_before_any_runtime_receipt(tmp_path):
 
 def test_host_does_not_start_attached_to_a_console_without_protection(monkeypatch):
     from amplifier_web import windows_hidden_console, windows_task_runtime
+    saved = []
 
     def unsafe():
         raise windows_hidden_console.HiddenConsoleError("attached, not protected, not released")
 
     monkeypatch.setattr(windows_hidden_console, "ensure_hidden_console", unsafe)
+    monkeypatch.setattr(windows_task_runtime, "record_failure",
+                        lambda value, error, source: saved.append((value, str(error), source)))
     monkeypatch.setattr(service, "_read", lambda *a: pytest.fail("an unsafe host must not continue"))
     monkeypatch.setattr(windows_task_runtime, "Runner",
                         lambda *a: pytest.fail("an unsafe host must not publish a runtime receipt"))
     # The launcher sees a host that ended before its receipt: a failed start.
     with pytest.raises(windows_hidden_console.HiddenConsoleError):
         service._host(spec(supervised=True))
+    # The reason is saved for the owner's status command.
+    assert saved == [(spec(supervised=True), "attached, not protected, not released", "host")]
+
+
+@pytest.mark.parametrize("ending,recorded", [
+    (None, False), (SystemExit(0), False), (SystemExit(), False), (KeyboardInterrupt(), False),
+    (SystemExit("Could not start Amplifier on 127.0.0.1, port 21603."), True),
+    (SystemExit(1), True), (OSError("unexpected"), True)])
+def test_host_saves_a_reason_only_when_it_ends_with_an_error(monkeypatch, ending, recorded):
+    from amplifier_web import windows_task_runtime
+    saved = []
+    monkeypatch.setattr(windows_task_runtime, "record_failure",
+                        lambda value, error, source: saved.append((error, source)))
+
+    def serve(value):
+        if ending is not None:
+            raise ending
+        return 75  # A restart request is a normal return, not a failure.
+
+    monkeypatch.setattr(service, "_serve_host", serve)
+    if ending is None:
+        assert service._host(spec()) == 75
+    else:
+        with pytest.raises(type(ending)):
+            service._host(spec())
+    assert saved == ([(ending, "host")] if recorded else [])
+
+
+@pytest.mark.parametrize("outcome", [0, 3, "error"])
+def test_launcher_saves_a_reason_when_the_host_or_the_launch_fails(monkeypatch, outcome):
+    from amplifier_web import windows_files, windows_jobs, windows_task_runtime
+    value = spec(supervised=True)
+    saved, files = [], {}
+    for name in ("PATH", "AMPLIFIER_SESSION_STATE_HOME", "AMPLIFIER_GITHUB_ACCESS", "AMPLIFIER_WEB_HOME"):
+        monkeypatch.setenv(name, "prior")
+    monkeypatch.setattr(service, "_require_python", lambda: None)
+    monkeypatch.setattr(service, "_owner", lambda: SID)
+    monkeypatch.setattr(service, "_read", lambda home: ({"state": 4, "instances": 1}, value))
+    monkeypatch.setattr(service.os, "chdir", lambda path: None)
+    monkeypatch.setattr(windows_jobs, "contain_current_host", lambda: None)
+    monkeypatch.setattr(windows_files, "address", PureWindowsPath)
+
+    @contextmanager
+    def directory(path, **kwargs):
+        yield SimpleNamespace(publish_private=lambda name, content, replace: files.update({name: content}))
+
+    monkeypatch.setattr(windows_files, "directory", directory)
+    monkeypatch.setattr(windows_task_runtime, "record_failure",
+                        lambda value, error, source, **options: saved.append((str(error), source, options)))
+
+    def supervise(value):
+        if outcome == "error":
+            raise service.WindowsServiceError("The scheduled launch definition changed.")
+        return outcome
+
+    monkeypatch.setattr(service, "_supervise", supervise)
+    with pytest.raises(SystemExit) as ended:
+        service._run(value.encoded())
+    if outcome == 0:
+        assert ended.value.code == 0 and saved == [] and files == {}
+    elif outcome == 3:
+        # The host ended with an error: the launcher exits with that code and
+        # does not replace a newer reason that the host saved itself.
+        assert ended.value.code == 3 and files == {}
+        (text, source, options), = saved
+        assert (text, source) == ("Its background process ended unexpectedly (exit code 3).", "launcher")
+        assert abs(options["unless_since"] - time.time()) < 60
+    else:
+        # This path ends with exit code 0, so the saved reason is the only signal.
+        assert ended.value.code == 0 and set(files) == {"task-launcher-error.json"}
+        (text, source, options), = saved
+        assert (text, source) == ("The scheduled launch definition changed.", "launcher")
+        assert abs(options["unless_since"] - time.time()) < 60
 
 
 def test_host_attaches_the_windowless_console_before_any_other_step(monkeypatch):

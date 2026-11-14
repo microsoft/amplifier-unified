@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {actionContent,actionHeading,contentUnavailable,diffRows,cleanSummary} from '../src/execution-content.js';
+import {actionContent,actionHeading,contentUnavailable,diffRows,cleanSummary,recordingExpiredAt} from '../src/execution-content.js';
 const node=(label,input,output,phase='completed')=>({label,input:JSON.stringify(input),output:JSON.stringify(output),phase});
 test('stopped tool keeps retained output without presenting it as successful completion',()=>{
  const action=actionContent(node('bash',{command:'bounded-effect'},{stdout:'partial result'},'stopped'));
@@ -71,4 +71,17 @@ test('UI actions keep their tool identity while app dispatch exposes its nested 
  }
  const app=actionContent(node('app_control',{operation:'dispatch',args:{action:'canvas.show'}},{success:true}));
  assert.equal(app.kind,'app');assert.equal(app.title,'App action');assert.equal(app.target,'dispatch → canvas.show');
+});
+
+test('recording expiry requires exact versioned owner metadata, never absence or arbitrary text',()=>{
+ const marker={v:1,sha256:'a'.repeat(64),bytes:123,expired_at:'2026-11-13T12:00:00+02:00',reason:'retention'};
+ assert.equal(recordingExpiredAt(marker),'2026-11-13T10:00:00.000Z');
+ for(const value of [null,undefined,'expired',JSON.stringify(marker),[],{}, {...marker,v:2},{...marker,v:true},
+  {...marker,reason:'missing'},{...marker,sha256:'A'.repeat(64)},{...marker,bytes:0},{...marker,bytes:true},
+  {...marker,bytes:'123'},{...marker,bytes:Infinity},{...marker,expired_at:'2026-11-13T12:00:00'},
+  {...marker,expired_at:'2026-02-30T12:00:00Z'},{...marker,expired_at:'2026-11-13T24:00:00Z'},
+  {...marker,expired_at:'0000-11-13T12:00:00Z'},
+  {...marker,expired_at:'unknown'},{...marker,extra:true},Object.fromEntries(Object.entries(marker).filter(([key])=>key!=='bytes'))]){
+  assert.equal(recordingExpiredAt(value),null);
+ }
 });

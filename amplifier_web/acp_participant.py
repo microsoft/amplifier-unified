@@ -8,6 +8,8 @@ from pathlib import Path
 
 ATTENTION = 'com.microsoft.amplifier.attention'
 INSTANCE = 'io.github.bkrabach.agent-instance'
+RETIREMENT = 'com.microsoft.amplifier.retirement'
+RETIREMENT_TIMEOUT = 30  # Same bounded operation policy as connection setup.
 
 
 class ACPParticipant:
@@ -25,6 +27,29 @@ class ACPParticipant:
         self._decision_output = None
         self._decision_overflow = False
         self._decision_size = 0
+        self.retirement_available = None
+        self._retirement_uncertain = False
+
+    @property
+    def supports_retirement(self):
+        value = self.initialization_metadata.get(RETIREMENT, {})
+        return (self.capabilities.get('resume') is True
+                and isinstance(value, dict) and value.get('version') == 1
+                and value.get('method') == '_amplifier/retire'
+                and value.get('notification') == '_amplifier/retirementRequested')
+
+    async def retire(self):
+        """A method advertisement is not permission to close the transport."""
+        if not self.supports_retirement or self.connection is None:
+            return 'unsupported'
+        self._retirement_uncertain = True
+        result = await asyncio.wait_for(self.connection.ext_method(
+            'amplifier/retire', {'sessionId': self.session_id}), RETIREMENT_TIMEOUT)
+        if (not isinstance(result, dict) or result.get('sessionId') != self.session_id
+                or result.get('disposition') not in {'retired', 'busy', 'unknown'}):
+            raise ValueError('Retirement was not confirmed for the saved execution. Its connection was retained.')
+        self._retirement_uncertain = result['disposition'] == 'unknown'
+        return result['disposition']
 
     @property
     def supports_attention(self):
@@ -58,7 +83,15 @@ class ACPParticipant:
         from acp.schema import ClientCapabilities, HttpMcpServer
 
         if self.connection is not None and self.process.returncode is None:
-            return
+            if not self._retirement_uncertain:
+                return
+            # Reconcile cleanup, never replay an input. A lost successful
+            # acknowledgement is repeatable for this exact attachment.
+            disposition = await self.retire()
+            if disposition == 'busy':
+                return
+            if disposition != 'retired':
+                raise ValueError('Retirement is still unconfirmed. No input was sent; the binding was retained.')
         await self.close()
         self.context = spawn_agent_process(
             self, self.endpoint['command'], *self.endpoint.get('args', []),
@@ -240,13 +273,17 @@ class ACPParticipant:
         raise RequestError(-32601, 'Unsupported ACP extension.')
 
     async def ext_notification(self, method, params):
-        pass
+        if (method == 'amplifier/retirementRequested' and self.supports_retirement
+                and isinstance(params, dict) and params.get('sessionId') == self.session_id
+                and self.retirement_available is not None):
+            await self.retirement_available(self)
 
     async def close(self):
         context, self.context = self.context, None
         self.connection = self.process = None
         self.initialization_metadata = {}
         self._active_prompt_id = None
+        self._retirement_uncertain = False
         if context is not None:
             await context.__aexit__(None, None, None)
 

@@ -33,7 +33,7 @@ class _ImageOperationResult(Exception):
         self.result = result
 
 
-def public_usage(value):
+def public_usage(value, *, metadata=None):
     if hasattr(value, "model_dump"):
         value = value.model_dump()
     if not isinstance(value, dict):
@@ -62,6 +62,17 @@ def public_usage(value):
             result["costSource"] = str(value["cost_source"])[:300]
     except (KeyError, TypeError, ValueError):
         result["costType"] = "unavailable"
+        # Only documented diagnostic codes cross the response-metadata boundary.
+        # Never retain arbitrary response metadata, exception text or payloads.
+        reason = metadata.get("anthropic_cost_unavailable") if isinstance(metadata, dict) else None
+        if isinstance(reason, str) and reason in {
+            "invalid_usage_counts", "cache_write_ttl_split_incomplete",
+            "cache_write_ttl_split_mismatch", "cache_write_ttl_unavailable",
+            "model_rates_unavailable", "inference_geo_unavailable",
+            "request_speed_unavailable", "response_speed_unavailable",
+            "fast_mode_rates_unavailable",
+        }:
+            result["costUnavailableReason"] = reason
     return with_gross_tokens(result)
 
 
@@ -285,7 +296,8 @@ class ExecutionEvents:
         try:
             response = await invoke()
             usage = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
-            terminal = {**row, "phase": "completed", "endedAt": time.time(), "usage": public_usage(usage)}
+            metadata = response.get("metadata") if isinstance(response, dict) else getattr(response, "metadata", None)
+            terminal = {**row, "phase": "completed", "endedAt": time.time(), "usage": public_usage(usage, metadata=metadata)}
             await safe_observe(self.context_inspectors.get(sid), 'finish', terminal)
             self.publish(terminal)
             return response
@@ -405,7 +417,8 @@ class ExecutionEvents:
                     # token delta. A later snapshot replaces the receipt.
                     usage = chunk.get("usage") if isinstance(chunk, dict) else getattr(chunk, "usage", None)
                     if usage is not None:
-                        self.publish({**self.nodes[row["id"]], "usage": public_usage(usage)})
+                        metadata = chunk.get("metadata") if isinstance(chunk, dict) else getattr(chunk, "metadata", None)
+                        self.publish({**self.nodes[row["id"]], "usage": public_usage(usage, metadata=metadata)})
                     yield chunk
             except GeneratorExit:
                 phase = "interrupted"
@@ -531,7 +544,7 @@ class ExecutionEvents:
                 if row and event == "provider:retry":
                     self.publish({**row,"phase":"retrying"})
                 elif row and current in self.streaming_calls and event == "llm:response" and data.get("usage") is not None:
-                    self.publish({**row, "usage": public_usage(data["usage"])})
+                    self.publish({**row, "usage": public_usage(data["usage"], metadata=data.get("metadata"))})
                 return
             purpose = CALL_PURPOSE.get() or {}
             if purpose: parent, turn = None, purpose.get("turnId", turn)
@@ -558,7 +571,7 @@ class ExecutionEvents:
             row = dict(row)
             if event == "llm:response":
                 row.update(phase="error" if data.get("status") == "error" else "completed", endedAt=now,
-                    usage=public_usage(data.get("usage")),
+                    usage=public_usage(data.get("usage"), metadata=data.get("metadata")),
                     **{key:str(data[key])[:160] for key in ("provider", "model") if data.get(key)})
                 self.requests.pop(task, None)
             elif event == "provider:retry":

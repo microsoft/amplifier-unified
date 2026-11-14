@@ -46,6 +46,53 @@ certificate pin for HTTPS; it never creates a credential. This credential
 provides owner access: keep it private and give it only to an authorized launcher.
 Never place its contents in arguments, URLs or Instance settings.
 
+### Choose a profile with MCP support
+
+Transient HTTP MCP support also requires `tool-mcp` in the selected native
+profile. Work 0.4.0 does not include it. If an attachment supplies
+MCP servers without that capability, preparation refuses the request before
+model execution.
+
+For a new conversation that needs connected tools such as Instance's context
+retrieval, save this explicit profile as `/path/to/profiles/work-mcp.md` on the
+Unified host. This composition was tested with published Unified 0.94.1, the
+pinned Work source below, and canonical MCP v0.3.0:
+
+```markdown
+---
+bundle:
+  name: work-mcp
+  version: 1.0.0
+  description: Explicit Work profile with canonical MCP support.
+includes:
+  - bundle: git+https://github.com/microsoft/amplifier-bundle-work@b5154aabf0aaed0ad9465f711abb3bfb18dee6f8#subdirectory=bundle.md
+tools:
+  - module: tool-mcp
+    source: git+https://github.com/microsoft/amplifier-module-tool-mcp@77b74bee1a7947a0cf4b3bac4d0dd74490c1ea21
+---
+
+@work:context/system.md
+```
+
+Select it through the existing launcher option:
+
+```sh
+amplifier-unified --data-dir /path/to/unified-home --workspace /path/to/workspace acp --bundle /path/to/profiles/work-mcp.md
+```
+
+For Instance, append `"--bundle", "/path/to/profiles/work-mcp.md"` to the backend
+`args` above. The profile path is on the Unified host. This selects the profile
+for **new conversations**; exact-ID resume retains the conversation's saved root
+bundle. Changing launcher arguments does not convert an existing Work-only chat.
+Unified's default profile remains unchanged.
+
+Preserve existing [scoped source choices](../scoped-bundle-sources.md): module or
+bundle overrides can take precedence over these declarations. Confirm the actual
+selected sources when qualifying a different configuration. Transient server
+URLs, headers and credentials arrive through the ACP connection, not this profile.
+The MCP module also reads the execution account's ordinary MCP configuration;
+review those settings when preparing a dedicated agent.
+
 ## Ownership and recovery
 
 Unified owns native execution and durable input receipts. Constellation and its

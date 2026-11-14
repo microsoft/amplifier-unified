@@ -89,6 +89,7 @@ on:
       - tests/test_update_checks.py
       - tests/test_windows_tls.py
       - tests/test_windows_trust.py
+      - tests/test_session_sign_out.py
       - tests/test_windows_service.py
       - tests/test_windows_task_runtime.py
       - tests/test_windows_installation.py
@@ -250,6 +251,11 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_trust.py
           if ($LASTEXITCODE -ne 0) { throw 'Windows local-root trust checks failed.' }
+      - name: Check sign-out of all browsers on the real private store
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_session_sign_out.py
+          if ($LASTEXITCODE -ne 0) { throw 'Sign-out of all browsers checks failed.' }
   windows-user-trial:
     if: ${{ inputs.storage_only || (!inputs.bootstrap_only && !inputs.foreground_only) }}
     # Candidate-only combined boundary, not a universal suite/release gate.

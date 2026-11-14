@@ -5,6 +5,7 @@ import './external-agents.css';
 import {ConfigurationBoundary} from './configuration-scope';
 import {RegistrySettings} from './registry';
 import {StorageSettings} from './storage-settings';
+import {OptimizeStorageSettings} from './optimize-storage-settings';
 import {TestingSettings} from './testing-settings';
 import {createPortal} from 'react-dom';
 import {SetupJourney,AssistedSettingsButton} from './setup-journey';
@@ -53,6 +54,10 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  const editors=useRef(new Map());
  const family=page=>['ai-connections','overview'].includes(page)?'ai-connections':page==='appearance'?'appearance':['smart-tools','tool-connections'].includes(page)?'smart-tools':['app-bundles','add-bundles','loaded-modules','share-bundle','registries'].includes(page)?'bundles':['notifications','diagnostics','history','permissions','automation','repair','reset'].includes(page)?'maintenance':page;
  const active=family(page);if(!index)editors.current.set(active,page);
+ // One retained editor serves both entry points. Never mount two independent
+ // recovery owners for the same operation when switching settings pages.
+ const optimizePage=useRef(null),optimizeVisible=!index&&['storage','repair'].includes(page);
+ if(optimizeVisible)optimizePage.current=page;
  function renderPage(page){
  let content;
  if(['overview','ai-connections','providers','routing','registries'].includes(page))content=<ConfigurationBoundary state={state} act={dispatch||act}>{config=>['overview','ai-connections'].includes(page)?<AIConnections {...config} navigate={navigate} onReturnToChat={navigation.dismiss}/>:page==='providers'?<ProviderSettings {...config} navigate={navigate}/>:page==='routing'?<RoutingSettings {...config}/>:<RegistrySettings {...config}/>}</ConfigurationBoundary>;
@@ -92,6 +97,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
    {page==='ai-connections'&&<SetupJourney state={state} act={act} dispatch={dispatch||act} onBeforeStart={drafts.confirmClose}/>}
    {drafts.count>0&&<p className="a-alert" role="status">You have unsaved settings changes. They are kept while Settings stays open.</p>}
    {state.management?.error&&page!=='add-bundles'&&page!=='updates'&&<div className="a-alert" role="alert">{state.management.error}</div>}
+   {optimizePage.current&&<div hidden={!optimizeVisible}><OptimizeStorageSettings key={state.client?.hostInstanceId} hostId={state.client?.hostInstanceId} sessionId={state.selectedSessionId} act={dispatch||act} active={optimizeVisible} navigate={navigate} page={optimizePage.current}/></div>}
    <>{[...editors.current].map(([key,editorPage])=><SettingsPageContext.Provider key={key} value={editorPage}><SettingsLayoutContext.Provider value={{compact,active:key===active&&!index,footer}}><div className="a-settings-page-content" hidden={key!==active}>{renderPage(editorPage)}</div></SettingsLayoutContext.Provider></SettingsPageContext.Provider>)}</>
   </div>
   {!compact&&headerTarget&&createPortal(help,headerTarget)}

@@ -166,6 +166,8 @@ export function segmentUsage(nodes){
   if(usage.totalTokens==null&&usage.inputTokens==null&&usage.outputTokens==null){value.tokenUnknownCalls++;if(pending)value.tokenPendingCalls++}
   if(Number.isFinite(usage.costUsd)){value.costUsd+=usage.costUsd;value.pricedCalls++;if(usage.costType==='estimated')value.estimatedCalls++}else{value.unknownCalls++;if(pending)value.costPendingCalls++}
  }
+ const reasons=[...new Set(calls.map(node=>node.usage?.costUnavailableReason).filter(reason=>typeof reason==='string'))];
+ if(reasons.length)value.costUnavailableReasons=reasons;
  value.costType=!value.pricedCalls?'unavailable':value.unknownCalls?'partial':value.estimatedCalls?'estimated':'reported';return value;
 }
 export function splitWork(messages,data){
@@ -256,6 +258,8 @@ export function combinedWork(turns,now){
   if(value.totalTokens==null&&(value.inputTokens!=null||value.outputTokens!=null)){usage.totalTokens=(usage.totalTokens||0)+(value.inputTokens||0)+(value.outputTokens||0);usage.metricKnownCalls.totalTokens+=Math.max(0,calls-unknownTokens)}
  }
  usage.costType=!usage.pricedCalls?'unavailable':usage.unknownCalls?'partial':usage.estimatedCalls?'estimated':'reported';
+ const reasons=[...new Set(turns.flatMap(turn=>{const value=turn.aggregateUsage||turn.usage||{};return value.costUnavailableReasons||[value.costUnavailableReason]}).filter(reason=>typeof reason==='string'))];
+ if(reasons.length)usage.costUnavailableReasons=reasons;
  return {running,phase:failure?(failure.status||failure.phase):running?'running':turns.every(turn=>['completed','complete','done','success'].includes(turn.status||turn.phase))?'completed':'recorded',
   elapsed:intervals.length?elapsedLabel({startedAt:0,endedAt:duration}):null,elapsedSeconds:intervals.length?duration:null,usage};
 }

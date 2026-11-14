@@ -40,6 +40,48 @@ def test_dedup_cumulative_replacement_corrections_descendants_and_unknowns():
     assert snapshot['metrics']['costUsd']['unknownCalls'] == 2
 
 
+async def test_provider_decimal_cost_reaches_session_totals_without_repricing_history():
+    """The provider owns rates; the host preserves known zero and partial sums."""
+    root = {'id': 'root'}
+    emitted = []
+    telemetry = ExecutionEvents('root', emitted.append)
+    class Provider:
+        def get_info(self): return SimpleNamespace(id='anthropic', defaults={'model': 'priced'})
+        async def complete(self, request):
+            return SimpleNamespace(usage={'input_tokens': 100, 'output_tokens': 10,
+                'cost_usd': request.cost},
+                metadata={'anthropic_cost_unavailable': 'cache_write_ttl_unavailable',
+                          'private_response': 'DO NOT RETAIN'})
+    provider = telemetry.instrument_provider('root', Provider())
+    for cost in ('0.000015', '0', None):
+        await provider.complete(SimpleNamespace(model='priced', cost=cost))
+    for event in emitted:
+        ingest(root, event['event'])
+    snapshot = usage_snapshot(root)
+    assert root['execution']['aggregateUsage']['costUnavailableReasons'] == ['cache_write_ttl_unavailable']
+    metric = snapshot['metrics']['costUsd']
+    assert snapshot['calls'] == 3
+    assert metric['value'] == 0.000015
+    assert metric['knownCalls'] == 2 and metric['unknownCalls'] == 1
+    assert metric['status'] == 'partial'
+    assert metric['unavailableReasons'] == ['cache_write_ttl_unavailable']
+    assert any(row['usage'].get('costUsd') == 0 for row in snapshot['receipts'])
+    assert len([row for row in snapshot['receipts'] if row['usage']['costType'] == 'unavailable']) == 1
+    unknown = next(row['usage'] for row in snapshot['receipts'] if row['usage']['costType'] == 'unavailable')
+    assert unknown['costUnavailableReason'] == 'cache_write_ttl_unavailable'
+    assert all('costUnavailableReason' not in row['usage'] for row in snapshot['receipts'] if 'costUsd' in row['usage'])
+    assert 'DO NOT RETAIN' not in str(root)
+    from amplifier_web.session_projection import accounting_projection
+    retained = accounting_projection(root['execution'])
+    restored = usage_snapshot({'id': 'root', 'execution': {'retiredUsageNodes': retained}})
+    assert restored['metrics']['costUsd'] == metric
+    assert any(row['usage'].get('costUnavailableReason') == 'cache_write_ttl_unavailable'
+               for row in restored['receipts'])
+    before = copy.deepcopy(root)
+    assert usage_snapshot(root)['metrics']['costUsd'] == metric
+    assert root == before, 'Reading usage does not rewrite historical receipts from current rates'
+
+
 def test_history_edit_transfers_usage_and_late_correction_is_not_double_counted():
     root = {'id': 'root', 'messages': [{'id': 'new', 'role': 'user'}]}
     ingest(root, call(turnId='input'))

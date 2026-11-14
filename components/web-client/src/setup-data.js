@@ -13,7 +13,12 @@ export function providerConfig(text){
 }
 export function modelOptions(value){
  const models=Array.isArray(value)?value:value?.models||[];
- return models.map(model=>typeof model==='string'?{id:model,name:model}:{id:model.id||model.name||model.model,name:model.display_name||model.displayName||model.name||model.id||model.model}).filter(model=>model.id);
+ return models.map(model=>{
+  if(typeof model==='string')return {id:model,name:model};
+  if(!model||typeof model!=='object'||Array.isArray(model))return null;
+  const id=model.id||model.name||model.model;
+  return id?{...model,id,name:model.display_name||model.displayName||model.name||model.id||model.model}:null;
+ }).filter(Boolean);
 }
 export function connectionTestability(catalog){
  const metadata=catalog?.metadata,origin=metadata?.modelListInfo?.source||catalog?.provenance;

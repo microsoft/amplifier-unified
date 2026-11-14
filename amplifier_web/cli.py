@@ -97,6 +97,9 @@ def _parse() -> argparse.Namespace:
     runtime = subcommands.add_parser("runtime", help="Prepare or inspect the default installation runtime without a conversation")
     runtime.add_argument("runtime_command", choices=["prepare", "status"])
     runtime.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    browsers = subcommands.add_parser("browsers", help="Manage signed-in browsers")
+    browsers.add_argument("browsers_command", choices=["sign-out"],
+                          help="sign-out: sign out every browser on every device")
     setup_tls = subcommands.add_parser("setup-tls", help="Create or inspect the app-owned local CA")
     setup_tls.add_argument("mode", nargs="?", choices=["status", "default", "force", "export"], default="default")
     reset = subcommands.add_parser("reset", help="Reinstall a clean app and runtime while preserving user data")
@@ -146,13 +149,13 @@ def _server_overrides(args: argparse.Namespace) -> dict:
 
 
 def _print_completion(shell: str) -> None:
-    words = "serve open tui acp run continue tool access doctor reset config service setup-tls completion --port --workspace --data-dir --no-open --bind --host --public-origin --tls-cert --tls-key --session-ttl --version"
+    words = "serve open tui acp run continue tool access doctor reset config service setup-tls browsers completion --port --workspace --data-dir --no-open --bind --host --public-origin --tls-cert --tls-key --session-ttl --version"
     if shell == "bash":
         print('complete -W "' + words + '" amplifier-unified')
     elif shell == "zsh":
-        print('#compdef amplifier-unified\n_arguments "1:command:(serve open tui acp run continue tool access doctor reset config service setup-tls)"')
+        print('#compdef amplifier-unified\n_arguments "1:command:(serve open tui acp run continue tool access doctor reset config service setup-tls browsers)"')
     else:
-        print('complete -c amplifier-unified -f -a "serve open tui acp run continue tool access doctor reset config service setup-tls"')
+        print('complete -c amplifier-unified -f -a "serve open tui acp run continue tool access doctor reset config service setup-tls browsers"')
 
 
 def _config(args, data_dir: Path) -> None:
@@ -502,6 +505,16 @@ def main():
         return
     if args.command == "config":
         _config(args, data_dir)
+        return
+    if args.command == "browsers":
+        from .auth import sign_out_all
+        try:
+            sign_out_all(data_dir)
+        except (OSError, ValueError):
+            raise SystemExit("Browsers were NOT signed out: the sign-out time could not be saved in "
+                             f"{data_dir}. Nothing was changed.") from None
+        print("All browsers on all devices are signed out. A running Amplifier applies this within a few seconds.")
+        print("To use Amplifier in a browser again, open it from this computer.")
         return
     if args.command == "doctor":
         from .installation_health import doctor, display

@@ -12,7 +12,11 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
  const inputId=message.inputId||localDelivery?.commandId;
  const checkOwner=usePendingDeliveryCheck(JSON.stringify([recovery?.scope,recovery?.connection,session.id,inputId]));
  const pending=submitting||checkOwner.pending;
- const report=localReport||checkOwner.settled?.result?.result,error=localError||checkOwner.settled?.error;
+ const sourceSteering=JSON.stringify(message.steering||null);
+ const checked=localReport||checkOwner.settled?.result;
+ // A passive read describes the steering evidence it checked, not a later SSE
+ // projection. Keep that binding with the existing in-flight result on remount.
+ const report=checked?.sourceSteering===sourceSteering?checked?.result:null,error=localError||checkOwner.settled?.error;
  const storageKey=session.id&&inputId?'amplifier.deliveryWarning.v1:'+JSON.stringify([session.id,inputId]):null;
  const [dismissed,setDismissed]=useState(()=>{try{return !!storageKey&&sessionStorage.getItem(storageKey)==='dismissed'}catch{return false}});
  const [expanded,setExpanded]=useState(false),summary=useRef(null),mounted=useRef(true);
@@ -34,19 +38,23 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
  const working=['working','starting','running','stopping'].includes(session.status);
  const authoritativeActive=working&&session.execution?.currentTurnId===inputId||
   [delivery,localDelivery,message.delivery].some(row=>['sending','queued','queued_for_update'].includes(row?.status));
- const active=authoritativeActive||['sending','queued','queued_for_update'].includes(report?.delivery);
- const closeable=!!localDelivery&&!active&&['failed','unknown'].includes(delivery?.status);
- const dismissible=!localDelivery&&!!storageKey&&!active&&['failed','unknown'].includes(delivery?.status);
+ const steering=report?.steering||message.steering;
+ const steeringWarning=!!steering&&!['applied','next_turn','sending','queued'].includes(steering.disposition);
+ const active=authoritativeActive||['sending','queued','queued_for_update'].includes(report?.delivery)||
+  [message.steering,report?.steering].some(row=>['sending','queued'].includes(row?.disposition));
+ const unresolved=steering?steeringWarning:['failed','unknown'].includes(delivery?.status);
+ const closeable=!!localDelivery&&!active&&unresolved;
+ const dismissible=!localDelivery&&!!storageKey&&!active&&unresolved;
  const check=async()=>{
   if(pending)return;setReport(null);setError('');setConfirm(false);
   try{
-   if(!session.id){setReport({delivery:'not_saved',message:'This message has no confirmed conversation yet. Nothing was sent again.'});return;}
+   if(!session.id){setReport({sourceSteering,result:{delivery:'not_saved',message:'This message has no confirmed conversation yet. Nothing was sent again.'}});return;}
    const result=await checkOwner.run(async()=>{
     const response=await dispatch('conversation.delivery',{sessionId:session.id,inputId},{feedback:false,...(recovery?{deliveryRecovery:recovery}:{})});
     checkedDelivery(response,session.id,inputId);
-    return response;
+    return {...response,sourceSteering};
    });
-   if(mounted.current)setReport(result.result);
+   if(mounted.current)setReport(result);
   }catch(e){if(mounted.current)setError(e.message)}
  };
  // One passive read when this exact unresolved row becomes visible, and one
@@ -66,12 +74,12 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
   if(pending)return;setPending(true);setError('');
   try{
    const saved=session.messages?.some(m=>m.role==='user'&&m.inputId===inputId);
-   if(saved){const result=await dispatch('conversation.retry',{sessionId:session.id,inputId,confirmUncertain:true},{feedback:false});setReport(result.result);}
+   if(saved){const result=await dispatch('conversation.retry',{sessionId:session.id,inputId,confirmUncertain:true},{feedback:false});setReport({...result,sourceSteering});}
    else await retry(message); // The original outbox identity deduplicates a late first receipt.
    setConfirm(false);
   }catch(e){setError(e.message)}finally{setPending(false)}
  };
- const steering=message.steering||report?.steering;
+ let steeringContent;
  if(steering){
   const labels={next_turn:'Received for the next turn',sending:'Sending message to the active run…',queued:'Received by the active run; waiting for its next step…',applied:'Added to the active run’s context',held:'Message not delivered. The run ended or could not accept steering.',unknown:'Steering delivery could not be confirmed. Nothing was resent.'};
   if(steering.mode==='native'){
@@ -79,28 +87,31 @@ function DeliveryWarning({message,session,delivery,localDelivery,dispatch,retry,
    labels.queued=steering.phase==='pending'?'Accepted; queued at the provider until a successor response can start…':steering.phase==='accepted'?'Accepted; applying live direction…':'Sending live direction…';
    labels.applied='Live direction applied to the successor response';
   }
-  return <span className="a-message-delivery" role="status"><span>{labels[steering.disposition]||labels.unknown}</span>
+  steeringContent=<span className="a-message-delivery" role="status"><span>{labels[steering.disposition]||labels.unknown}</span>
    {steering.reason&&<span className="a-delivery-detail"> {steering.reason}</span>}
    {['unknown','queued','sending'].includes(steering.disposition)&&<button type="button" className="a-link" disabled={pending} onClick={check}>{pending?'Checking…':'Check delivery'}</button>}
-   {error&&<span role="alert">{error}</span>}
   </span>;
  }
- if(!delivery||delivery.status==='accepted'||report?.delivery==='accepted'||localDelivery?.closed&&!active)return null;
- if(delivery.status==='queued_for_update')return <span className="a-message-delivery" role="status">Saved · waiting for the app update. You do not need to send it again.</span>;
- if(delivery.status==='held')return <span className="a-message-delivery" role="status">{delivery.reason||'Message retained without sending.'}</span>;
- const sending=['sending','queued'].includes(delivery.status);
+ // Closing suppresses unresolved presentation only. Positive steering evidence
+ // remains visible, including an exact check that supersedes an older warning.
+ if(localDelivery?.closed&&!active&&(!steering||steeringWarning))return null;
+ if(!steering&&(!delivery||delivery.status==='accepted'||report?.delivery==='accepted'))return null;
+ if(steeringWarning&&!active&&report?.delivery==='accepted'&&!report.steering)return null;
+ if(!steering&&delivery.status==='queued_for_update')return <span className="a-message-delivery" role="status">Saved · waiting for the app update. You do not need to send it again.</span>;
+ if(!steering&&delivery.status==='held')return <span className="a-message-delivery" role="status">{delivery.reason||'Message retained without sending.'}</span>;
+ const sending=['sending','queued'].includes(delivery?.status);
  const preparing=session.status==='starting'||session.activity?.phase==='runtime-setup';
  const content=<div className="a-dialog-actions a-delivery-content">
-  <span className="a-message-delivery" role="status">{sending?<><LoaderCircle className="a-progress-spinner"/>{preparing?'Preparing chat…':'Sending…'}</>:<><AlertCircle/>{delivery.status==='failed'?'Not sent':'Delivery not confirmed'}
+  {steeringContent||<span className="a-message-delivery" role="status">{sending?<><LoaderCircle className="a-progress-spinner"/>{preparing?'Preparing chat…':'Sending…'}</>:<><AlertCircle/>{delivery.status==='failed'?'Not sent':'Delivery not confirmed'}
    {delivery.status==='failed'?<button type="button" className="a-link" data-action="conversation.send" disabled={pending||blocked} onClick={()=>session.messages?.some(row=>row.inputId===inputId)?resend():retry(message)}><RotateCcw/>Retry</button>:<button type="button" className="a-link" data-action="conversation.delivery" disabled={pending||!inputId} onClick={check}><RotateCcw/>{pending?'Checking…':'Check delivery'}</button>}
-  </>}</span>
-  {!sending&&delivery.error&&<p role="alert" className="a-delivery-detail">{delivery.error}</p>}
+  </>}</span>}
+  {!sending&&(!steering||steeringWarning)&&delivery?.error&&<p role="alert" className="a-delivery-detail">{delivery.error}</p>}
   {closeable&&<button type="button" className="a-link" disabled={submitting} title="Keep the original submission in Chat info without resending or confirming delivery." onClick={()=>{if(!submitting)discard?.(message)}}>Close delivery item</button>}
   {report?.message&&<p role="status" className="a-delivery-detail">{report.message}</p>}
   {error&&<p role="alert" className="a-delivery-detail">{error}</p>}
-  {!sending&&report&&!['accepted','sending','held','queued_for_update'].includes(report.delivery)&&!confirm&&
+  {!steering&&!sending&&report&&!['accepted','sending','held','queued_for_update'].includes(report.delivery)&&!confirm&&
    (originalSubmission||saved&&report.delivery!=='not_saved')&&<button type="button" className="a-link" data-action="conversation.retry" disabled={pending||blocked||working} onClick={()=>setConfirm(true)}>{originalSubmission?'Retry original submission':'Send again'}</button>}
-  {confirm&&<div className="a-delivery-confirm" role="alert"><p>The earlier attempt may have run even though delivery was not confirmed. Sending again could repeat that work. Your saved message and history will be kept.</p><div className="a-dialog-actions"><button type="button" className="a-soft" disabled={pending} onClick={()=>setConfirm(false)}>Cancel</button><button type="button" className="a-primary" data-action="conversation.retry" disabled={pending||blocked||working} onClick={resend}>{pending?'Sending…':'Send this message again'}</button></div></div>}
+  {!steering&&confirm&&<div className="a-delivery-confirm" role="alert"><p>The earlier attempt may have run even though delivery was not confirmed. Sending again could repeat that work. Your saved message and history will be kept.</p><div className="a-dialog-actions"><button type="button" className="a-soft" disabled={pending} onClick={()=>setConfirm(false)}>Cancel</button><button type="button" className="a-primary" data-action="conversation.retry" disabled={pending||blocked||working} onClick={resend}>{pending?'Sending…':'Send this message again'}</button></div></div>}
   {dismissible&&<button type="button" className="a-link" disabled={pending} onClick={()=>{if(!pending)setWarningDismissed(!dismissed)}}>{dismissed?'Show warning':'Dismiss warning'}</button>}
  </div>;
  return dismissible?<details className="a-delivery-warning" open={pending||!dismissed||expanded} onToggle={event=>{if(dismissed&&!pending)setExpanded(event.currentTarget.open)}}>

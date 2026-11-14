@@ -13,7 +13,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from .auth import SESSION_COOKIE, _verified
+from .auth import SESSION_COOKIE, valid_session
 from .deployment import write_private
 from .device_capabilities import GRANTS, action, grants, transient
 from .terminal_devices import digest
@@ -420,7 +420,7 @@ class Connections:
 
 def browser_cookie(request):
     value = request.cookies.get(SESSION_COOKIE)
-    if not _verified(request.app['session_secret'], value, request.app['server_config']['session_ttl_seconds'], 'session'):
+    if not valid_session(request.app, value):
         raise web.HTTPForbidden(text='Sign in with your browser to approve connections.')
     return value
 

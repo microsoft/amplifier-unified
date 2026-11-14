@@ -59,6 +59,11 @@ class HiddenConsoleError(RuntimeError):
     """The process is attached to a console that it could not protect or release."""
 
 
+# The status command shows this sentence to the owner.
+_UNSAFE = ("Windows left this app attached to a helper console that the app could not make "
+           "safe or release. Start Amplifier again.")
+
+
 def ensure_hidden_console(*, timeout=5.0):
     """Attach a console without a window, and report the result.
 
@@ -81,9 +86,7 @@ def ensure_hidden_console(*, timeout=5.0):
     except Exception as error:  # An improvement, not a start condition.
         if rollback.get("consoleReleased") is False:
             # No later error, for example from helper cleanup, may hide this state.
-            raise HiddenConsoleError(
-                "This process is attached to a console that it could neither protect "
-                "nor release.") from error
+            raise HiddenConsoleError(_UNSAFE) from error
         return {"status": "unavailable", "errorType": type(error).__name__,
                 "windowsError": getattr(error, "winerror", None), **rollback}
 
@@ -165,9 +168,7 @@ def _attach(timeout, rollback):
             rollback["standardHandlesRestored"] = all(
                 kernel.GetStdHandle(name) == handle for name, handle in saved)
             if not rollback["consoleReleased"]:
-                raise HiddenConsoleError(
-                    "This process is attached to a console that it could neither protect "
-                    "nor release.") from error
+                raise HiddenConsoleError(_UNSAFE) from error
             _control_handler = None
         raise
     finally:
