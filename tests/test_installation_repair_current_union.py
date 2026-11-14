@@ -167,7 +167,7 @@ async def test_queued_conversation_owner_blocks_repair_before_startup(host, owne
         session['naming'] = {'status': 'working'}
     else:
         session.update(configurationBusy=True, historyEdit={'phase': 'working'})
-    with pytest.raises(ValueError, match='naming or history editing'):
+    with pytest.raises(ValueError, match='naming or history editing|Finish active work'):
         repair.require_idle(service)
     assert not host.launched
 

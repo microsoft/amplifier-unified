@@ -335,12 +335,14 @@ async def test_deletion_suppresses_same_message_even_with_changed_quote_boundari
     prior = next(n for n in app.recall.store.list_memories(None)['items'] if n['text']==PREFERENCE)
     await app.dispatch('memory.delete',{'sessionId':sid,'id':prior['id'],'expectedRevision':1})
     app._message(app._session(sid),'user','New unrelated information changes the source snapshot.','text',inputOrigin='ui')
-    async def different_quote(*args):
+    async def different_quote(*args, guard):
+        guard()
         return {'text':json.dumps([{'text':'Use paragraphs when reporting status.',
                                    'quote':'a short paragraph is easier for me to scan than bullets.'}])}
     app.runtime.control = different_quote
     await consolidate(app, sid)
     assert len(app.recall.store.list_memories(None)['items'])==2
+    assert app.recall.personalization.status(app._session(sid))['activity']['status'] == 'completed'
 
 
 async def test_later_human_reversal_can_restore_a_superseded_preference(memory_app):
