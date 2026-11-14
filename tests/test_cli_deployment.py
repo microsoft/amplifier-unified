@@ -43,6 +43,32 @@ def test_config_cli_sets_and_resets_server_setting(tmp_path, capsys):
     assert load_server_config(tmp_path)["session_ttl_seconds"] == 604800
 
 
+def test_config_cli_saves_related_settings_in_one_validated_write(tmp_path, monkeypatch):
+    from amplifier_web import deployment
+    monkeypatch.setattr(sys, "argv", [
+        "amplifier-unified", "config", "set", "port", "23456",
+        "public_origins", '["https://127.0.0.1:23456", "https://pc.example.ts.net"]'])
+    args = _parse()
+    assert (args.key, args.value) == ("port", "23456") and len(args.more) == 2
+    load_server_config(tmp_path)
+    writes = []
+    save = deployment.save_server_config
+    monkeypatch.setattr(deployment, "save_server_config", lambda *a: writes.append(a) or save(*a))
+    _config(args, tmp_path)
+    saved = load_server_config(tmp_path)
+    assert saved["port"] == 23456
+    assert saved["public_origins"] == ["https://127.0.0.1:23456", "https://pc.example.ts.net"]
+    assert len(writes) == 1
+    # A setting without its value changes nothing.
+    before = config_path(tmp_path).read_bytes()
+    with pytest.raises(SystemExit, match="value for every setting"):
+        _config(Namespace(config_command="set", key="port", value="23457", more=["public_origins"]), tmp_path)
+    # A later invalid setting discards the earlier ones in the same command.
+    with pytest.raises(ValueError):
+        _config(Namespace(config_command="set", key="port", value="23457", more=["bind", "[]"]), tmp_path)
+    assert config_path(tmp_path).read_bytes() == before
+
+
 def test_serve_options_are_top_level_repeatable_and_overlay_nested_tls(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", [
         "amplifier-unified", "--bind", "127.0.0.1", "--bind", "192.0.2.5",

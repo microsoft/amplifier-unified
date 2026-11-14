@@ -151,12 +151,23 @@ def environment(root, value):
 
 
 async def launch(root, *, open_browser=True):
-    from .windows_installation import prepare_background, owner_notice, review_browser_trust
+    from .windows_installation import (AddressUnavailable, address_message, change_address,
+                                       prepare_background, owner_notice, review_browser_trust)
     root, value = installation(root)
     env = environment(root, value)
     os.environ.update(env)  # Own shortcut process only; no saved settings.
     launcher = root / "tools/amplifier-unified/Scripts/amplifier-unified.exe"
-    result = await prepare_background(root, launcher, env)
+    try:
+        result = await prepare_background(root, launcher, env)
+    except AddressUnavailable as problem:
+        # Another owner holds the saved address. Never adopt or stop it; only
+        # the person's own Yes moves this installation to a new address.
+        if not open_browser:
+            raise  # A non-interactive caller gets the refusal, not a dialog.
+        if not owner_notice(address_message(problem), confirm=True):
+            return {"background": False, "address": {"available": False, "reason": problem.kind}}
+        await change_address(root, launcher, env)
+        result = await prepare_background(root, launcher, env)
     if open_browser:
         # Never silently import a CA or tell a user to bypass a browser warning.
         from . import browser_entry

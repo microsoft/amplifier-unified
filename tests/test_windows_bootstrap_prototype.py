@@ -625,7 +625,8 @@ class LauncherTests(unittest.TestCase):
         def private(*args, **kwargs):
             self.assertEqual(kwargs["owned_root"], root)
             yield pinned
-        async def prepare(*args):
+        async def prepare(*args, port):
+            self.assertEqual(port, 8942)  # The prototype keeps its fixed trial address.
             return {"runtime": {"connectionRequired": True}}
         certificate = mock.Mock()
         certificate.fingerprint.return_value = b"\x11" * 32

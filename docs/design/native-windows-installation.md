@@ -113,6 +113,52 @@ uninstall. Public artifact availability, a new installation's human trust
 decision/authenticated browser onboarding, and real sign-out/sign-in remain
 distinct acceptance boundaries; source admission does not label them passed.
 
+### Saved local address
+
+The consumer installation no longer uses the fixed port 8942. First setup reads
+this computer's dynamic TCP range and its excluded ranges
+(`netsh int ipv4 show dynamicport tcp` and `show excludedportrange`), and selects
+a random free loopback port outside both, from 20000 to 39999 when that block is
+available. Hyper-V and WSL reserve blocks inside the dynamic range, and those
+blocks move at each restart; some computers set the dynamic range to start at
+1024, so the range is read, not assumed. Random selection keeps a second Windows
+account on the same PC on a different port even while the first app is stopped.
+`amplifier_web/windows_ports.py` owns selection.
+
+Setup saves the port and its `https://127.0.0.1:<port>` origin together, in one
+write, in the existing private `config/server.yaml`. Restart, the sign-in task,
+an in-app update and every shortcut read that file; nothing selects again. The
+browser origin includes the port, so a changed port means a new site for an
+installed app window and its unsent drafts. An installation that already saved a
+port (including 8942 from an earlier setup) keeps it and its other settings when
+its task is registered again.
+
+A test bind filters candidates. It is not ownership: the host's own listener
+claims the port when it starts. Before a later start, and after a start that did
+not become ready, the launcher classifies the saved port:
+
+- **Another program listens there.** The launcher never adopts or stops it.
+- **Windows refuses the bind with access denied (10013) and nothing listens.**
+  A Windows feature reserved the port. There is no program to close, and the
+  message says so.
+
+Both cases offer the same repair, only on the person's confirmation: select and
+save a new port while this installation's host is stopped. Origins that named
+the old port move with it. The message states the cost: chats, settings and
+accounts stay; an installed app window must be installed again; typed but unsent
+messages are not carried over. The certificate names no port, so its trust is
+unchanged. A start without a browser (`--no-open`) receives the refusal and
+shows no dialog. This installation's own recorded host is never treated as
+another program.
+
+Limits: the retained prototype launcher keeps 8942. Two installations under one
+Windows account share the browser's cookies for `127.0.0.1`, because cookies are
+not scoped by port; signing in to one signs the other out. The focused Windows
+workflow checks selection against the runner's real ranges, a real listening
+first installation, a real Windows port reservation and a real listed exclusion.
+Two real setups on one PC and the port across a real update remain clean-room
+acceptance.
+
 Windows app preparation uses a compact `updates/a/<generation>` directory.
 Qualification and pointers retain the full source revision and attempt. The
 older `updates/applications/<revision>/<generation>` candidates remain in place

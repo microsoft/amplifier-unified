@@ -89,6 +89,7 @@ def _parse() -> argparse.Namespace:
     config_commands.add_parser("list")
     get = config_commands.add_parser("get"); get.add_argument("key")
     set_value = config_commands.add_parser("set"); set_value.add_argument("key"); set_value.add_argument("value")
+    set_value.add_argument("more", nargs="*", metavar="KEY VALUE", help="More settings to save in the same write")
     reset = config_commands.add_parser("reset"); reset.add_argument("key", nargs="?", default="all")
     service = subcommands.add_parser("service", help="Manage the systemd or launchd user service")
     service.add_argument("service_command", choices=["install", "uninstall", "start", "stop", "restart", "status", "logs"])
@@ -167,7 +168,14 @@ def _config(args, data_dir: Path) -> None:
         else:
             print(value)
     elif args.config_command == "set":
-        save_server_config(data_dir, setting_set(config, args.key, yaml.safe_load(args.value)))
+        # Related settings (a port and the origins that name it) change in one
+        # validated write, so an interrupted command cannot leave them apart.
+        more = getattr(args, "more", None) or []
+        if len(more) % 2:
+            raise SystemExit("config set needs a value for every setting.")
+        for key, value in ((args.key, args.value), *zip(more[::2], more[1::2])):
+            config = setting_set(config, key, yaml.safe_load(value))
+        save_server_config(data_dir, config)
     else:
         if args.key == "all":
             save_server_config(data_dir, DEFAULT_SERVER)

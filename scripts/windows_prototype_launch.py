@@ -245,7 +245,8 @@ def launch_background(root: Path, receipt: dict) -> None:
     from amplifier_web.windows_files import directory
     launcher = check_installation(root, receipt)
     env = child_environment(root, receipt)
-    result = asyncio.run(prepare_background(root, launcher, env))
+    # The prototype keeps its fixed trial address; the consumer entry saves a selected one.
+    result = asyncio.run(prepare_background(root, launcher, env, port=8942))
     print("Owner-logon background host is ready. You may close this window.", flush=True)
     print("It starts at sign-in and stops at sign-out; it is not a Windows SCM service.", flush=True)
     if (result.get("runtime") or {}).get("connectionRequired"):
