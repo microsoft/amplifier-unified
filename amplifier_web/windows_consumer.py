@@ -277,6 +277,40 @@ def _record(root, operation, step, error):
     return False
 
 
+def _trusted_root(root):
+    """This installation's own certificate (DER) if Windows trusts it for this person, else None.
+
+    Only a key-less identity qualifies: setup added that root with the person's
+    Yes. An earlier setup's identity added nothing and is never touched here.
+    """
+    from . import windows_tls, windows_trust
+    try:
+        identity = windows_tls.keyless_identity(root / "app")
+        if identity is not None and windows_trust.contains(identity[0]):
+            return identity[0]
+    except (OSError, ValueError, RuntimeError):
+        pass
+    return None
+
+
+def _forget_root(certificate):
+    """Ask Windows once to delete this installation's certificate. Never raises.
+
+    Returns `none` (nothing of this installation is trusted), `removed`,
+    `absent`, `declined` or `blocked`. Windows itself asks the person; its
+    default answer is No. Every outcome is a finished uninstall: a root that
+    stays has no signing key anywhere and names only this PC. One attempt, no
+    elevation, never the Local Machine store.
+    """
+    from . import windows_trust
+    if certificate is None:
+        return "none"
+    try:
+        return windows_trust.remove_root(certificate)
+    except (OSError, ValueError, RuntimeError):
+        return "blocked"
+
+
 async def _uninstall(root):
     """Stop the app and remove its sign-in task first; remove the Windows entries last.
 
@@ -292,11 +326,16 @@ async def _uninstall(root):
     from .installation_health import windows_working
     from .windows_installation import owner_notice
     from .windows_service import uninstall
+    from .windows_trust import ROOT_NAME
+    # Read-only: say in the first question what Windows will ask at the end.
+    certificate = await asyncio.to_thread(_trusted_root, root)
     if not owner_notice(
             "Uninstall Amplifier?\n\n"
             "Amplifier will stop and will no longer start when you sign in. Its entries in the "
             "Start menu and the Apps list will be removed.\n\n"
-            "Your chats, settings, accounts and the program files stay in this folder:\n" + str(root),
+            "Your chats, settings, accounts and the program files stay in this folder:\n" + str(root)
+            + (f'\n\nAt the end, Windows asks whether to delete the certificate "{ROOT_NAME}". '
+               "Select Yes there to remove it." if certificate else ""),
             confirm=True):
         return {"ok": True, "cancelled": True}
     working = await windows_working(root / "app")
@@ -336,13 +375,18 @@ async def _uninstall(root):
         raise
     if result.get("receiptError") is not None:
         _record(root, "uninstall", "receipt", result["receiptError"])
+    # Last, with the app stopped and its entries gone: the trusted certificate.
+    # Its bytes are in app\config\tls, so this comes before any file removal.
+    trust = await asyncio.to_thread(_forget_root, certificate)
     if sys.stdout is None:
         # No advice to delete the folder by hand: it holds the person's chats,
         # and File Explorer can refuse its longest paths.
         owner_notice("Amplifier is uninstalled. It no longer runs, and it no longer starts when you sign in.\n\n"
-                     "Your chats, settings, accounts and the program files are still in this folder:\n" + str(root))
+                     "Your chats, settings, accounts and the program files are still in this folder:\n" + str(root)
+                     + (f'\n\nWindows kept the certificate "{ROOT_NAME}". It works only for Amplifier on this PC.'
+                        if trust in {"declined", "blocked"} else ""))
     return {"ok": True, "operation": "uninstall", "userDataRetained": True,
-            "installationFilesRetained": True}
+            "installationFilesRetained": True, "certificate": trust}
 
 
 async def maintenance(root, operation):
