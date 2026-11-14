@@ -515,12 +515,15 @@ async def test_cold_nondefault_fable52_counts_exact_host_envelope_without_model_
     assert decision['measurement']['kind'] == 'provider_count'
     assert decision['input_limit_tokens'] == 1_000_000
     assert decision['max_output_tokens'] == 128_000
-    await dispatch(wrapped, value, streaming)
+    # Anthropic exposes complete(); use_streaming controls its internal SDK
+    # transport. Do not manufacture an optional public stream() capability.
+    assert not hasattr(provider, 'stream') and not hasattr(wrapped, 'stream')
+    await wrapped.complete(value)
     assert len(measured) == len(sent) == 1
     for key in ('model', 'system', 'messages', 'tools', 'thinking', 'extra_body', 'extra_headers'):
         assert measured[0].get(key) == sent[0].get(key), key
     assert sent[0]['model'] == 'claude-fable-5-2'
-    assert 'CURRENT_REFERENCE_1' in json.dumps(sent[0])
+    assert 'CURRENT_REFERENCE_1' in json.dumps(sent[0]['messages'])
     assert value == before
     assert provider._runtime_model_info_cache == {}
 

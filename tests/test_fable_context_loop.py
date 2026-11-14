@@ -134,9 +134,10 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
         http_client=http.AsyncClient(transport=http.MockTransport(wire.transport)))
     coordinator = session.coordinator
     context = coordinator.get('context')
-    raw = module.AnthropicProvider(client=sdk, coordinator=coordinator, config={
+    raw = module.AnthropicProvider(api_key='synthetic-not-live', coordinator=coordinator, config={
         'default_model': 'claude-sonnet-5', 'enable_1m_context': True,
         'use_streaming': False, 'max_retries': 0, 'enable_prompt_caching': False})
+    raw._client = sdk
     surface = SurfaceProvider(raw, CurrentContext().delivery(), coordinator=coordinator)
     selected = SelectedProvider(raw, {'model': MODEL, 'max_output_tokens': 1000},
                                 lambda _: surface)

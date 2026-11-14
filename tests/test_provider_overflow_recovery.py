@@ -258,9 +258,10 @@ async def test_real_anthropic_private_server_feedback_through_both_host_projecti
 
     sdk = module.AsyncAnthropic(api_key='synthetic-not-live', max_retries=0,
         http_client=sdk_httpx.AsyncClient(transport=sdk_httpx.MockTransport(transport)))
-    raw = module.AnthropicProvider(client=sdk, config={
+    raw = module.AnthropicProvider(api_key='synthetic-not-live', config={
         'default_model': 'claude-sonnet-5', 'use_streaming': False,
         'max_retries': 0, 'enable_prompt_caching': False, 'enable_1m_context': True})
+    raw._client = sdk
     raw.coordinator = SimpleNamespace(hooks=SimpleNamespace(emit=_ignore))
     surface = SurfaceProvider(raw, Delivery())
     wrapped = SelectedProvider(raw, {
