@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import stat
 import tempfile
+from datetime import datetime
 
 MAX_BYTES = 64 * 1024 * 1024
 MAX_CHARS = 16 * 1024 * 1024
@@ -57,9 +58,32 @@ def metadata(value):
     return {key: value[key] for key in ('sha256', 'bytes', 'redacted', 'truncated', 'limit_chars') if key in value}
 
 
+def expired_metadata(value):
+    """Recognize the exact retention-owner tombstone, never infer from absence."""
+    if not isinstance(value, dict) or set(value) != {'v', 'sha256', 'bytes', 'expired_at', 'reason'}:
+        return None
+    if type(value['v']) is not int or value['v'] != 1 or value['reason'] != 'retention':
+        return None
+    if not re.fullmatch('[0-9a-f]{64}', str(value['sha256'])):
+        return None
+    if type(value['bytes']) is not int or not 0 < value['bytes'] <= MAX_BYTES:
+        return None
+    try:
+        at = datetime.fromisoformat(value['expired_at'].replace('Z', '+00:00'))
+        if at.utcoffset() is None:
+            return None
+    except (AttributeError, ValueError, TypeError):
+        return None
+    return dict(value)
+
+
 def open_record(event_reference, expected_digest):
     from .event_log_view import read_event_data
     data = read_event_data(event_reference)
+    expired = data.get('provider_payloads_expired')
+    marker = expired_metadata(expired.get(event_reference['key'])) if isinstance(expired, dict) else None
+    if marker and marker['sha256'] == expected_digest:
+        raise ValueError('This provider recording expired under the saved retention policy. It will not be reconstructed or replayed.')
     files = data.get('provider_payloads')
     info = metadata(files.get(event_reference['key'])) if isinstance(files, dict) else None
     if not info or info['sha256'] != expected_digest:

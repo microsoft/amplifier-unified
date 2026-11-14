@@ -131,3 +131,31 @@ async def test_download_rejects_links_and_non_regular_files(tmp_path, replacemen
         os.mkfifo(path)
     with pytest.raises(ValueError):
         open_record(node['_eventFields']['request'], info['sha256'])
+
+
+async def test_retention_tombstone_is_explicit_and_never_opens_old_bytes(tmp_path, monkeypatch):
+    data = await capture(tmp_path, 'llm:request', {'input': 'x' * 1_100_000})
+    info = data['provider_payloads']['raw']
+    data.pop('raw')
+    data.pop('provider_payloads')
+    data['provider_payloads_expired'] = {'raw': {
+        'v': 1, 'sha256': info['sha256'], 'bytes': info['bytes'],
+        'expired_at': '2026-11-13T12:00:00Z', 'reason': 'retention'}}
+    node = index(tmp_path, 'llm:request', data)
+    assert 'expired' in node['request'].lower()
+    assert node['requestRecordingExpired']['sha256'] == info['sha256']
+    assert 'requestRecording' not in node
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Expired bytes must never be opened even if an orphan remains')
+    monkeypatch.setattr('amplifier_web.provider_payloads.os.open', forbidden)
+    with pytest.raises(ValueError, match='expired'):
+        open_record(node['_eventFields']['request'], info['sha256'])
+
+
+@pytest.mark.parametrize('changes', [{'v': True}, {'reason': 'missing'}, {'bytes': True},
+                                     {'sha256': 'A' * 64}, {'expired_at': '2026-11-13T12:00:00'}])
+def test_malformed_expiry_is_not_treated_as_retention(changes):
+    from amplifier_web.provider_payloads import expired_metadata
+    marker = {'v': 1, 'sha256': 'a' * 64, 'bytes': 123,
+              'expired_at': '2026-11-13T12:00:00Z', 'reason': 'retention'}
+    assert expired_metadata({**marker, **changes}) is None
