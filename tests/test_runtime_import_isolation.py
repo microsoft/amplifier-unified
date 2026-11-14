@@ -263,6 +263,45 @@ else:
 """)
 
 
+def test_installed_voice_alignment_does_not_require_history_dependencies(installed_app):
+    run_bootstrap_check(installed_app, """
+import copy, json
+runtime_paths = list(sys.path)
+bootstrap.bootstrap_app_package()
+from amplifier_web.native_message_projection import display_message
+from amplifier_web.voice_input_projection import PREFIX, START, END, align
+raw_text = PREFIX + START + json.dumps([]) + END + "yes"
+native = {"role": "user", "content": raw_text, "metadata": {
+    "amplifier_input": {"version": 1, "kind": "user", "source": "user",
+                        "id": "voice:call-one:delegation-one"}}}
+original = copy.deepcopy(native)
+session = {"id": "chat", "nativeIdentity": "native-root"}
+old = display_message(native, 2, session, include_internal=True)
+incoming = display_message(native, 2, session)
+session["messages"] = [old]
+current, projected = align(session, [incoming])
+assert current == projected == [incoming]
+assert current[0]["id"] == old["id"] and current[0]["text"] == "yes"
+assert current[0]["nativeIndex"] == 2 and old["text"] == raw_text
+first = {"id": "first", "role": "user", "text": "yes", "voiceId": "call-one"}
+second = {**first, "id": "second", "voiceInputId": "voice:call-one:delegation-one"}
+session["messages"] = [first, second]
+current, projected = align(session, [incoming])
+assert current[0] == first and "nativeMessageId" not in current[0]
+assert current[1] == {**second, "nativeMessageId": incoming["id"]}
+assert projected == [{**second, "nativeMessageId": incoming["id"], "nativeIndex": 2}]
+assert native == original and session["messages"] == [first, second]
+assert all(name not in sys.modules for name in (
+    "amplifier_web.automatic_history", "amplifier_web.session_store",
+    "amplifier_web.session_files", "amplifier_web.host.config",
+    "amplifier_web.host.storage", "amplifier_foundation"))
+assert importlib.util.find_spec("amplifier_foundation") is None
+assert importlib.util.find_spec("filelock") is None
+assert importlib.util.find_spec("host_only_dependency") is None
+assert str(site) not in sys.path and sys.path == runtime_paths
+""")
+
+
 @pytest.mark.parametrize("name", ["amplifier_web", "amplifier_operations", "amplifier_kernels"])
 def test_bootstrap_rejects_wrong_origin_before_loading(installed_app, name):
     run_bootstrap_check(installed_app, f"""
