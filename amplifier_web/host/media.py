@@ -121,6 +121,8 @@ def begin_hook_graph(session, *, selection=None):
     coordinator.register_capability(_HOOK_GRAPH, graph)
     coordinator.register_capability("web.media.graph_selection", selection)
     _CONSTRUCTIONS[id(coordinator)] = [coordinator, bridge, graph, selection, None]
+    selection.mint_owner(coordinator, kind="coordinator",
+                         associations=((session, "coordinator", coordinator),))
 
 
 def seal_hook_graph(coordinator):
@@ -133,7 +135,8 @@ def seal_hook_graph(coordinator):
             coordinator.get_capability(_HOOK_BRIDGE) is not bridge or
             coordinator.get_capability("web.media.graph_selection") is not selection):
         return False
-    if (selection is None or not selection.accepts_plan(coordinator.config)
+    if (selection is None or not selection.bind_capability_owners(coordinator)
+            or not selection.accepts_plan(coordinator.config)
             or not selection.accepts_construction(graph)):
         coordinator.register_capability("web.media.source_join", None)
         enable_media(coordinator)
@@ -463,7 +466,10 @@ def bind_media(session, store, *, selection=None):
         facts = dict(details or {})
         if event == "consumer-ready":
             facts["ready"] = outcome == "ready"
-        return original_report(component, event=event, outcome=outcome, details=facts)
+        result = original_report(component, event=event, outcome=outcome, details=facts)
+        if event == "consumer-ready":
+            enable_media(coordinator)
+        return result
     capability.report = report
     projected = {}
     coordinator.register_capability("web.media.projections", projected)

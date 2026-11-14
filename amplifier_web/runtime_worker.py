@@ -1083,9 +1083,30 @@ class Worker:
                 self.install_collaboration_checkpoint(self.session.coordinator)
             original_host = self.session.coordinator.get_capability("live.host")
             class ObservedHost:
+                registrations = {}
                 def __getattr__(self, name):
                     return getattr(original_host, name)
+                def execution_registration(self, coordinator, hooks):
+                    from contextlib import contextmanager
+                    from amplifier_web.host.media import hook_configuration, registration_coordinator
+                    @contextmanager
+                    def construction():
+                        native = coordinator
+                        with hook_configuration(native):
+                            view = registration_coordinator(native)
+                            self.registrations[id(view)] = (view, native)
+                            bridge = native.get_capability("web.media.hook_bridge")
+                            selection = native.get_capability("web.media.graph_selection")
+                            if bridge is not None and selection is not None:
+                                selection.bind_registration_view(native, bridge, view)
+                            yield view, view.hooks
+                        from amplifier_web.host.media import seal_hook_graph
+                        seal_hook_graph(native)
+                    return construction()
                 async def prepare_execution(self, loop, coordinator, providers):
+                    entry = self.registrations.get(id(coordinator))
+                    if entry is not None and entry[0] is coordinator:
+                        coordinator = entry[1]
                     result = await original_host.prepare_execution(loop, coordinator, providers)
                     if coordinator:
                         host.install_activity(coordinator)
@@ -1106,8 +1127,6 @@ class Worker:
                             wrapped = transform(value)
                             await mount_media_adapter(coordinator, "providers", wrapped,
                                                       previous=mounted, name=name)
-                        from amplifier_web.host.media import seal_hook_graph
-                        seal_hook_graph(coordinator)
                         return runtime, {name: transform(value) for name, value in selected.items()}, scope
                     return result
             # loop-live propagates this host through its existing ContextVar to
@@ -1125,6 +1144,16 @@ class Worker:
             from amplifier_web.host.naming import LiveSessionNaming
             completed=[identity for event in config.get('generations',[]) if event.get('event')=='generation.finished' for identity in event.get('input_ids',[]) if identity in {t['id'] for t in config.get('execution',{}).get('turns',[])}]
             self.naming=LiveSessionNaming(self.session.coordinator,self.home,publish,completed)
+            # Finish the actual host graph before attachment admission. The
+            # live execution task is not started yet; no tool is run here.
+            self.install_activity(self.session.coordinator)
+            from amplifier_web.host.media import flush_media_adapters, mount_media_adapter, seal_hook_graph
+            await flush_media_adapters(self.session.coordinator)
+            transform = self.session.coordinator.get_capability('web.provider_transform')
+            if callable(transform):
+                for name, provider in list((self.session.coordinator.get("providers") or {}).items()):
+                    await mount_media_adapter(self.session.coordinator, "providers", transform(provider),
+                                              previous=provider, name=name)
             from amplifier_web.loaded_provenance import capture_mount
             self.provenance_mount = capture_mount(self.session)
             with startup_timing.phase('worker.ownership.register'):

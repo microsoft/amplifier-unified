@@ -169,7 +169,8 @@ class SelectedProvider:
                         {key: value for key, value in kwargs.items() if key != "request_options"})
                     self._release_bindings = [row for row in self._release_bindings if row[0] is not request]
                     self._release_bindings.append((request, selected, execution,
-                                                   copy.deepcopy(request_options), copy.deepcopy(options)))
+                                                   copy.deepcopy(request_options or {}), copy.deepcopy(options)))
+                    self._release_bindings = self._release_bindings[-4:]
                     result = method(selected, **kwargs)
                 except BaseException:
                     self._forget_request(request)
@@ -189,7 +190,7 @@ class SelectedProvider:
     def release_media_request(self, canonical, *, request_options=None):
         """Only preparation-time associations participate in cleanup."""
         row = next((row for row in self._release_bindings if row[0] is canonical), None)
-        if row is None or row[3] != request_options:
+        if row is None or row[3] != (request_options or {}):
             return False
         release = getattr(row[2], "release_media_request", None)
         if not callable(release):
@@ -1045,6 +1046,9 @@ def install_checkpoint_hooks(coordinator, runtime, checkpoint):
     """Keep automatic nested completion cheap; enclosing saves are unchanged."""
     import asyncio
     from amplifier_core import HookResult
+    from .media import mint_graph_owner
+    mint_graph_owner(coordinator, checkpoint, kind="checkpoint")
+    mint_graph_owner(coordinator, runtime, kind="runtime")
     async def checkpoint_hook(event, data):
         if data.get("session_id", runtime.session_id) == runtime.session_id:
             from ..performance_diagnostics import PhaseTiming, TIMING_ENABLED

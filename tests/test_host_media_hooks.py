@@ -29,6 +29,27 @@ def policy_with_flags(deny, audit):
         return HookResult(action="deny" if deny else "continue", reason="audit" if audit else None)
     return post
 
+def policy_with_config(config):
+    async def post(event, data):
+        return HookResult(action="deny" if config["deny"] is True else "continue")
+    return post
+
+async def policy_positional_and_keyword(event, data, deny=True, *, audit=False):
+    return HookResult(action="deny" if deny else "continue", reason="audit" if audit else None)
+
+@pytest.mark.parametrize("alternatives", [False, True])
+def test_environments_are_recursive_type_exact_and_defaults_keep_parameter_kinds(alternatives):
+    from amplifier_web.host.media_graph import NamedMediaGraph
+    config = {"config": {"deny": True}}
+    selected = NamedMediaGraph("typed-config", plans=[{}],
+        sources={__file__: hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
+        dependencies=(HookResult,), environments={
+            "policy_with_config.<locals>.post": [config] if alternatives else config,
+            "policy_positional_and_keyword": {"deny": True, "audit": False}})
+    assert selected.accepts_callable(policy_with_config({"deny": True}))
+    assert not selected.accepts_callable(policy_with_config({"deny": 1}))
+    assert selected.accepts_callable(policy_positional_and_keyword)
+
 def test_named_graph_requires_selected_global_targets_and_capture_values():
     from amplifier_web.host.media_graph import NamedMediaGraph
     sources = {__file__: hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}

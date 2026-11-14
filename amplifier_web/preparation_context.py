@@ -111,47 +111,47 @@ class PreparationContext:
         return await self.bridge(operation, args)
 
     def wrap(self, delivery):
-        owner = self
+        return PreparedDelivery(self, delivery)
 
-        class Delivery:
-            def __getattr__(self, name):
-                return getattr(delivery, name)
 
-            async def _with_context(self, request, provider, values, *, commit=False):
-                token = owner.current.set(values)
-                try:
-                    result = await delivery.prepare(request, provider, commit=commit)
-                    result = anchor_observations(request, result)
-                    work_request = getattr(delivery, 'work_request', None)
-                    binding = work_request(result) if callable(work_request) else None
-                    if binding is not None:
-                        # Private, bounded by the existing request/refusal records.
-                        # Never exported as authority or cached across requests.
-                        binding['preparationContext'] = values
-                    return result
-                finally:
-                    owner.current.reset(token)
+class PreparedDelivery:
+    """Explicit constructor-owned delegates; preparation state remains mutable."""
+    def __init__(self, owner, delivery):
+        self.owner, self.delivery = owner, delivery
 
-            async def prepare_refit(self, request, provider, *, binding):
-                values = binding.get('preparationContext')
-                if not isinstance(values, dict) or binding['required']['status'] != 'available':
-                    return await self.prepare(request, provider)
-                # Finalization applies the same current policy as an ordinary
-                # request: strict Work assurance in Ask; standing authority in
-                # Full. Both retain native input/generation/Stop checks.
-                return await self._with_context(request, provider, values)
+    def __getattr__(self, name):
+        return getattr(self.delivery, name)
 
-            async def prepare(self, request, provider, *, commit=False):
-                from .execution_events import CALL_PURPOSE
-                if CALL_PURPOSE.get() or not any(getattr(t, 'name', None) == 'app_control'
-                                                for t in request.tools or []):
-                    return await delivery.prepare(request, provider, commit=commit)
-                try:
-                    values = await asyncio.wait_for(owner.bridge('context.prepare', {}), TRANSPORT_TIMEOUT)
-                    if not isinstance(values, dict):
-                        raise ValueError('Invalid preparation context')
-                except Exception:
-                    values = {}
-                return await self._with_context(request, provider, values, commit=commit)
+    async def _with_context(self, request, provider, values, *, commit=False):
+        token = self.owner.current.set(values)
+        try:
+            result = await self.delivery.prepare(request, provider, commit=commit)
+            result = anchor_observations(request, result)
+            work_request = getattr(self.delivery, 'work_request', None)
+            binding = work_request(result) if callable(work_request) else None
+            if binding is not None:
+                binding['preparationContext'] = values
+            return result
+        finally:
+            self.owner.current.reset(token)
 
-        return Delivery()
+    async def prepare_refit(self, request, provider, *, binding):
+        values = binding.get('preparationContext')
+        if not isinstance(values, dict) or binding['required']['status'] != 'available':
+            return await self.prepare(request, provider)
+        # Strict Work assurance in Ask; standing authority in Full. Both keep
+        # native input/generation/Stop checks.
+        return await self._with_context(request, provider, values)
+
+    async def prepare(self, request, provider, *, commit=False):
+        from .execution_events import CALL_PURPOSE
+        if CALL_PURPOSE.get() or not any(getattr(t, 'name', None) == 'app_control'
+                                        for t in request.tools or []):
+            return await self.delivery.prepare(request, provider, commit=commit)
+        try:
+            values = await asyncio.wait_for(self.owner.bridge('context.prepare', {}), TRANSPORT_TIMEOUT)
+            if not isinstance(values, dict):
+                raise ValueError('Invalid preparation context')
+        except Exception:
+            values = {}
+        return await self._with_context(request, provider, values, commit=commit)

@@ -18,7 +18,7 @@ from types import CodeType, FunctionType, MethodType, ModuleType
 class NamedMediaGraph:
     """Host-only selection. Never construct from session/config/imported metadata."""
     def __init__(self, name, *, plans, sources, bindings=(), observations=(), dependencies=(),
-                 owner_rules=(), environments=None):
+                 owner_rules=(), environments=None, capability_owners=()):
         if not isinstance(name, str) or not name or not plans or not sources:
             raise ValueError("A named graph needs reviewed plans and sources")
         if len(sources) > 128:
@@ -33,6 +33,9 @@ class NamedMediaGraph:
         self._dependencies = tuple(dependencies)
         self._environments = copy.deepcopy(environments or {})
         self._owner_rules = tuple(owner_rules)
+        self._capability_owners = tuple(capability_owners)
+        self._capability_bindings = []
+        self._registration_views = []
         self._owners = []
         self._codes = {}
         self._stamps = {}
@@ -76,6 +79,27 @@ class NamedMediaGraph:
         self._owners.append((obj, type(obj), protected, tuple(associations)))
         return True
 
+    def bind_capability_owners(self, coordinator):
+        """Join explicitly selected external constructor outputs once.
+
+        Paths and classes come from the reviewed assembly, not callback evidence.
+        Later replacement cannot acquire the original constructor association.
+        """
+        for kind, capability, keys in self._capability_owners:
+            previous = next((row for row in self._capability_bindings
+                             if row[0] is coordinator and row[1:3] == (capability, keys)), None)
+            value = coordinator.get_capability(capability)
+            for key in keys:
+                value = value[key]
+            if previous is not None:
+                if previous[3] is not value:
+                    return False
+                continue
+            if not self.mint_owner(value, kind=kind):
+                return False
+            self._capability_bindings.append((coordinator, capability, keys, value))
+        return True
+
     @property
     def name(self):
         return self._name
@@ -101,10 +125,24 @@ class NamedMediaGraph:
         return value(vars(obj) if hasattr(obj, "__dict__") else obj)
 
     def _binding_valid(self, obj):
+        for native, bridge, view in self._registration_views:
+            if obj is view:
+                return (native.get_capability("web.media.hook_bridge") is bridge
+                        and bridge.participant("unified-host") is view)
+        for coordinator, capability, keys, selected in self._capability_bindings:
+            if selected is obj:
+                current = coordinator.get_capability(capability)
+                for key in keys:
+                    current = current[key]
+                if current is not selected:
+                    return False
         for original, cls, protected, associations in self._owners:
             if original is obj:
                 return (type(obj) is cls and
-                        all(getattr(obj, name, None) is value for name, value in protected) and
+                        all((type(getattr(obj, name, None)) is type(value) and
+                             getattr(obj, name, None) == value)
+                            if value is None or type(value) in (str, int, float, bool, bytes)
+                            else getattr(obj, name, None) is value for name, value in protected) and
                         all(getattr(owner, name, None) is value for owner, name, value in associations))
         for original, fields in self._bindings:
             if original is obj:
@@ -126,6 +164,11 @@ class NamedMediaGraph:
             return type(obj) is list and all(type(item) in (str, int, float, bool) for item in obj)
         return False
 
+    def bind_registration_view(self, native, bridge, view):
+        if bridge.participant("unified-host") is not view:
+            raise ValueError("Foreign registration view")
+        self._registration_views.append((native, bridge, view))
+
     def _unchanged(self):
         for path, stamp in self._stamps.items():
             stat = Path(path).stat()
@@ -137,6 +180,10 @@ class NamedMediaGraph:
         """Compare live code objects, including captured loader/mount callbacks."""
         seen = set()
         def check(value):
+            if not isinstance(value, (FunctionType, MethodType)) and callable(value):
+                if not self._binding_valid(value):
+                    return False
+                value = value.__call__
             if isinstance(value, MethodType):
                 if not self._binding_valid(value.__self__):
                     return False
@@ -149,6 +196,8 @@ class NamedMediaGraph:
             filename = str(Path(value.__code__.co_filename).resolve())
             if value.__code__ not in self._codes.get(filename, ()):
                 return False
+            if any(value is dependency for dependency in self._dependencies):
+                return True
             for name in value.__code__.co_names:
                 if name not in value.__globals__:
                     continue
@@ -167,7 +216,7 @@ class NamedMediaGraph:
                     return False
             # Core's selected Python loader returns a closure whose default is
             # the actual module mount. Check that object too, not only loader.py.
-            parameters = list(inspect.signature(value).parameters)
+            parameters = list(value.__code__.co_varnames[:value.__code__.co_argcount])
             defaults = value.__defaults__ or ()
             captures = list(zip(parameters[len(parameters) - len(defaults):], defaults)) if defaults else []
             captures.extend((value.__kwdefaults__ or {}).items())
@@ -176,7 +225,23 @@ class NamedMediaGraph:
                     captures.append((name, cell.cell_contents))
                 except ValueError:
                     return False
-            environment = self._environments.get(value.__qualname__, {})
+            environment = self._environments.get((filename, value.__qualname__))
+            if environment is None:
+                # A short qualified name is unambiguous only within the
+                # reviewed source set. It must never borrow another file's
+                # accepted callback environment.
+                owners = {path for path, codes in self._codes.items()
+                          if any(code.co_qualname == value.__qualname__ for code in codes)}
+                environment = (self._environments.get(value.__qualname__, {})
+                               if owners == {filename} else {})
+            def exact(left, right):
+                if type(left) is not type(right):
+                    return False
+                if type(left) is dict:
+                    return left.keys() == right.keys() and all(exact(left[key], right[key]) for key in left)
+                if type(left) in (tuple, list):
+                    return len(left) == len(right) and all(exact(a, b) for a, b in zip(left, right))
+                return left == right
             if isinstance(environment, list):
                 # Alternatives are whole environments, never per-value pools.
                 def constants(item):
@@ -188,7 +253,7 @@ class NamedMediaGraph:
                         return all(constants(child) for child in item)
                     return False
                 actual = {name: item for name, item in captures if constants(item)}
-                environment = next((candidate for candidate in environment if candidate == actual), {})
+                environment = next((candidate for candidate in environment if exact(candidate, actual)), {})
             for capture_name, item in captures:
                 if inspect.isfunction(item) or inspect.ismethod(item):
                     if not check(item):
@@ -196,7 +261,7 @@ class NamedMediaGraph:
                 elif item is None or type(item) in (str, int, float, bool, bytes):
                     if (capture_name not in environment or
                             type(item) is not type(environment[capture_name]) or
-                            item != environment[capture_name]):
+                            not exact(item, environment[capture_name])):
                         return False
                 elif type(item) in (dict, tuple, list):
                     def plain(child):
@@ -209,9 +274,10 @@ class NamedMediaGraph:
                         return False
                     if not (plain(item) and capture_name in environment and
                             type(item) is type(environment[capture_name]) and
-                            item == environment[capture_name]) and not self._binding_valid(item):
+                            exact(item, environment[capture_name])) and not self._binding_valid(item):
                         return False
-                elif not self._binding_valid(item):
+                elif not (any(item is dependency for dependency in self._dependencies)
+                          or self._binding_valid(item)):
                     return False
             return True
         return check(callback)
