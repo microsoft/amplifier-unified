@@ -525,7 +525,7 @@ async def delegate_specialists(specialist, tmp_path):
         source = source.replace(
             '    await coordinator.mount("tools", Specialist(), name="',
             '''    state = coordinator.get_capability("test.specialist")
-    if coordinator.session_id != "parent":
+    if state is not None and coordinator.session_id != "parent":
         if state["block"]:
             import asyncio
             state["mounting"].set()
@@ -551,6 +551,8 @@ class Probe:
     async def execute(self, prompt, context, providers, tools, hooks, coordinator):
         state = coordinator.get_capability("test.specialist")
         state["executed"].append(coordinator.session_id)
+        if prompt != "inspect":
+            return "Unexpected execution after failed initialization"
         name = coordinator.config["instruction"].split()[0]
         assert coordinator.config["instruction"] == name + " instructions."
         assert coordinator.config["model_role"] == [name, "general"]
@@ -641,8 +643,8 @@ async def test_real_delegate_refuses_failed_child_tool_mount(delegate_specialist
     fixture = delegate_specialists
     fixture.state["fail"].add("alpha")
     if inherited:
-        # Parent mount succeeded; the same configured inherited tool fails only
-        # in the child. Root-equivalent policy must not inspect just the overlay.
+        # A prepared declaration inherited from the parent, not the overlay.
+        # Root-equivalent policy must not inspect just agent-declared tools.
         fixture.parent.coordinator.config["tools"].append(copy.deepcopy(fixture.sources["alpha"]))
         fixture.parent.coordinator.config["agents"]["specialists:alpha"]["tools"] = []
     result = await fixture.delegate.execute({
