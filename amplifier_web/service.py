@@ -2082,6 +2082,14 @@ class AppService:
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
         if routed is not None:
             return routed
+        if action == 'conversation.delivery':
+            # A check is not another send command. Skip full history refresh and
+            # per-check receipt/publication; exact new acceptance still reconciles
+            # through the existing delivery owner below.
+            if admission_check is not None:
+                admission_check()
+            return {'accepted': True, 'hostInstanceId': self.instance_id,
+                    'result': await self._check_delivery(args['sessionId'], args['inputId'])}
         if action == 'conversation.configuration':
             from .conversation_configuration import read
             async with self.lock:
@@ -3518,9 +3526,6 @@ class AppService:
                         session['externalAgent']['activeInputId'] = input_id
                 if not update_message:
                     pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity, args.get('preserveDraft', False))))
-            elif action == "conversation.delivery":
-                session = self._session(args['sessionId'])
-                pending.append((self._check_delivery, (session['id'], args['inputId'])))
             elif action == "conversation.retry":
                 from .message_delivery import find_message
                 session = self._session(args['sessionId'])
@@ -4343,7 +4348,7 @@ class AppService:
             raise AppError(str(exc),409,code=receipt['code']) from exc
 
     async def _check_delivery(self, sid, input_id):
-        if self._session(sid).get('externalAgent'):
+        if self._session(sid, hydrate=False).get('externalAgent'):
             async with self.lock:
                 return self.external_conversations.delivery(self._session(sid), input_id)
         from .message_delivery import find_message, receipt_delivery, receipt_mapping
@@ -4411,8 +4416,13 @@ class AppService:
             }.get(status, 'Delivery is still uncertain. Checking does not resend it. Sending again may repeat work if the earlier attempt ran.')}
 
         async with self.lock:
-            session = copy.deepcopy(self._session(sid))
-            message, status, protected, conflict, _ = saved_evidence(session)
+            from .cold_display import detached
+            view = detached(self._session(sid, hydrate=False))
+            # The native receipt probe needs identity, not a copy of the entire
+            # transcript, execution tree and accumulated tool output.
+            session = {key: view.get(key) for key in ('id', 'workspace', 'runtimeSessionId', 'nativeIdentity')}
+            message, status, protected, conflict, _ = saved_evidence(view)
+            message = copy.deepcopy(message)
         if protected:
             return result(status, session, message)
         if conflict:
@@ -4428,7 +4438,7 @@ class AppService:
             except Exception:
                 pass  # A failed probe cannot prove that the input was not delivered.
         async with self.lock:
-            current = self._session(sid)
+            current = self._session(sid, hydrate=False)
             message, status, protected, conflict, writable = saved_evidence(current)
             if protected:
                 return result(status, current, message)

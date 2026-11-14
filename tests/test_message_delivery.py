@@ -982,6 +982,36 @@ async def test_check_is_passive_and_explains_uncertainty(recovery):
         await app.dispatch('conversation.retry', recovery_args(app), origin='agent', caller_session_id=app._session()['id'])
 
 
+async def test_unknown_delivery_check_skips_history_saves_and_its_own_command_receipt(recovery, monkeypatch):
+    app, runtime, _ = recovery
+    args = recovery_args(app)
+    before = app.db.execute('SELECT id,receipt FROM commands ORDER BY id').fetchall()
+    def forbidden(*args, **kwargs):
+        raise AssertionError('A passive unknown lookup must not refresh or save the conversation')
+    monkeypatch.setattr(app.history, 'ensure_loaded', AsyncMock(side_effect=forbidden))
+    monkeypatch.setattr(app, '_save', forbidden)
+    monkeypatch.setattr(app, '_publish_changes', forbidden)
+    result = await app.dispatch('conversation.delivery', args, command_id='passive-check')
+    assert result['hostInstanceId'] == app.instance_id
+    assert result['result']['delivery'] == 'unknown'
+    assert app.db.execute('SELECT id,receipt FROM commands ORDER BY id').fetchall() == before
+    assert not runtime.sent and not runtime.started and not runtime.retries
+
+
+async def test_delivery_probe_copies_identity_not_unrelated_execution(recovery):
+    app, runtime, _ = recovery
+    session = app._session()
+    class NoCopy:
+        def __deepcopy__(self, memo):
+            raise AssertionError('Unrelated execution copied')
+    original = session.get('execution')
+    session['execution'] = NoCopy()
+    try:
+        assert (await app._check_delivery(session['id'], 'original'))['delivery'] == 'unknown'
+    finally:
+        session['execution'] = original
+
+
 async def test_check_reconciles_positive_evidence_and_original_receipt(recovery):
     app, runtime, args = recovery
     runtime.evidence = 'accepted'
