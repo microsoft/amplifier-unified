@@ -287,6 +287,20 @@ def test_held_entry_stays_and_a_second_uninstall_finishes(tmp_path, monkeypatch)
     assert done["state"] == "complete" and data(root) == {} and person(data(folder)) == person(before)
 
 
+def test_set_is_not_complete_while_any_folder_holds_an_entry(tmp_path, monkeypatch):
+    root = used(tmp_path / "Amplifier")
+    shutil.rmtree(root / "app" / "updates")  # An installation without program state.
+    shutil.rmtree(root / "app" / "runtime")
+    before, folder = data(root), kept.kept_folder(root)
+    release = refuse(monkeypatch, "rename", root / "workspace", root / "workspace" / "notes.txt")
+    result = kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)
+    assert result["state"] == "moving" and result["remaining"] == ["workspace"] and result["programState"] == []
+    assert kept.read(folder)[0] == "moving" and (root / "workspace" / "notes.txt").read_text() == "mine\n"
+    release()
+    done = kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)
+    assert done["state"] == "complete" and data(folder) == before
+
+
 def test_entry_never_replaces_an_entry_in_the_kept_folder(tmp_path, monkeypatch):
     root = used(tmp_path / "Amplifier")
     folder = kept.kept_folder(root)
@@ -615,6 +629,24 @@ def test_filled_folder_never_replaces_an_entry(tmp_path, monkeypatch, notices):
     snapshot = tree(tmp_path)
     result = kept.first_start(root, VERSION, ask=False)
     assert result["reason"] == "take-back-not-empty" and tree(tmp_path) == snapshot
+
+
+def test_entry_that_appears_while_a_folder_is_filled_is_never_replaced(tmp_path, monkeypatch, notices):
+    root, folder, _ = kept_then_installed(tmp_path)
+    refuse(monkeypatch, "rmdir", root / "workspace")
+    real = kept._write
+
+    def write(kept_folder, value):
+        real(kept_folder, value)
+        if value.get("entries") == "workspace":  # After every check, before the first entry moves.
+            (root / "workspace" / "notes.txt").write_text("appeared in between")
+    monkeypatch.setattr(kept, "_write", write)
+    notices.answers.append(True)
+    result = kept.first_start(root, VERSION, ask=True)
+    assert result["taken"] is False and result["reason"] == "take-back-not-empty"
+    assert (root / "workspace" / "notes.txt").read_text() == "appeared in between"
+    assert (folder / "workspace" / "notes.txt").read_text() == "mine\n"  # Neither file replaced the other.
+    assert kept.read(folder)[0] == "adopting"
 
 
 @pytest.mark.parametrize("change,kind", [("link", "take-back-link"), ("newer", "take-back-newer"),
