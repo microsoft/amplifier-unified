@@ -138,6 +138,17 @@ references pin sidecars. Capture replacement preserves diagnostic record IDs and
 all delivery/outbox outcomes by rebinding exact physical byte references in a
 separate transaction. Unqualified inode/truncation changes hold the old index;
 they do not delete receipts and enroll rewritten history for network delivery.
+The hold is per capture, not a global diagnostics failure. Its exact records and
+outbox outcomes also remain excluded from ordinary age/count retirement until
+qualified reconciliation; unrelated capture/app records continue normally.
+
+When both choices apply, image extraction precedes diagnostic expiry through
+CI's exact verified-generation continuation, without clearing its permanent
+replay fence. Each stage has its own durable map and outcome; this is not a
+whole-file atomic promise. An interrupted second stage cannot repeat the first,
+and an unknown unlink is never retried as if no effect occurred. Recovery
+originals still pin sidecars, and newly unreferenced media is not automatically
+reclaimed. No inline images means no conversion is staged before ordinary expiry.
 
 Reports separate logical inline removal, new assets/reference/journal bytes,
 retained recovery bytes, observed unlink bytes and filesystem change. Unknown

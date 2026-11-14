@@ -152,7 +152,7 @@ class SavedStorageOptimize:
             operation = json.loads(operation[0])
             if 'operationId' in value and value['operationId'] != identity:
                 raise ValueError('File outcome belongs to another saved-storage operation')
-            value = {**value, 'operationId': identity}
+            value = {**value, 'operationId': identity, '_ordinal': ordinal}
             summary = operation['summary']
             accounting = operation.setdefault('_accounting', {})
             old = self.journal.db.execute(

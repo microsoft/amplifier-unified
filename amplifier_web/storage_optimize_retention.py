@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -75,9 +75,13 @@ def inspect(row, operation):
             'reason': 'Retention owner retained this file or could not establish its eligibility'}
 
 
-def _receipt(path):
+def _receipt(path, continuation=None):
     from context_intelligence.prune.coordination import receipt_path
-    name = receipt_path(path)
+    if continuation:
+        from context_intelligence.prune.compound import optimize_retention_receipt
+        name = optimize_retention_receipt(path, file_hash(receipt_path(path)))
+    else:
+        name = receipt_path(path)
     if not name.exists():
         return None
     if name.is_symlink():
@@ -115,12 +119,13 @@ def _mapping(path, receipt):
         db.close()
 
 
-async def apply(app, row, operation, *, resume=False):
+async def apply(app, row, operation, *, resume=False, after_rebind=None):
     """Keep native writer exclusion and diagnostics serialization until settled."""
     from context_intelligence.prune.operations import PruneRequest, prune_file
     from .storage_cleanup import check
     from .storage_optimize import owner
     path = Path(row['_path'])
+    continuation = Path(row['_captureOperation']) if row.get('_captureOperation') else None
     identity = operation['operationId'] + ':' + hashlib.sha256(str(path).encode()).hexdigest()
     loop = asyncio.get_running_loop()
     cancelled = threading.Event()
@@ -150,7 +155,7 @@ async def apply(app, row, operation, *, resume=False):
                     hold_replacement(db, path, identity, _witness(prepared))
 
             def poll():
-                receipt = _receipt(path)
+                receipt = _receipt(path, continuation)
                 loop_future = asyncio.run_coroutine_threadsafe(admission(receipt), loop)
                 loop_future.result()
                 if receipt:
@@ -159,7 +164,7 @@ async def apply(app, row, operation, *, resume=False):
                     asyncio.run_coroutine_threadsafe(admission(receipt), loop).result()
 
             def perform():
-                receipt = _receipt(path)
+                receipt = _receipt(path, continuation)
                 if receipt:
                     # Reconcile only; never call prune_file again after its
                     # irreversible marker exists, even after lost acknowledgement.
@@ -173,9 +178,11 @@ async def apply(app, row, operation, *, resume=False):
                     return None, receipt
                 if file_hash(path) != row['_sourceSha256']:
                     raise CaptureDrift('Source changed after preview')
+                options = {'verified_optimize': continuation} if continuation else {}
                 result = prune_file(path, PruneRequest(path.parent, policy(operation),
-                    apply=True, writers_stopped=True, before_commit=poll))
-                return result, _receipt(path)
+                    apply=True, writers_stopped=True, min_idle=timedelta(0) if continuation else timedelta(hours=1),
+                    before_commit=poll, **options))
+                return result, _receipt(path, continuation)
 
             result, receipt = await settle_owned(perform, cancelled)
             if receipt:
@@ -184,16 +191,21 @@ async def apply(app, row, operation, *, resume=False):
                         return rebind_replaced_capture(db, path, identity, _witness(receipt),
                                                        _mapping(path, receipt))
                 await settle_owned(rebind, cancelled)
+                if after_rebind is not None:
+                    await admission()
+                    await settle_owned(after_rebind, cancelled)
             if result is None:
                 return {**row, 'status': 'held', 'reason':
-                    'Diagnostic reference expiry was reconciled; earlier unlink outcome remains unknown and was not replayed'}
+                    'Diagnostic reference expiry was reconciled; earlier unlink outcome remains unknown and was not replayed',
+                    '_accounting': {}}
             if result.status != 'pruned':
-                return {**row, 'status': 'held', 'reason': 'The retention owner declined apply; original evidence remains'}
+                return {**row, 'status': 'held', 'reason': 'The retention owner declined apply; original evidence remains',
+                        '_accounting': {}}
             return {**row, 'status': 'completed' if not result.reason else 'held',
                     'reason': 'Diagnostic expiry completed' if not result.reason else
                               'Reference expiry completed but final durability or unlink needs inspection',
                     '_accounting': {'unlinked': result.asset_bytes_unlinked,
-                        'inlineRemoved': result.bytes_saved, 'recoveryRetained': 0,
+                        'inlineRemoved': result.bytes_saved, 'recoveryRetained': None if continuation else 0,
                         'assetsAdded': 0, 'filesystemDelta': None}}
     finally:
         if boundary is not None:

@@ -155,9 +155,6 @@ class OwnerAdapters:
                 from .storage_optimize_retention import inspect
                 return await asyncio.to_thread(inspect, row, operation)
             return {**row, 'status': 'held', 'reason': 'No known inline images require extraction'}
-        if any(operation['cutoffs'].values()):
-            return {**row, 'status': 'held', 'reason':
-                'Combined image extraction and diagnostic expiry await both qualified stages; neither choice was silently dropped'}
         # A preview cannot assert writers stopped from an absent catalog entry
         # or from an advisory lock. Actual apply must acquire native ownership.
         row['_sourceSha256'] = result['source_sha256']
@@ -167,7 +164,17 @@ class OwnerAdapters:
         except (UnknownHistoricalMedia, ImportError):
             return {**row, 'status': 'held',
                     'reason': 'Original image provenance and expiry are unverified; no pixels were converted'}
-        return {**row, 'status': 'eligible', '_action': 'capture-images',
+        combined = any(operation['cutoffs'].values())
+        if combined:
+            try:
+                from context_intelligence.prune.operations import PruneRequest
+                from context_intelligence.prune.compound import optimize_retention_receipt
+                if 'verified_optimize' not in PruneRequest.__dataclass_fields__:
+                    raise ImportError
+            except ImportError:
+                return {**row, 'status': 'unsupported',
+                        'reason': 'Combined diagnostic expiry continuation owner is not installed'}
+        return {**row, 'status': 'eligible', '_action': 'capture-images-and-retention' if combined else 'capture-images',
                 'reason': 'Known image copies have an original owner receipt'}
 
     async def apply(self, row, operation, *, resume=False):
@@ -180,6 +187,9 @@ class OwnerAdapters:
         if row.get('_action') == 'capture-images':
             from .storage_optimize_capture import apply
             return await apply(self.app, row, operation, resume=resume)
+        if row.get('_action') == 'capture-images-and-retention':
+            from .storage_optimize_capture import apply_combined
+            return await apply_combined(self.app, row, operation, resume=resume)
         # No guessed compatibility, no direct unlink and no replay. Actual
         # owner API integration is activated only at its qualified dependency.
         return {**row, 'status': 'held', 'reason': 'The selected format owner is not qualified for apply'}

@@ -18,6 +18,8 @@ def maintenance_schema(db):
     db.execute('CREATE TABLE IF NOT EXISTS capture_rebindings('
                'path TEXT NOT NULL, operation_id TEXT NOT NULL, value TEXT NOT NULL,'
                'PRIMARY KEY(path,operation_id))')
+    db.execute('CREATE TABLE IF NOT EXISTS capture_quarantine('
+               'path TEXT PRIMARY KEY, reason TEXT NOT NULL)')
 
 
 def _file_digest(path):
@@ -176,6 +178,7 @@ def rebind_replaced_capture(db, path, operation_id, witness, mappings):
         db.execute('INSERT INTO captures VALUES(?,?,?) ON CONFLICT(path) DO UPDATE SET '
                    'offset=excluded.offset,inode=excluded.inode', (str(path), new_end, stamp.st_ino))
         db.execute('DELETE FROM capture_maintenance WHERE path=? AND operation_id=?', (str(path), operation_id))
+        db.execute('DELETE FROM capture_quarantine WHERE path=?', (str(path),))
         db.execute('INSERT INTO capture_rebindings VALUES(?,?,?)', (str(path), operation_id, json.dumps(witness)))
         db.execute('RELEASE capture_rebind')
         return {'records': count, 'backfilled': 0, 'deliveriesChanged': 0}
@@ -250,7 +253,8 @@ def index_shared(db, scopes, config, *, metadata_cache=None):
         else:
             metadata_cache.validate(directory)
         stat = path.stat()
-        if db.execute('SELECT 1 FROM capture_maintenance WHERE path=?', (str(path),)).fetchone():
+        if db.execute('SELECT 1 FROM capture_maintenance WHERE path=? UNION ALL '
+                      'SELECT 1 FROM capture_quarantine WHERE path=? LIMIT 1', (str(path), str(path))).fetchone():
             # Quarantine this source only. Its retained cursor/records/outcomes
             # remain held; unrelated sources and app-authored rows still persist.
             continue
@@ -259,6 +263,8 @@ def index_shared(db, scopes, config, *, metadata_cache=None):
         if previous and (previous[1] != stat.st_ino or previous[0] > stat.st_size):
             # Inode drift is not authority to discard accepted delivery facts
             # or forward a rewritten historical record as a new event.
+            db.execute('INSERT OR IGNORE INTO capture_quarantine VALUES(?,?)',
+                       (str(path), 'source-generation-drift'))
             continue
         with path.open('rb') as stream:
             stream.seek(offset)
