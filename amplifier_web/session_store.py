@@ -415,7 +415,10 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
         raise ValueError('Wait for delegated work to stop before creating a recovery copy.')
     home = Path(home)
     store = SessionStore.for_app(home, source.get("workspace") or Path.cwd())
+    source_store = store
     source_id = source.get("runtimeSessionId") or source["id"]
+    from amplifier_foundation.session.transcript_guard import NativeTranscriptGuard
+    source_guard = NativeTranscriptGuard(store.directory(source_id) / 'transcript.jsonl')
     source_dir = home / "sessions" / source_id
     target_dir = home / "sessions" / target_id
     if not prepare_only and (target_dir.exists() or (store.directory(target_id) / "transcript.jsonl").exists()):
@@ -606,7 +609,29 @@ def fork_session(home, source, target_id, *, turn=None, after_message_id=None, b
         # chat's files, tools, jobs, or interpreter state.
         store = SessionStore.for_app(home, target_workspace)
         metadata['working_dir'] = target_workspace
-    store.save(target_id,messages,metadata,preserve_system=not bool(bundle or recovery))
+    # Filtered context is the only asset authority. Never copy the parent's
+    # entire media directory or carry a live capability/lock into the target.
+    from contextlib import closing
+    from .session_assets import message_refs, adopt_messages, source_reader_guard, ref_key
+    selected_refs = message_refs(messages, source_id)
+    if selected_refs:
+        if saved is None:
+            raise ValueError('Media fork requires its saved source transcript')
+        # Only retained source positions can authorize adoption. A corrupt or
+        # foreign ref in a discarded later turn must not veto an earlier fork.
+        saved_rows = [saved[0][index] for index in index_map if index < len(saved[0])]
+        saved_refs = {ref_key(ref) for ref in message_refs(saved_rows, source_id)}
+        if any(ref_key(ref) not in saved_refs for ref in selected_refs):
+            raise ValueError('Fork media does not belong to its saved source transcript')
+        source_guard.check()
+        verifier = source_reader_guard(source_guard, selected_refs)
+        with closing(source_store.media(source_id, read_only=True, source_read_verifier=verifier)) as original, closing(store.media(target_id)) as target:
+            messages = adopt_messages(messages, original, target)
+            source_guard.check()
+            canonical = store.save(target_id, messages, metadata, preserve_system=not bool(bundle or recovery))
+            store.acknowledge_media(target_id, canonical, target)
+    else:
+        store.save(target_id,messages,metadata,preserve_system=not bool(bundle or recovery))
     for name,value in copied.items():
         write_private(target_dir / name,value)
     if source.get('sharedHistoryOffset', 0) or user_offset:

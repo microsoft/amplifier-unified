@@ -158,6 +158,8 @@ def display_message(row, index, session, *, include_internal=False):
         return None
     from .session_store import message_time
     metadata=row.get('metadata') or {}
+    from .session_assets import upload_rows
+    attachments = list(upload_rows([row]).values())
     provenance=metadata.get('amplifier_input',{})
     recovery=metadata.get('live_recovery_job')
     if 'amplifier_input' not in metadata and isinstance(recovery,str) and 0<len(recovery)<=128:
@@ -186,6 +188,7 @@ def display_message(row, index, session, *, include_internal=False):
             'text': voice['text'] if voice else text, 'via': 'call' if voice else 'chat', 'source': 'native', 'nativeIndex': index,
             'createdAt': message_time(row) or session.get('createdAt', 0), 'timestampKnown': message_time(row) is not None,
             **({'nativeMessageId': identity} if text != raw_text else {}),
+            **({'attachments': attachments} if attachments else {}),
             **input_identity, **observation, **voice_fields}
 
 

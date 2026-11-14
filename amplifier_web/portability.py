@@ -512,7 +512,8 @@ class Portability:
                     # UI edits and local file changes after staging must not
                     # disappear at the irreversible ownership boundary.
                     current = data.capture(self.app, session)
-                    if digest(current) != digest({key: value for key, value in payload.items() if key != 'workspace'}):
+                    from .session_assets import release_comparison
+                    if digest(release_comparison(current)) != digest(release_comparison({key: value for key, value in payload.items() if key != 'workspace'})):
                         raise ValueError('Task history or outputs changed after export; keep both hosts fenced and inspect')
                     capture_workspace(session.get('workingDirectory') or session['workspace'], payload['workspace']['sourceRevision'], payload['workspace']['mode'])
             archive = self.node.directory / 'archives' / row['id']
@@ -630,6 +631,24 @@ class Portability:
                        'portabilityEvidence': {'transferId': row['id'], 'historicalOnly': True,
                            'counts': {key: len(records) for key, records in payload['observations'].items()}}}
             native = data.native_directory(self.app, session)
+            # Signed package and release certificate were verified above. Only
+            # their exact selected refs authorize local import, never a hash/path.
+            from contextlib import closing
+            from .host.storage import SessionStore
+            from .session_assets import install_media, install_uploads
+            refs, uploads = data.asset_selection(payload)
+            assets = payload.get('assets', {'media': {}, 'attachments': {}})
+            install_uploads(self.app.data_dir, assets['attachments'], uploads)
+            media = None
+            if refs:
+                media = SessionStore(native.parent, shared=True).media(payload['nativeIdentity'])
+                try:
+                    def authorized(ref, *, receipt, target_session_id):
+                        return (receipt is body and target_session_id == payload['nativeIdentity']
+                                and ref in refs)
+                    install_media(media, assets['media'], refs, receipt=body, verifier=authorized)
+                finally:
+                    media.close()
             for name, value in payload['native'].items():
                 path = native / name
                 if path.exists() or path.is_symlink():
@@ -641,6 +660,10 @@ class Portability:
                     metadata.update(working_dir=destination['workspace'], portabilityOrigin=payload['origin'])
                     raw = json.dumps(metadata, ensure_ascii=False).encode()
                 write_private_bytes(path, raw)
+            if refs:
+                store = SessionStore(native.parent, shared=True)
+                with closing(store.media(payload['nativeIdentity'])) as media:
+                    store.acknowledge_media(payload['nativeIdentity'], store.load(payload['nativeIdentity'])[0], media)
             local = _local_path(self.app.data_dir / 'sessions' / payload['nativeIdentity'])
             # A returning task must not silently remount stale local session
             # overrides. Retain them locally; only reviewed portable controls
