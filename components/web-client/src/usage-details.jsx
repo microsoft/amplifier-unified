@@ -22,7 +22,7 @@ export function UsageDetails({usage,metrics=usageMetrics(usage),label='Token usa
  })}</dl>;
  return <section className="a-usage-details" aria-label={label}>
   {primaryRows.length>0&&grid(primaryRows,true)}
-  {selected.includes('costUsd')&&costUnavailableNotes(metrics.costUsd).map(note=><p key={note} className="a-caption">Cost unavailable for some calls: {note} Unavailable costs are not zero.</p>)}
+  {selected.includes('costUsd')&&costUnavailableNotes(metrics.costUsd).map(note=><p key={note} className="a-caption">{metrics.costUsd?.value==null?'Cost unavailable: ':'Cost unavailable for some calls: '}{note} Unavailable costs are not zero.</p>)}
   {rows.some(row=>row.key==='voiceSeconds')&&<p className="a-caption">Voice seconds are reported separately from tokens. Incomplete totals retain the last observed duration.</p>}
   {record&&<MetricsExport metrics={metrics} scope={scope} record={record} observedAt={observedAt} coverage={coverage}/>}
   {!rows.length&&<p className="a-caption">No metrics selected.</p>}

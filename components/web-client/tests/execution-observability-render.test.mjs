@@ -32,9 +32,11 @@ test('cost details explain documented missing-cost reasons and keep partial subt
  const view=metrics=>wrap({executionMetrics:['costUsd']},React.createElement(UsageDetails,{metrics,scope:'conversation',record:{id:'session'}}));
  await act(async()=>{root=create(view({costUsd:{value:null,status:'unknown',unavailableReasons:['cache_write_ttl_unavailable','private response']}}))});
  assert.match(text(),/Cache-write duration was not reported/);assert.match(text(),/Unavailable costs are not zero/);
+ assert.match(text(),/Cost unavailable: /);assert.doesNotMatch(text(),/Cost unavailable for some calls/);
  assert.ok(!text().includes('$0'));assert.ok(!text().includes('private response'));
  await act(async()=>root.update(view({costUsd:{value:0.000015,status:'partial',unavailableReasons:['model_rates_unavailable']}})));
  assert.match(text(),/\$0.000015/);assert.match(text(),/Partial/);assert.match(text(),/Rates are unavailable for this model/);
+ assert.match(text(),/Cost unavailable for some calls/);
 });
 test('compact conversation is demand-only and fences late results from previous chat',async()=>{
  const pending=[],dispatch=(name,args)=>new Promise(resolve=>pending.push({name,args,resolve}));

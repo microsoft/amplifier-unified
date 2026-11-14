@@ -90,11 +90,11 @@ function CacheDetails({pricing}){
 }
 export function ModelPricing({model}){
  const pricing=modelPricing(model);
- if(pricing.kind==='unavailable')return <p className="a-model-pricing a-model-pricing-unavailable" aria-live="polite">Pricing unavailable for the selected model.</p>;
+ if(pricing.kind==='unavailable')return <p className="a-model-pricing a-model-pricing-unavailable">Pricing unavailable for the selected model.</p>;
  const label=String(model?.name||model?.id||'Selected model');
  const basis=pricing.basis?` · ${humanizeIdentifier(pricing.basis)}`:'';
  return <section className="a-model-pricing" aria-label={`Pricing for ${label}`}>
-  <div aria-live="polite" aria-atomic="true">
+  <div>
    <p><strong>Listed price for {label}</strong>{basis} · USD per 1M tokens</p>
    {pricing.kind==='fixed'?<RateList rates={pricing.rates} fields={INPUT_OUTPUT_RATES}/>:
     <>

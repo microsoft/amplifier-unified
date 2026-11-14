@@ -225,6 +225,18 @@ try{
  // width; prices are descriptive and do not change the selected request.
  await activate(model);await showComposerOption(page,'model');
  const tierPrice=dialog.getByRole('region',{name:'Pricing for cli-model',exact:true});
+ const revealPricing=async target=>{
+  // Center the requested evidence below the sticky dialog heading. Scrolling
+  // to block:start can place the price basis/unit behind that heading.
+  await target.evaluate(node=>node.scrollIntoView({block:'center'}));
+  await expect.poll(()=>target.evaluate(node=>{
+   const rect=node.getBoundingClientRect(),dialog=node.closest('[role="dialog"]');
+   const heading=dialog.querySelector('.a-composer-options-heading').getBoundingClientRect();
+   const bounds=dialog.getBoundingClientRect();
+   return rect.top>=Math.max(bounds.top,heading.bottom)-1&&rect.bottom<=Math.min(innerHeight,bounds.bottom)+1;
+  })).toBe(true);
+ };
+ const priceHeader=tierPrice.locator(':scope > div > p').first();
  await expect(tierPrice).toContainText('Up to 100,000 prompt tokens');
  await expect(tierPrice).toContainText('Above 100,000 prompt tokens');
  await expect(tierPrice).toContainText('$0.1');
@@ -249,14 +261,15 @@ try{
   return rates;
  };
  const desktopRates=await assertRates('desktop');
+ await revealPricing(priceHeader);
  await page.screenshot({path:`${evidence}/desktop-tiered-pricing.png`});
  await page.setViewportSize({width:390,height:844});
  await expect(tierPrice).toBeVisible();
  assert.ok(await tierPrice.evaluate(node=>node.scrollWidth<=node.clientWidth+1),'Pricing reflows without horizontal clipping');
  const narrowRates=await assertRates('390px');
- await tierPrice.locator('strong').first().evaluate(node=>node.scrollIntoView({block:'start'}));
+ await revealPricing(priceHeader);
  await page.screenshot({path:`${evidence}/narrow-tiered-pricing-header.png`});
- await cacheSummary.evaluate(node=>node.scrollIntoView({block:'start'}));
+ await revealPricing(cacheSummary);
  await page.screenshot({path:`${evidence}/narrow-tiered-pricing.png`});
  await save('pricing-rate-layout.json',{desktop:desktopRates,narrow390:narrowRates});
  await page.setViewportSize({width:1280,height:900});
@@ -369,6 +382,10 @@ try{
  assert.deepEqual((await state()).view.newSessionDraft.selection,wrong,'Changing the local connection field does not silently save a default model');
   // Successful recommendations are not an entitlement gate. The uncommon exact
   // ID path stays explicit and does not add a made-up row to the API inventory.
+  const announcement=dialog.locator('[data-part="model-pricing-announcement"]');
+  await expect(announcement).toHaveAttribute('aria-live','polite');
+  await expect(announcement).toHaveAttribute('aria-atomic','true');
+  const announcementNode=await announcement.elementHandle();
   await dialog.getByRole('button',{name:'Enter an exact model ID',exact:true}).click();
   await dialog.locator('input#chat-model').fill('hidden-by-recommendation');
   await dialog.locator('input#chat-model').press('Tab');
@@ -376,9 +393,13 @@ try{
   await expect(dialog.locator('select#chat-model-catalog option[value="hidden-by-recommendation"]')).toHaveCount(0);
   await expect(dialog.getByText(/not verified by discovery/)).toBeVisible();
   await expect(dialog.getByText('Pricing unavailable for the selected model.',{exact:true})).toBeVisible();
+  assert.ok(await announcementNode.evaluate(node=>node.isConnected&&node===document.querySelector('[role="dialog"] [data-part="model-pricing-announcement"]')),'Unknown-price update retains the original DOM announcement container');
+  await expect(announcement.locator('[aria-live]')).toHaveCount(0);
   await dialog.locator('input#chat-model').fill(wrong.model);
   await dialog.locator('input#chat-model').press('Tab');
   await expect.poll(async()=>(await state()).view.newSessionDraft.selection?.model).toBe(wrong.model);
+  assert.ok(await announcementNode.evaluate(node=>node.isConnected&&node===document.querySelector('[role="dialog"] [data-part="model-pricing-announcement"]')),'Priced update retains the original DOM announcement container');
+  await announcementNode.dispose();
   // Choosing a different model intentionally clears model-specific effort.
   // Restore the explicit old journey baseline rather than assuming it survived.
   await showComposerOption(page,'effort');

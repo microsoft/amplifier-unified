@@ -678,7 +678,7 @@ body,
 }
 
 #amp-one .a-model-pricing > p,
-#amp-one .a-model-pricing [aria-live] > p {
+#amp-one .a-model-pricing > div > p {
   margin: 4px 0;
 }
 

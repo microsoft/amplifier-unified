@@ -163,6 +163,27 @@ test('model selector retains only host-supplied refresh data and never unions ea
  }finally{await renderAct(async()=>root?.unmount())}
 });
 
+test('model selector keeps one live region from empty through first choice and unavailable pricing',async()=>{
+ const {ModelSelect}=await server.ssrLoadModule('/src/model-select.jsx');
+ const entry={phase:'ready',models:[{id:'priced',pricing:{input_per_million:1,output_per_million:2,currency:'USD'}}]};
+ let value='',root;
+ const render=()=>React.createElement(ModelSelect,{id:'announced-price',value,entry,state:{view:{}},act:async()=>{},onChange:()=>{}});
+ try{
+  await renderAct(async()=>root=create(render()));
+  const region=root.root.findByProps({'data-part':'model-pricing-announcement'});
+  assert.equal(region.props['aria-live'],'polite');assert.equal(region.props['aria-atomic'],'true');
+  assert.equal(renderedText(region.children),'');
+  for(const next of ['priced','unlisted','priced','']){
+   value=next;await renderAct(async()=>root.update(render()));
+   assert.equal(root.root.findByProps({'data-part':'model-pricing-announcement'}),region,'The announcement container is never replaced');
+   assert.equal(region.findAll(node=>node!==region&&node.props['aria-live']!=null).length,0,'No nested live regions');
+   if(next==='priced')assert.match(renderedText(region.children),/Input\$1/);
+   else if(next)assert.match(renderedText(region.children),/Pricing unavailable/);
+   else assert.equal(renderedText(region.children),'');
+  }
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+
 test('model selector shows selected fixed, tiered and flat prices without guessing missing metadata',async()=>{
  const {ModelSelect}=await server.ssrLoadModule('/src/model-select.jsx');
  const tiered={version:1,kind:'tiered',currency:'USD',unit:'per_million_tokens',basis:'standard_global',
