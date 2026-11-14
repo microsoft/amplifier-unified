@@ -209,6 +209,15 @@ async def test_dispatch_inflight_changes_cannot_become_the_feedback_snapshot(str
     assert not value.raw.consumed and len(value.raw.sent) == 1
 
 
+async def test_equal_python_values_do_not_hide_option_type_mutation():
+    value = case('selected_surface')
+    with pytest.raises(ContextLengthError) as caught:
+        await value.wrapped.complete(value.request, custom={'value': 1})
+    assert value.wrapped.recover_context_overflow(value.request, caught.value,
+        context_estimate=600_000, request_options={'custom': {'value': True}}) is None
+    assert not value.raw.consumed
+
+
 @pytest.mark.parametrize('size', [100, 1_000_000])
 def test_feedback_witness_keeps_only_fixed_hashes_not_request_body_copies(size, monkeypatch):
     from amplifier_web import overflow_feedback

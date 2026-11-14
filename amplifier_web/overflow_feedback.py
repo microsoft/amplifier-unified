@@ -1,6 +1,7 @@
 """Bounded identity translation, never classification, fitting or inference."""
 import copy
 import hashlib
+import json
 from dataclasses import dataclass
 
 
@@ -11,11 +12,11 @@ class _Feedback:
     prepared: object
     prepared_snapshot: object
     error: Exception | None
-    options: dict
+    options: str
     dispatch_options: dict
     owner: object
     method: object
-    binding: object
+    binding: str
 
 
 class OverflowFeedback:
@@ -29,6 +30,10 @@ class OverflowFeedback:
     def fingerprint(request):
         return hashlib.sha256(request.model_dump_json().encode('utf-8')).digest()
 
+    @staticmethod
+    def freeze(value):
+        return json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False)
+
     def capture(self, request, prepared, options, dispatch_options, owner, *, binding=None):
         """Witness dispatch inputs before any provider await; retain no body copy."""
         method = getattr(owner, 'recover_context_overflow', None)
@@ -36,8 +41,8 @@ class OverflowFeedback:
             return None
         try:
             return _Feedback(request, self.fingerprint(request), prepared, self.fingerprint(prepared),
-                             None, copy.deepcopy(options), copy.deepcopy(dispatch_options),
-                             owner, method, copy.deepcopy(binding))
+                             None, self.freeze(options), copy.deepcopy(dispatch_options),
+                             owner, method, self.freeze(binding))
         except Exception:
             return None  # Opaque inputs cannot be proven unchanged.
 
@@ -57,8 +62,8 @@ class OverflowFeedback:
         self.entries = [item for item in self.entries if item is not row]
         # Even a refused matching attempt is not replayable.
         try:
-            unchanged = (row.owner is owner and row.binding == binding
-                and row.options == (request_options or {})
+            unchanged = (row.owner is owner and row.binding == self.freeze(binding)
+                and row.options == self.freeze(request_options or {})
                 and self.fingerprint(request) == row.original_snapshot
                 and self.fingerprint(row.prepared) == row.prepared_snapshot)
         except Exception:
