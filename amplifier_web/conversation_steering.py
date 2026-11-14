@@ -1,4 +1,4 @@
-"""Generation-bound steering and explicit ordinary-message completion handoff."""
+"""Strict anchored admission and observation of native-chosen input delivery."""
 import copy
 import json
 import time
@@ -39,13 +39,10 @@ def recover_failed_generation(service, session, boundary):
     return {**proof, 'generationId': active['id']}
 
 
-def target(session, expected=None, allow_next_turn=False):
+def target(session, expected):
     from .errors import AppError
     active = session.get('collaborationGeneration') or {}
     identity = active.get('id') if not active.get('terminal') else None
-    if (allow_next_turn and expected is not None and active.get('id') == expected
-            and active.get('terminal') and active.get('completed')):
-        return None
     if expected is not None and identity != expected:
         raise AppError('The run you were steering has ended or changed. Your message was not sent.',
                        409, code='steering_target_changed')
@@ -119,18 +116,33 @@ def observe(service, session, kind, payload):
             record(service, session, message['inputId'], 'applied' if applied else 'unknown',
                    None if applied else 'The run ended before steering delivery was confirmed. Nothing was resent.')
         return
-    if kind != 'runtime.steering':
+    if kind != 'runtime.steering' and not (kind == 'runtime.status'
+            and payload.get('event') == 'input.delivered' and payload.get('delivery') == 'request_boundary'):
         return
     message = find_message(session, payload.get('input_id'))
-    if not message or (message.get('steering') or {}).get('generationId') != payload.get('target_generation_id'):
-        return
+    generation = payload.get('target_generation_id') or payload.get('generation_id')
     disposition = {'steering.sent': 'queued', 'steering.accepted': 'queued', 'steering.pending': 'queued',
                    'steering.applied': 'applied', 'steering.held': 'held',
                    'steering.failed': 'held', 'steering.unknown': 'unknown',
+                   'input.queued': 'queued', 'input.delivered': 'applied',
+                   'input.held': 'held', 'input.unknown': 'unknown',
                    'native.outcome_unknown': 'unknown'}.get(payload.get('event'))
-    if disposition:
-        record(service, session, message['inputId'], disposition, payload.get('reason'),
-               mode=payload.get('delivery'), phase=payload.get('event', '').removeprefix('steering.'))
+    if not message or not generation or not disposition:
+        return
+    steering = message.get('steering')
+    if not steering:
+        # Route evidence comes from the native owner, never status projections
+        # or a send snapshot. Foreign-root/epoch observations cannot create it.
+        if (message.get('inputOrigin') != 'ui'
+                or payload.get('rootSessionId', session['id']) != session['id']
+                or payload.get('interruptionRevision', 0) != message.get('interruptionRevision', 0)
+                or payload.get('delivery') not in {'native', 'request_boundary'}):
+            return
+        steering = message['steering'] = {'generationId': generation, 'disposition': 'sending'}
+    if steering.get('generationId') != generation:
+        return
+    record(service, session, message['inputId'], disposition, payload.get('reason'),
+           mode=payload.get('delivery'), phase=payload.get('event', '').removeprefix('steering.'))
 
 
 async def send(service, session, text, input_id, preserve_draft):
@@ -145,9 +157,7 @@ async def send(service, session, text, input_id, preserve_draft):
         if not isinstance(result, dict) or type(result.get('accepted')) is not bool:
             raise RuntimeError('Steering acknowledgement was not recognized.')
         disposition = result.get('disposition', 'queued') if result['accepted'] else 'held'
-        if disposition == 'next_turn' and not (result['accepted'] and message['steering'].get('allowNextTurn')):
-            raise RuntimeError('Unexpected next-turn acknowledgement.')
-        if disposition not in {'queued', 'applied', 'next_turn', 'held', 'unknown'}:
+        if disposition not in {'queued', 'applied', 'held', 'unknown'}:
             raise RuntimeError('Steering disposition was not recognized.')
         reason = result.get('reason')
     except UpdateDeferred:
@@ -178,22 +188,6 @@ async def submit(controls, runtime, args, activation, stop_epoch):
     epoch = stop_epoch()
     text = await prepare_input(controls.coordinator, args['text'], args.get('reply_context'),
                                max_chars=runtime.max_input_chars)
-    # Preparation may yield while the manager finishes. Native admission is
-    # synchronous up to queue insertion: recheck the exact terminal evidence
-    # here, beside the owning inbox, rather than resend from the browser.
-    if (args.get('allowNextTurn') is True and runtime.generation is None
-            and not runtime.closed and not runtime.stop_requested and stop_epoch() == epoch
-            and args['inputId'] not in runtime.accepted):
-        terminal = next((event for event in reversed(runtime.events)
-            if event.get('type') in {'generation.started', 'generation.finished',
-                                    'generation.failed', 'generation.detached'}), None)
-        if (terminal and terminal.get('type') == 'generation.finished'
-                and terminal.get('generation_id') == args['targetGenerationId']
-                and terminal.get('disposition') == 'manager_turn_finished'
-                and not terminal.get('active_job_ids')):
-            await runtime.submit(Input('user', text, id=args['inputId'],
-                attachments=tuple(args.get('attachments', [])), activation=activation))
-            return {'accepted': True, 'disposition': 'next_turn', 'inputId': args['inputId']}
     capability = _steering_capability(controls)
     if capability is None:
         return {'accepted': False, 'reason': 'This runtime does not support steering an active run.'}

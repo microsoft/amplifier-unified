@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {inputStatus,statusLabel,workingDuration} from '../src/input-status.js';
+import React,{act} from 'react';
+import {create} from 'react-test-renderer';
+import {createServer} from 'vite';
+const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
+const {InputStatus}=await server.ssrLoadModule('/src/input-status.jsx');
+globalThis.IS_REACT_ACT_ENVIRONMENT=true;test.after(()=>server.close());
 const message={role:'user',inputId:'one',delivery:{status:'accepted'}};
 test('host receipt never claims read, working, or completion',()=>{
  assert.deepEqual(inputStatus(message),{inputId:'one',phase:'received',basis:'delivery'});
@@ -63,4 +69,32 @@ test('timer starts only at observed execution and stops on terminal or disconnec
  assert.equal(workingDuration({...status,endedAt:90}),null);
  assert.match(statusLabel(status,false),/last observed/);
  assert.equal(statusLabel({phase:'done'}),'Turn finished');
+});
+
+test('exact request-local failure details remain available without replay or current chat error state',async()=>{
+ const failure={category:'provider',summary:'This request failed.',guidance:'Check the selected model.',errorType:'ProviderError',generationId:'generation-one',inputId:'one',exceptionChain:[{type:'ProviderError'}]};
+ const row={...message,inputStatus:{version:1,inputId:'one',generationId:'generation-one',phase:'failed',basis:'generation',failure}};
+ const calls=[];let root;
+ await act(async()=>{root=create(React.createElement(InputStatus,{message:row,current:false,sessionId:'chat',state:{view:{feedbackDraft:{title:'Existing draft',body:'Kept text',includeDiagnostics:true}}},act:async(...args)=>{calls.push(args);return {accepted:true}}}))});
+ const text=JSON.stringify(root.toJSON());
+ assert.match(text,/This request failed/);assert.match(text,/generation-one/);assert.match(text,/Technical details/);
+ assert.match(text,/Report this problem/);
+ assert.equal(root.root.findAllByType('button').length,1);
+ await act(async()=>root.root.findByType('button').props.onClick());
+ assert.deepEqual(calls,[['view.update',{patch:{panel:'feedback',feedbackDraft:{title:'Existing draft',body:'Kept text',includeDiagnostics:false,failureContext:{sessionId:'chat',inputId:'one',generationId:'generation-one'}}}}]]);
+ // A later completed input must not inherit the earlier failure or offer replay.
+ await act(async()=>root.update(React.createElement(InputStatus,{message:{...message,inputStatus:{...row.inputStatus,phase:'done',failure:undefined}}})));
+ assert.doesNotMatch(JSON.stringify(root.toJSON()),/This request failed|Report a problem|Turn failed/);
+ await act(async()=>root.unmount());
+});
+
+test('historical report cannot replace a pending submission or run without an exact reference',async()=>{
+ const row={...message,inputStatus:{version:1,inputId:'one',phase:'failed',basis:'generation',generationId:'one-generation'}};
+ for(const props of [{state:{view:{feedbackDraft:{pending:{requestId:'saved'}}}}},{sessionId:undefined},{message:{...row,inputStatus:{...row.inputStatus,generationId:undefined}}}]){
+  let root;const calls=[];
+  await act(async()=>{root=create(React.createElement(InputStatus,{message:row,sessionId:'chat',act:async(...args)=>calls.push(args),...props}))});
+  const button=root.root.findByType('button');assert.equal(button.props.disabled,true);
+  await act(async()=>button.props.onClick());assert.deepEqual(calls,[]);
+  await act(async()=>root.unmount());
+ }
 });

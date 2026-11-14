@@ -56,7 +56,14 @@ async def waiting(boundary):
     worker = b.worker = Worker()
     worker.session = runtime.controls.session
     worker.controls, worker.runtime = runtime.controls, runtime.native
-    worker.parked = False
+    from amplifier_foundation.session.activation import ActivationGate
+    worker.shared_handle = object()
+    worker.activation_gate = ActivationGate()
+    worker.activation = worker.activation_gate.activate()
+    async def checkpoint(_status):
+        # Persistence adapter only; real checkpoint/recheck remains in Worker.
+        runtime.controls.persist(task_only=True)
+    c.register_capability('live.checkpoint', checkpoint)
     b.handlers = handlers
 
     async def boundary_read(sid, operation, *, receipt, configuration, cancel=False):
@@ -95,7 +102,8 @@ async def yield_and_park(b):
     b.runtime.native.generation = None
     b.owner['collaborationGeneration']['terminal'] = True
     checkpoint_configuration(b.worker)
-    b.worker.parked = True
+    # The subsequent boundary inspection checkpoints under the retained writer.
+    assert b.worker.shared_handle is not None
     b.owner['status'] = 'idle'
 
 

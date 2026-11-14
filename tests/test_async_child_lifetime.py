@@ -131,7 +131,7 @@ async def test_native_child_continues_after_parent_finished(app, tmp_path, monke
         if reply.get('error'): raise RuntimeError(reply['error'])
         return reply['result']
     worker.bridge = bridge
-    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator), execution_role='root')
     registry = await install_children(parent, prepared, runtime, SessionStore(tmp_path/'children'), approvals)
     ready, release = asyncio.Event(), asyncio.Event()
     calls, results = [], []

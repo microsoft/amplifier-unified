@@ -112,7 +112,8 @@ else:
  # without host site-packages, environment paths, or user-site metadata.
  with tempfile.TemporaryDirectory() as cwd:
   result=subprocess.run([sys.executable,"-I","-S","-c",worker_probe,str(p)],
-                        cwd=cwd,capture_output=True,text=True,timeout=15)
+                        cwd=cwd,capture_output=True,text=True,timeout=15,
+                        creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
  assert result.returncode==0
  facts["workerImportsAvailable"]=True
  facts.update(ok=True,stage="complete")

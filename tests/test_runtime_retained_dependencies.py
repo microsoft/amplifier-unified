@@ -41,9 +41,14 @@ def reference(ref=OLD):
 
 
 @pytest.mark.parametrize('provenance', ['installed Git distribution', 'installed Foundation cache module'])
-@pytest.mark.parametrize('ref', ['stable', OLD])
+@pytest.mark.parametrize('ref', ['stable', OLD, '05082c89a171758f8d0fb9d8df630ea581e5bdb5'])
 def test_foundation_has_one_effective_source_policy(provenance, ref):
     shipped = tomllib.loads(runtime.manifest_path().read_text())
+    foundation = 'https://github.com/microsoft/amplifier-foundation'
+    assert shipped['tool']['uv']['sources']['amplifier-foundation'] == {
+        'git': foundation, 'rev': 'main'}
+    assert shipped['tool']['uv']['sources']['amplifier-module-hooks-session-naming'] == {
+        'git': foundation, 'rev': 'main', 'subdirectory': 'modules/hooks-session-naming'}
     # The canonical source owns the app default, not a second authored URL.
     assert [value for value in shipped['tool']['uv']['override-dependencies']
             if Requirement(value).name == 'amplifier-foundation'] == ['amplifier-foundation']

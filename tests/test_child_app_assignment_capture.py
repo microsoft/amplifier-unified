@@ -94,7 +94,7 @@ async def test_first_child_mount_retains_invoking_assignment_through_provider_wa
 
     worker.bridge = transport
     monkeypatch.setattr(app, '_app_bridge', current_execution)
-    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator), execution_role='root')
     registry = await install_children(parent, prepared, Runtime('root'), SessionStore(tmp_path / 'children'), approvals)
     entered, release = asyncio.Event(), asyncio.Event()
 

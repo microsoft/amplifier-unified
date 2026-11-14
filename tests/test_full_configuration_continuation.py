@@ -84,7 +84,7 @@ async def child(app, owner, tmp_path, monkeypatch, exercise):
             raise RuntimeError(reply['error'])
         return reply['result']
     worker.bridge = transport
-    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator))
+    await install_app_access(parent.coordinator, worker.app_access_bridge(parent.coordinator), execution_role='root')
     registry = await install_children(parent, prepared, Runtime(native), SessionStore(tmp_path / 'continuation-children'), approvals)
     failures, completed = [], []
     async def execute(self, prompt, context, providers, tools, hooks, coordinator):

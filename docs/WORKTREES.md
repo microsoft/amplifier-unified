@@ -22,8 +22,8 @@ Existing file/tool permission boundaries continue to apply.
 
 Handoff returns a durable pending receipt, blocks new task input, and requests
 cooperative release through the existing Foundation owner protocol. A running
-writer checkpoints and stops before release. An already parked runtime is safe
-to close while a temporary native session lock proves writer ownership. Another
+writer, including an idle one, checkpoints and stops before release. A temporary
+native session lock then proves exclusive ownership through the move. Another
 application's owner is not silently taken over. No provider input is submitted,
 no effects are rolled back, and no uncertain operation is replayed. After release
 the app changes only the execution association and increments executionRevision.

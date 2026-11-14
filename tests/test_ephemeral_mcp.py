@@ -169,7 +169,7 @@ async def test_reconnect_retires_only_released_settled_mcp_worker(tmp_path, disp
         await manager.bind_ephemeral_mcp('owned', 'first', SERVERS)
         await manager.start(session, emit)
         first = manager.workers['owned']
-        first['parked'] = disposition != 'busy'
+        first['idle'] = disposition != 'busy'
         manager.retention.protected = lambda sid: disposition == 'protected'
         if disposition != 'connected':
             manager.release_ephemeral_mcp('owned', 'first')
@@ -219,7 +219,7 @@ async def retiring_attachment(tmp_path):
         await manager.close()
         raise
     row = manager.workers['owned']
-    row['parked'] = True
+    row['idle'] = True
     manager.release_ephemeral_mcp('owned', 'first')
     return manager, row, entered, proceed, writes
 

@@ -14,7 +14,11 @@ import sys
 import tempfile
 
 SOURCE = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(SOURCE))
+# Installed qualification supplies the exact package directory and runs this
+# unchanged fixture with its installed interpreter. Source mode remains default.
+INSTALLED_HOST = os.environ.get('DIRECTION_INSTALLED_HOST')
+if not INSTALLED_HOST:
+    sys.path.insert(0, str(SOURCE))
 
 
 def log(kind, **data):
@@ -47,18 +51,45 @@ class Socket:
         self.state = State.OPEN
         self.frames = asyncio.Queue()
         self.tasks = []
+        self.creates = 0
 
     async def send(self, wire):
         value = json.loads(wire)
         log('wire', payload=value)
         if value['type'] == 'response.create':
-            await self.frames.put(json.dumps({'type': 'response.created', 'response': {'id': 'parent'}}))
+            self.creates += 1
+            identity = 'parent' if self.creates == 1 else 'boundary-' + str(self.creates)
+            await self.frames.put(json.dumps({'type': 'response.created', 'response': {'id': identity}}))
             if os.environ.get('DIRECTION_SCENARIO') == 'tool':
-                await self.frames.put(json.dumps({'type': 'response.completed', 'response': terminal('parent', tool=True)}))
+                await self.frames.put(json.dumps({'type': 'response.completed', 'response':
+                    terminal(identity, 'TOOL_BOUNDARY_FINAL') if stage('tool-release')
+                    else terminal(identity, tool=True)}))
+            elif os.environ.get('DIRECTION_SCENARIO') in {'completion', 'stale-config'}:
+                next_turn = stage('complete')
+                async def complete():
+                    await wait_stage('complete')
+                    await self.frames.put(json.dumps({'type': 'response.completed', 'response':
+                        terminal(identity, 'NEXT_TURN_FINAL' if next_turn else 'ORIGINAL_FINAL')}))
+                self.tasks.append(asyncio.create_task(complete()))
         elif value['type'] == 'response.steer':
+            if os.environ.get('DIRECTION_SCENARIO') == 'native-unknown':
+                # Bytes crossed the external transport boundary; deliberately
+                # lose its acknowledgement, never claim a definite no-effect.
+                raise TimeoutError('Scripted native send acknowledgement lost')
             async def phases():
                 await wait_stage('accept')
                 await self.frames.put(json.dumps({'type': 'response.steer.accepted', 'steer': {'id': 'steer-one'}}))
+                if os.environ.get('DIRECTION_SCENARIO') == 'native-stop':
+                    await wait_stage('pending')
+                    # Pending steering refers to the now-terminal parent. The
+                    # provider records previous_response_id at that terminal,
+                    # then waits for its required tool output before successor.
+                    await self.frames.put(json.dumps({'type': 'response.completed',
+                        'response': terminal('parent', tool=True)}))
+                    await self.frames.put(json.dumps({'type': 'response.steer.pending',
+                        'steer': {'id': 'steer-one'},
+                        'required_input': [{'type': 'function_call_output', 'call_id': 'call-tool'}]}))
+                    return
                 await wait_stage('apply')
                 parent = terminal('parent')
                 parent.update(status='incomplete', incomplete_details={'reason': 'steered'})
@@ -89,16 +120,19 @@ async def worker():
     import websockets
     import amplifier_module_provider_openai.native as native
     import amplifier_module_loop_live.orchestrator as loop
+    import amplifier_module_loop_streaming
     import amplifier_web
     from amplifier_web.runtime_worker import Worker, configure_protocol
-    assert Path(amplifier_web.__file__).resolve().parent == SOURCE / 'amplifier_web'
-    log('worker-provenance', source=str(SOURCE),
+    host = Path(amplifier_web.__file__).resolve().parent
+    assert host == (Path(INSTALLED_HOST).resolve() if INSTALLED_HOST else SOURCE / 'amplifier_web')
+    log('worker-provenance', source=str(SOURCE), host=str(host), python=sys.executable,
         packages={name: {'version': importlib.metadata.version(name),
                         'directUrl': json.loads(importlib.metadata.distribution(name).read_text('direct_url.json') or 'null')}
                   for name in ('amplifier-core', 'amplifier-foundation', 'amplifier-module-loop-live',
-                               'amplifier-module-provider-openai', 'openai', 'websockets')},
+                               'amplifier-module-loop-streaming', 'amplifier-module-provider-openai',
+                               'openai', 'websockets')},
         sourceHashes={str(Path(module.__file__)): hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()
-                      for module in (native, loop)})
+                      for module in (native, loop, amplifier_module_loop_streaming)})
 
     async def connect(*args, **kwargs):
         return Socket()
@@ -155,6 +189,7 @@ async def worker():
 
 async def serve(root):
     import yaml
+    import amplifier_web
     import amplifier_module_loop_live
     import amplifier_module_context_simple
     import amplifier_module_provider_openai
@@ -165,6 +200,8 @@ async def serve(root):
     from amplifier_web.runtime import RuntimeManager
     from amplifier_web.server import create_app
 
+    host = Path(amplifier_web.__file__).resolve().parent
+    assert host == (Path(INSTALLED_HOST).resolve() if INSTALLED_HOST else SOURCE / 'amplifier_web')
     # Existing installed modules only; the fixture never downloads a runtime.
     sources = {name: str(Path(module.__file__).parent) for name, module in (
         ('loop-live', amplifier_module_loop_live), ('context-simple', amplifier_module_context_simple),
@@ -177,7 +214,7 @@ async def serve(root):
                 'min_delay_between_calls_ms': 0}}, 'context': {'module': 'context-simple', 'source': sources['context-simple']}},
             'providers': [{'module': 'provider-openai', 'source': sources['provider-openai'],
                            'config': {'api_key': 'fixture-not-an-account', 'default_model': model}}]}
-    if os.environ.get('DIRECTION_SCENARIO') == 'tool':
+    if os.environ.get('DIRECTION_SCENARIO') in {'tool', 'native-stop'}:
         module = root / 'tool' / 'amplifier_module_tool_fixture_hold' / '__init__.py'
         module.parent.mkdir(parents=True)
         module.write_text('''import asyncio, os
@@ -190,7 +227,9 @@ class Hold:
     input_schema={"type":"object","properties":{}}
     async def execute(self, arguments):
         (Path(os.environ["DIRECTION_FIXTURE"])/"tool-running").touch()
-        await asyncio.Event().wait()
+        async with asyncio.timeout(90):
+            while not (Path(os.environ["DIRECTION_FIXTURE"])/"tool-release").exists():
+                await asyncio.sleep(.02)
         return ToolResult(success=True, output="done")
 async def mount(coordinator, config=None):
     await coordinator.mount("tools", Hold(), name="fixture_hold")
@@ -210,7 +249,7 @@ async def mount(coordinator, config=None):
     draft_defaults.resolve_defaults = resolver
     workspace = root / 'workspace'
     workspace.mkdir()
-    runtime = RuntimeManager(command=[sys.executable, '-u', str(Path(__file__).resolve()), '--worker'],
+    runtime = RuntimeManager(command=[sys.executable, '-I', '-u', str(Path(__file__).resolve()), '--worker'],
                              startup_timeout=45, retention={'prewarm_on_select': False})
     app = await create_app(root / 'web', workspace=workspace, runtime=runtime, voice=False,
                            background_updates=False, preload_providers=False)
@@ -229,11 +268,13 @@ async def mount(coordinator, config=None):
     async def inspect(request):
         path = root / 'wire.jsonl'
         return web.json_response({'wire': [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else [],
-            'session': {key: service._session().get(key) for key in ('status', 'collaborationGeneration', 'messages', 'error', 'failure')},
+            'session': {key: service._session().get(key) for key in (
+                'id', 'workspace', 'runtimeSessionId', 'nativeIdentity', 'status', 'collaborationGeneration', 'messages', 'error', 'failure',
+                'interruptionRevision', 'nextMessageRevision', 'pendingModelSelection', 'execution')},
             'toolRunning': stage('tool-running'), 'workers': len(runtime.workers)})
     async def release(request):
         name = (await request.json())['stage']
-        assert name in {'accept', 'apply', 'finish', 'ordinary-release'}
+        assert name in {'accept', 'apply', 'finish', 'pending', 'ordinary-release', 'tool-release', 'complete'}
         (root / name).touch()
         return web.json_response({'released': name})
     app.router.add_get('/fixture', inspect)
@@ -249,7 +290,8 @@ async def mount(coordinator, config=None):
         await site.start()
         url = 'http://127.0.0.1:' + str(site._server.sockets[0].getsockname()[1])
         app['allowed_origins'] = app['allowed_origins'] | {url}
-        print(json.dumps({'url': url, 'source': str(SOURCE), 'python': sys.executable}), flush=True)
+        print(json.dumps({'url': url, 'source': str(SOURCE), 'host': str(host),
+                          'python': sys.executable}), flush=True)
         await stopped.wait()
     finally:
         await runner.cleanup()
@@ -264,7 +306,8 @@ def isolate(root):
         AMPLIFIER_WEB_HOME=str(root / 'web'), AMPLIFIER_UNIFIED_IMPORT_HOME=str(root / 'legacy'),
         AMPLIFIER_SESSION_STATE_HOME=str(root / 'ownership'), AMPLIFIER_RUNTIME_IMMUTABLE='1',
         AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH=str(root / 'capture'),
-        PYTHONPATH=str(SOURCE), DIRECTION_FIXTURE=str(root), OPENAI_API_KEY='fixture-not-an-account')
+        PYTHONPATH='' if INSTALLED_HOST else str(SOURCE),
+        DIRECTION_FIXTURE=str(root), OPENAI_API_KEY='fixture-not-an-account')
 
 
 def deny_external_network():

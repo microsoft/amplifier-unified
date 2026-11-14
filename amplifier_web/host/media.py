@@ -88,7 +88,8 @@ def seal_hook_graph(coordinator):
     if graph is None or bridge is None:
         return False
     selection = coordinator.get_capability("web.media.graph_selection")
-    if selection is None or not selection.accepts_construction(graph):
+    if (selection is None or not selection.accepts_plan(coordinator.config)
+            or not selection.accepts_construction(graph)):
         coordinator.register_capability("web.media.source_join", None)
         enable_media(coordinator)
         return False
@@ -403,7 +404,7 @@ def enable_media(coordinator):
                  join[0] is bridge and join[1] is graph and
                  join[2] is bridge.graph_receipt and join[3] is selection and
                  bridge.validate_receipt(join[2]) is True and
-                 selection.accepts_construction(graph))
+                 selection.accepts_plan(coordinator.config) and selection.accepts_construction(graph))
     capability.enabled = bool(qualified and loop_ready and _durable_media_supported() and
                               callable(coordinator.get_capability("session.durable_checkpoint")))
 

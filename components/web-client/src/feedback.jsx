@@ -11,13 +11,31 @@ import {FeedbackReconcile} from './feedback-lifecycle';
 const empty=()=>({title:'',body:'',category:'bug',includeDiagnostics:false,attachments:[],confirmExcerpts:false,confirmedExcerpts:[],uploadDestination:null,confirmedFiles:[]});
 const sizeLabel=bytes=>bytes<1024?`${bytes} B`:bytes<1024*1024?`${Math.ceil(bytes/1024)} KB`:`${(bytes/(1024*1024)).toFixed(1)} MB`;
 const encodeFile=file=>new Promise((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(new Error('Could not read this file.'));reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.readAsDataURL(file)});
+// Only mounted/retiring editors own draft writes. A report-opening handoff waits
+// for their ordinary saves, including a final save delayed past unmount.
+const draftEditors=new Set();
+export async function openProblemReport(state,act,failureContext=null){
+ const editors=[...draftEditors];
+ await Promise.all(editors.map(editor=>editor.flush()));
+ const draft=editors.findLast(editor=>editor.edited())?.value()||state?.view?.feedbackDraft||{};
+ if(draft.pending)throw Error('Finish checking the existing report before starting another.');
+ const response=await act('view.update',{patch:{panel:'feedback',feedbackDraft:{...draft,includeDiagnostics:false,failureContext}}});
+ if(response?.accepted!==true)throw Error('Could not open the report. Nothing was submitted.');
+ return response;
+}
 export function FeedbackPanel({state,act}){
  const shared=state.view?.feedbackDraft;
  const selectedSession=useRef(state.selectedSessionId);selectedSession.current=state.selectedSessionId;
  const alive=useRef(true);useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
  const [draft,setDraft]=useState(()=>shared||empty()),[busy,setBusy]=useState(false),[error,setError]=useState(''),[uploading,setUploading]=useState(false),[dragging,setDragging]=useState(false),[retryUpload,setRetryUpload]=useState(null);
  const current=useRef(draft),submitting=useRef(false),fileInput=useRef(null),staging=useRef(false),dirty=useRef(false),timer=useRef(null),saving=useRef(null);
- useEffect(()=>()=>{clearTimeout(timer.current);if(dirty.current)void flush().catch(()=>{})},[]);
+ const attachmentWork=useRef(null);
+ const edited=useRef(false);
+ useEffect(()=>{
+  const editor={flush:settleDraft,value:()=>current.current,edited:()=>edited.current};
+  draftEditors.add(editor);
+  return()=>{clearTimeout(timer.current);void settleDraft().catch(()=>{}).finally(()=>draftEditors.delete(editor))};
+ },[]);
  useEffect(()=>{if(shared&&!dirty.current&&!submitting.current){current.current=shared;setDraft(shared)}},[shared]);
  const requests=state.feedback?.requests||[],pending=draft.pending;
  const result=pending&&requests.find(item=>item.requestId===pending.requestId);
@@ -41,23 +59,30 @@ export function FeedbackPanel({state,act}){
   finally{saving.current=null}
   if(dirty.current)return flush();
  }
- function save(next){current.current=next;dirty.current=true;setDraft(next);return flush()}
- function edit(patch){setError('');current.current={...current.current,...patch};dirty.current=true;setDraft(current.current);clearTimeout(timer.current);timer.current=setTimeout(()=>flush().catch(()=>setError('The draft could not be saved. Reconnect and try again.')),250)}
+ function save(next){edited.current=true;current.current=next;dirty.current=true;setDraft(next);return flush()}
+ function edit(patch){edited.current=true;setError('');current.current={...current.current,...patch};dirty.current=true;setDraft(current.current);clearTimeout(timer.current);timer.current=setTimeout(()=>flush().catch(()=>setError('The draft could not be saved. Reconnect and try again.')),250)}
+ function attachmentStarted(){
+  let finish;attachmentWork.current=new Promise(resolve=>finish=resolve);
+  return()=>{attachmentWork.current=null;finish()};
+ }
+ async function settleDraft(){if(attachmentWork.current)await attachmentWork.current;await flush()}
  function setPreview(id){edit({previewId:id})}
  async function stageExcerpt(args){
   if(staging.current||current.current.pending)throw Error('Wait for the current attachment or submission to finish.');
+  const finish=attachmentStarted();
   staging.current=true;setUploading(true);
   try{
    await flush();
    if(selectedSession.current!==args.id)throw Error('The selected conversation changed. Review its excerpt again.');
    const response=await act('feedback.excerpt.stage',args);
    if(!response?.result)throw Error('The excerpt was not attached. Check the same review again.');
-   if(alive.current&&selectedSession.current===args.id)acceptDraft(response);
-  }finally{staging.current=false;setUploading(false)}
+   if(selectedSession.current===args.id)acceptDraft(response);
+  }finally{staging.current=false;setUploading(false);finish()}
  }
- function acceptDraft(response){const next=response?.state?.view?.feedbackDraft;if(next){const changed=JSON.stringify(next.attachments)!==JSON.stringify(current.current.attachments);current.current={...current.current,attachments:next.attachments,...(changed?{confirmExcerpts:false,confirmedExcerpts:[],uploadDestination:null,confirmedFiles:[]}: {})};setDraft(current.current);if(changed){dirty.current=true;void flush().catch(()=>setError('The updated attachment list could not be saved.'))}}}
+ function acceptDraft(response){const next=response?.state?.view?.feedbackDraft;if(next){const changed=JSON.stringify(next.attachments)!==JSON.stringify(current.current.attachments);current.current={...current.current,attachments:next.attachments,...(changed?{confirmExcerpts:false,confirmedExcerpts:[],uploadDestination:null,confirmedFiles:[]}: {})};setDraft(current.current);if(changed){edited.current=true;dirty.current=true;void flush().catch(()=>setError('The updated attachment list could not be saved.'))}}}
  async function stageFiles(files,retry){
   if(staging.current||current.current.pending)return;
+  const finish=attachmentStarted();
   staging.current=true;setUploading(true);setError('');setDragging(false);
   try{
    await flush();
@@ -69,9 +94,9 @@ export function FeedbackPanel({state,act}){
     catch(error){setRetryUpload(request);throw error}
    }
   }catch(error){setError(error?.message||'The file could not be added. Check the draft and retry; it will not be added twice.')}
-  finally{staging.current=false;setUploading(false)}
+  finally{staging.current=false;setUploading(false);finish()}
  }
- async function removeFile(id){if(frozen)return;setError('');try{await flush();acceptDraft(await act('feedback.attachment.remove',{id}));if(preview===id)setPreview(null)}catch(error){setError(error?.message||'The attachment could not be removed.')}}
+ async function removeFile(id){if(frozen||staging.current)return;const finish=attachmentStarted();staging.current=true;setUploading(true);setError('');try{await flush();acceptDraft(await act('feedback.attachment.remove',{id}));if(preview===id)setPreview(null)}catch(error){setError(error?.message||'The attachment could not be removed.')}finally{staging.current=false;setUploading(false);finish()}}
  function paste(event){const files=Array.from(event.clipboardData?.files||[]);if(files.length){event.preventDefault();event.stopPropagation();if(!frozen)stageFiles(files)}}
  function drop(event){if(!event.dataTransfer?.types?.includes('Files'))return;event.preventDefault();event.stopPropagation();setDragging(false);if(!frozen)stageFiles(Array.from(event.dataTransfer.files||[]))}
  async function submit(event){
@@ -79,7 +104,7 @@ export function FeedbackPanel({state,act}){
   submitting.current=true;setBusy(true);setError('');
   // Freeze both text and identity before the first await. A lost response must
   // never generate a second GitHub issue or submit newly edited text as a retry.
-  const source=current.current,payload=source.pending||{requestId:crypto.randomUUID(),title:source.title,body:source.body,category:source.category,includeDiagnostics:source.includeDiagnostics===true,...(source.includeDiagnostics===true?{deviceDiagnostics:feedbackDiagnostics(state)}:{}),confirmExcerpts:source.confirmExcerpts===true,confirmedExcerpts:source.confirmedExcerpts||[],...(source.uploadDestination?{uploadDestination:source.uploadDestination,confirmedFiles:source.confirmedFiles||[]}:{}),attachmentIds:(source.attachments||[]).map(row=>row.id)};
+  const source=current.current,payload=source.pending||{requestId:crypto.randomUUID(),title:source.title,body:source.body,category:source.category,includeDiagnostics:source.includeDiagnostics===true,...(source.failureContext?{failureContext:source.failureContext}:{}),...(source.includeDiagnostics===true?{deviceDiagnostics:feedbackDiagnostics(state)}:{}),confirmExcerpts:source.confirmExcerpts===true,confirmedExcerpts:source.confirmedExcerpts||[],...(source.uploadDestination?{uploadDestination:source.uploadDestination,confirmedFiles:source.confirmedFiles||[]}:{}),attachmentIds:(source.attachments||[]).map(row=>row.id)};
   try{await save({...source,pending:payload});await act('feedback.submit',payload)}
   catch{setError('The submission was not acknowledged. Check its status using the same request below; this will not post it twice.')}
   finally{submitting.current=false;setBusy(false)}
@@ -87,6 +112,7 @@ export function FeedbackPanel({state,act}){
  async function startNew(){if(busy||uploading)return;setError('');setRetryUpload(null);try{await save(empty())}catch{setError('Could not start a new draft. Reconnect and try again.')}}
  return <section className={`a-feedback${dragging?' is-dragging':''}`} data-part="feedback" onPaste={paste} onDrop={drop} onDragOver={event=>{if(event.dataTransfer?.types?.includes('Files')){event.preventDefault();event.stopPropagation();if(!frozen)setDragging(true)}}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget))setDragging(false)}}>
   <p>Send a bug report, idea, or question to <a href={issues} target="_blank" rel="noopener noreferrer">microsoft/amplifier-unified</a>. Direct submission uses the host’s GitHub CLI sign-in. Without it, prepare a local report below and submit through your browser.</p>
+  {shown.failureContext&&<p role="status">Reporting the recorded request you selected. Optional diagnostics use that request’s saved evidence, not the latest chat failure.</p>}
   {(result||error)&&<div className="a-feedback-result"><ResultNotice phase={result?.status==='submitted'?'success':['failed','unknown'].includes(result?.status)?'error':'working'} message={result?.message}/>{error&&<ResultNotice phase="error" message={error}/>} {result?.url&&<a className="a-feedback-link" href={result.url} target="_blank" rel="noopener noreferrer">View issue <ExternalLink size={14}/></a>} {result?.status==='unknown'&&<><a href={issues} target="_blank" rel="noopener noreferrer">Check repository issues <ExternalLink size={14}/></a>{result.attachmentsUrl&&<a href={result.attachmentsUrl} target="_blank" rel="noopener noreferrer">Check attachment branch <ExternalLink size={14}/></a>}</>}</div>}
   <form onSubmit={submit} data-action="feedback.submit">
    <label htmlFor="feedback-category">Type</label><select id="feedback-category" data-action="view.update" value={shown.category||'bug'} disabled={frozen} onChange={e=>edit({category:e.target.value})}><option value="bug">Bug report</option><option value="idea">Feature idea</option><option value="question">Question</option><option value="other">Other feedback</option></select>
@@ -104,14 +130,14 @@ export function FeedbackPanel({state,act}){
     {retryUpload&&<div className="a-feedback-upload-retry"><button type="button" className="a-soft" disabled={uploading} onClick={()=>stageFiles([],retryUpload)}>Check attachment: {retryUpload.name}</button><button type="button" className="a-soft" disabled={uploading} onClick={()=>{setRetryUpload(null);setError('')}}>Stop retrying</button></div>}
    </div>
    {selected.some(row=>!row.excerpt)&&<div>
-    {!pending&&<button type="button" disabled={frozen} onClick={async()=>{try{await flush();const response=await act('feedback.destination',{});const hashes=new Map((response.files||[]).map(row=>[row.id,row.sha256]));edit({uploadDestination:response.result,confirmedFiles:[],attachments:current.current.attachments.map(row=>hashes.has(row.id)?{...row,sha256:hashes.get(row.id)}:row)})}catch{setError('Could not check the file destination. Nothing was uploaded.')}}}>Review file destination</button>}
+    {!pending&&<button type="button" disabled={frozen} onClick={async()=>{try{await flush();const response=await act('feedback.destination',{});if(!alive.current)return;const hashes=new Map((response.files||[]).map(row=>[row.id,row.sha256]));edit({uploadDestination:response.result,confirmedFiles:[],attachments:current.current.attachments.map(row=>hashes.has(row.id)?{...row,sha256:hashes.get(row.id)}:row)})}catch{if(alive.current)setError('Could not check the file destination. Nothing was uploaded.')}}}>Review file destination</button>}
     {shown.uploadDestination&&<><p>Files will be stored in {shown.uploadDestination.repository} · {shown.uploadDestination.visibility==='public'?'Public — anyone can read these files':'Private — repository access required'}. Files remain in repository history. Visibility can change later; removing local files does not remove uploaded files.</p>
      <label><input type="checkbox" disabled={frozen} checked={JSON.stringify(shown.confirmedFiles||[])===JSON.stringify(selected.filter(row=>!row.excerpt).map(row=>({id:row.id,sha256:row.sha256})))} onChange={event=>edit({confirmedFiles:event.target.checked?selected.filter(row=>!row.excerpt).map(row=>({id:row.id,sha256:row.sha256})):[]})}/>Send the exact files listed above to this destination when I submit.</label></>}
    </div>}
    {!pending&&<FeedbackExcerpt state={state} act={act} frozen={frozen} onStage={stageExcerpt}/>}
    {selected.some(row=>row.excerpt)&&<label className="a-feedback-checkbox"><input type="checkbox" checked={shown.confirmExcerpts===true} disabled={frozen} onChange={e=>edit({confirmExcerpts:e.target.checked,confirmedExcerpts:e.target.checked?selected.filter(row=>row.excerpt).map(row=>({id:row.id,sha256:row.excerpt.sha256})):[]})}/>Include the reviewed conversation excerpts listed above when I send this feedback.</label>}
    <label className="a-feedback-checkbox"><input type="checkbox" data-action="view.update" checked={shown.includeDiagnostics===true} disabled={frozen} onChange={e=>edit({includeDiagnostics:e.target.checked})}/>Include reproduction diagnostics</label>
-   {shown.includeDiagnostics===true&&<FeedbackDiagnostics key={result?`receipt:${result.requestId}`:state.selectedSessionId||'current'} state={state} act={act} requestId={result?.requestId} device={pending?.deviceDiagnostics}/> }
+   {shown.includeDiagnostics===true&&<FeedbackDiagnostics key={result?`receipt:${result.requestId}`:JSON.stringify([state.selectedSessionId,shown.failureContext])} state={state} act={act} requestId={result?.requestId} device={pending?.deviceDiagnostics} failureContext={shown.failureContext}/> }
    <p className="a-caption">Your text, selected diagnostics and the files listed above are sent when you submit. Files stay in repository history and are linked from the issue. Reviewed excerpts use the visibility shown during review; ordinary files use the destination and visibility you explicitly review; your GitHub sign-in needs repository Contents write access. Chats, paths, provider settings, and credentials are not attached automatically.</p>
    <div className="a-dialog-actions">
     {!done&&<button type="submit" className="a-primary" data-action="feedback.submit" disabled={working||uploading||!!retryUpload||!pending&&selected.some(row=>!row.excerpt)&&(!shown.uploadDestination||JSON.stringify(shown.confirmedFiles||[])!==JSON.stringify(selected.filter(row=>!row.excerpt).map(row=>({id:row.id,sha256:row.sha256}))))||selected.some(row=>row.excerpt)&&!shown.confirmExcerpts||!shown.title?.trim()||!shown.body?.trim()}><Send/>{working?'Sending…':pending?'Check submission':'Send feedback'}</button>}
@@ -128,7 +154,7 @@ export function FeedbackPanel({state,act}){
 export function LocalFeedbackReport({draft,state,act,working=false,uncertain=false}){
  const [report,setReport]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const flight=useRef(false),alive=useRef(true),owner=useRef(null);
- const identity=JSON.stringify([state.selectedSessionId,draft?.title,draft?.body,draft?.category,draft?.includeDiagnostics===true]);
+ const identity=JSON.stringify([state.selectedSessionId,draft?.title,draft?.body,draft?.category,draft?.includeDiagnostics===true,draft?.failureContext]);
  if(owner.current?.identity!==identity)owner.current={identity};
  useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
  useEffect(()=>{setReport(null);setError('');setNotice('')},[identity]);
@@ -138,7 +164,7 @@ export function LocalFeedbackReport({draft,state,act,working=false,uncertain=fal
   flight.current=true;setBusy(true);setError('');setNotice('');
   try{
    const response=await act('feedback.report',{title:draft.title,body:draft.body,category:draft.category||'bug',
-    includeDiagnostics:draft.includeDiagnostics===true,...(draft.includeDiagnostics===true?{deviceDiagnostics:feedbackDiagnostics(state)}:{}),destination:'none'});
+    includeDiagnostics:draft.includeDiagnostics===true,...(draft.failureContext?{failureContext:draft.failureContext}:{}),...(draft.includeDiagnostics===true?{deviceDiagnostics:feedbackDiagnostics(state)}:{}),destination:'none'});
    if(response?.accepted!==true||response.result?.submitted!==false||typeof response.result.content!=='string')throw Error(response?.error||'The local report could not be prepared.');
    if(alive.current&&owner.current===captured)setReport({owner:captured,...response.result});
   }catch(error){if(alive.current&&owner.current===captured)setError(error.message||'The local report could not be prepared.')}
@@ -159,28 +185,34 @@ export function LocalFeedbackReport({draft,state,act,working=false,uncertain=fal
 }
 
 
-export function FeedbackDiagnostics({state,act,requestId,device,downloadable=false}){
+export function FeedbackDiagnostics({state,act,requestId,device,downloadable=false,failureContext}){
  const [result,setResult]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const loading=useRef(false),loaded=useRef(false),alive=useRef(true);
+ const identity=JSON.stringify([state.selectedSessionId,requestId,failureContext]),owner=useRef(null);
+ if(owner.current?.identity!==identity)owner.current={identity};
+ useEffect(()=>{setResult(null);setError('');setNotice('');loaded.current=false},[identity]);
  useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
  async function load(){
   if(loading.current)return;
+  const captured=owner.current;
   loading.current=true;setBusy(true);setError('');
   try{
-   const response=await act('feedback.diagnostics',requestId?{requestId}:{deviceDiagnostics:device||feedbackDiagnostics(state)});
+   const response=await act('feedback.diagnostics',requestId?{requestId}:{deviceDiagnostics:device||feedbackDiagnostics(state),...(failureContext?{failureContext}:{})});
    if(!response?.result)throw Error('Unavailable');
-   if(alive.current){setResult(response.result);loaded.current=true}
-  }catch{if(alive.current)setError('Diagnostics could not be loaded. Try Refresh.')}
+   if(alive.current&&owner.current===captured){setResult({owner:captured,value:response.result});loaded.current=true}
+  }catch{if(alive.current&&owner.current===captured)setError('Diagnostics could not be loaded. Try Refresh.')}
   finally{loading.current=false;if(alive.current)setBusy(false)}
  }
+ const current=result?.owner===owner.current?result.value:null;
  return <details data-part="feedback-diagnostics" onToggle={event=>{if(event.currentTarget.open&&!loaded.current)void load()}}>
   <summary>{requestId?'Submitted diagnostics':'Preview reproduction diagnostics'}</summary>
-  <p className="a-caption">{requestId?'This is the snapshot saved when this submission was accepted.':'Loads only when opened. This is a current preview; live status may change before you submit.'} Host active component generation does not prove which code a running worker loaded. Reported online views counts device reports, not live event-stream connections. No message text, workspace paths, raw logs, or credentials.</p>
+  {!requestId&&<p>Review the sanitized evidence below before including it in a report to <a href={state.feedback?.issuesUrl||'https://github.com/microsoft/amplifier-unified/issues'} target="_blank" rel="noopener noreferrer">microsoft/amplifier-unified</a>. Opening this preview does not upload it. Local conversation diagnostics are separate and are not attached automatically.</p>}
+  <p className="a-caption">{requestId?'This is the snapshot saved when this submission was accepted.':failureContext?'Loads only when opened. The host checks the selected request reference; unavailable evidence is not replaced with a newer failure.':'Loads only when opened. This is a current preview; live status may change before you submit.'} Host active component generation does not prove which code a running worker loaded. Reported online views counts device reports, not live event-stream connections. No message text, workspace paths, raw logs, or credentials.</p>
   {busy&&<p role="status">Loading diagnostics…</p>}
   {error&&<p role="alert">{error}</p>}
-  {result&&(result.diagnostics?<pre className="a-state-view">{JSON.stringify(result.diagnostics,null,2)}</pre>:<p>No diagnostics were saved with this submission.</p>)}
+  {current&&(current.diagnostics?<pre className="a-state-view">{JSON.stringify(current.diagnostics,null,2)}</pre>:<p>No diagnostics were saved with this submission.</p>)}
   <button type="button" className="a-soft" data-action="feedback.diagnostics" disabled={busy} onClick={()=>void load()}>Refresh diagnostics</button>
-  {downloadable&&result?.diagnostics&&<div className="a-dialog-actions"><button type="button" className="a-soft" onClick={async()=>{try{await navigator.clipboard.writeText(JSON.stringify(result.diagnostics,null,2));setNotice('Diagnostics copied')}catch{setError('Clipboard unavailable. Select the report above and copy it.')}}}>Copy report</button><button type="button" className="a-soft" onClick={()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(result.diagnostics,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download='amplifier-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setNotice('Report saved')}}>Save report</button></div>}
+  {downloadable&&current?.diagnostics&&<div className="a-dialog-actions"><button type="button" className="a-soft" onClick={async()=>{try{await navigator.clipboard.writeText(JSON.stringify(current.diagnostics,null,2));setNotice('Diagnostics copied')}catch{setError('Clipboard unavailable. Select the report above and copy it.')}}}>Copy report</button><button type="button" className="a-soft" onClick={()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(current.diagnostics,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download='amplifier-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setNotice('Report saved')}}>Save report</button></div>}
   {notice&&<p role="status">{notice}</p>}
  </details>;
 }

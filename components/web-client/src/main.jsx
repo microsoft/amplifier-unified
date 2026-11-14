@@ -41,8 +41,8 @@ import {appAppearanceState} from './app-appearance-state';
 import {homePatch} from './adaptive-work.js';
 import {SettingsExperience} from './settings-experience';
 import {useGuardedSettingsPanel,useGuardedSettingsSession} from './settings-drafts';
-import {useMessageOutbox,outboxMessages,outboxMatches} from './message-outbox';
-import {checkedDelivery,deliveryRecovery,deliveryScope} from './pending-delivery-checks';
+import {useMessageOutbox,outboxMessages,outboxMatches,ClosedDeliveryItems} from './message-outbox';
+import {checkedDelivery,deliveryRecovery,deliveryScope,deliverySourceScope,deliveryTargetMatches,nativeDeliverySource,retainedDeliveryTarget,freshRetrySource} from './pending-delivery-checks';
 import {clientId,clientUrl,attachClient,draftJournal} from './api';
 import {checkpointSurfaces} from './surface-checkpoint';
 import {useConversationDetail} from './conversation-detail';
@@ -69,6 +69,7 @@ import {WorkspaceLayout} from './panel-layout';
 import {AttachmentStrip,readAttachment} from './chat-controls';
 import {useChatFileDrop} from './chat-file-drop.js';
 import {ComposerOptions} from './composer-options';
+import {draftExternalAgentIds,externalParticipants,externalAgentLabel,isSharedExternalConversation} from './external-participants';
 import {CoordinationPanel,selectWorkspaceChat} from './coordination';
 import {ActivityPanel,useReadCompletion} from './attention';
 import {ChatDelete} from './chat-delete';
@@ -147,6 +148,7 @@ function App(){
  const visualClient=useRef(null),computerClient=useRef(null);const [visual,setVisual]=useState({status:'idle'}),[computerVisual,setComputerVisual]=useState({status:'idle'});
  const startingCall=useRef(false),[voiceStarting,setVoiceStarting]=useState(false);
  const outbox=useMessageOutbox(),deliveries=useRef(new Set()),sendQueue=useRef(Promise.resolve()),draftSaves=useRef(new WeakMap());
+ const [recipientChoices,setRecipientChoices]=useState({});
  const draftJournalEntries=useRef(new WeakMap()),[draftStorageError,setDraftStorageError]=useState(false);
  const referenceDraftLock=useRef(false),[referencingDraft,setReferencingDraft]=useState(false);
  const quoteApi=useRef(null),addingQuote=useRef(false),[quoteNotice,setQuoteNotice]=useState(null),[quoteReturn,setQuoteReturn]=useState(null);
@@ -232,14 +234,24 @@ function App(){
   });
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
+  if(action==='conversation.send'){
+   args={sessionId:latest.current?.selectedSessionId,...args};
+   if(!meta.preservePayload&&args.expectedSource===undefined){
+    const source=nativeDeliverySource(latest.current?.sessions?.find(row=>row.id===args.sessionId));
+    if(source)args={...args,expectedSource:source};
+   }
+  }
   const creatingConversation=action==='session.create'&&args.fromDraft;
-  const readDeliveryTarget=(frame=latest.current)=>creatingConversation?{scope:deliveryScope(frame,null),connection:frame?.client?.hostInstanceId}:deliveryRecovery(frame,frame?.sessions?.find(row=>row.id===args.sessionId));
-  const deliveryTarget=creatingConversation||['conversation.delivery','conversation.send'].includes(action)?readDeliveryTarget():null,deliveryAuthenticationAtStart=deliveryAuthentication.current;
-  const sameDeliveryTarget=()=>deliveryAuthenticationAtStart===deliveryAuthentication.current&&(!deliveryTarget||JSON.stringify(deliveryTarget)===JSON.stringify(readDeliveryTarget()));
+  const readDeliveryTarget=(frame=latest.current)=>creatingConversation?{scope:deliveryScope(frame,null),connection:frame?.client?.hostInstanceId}:deliveryRecovery(frame,frame?.sessions?.find(row=>row.id===args.sessionId)||(args.expectedSource?{id:args.sessionId,...args.expectedSource}:null));
+  const deliveryTarget=meta.capturedDelivery?.target??(action==='conversation.send'&&meta.outboxScope?retainedDeliveryTarget(latest.current,meta.outboxScope):creatingConversation||['conversation.delivery','conversation.send'].includes(action)?readDeliveryTarget():null),deliveryAuthenticationAtStart=meta.capturedDelivery?.authentication??deliveryAuthentication.current;
+  if(deliveryTarget&&!meta.capturedDelivery)meta={...meta,capturedDelivery:{target:deliveryTarget,authentication:deliveryAuthenticationAtStart}};
+  const matchesFrame=frame=>creatingConversation?JSON.stringify(readDeliveryTarget(frame))===JSON.stringify(deliveryTarget):deliveryTargetMatches(frame,deliveryTarget,args.sessionId);
+  const externalDeliveryId=action==='conversation.delivery'&&latest.current?.sessions?.find(row=>row.id===args.sessionId)?.externalAgent?args.sessionId:null;
+  const sameDeliveryTarget=()=>deliveryAuthenticationAtStart===deliveryAuthentication.current&&(!deliveryTarget||matchesFrame(latest.current));
   const validDeliveryState=frame=>!deliveryTarget||(sameDeliveryTarget()&&
    (!frame?.client?.hostInstanceId||frame.client.hostInstanceId===deliveryTarget.connection)&&
    (!frame?.client?.historyScope||!latest.current?.client?.historyScope||frame.client.historyScope===latest.current.client.historyScope)&&
-   (!frame||creatingConversation||JSON.stringify(readDeliveryTarget(frame))===JSON.stringify(deliveryTarget)));
+   (!frame||creatingConversation||matchesFrame(frame)));
   const capabilityCard=isCapabilityCardAction(action,args,meta);
   const capabilityRead=capabilityCard&&action==='capability.read'?capabilityStopFence.current.beginRead(args):null;
   // Capture eligibility BEFORE passive recovery: this preflight cannot become
@@ -325,7 +337,7 @@ function App(){
    ?capabilityStopFence.current.beginStop(args.sessionId,meta.id||crypto.randomUUID()):null;
   if(stop)meta={...meta,id:stop.commandId};
   let stopPostStarted=false;
-  if(action==='conversation.send'&&args.expectedConfigurationRevision===undefined){const target=latest.current?.sessions?.find(row=>row.id===args.sessionId);args={...args,expectedConfigurationRevision:target?.nextMessageRevision||0}}
+  if(action==='conversation.send'&&!meta.preservePayload&&args.expectedConfigurationRevision===undefined){const target=latest.current?.sessions?.find(row=>row.id===args.sessionId);args={...args,expectedConfigurationRevision:target?.nextMessageRevision||0}}
   if(action==='conversation.send'&&meta.outboxScope&&meta.outboxAuthentication===undefined)meta={...meta,outboxAuthentication:deliveryAuthentication.current};
   if(action==='conversation.send'&&!meta.checkpointed)return checkpointSurfaces(args.sessionId).then(()=>dispatch(action,args,{...meta,checkpointed:true}));
   if(action==='view.update'&&Object.keys(args.patch||{}).some(key=>key==='draft'||key.startsWith('canvas')))args={sessionId:latest.current?.selectedSessionId,...args};
@@ -345,9 +357,9 @@ function App(){
   const dirtyBarrier=canvasDirtyBarrier.current;
   const execute=async()=>{
    if(meta.before)await meta.before;
-   if(deliveryTarget&&!sameDeliveryTarget())throw Error('The delivery target changed. The original submission remains saved.');
-   if(action==='conversation.send'&&meta.outboxScope&&(meta.outboxAuthentication!==deliveryAuthentication.current||!outboxMatches({scope:meta.outboxScope},deliveryScope(latest.current,latest.current?.sessions?.find(row=>row.id===args.sessionId)))))
-    throw Error('The original message belongs to a different source. Nothing was sent again.');
+   if(deliveryTarget&&!sameDeliveryTarget())throw Object.assign(Error('The delivery target changed. The original submission remains saved.'),{accepted:false,beforePost:true});
+   if(action==='conversation.send'&&meta.outboxScope&&(meta.outboxAuthentication!==deliveryAuthentication.current||!deliveryTargetMatches(latest.current,{scope:meta.outboxScope},args.sessionId)))
+    throw Object.assign(Error('The original message belongs to a different source. Nothing was sent again.'),{accepted:false,beforePost:true});
    if(action==='conversation.delivery'&&(!sameDeliveryTarget()||meta.deliveryRecovery&&JSON.stringify(meta.deliveryRecovery)!==JSON.stringify(deliveryTarget)))
     throw Error('The delivery target changed. Nothing was sent again.');
    if(capabilityRecovery)await capabilityRecovery;
@@ -397,12 +409,10 @@ function App(){
      const returnedSource=result.state?.client?.historyScope,currentSource=latest.current?.client?.historyScope;
      if(!sameDeliveryTarget()||deliveryTarget&&returnedHost!==deliveryTarget.connection||returnedSource&&currentSource&&returnedSource!==currentSource)throw Error('The delivery target changed. Nothing was sent again.');
      checkedDelivery(result,args.sessionId,args.inputId);
-     // Compact replies omit state. Their observation still carries the exact
-     // native source: a matching chat/input alone cannot retire another source.
-     const source=result.result.source;
-     if(!source||!(source.workspace===null||typeof source.workspace==='string'&&source.workspace.length>0)||
-        typeof source.nativeIdentity!=='string'||!source.nativeIdentity||
-        deliveryScope(latest.current,{workspace:source.workspace,nativeIdentity:source.nativeIdentity})!==deliveryTarget?.scope)
+     // Compact replies still bind the source captured before the read: native
+     // execution for native chats, the public conversation for external chats.
+     const receiptScope=deliverySourceScope(latest.current,result.result.source,externalDeliveryId);
+     if(!receiptScope||receiptScope!==deliveryTarget?.scope)
       throw Error('The delivery source could not be verified. Nothing was sent again.');
      outbox.acknowledge(args.sessionId,args.inputId,result.result,deliveryTarget?.scope);
      if(result.result?.delivery==='accepted'){
@@ -605,7 +615,7 @@ function App(){
   for(const entry of outbox.entries){
    if(entry.sessionId||!entry.creation?.id||!outboxMatches(entry,deliveryScope(state,null)))continue;
    const created=state?.sessions?.find(row=>row.creationCommandId===entry.creation.id);
-   if(created)outbox.update(entry.id,{sessionId:created.id,scope:deliveryScope(state,created)});
+   if(created)outbox.update(entry.id,{sessionId:created.id,scope:deliveryScope(state,created),...(entry.expectedSource===null?{expectedSource:nativeDeliverySource(created)}:{}),...(entry.expectedConfigurationRevision===null?{expectedConfigurationRevision:created.nextMessageRevision??0}:{})});
   }
  },[state?.sessions,outbox.entries]);
  // Shell snapshots are server-scoped. An optimistic browse patch can arrive
@@ -699,8 +709,11 @@ function App(){
  const detail=useConversationDetail(state?.sessions?.find(s=>s.id===state.selectedSessionId),()=>{stickToBottom.current=false;const pane=messagesPane.current;if(!pane)return;const top=pane.getBoundingClientRect().top,anchor=[...pane.querySelectorAll('[data-message-id]')].find(node=>node.getBoundingClientRect().bottom>top);if(anchor)historyScrollAnchor.current={sessionId:state.selectedSessionId,messageId:anchor.dataset.messageId,top:anchor.getBoundingClientRect().top}},dispatch);
  useEffect(()=>{if(detail.jumpRequest){const frame=requestAnimationFrame(()=>detail.jumpRequest.id==='latest'?chatScroll.current?.reveal():chatScroll.current?.jump(detail.jumpRequest.id));return()=>cancelAnimationFrame(frame)}},[detail.jumpRequest]);
  const session=detail.session,view=state?.view||{},mode=view.mode||'chat',activity=sessionStatus(session),working=activity.busy;
- const externalConversation=!!(session?.externalAgent||(!session&&view.newSessionDraft?.externalAgentId));
+ const externalConversation=!!(session?.externalAgent||(!session&&draftExternalAgentIds(view.newSessionDraft).length));
+ const sharedConversation=isSharedExternalConversation(session)||!session&&draftExternalAgentIds(view.newSessionDraft).length>1;
  const outboxSource=deliveryScope(state,session);
+ const recipientKey=JSON.stringify([outboxSource,session?.id]);
+ const recipientAgentId=recipientChoices[recipientKey]??session?.messages?.findLast(row=>row.recipientAgentId)?.recipientAgentId??externalParticipants(session)[0]?.id??'';
  const messages=useMemo(()=>outboxMessages(session?.messages||[],outbox.entries,session?.id,outboxSource),[session?.messages,outbox.entries,session?.id,outboxSource]);
  const historyPending=conversationHistoryPending(session,state?.navigationPending,messages),ownership=ownershipState(session),executionUnavailable=session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||ownership.blocked;
  // Pending New chat fences input without replacing the current transcript.
@@ -906,35 +919,38 @@ function App(){
  }
  const chatDrop=useChatFileDrop({ownerKey:JSON.stringify([session?.id??null,state?.attachmentDraftId,state?.selectedWorkspaceId]),enabled:!!state&&workSurface(state)==='chat'&&!externalConversation&&!executionUnavailable&&!historyPending&&!referencingDraft,onFiles:addFiles,onError:setError});
  async function deliver(entry){
-  if(!outboxMatches(entry,deliveryScope(latest.current,latest.current?.sessions?.find(row=>row.id===entry.sessionId))))return;
   if(deliveries.current.has(entry.id))return;
+  const previouslyUncertain=entry.status==='unknown';
   deliveries.current.add(entry.id);outbox.update(entry.id,{status:'sending',error:''});
   try{
-   if(!entry.sessionId){const current=await ensureSession(entry.creation);if(!outboxMatches(entry,deliveryScope(latest.current,null)))return;entry=outbox.update(entry.id,{sessionId:current.id,scope:deliveryScope(latest.current,current)});}
-   const result=await dispatch('conversation.send',{sessionId:entry.sessionId,text:entry.text,...(entry.document?{document:entry.document}:{}),...(entry.allowNextTurn?{allowNextTurn:true}:{}),...(entry.expectedGenerationId?{expectedGenerationId:entry.expectedGenerationId}:{}),...(Number.isInteger(entry.expectedConfigurationRevision)?{expectedConfigurationRevision:entry.expectedConfigurationRevision}:{}),...(entry.replyTo?.id?{replyId:entry.replyTo.id}:{}),attachmentIds:entry.attachmentIds,via:entry.via,preserveDraft:true},{id:entry.commandId,feedback:false,outboxScope:entry.scope});
-   if(!outboxMatches(entry,deliveryScope(latest.current,latest.current?.sessions?.find(row=>row.id===entry.sessionId)))){outbox.update(entry.id,{status:'unknown',error:'The source changed before acknowledgement. The original submission remains saved.'});return;}
+   if(!entry.sessionId){const current=await ensureSession(entry.creation);if(!outboxMatches(entry,deliveryScope(latest.current,null)))throw Object.assign(Error('The delivery target changed. The original submission remains saved.'),{accepted:false,beforePost:true});entry=outbox.update(entry.id,{sessionId:current.id,scope:deliveryScope(latest.current,current),...(entry.expectedSource===null?{expectedSource:nativeDeliverySource(current)}:{}),...(entry.expectedConfigurationRevision===null?{expectedConfigurationRevision:current.nextMessageRevision??0}:{})});}
+   if(!deliveryTargetMatches(latest.current,{scope:entry.scope},entry.sessionId))throw Object.assign(Error('The original message belongs to a different source. Nothing was sent again.'),{accepted:false,beforePost:true});
+   const result=await dispatch('conversation.send',{sessionId:entry.sessionId,text:entry.text,...(entry.recipientAgentId?{recipientAgentId:entry.recipientAgentId}:{}),...(entry.expectedSource?{expectedSource:entry.expectedSource}:{}),...(entry.document?{document:entry.document}:{}),...(Number.isInteger(entry.expectedConfigurationRevision)?{expectedConfigurationRevision:entry.expectedConfigurationRevision}:{}),...(Number.isInteger(entry.expectedInterruptionRevision)?{expectedInterruptionRevision:entry.expectedInterruptionRevision}:{}),...(entry.replyTo?.id?{replyId:entry.replyTo.id}:{}),attachmentIds:entry.attachmentIds,via:entry.via,preserveDraft:true},{id:entry.commandId,feedback:false,outboxScope:entry.scope,preservePayload:true});
+   if(!deliveryTargetMatches(latest.current,{scope:entry.scope},entry.sessionId)){outbox.update(entry.id,{status:'unknown',error:'The source changed before acknowledgement. The original submission remains saved.'});return;}
    outbox.update(entry.id,['sending','unknown'].includes(result.delivery)?{status:'unknown',error:'Delivery has not been confirmed. Checking again will not run it twice.'}:null);
   }catch(error){
-   const received=outboxMatches(entry,deliveryScope(latest.current,latest.current?.sessions?.find(row=>row.id===entry.sessionId)))&&latest.current?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.some(row=>row.inputId===entry.commandId&&['accepted','queued_for_update','held'].includes(row.delivery?.status));
+   const received=deliveryTargetMatches(latest.current,{scope:entry.scope},entry.sessionId)&&latest.current?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.some(row=>row.inputId===entry.commandId&&['accepted','queued_for_update','held'].includes(row.delivery?.status));
    if(received&&error.code!=='session_busy')outbox.update(entry.id,null);
-   else outbox.update(entry.id,{status:error.receipt?.delivery==='failed'||error.status>=400&&error.status<500&&error.status!==408?'failed':'unknown',error:actionErrorMessage(error)});
+   else outbox.update(entry.id,{status:!previouslyUncertain&&!error.unconfirmed&&(error.beforePost||error.receipt?.delivery==='failed'||error.accepted===false)?'failed':'unknown',error:actionErrorMessage(error)});
   }finally{deliveries.current.delete(entry.id)}
  }
  function discardMessage(message){
   const entry=outbox.current.current.find(row=>row.id===message.localDelivery?.id);
-  if(!entry||entry.status!=='failed'||deliveries.current.has(entry.id))return;
-  const saved=latest.current?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.some(row=>row.inputId===entry.commandId);
-  if(saved)return;
-  outbox.update(entry.id,null);
-  if(latest.current?.view?.messageEdit?.messageId===message.id)act('view.update',{patch:{messageEdit:null}});
+  if(!entry||!['failed','unknown'].includes(entry.status)||deliveries.current.has(entry.id))return;
+  const owner=latest.current?.sessions?.find(row=>row.id===entry.sessionId),saved=owner?.messages?.find(row=>row.inputId===entry.commandId);
+  if(!deliveryTargetMatches(latest.current,{scope:entry.scope},entry.sessionId)||['sending','queued','queued_for_update'].includes(saved?.delivery?.status)||
+   ['working','starting','running','stopping'].includes(owner?.status)&&owner?.execution?.currentTurnId===entry.commandId)return;
+  outbox.update(entry.id,{closed:true});
  }
  async function retryMessage(message,text){
-  const previous=outbox.current.current.find(row=>row.id===(message.localDelivery?.id||message.id));if(!previous||previous.status==='sending'||!outboxMatches(previous,deliveryScope(latest.current,latest.current?.sessions?.find(row=>row.id===previous.sessionId))))return;
+  const previous=outbox.current.current.find(row=>row.id===(message.localDelivery?.id||message.id));if(!previous||previous.closed||previous.status==='sending'||!deliveryTargetMatches(latest.current,{scope:previous.scope},previous.sessionId))return;
   if(previous.document&&text!==undefined){setError('Retry this quoted message unchanged, or discard it and compose a correction.');return;}
   if(previous.status==='unknown'&&text!==undefined)return;
-  const creation=previous.status==='failed'&&!previous.sessionId?{id:crypto.randomUUID(),setup:creationSetup()}:previous.creation;
-  const currentSession=latest.current?.sessions?.find(row=>row.id===previous.sessionId),currentGeneration=currentSession?.collaborationGeneration;
-  const next=outbox.update(previous.id,{creation,...(previous.status==='failed'?{commandId:crypto.randomUUID(),allowNextTurn:true,expectedGenerationId:currentGeneration&&!currentGeneration.terminal?currentGeneration.id:null,expectedConfigurationRevision:currentSession?.nextMessageRevision??0,...(text!==undefined?{text}:{})}:{}),status:'sending',error:''});
+  if(previous.status==='unknown'&&(previous.expectedGenerationId!==undefined||previous.allowNextTurn!==undefined)){setError('This earlier submission is still uncertain and cannot be sent again here. Use Check delivery for its original receipt. The saved message was kept.');return;}
+  const creation=previous.status==='failed'&&!previous.sessionId?{id:crypto.randomUUID(),setup:draftExternalAgentIds(previous.creation?.setup).length?previous.creation.setup:creationSetup()}:previous.creation;
+  const currentSession=latest.current?.sessions?.find(row=>row.id===previous.sessionId);
+  if(previous.status==='failed'&&previous.sessionId&&!currentSession){setError('Open the original chat before retrying this unsent message. Its saved submission was kept.');return;}
+  const next=outbox.update(previous.id,{creation,...(previous.status==='failed'?{commandId:crypto.randomUUID(),...freshRetrySource(currentSession,creation),expectedGenerationId:undefined,allowNextTurn:undefined,expectedConfigurationRevision:currentSession?currentSession.nextMessageRevision??0:null,expectedInterruptionRevision:currentSession?.interruptionRevision??0,...(text!==undefined?{text}:{})}:{}),error:''});
   if(text!==undefined)act('view.update',{patch:{messageEdit:null}});
   await deliver(next);
  }
@@ -946,13 +962,14 @@ function App(){
   const submittedDocument=editorDocument?.segments.some(part=>part.type==='quote')?editorDocument:null;
   if(externalConversation&&(attachments.length||submittedDocument||state.view?.messageReply)){setError('This agent currently accepts text messages. Remove attachments or quotations before sending.');return;}
   if(externalConversation&&!session&&!creationSetup().workspace){setError('Choose an existing workspace before starting a chat with an external agent.');return;}
-  const activeGeneration=session?.collaborationGeneration;
-  const expectedGenerationId=activeGeneration&&!activeGeneration.terminal?activeGeneration.id:null;
+  const setup=!session?creationSetup():null;
+  const recipient=externalConversation&&!sharedConversation?(session?recipientAgentId:draftExternalAgentIds(setup)[0]):null;
+  if(session?.externalAgent&&!sharedConversation&&!externalParticipants(session).some(agent=>agent.id===recipient)){setError('Choose an agent in this conversation before sending.');return;}
   if(!submittedText.trim()&&!attachments.length)return;
   if(detail.focused)detail.latest(false);
   chatScroll.current?.submitted(id);setError('');setQuoteNotice(notice=>quoteNoticeAfterSend(notice,session?.id));editDraft('');clearTimeout(draftTimer.current);
   const blankToken=stagedDraft.current;
-  let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,scope:deliveryScope(latest.current,session),allowNextTurn:true,...(expectedGenerationId?{expectedGenerationId}:{}),...(session?{expectedConfigurationRevision:session.nextMessageRevision??0}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:creationSetup()}}:{}),text:submittedText,...(submittedDocument?{document:submittedDocument,replyTo:{version:2,segments:submittedDocument.segments}}:state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
+  let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,scope:deliveryScope(latest.current,session),...(!externalConversation?{expectedSource:nativeDeliverySource(session)}:{}),expectedInterruptionRevision:session?.interruptionRevision??0,expectedConfigurationRevision:session?session.nextMessageRevision??0:null,...(!session?{creation:{id:crypto.randomUUID(),setup}}:{}),...(recipient?{recipientAgentId:recipient,recipientAgentLabel:externalAgentLabel(session,recipient)}:{}),text:submittedText,...(submittedDocument?{document:submittedDocument,replyTo:{version:2,segments:submittedDocument.segments}}:state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
   try{
    const clearingDraft=saveDraft(stagedDraftPayload.current,blankToken);
    // The outbox already owns this exact submitted text. A slow/ lost draft
@@ -961,7 +978,7 @@ function App(){
    if(session)clearingDraft.catch(error=>reportError(error));
    else await clearingDraft;
    if(!outboxMatches(entry,deliveryScope(latest.current,session)))throw Error('The delivery target changed. The original submission remains saved.');
-   const current=session||await ensureSession(entry.creation);if(!outboxMatches(entry,deliveryScope(latest.current,session)))throw Error('The delivery target changed. The original submission remains saved.');entry=outbox.update(id,{sessionId:current.id,scope:deliveryScope(latest.current,current)});
+   const current=session||await ensureSession(entry.creation);if(!outboxMatches(entry,deliveryScope(latest.current,session)))throw Error('The delivery target changed. The original submission remains saved.');entry=outbox.update(id,{sessionId:current.id,scope:deliveryScope(latest.current,current),...(entry.expectedSource===null?{expectedSource:nativeDeliverySource(current)}:{}),...(entry.expectedConfigurationRevision===null?{expectedConfigurationRevision:current.nextMessageRevision??0}:{})});
    await deliver(entry);
   }catch(error){outbox.update(id,{status:error.receipt?.delivery==='failed'||error.status>=400&&error.status<500&&error.status!==408?'failed':'unknown',error:actionErrorMessage(error)});}
  }
@@ -1002,7 +1019,7 @@ function App(){
   activeScope:appearance.activeScope,storageVersion:appearanceCacheLocal.storageVersion,confirmed:appearanceCacheConfirmed,
   invalidate:!!appearanceCacheLocal.error||!!state&&(!hasAppearanceIdentity(state.appearance)||state.appearance.availability==='failed')});
  useLayoutEffect(()=>bindWindowControlsOverlay(root.current),[shell.ready,!!state]);
- const newChatPending=!session&&outbox.entries.some(row=>outboxMatches(row,outboxSource)&&row.sessionId===null&&['sending','unknown'].includes(row.status));
+ const newChatPending=!session&&outbox.entries.some(row=>!row.closed&&outboxMatches(row,outboxSource)&&row.sessionId===null&&['sending','unknown'].includes(row.status));
  const responseActive=working||(session?.workers||[]).some(worker=>['queued','starting','working','running','stopping'].includes(worker.status));
  const sendingHere=outbox.entries.some(row=>outboxMatches(row,outboxSource)&&row.sessionId===(session?.id??null)&&row.status==='sending');
  const primaryAction=composerPrimaryAction({draft,attachments:availableAttachments,uploading,working,responseActive,stopping:session?.status==='stopping',voiceStatus:voice.status,voiceStarting,voiceAvailable:!externalConversation,busy,newChatPending,sending:sendingHere,historyPending,executionUnavailable});
@@ -1076,7 +1093,7 @@ function App(){
   {chatLink?.status==='failed'&&<div className="a-alert" role="alert" data-chat-link-failure><span>Couldn’t open chat: {actionErrorMessage(chatLink.error)}</span><button type="button" onClick={()=>chatLinkReceiver.current.retry()}>Retry opening chat</button><button type="button" aria-label="Dismiss chat link" onClick={()=>chatLinkReceiver.current.dismiss()}><X/></button></div>}
   <ConnectionNotice connected={connected} updates={state.updates} failure={connectionFailure} onRetry={()=>setBootAttempt(value=>value+1)} onDismiss={()=>setConnectionFailure(null)}/>
   {error&&<div className="a-alert" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={()=>{setError('');act('view.update',{patch:{notice:null}})}} data-action="view.update"><X/></button></div>}
-  {!browsing&&<><ConversationStatus session={session} act={act}/><ConversationError state={state} session={session} act={act}/></>}{!externalConversation&&!state.runtime?.available&&<div className="a-alert a-runtime"><span><strong>Connect Amplifier to get started.</strong> {state.runtime?.error||'The Amplifier runtime is not installed. Install this app with its runtime dependencies, then relaunch.'}</span><button className="a-link" onClick={()=>open('settings')} data-action="view.update">Setup details <ChevronRight/></button></div>}
+  {!browsing&&<ConversationStatus session={session} act={act}/>} {!externalConversation&&!state.runtime?.available&&<div className="a-alert a-runtime"><span><strong>Connect Amplifier to get started.</strong> {state.runtime?.error||'The Amplifier runtime is not installed. Install this app with its runtime dependencies, then relaunch.'}</span><button className="a-link" onClick={()=>open('settings')} data-action="view.update">Setup details <ChevronRight/></button></div>}
   <LiveChatActivity voice={voice} callSession={state.sessions.find(row=>row.id===state.voice?.sessionId)} callActive={callActive} act={act}><SharingIndicator sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={reportError}/></LiveChatActivity>
   <WorkspaceLayout appearanceScheme={themeScheme} appearanceCss={activeCss} state={layoutState} act={act} presentation={presentation}><WorkspaceRail footer={<AppFooter state={state} act={act} connected={connected} open={open}/>} shell={shell} state={state} session={session} act={act} selectSession={id=>act('session.select',{id})} newSession={newChat}/><section className={`a-conversation ${messages.length||historyDisplayPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation" {...chatDrop.handlers}>{chatDrop.active&&<div className="a-chat-file-overlay" data-part="chat-file-drop" role="status"><div><strong>Drop to attach to {session?.title||'this draft'}</strong><p>Files join this draft. Nothing is sent.</p></div></div>}<WorkSurface shell={shell} state={state} act={act} dispatch={dispatch} navigationRef={workspaceSettingsNavigation}/>
    <MessageFocus session={session} focus={state.view?.messageFocus} detail={detail} ensureVisible={interim.ensureVisible}/><div className="a-messages" ref={messagesPane} data-part="messages" data-view-source={session?"conversation":undefined} data-session-id={session?.id??undefined} data-host-instance-id={state.client?.hostInstanceId} data-work-projection={workProjectionReceipt(session,state.client?.hostInstanceId)} role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={historyDisplayPending||!!detail.busy}>{historyDisplayPending?<SessionHistoryControls session={{...session,historyLoading:!session?.historyError, messages:[],sharedHistoryOffset:0,historyActivity:null}} act={act}/>:<><div className="a-session-history">{detail.controls}</div><WorkProjectionStatus session={session} messages={messages}/><SessionHistoryControls session={session?.messageWindow?.offset>0?{...session,sharedHistoryOffset:0}:session} messages={messages} act={act} hideEarlier/>{session?.parentId&&<div className="a-chat-origin"><GitBranch/><span>{!isTopLevelChat(session)?'Subagent conversation':session.editOrigin?'Continued from an edited message':'Forked conversation'}</span><button type="button" className="a-link" data-action="session.select" disabled={!state.sessions.some(s=>s.id===session.parentId)} onClick={()=>act('session.select',{id:session.parentId})}>{!isTopLevelChat(session)?'Open parent chat':'Open original chat'}</button></div>}{!session&&conversationRows.length===0&&<NewChatSetup draft={draft} onChoose={value=>{if(lastDraft.current.trim())return;editDraft(value);composerRef.current?.focus()}}/>} {conversationRows.length===0&&!historyDisplayPending&&!session?.historyError&&!executionUnavailable?session&&<div className="a-empty"><img src={logo} alt=""/><h2>What shall we work on?</h2><p>{session.externalAgent?'Send a message to '+(session.externalAgent.label||session.externalAgent.id)+'.':'Bring an idea, a question, or a file.'}</p></div>:conversationRows.map(renderRow)}{!voiceStream&&<StreamingMessage session={session} state={state}/>}{presentation.planPlacement==='inline'&&<ChatPlan session={session} state={state} act={act} placement="inline"/>}<Questions key={`questions:${session?.id}`} session={session} state={state} dispatch={dispatch} reviewState={questionReviewState}/><NewChatHandoffs key={`handoffs:${session?.id}`} state={state} dispatch={dispatch}/></>}<div ref={messagesEnd}/></div>
@@ -1087,6 +1104,8 @@ function App(){
    <ApprovalPanel key={session?.id} session={session} act={act} dispatch={dispatch} canvasDraft={state.view?.canvasDraft} freshnessKey={`${connected}:${session?.interruptionRevision}:${session?.executionRevision}`}/>
    {(!presentation.planPlacement||presentation.planPlacement==='composer'||presentation.planPlacement==='active'&&responseActive)&&!historyDisplayPending&&<ChatPlan session={session} state={state} act={act}/> }
    <QuestionNotice session={session} paneRef={messagesPane}/>
+   {!browsing&&<ConversationError state={state} session={session} act={act}/>}
+   {!session&&<ClosedDeliveryItems entries={outbox.entries} sessionId={null} scope={outboxSource} reopen={id=>outbox.update(id,{closed:false})}/>}
    <form className="a-composer a-compact-composer" data-part="composer" data-action="conversation.send" onSubmit={send}>
     {draftStorageError&&<p role="alert" className="a-upload-status">This browser could not keep a recovery copy of your draft. Keep this tab open until it is saved.</p>}
     {outbox.storageError&&outbox.entries.length>0&&<p role="alert" className="a-upload-status">This browser could not save the pending message. Keep this tab open until delivery is confirmed.</p>}
@@ -1120,7 +1139,7 @@ function App(){
     </div>
     <div className="a-compose-configuration">
      {session&&responseActive&&!callActive&&primaryAction.action!=='conversation.stop'&&<button type="button" className="a-compose-stop" aria-label="Stop response" data-action="conversation.stop" disabled={session.status==='stopping'||executionUnavailable} onClick={()=>act('conversation.stop',{sessionId:session.id})}>{session.status==='stopping'?'Stopping…':'Stop'}</button>}
-     <ShellSlot name="composer.actions"><ComposerOptions state={state} session={session} act={act} working={working} detail={presentation.interfaceDetail||presentation.executionDetail}/></ShellSlot>
+     <ShellSlot name="composer.actions"><ComposerOptions state={state} session={session} act={act} working={working} detail={presentation.interfaceDetail||presentation.executionDetail} recipientAgentId={recipientAgentId} onRecipientChange={id=>setRecipientChoices(current=>({...current,[recipientKey]:id}))}/></ShellSlot>
     </div>
     </ComposerOwnership>
    </form>
@@ -1135,6 +1154,7 @@ function App(){
    <ArchiveNotice value={archiveValue}/>
    {error&&<div className="a-alert" role="alert"><span>{error}</span><button type="button" aria-label="Dismiss error" onClick={()=>setError('')}><X/></button></div>}
    {(Object.hasOwn(chatPageTitles,panel)||panel==='runtime')&&<ChatPages key={session?.id||'draft'} page={panel} state={state} session={session} act={act} dispatch={dispatch} open={open} working={working} questionReviewState={questionReviewState} computerControls={<VoiceVisualControls sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={reportError}/>}/>}
+   {panel==='session-details'&&<ClosedDeliveryItems entries={outbox.entries} sessionId={session?.id} scope={outboxSource} reopen={id=>outbox.update(id,{closed:false})}/>}
     {panel==='coordination'&&<CoordinationPanel key={session?.id} dispatch={dispatch} sessionId={session?.id} session={session} onOpenChat={id=>selectWorkspaceChat(dispatch,id,target=>latest.current?.selectedSessionId===target&&latest.current?.view?.panel==='coordination')}/>}
    {panel==='subagent-history'&&<SubagentHistory state={state} session={session} act={act}/>}
    {panel==='automation'&&<AutomationHub state={state} dispatch={dispatch} isCurrent={id=>latest.current?.selectedSessionId===id&&pendingView.current.apply(latest.current)?.view?.panel==='automation'}/>}

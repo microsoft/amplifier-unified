@@ -59,6 +59,29 @@ async def test_operation_and_probe_preserve_os_cause_in_sanitized_receipt(tmp_pa
     await service.close()
 
 
+async def test_catalog_category_survives_saved_export_without_splitting_by_timing(tmp_path):
+    from amplifier_web.update_report import event
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    manager = UpdateManager(service)
+    service.update_manager = manager
+    try:
+        for elapsed, size in ((10, 3), (500, 900)):
+            manager.diagnostics.record("ecosystem-compatibility", "failed", probe={
+                "ok": False, "stage": "prepare", "decisionCatalog": {
+                    "category": "timeout", "elapsedMs": elapsed, "stdoutBytes": size,
+                    "stderr": "/private/credential"}})
+        groups = manager.diagnostics.state["activeFailures"]
+        assert len(groups) == 1
+        group = next(iter(groups.values()))
+        assert group["occurrences"] == 2
+        exported = event(group["latest"])
+        assert exported["probe"]["decisionCatalog"] == {
+            "category": "timeout", "elapsedMs": 500, "stdoutBytes": 900}
+        assert "/private" not in json.dumps(manager.diagnostics.state)
+    finally:
+        await service.close()
+
+
 async def test_subprocess_failure_retains_safe_classification_not_output(tmp_path):
     secret='fixture-sensitive-credential'
     code="import sys; print('"+secret+"'); sys.stderr.write('ImportError: '+ '"+secret+"'); raise SystemExit(17)"

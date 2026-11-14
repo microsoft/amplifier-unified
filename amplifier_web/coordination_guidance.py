@@ -1,13 +1,14 @@
 """Bounded orientation and recovery hints; never an authority transfer."""
 
 ROOT_SCOPE_MESSAGE = (
-    "A child cannot borrow its root's collaboration authority. "
-    "End this delegated attempt and return the requested action, completed effects "
-    "and this refusal to the parent that delegated it. Do not retry with a root ID "
-    "or another tool. The owning root can inspect current state and perform an "
-    "already-authorized step through its own controls. This refusal does not add "
-    "a requirement for new user approval; existing Stop, scope and permission "
-    "restrictions still apply."
+    "This root-only collaboration operation is denied: a child cannot borrow "
+    "its root's collaboration authority. Do not retry with a root ID or another "
+    "tool. Retain the requested action, completed effects and this refusal for "
+    "your normal delegated result to the parent. Continue independent work only "
+    "while it remains authorized and currently admitted. If this operation is "
+    "essential, report the blocker through that result path. Actual Stop, stale "
+    "execution, revocation, scope and permission restrictions still govern; this "
+    "refusal neither cancels unrelated work nor requires new user approval."
 )
 
 READ_GUIDANCE = (
@@ -25,6 +26,13 @@ READ_GUIDANCE = (
 )
 
 PLANNING_GUIDANCE = (
+    "Managers coordinate many independent workers when useful. Commission complete "
+    "deliverables with acceptance criteria and clear ownership; workers implement, "
+    "repair and test within that authority and return a result or concrete external "
+    "blocker. Do not make routine acknowledgements, repeated inventories or repeated "
+    "passing checks a workflow. Discover supported placement for concurrent writers; "
+    "do not share a mutable checkout accidentally. A child retains its own authority "
+    "and cannot impersonate its root.\n\n"
     "One manager coordinates many independent goal-driven workers when tasks "
     "permit. Give each worker a deliverable, acceptance criteria and existing "
     "authority to carry implementation, repair, isolated checks and a reviewable "
@@ -60,6 +68,19 @@ PLANNING_GUIDANCE = (
     "cannot continue without a missing decision, authority or external event. "
     "Ask only for a missing decision or authority. Preserve actual Stop, "
     "unanswered user choices and ownership; reconcile uncertain effects."
+)
+
+NATIVE_CHILD_GUIDANCE = (
+    "You are a native delegated child, not a root conversation or a durable "
+    "commissioned root worker. Return findings, completed effects, retained "
+    "evidence and concrete blockers through your normal delegated result to the "
+    "parent. Root-only collaboration sends, replies, commissioning and root task "
+    "ownership advice do not apply to you; do not borrow a root ID or retry a "
+    "denied operation through another tool. A refused optional report blocks that "
+    "operation, not unrelated independently authorized work that is still admitted. "
+    "If a denied operation is essential, return the dependency as a blocker. "
+    "Actual Stop, stale execution, revoked permission, scope and lifecycle checks "
+    "still govern. Inspect saved receipts for unknown effects; never replay them."
 )
 
 

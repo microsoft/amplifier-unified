@@ -534,7 +534,7 @@ async def test_same_mounted_writer_running_during_grant_keeps_its_old_snapshot(t
     assert (workspace / 'held').read_text() == 'old invocation'
 
 
-@pytest.mark.parametrize('state', ['active', 'stale', 'parked', 'superseded-settings'])
+@pytest.mark.parametrize('state', ['active', 'stale', 'released', 'superseded-settings'])
 async def test_worker_refresh_binds_only_existing_activation_and_never_starts_input(tmp_path, monkeypatch, state):
     from amplifier_web.runtime_worker import Worker
     from amplifier_foundation.session.activation import ActivationGate
@@ -545,7 +545,9 @@ async def test_worker_refresh_binds_only_existing_activation_and_never_starts_in
     worker.activation_gate = ActivationGate()
     worker.activation = worker.activation_gate.activate()
     worker.ownership = SimpleNamespace(yielding=False)
-    worker.parked = state == 'parked'
+    if state == 'released':
+        worker.shared_handle = None
+        worker.activation_gate.release(worker.activation)
     policy.current = lambda: worker.activation_gate.current_valid and state != 'stale'
     save(tmp_path, 'root', [tmp_path.parent])
     revision = fingerprint(read_settings(tmp_path, session_id='root'))

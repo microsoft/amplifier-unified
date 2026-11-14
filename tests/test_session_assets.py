@@ -44,6 +44,8 @@ async def test_upload_reference_checkpoint_and_selected_fork(tmp_path, monkeypat
         assert ref['provenance']['expires_at'] is None
         assert not any(item['type'] == 'image' for item in message['content'])
         assert base64.b64encode(png()).decode() not in json.dumps(message)
+        for path in store.directory('source').rglob('*.json*'):
+            assert base64.b64encode(png()) not in path.read_bytes()
         with media.resolve_ref(ref) as stream:
             assert stream.read() == png()
         with closing(store.media('target')) as target:
@@ -136,7 +138,7 @@ async def test_nonimage_locator_works_at_destination(tmp_path, monkeypatch, name
     assert request.model_dump() == original
 
 
-@pytest.mark.parametrize('expires_during_transfer', [False, True])
+@pytest.mark.parametrize('expires_during_transfer', [False, True, 'during-decode'])
 async def test_real_portability_media_and_legacy_closure_after_origin_absent(tmp_path, monkeypatch, expires_during_transfer):
     from amplifier_foundation.session.media import SessionMediaCapability
     from test_portability import setup_hosts, host_env, export
@@ -176,13 +178,41 @@ async def test_real_portability_media_and_legacy_closure_after_origin_absent(tmp
             import amplifier_foundation.session.media as foundation
             from datetime import timedelta
             real_date = foundation._date
-            monkeypatch.setattr(foundation, '_date', lambda value: real_date(value) - timedelta(days=3))
             original_expired = assets.expired
-            monkeypatch.setattr(assets, 'expired', lambda ref: ref['provenance']['expires_at'] is not None or original_expired(ref))
+            if expires_during_transfer == 'during-decode':
+                # Reproduce the final-owner race, not just expiry before the
+                # host check: the exact source is already irreversibly released.
+                # Arm only at the install loop's last unexpired source check,
+                # then cross expiry while decoding that signed original payload.
+                armed, crossings = False, []
+                original_unpacked = assets.unpacked
+                def expired_before_decode(ref):
+                    nonlocal armed
+                    result = original_expired(ref)
+                    if ref['provenance']['id'] == 'screen-observation':
+                        assert not result
+                        armed = True
+                    return result
+                def decode_crossing_expiry(value):
+                    nonlocal armed
+                    raw = original_unpacked(value)
+                    if armed:
+                        armed = False
+                        crossings.append(True)
+                        monkeypatch.setattr(foundation, '_date',
+                            lambda value: real_date(value) - timedelta(days=3))
+                    return raw
+                monkeypatch.setattr(assets, 'expired', expired_before_decode)
+                monkeypatch.setattr(assets, 'unpacked', decode_crossing_expiry)
+            else:
+                monkeypatch.setattr(foundation, '_date', lambda value: real_date(value) - timedelta(days=3))
+                monkeypatch.setattr(assets, 'expired', lambda ref: ref['provenance']['expires_at'] is not None or original_expired(ref))
         host_env(monkeypatch, destination)
         result = (await target.dispatch('portability.activate', {'sessionId': sid,
             'id': staged['id'], 'expectedRevision': staged['revision'], 'path': released['receiptPath']}))['result']
         assert result['phase'] == 'active'
+        if expires_during_transfer == 'during-decode':
+            assert crossings == [True]  # Exactly one injected expiry transition.
         current = target._session(sid)
         saved_store = SessionStore.for_app(target.data_dir, current['workspace'])
         saved = saved_store.load(sid)[0]
@@ -193,6 +223,7 @@ async def test_real_portability_media_and_legacy_closure_after_origin_absent(tmp
                 assert stream.read() == png()
             if expires_during_transfer:
                 screen = assets.message_refs(saved, sid)[1]
+                assert screen['provenance'] == origin
                 with pytest.raises(ValueError, match='expired'):
                     media.resolve_ref(screen)
         assert attachments.file_path(target.data_dir, legacy['id'])[0].read_bytes() == b'%PDF-example'
@@ -347,5 +378,23 @@ async def test_upload_origin_requires_real_admitted_owner_and_original_receipt(t
         legacy['metadata'].pop(assets.MEDIA)
         assert assets.resolve_upload_origin(legacy, session_id='source', attachment_id=row['id'],
                                             input_id='admitted', media_store=media) is None
+    finally:
+        media.close()
+
+
+@pytest.mark.parametrize('preserve_system', [False, True])
+async def test_core_message_nullable_media_metadata_matches_actual_save_ack(tmp_path, monkeypatch, preserve_system):
+    from amplifier_core.message_models import Message
+    _, store, media, row, _ = await uploaded(tmp_path, monkeypatch)
+    try:
+        message = Message(**row)
+        rows = [Message(role='system', content='Host guidance'), message]
+        canonical = store.save('source', rows, {}, preserve_system=preserve_system)
+        assert canonical == store.load('source')[0]
+        refs = assets.message_refs(canonical, 'source')
+        assert refs[0]['provenance']['expires_at'] is None
+        store.acknowledge_media('source', canonical, media)
+        with media.resolve_ref(refs[0]) as stream:
+            assert stream.read() == png()
     finally:
         media.close()

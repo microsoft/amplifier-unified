@@ -39,8 +39,8 @@ async def run():
         observation.update(peer='AWARENESS_SECOND_PEER', revision=2)
         return {'ok': True}
 
-    await install_app_access(session.coordinator, bridge)
-    await install_app_access(session.coordinator, bridge)
+    await install_app_access(session.coordinator, bridge, execution_role='root')
+    await install_app_access(session.coordinator, bridge, execution_role='root')
 
     class Provider:
         name = 'fixture'

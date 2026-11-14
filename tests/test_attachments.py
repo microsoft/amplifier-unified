@@ -140,13 +140,59 @@ async def test_draft_attachment_send_is_durable_and_private(tmp_path):
 
 async def test_runtime_routes_only_matching_message_attachments():
     runtime = RuntimeManager()
-    async def start(*args): pass
+    async def start(*args, **kwargs): pass
     async def request(*args, **kwargs): return kwargs
     runtime.start, runtime._request = start, request
     result = await runtime.send({'id': 'session', 'messages': [
         {'inputId': 'old', 'attachments': [{'id': 'old-file'}]},
         {'inputId': 'current', 'attachments': [{'id': 'current-file'}]}]}, 'Review', 'current', None)
     assert result['attachments'] == [{'id': 'current-file'}]
+
+
+async def test_legacy_fork_context_awaits_bound_encoder_and_preserves_metadata(tmp_path, monkeypatch):
+    """Execute the real Worker.start fork block without starting a runtime."""
+    import ast
+    import inspect
+    from amplifier_web.runtime_worker import Worker
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    saved = upload(tmp_path)
+    metadata = {'amplifier_attachments': {'v': 1, 'items': [saved]}}
+    calls = []
+    async def bound(command):
+        calls.append(command)
+        await asyncio.sleep(0)
+        value = await attachments.encode(command)
+        assert value['metadata']['amplifier_attachments']['items'] == [saved]
+        return value
+    rows = [{'role': 'user', 'text': '', 'attachments': [saved]},
+            {'role': 'assistant', 'text': 'Existing reply'},
+            {'role': 'tool', 'text': 'Do not replay this receipt'}]
+    stored = []
+    async def set_messages(messages):
+        assert not any(inspect.isawaitable(row['content']) for row in messages)
+        stored.extend(messages)
+    coordinator = SimpleNamespace(
+        get_capability=lambda name: bound if name == 'live.attachments.encode' else None,
+        get=lambda name: SimpleNamespace(set_messages=set_messages))
+    tree = ast.parse(inspect.getsource(Worker))
+    start = next(node for node in tree.body[0].body
+                 if isinstance(node, ast.AsyncFunctionDef) and node.name == 'start')
+    block = next(node for node in ast.walk(start)
+                 if isinstance(node, ast.If) and isinstance(node.test, ast.BoolOp)
+                 and ast.unparse(node.test).startswith("config.get('forkContext')"))
+    function = ast.AsyncFunctionDef(name='run', args=ast.arguments(
+        posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]),
+        body=[block], decorator_list=[])
+    module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
+    report = {}
+    scope = {'config': {'forkContext': True, 'messages': rows}, 'report': report,
+             'coordinator': coordinator, 'self': SimpleNamespace(session=SimpleNamespace(coordinator=coordinator))}
+    exec(compile(module, 'Worker.start forkContext', 'exec'), scope)
+    await scope['run']()
+    assert len(calls) == 1 and report['fork_context_messages'] == 2
+    assert stored[0]['metadata'] == metadata
+    assert stored[1] == {'role': 'assistant', 'content': 'Existing reply'}
+    assert not any(block.get('type') == 'image' for block in stored[0]['content'])
 
 
 async def test_attachment_http_images_inline_documents_download(authenticated_client, tmp_path):
@@ -164,13 +210,15 @@ async def test_attachment_http_images_inline_documents_download(authenticated_cl
     assert (await client.get('/api/attachments/' + '0' * 32)).status == 404
 
 
-def test_real_core_loop_live_missing_media_is_truthfully_unavailable():
+def test_real_core_loop_live_receives_multimodal_message():
     python = os.environ.get('UNIFIED_RUNTIME_PYTHON')
     if not python:
-        pytest.skip('Set UNIFIED_RUNTIME_PYTHON for real Core/loop-live unavailable-media verification')
+        pytest.skip('Set UNIFIED_RUNTIME_PYTHON for real Core/loop-live admitted-media verification')
     result = subprocess.run([python, str(Path(__file__).parent / 'fixtures/attachments_runtime_probe.py')], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert '"image_unavailable_without_capability": true' in result.stdout
+    assert '"image_received": true' in result.stdout
+    assert '"canonical_reference_only": true' in result.stdout
+    assert '"actual_checkpoint_before_provider": true' in result.stdout
 
 
 def test_pasted_text_metadata_and_content_survive_reload(tmp_path):

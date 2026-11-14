@@ -1,5 +1,6 @@
 """Portable fixture-contract checks; actual qualification is the Windows job."""
 import ast
+import asyncio
 import importlib.util
 import json
 from pathlib import Path
@@ -75,3 +76,32 @@ def test_preparation_uv_operations_use_owned_tree_not_raw_timeout(fixture_module
     assert not any(isinstance(node.func, ast.Attribute) and node.func.attr == 'run'
                    and isinstance(node.func.value, ast.Name) and node.func.value.id == 'subprocess' for node in calls)
     assert 'jobsSettled' in inspect.getsource(fixture_module.owned_command)
+
+
+def test_native_fixture_has_one_observation_deadline_not_nested_reconcile_timeout(fixture_module):
+    import inspect
+    flow = ast.parse(inspect.getsource(fixture_module.controlled_flow))
+    assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                   and node.func.attr in {'timeout', 'wait_for'} for node in ast.walk(flow))
+    assert 'await asyncio.wait_for(job.wait(), 600)' in inspect.getsource(fixture_module.contained)
+    assert "assert result['status'] == 'succeeded'" in inspect.getsource(fixture_module.controlled_flow)
+    assert "assert await handoff.verify_current(manager, full=True)" in inspect.getsource(fixture_module.controlled_flow)
+
+
+def test_pending_audits_uses_fixed_labels_not_task_names_locals_or_paths(fixture_module):
+    async def run():
+        secret = '/private/path/credential-canary'
+        release = asyncio.Event()
+        async def _payload():
+            assert secret
+            await release.wait()
+        task = asyncio.create_task(_payload(), name=secret)
+        try:
+            await asyncio.sleep(0)
+            facts = fixture_module.pending_audits()
+            assert facts == ['_payload']
+            assert secret not in json.dumps(facts)
+        finally:
+            release.set()
+            await task
+    asyncio.run(run())

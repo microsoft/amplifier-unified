@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import subprocess
 import tempfile
 from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
 import uuid
@@ -85,7 +86,8 @@ async def git(*args: str, cwd: Path | None = None, timeout: int = 60, _env=None)
         from .reset import repository_environment
         env = repository_environment(env)
     process = await asyncio.create_subprocess_exec("git", "-c", "protocol.file.allow=never", "-c", "protocol.ext.allow=never", *args,
-        cwd=cwd, env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        cwd=cwd, env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     try:
         output, error = await asyncio.wait_for(process.communicate(), timeout)
     except BaseException:

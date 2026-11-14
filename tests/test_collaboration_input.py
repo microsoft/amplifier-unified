@@ -351,11 +351,11 @@ async def test_manager_steer_refusal_does_not_revive_retired_or_submit(boundary,
     manager._admit.assert_not_awaited()
 
 
-async def test_manager_approval_is_independent_of_admission_and_does_not_unpark():
+async def test_manager_approval_is_independent_of_admission_and_retains_idle_owner():
     manager = RuntimeManager()
     ready = asyncio.get_running_loop().create_future()
     ready.set_result({})
-    row = {"process": SimpleNamespace(returncode=None), "parked": True,
+    row = {"process": SimpleNamespace(returncode=None), "idle": True,
            "pending": {}, "inflight": set(), "ready": ready}
     manager.workers["recipient"] = row
     manager._locks["recipient"] = asyncio.Lock()
@@ -372,9 +372,9 @@ async def test_manager_approval_is_independent_of_admission_and_does_not_unpark(
     manager._write = AsyncMock(side_effect=write)
     async with manager._locks["recipient"]:
         result = await asyncio.wait_for(manager.collaboration_approval("recipient", "Exact scoped approval"), 1)
-    assert result == {"allowed": True} and row["parked"] is True and not row["pending"]
+    assert result == {"allowed": True} and row["idle"] is True and not row["pending"]
     assert (await manager.approval("recipient", "approval-id", "allow"))["accepted"]
-    assert row["parked"] is True and not row["pending"]
+    assert row["idle"] is True and not row["pending"]
 
 
 async def test_worker_root_stamps_generation_and_strips_forged_approval_child_never_borrows_it():
@@ -416,9 +416,7 @@ async def test_worker_root_stamps_generation_and_strips_forged_approval_child_ne
 
 async def test_worker_approval_question_and_human_answer_bypass_held_command_lock(monkeypatch):
     worker = Worker()
-    worker.parked = True
-    worker.ownership.yielding = True
-    worker.acquire_for_mutation = AsyncMock()
+    worker.shared_handle, worker.activation_gate = handle, gate = object(), object()
     worker.bind_activation = Mock(side_effect=AssertionError("No owner mutation"))
     records, requested = [], asyncio.Event()
     def publish(data):
@@ -441,8 +439,7 @@ async def test_worker_approval_question_and_human_answer_bypass_held_command_loc
                 question.cancel()
                 await asyncio.gather(question, return_exceptions=True)
     assert {"op": "reply", "id": "question", "result": {"allowed": True}} in records
-    assert not worker.approvals and worker.parked and worker.shared_handle is None
-    worker.acquire_for_mutation.assert_not_awaited()
+    assert not worker.approvals and worker.shared_handle is handle and worker.activation_gate is gate
     worker.bind_activation.assert_not_called()
 
 
@@ -478,11 +475,10 @@ async def test_worker_steering_bridge_runs_under_command_and_activation_ownershi
     worker.session, worker.execution, worker.shared_handle = object(), object(), object()
     worker.controls, worker.runtime, worker.activation = boundary.controls, boundary.runtime, boundary.activation
     worker.runtime.accepted = {}  # Native Runtime tracks admitted input identities.
-    worker.acquire_for_mutation = AsyncMock()
+    retained = worker.session, worker.shared_handle
     worker.bind_activation = Mock(return_value="bound-token")
     worker.activation_gate = SimpleNamespace(reset=Mock())
     worker.bridge = AsyncMock(return_value=boundary.permission)
-    worker.park = AsyncMock()
     records = []
     monkeypatch.setattr("amplifier_web.runtime_worker.publish", records.append)
     async def adapter(controls, runtime, args, activation, authorize, stop_epoch):
@@ -496,7 +492,7 @@ async def test_worker_steering_bridge_runs_under_command_and_activation_ownershi
     monkeypatch.setattr("amplifier_web.collaboration_input.steer", adapter)
     await worker.command({"op": "control", "id": "operation", "operation": "coordination.steer",
                           "arguments": boundary.args})
-    worker.acquire_for_mutation.assert_awaited_once()
+    assert (worker.session, worker.shared_handle) == retained
     worker.bridge.assert_awaited_once_with("coordination.admit", boundary.args)
     assert worker.context_bindings[boundary.args['inputId']]['interruptionRevision'] == 0
     worker.activation_gate.reset.assert_called_once_with("bound-token")
@@ -504,18 +500,16 @@ async def test_worker_steering_bridge_runs_under_command_and_activation_ownershi
                         "result": {"accepted": True, "mode": "steer", "disposition": "queued"}}]
 
 
-async def test_parked_worker_steer_does_not_reacquire_or_remount(monkeypatch):
+async def test_unmounted_worker_steer_has_no_effect_or_new_owner(monkeypatch):
     worker = Worker()
-    worker.parked = True
-    worker.acquire_for_mutation = AsyncMock(side_effect=AssertionError("Must not reacquire"))
     worker.bind_activation = Mock(side_effect=AssertionError("No owner"))
     records = []
     monkeypatch.setattr("amplifier_web.runtime_worker.publish", records.append)
     await worker.command({"op": "control", "id": "operation", "operation": "coordination.steer",
                           "arguments": {"targetGenerationId": "old"}})
     assert len(records) == 1 and not records[0]["result"]["accepted"]
-    assert records[0]["result"]["effect"] == "none" and worker.parked
-    worker.acquire_for_mutation.assert_not_awaited()
+    assert records[0]["result"]["effect"] == "none" and worker.shared_handle is None
+    assert worker.session is None and worker.execution is None
     worker.bind_activation.assert_not_called()
 
 

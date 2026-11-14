@@ -118,7 +118,7 @@ CODE_LABELS = {
 ADMISSION_REASONS = {
     "Session is not ready": "worker_not_ready",
     "Session is not running": "worker_not_running",
-    "The session is parked and has no active shared writer.": "worker_parked",
+    "The session has no active shared writer.": "worker_no_writer",
     "The session has not finished loading successfully.": "worker_not_loaded",
     "The conversation already has a worker. Retry the bundle change after it settles.": "replacement_has_worker",
     "Already started": "worker_already_started",
@@ -1700,9 +1700,9 @@ async def journey(root, wheel, report):
         async with asyncio.timeout(90):
             while True:
                 assert service._session(sid).get("status") != "error"
-                # The first idle/parked notification may precede delivery of
+                # The first idle notification may precede delivery of
                 # this input. Require this turn's actual saved response too.
-                if row.get("parked"):
+                if row.get("idle"):
                     history = history_store.load_messages()
                     if any(m["role"] == "assistant" and "Default command caf\u00e9 verified" in str(m.get("content"))
                            for m in history):

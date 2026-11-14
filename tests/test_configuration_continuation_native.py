@@ -3,7 +3,7 @@
 Provider replies and goal evaluation are scripted. Process retirement/loading
 are transport adapters; they use the actual configuration save/readback controls
 but do not claim subprocess replacement or live-provider qualification. The
-native goal yield, checkpoint/park, writer lease and continuation admission run
+    native goal yield, settled checkpoint, writer lease and continuation admission run
 without manufactured generation events or a fabricated boundary receipt.
 """
 import asyncio
@@ -72,7 +72,6 @@ class SettingsHost(OwnerUpdateHost):
             if guard:
                 guard()
             worker = self.roots[session['id']]
-            await worker.acquire_for_mutation()
             if self.needs_mount:
                 path = override_path(session['id'])
                 if path.exists():

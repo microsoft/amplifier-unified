@@ -123,17 +123,17 @@ providers:
         await asyncio.wait_for(observed.wait(),10)
         first=json.loads(json.dumps(app.state['updates']['drain']))
         assert first['workers'][sid]['ready'] is False
-        # Exercise the race where parking wakes immediate retention before
+        # Exercise the race where idle wakes immediate retention before
         # the host has refreshed its saved boundary observation.
         runtime.retention.settings['max_warm_workers']=0
         (root/'release-child').write_text('finish')
-        # Below the unchanged 60-second fallback: native park must wake the
+        # Below the unchanged 60-second fallback: native idle must wake the
         # production owner. The fixture never polls prepare() for readiness.
         await asyncio.wait_for(ready.wait(),45)
         saved=json.loads(json.dumps(app.state['updates']['drain']))
         assert saved['workers'][sid]['ready']
         assert saved['workers'][sid]['yieldedGoal']['turns_used']==2,saved
-        assert sid not in runtime.workers or runtime.workers[sid]['parked']
+        assert sid not in runtime.workers or runtime.workers[sid]['idle']
         saved['phase']='replacing';app.state['updates']['drain']=saved;app._publish()
         await app.close()
         app,runtime=create()
@@ -150,7 +150,7 @@ providers:
                 # and the exact accepted input before inspecting final parking.
                 if (len({row['pid'] for row in calls})==2 and len(returns)==1
                         and json.loads(returns[0][0]).get('delivery')=='accepted'
-                        and runtime.workers.get(sid,{}).get('parked')):break
+                        and runtime.workers.get(sid,{}).get('idle')):break
                 if app._session(sid).get('error'):raise AssertionError(app._session(sid)['error'])
                 await asyncio.sleep(.05)
         await update_drain.finish(app.update_manager,'installed')
@@ -169,7 +169,7 @@ providers:
         (root/'runtime-provenance.json').write_text(json.dumps({str(pid):next(row['modules'] for row in calls if row['pid']==pid) for pid in pids},indent=2))
         (root/'drain-receipt.json').write_text(json.dumps(saved,indent=2))
         print(json.dumps({'workerProcesses':2,'originalInputCount':1,'continuations':1,
-            'childResultRetained':True,'parkedBeforeRestart':True,'resumedUsedTurns':2,'cap':3,
+            'childResultRetained':True,'idleBeforeRestart':True,'resumedUsedTurns':2,'cap':3,
             'healthyReceipt':'fixture-controlled','provider':'scripted-offline',
             'readinessDriver':'real-update-loop/native-settlement-event','boundaryObservations':len(observations)}))
     finally:await app.close()

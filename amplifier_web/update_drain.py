@@ -359,6 +359,25 @@ async def prepare(manager, release):
         await observe_waiters(manager)
         if any(not row.get('ready') and not row.get('suppressed') for row in prior['workers'].values()):
             return False
+        # Saved settings freshness waits for the enrolled writer's checkpoint.
+        # Once positively ready, retire that exact idle owner rather than
+        # weakening the application gate's real writer-absence requirement.
+        for sid, row in list(prior['workers'].items()):
+            session = service._session(sid)
+            if (row.get('ready') and not row.get('suppressed') and session.get('configurationPending')
+                    and not session.get('configurationBusy') and not session.get('pendingConfiguration')
+                    and not session.get('configurationOperationFence')):
+                if (service.state['updates'].get('drain') is not prior
+                        or continuation_guard(service, {'updateYield': row}, authority_only=True)):
+                    return False
+                if sid in service.runtime.workers:
+                    if not await service.runtime.retire_idle(sid, row['owner'], guard=lambda:
+                            service.state['updates'].get('drain') is not prior
+                            or continuation_guard(service, {'updateYield': row}, authority_only=True)):
+                        return False
+                if (service.state['updates'].get('drain') is not prior
+                        or continuation_guard(service, {'updateYield': row}, authority_only=True)):
+                    return False
     return not held(service) and not manager.app_busy()
 
 
@@ -540,6 +559,7 @@ async def finish(manager, reason):
             service._publish_changes(globals={'updates'})
         from .message_delivery import find_message
         from .execution import ensure_turn
+        from .external_conversation import is_shared
         for sid, identity in drain['messages']:
             async with service.lock:
                 session = service._session(sid)
@@ -556,15 +576,14 @@ async def finish(manager, reason):
                 # leaves this input uncertain and the remaining inputs queued.
                 drain['releasingInput'] = [sid, identity]
                 service._delivery(session, identity, 'sending')
-                active = session.get('collaborationGeneration') or {}
-                if active.get('id') and not active.get('terminal'):
-                    message['steering'] = {'generationId': active['id'], 'allowNextTurn': True,
-                                           'disposition': 'sending'}
-                else:
+                if not is_shared(session):
                     session['status'] = 'working'
-                    ensure_turn(session, identity, message['text'])
+                    if session.get('externalAgent'):
+                        ensure_turn(session, identity, message['text'])
                 service._publish_changes(sessions={sid}, globals={'updates'})
-                captured = copy.deepcopy(session)
+                captured = ({'id': sid, 'externalAgent': {'participation': 'shared'},
+                             'interruptionRevision': session.get('interruptionRevision', 0)}
+                            if is_shared(session) else copy.deepcopy(session))
             try:
                 await service._send(captured, message['text'], identity, preserve_draft=True)
             except Exception:
@@ -585,6 +604,7 @@ async def finish(manager, reason):
             drain.pop('releasingInput', None)
             drain['phase'] = 'released'
             service._publish_changes(globals={'updates'})
+        service._task(service.external_conversations.resume_pending())
         targets = service.db.execute("""SELECT DISTINCT json_extract(receipt,'$.target.sessionId') FROM commands
             WHERE json_extract(receipt,'$.commandAction')='coordination.send'
             AND json_extract(receipt,'$.delivery')='queued'""").fetchall()
@@ -608,10 +628,5 @@ async def defer_send(service, sid, identity, preserve_draft=False):
             return {'accepted': True, 'inputId': identity, 'delivery': 'queued_for_update'}
         # The gate released while we awaited the commit lock. Continue that
         # same first admission; never append to an already released drain.
-        active = session.get('collaborationGeneration') or {}
-        message.pop('steering', None)
-        if active.get('id') and not active.get('terminal'):
-            message['steering'] = {'generationId': active['id'], 'allowNextTurn': True,
-                                   'disposition': 'sending'}
         captured = copy.deepcopy(session)
     return await service._send(captured, message['text'], identity, preserve_draft=preserve_draft)

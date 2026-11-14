@@ -4,8 +4,20 @@ import json
 import os
 from pathlib import Path
 import signal
+import sys
 import tempfile
 import time
+
+if installed := os.environ.get('AMPLIFIER_TEST_INSTALLED_PACKAGE'):
+    if not Path(installed).is_absolute() or not sys.flags.isolated or not sys.dont_write_bytecode:
+        raise ValueError('Installed fixture requires an absolute package path and Python -I -B')
+    import amplifier_web
+    package = Path(installed).resolve()
+    if (Path(amplifier_web.__file__).resolve() != package / '__init__.py'
+            or {Path(path).resolve() for path in amplifier_web.__path__} != {package}):
+        raise ValueError('Fixture imported a different amplifier_web package')
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from aiohttp import web
 import settings_ui_server as fixture
 
@@ -19,8 +31,13 @@ class Runtime(fixture.Runtime):
         self.known = set()
         self.accepted = None
         self.status_events = []
+        self.captured_sends = []
 
     async def send(self, session, text, input_id, emit):
+        if text.startswith('Captured target '):
+            self.captured_sends.append({'sessionId': session['id'], 'inputId': input_id, 'text': text})
+            await emit('runtime.status', {'sessionId': session['id'], 'status': 'idle'})
+            return {'accepted': True}
         raise RuntimeError('Synthetic lost reply')
 
     async def delivery(self, session, input_id):
@@ -48,9 +65,14 @@ async def main(home):
     app = await fixture.main(home)
     service = app['service']
     service.state['updates'].update(items=[], available=0)
+    target_a = service._session()['id']
+    await service.dispatch('session.create', {})
+    target_b = service._session()['id']
+    await service.dispatch('session.rename', {'id': target_b, 'title': 'Captured target B'})
+    await service.dispatch('session.select', {'id': target_a})
     await service.dispatch('session.rename', {'id': service._session()['id'], 'title': 'Delivery recovery fixture'})
     attachment = await service.dispatch('attachment.add', {'name': 'reference.txt', 'base64': 'UmV0YWluIHRoaXMgYXR0YWNobWVudC4='})
-    attachment_id = attachment['state']['sessions'][0]['draftAttachments'][0]['id']
+    attachment_id = service.clients.attachments(service._session(target_a))[0]['id']
     try:
         await service.dispatch('conversation.send', {'text': 'Recover this synthetic message with its attachment.', 'attachmentIds': [attachment_id]}, command_id='original-fixture-input')
     except RuntimeError:
@@ -60,7 +82,8 @@ async def main(home):
         binding = runtime.accepted
         return web.json_response({'sent': runtime.sent, 'checked': runtime.checked, 'retried': runtime.retried,
             'accepted': {'sessionId': binding[0]['id'], 'inputId': binding[1]} if binding else None,
-            'statusEvents': runtime.status_events})
+            'statusEvents': runtime.status_events, 'capturedSends': runtime.captured_sends,
+            'targetA': target_a, 'targetB': target_b})
     status_lock = asyncio.Lock()
     async def status(request):
         if request.headers.get('Authorization') != f"Bearer {app['control_token']}":

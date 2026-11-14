@@ -75,7 +75,7 @@ async def production(tmp_path, *, legacy=False, immutable=False, streaming=True)
     async def bridge(operation,args):
         if operation=='context.manifest':return {'surfaces':[],'inputIds':[]}
         return {}  # No Work obligation; no host/vendor IO in this synthetic fixture.
-    await install_app_access(c,bridge)
+    await install_app_access(c,bridge, execution_role='root')
     transform=c.get_capability('web.provider_transform')
     selected=SelectedProvider(raw,{'model':'selected-model','effort':'high','max_output_tokens':321},transform)
     await c.mount('providers',selected,name='fixture')

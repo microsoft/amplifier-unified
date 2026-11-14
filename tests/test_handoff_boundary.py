@@ -26,7 +26,7 @@ def boundary_worker():
     worker.session = SimpleNamespace(coordinator=coordinator)
     worker.controls = SimpleNamespace(persist=Mock())
     worker.runtime = SimpleNamespace(generation=None, queued_inputs=0, inbox=asyncio.Queue())
-    worker.parked = True
+    worker.checkpoint_idle = AsyncMock(return_value=True)
     return worker, loop, hooks
 
 
@@ -39,7 +39,7 @@ async def test_worker_requires_actual_settlement_not_idle_event(pending):
     if pending == 'operations': worker.operation_ids.add('op')
     if pending == 'inputs': worker.runtime.queued_inputs = 1
     if pending == 'children': loop._active_jobs = lambda: ['child']
-    if pending == 'checkpoint': worker.parked = False
+    if pending == 'checkpoint': worker.checkpoint_idle.return_value = False
     answer = await inspect(worker, 'move')
     assert answer['ready'] is False and pending in answer['waitingFor']
     assert not worker.shutdown.is_set()

@@ -3,6 +3,7 @@
 This is not admission, request membership, a model-read receipt or a goal ledger.
 Only native root lifecycle and live execution observations can advance it.
 """
+import copy
 import math
 import time
 
@@ -56,6 +57,8 @@ def public(value, expected):
             result[key] = value[key]
     if identity(value.get('generationId')):
         result['generationId'] = value['generationId']
+    if value['phase'] == 'failed' and isinstance(value.get('failure'), dict):
+        result['failure'] = copy.deepcopy(value['failure'])
     return result
 
 
@@ -90,6 +93,23 @@ def _save(session, exact, status, *, generation_start=None, closed=False):
 def _root(session, event):
     return (identity(session.get('id')) is not None and event.get('sessionId') == session.get('id')
             and event.get('rootSessionId') == session.get('id'))
+
+
+def record_failure(session, failure):
+    """Keep the existing diagnosis beside only its exact failed input receipt."""
+    gen = failure.get('generationId')
+    for exact in failure.get('inputIds') or [failure.get('inputId')]:
+        if not identity(exact):
+            continue
+        entry = _entry(session, exact)
+        status = entry.get('inputStatus', {})
+        if status.get('phase') != 'failed' or not gen or status.get('generationId') != gen:
+            continue
+        saved = copy.deepcopy(failure)
+        support = ((status.get('failure') or {}).get('runtimeReport') or session.get('runtimeReport') or {}).get('support')
+        if support:
+            saved['runtimeReport'] = {'support': copy.deepcopy(support)}
+        entry['inputStatus'] = {**status, 'failure': saved}
 
 
 def _current_generation_epoch(session, gen):
