@@ -156,6 +156,14 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
             return ToolResult(success=True, output={
                 'receipt': f'RECEIPT-{index}', 'outcome': 'completed', 'filler': wire.filler})
 
+    class AppControl:
+        # Host observation delivery is explicitly gated on the mounted app tool.
+        name, description = 'app_control', 'Synthetic host observation surface'
+        input_schema = {'type': 'object'}
+
+        async def execute(self, arguments):
+            raise AssertionError('The fixture must not invoke unrelated host tools')
+
     async def observe(event, data):
         wire.events.append(dict(data))
         return HookResult()
@@ -164,6 +172,7 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
         return 'Preserve ORBIT and every completed outcome. Never replay operations.'
 
     await coordinator.mount('tools', Record(), name='record')
+    await coordinator.mount('tools', AppControl(), name='app_control')
     await context.set_system_prompt_factory(instructions)
     coordinator.hooks.register('context:compaction_finished', observe, name='fable-compaction-witness')
     coordinator.hooks.register('orchestrator:provider_overflow_recovery', observe, name='fable-overflow-witness')
@@ -183,6 +192,11 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
                 {'role': 'tool', 'name': 'record', 'tool_call_id': f'call-{index}',
                  'content': json.dumps({'receipt': f'RECEIPT-{index}', 'outcome': 'completed',
                                        'filler': FILLER})}])
+        # Ordinary saved conversations have more than one accepted input. The
+        # existing boundary retains the latest two; make the older tool prefix
+        # eligible without changing its retention policy for this test.
+        seed.extend([{'role': 'user', 'content': 'Accepted correction: retain ORBIT.'},
+                     {'role': 'assistant', 'content': 'Correction acknowledged.'}])
         await context.set_messages(seed)
         wire.effects = list(range(1, STEPS + 1))
     elif seed_kind == 'oversized-tail':
@@ -218,7 +232,7 @@ async def test_cold_nondefault_fable_compacts_inside_one_ordinary_tool_turn(reje
         assert wire.effects == list(range(1, STEPS + 1))
         assert [row['content'] for row in rows if row['role'] == 'user'
                 and not (row.get('metadata') or {}).get('ephemeral')] == (
-                    [seed[0]['content'], prompt] if seed else [prompt])
+                    [seed[0]['content'], seed[-2]['content'], prompt] if seed else [prompt])
         assert [digest(row) for row in rows[:len(seed)]] == seed_hashes
         tools = [row for row in rows if row['role'] == 'tool']
         assert [row['tool_call_id'] for row in tools] == [f'call-{i}' for i in wire.effects]
