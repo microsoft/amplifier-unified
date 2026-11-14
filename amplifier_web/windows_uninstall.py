@@ -53,6 +53,10 @@ def _form(name, forms):
     return any(re.fullmatch(form, name, re.ASCII) for form in forms)
 
 
+def _folder(name):
+    return name in _FOLDERS or _form(name, _FOLDER_FORMS)
+
+
 def sort(names):
     """Sort a folder's own listing into what each step deletes.
 
@@ -114,6 +118,27 @@ def completed(root):
 
 class Busy(RuntimeError):
     """Another Amplifier window starts or removes this installation right now."""
+
+
+def question(message, *, cancel=False):
+    """Ask with No as the default answer. Returns "yes", "no" or "cancel".
+
+    With `cancel` there are three buttons. Without it the question carries the
+    warning icon: Yes there deletes the person's data. Closing a three-button
+    question counts as Cancel; a two-button question cannot be closed.
+    """
+    if os.name != "nt":
+        raise RuntimeError("The uninstall question requires native Windows.")
+    dialog = C.WinDLL("user32", use_last_error=True).MessageBoxW
+    dialog.argtypes = [C.c_void_p, C.c_wchar_p, C.c_wchar_p, C.c_uint]
+    dialog.restype = C.c_int
+    # In front of other windows, as `windows_installation.owner_notice`
+    # (system-modal, foreground, topmost); the second button is the default.
+    flags = 0x51000 | 0x100 | (0x40 | 0x3 if cancel else 0x30 | 0x4)
+    result = dialog(None, message, "Amplifier Unified", flags)
+    if not result:
+        raise OSError("The uninstall question could not be displayed.")
+    return {6: "yes", 7: "no"}.get(result, "cancel" if cancel else "no")
 
 
 @contextmanager
@@ -199,9 +224,10 @@ def _clear(owned, names, deadline, wait):
     Every deletion of this module goes through here. Until `deadline` a
     closing program gets time to release its files.
     """
-    names = list(names)
-    if JOURNAL in names or sort(names)["foreign"]:
-        raise ValueError("Not an entry of this installation.")  # Never the journal, never a foreign name.
+    names, groups = list(names), sort(names)
+    # Never the journal, never a foreign name, never the running program.
+    if JOURNAL in names or groups["foreign"] or groups["running"]:
+        raise ValueError("Not an entry that uninstall deletes in this step.")
     left = names
     while True:
         for name in left:
@@ -238,33 +264,42 @@ def remove_data(owned, *, wait=time.sleep):
         raise Held(held)
 
 
-def remove_program(owned, *, wait=time.sleep):
-    """Delete caches and program files; what the launcher's own check needs goes last.
+def remove_program(owned, *, last=False, wait=time.sleep):
+    """Delete caches and program files. With `last`: what the launcher's own check needs.
 
+    Uninstall removes the Windows entries between the two calls: until then a
+    second uninstall can still start from its entry and finish the removal.
     The two folders of the running program are not touched. Returns what
     stayed. Nothing here holds the person's data, so nothing here stops.
     """
     from . import windows_consumer_shell as shell
-    groups, deadline = sort(owned.names()), time.monotonic() + shell.SETTLE_SECONDS
-    return _clear(owned, groups["program"], deadline, wait) + _clear(owned, groups["last"], deadline, wait)
+    names = sort(owned.names())["last" if last else "program"]
+    return _clear(owned, names, time.monotonic() + shell.SETTLE_SECONDS, wait)
 
 
 def remaining(owned):
-    """What is in the folder now: this installation's own leftovers, and what is foreign."""
+    """What is in the folder now, sorted for the step after exit, and what is foreign.
+
+    `contents`: the running program's folders and program folders that a
+    program still used; that step empties and removes them. `folders`: data
+    folders that are empty and that Windows still keeps; that step removes one
+    only while it is empty. `files`: this installation's own files.
+    """
     groups = sort(owned.names())
-    own = groups["setup"] + groups["data"] + groups["program"] + groups["last"]
-    return {"folders": [name for name in own if name in _FOLDERS or _form(name, _FOLDER_FORMS)],
-            "files": [name for name in own if name not in _FOLDERS and not _form(name, _FOLDER_FORMS)],
+    program = groups["program"] + groups["last"]
+    return {"contents": groups["running"] + [name for name in program if _folder(name)],
+            "folders": groups["data"],
+            "files": groups["setup"] + [name for name in program if not _folder(name)],
             "foreign": groups["foreign"]}
 
 
 def finish_after_exit(root, token, rest):
     """Start the step that removes the running program's files after this process has exited.
 
-    It also removes the named leftovers: a folder only when it is empty. After
-    this call the process must write nothing into the installation and end.
+    After this call the process must write nothing into the installation and
+    end. A return means that the step was started, not that the folder is gone.
     """
     from . import windows_removal
     return windows_removal.finish_after_exit(
-        root, token, contents=RUNNING, folders=rest["folders"], files=rest["files"],
+        root, token, contents=rest["contents"], folders=rest["folders"], files=rest["files"],
         wait_for=(os.getpid(), os.getppid()), seconds=SECONDS_AFTER_EXIT)
