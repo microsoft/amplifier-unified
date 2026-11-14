@@ -8,7 +8,7 @@ import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
 const {MessageDelivery}=await server.ssrLoadModule('/src/message-delivery.jsx');
 const {readOutbox,outboxMessages,useMessageOutbox}=await server.ssrLoadModule('/src/message-outbox.jsx');
-const {deliveryScope,nativeDeliverySource,deliveryTargetMatches,retainedDeliveryTarget,freshRetrySource}=await server.ssrLoadModule('/src/pending-delivery-checks.js');
+const {deliveryScope,deliverySourceScope,nativeDeliverySource,deliveryTargetMatches,retainedDeliveryTarget,freshRetrySource}=await server.ssrLoadModule('/src/pending-delivery-checks.js');
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>server.close());
 
@@ -384,6 +384,7 @@ test('fresh failed native new-chat retry marks witness binding; external retry s
  assert.deepEqual(freshRetrySource({id:'chat',workspace:'/fixture',runtimeSessionId:'native'}),{
   expectedSource:{workspace:'/fixture',nativeIdentity:'native'}});
  assert.deepEqual(freshRetrySource(undefined,{setup:{externalAgentId:'external'}}),{});
+ assert.deepEqual(freshRetrySource(undefined,{setup:{externalAgentIds:['alpha','beta']}}),{});
  assert.deepEqual(freshRetrySource({id:'chat',externalAgent:{id:'external'}}),{});
 });
 
@@ -433,4 +434,24 @@ test('exact scoped acknowledgement survives remount without adopting or clearing
  await act(async()=>api.update('new-source',{status:'unknown',error:'Late transport error'}));
  assert.deepEqual(api.entries,kept,'Late errors cannot recreate an acknowledged payload');
  assert.deepEqual(outboxMessages([],api.entries,'chat',scope).map(row=>row.id),['old-source']);
+});
+
+test('external public-input receipts bind the host conversation without inventing a native identity',()=>{
+ const frame={client:{historyScope:'account-one',hostInstanceId:'host-one'}};
+ const source={sessionId:'external-room',workspace:'/fixture'};
+ assert.equal(deliverySourceScope(frame,source,'external-room'),deliveryScope(frame,{id:'external-room',workspace:'/fixture'}));
+ assert.equal(deliverySourceScope(frame,source),null,'Native recovery cannot consume an external receipt');
+ assert.equal(deliverySourceScope(frame,{...source,sessionId:'another-room'},'external-room'),null);
+ assert.equal(deliverySourceScope(frame,{...source,nativeIdentity:'external-room'},'external-room'),null,'Execution and public-room identities remain separate');
+ assert.equal(deliverySourceScope(frame,{...source,workspace:''},'external-room'),null);
+ assert.notEqual(deliverySourceScope(frame,{...source,workspace:'/elsewhere'},'external-room'),deliveryScope(frame,{id:'external-room',workspace:'/fixture'}));
+});
+
+test('native receipt source verification keeps the native store identity and history scope',()=>{
+ const frame={client:{historyScope:'account-one',hostInstanceId:'host-one'}};
+ const source={workspace:'/fixture',nativeIdentity:'native-run'};
+ assert.equal(deliverySourceScope(frame,source),deliveryScope(frame,{workspace:'/fixture',runtimeSessionId:'native-run'}));
+ assert.equal(deliverySourceScope(frame,{workspace:'/fixture',sessionId:'native-run'}),null);
+ assert.notEqual(deliverySourceScope({...frame,client:{historyScope:'other-account'}},source),deliverySourceScope(frame,source));
+ assert.equal(deliverySourceScope(frame,source,'external-room'),null);
 });

@@ -844,6 +844,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.on_shutdown.append(shutdown)
 
     async def confirm_started(app):
+        if background_work:
+            # Resume only durable, positively unsubmitted shared-room work.
+            # Configuration and runtime ownership are installed before attach.
+            service._task(service.external_conversations.resume_pending())
         from .update_readiness import wait_for_readiness, recovery_candidate
         if recovery_candidate(service.update_manager):
             service.update_manager.readiness_task = asyncio.create_task(
