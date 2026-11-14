@@ -982,6 +982,41 @@ async def test_check_is_passive_and_explains_uncertainty(recovery):
         await app.dispatch('conversation.retry', recovery_args(app), origin='agent', caller_session_id=app._session()['id'])
 
 
+async def test_unknown_delivery_check_skips_history_saves_and_its_own_command_receipt(recovery, monkeypatch):
+    app, runtime, _ = recovery
+    args = recovery_args(app)
+    before = app.db.execute('SELECT id,receipt FROM commands ORDER BY id').fetchall()
+    def forbidden(*args, **kwargs):
+        raise AssertionError('A passive unknown lookup must not refresh or save the conversation')
+    with monkeypatch.context() as isolated:
+        isolated.setattr(app.history, 'ensure_loaded', AsyncMock(side_effect=forbidden))
+        isolated.setattr(app, '_save', forbidden)
+        isolated.setattr(app, '_publish_changes', forbidden)
+        result = await app.dispatch('conversation.delivery', args, command_id='passive-check')
+    assert result['hostInstanceId'] == app.instance_id
+    assert result['result']['delivery'] == 'unknown'
+    assert app.db.execute('SELECT id,receipt FROM commands ORDER BY id').fetchall() == before
+    assert not runtime.sent and not runtime.started and not runtime.retries
+
+
+async def test_delivery_probe_copies_identity_not_unrelated_execution(recovery):
+    app, runtime, _ = recovery
+    session = app._session()
+    class NoCopy:
+        def __deepcopy__(self, memo):
+            raise AssertionError('Unrelated execution copied')
+    missing = object()
+    original = session.get('execution', missing)
+    session['execution'] = NoCopy()
+    try:
+        assert (await app._check_delivery(session['id'], 'original'))['delivery'] == 'unknown'
+    finally:
+        if original is missing:
+            session.pop('execution', None)
+        else:
+            session['execution'] = original
+
+
 async def test_check_reconciles_positive_evidence_and_original_receipt(recovery):
     app, runtime, args = recovery
     runtime.evidence = 'accepted'
@@ -1168,6 +1203,39 @@ async def test_retry_after_restart_requires_explicit_action_and_not_outbox(recov
         assert runtime.sent[0][2] == 'original'
     finally:
         await restored.close()
+
+
+async def test_cold_positive_dispatch_commits_original_receipt_and_survives_restart(recovery, tmp_path, monkeypatch):
+    app, _, _ = recovery
+    sid = app._session()['id']
+    original_texts = [(m['id'], m.get('text')) for m in app._session()['messages']]
+    await app.close()
+    app._test_closed = True
+    runtime = RecoveryRuntime()
+    runtime.evidence = 'accepted'
+    restored = AppService(tmp_path, runtime, workspace=tmp_path)
+    try:
+        with monkeypatch.context() as isolated:
+            isolated.setattr(restored.history, 'ensure_loaded', AsyncMock(side_effect=AssertionError('No native history refresh')))
+            checked = await restored.dispatch('conversation.delivery', {'sessionId': sid, 'inputId': 'original'}, command_id='cold-check')
+        assert checked['result']['delivery'] == 'accepted'
+        assert [(m['id'], m.get('text')) for m in restored._session(sid)['messages']] == original_texts
+        # Read another connection before shutdown can create a final checkpoint.
+        database = restored.db.execute('PRAGMA database_list').fetchone()[2]
+        with sqlite3.connect(database) as reader:
+            receipt = json.loads(reader.execute('SELECT receipt FROM commands WHERE id=?', ('original',)).fetchone()[0])
+            assert receipt['delivery'] == 'accepted'
+            assert reader.execute('SELECT 1 FROM commands WHERE id=?', ('cold-check',)).fetchone() is None
+        assert not runtime.sent and not runtime.retries and not runtime.started
+    finally:
+        await restored.close()
+    resumed = AppService(tmp_path, RecoveryRuntime(), workspace=tmp_path)
+    try:
+        checked = await resumed.dispatch('conversation.delivery', {'sessionId': sid, 'inputId': 'original'})
+        assert checked['result']['delivery'] == 'accepted'
+        assert [(m['id'], m.get('text')) for m in resumed._session(sid)['messages']] == original_texts
+    finally:
+        await resumed.close()
 
 
 async def test_unknown_input_not_saved_is_distinct_and_cannot_resend(recovery):

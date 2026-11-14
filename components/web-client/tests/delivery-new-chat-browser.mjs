@@ -187,7 +187,22 @@ async function runCase(kind){
     creation:{id:'old-creation',setup:{workspace:'/fixture'}},
    }])),{key:outboxKey,scope:newScope,text:submitted});
    await page.reload();await expect(composer).toBeVisible();
-   await page.getByRole('button',{name:'Retry',exact:true}).click();
+   const retained=(await outbox())[0],beforeClose=actions.length;
+   await page.getByRole('button',{name:'Close delivery item',exact:true}).click();
+   await expect(page.locator('[data-input-id="old-failed"]')).toHaveCount(0);
+   assert.deepEqual(await outbox(),[{...retained,closed:true}]);
+   assert.deepEqual(actions.slice(beforeClose).filter(row=>row.action!=='shell.report'),[],'Close changes no delivery or saved view; ordinary shell readiness may report independently');
+   state.selectedSessionId='previous';await emit();
+   await expect(page.getByRole('banner')).toContainText('Previous conversation');
+   state.selectedSessionId=null;await emit();
+   await expect(page.getByRole('banner')).toContainText('New chat');
+   await page.reload();await expect(composer).toBeVisible();
+   const closed=page.locator('details').filter({has:page.locator('summary').filter({hasText:'Closed delivery items (1)'})});
+   await closed.locator('summary').click();
+   await expect(closed.getByText(submitted,{exact:true})).toBeVisible();
+   await closed.getByRole('button',{name:'Reopen delivery item',exact:true}).click();
+   assert.equal(count('session.create'),0);assert.equal(count('conversation.send'),0);
+   await page.locator('[data-input-id="old-failed"]').getByRole('button',{name:'Retry',exact:true}).click();
   }else{
    await composer.fill(submitted);
    const sendButton=page.getByRole('button',{name:'Send message',exact:true});
