@@ -356,7 +356,14 @@ async def post_login(request: web.Request) -> web.Response:
     if browser_entry.is_windows():
         return web.Response(text=browser_entry.REOPEN, status=403)
     form = await request.post()
-    if not authenticate_pam(str(form.get("username", "")), str(form.get("password", ""))):
+    username, password = str(form.get("username", "")), str(form.get("password", ""))
+    bridge = request.app["server_config"].get("host_pam")
+    if bridge is not None:
+        from .host_pam import authenticate
+        accepted = await authenticate(bridge, username, password)
+    else:
+        accepted = authenticate_pam(username, password)
+    if not accepted:
         url = login_url(request.query.get("next"))
         raise web.HTTPSeeOther(url + ("&" if "?" in url else "?") + "error=1")
     response = web.HTTPSeeOther(validate_next_path(request.query.get("next")))

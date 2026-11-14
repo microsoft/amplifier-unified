@@ -309,7 +309,9 @@ def test_windowless_notice_uses_owner_dialog_without_shell_or_trust_change(monke
     monkeypatch.setattr(setup.os, "name", "nt")
     monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **kw: SimpleNamespace(MessageBoxW=dialog), raising=False)
     assert setup.owner_notice("Review the local certificate?", confirm=True) is expected
-    assert calls == [(None, "Review the local certificate?", "Amplifier Unified", 0x44)]
+    # Information icon, Yes/No, and in front of other windows: a windowless
+    # launcher's question must not wait behind the browser.
+    assert calls == [(None, "Review the local certificate?", "Amplifier Unified", 0x50044)]
     assert dialog.restype is ctypes.c_int
 
 
@@ -390,11 +392,121 @@ def test_browser_trust_requires_windows_roots_and_exact_private_leaf(monkeypatch
         setup.browser_trust_ready(["https://example.invalid/api/health"], pin)
 
 
+def test_first_setup_creates_its_identity_once_before_the_cli_checks_tls(installation):
+    root, value, calls, _ = installation
+    events = []
+    asyncio.run(setup.prepare_background(
+        root, root / "host/Scripts/amplifier-unified.exe", {"PUBLIC": "only"},
+        identity=lambda: events.append(list(calls))))
+    assert events == [[("config", "set", "bind", "[127.0.0.1]")]]
+    assert calls[1] == ("setup-tls",)
+    # A registered installation keeps its identity: nothing is created again.
+    owned(installation)
+    asyncio.run(setup.prepare_background(
+        root, root / "host/Scripts/amplifier-unified.exe", {"PUBLIC": "only"},
+        identity=lambda: pytest.fail("An existing installation's identity is never replaced")))
+
+
+@pytest.fixture
+def trust_step(tmp_path, monkeypatch):
+    """The key-less trust step with every Windows effect recorded."""
+    from amplifier_web import windows_trust
+    state = {"ready": [False, True], "candidate": b"saved-root", "add": "added", "policy": False}
+    events = []
+    monkeypatch.setattr(setup, "browser_trust_ready", lambda urls, pin:
+                        events.append(("check", urls, pin)) or state["ready"].pop(0))
+    def candidate(home, pin, fresh):
+        events.append(("candidate", home, pin, fresh))
+        return fresh if fresh is not None and state["candidate"] is not None else state["candidate"]
+    monkeypatch.setattr(windows_trust, "candidate", candidate)
+    monkeypatch.setattr(windows_trust, "user_roots_disabled", lambda: state["policy"])
+    monkeypatch.setattr(windows_trust, "add_root", lambda der: events.append(("add", der)) or state["add"])
+    monkeypatch.setattr(windows_trust, "thumbprint", lambda der: "71A44501 61589BA0 7236E01B 8BF48F15 5B4A7606")
+    monkeypatch.setattr(setup, "_export_certificate", lambda root: events.append(("export", root)))
+    monkeypatch.setattr(setup, "owner_notice", lambda text, **kw: events.append(("notice", text, kw)) or True)
+    run = lambda fresh=None: setup.review_browser_trust(tmp_path, ["verified-url"], "private-pin", fresh=fresh)
+    return state, events, run
+
+
+def test_trusted_connection_asks_nothing(trust_step):
+    state, events, run = trust_step
+    state["ready"] = [True]
+    assert run() is True
+    assert events == [("check", ["verified-url"], "private-pin")]
+
+
+def test_trust_step_explains_then_windows_asks_once_for_the_exact_fresh_root(trust_step, tmp_path):
+    state, events, run = trust_step
+    fresh = b"root-created-by-this-process"
+    assert run(fresh) is True
+    assert [event[0] for event in events] == ["check", "candidate", "notice", "add", "check"]
+    assert events[1] == ("candidate", tmp_path / "app", "private-pin", fresh)
+    assert events[3][1] is fresh  # Not a copy read back from a file.
+    text, options = events[2][1:]
+    assert options == {}  # One OK: the single extra click of the journey.
+    assert "Windows will now ask one question" in text and "Select Yes" in text
+    assert '"Amplifier Unified (this PC only)"' in text
+    assert "only for the private connection between your browser and Amplifier on this PC" in text
+    assert "71A44501 61589BA0 7236E01B 8BF48F15 5B4A7606" in text
+    assert len(text) < 520
+
+
+def test_no_keeps_the_app_running_and_the_next_open_asks_again(trust_step, tmp_path):
+    state, events, run = trust_step
+    state.update(add="declined", ready=[False])
+    assert run() is False
+    # No second check and no exported file: nothing was changed.
+    assert [event[0] for event in events] == ["check", "candidate", "notice", "add", "notice"]
+    assert "Open Amplifier again" in events[-1][1] and "Nothing on this PC was changed" in events[-1][1]
+    # A later open is a new person-started attempt with the same steps.
+    events.clear()
+    state.update(add="added", ready=[False, True])
+    assert run() is True
+    assert [event[0] for event in events] == ["check", "candidate", "notice", "add", "check"]
+    assert events[3] == ("add", b"saved-root")
+
+
+def test_windows_refusal_gives_one_plain_message_and_no_loop(trust_step, tmp_path):
+    state, events, run = trust_step
+    state.update(add="blocked", ready=[False])
+    assert run() is False
+    assert [event[0] for event in events] == ["check", "candidate", "notice", "add", "export", "notice"]
+    text = events[-1][1]
+    assert "this PC's security settings" in text and "IT support" in text
+    assert str(tmp_path / "export" / "local-ca.cer") in text
+    assert "did not change any security setting" in text
+
+
+@pytest.mark.parametrize("add", ["added", "present"])
+def test_trust_that_has_no_effect_is_reported_without_claiming_nothing_changed(trust_step, tmp_path, add):
+    state, events, run = trust_step
+    state.update(add=add, ready=[False, False])
+    assert run() is False
+    assert [event[0] for event in events] == [
+        "check", "candidate", "notice", "add", "check", "export", "notice"]
+    text = events[-1][1]
+    assert "Windows accepted its certificate" in text and "Open Amplifier again" in text
+    assert "IT support" in text and str(tmp_path / "export" / "local-ca.cer") in text
+    assert "did not change" not in text and "Nothing on this PC" not in text
+
+
+def test_policy_that_disables_user_roots_is_reported_without_a_windows_question(trust_step):
+    state, events, run = trust_step
+    state.update(policy=True, ready=[False])
+    assert run() is False
+    assert [event[0] for event in events] == ["check", "candidate", "export", "notice"]
+    assert "IT support" in events[-1][1]
+
+
 @pytest.mark.parametrize("review,recheck,expected", [(False, False, False), (True, False, False), (True, True, True)])
 def test_certificate_review_is_public_only_and_never_imports_trust(tmp_path, monkeypatch, review, recheck, expected):
+    # An identity made by an earlier setup has its signing key on disk.
+    # Amplifier never adds such a root; the person may review it themselves.
     from contextlib import contextmanager
     from cryptography import x509
-    from amplifier_web import tls, windows_files
+    from amplifier_web import tls, windows_files, windows_trust
+    monkeypatch.setattr(windows_trust, "candidate", lambda home, pin, fresh: None)
+    monkeypatch.setattr(windows_trust, "add_root", lambda der: pytest.fail("never added"))
     checks = iter([False, recheck])
     monkeypatch.setattr(setup, "browser_trust_ready", lambda *a: next(checks))
     monkeypatch.setattr(tls, "exported_ca_bytes", lambda home: b"public-ca")

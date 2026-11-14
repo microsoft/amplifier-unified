@@ -1,4 +1,4 @@
-"""Publish only the standalone scheduling package; never select an app dependency."""
+"""Publish selected standalone packages; never select an app dependency."""
 from __future__ import annotations
 
 import argparse
@@ -15,6 +15,18 @@ import zipfile
 REPOSITORY = "microsoft/amplifier-unified"
 PROJECT = "components/scheduling"
 RECEIPT = "scheduling-source.json"
+COMPONENTS = ("scheduling", "worktrees")
+
+
+def component_name(selected):
+    for name in COMPONENTS:
+        if selected["subdirectory"] == "components/" + name:
+            return name
+    raise ValueError("Unknown standalone component selection.")
+
+
+def receipt_name(selected):
+    return component_name(selected) + "-source.json"
 
 
 def run(*args, cwd=None):
@@ -25,25 +37,28 @@ def sha(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
-def selection(root, revision, *, qualification=False):
+def selection(root, revision, *, qualification=False, component="scheduling"):
+    if component not in COMPONENTS:
+        raise ValueError("Unknown standalone component selection.")
+    project_path = "components/" + component
     if not re.fullmatch(r"[a-f0-9]{40}", revision):
         raise ValueError("Select a full merged commit SHA.")
     if not qualification:
         run("git", "merge-base", "--is-ancestor", revision, "origin/main", cwd=root)
-    project = tomllib.loads(run("git", "show", f"{revision}:{PROJECT}/pyproject.toml", cwd=root).decode())
+    project = tomllib.loads(run("git", "show", f"{revision}:{project_path}/pyproject.toml", cwd=root).decode())
     version = project["project"]["version"]
-    if project["project"]["name"] != "amplifier-scheduling" or not re.fullmatch(r"\d+\.\d+\.\d+", version):
-        raise ValueError("Expected the stable standalone scheduling project.")
-    files = run("git", "ls-tree", "-r", "--name-only", revision, "--", PROJECT, cwd=root).decode().splitlines()
+    if project["project"]["name"] != "amplifier-" + component or not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise ValueError("Expected the selected stable standalone project.")
+    files = run("git", "ls-tree", "-r", "--name-only", revision, "--", project_path, cwd=root).decode().splitlines()
     return {"schema": 1, "repository": REPOSITORY, "revision": revision,
-            "subdirectory": PROJECT, "tree": run("git", "rev-parse", f"{revision}:{PROJECT}", cwd=root).decode().strip(),
-            "version": version, "tag": "scheduling-v" + version,
-            "sourceFiles": {name.removeprefix(PROJECT + "/"): sha(run("git", "show", f"{revision}:{name}", cwd=root))
+            "subdirectory": project_path, "tree": run("git", "rev-parse", f"{revision}:{project_path}", cwd=root).decode().strip(),
+            "version": version, "tag": component + "-v" + version,
+            "sourceFiles": {name.removeprefix(project_path + "/"): sha(run("git", "show", f"{revision}:{name}", cwd=root))
                             for name in files}}
 
 
 def artifact_names(selected):
-    stem = "amplifier_scheduling-" + selected["version"]
+    stem = "amplifier_" + component_name(selected) + "-" + selected["version"]
     return stem + "-py3-none-any.whl", stem + ".tar.gz"
 
 
@@ -55,10 +70,12 @@ def safe(name):
 
 def package_identity(dist, selected):
     """Bind built payload and sdist inputs to Git, not merely their version labels."""
+    component = component_name(selected)
+    package = "amplifier_" + component
     wheel, source = artifact_names(selected)
     expected = selected["sourceFiles"]
-    runtime = {name: digest for name, digest in expected.items() if name.startswith("amplifier_scheduling/")}
-    info = f"amplifier_scheduling-{selected['version']}.dist-info/"
+    runtime = {name: digest for name, digest in expected.items() if name.startswith(package + "/")}
+    info = f"{package}-{selected['version']}.dist-info/"
     with zipfile.ZipFile(dist / wheel) as archive:
         names = archive.namelist()
         if len(names) != len(set(names)):
@@ -70,9 +87,9 @@ def package_identity(dist, selected):
         if {name: sha(archive.read(name)) for name in names if name in runtime} != runtime:
             raise ValueError("Wheel runtime differs from selected source.")
         metadata = BytesParser().parsebytes(archive.read(info + "METADATA"))
-        if metadata["Name"] != "amplifier-scheduling" or metadata["Version"] != selected["version"]:
+        if metadata["Name"] != "amplifier-" + component or metadata["Version"] != selected["version"]:
             raise ValueError("Wheel metadata differs from selection.")
-    prefix = f"amplifier_scheduling-{selected['version']}/"
+    prefix = f"{package}-{selected['version']}/"
     with tarfile.open(dist / source) as archive:
         members = archive.getmembers()
         names = [member.name for member in members]
@@ -96,26 +113,28 @@ def package_identity(dist, selected):
             for name in (wheel, source)}
 
 
-def seal(root, revision, dist, *, qualification=False):
-    selected = selection(root, revision, qualification=qualification)
+def seal(root, revision, dist, *, qualification=False, component="scheduling"):
+    selected = selection(root, revision, qualification=qualification, component=component)
+    receipt_file = receipt_name(selected)
     if set(p.name for p in dist.iterdir()) != set(artifact_names(selected)):
         raise ValueError("Seal requires only the original wheel and source archive.")
     receipt = {**selected, "artifacts": package_identity(dist, selected)}
-    (dist / RECEIPT).write_text(json.dumps(receipt, indent=2) + "\n")
+    (dist / receipt_file).write_text(json.dumps(receipt, indent=2) + "\n")
     (dist / "SHA256SUMS").write_text("".join(f"{sha((dist / name).read_bytes())}  {name}\n"
-                                               for name in (*artifact_names(selected), RECEIPT)))
+                                               for name in (*artifact_names(selected), receipt_file)))
     return receipt
 
 
-def verify(root, revision, dist, *, qualification=False):
-    selected = selection(root, revision, qualification=qualification)
-    expected = {*artifact_names(selected), RECEIPT, "SHA256SUMS"}
+def verify(root, revision, dist, *, qualification=False, component="scheduling"):
+    selected = selection(root, revision, qualification=qualification, component=component)
+    receipt_file = receipt_name(selected)
+    expected = {*artifact_names(selected), receipt_file, "SHA256SUMS"}
     if set(p.name for p in dist.iterdir()) != expected:
         raise ValueError("Unexpected release asset set.")
-    receipt = json.loads((dist / RECEIPT).read_bytes())
+    receipt = json.loads((dist / receipt_file).read_bytes())
     if receipt != {**selected, "artifacts": package_identity(dist, selected)}:
         raise ValueError("Release receipt does not match selected source and bytes.")
-    sums = "".join(f"{sha((dist / name).read_bytes())}  {name}\n" for name in (*artifact_names(selected), RECEIPT))
+    sums = "".join(f"{sha((dist / name).read_bytes())}  {name}\n" for name in (*artifact_names(selected), receipt_file))
     if (dist / "SHA256SUMS").read_text() != sums:
         raise ValueError("Release checksums differ.")
     return receipt
@@ -180,8 +199,8 @@ def remote_assets(release, dist, *, complete):
     return set(names)
 
 
-def publish(root, revision, dist):
-    receipt = verify(root, revision, dist)
+def publish(root, revision, dist, *, component="scheduling"):
+    receipt = verify(root, revision, dist, component=component)
     tag = receipt["tag"]
     ref = api("git/ref/tags/" + tag, missing=True)
     if ref is not None and (ref.get("object", {}).get("type") != "commit" or ref["object"].get("sha") != revision):
@@ -199,8 +218,9 @@ def publish(root, revision, dist):
         return {"tag": tag, "status": "already-published-exact-bytes"}
     if not release:
         release = api("releases", "-X", "POST", "-f", "tag_name=" + tag,
-                      "-f", "name=Scheduling " + receipt["version"], "-F", "draft=true", "-f", "make_latest=false",
-                      "-f", "body=Standalone scheduling policy/store package. Source: " + revision +
+                      "-f", "name=" + component.title() + " " + receipt["version"], "-F", "draft=true", "-f", "make_latest=false",
+                      "-f", "body=" + {"scheduling": "Standalone scheduling policy/store package.",
+                                  "worktrees": "Standalone managed Git worktree mechanism."}[component] + " Source: " + revision +
                       ". Unified dependency selection is unchanged. Do not co-install with a Unified version that still bundles this package.")
         release = read_release(release, tag)
     if not release["draft"]:
@@ -227,6 +247,7 @@ def publish(root, revision, dist):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=["plan", "seal", "verify", "publish"])
+    parser.add_argument("--component", choices=COMPONENTS, default="scheduling")
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--revision", required=True)
     parser.add_argument("--dist", type=Path)
@@ -234,7 +255,7 @@ def main():
     parser.add_argument("--qualification", action="store_true", help="Allow an unmerged test candidate; never publication")
     args = parser.parse_args()
     if args.operation == "plan":
-        result = selection(args.root, args.revision, qualification=args.qualification)
+        result = selection(args.root, args.revision, qualification=args.qualification, component=args.component)
         if args.output:
             with args.output.open("a") as output:
                 for key in ("revision", "version", "tag"):
@@ -245,9 +266,9 @@ def main():
         if args.operation == "publish":
             if args.qualification:
                 parser.error("A qualification candidate cannot publish")
-            result = publish(args.root, args.revision, args.dist)
+            result = publish(args.root, args.revision, args.dist, component=args.component)
         else:
-            result = {"seal": seal, "verify": verify}[args.operation](args.root, args.revision, args.dist, qualification=args.qualification)
+            result = {"seal": seal, "verify": verify}[args.operation](args.root, args.revision, args.dist, qualification=args.qualification, component=args.component)
     print(json.dumps(result, sort_keys=True))
 
 

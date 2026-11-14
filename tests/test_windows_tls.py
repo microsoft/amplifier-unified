@@ -19,12 +19,16 @@ from cryptography.hazmat.primitives import serialization
 from amplifier_web import deployment, tls, windows_files as wf, windows_tls as wt
 
 
-def handshake(server_context, ca):
+def handshake(server_context, ca, *, hostname="localhost", strict=False):
     """Real OpenSSL verification/handshake with MemoryBIO, no network listener."""
-    client_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    client_context.load_verify_locations(cadata=ca.decode("ascii"))
+    if strict:
+        # Python's default client policy, including RFC 5280 strict checks.
+        client_context = ssl.create_default_context(cadata=ca.decode("ascii"))
+    else:
+        client_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        client_context.load_verify_locations(cadata=ca.decode("ascii"))
     ci, co, si, so = [ssl.MemoryBIO() for _ in range(4)]
-    client = client_context.wrap_bio(ci, co, server_side=False, server_hostname="localhost")
+    client = client_context.wrap_bio(ci, co, server_side=False, server_hostname=hostname)
     server = server_context.wrap_bio(si, so, server_side=True)
     completed = set()
     for _ in range(20):
@@ -139,6 +143,188 @@ def test_create_then_read_then_force_keeps_ca_and_real_handshake(simulated, samp
     assert after["leaf.crt"] != before["leaf.crt"] and after["leaf.key"] != before["leaf.key"]
     assert state["publications"][-2:] == [("leaf.key", True), ("leaf.crt", True)]
     handshake(tls.ssl_context(root, configured), after["ca.crt"])
+
+
+def test_keyless_identity_publishes_no_signing_key_and_serves_real_tls(simulated, sample):
+    root, pinned, state = simulated
+    der = wt.create_identity(root, sample[0])
+    assert state["publications"] == [("leaf.key", False), ("leaf.crt", False), ("ca.crt", False)]
+    assert sorted(p.name for p in pinned.path.iterdir()) == ["ca.crt", "leaf.crt", "leaf.key"]
+    assert state["saves"][-1]["tls"] == {"method": "ca", **wt._LAYOUT}
+    saved = (pinned.path / "ca.crt").read_bytes()
+    certificate = x509.load_pem_x509_certificate(saved)
+    # The caller receives the exact root that was saved, to hand to Windows from memory.
+    assert der == certificate.public_bytes(serialization.Encoding.DER)
+    leaf = x509.load_pem_x509_certificate((pinned.path / "leaf.crt").read_bytes())
+    configured = {**sample[0], "tls": {"method": "ca", **wt._LAYOUT}}
+    context = tls.ssl_context(root, configured)
+    for hostname in ("localhost", "127.0.0.1", "::1"):
+        assert handshake(context, saved, hostname=hostname, strict=True) == leaf.public_bytes(
+            serialization.Encoding.DER)
+    assert wt.keyless_identity(root) == (der, leaf.public_bytes(serialization.Encoding.DER))
+    wt._ca(saved)  # The public export's own check accepts the root without a key.
+
+
+def test_keyless_root_and_server_certificate_have_the_local_only_shape(simulated, sample):
+    import ipaddress
+    from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+    root, pinned, _ = simulated
+    wt.create_identity(root, sample[0])
+    certificate = x509.load_pem_x509_certificate((pinned.path / "ca.crt").read_bytes())
+    leaf = x509.load_pem_x509_certificate((pinned.path / "leaf.crt").read_bytes())
+    assert certificate.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == wt.ROOT_NAME
+    basic = certificate.extensions.get_extension_for_class(x509.BasicConstraints)
+    assert basic.critical and basic.value.ca and basic.value.path_length == 0
+    constraints = certificate.extensions.get_extension_for_class(x509.NameConstraints)
+    assert constraints.critical and constraints.value.excluded_subtrees is None
+    # Exact names and full-length masks: nothing wider than this installation.
+    assert constraints.value.permitted_subtrees == [
+        x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_network("127.0.0.1/32")),
+        x509.IPAddress(ipaddress.ip_network("::1/128"))]
+    assert list(certificate.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value) == [
+        ExtendedKeyUsageOID.SERVER_AUTH]
+    assert certificate.not_valid_after_utc - certificate.not_valid_before_utc == wt.LIFETIME
+    # No subject name: every name is an alternative name inside the root's constraints.
+    assert len(leaf.subject) == 0
+    names = leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+    assert names.critical
+    assert names.value.get_values_for_type(x509.DNSName) == ["localhost"]
+    assert names.value.get_values_for_type(x509.IPAddress) == [
+        ipaddress.ip_address("127.0.0.1"), ipaddress.ip_address("::1")]
+    assert not leaf.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+    # It lives exactly as long as its root: no key exists to issue a replacement.
+    assert (leaf.not_valid_before_utc, leaf.not_valid_after_utc) == (
+        certificate.not_valid_before_utc, certificate.not_valid_after_utc)
+
+
+def test_keyless_root_signing_key_is_never_serialized_or_saved(simulated, sample, monkeypatch):
+    root, pinned, _ = simulated
+    made, encoded = [], []
+    new_root, pair = wt._new_root, wt._encoded_pair
+    monkeypatch.setattr(wt, "_new_root", lambda config: made.append(new_root(config)) or made[-1])
+    monkeypatch.setattr(wt, "_encoded_pair", lambda cert, key: encoded.append(key) or pair(cert, key))
+    wt.create_identity(root, sample[0])
+    signing = wt._public_key(made[0][1])
+    assert len(made) == 1 and len(encoded) == 1 and wt._public_key(encoded[0]) != signing
+    for path in pinned.path.iterdir():
+        content = path.read_bytes()
+        assert (b"PRIVATE KEY" in content) is (path.name == "leaf.key")
+        if path.name == "leaf.key":
+            assert wt._public_key(serialization.load_pem_private_key(content, None)) != signing
+
+
+@pytest.mark.parametrize("present", [["ca.crt", "ca.key", "leaf.crt", "leaf.key"], ["leaf.crt"], ["ca.key"]])
+def test_keyless_identity_never_replaces_existing_material(simulated, sample, present):
+    root, pinned, state = simulated
+    for name in present:
+        (pinned.path / name).write_bytes(sample[1][name])
+    before = {p.name: p.read_bytes() for p in pinned.path.iterdir()}
+    assert wt.create_identity(root, sample[0]) is None
+    assert not state["publications"] and not state["saves"]
+    assert {p.name: p.read_bytes() for p in pinned.path.iterdir()} == before
+
+
+def test_identity_with_a_signing_key_on_disk_is_not_keyless(simulated, sample):
+    root, _, _ = seed(simulated, sample)
+    assert wt.keyless_identity(root) is None
+
+
+def test_keyless_identity_is_checked_but_never_renewed_in_place(simulated, sample):
+    root, pinned, state = simulated
+    wt.create_identity(root, sample[0])
+    before = {p.name: p.read_bytes() for p in pinned.path.iterdir()}
+    count = len(state["publications"])
+    configured = tls.setup_local_ca(root, sample[0])  # What setup's CLI check runs.
+    assert configured["tls"] == {"method": "ca", **wt._LAYOUT}
+    with pytest.raises(ValueError, match="cannot be renewed in place"):
+        tls.setup_local_ca(root, sample[0], force=True)
+    (pinned.path / "leaf.crt").unlink()
+    (pinned.path / "leaf.key").unlink()
+    with pytest.raises(ValueError, match="cannot be renewed in place"):
+        tls.setup_local_ca(root, sample[0])
+    assert len(state["publications"]) == count
+    assert {p.name: p.read_bytes() for p in pinned.path.iterdir()} == {
+        name: content for name, content in before.items() if name == "ca.crt"}
+
+
+def test_keyless_identity_survives_a_renamed_computer(simulated, sample, monkeypatch):
+    root, pinned, _ = simulated
+    wt.create_identity(root, sample[0])
+    configured = {**sample[0], "tls": {"method": "ca", **wt._LAYOUT}}
+    monkeypatch.setattr(tls.socket, "gethostname", lambda: "renamed-computer")
+    tls.ssl_context(root, configured)
+    # An identity with a signing key names the computer and needs its leaf rotated.
+    for name, content in sample[1].items():
+        (pinned.path / name).write_bytes(content)
+    with pytest.raises(ValueError, match="leaf"):
+        tls.ssl_context(root, configured)
+
+
+def test_keyless_identity_names_the_owners_configured_addresses(simulated, sample):
+    import ipaddress
+    root, pinned, _ = simulated
+    config = deployment.validate_server({
+        "bind": ["127.0.0.1", "192.0.2.7"], "public_origins": ["https://pc.example.ts.net:23456"],
+        "tls": {"method": "ca", **wt._LAYOUT}})
+    wt.create_identity(root, config)
+    leaf = x509.load_pem_x509_certificate((pinned.path / "leaf.crt").read_bytes())
+    names = leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    assert names.get_values_for_type(x509.DNSName) == ["localhost", "pc.example.ts.net"]
+    assert ipaddress.ip_address("192.0.2.7") in names.get_values_for_type(x509.IPAddress)
+    saved = (pinned.path / "ca.crt").read_bytes()
+    handshake(tls.ssl_context(root, config), saved, hostname="pc.example.ts.net", strict=True)
+    # A later address that the certificate does not name is refused, not papered over.
+    with pytest.raises(ValueError, match="leaf"):
+        tls.ssl_context(root, {**config, "public_origins": ["https://other.example.ts.net"]})
+
+
+def outside_leaf(root, key, name):
+    """A server certificate for a name the root does not permit (test key only)."""
+    import ipaddress
+    from datetime import UTC, datetime, timedelta
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import ExtendedKeyUsageOID
+    leaf_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    try:
+        general = x509.IPAddress(ipaddress.ip_address(name))
+    except ValueError:
+        general = x509.DNSName(name)
+    now = datetime.now(UTC)
+    leaf = (x509.CertificateBuilder().subject_name(x509.Name([])).issuer_name(root.subject)
+        .public_key(leaf_key.public_key()).serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5)).not_valid_after(now + timedelta(days=2))
+        .add_extension(x509.SubjectAlternativeName([general]), critical=True)
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(leaf_key.public_key()), critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(root.public_key()), critical=False)
+        .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False, key_encipherment=True,
+            data_encipherment=False, key_agreement=False, key_cert_sign=False, crl_sign=False,
+            encipher_only=False, decipher_only=False), critical=True)
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+        .sign(key, hashes.SHA256()))
+    return leaf, leaf_key
+
+
+def server_context(directory, leaf, key):
+    cert_bytes, key_bytes = wt._encoded_pair(leaf, key)
+    (directory / "server.crt").write_bytes(cert_bytes)
+    (directory / "server.key").write_bytes(key_bytes)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(directory / "server.crt", directory / "server.key")
+    return context
+
+
+@pytest.mark.parametrize("name", ["amplifier-outside.example", "127.0.0.2"])
+def test_local_only_root_cannot_vouch_for_another_name_even_with_its_key(tmp_path, sample, name):
+    # The second barrier, exercised with a root whose key this TEST keeps:
+    # a real verifier refuses a certificate for any name outside the constraints.
+    root, key = wt._new_root(sample[0])
+    pem = root.public_bytes(serialization.Encoding.PEM)
+    inside = server_context(tmp_path, *wt._new_local_leaf(root, key, sample[0]))
+    handshake(inside, pem, hostname="127.0.0.1", strict=True)
+    with pytest.raises(ssl.SSLCertVerificationError, match="(?i)permitted subtree|name constraint"):
+        handshake(server_context(tmp_path, *outside_leaf(root, key, name)), pem, hostname=name, strict=True)
 
 
 @pytest.mark.parametrize("missing", ["ca.crt", "ca.key", "leaf.crt", "leaf.key"])
@@ -503,6 +689,49 @@ def test_native_creation_privacy_before_bytes_handshake_and_force(native_root, m
     assert tls.exported_ca_bytes(native_root) == old_ca
     assert (path / "ca.key").read_bytes() == old_key
     handshake(tls.ssl_context(native_root, config), old_ca)
+
+
+def test_native_keyless_identity_has_no_signing_key_file_and_serves_tls(native_root):
+    import hashlib
+    from amplifier_web import windows_trust
+    config = deployment.load_server_config(native_root)
+    der = wt.create_identity(native_root, config)
+    path = tls.tls_dir(native_root)
+    # The real private store holds no CA key, in any form.
+    assert sorted(p.name for p in path.iterdir()) == [".tls.lock", "ca.crt", "leaf.crt", "leaf.key"]
+    configured = deployment.load_server_config(native_root)
+    assert configured["tls"] == {"method": "ca", **wt._LAYOUT}
+    ca = tls.exported_ca_bytes(native_root)
+    assert x509.load_pem_x509_certificate(ca).public_bytes(serialization.Encoding.DER) == der
+    peer = handshake(tls.ssl_context(native_root, configured), ca, hostname="127.0.0.1", strict=True)
+    assert wt.keyless_identity(native_root) == (der, peer)
+    before = {p.name: p.read_bytes() for p in path.iterdir() if p.name != ".tls.lock"}
+    # An existing identity is never replaced, and never renewed in place.
+    assert wt.create_identity(native_root, configured) is None
+    tls.setup_local_ca(native_root, configured)  # What setup's CLI check runs.
+    with pytest.raises(ValueError, match="cannot be renewed in place"):
+        tls.setup_local_ca(native_root, configured, force=True)
+    assert {p.name: p.read_bytes() for p in path.iterdir() if p.name != ".tls.lock"} == before
+    # The launcher's candidate: the exact in-memory root for a new identity,
+    # the owner-only store on a later start.
+    pin = SimpleNamespace(fingerprint=hashlib.sha256(peer).digest())
+    assert windows_trust.candidate(native_root, pin, der) is der
+    assert windows_trust.candidate(native_root, pin) == der
+    with pytest.raises(ValueError, match="changed"):
+        windows_trust.candidate(native_root, SimpleNamespace(fingerprint=b"\0" * 32))
+
+
+def test_native_identity_with_a_signing_key_is_never_a_trust_candidate(native_root):
+    import hashlib
+    from amplifier_web import windows_trust
+    config = tls.setup_local_ca(native_root, deployment.load_server_config(native_root))
+    path = tls.tls_dir(native_root)
+    assert (path / "ca.key").is_file()
+    assert wt.keyless_identity(native_root) is None
+    assert wt.create_identity(native_root, config) is None
+    leaf = x509.load_pem_x509_certificate((path / "leaf.crt").read_bytes())
+    pin = SimpleNamespace(fingerprint=hashlib.sha256(leaf.public_bytes(serialization.Encoding.DER)).digest())
+    assert windows_trust.candidate(native_root, pin) is None
 
 
 def test_native_openssl_files_cannot_be_replaced_while_loading(native_root, monkeypatch):
