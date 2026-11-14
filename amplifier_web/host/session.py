@@ -1088,7 +1088,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                           shared_handle_getter=None, shared_snapshot=None,
                           write_guard=None, resolved_root=None, execution_workspace=None, owner_session_id=None,
                           refresh_dependencies=False, install_overrides=None, qualification_readonly=False, global_only=False, runtime_plan=None, startup_timing=None, ephemeral_mcp_servers=None, media_graph_selection=None,
-                          canonical_binding=None, **kwargs):
+                          canonical_binding=None, canonical_binding_factory=None, **kwargs):
     from ..worker_diagnostics import StartupTimings
     startup_timing = startup_timing or StartupTimings()
     if refresh_dependencies and resume:
@@ -1319,7 +1319,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             if messages is not None:
                 await coordinator.get("context").set_messages(messages)
         with startup_timing.phase('manager.children'):
-            await install_children(session, prepared, runtime, store, approvals, host_adapter=adapter)
+            await install_children(session, prepared, runtime, store, approvals, host_adapter=adapter,
+                **({"canonical_binding_factory": canonical_binding_factory}
+                   if canonical_binding_factory is not None else {}))
         configurator = SessionConfigurator(session, prepared)
         coordinator.register_capability("web.configurator", configurator)
         coordinator.register_capability("web.prepared", prepared)

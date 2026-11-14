@@ -8,11 +8,15 @@ This is not qualification of loop-live, an installed Unified wheel or a live hos
 from __future__ import annotations
 
 import base64
+import asyncio
 import copy
 from dataclasses import dataclass
 import hashlib
 import io
+import json
 from pathlib import Path
+import stat
+import sys
 
 import pytest
 from amplifier_core import AmplifierSession, HookResult, ModuleCoordinator
@@ -31,23 +35,99 @@ from test_host_media_hooks import NamedFixtureLoader
 NAMESPACE = host_media.NAMESPACE
 
 
+class ProspectiveChildFactory:
+    """Private test assembly owner, never recovered from a catalog or JSON flag."""
+    def __init__(self):
+        lifetime = pytest.importorskip("amplifier_foundation.session.transcript_lifetime")
+        self.binding_type = lifetime.VersionedSessionBinding
+        self.conflict_type = lifetime.VersionedSessionConflict
+        self.bindings = []
+        self.openings = []
+
+    def latest(self, session_id):
+        return next(binding for binding in reversed(self.bindings)
+                    if binding.session_id == session_id)
+
+    def __call__(self, directory, *, session_id, resumed):
+        directory = Path(directory).absolute()
+        if resumed:
+            previous = self.latest(session_id)
+            with pytest.raises(self.conflict_type, match="closed"):
+                previous.check()
+            # Exact object from our completed owner, not a deserialized report.
+            expected = previous.expected
+            binding = self.binding_type.resume(directory, session_id=session_id, expected=expected)
+            assert binding.expected == expected
+        else:
+            assert not directory.exists(), "Prospective enrollment must precede native child opens"
+            binding = self.binding_type.create_new(directory, session_id=session_id,
+                operation_id="create-" + session_id, admit=self.admit_empty_source)
+        binding.check()
+        _assert_legacy_fences(directory)
+        self.bindings.append(binding)
+        self.openings.append((session_id, resumed))
+        return binding
+
+    @staticmethod
+    def admit_empty_source():
+        # create_new commits zero canonical rows: no image asset is reachable.
+        # Later Children checkpoints must supply their actual media store.
+        return None
+
+
+def _assert_legacy_fences(directory):
+    for name in ("transcript.jsonl", "transcript.jsonl.backup"):
+        fence = directory / name
+        assert fence.is_dir()
+        marker = json.loads((fence / "format.json").read_text())
+        assert marker["v"] == 2 and marker["status"] == "unsupported-by-legacy-entrypoint"
+        with pytest.raises(IsADirectoryError):
+            fence.open("ab")
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    assert stat.S_IMODE((directory / ".versioned-owner").stat().st_mode) == 0o600
+
+
 class ChildRouteProvider:
     """No SDK/network: inspect the real host's private count/send projection."""
     default_model = "fixture"
     name = "fixture"
     config = {}
 
-    def __init__(self, coordinator, pixels):
+    def __init__(self, coordinator, pixels, binding=None):
         self.coordinator = coordinator
         self.pixels = pixels
+        self.binding = binding
         self.counted = []
         self.sent = []
         self.digests = []
+        self.count_receipts = []
+        self.cleanup_checked = False
 
     def get_media_request_support(self, **kwargs):
         return {"v": 1, "positions": ["tool"]}
 
     async def request_budget(self, request, *, request_options=None, **kwargs):
+        if self.binding is not None:
+            from amplifier_foundation.session.transcript_lifetime import (
+                VersionedSessionBinding, VersionedSessionConflict,
+            )
+            from amplifier_foundation.session.versioned_checkpoint import VersionedCheckpointReceipt
+            self.binding.check()
+            receipt = self.binding.last_receipt
+            assert type(receipt) is VersionedCheckpointReceipt
+            facts = receipt.verify()  # After actual write/ACK/fence exit.
+            assert facts["kind"] == "versioned-checkpoint-backed-v1"
+            assert facts["session_id"] == self.coordinator.session_id
+            assert facts["operation_id"] == self.binding.expected.operation_id
+            assert self.binding.last_result.commit == self.binding.expected
+            refs = list(receipt.iter_refs())
+            assert len(refs) == 1 and refs[0]["session_id"] == self.coordinator.session_id
+            assert self.coordinator.get_capability("web.media.store").validate_ref(refs[0]) == refs[0]
+            # The enrolled prospective FD lease remains held during SDK work.
+            with pytest.raises(VersionedSessionConflict, match="retains the source lease"):
+                VersionedSessionBinding.resume(self.binding.directory,
+                    session_id=self.binding.session_id, expected=self.binding.expected)
+            self.count_receipts.append(receipt)
         self.coordinator.get_capability(NAMESPACE).validate(
             request, purpose="count", request_options=request_options or {})
         self.counted.append(request)
@@ -65,7 +145,16 @@ class ChildRouteProvider:
         raw = base64.b64decode(images[0].source["data"])
         assert raw == self.pixels
         self.digests.append(hashlib.sha256(raw).hexdigest())
+        if getattr(self, "failure", None) == "cancel":
+            raise asyncio.CancelledError("fixture provider cancelled")
+        if getattr(self, "failure", None) == "error":
+            raise RuntimeError("fixture provider failed")
         return "private image inspected"
+
+    async def observe_cleanup(self):
+        if self.binding is not None:
+            self.binding.check()  # Children must not retire the lease before native cleanup.
+            self.cleanup_checked = True
 
 
 class ChildRouteLoop:
@@ -136,7 +225,14 @@ class ChildRoutePrepared(PreparedBundle):
             # Keep Foundation's actual constructor, resolver, initialize and ready
             # phases. Substitute only its module loader, before the host binder.
             coordinator = session.coordinator
-            provider = ChildRouteProvider(coordinator, self.state["pixels"])
+            factory = self.state["factory"]
+            binding = factory.latest(session.session_id) if factory and kwargs.get("parent_id") else None
+            provider = ChildRouteProvider(coordinator, self.state["pixels"], binding)
+            provider.failure = self.state.get("provider_failure")
+            if binding is not None:
+                binding.check()
+                _assert_legacy_fences(binding.directory)
+                coordinator.register_cleanup(provider.observe_cleanup)
             loader = ChildRouteLoader(provider, SimpleContextManager(),
                                       sentinel=self.state["sentinel"])
             loader.observed = []
@@ -173,13 +269,16 @@ def _assert_qualified(coordinator):
     assert coordinator.get_capability(NAMESPACE).enabled is True
 
 
-@pytest.fixture
-async def child_routes(tmp_path, monkeypatch):
+@pytest.fixture(params=[False, True], ids=["legacy", "prospective-t2"])
+async def child_routes(tmp_path, monkeypatch, request):
     """Explicit source selection, never a Boolean or a synthetic seal receipt."""
     from PIL import Image
     bridge = pytest.importorskip("amplifier_foundation.session.media_hook_bridge")
     if not hasattr(bridge.MediaHookBridge, "begin_participating_graph"):
         pytest.skip("Requires the paired positive Foundation bridge")
+    if request.param and sys.platform != "linux":
+        pytest.skip("Prospective source lifetime is qualified on Linux only")
+    factory = ProspectiveChildFactory() if request.param else None
     monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path / "app"))
     raw = io.BytesIO()
     Image.new("RGB", (2, 2), (19, 71, 149)).save(raw, format="PNG")
@@ -211,7 +310,7 @@ async def child_routes(tmp_path, monkeypatch):
             {"module_id": name} for name in ("fixture-context", "fixture-provider", "fixture-hooks")]})
     state = {"selection": selection, "pixels": pixels,
              "sentinel": base64.b64encode(pixels).decode(), "sessions": [], "providers": [],
-             "loaders": [], "creations": []}
+             "loaders": [], "creations": [], "factory": factory}
     prepared = ChildRoutePrepared(copy.deepcopy(plan), BundleModuleResolver({}),
         Bundle(name="child-routes", session=plan["session"], agents=plan["agents"]), state=state)
     store = SessionStore(tmp_path / "sessions")
@@ -236,7 +335,9 @@ async def child_routes(tmp_path, monkeypatch):
     await parent.coordinator.get("context").set_messages(rows)
     await checkpoint()
     rows = await parent.coordinator.get("context").get_messages()
-    registry = await host_children.install_children(parent, prepared, Runtime("parent"), store, None)
+    registry = await host_children.install_children(parent, prepared, Runtime("parent"), store, None,
+                                                   canonical_binding_factory=factory)
+    assert registry.canonical_binding_factory is factory
     try:
         yield parent, registry, store, rows, state
     finally:
@@ -279,6 +380,21 @@ async def test_actual_children_routes_use_own_acked_refs_and_private_count_send(
                for provider in providers)
     assert all(provider.digests == [hashlib.sha256(state["pixels"]).hexdigest()]
                for provider in providers)
+    factory = state["factory"]
+    if factory is not None:
+        expected_openings = [("child", False)]
+        if route == "nested":
+            expected_openings.append(("grandchild", False))
+        elif route == "resumed":
+            expected_openings.append(("child", True))
+        assert factory.openings == expected_openings
+        assert len({id(binding) for binding in factory.bindings}) == expected
+        for provider in providers:
+            assert provider.cleanup_checked
+            assert len(provider.count_receipts) == 1
+        for binding in factory.bindings:
+            with pytest.raises(factory.conflict_type, match="closed"):
+                binding.check()
     assert not state["providers"][0].counted and not state["providers"][0].sent
     assert await parent.coordinator.get("context").get_messages() == rows
     for loader in state["loaders"][1:]:
@@ -286,7 +402,22 @@ async def test_actual_children_routes_use_own_acked_refs_and_private_count_send(
         assert all(NAMESPACE in value and state["sentinel"] not in value
                    for value in loader.observed)
     for session_id in {"child", "grandchild"} if route == "nested" else {"child"}:
-        saved, metadata = store.load(session_id)
+        if factory is None:
+            saved, metadata = store.load(session_id)
+        else:
+            closed = factory.latest(session_id)
+            # Successful fresh acquisition proves physical retirement, not merely
+            # a cleared Python flag. Read through the selected store, under custody.
+            reopened = factory.binding_type.resume(closed.directory, session_id=session_id,
+                                                   expected=closed.expected)
+            try:
+                selected_store = SessionStore(store.base_dir, canonical_binding=reopened)
+                saved, metadata = selected_store.load(session_id)
+                assert saved == reopened.load_messages()
+                assert closed.last_receipt.verify()["operation_id"] == reopened.expected.operation_id
+                _assert_legacy_fences(closed.directory)
+            finally:
+                await reopened.aclose()
         assert metadata["status"] == "completed"
         refs = [ref for row in saved for ref in
                 row.get("metadata", {}).get(NAMESPACE, {}).get("refs", [])]
@@ -297,3 +428,61 @@ async def test_actual_children_routes_use_own_acked_refs_and_private_count_send(
             assert state["sentinel"].encode() not in path.read_bytes()
     assert not registry.admissions
     assert set(registry.sessions) == {"parent"}
+
+
+@pytest.mark.parametrize("child_routes", [True], indirect=True, ids=["prospective-t2"])
+async def test_prospective_child_precheckpoint_failure_cleans_up_before_closing_owner(child_routes):
+    parent, registry, store, rows, state = child_routes
+    parent.coordinator.get("orchestrator").root_provider = SelectedProvider(
+        parent.coordinator.get("providers")["fixture"],
+        {"instance": "missing-child-account", "model": "fixture"})
+    with pytest.raises(ValueError, match="inherited provider instance is unavailable"):
+        await registry.spawn("worker", "must not count or send", parent,
+                             sub_session_id="rejected-child", parent_messages=rows)
+    factory = state["factory"]
+    binding = factory.latest("rejected-child")
+    assert factory.openings == [("rejected-child", False)]
+    assert state["creations"][-1] == ("rejected-child", "parent", False)
+    provider = state["providers"][-1]
+    assert provider.cleanup_checked and not provider.counted and not provider.sent
+    with pytest.raises(factory.conflict_type, match="closed"):
+        binding.check()
+    # Admission failed before context restoration/checkpoint readiness. Do not
+    # claim the inherited ref was committed, or publish a partial child context.
+    assert binding.expected.message_count == 0 and binding.last_receipt is None
+    reopened = factory.binding_type.resume(store.directory("rejected-child"),
+        session_id="rejected-child", expected=binding.expected)
+    try:
+        assert reopened.load_messages() == []
+        _assert_legacy_fences(reopened.directory)
+    finally:
+        await reopened.aclose()
+    assert registry.rows["rejected-child"]["status"] == "error"
+    assert not registry.admissions and set(registry.sessions) == {"parent"}
+    assert await parent.coordinator.get("context").get_messages() == rows
+
+
+@pytest.mark.parametrize("child_routes", [True], indirect=True, ids=["prospective-t2"])
+@pytest.mark.parametrize("failure", ["error", "cancel"])
+async def test_prospective_child_provider_terminal_failure_retires_physical_owner(child_routes, failure):
+    parent, registry, store, rows, state = child_routes
+    state["provider_failure"] = failure
+    with pytest.raises(BaseException):
+        await registry.spawn("worker", "Inspect", parent, sub_session_id="child", parent_messages=rows)
+    factory = state["factory"]
+    binding = factory.latest("child")
+    assert not registry.admissions and set(registry.sessions) == {"parent"}
+    provider = state["providers"][-1]
+    assert provider.cleanup_checked
+    assert len(provider.counted) == len(provider.sent) == 1
+    assert provider.sent[0].messages == []
+    with pytest.raises(factory.conflict_type, match="closed"):
+        binding.check()
+    reopened = factory.binding_type.resume(binding.directory, session_id="child", expected=binding.expected)
+    try:
+        assert reopened.load_messages()
+        assert binding.last_receipt.verify()["operation_id"] == reopened.expected.operation_id
+    finally:
+        await reopened.aclose()
+    assert not registry.admissions and set(registry.sessions) == {"parent"}
+    assert await parent.coordinator.get("context").get_messages() == rows

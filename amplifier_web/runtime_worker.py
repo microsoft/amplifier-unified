@@ -52,13 +52,15 @@ def publish_process_identity():
 
 
 class Worker:
-    def __init__(self, *, media_graph_selection=None, canonical_binding=None):
+    def __init__(self, *, media_graph_selection=None, canonical_binding=None,
+                 canonical_binding_factory=None):
         self.session = self.runtime = self.execution = None
         # Assembly-owned object, never a worker command/configuration field.
         self.media_graph_selection = media_graph_selection
         # Private prospective owner, acquired before this Worker is started.
         # Never reconstruct it from a command, catalog row or JSON prefix.
         self.canonical_binding = canonical_binding
+        self.canonical_binding_factory = canonical_binding_factory
         self.approvals = {}
         self.approval_contexts = {}
         self.approval_deliveries = {}
@@ -985,13 +987,19 @@ class Worker:
             with startup_timing.phase('worker.recovery'):
                 if recover_bundle:
                     from amplifier_web.bundle_selection import BundleTransaction
-                    BundleTransaction(self.home, workspace, config["id"]).restore()
+                    BundleTransaction(self.home, workspace, config["id"],
+                        **({"canonical_binding": self.canonical_binding}
+                           if self.canonical_binding is not None else {})).restore()
                 from amplifier_web.history_revision import recover_pending
-                recover_pending(self.home, workspace, config['id'])
+                recover_pending(self.home, workspace, config['id'],
+                    **({"canonical_binding": self.canonical_binding}
+                       if self.canonical_binding is not None else {}))
                 if config.get('bundleReplacement') is not None:
                     from amplifier_web.bundle_selection import begin_replacement
                     replacement, resolved_root = await begin_replacement(self.home, workspace, config,
-                        admit=lambda: self.bridge('configuration.nextMessage.admit', {}))
+                        admit=lambda: self.bridge('configuration.nextMessage.admit', {}),
+                        **({"canonical_binding": self.canonical_binding}
+                           if self.canonical_binding is not None else {}))
             self.activation = self.activation_gate.activate()
             self.runtime.capture_activation = self.activation_gate.current
             # Always allow loading the saved transcript when one exists; the
@@ -1017,6 +1025,8 @@ class Worker:
                     ephemeral_mcp_servers=config.get("ephemeralMcpServers"),
                     media_graph_selection=self.media_graph_selection,
                     **({"canonical_binding": self.canonical_binding} if self.canonical_binding is not None else {}),
+                    **({"canonical_binding_factory": self.canonical_binding_factory}
+                       if self.canonical_binding_factory is not None else {}),
                     startup_timing=startup_timing)
             if qualified_overrides is not None:
                 with startup_timing.phase('worker.runtime.verify.after_prepare'):
@@ -1924,7 +1934,9 @@ class Worker:
                     from amplifier_web.history_revision import rewind
                     from amplifier_web.message_interactions import prepare_input
                     text = await prepare_input(self.session.coordinator, arguments['text'], arguments.get('reply_context'), max_chars=self.runtime.max_input_chars)
-                    result = await rewind(self.controls, arguments)
+                    result = await rewind(self.controls, arguments,
+                        **({"canonical_binding": self.canonical_binding}
+                           if self.canonical_binding is not None else {}))
                     publish({'type': 'history.revised', **result})
                     from amplifier_module_loop_live.runtime import Input
                     await self.runtime.submit(Input('user', text, id=arguments['operationId'],
@@ -2012,7 +2024,14 @@ class Worker:
         # Bind before creating any worker task and retain through joined cleanup.
         # Foundation captures this policy for later lazy module activation.
         with preparation_scope() as self.preparation_report:
-            await self._run()
+            try:
+                await self._run()
+            finally:
+                if self.canonical_binding is not None:
+                    # The owner joins any physical operation before releasing
+                    # descriptors, including cancellation during worker cleanup.
+                    await self.canonical_binding.aclose()
+                    self.canonical_binding = None
 
     async def _run(self):
         # The host verifies membership/creation time before sending even start.

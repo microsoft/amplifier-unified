@@ -347,6 +347,7 @@ def source_evidence(overlay):
 async def main():
     root = Path(sys.argv[1]).resolve()
     use_media = os.environ.get("WARM_WORKER_MEDIA") == "1"
+    use_versioned = os.environ.get("WARM_WORKER_T2") == "1"
     workspace = root / "workspace"
     provider = root / "provider" / "amplifier_module_provider_fixture"
     workspace.mkdir(parents=True)
@@ -465,7 +466,16 @@ Reply with the fixture response.
         publish(event)
     worker_module.publish = guarded_publish if use_media else publish
     selection = media_selection(root, context_module, capture_module) if use_media else None
-    worker = Worker(media_graph_selection=selection) if use_media else Worker()
+    canonical_binding = None
+    if use_versioned:
+        from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+        from amplifier_web.session_files import sessions_dir
+        destination = sessions_dir(workspace) / "warm-fixture"
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        destination.parent.chmod(0o700)
+        canonical_binding = VersionedSessionBinding.create_new(
+            destination, session_id="warm-fixture", operation_id="prospective-create", admit=lambda: None)
+    worker = Worker(media_graph_selection=selection, canonical_binding=canonical_binding)
     workers.append(worker)
     config = {"id": "warm-fixture", "workspace": str(workspace), "bundle": str(bundle)}
     cold_started = time.monotonic()
@@ -504,7 +514,11 @@ Reply with the fixture response.
             from amplifier_foundation.session.history import SessionHistoryStore
             from amplifier_web.session_files import sessions_dir
             history = SessionHistoryStore(sessions_dir(workspace) / config["id"])
-            media_ref = media_checkpoint(worker, history.load_messages()) if use_media else None
+            def authoritative_rows():
+                current = next((owner.canonical_binding for owner in reversed(workers)
+                                if owner.canonical_binding is not None), None)
+                return current.load_messages() if use_versioned else history.load_messages()
+            media_ref = media_checkpoint(worker, authoritative_rows()) if use_media else None
             warm_started = time.monotonic()
             await worker.command({"op": "send", "id": "two-request", "input_id": "two", "text": "two"})
             for _ in range(200):
@@ -515,7 +529,7 @@ Reply with the fixture response.
             assert worker.idle() and any(event.get("type") == "generation.finished"
                                         and "two" in event.get("input_ids", []) for event in events), events
             warm_seconds = time.monotonic() - warm_started
-            checkpoint = {"messages": history.load_messages()}
+            checkpoint = {"messages": authoritative_rows()}
             assert worker.shared_store.read() is None
             assert id(worker.session) == first_session
             assert id(worker.execution) == first_execution
@@ -524,13 +538,21 @@ Reply with the fixture response.
                 "fixture response", "fixture response"]
             if use_media:
                 media_checkpoint(worker, checkpoint["messages"], media_ref)
+            if use_versioned:
+                committed_prefix = canonical_binding.expected
+                assert canonical_binding.last_result.commit == committed_prefix
+                assert canonical_binding.last_receipt is not None
             else:
                 assert [row["content"] for row in checkpoint["messages"] if row["role"] == "user"][-2:] == ["one", "two"]
             await worker.command({"op": "retire", "id": "retire-request"})
             assert worker.shutdown.is_set(), events
             await worker.run()
             assert not first_writer.active
-            restored = Worker(media_graph_selection=selection) if use_media else Worker()
+            if use_versioned:
+                committed_prefix = canonical_binding.expected  # Includes the actual terminal checkpoint.
+            resumed_binding = (VersionedSessionBinding.resume(destination, session_id="warm-fixture",
+                expected=committed_prefix) if use_versioned else None)
+            restored = Worker(media_graph_selection=selection, canonical_binding=resumed_binding)
             workers.append(restored)
             sends_before_resume = len([event for event in events if event.get("type") == "assistant.message"])
             await restored.start(config)
@@ -542,7 +564,7 @@ Reply with the fixture response.
                         break
                     await asyncio.sleep(.02)
                 require_media(restored, selection)
-                media_checkpoint(restored, history.load_messages(), media_ref)
+                media_checkpoint(restored, authoritative_rows(), media_ref)
                 assert len((root / "private-provider.jsonl").read_text().splitlines()) == 4
             assert len([event for event in events if event.get("type") == "assistant.message"]) == sends_before_resume
             await restored.command({"op": "send", "id": "three-request", "input_id": "three", "text": "three"})
@@ -552,7 +574,7 @@ Reply with the fixture response.
                     break
                 await asyncio.sleep(.02)
             assert restored.idle() and restored.shared_handle.active, events
-            messages = history.load_messages()
+            messages = authoritative_rows()
             user_rows = [row for row in messages if (row.get('metadata') or {}).get('amplifier_input', {}).get('kind') == 'user']
             if use_media:
                 assert [row["content"] if isinstance(row["content"], str) else row["content"][0]["text"]
@@ -571,6 +593,14 @@ Reply with the fixture response.
             if use_media:
                 evidence["media"] = media_evidence(root, pixels, messages, events)
                 evidence["media_source_manifest"] = selection.sources
+            if use_versioned:
+                assert (destination / "transcript.jsonl").is_dir()
+                assert (destination / "transcript.jsonl.backup").is_dir()
+                assert resumed_binding.last_receipt is not None
+                evidence["prospective_canonical_owner"] = {
+                    "explicit_rewrite": True, "typed_ack": True,
+                    "same_owner_two_turns": True, "fresh_resume_exact_prefix": True,
+                    "legacy_writer_fences": True}
             print(json.dumps(evidence))
         finally:
             for owner in workers:

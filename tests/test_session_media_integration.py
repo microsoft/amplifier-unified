@@ -573,6 +573,36 @@ async def test_indexed_support_binds_exact_postoverlay_source_without_v1_fallbac
         assert bool(images) is (mode == "allowed")
     assert len(original.messages) == 1 and original.messages[0].role == "tool"
 
+async def test_bound_attachment_encoder_accepts_actual_loop_argument_without_rebinding(session, monkeypatch):
+    from amplifier_web import attachments
+    observed = []
+    async def encode(command, coordinator):
+        observed.append((command, coordinator))
+        return {"content": "refs-only", "metadata": {}}
+    monkeypatch.setattr(attachments, "encode", encode)
+    # bind_media captures the actual attachment helper at installation, so bind
+    # a fresh structural host instead of replacing its already-issued callback.
+    from amplifier_web.host import media
+    from types import SimpleNamespace
+    capabilities = {}
+    coordinator = SimpleNamespace(
+        session_id=session.caps["web.media.store"].session_id,
+        register_capability=capabilities.__setitem__,
+        get_capability=capabilities.get,
+        register_cleanup=lambda cleanup: None,
+        hooks=SimpleNamespace(register=lambda *args, **kwargs: None))
+    class Store:
+        def media(self, *args, **kwargs):
+            return session.caps["web.media.store"]
+    media.bind_media(SimpleNamespace(session_id=coordinator.session_id, coordinator=coordinator), Store())
+    command = SimpleNamespace(text="read")
+    encoder = capabilities["live.attachments.encode"]
+    assert await encoder(command, coordinator) == {"content": "refs-only", "metadata": {}}
+    assert observed == [(command, coordinator)]
+    with pytest.raises(ValueError, match="another construction"):
+        await encoder(command, SimpleNamespace(get_capability=lambda name: object()))
+    assert len(observed) == 1
+
 
 @pytest.mark.parametrize("mode", ["finite", "selected", "nested", "resumed", "persistent"])
 async def test_actual_child_provider_receives_own_adopted_pixels_without_parent_capability(
