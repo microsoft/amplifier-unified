@@ -8,9 +8,6 @@ elevation or policy.
 
 Outside what this protects: changed app code, or any other program that runs
 as the same person, can ask Windows for the same confirmation itself.
-
-dialogs_in_front also serves the launcher's own messages: it changes window
-order only, and nothing here answers a dialog.
 """
 from __future__ import annotations
 
@@ -225,11 +222,10 @@ def _bring_forward(window):
 
 
 def _raise_dialogs(done):
-    """Bring each dialog of this process in front of other windows, once.
+    """Keep this process's Windows confirmation in front of other windows.
 
-    Windows opens a dialog of a program that is not in use behind the window
-    that is in use, where the person sees only a taskbar button. The flags of
-    the message box itself do not prevent that. The person still answers it.
+    Windows may open it behind them, where the person sees only a taskbar
+    button. The person still answers it.
     """
     raised = set()
     try:
@@ -238,21 +234,8 @@ def _raise_dialogs(done):
                 if window not in raised:
                     raised.add(window)
                     _bring_forward(window)
-    except Exception:  # Window order is a convenience; never fail the step for it.
+    except Exception:  # Window order is a convenience; never fail the trust step for it.
         return
-
-
-@contextmanager
-def dialogs_in_front():
-    """While open, bring this process's dialogs in front of other programs' windows."""
-    done = threading.Event()
-    helper = threading.Thread(target=_raise_dialogs, args=(done,), daemon=True)
-    helper.start()
-    try:
-        yield
-    finally:
-        done.set()
-        helper.join(2)
 
 
 def add_root(der, *, store="ROOT"):
@@ -262,18 +245,25 @@ def add_root(der, *, store="ROOT"):
     person selected No) or `blocked` (Windows refused or did not keep it).
     The call waits while the Windows confirmation is open.
     """
+    done = threading.Event()
+    helper = threading.Thread(target=_raise_dialogs, args=(done,), daemon=True)
     try:
         with _open(der, store, write=True) as (api, handle, context):
             found = _find(api, handle, context)
             if found:
                 api.CertFreeCertificateContext(found)
                 return "present"
-            with dialogs_in_front():
-                added = api.CertAddCertificateContextToStore(handle, context, _ADD_REPLACE_INHERIT, None)
-                error = C.get_last_error()
-            outcome = "added" if added else "declined" if error == _CANCELLED else "blocked"
+            helper.start()
+            if api.CertAddCertificateContextToStore(handle, context, _ADD_REPLACE_INHERIT, None):
+                outcome = "added"
+            else:
+                outcome = "declined" if C.get_last_error() == _CANCELLED else "blocked"
     except OSError:
         outcome = "blocked"
+    finally:
+        done.set()
+        if helper.is_alive():
+            helper.join(2)
     try:
         # Windows said yes; require that the store really holds it now.
         if outcome == "added" and not contains(der, store=store):
@@ -290,18 +280,25 @@ def remove_root(der, *, store="ROOT"):
     the Windows question is No, so `declined` is an ordinary outcome: the root
     stays, and it is inert because no key can sign under it.
     """
+    done = threading.Event()
+    helper = threading.Thread(target=_raise_dialogs, args=(done,), daemon=True)
     try:
         with _open(der, store, write=True) as (api, handle, context):
             found = _find(api, handle, context)
             if not found:
                 return "absent"
-            with dialogs_in_front():
-                # Windows frees the found context whether or not it deletes it.
-                removed = api.CertDeleteCertificateFromStore(found)
-                error = C.get_last_error()
-            outcome = "removed" if removed else "declined" if error == _CANCELLED else "blocked"
+            helper.start()
+            # Windows frees the found context whether or not it deletes it.
+            if api.CertDeleteCertificateFromStore(found):
+                outcome = "removed"
+            else:
+                outcome = "declined" if C.get_last_error() == _CANCELLED else "blocked"
     except OSError:
         outcome = "blocked"
+    finally:
+        done.set()
+        if helper.is_alive():
+            helper.join(2)
     try:
         if outcome == "removed" and contains(der, store=store):
             return "blocked"

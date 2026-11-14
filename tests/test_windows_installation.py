@@ -310,43 +310,29 @@ def test_failed_health_is_not_host_success_or_automatic_force_cleanup(installati
 @pytest.mark.parametrize("result,expected", [(6, True), (7, False)])
 def test_windowless_notice_uses_owner_dialog_without_shell_or_trust_change(monkeypatch, result, expected):
     import ctypes
-    from contextlib import contextmanager
-    from amplifier_web import windows_trust
-    calls, order = [], []
+    calls = []
     class Dialog:
         def __call__(self, parent, message, title, flags):
-            order.append("message")
             calls.append((parent, message, title, flags))
             return result
-    @contextmanager
-    def in_front():
-        order.append("raise-start")
-        yield
-        order.append("raise-end")
     dialog = Dialog()
     monkeypatch.setattr(setup.os, "name", "nt")
     monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **kw: SimpleNamespace(MessageBoxW=dialog), raising=False)
-    monkeypatch.setattr(windows_trust, "dialogs_in_front", in_front)
     assert setup.owner_notice("Review the local certificate?", confirm=True) is expected
-    # Information icon and Yes/No. A windowless launcher's question must not
-    # wait behind the browser: the flags ask Windows for that, and because the
-    # flags alone did not achieve it on a real PC, the message is also raised
-    # explicitly for as long as it is open.
-    assert calls == [(None, "Review the local certificate?", "Amplifier Unified", 0x50044)]
-    assert order == ["raise-start", "message", "raise-end"]
+    # Information icon, Yes/No, and in front of other windows: a windowless
+    # launcher's question must not wait behind the browser. The system-modal
+    # flag (0x1000) is the one that achieves it; the native test measures that.
+    assert calls == [(None, "Review the local certificate?", "Amplifier Unified", 0x51044)]
     assert dialog.restype is ctypes.c_int
 
 
 def test_windowless_notice_failure_is_not_approval(monkeypatch):
     import ctypes
-    from contextlib import nullcontext
-    from amplifier_web import windows_trust
     class Dialog:
         def __call__(self, *args):
             return 0
     monkeypatch.setattr(setup.os, "name", "nt")
     monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **kw: SimpleNamespace(MessageBoxW=Dialog()), raising=False)
-    monkeypatch.setattr(windows_trust, "dialogs_in_front", nullcontext)
     with pytest.raises(OSError, match="could not be displayed"):
         setup.owner_notice("Review?", confirm=True)
 

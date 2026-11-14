@@ -24,16 +24,17 @@ def owner_notice(message, *, confirm=False):
     import ctypes
     if os.name != "nt":
         raise RuntimeError("The installation dialog requires native Windows.")
-    from .windows_trust import dialogs_in_front
     dialog = ctypes.WinDLL("user32", use_last_error=True).MessageBoxW
     dialog.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint]
     dialog.restype = ctypes.c_int
     # In front of other windows: a windowless launcher's message that waits
-    # behind the browser looks like nothing happened. The message-box flags
-    # alone did not achieve that on a real PC (the message opened behind the
-    # browser), so the message is also raised explicitly.
-    with dialogs_in_front():
-        result = dialog(None, message, "Amplifier Unified", 0x50040 | (0x4 if confirm else 0))
+    # behind the browser looks like nothing happened. The person's last click
+    # usually went to another window, and Windows then keeps a new window of
+    # this process behind it. Measured on native Windows: the foreground and
+    # topmost flags alone do not prevent that, and neither does raising the
+    # window afterwards. The system-modal flag (0x1000) does: Windows creates
+    # the message as a topmost window.
+    result = dialog(None, message, "Amplifier Unified", 0x51040 | (0x4 if confirm else 0))
     if not result:
         raise OSError("The installation dialog could not be displayed.")
     return result == 6 if confirm else True
