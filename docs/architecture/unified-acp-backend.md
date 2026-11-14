@@ -75,6 +75,37 @@ recovery policy. This feature does not promise survival of process/machine loss.
 The authenticated WebSocket hop is internal to the shipped launcher and host,
 not a portable upstream ACP network protocol; external clients use ACP stdio.
 
+### Optional conditional retirement
+
+Initialization metadata `com.microsoft.amplifier.retirement` version `1`
+advertises `_amplifier/retire` and advisory notification
+`_amplifier/retirementAvailable`. These are private optional extensions over the
+existing ACP connection, not upstream ACP session-close semantics or a blanket
+claim that a wrapper can be killed safely.
+
+The request contains only `sessionId`, the exact execution attached to this
+connection. The result repeats `sessionId` and has `disposition` equal to
+`retired`, `busy` or `unknown`. Only `retired` authorizes closing this attachment.
+The owner refuses cleanup when it has other attached sessions or unsettled work;
+this does not limit how many sessions a connection can normally use. Native
+retirement checks active and background work, approvals, tools and persistence
+under the existing admission/retirement handshake. Connection-bound tools stay
+mounted until the acknowledgement and a final matching-owner check. Refusal,
+timeout, caller cancellation or changed ownership does not release those tools.
+An exact successful result can be read again after a lost response, without
+creating a session or replaying an input.
+
+The advisory notification contains only `sessionId`. Existing root idle or
+background completion observations can produce it, including outside a prompt;
+it only suggests attempting the conditional operation. It is neither an idle
+guarantee nor an instruction to retry work. Retirement replies do not trigger
+another advisory notification. No timer or new retention limit is added.
+Naming emits its completion advisory after its owning future and persistence
+settle. Some other final resource-release paths, including closing the last
+kernel or settling computer custody, do not yet emit a later advisory. Their
+connections may remain attached until another legitimate activity; active or
+uncertain resources still refuse retirement safely.
+
 ## Scope and qualification
 
 Advertised capabilities are text, resume and transient HTTP MCP. Legacy-history

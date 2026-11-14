@@ -222,7 +222,13 @@ class LiveSessionNaming:
             except Exception:
                 log.warning('Session naming failed; keeping the existing title.',exc_info=True)
         self.pending=asyncio.create_task(generate())
-        self.pending.add_done_callback(lambda _:self.schedule())
+        def finished(task):
+            self.schedule()
+            if not self.closed and not task.cancelled():
+                # Provider completion can precede naming persistence. This
+                # advisory is emitted only after the owning future settles.
+                self.publish({'type':'session.naming.finished'})
+        self.pending.add_done_callback(finished)
 
     async def _snapshot_hook(self, metadata, *, skip_unchanged=False):
         """Freeze sampled text and the selected connection without editing context."""
