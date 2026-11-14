@@ -335,10 +335,14 @@ class StandaloneHostAdapter(HostAdapter):
 
     async def prepare_execution(self, loop, coordinator, providers):
         if coordinator and coordinator.get_capability("live.child_mode") == "finite":
-            return None, providers, coordinator.session_id
+            from .media import execution_providers
+            return None, execution_providers(coordinator, providers), coordinator.session_id
         if coordinator:
             from ..native_provider import install_native
             providers = await install_native(loop, coordinator, providers)
+        if coordinator and not coordinator.get_capability("web.app_access.install"):
+            from .media import execution_providers
+            providers = execution_providers(coordinator, providers)
         return coordinator.get_capability("live.runtime") if coordinator else None, providers, None
 
     def finite_finished(self, scope, coordinator, status, result=""):
@@ -702,7 +706,9 @@ class Children:
                 return
             context = child.coordinator.get("context")
             messages = await context.get_messages() if context else []
-            self.store.save(identity, messages, {**metadata, "status": status or row["status"]})
+            canonical = self.store.save(identity, messages, {**metadata, "status": status or row["status"]})
+            from .media import acknowledge_media
+            acknowledge_media(child.coordinator, self.store, identity, canonical)
             if continuity:
                 continuity.save()
         completion = {}
@@ -716,8 +722,10 @@ class Children:
             def retain_child(constructing):
                 nonlocal child
                 child = constructing
+            from .media import bind_media
             initialization = initialization_hooks(isolation=isolation, decision_accounts=decision_accounts,
-                                                  routing=routing, retain=retain_child)
+                                                  routing=routing, retain=retain_child,
+                                                  media=partial(bind_media, store=self.store))
             from .approvals import Approvals
             approvals = (self.approvals.for_context(lambda: child.coordinator.get('context') if child else None)
                          if isinstance(self.approvals, Approvals) else self.approvals)
@@ -751,6 +759,7 @@ class Children:
             coordinator.register_capability("web.worker_run", row["runId"])
             coordinator.register_capability("self_delegation_depth", self_delegation_depth)
             coordinator.register_capability("live.checkpoint", checkpoint)
+            coordinator.register_capability("session.durable_checkpoint", checkpoint)
             from ..context_continuity import install as install_continuity
             from ..runtime_controls import override_path
             continuity = install_continuity(coordinator, identity, override_path(identity).parent, checkpoint)
@@ -778,7 +787,9 @@ class Children:
             else:
                 coordinator.register_capability("live.runtime", None)
             if parent_messages is not None:
-                await coordinator.get("context").set_messages(copy.deepcopy(parent_messages))
+                from .media import adopt_messages
+                parent_messages = await adopt_messages(coordinator, parent.coordinator, parent_messages)
+                await coordinator.get("context").set_messages(parent_messages)
             await self.install(child, child_prepared)
             # Authority-bearing closures belong to the invoking coordinator.
             # Install before execution, including finite/custom orchestrators
@@ -786,6 +797,12 @@ class Children:
             # also propagates itself for nested and resumed children.
             if install_access:
                 await install_access(coordinator)
+            if not persistent or not callable(getattr(coordinator.get("orchestrator"), "_select_provider", None)):
+                # Finite/custom loops do not necessarily call prepare_execution.
+                # Native installation is deliberately not attempted on this path.
+                from .media import execution_providers
+                providers = coordinator.get("providers") or {}
+                providers.update(execution_providers(coordinator, providers))
             unregister = coordinator.hooks.register("orchestrator:complete", completed, name="unified-child-completion", priority=999)
             if ledger and parent_messages is not None:
                 # Recover evidence only after original history and admission
@@ -797,6 +814,8 @@ class Children:
                 if recovered_messages != parent_messages:
                     await coordinator.get("context").set_messages(recovered_messages)
             checkpoint_ready = True
+            from .media import enable_media
+            enable_media(coordinator)
             row["status"] = "running"
             self._emit(row)
             await checkpoint()

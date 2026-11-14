@@ -101,7 +101,8 @@ class SelectedProvider:
     def __getattr__(self, name):
         if name == "default_model" and self.selection.get("model"):
             return self.selection["model"]
-        execution = self._execution_provider() if name in {'stream', 'request_budget', 'refit_request'} else self.original
+        execution = self._execution_provider() if name in {
+            'stream', 'request_budget', 'refit_request', 'compact_context'} else self.original
         method = getattr(execution, name)
         if name == 'refit_request' and callable(method):
             async def refit(request, *, error, request_options=None, **kwargs):
@@ -137,7 +138,8 @@ class SelectedProvider:
                 selected, _ = self._selected_request(request, {}, consume=True)
                 # Native compaction owns its own output reservation. Only the
                 # selected model/effort follows the conversation preference.
-                selected = selected.model_copy(update={"max_output_tokens": request.max_output_tokens})
+                if selected.max_output_tokens != request.max_output_tokens:
+                    selected = selected.model_copy(update={"max_output_tokens": request.max_output_tokens})
                 return await method(selected, **kwargs)
             return compact
         if name == "validate_compacted_context" and callable(method):
@@ -1235,9 +1237,11 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         def retain_session(constructing):
             nonlocal session
             session = constructing
+        from .media import bind_media
         initialization = initialization_hooks(isolation=isolation, decision_accounts=decision_accounts,
                                               routing=routing, retain=retain_session,
-                                              ephemeral_servers=ephemeral_mcp_servers)
+                                              ephemeral_servers=ephemeral_mcp_servers,
+                                              media=partial(bind_media, store=store))
         with startup_timing.phase('manager.session.create'):
             session = await prepared.create_session(session_id=runtime.session_id,
                 session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None,
@@ -1370,6 +1374,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 saved_rows = store.save(runtime.session_id, transcript, {**metadata, "status": status,
                     "last_updated": datetime.now(UTC).isoformat(),
                     "turn_count": sum(row.get("role") == "user" for row in transcript)})
+                from .media import acknowledge_media
+                acknowledge_media(coordinator, store, runtime.session_id, saved_rows)
                 if timing:timing.mark('store.end')
                 native_guard.saved()
                 if continuity:
@@ -1405,6 +1411,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 published_anchors = anchors  # A failed emit remains retryable.
             return canonical
         coordinator.register_capability("live.checkpoint", checkpoint)
+        coordinator.register_capability("session.durable_checkpoint",
+                                        partial(checkpoint, capture_messages=False))
         from ..context_continuity import install as install_continuity
         continuity = install_continuity(coordinator, runtime.session_id, edited_path.parent,
                                        checkpoint, writer_guard=recovery_write_guard)
@@ -1414,6 +1422,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         coordinator.register_cleanup(cleanup_jobs)
         with startup_timing.phase('manager.checkpoint'):
             await checkpoint(capture_messages=False)
+        from .media import enable_media
+        enable_media(coordinator)
         failures = getattr(loop, "load_failures", [])
         fatal_failures = [row for row in failures if not isolation or row.get("type") != "provider"]
         if fatal_failures:
