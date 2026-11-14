@@ -25,6 +25,43 @@ rollback. Private runtime receipts still identify the actual host PID, exact
 creation time, process image and listening identity. Native windowless worker
 containment and full background lifetime remain affected qualification boundaries.
 
+### One console without a window for the host's child programs
+
+`pythonw.exe` has no console. Windows creates a new, visible console for every
+console program that such a process starts with default creation flags. A
+no-window flag at each known call site cannot cover code that the application
+does not own.
+
+The app host therefore attaches a console that has no window as its first step
+(`amplifier_web/windows_hidden_console.py`). A console program started with
+default flags inherits that console, and so do the console programs it starts.
+The mechanism lives in the app generation, so an in-app update delivers it. The
+stable launcher is not changed by it: a launcher keeps the code that setup
+installed.
+
+Rules that the mechanism depends on (measured on native Windows 11, CPython 3.13):
+
+- A console attached after process start resets the process's console control
+  handlers. Python's signal settings then give no protection: one Ctrl+C event
+  from a child on the shared console ends the host with `0xC000013A`. The host
+  registers an explicit handler for Ctrl+C and Ctrl+Break. If that registration
+  fails, the host releases the console and continues without it.
+- The host's standard handles are restored to their earlier values after the
+  attach. A child must not inherit console input that nobody can type.
+- Known call sites keep their explicit no-window flag. Such a child gets its own
+  console and does not share the host's.
+
+Limits. This is a default, not a sandbox:
+
+- A program that requests a new console still gets a window.
+- A windowed (GUI) child and a detached child have no console. Their console
+  children get a new window unless that child prevents it.
+- Children that share the host's console also share its control events: a
+  Ctrl+C event that one child sends to the whole console reaches the others.
+- Ending the hidden console's `conhost.exe` ends the host.
+- The worker tree was already covered: the launch guard starts each payload
+  with the no-window flag, and the worker's tools inherit that console.
+
 ### Stable launcher and update recovery
 
 The supervised candidate keeps the owner-logon task's `pythonw.exe` as a stable

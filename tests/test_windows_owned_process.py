@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+from amplifier_web import windows_hidden_console as hidden_console
 from amplifier_web import windows_jobs as jobs
 from amplifier_web import windows_launch_guard as guard
 
@@ -974,6 +975,134 @@ asyncio.run(main())
 """
 
 
+class HiddenConsoleTests(unittest.TestCase):
+    """Fake kernel: order and failure handling only, not Windows qualification."""
+
+    def native(self, **results):
+        folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (folder / "python.exe").write_bytes(b"MZ")
+        k = SimpleNamespace(**{name: Mock(return_value=1) for name in (
+            "SetStdHandle", "AttachConsole", "SetConsoleCtrlHandler", "FreeConsole")})
+        k.GetConsoleCP = Mock(return_value=0)
+        self.saved = {0xFFFFFFF6: 11, 0xFFFFFFF5: 12, 0xFFFFFFF4: None}
+        k.GetStdHandle = Mock(side_effect=self.saved.__getitem__)
+        for name, value in results.items():
+            getattr(k, name).return_value = value
+        helper = Mock(pid=4321, stdout=Mock(read=Mock(return_value=b"1")), wait=Mock(return_value=0))
+        popen = self.enterContext(patch.object(hidden_console.subprocess, "Popen", return_value=helper))
+        self.enterContext(patch.object(hidden_console.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True))
+        self.enterContext(patch.object(hidden_console.sys, "platform", "win32"))
+        self.enterContext(patch.object(hidden_console.sys, "_base_executable",
+                                       str(folder / "pythonw.exe"), create=True))
+        self.enterContext(patch.object(c, "WinDLL", return_value=k, create=True))
+        self.enterContext(patch.object(c, "WINFUNCTYPE", lambda *types: (lambda function: function), create=True))
+        self.enterContext(patch.object(c, "get_last_error", return_value=5, create=True))
+        self.enterContext(patch.object(c, "WinError", side_effect=lambda code=0: OSError(code), create=True))
+        self.enterContext(patch.object(hidden_console, "_control_handler", None))
+        return k, helper, popen, folder
+
+    def test_other_platforms_change_nothing(self):
+        with patch.object(hidden_console.sys, "platform", "linux"), \
+                patch.object(hidden_console.subprocess, "Popen") as popen:
+            self.assertEqual(hidden_console.ensure_hidden_console(), {"status": "not-applicable"})
+        popen.assert_not_called()
+
+    def test_existing_console_is_kept(self):
+        k, helper, popen, folder = self.native(GetConsoleCP=437)
+        self.assertEqual(hidden_console.ensure_hidden_console(), {"status": "existing"})
+        popen.assert_not_called()
+        k.AttachConsole.assert_not_called()
+        k.SetConsoleCtrlHandler.assert_not_called()
+
+    def test_attach_restores_standard_handles_then_handles_control_events(self):
+        k, helper, popen, folder = self.native()
+        order = Mock()
+        order.attach_mock(k.AttachConsole, "attach")
+        order.attach_mock(k.SetStdHandle, "restore")
+        order.attach_mock(k.SetConsoleCtrlHandler, "handler")
+        self.assertEqual(hidden_console.ensure_hidden_console(), {"status": "attached"})
+        argv = popen.call_args.args[0]
+        self.assertEqual(argv[:3], [str(folder / "python.exe"), "-I", "-S"])
+        self.assertEqual(popen.call_args.kwargs["creationflags"], 0x08000000)
+        helper.stdin.close.assert_called_once()
+        helper.wait.assert_called_once()
+        # Console membership first; the earlier pipe/absent handles return
+        # before any child can start; the control handler is last and required.
+        self.assertEqual([call[0] for call in order.mock_calls],
+                         ["attach", "restore", "restore", "restore", "handler"])
+        k.AttachConsole.assert_called_once_with(4321)
+        self.assertEqual([call.args for call in k.SetStdHandle.call_args_list], list(self.saved.items()))
+        handler, add = k.SetConsoleCtrlHandler.call_args.args
+        self.assertEqual(add, 1)
+        self.assertIs(hidden_console._control_handler, handler)
+        # Ctrl+C and Ctrl+Break are handled. Close, sign-out and shutdown keep
+        # the default Windows result.
+        self.assertEqual([handler(event) for event in (0, 1, 2, 5, 6)], [1, 1, 0, 0, 0])
+        k.FreeConsole.assert_not_called()
+
+    def test_console_without_control_handler_is_released(self):
+        k, helper, popen, folder = self.native(SetConsoleCtrlHandler=0)
+        result = hidden_console.ensure_hidden_console()
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["errorType"], "OSError")
+        k.FreeConsole.assert_called_once()
+        self.assertEqual([call.args for call in k.SetStdHandle.call_args_list], 2 * list(self.saved.items()))
+        self.assertIsNone(hidden_console._control_handler)
+
+    def test_failed_attach_or_missing_interpreter_changes_nothing(self):
+        k, helper, popen, folder = self.native(AttachConsole=0)
+        self.assertEqual(hidden_console.ensure_hidden_console()["status"], "unavailable")
+        helper.stdin.close.assert_called_once()
+        k.SetStdHandle.assert_not_called()
+        k.SetConsoleCtrlHandler.assert_not_called()
+        (folder / "python.exe").unlink()
+        popen.reset_mock()
+        self.assertEqual(hidden_console.ensure_hidden_console(),
+                         {"status": "unavailable", "errorType": "FileNotFoundError", "windowsError": None})
+        popen.assert_not_called()
+
+    def test_helper_that_does_not_start_leaves_the_process_without_a_console(self):
+        k, helper, popen, folder = self.native()
+        helper.stdout.read.return_value = b""
+        self.assertEqual(hidden_console.ensure_hidden_console()["status"], "unavailable")
+        k.AttachConsole.assert_not_called()
+        helper.stdin.close.assert_called_once()
+
+
+# A windowless (pythonw.exe) host. It starts console programs with DEFAULT creation
+# flags, as code that this application does not own does. argv: module, python, mode.
+WINDOWLESS_HOST = r"""
+import ctypes as c, importlib.util, json, os, subprocess, sys
+spec = importlib.util.spec_from_file_location('hidden_console', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+python, mode = sys.argv[2], sys.argv[3]
+report = ("import ctypes as c,json;k=c.WinDLL('kernel32');k.GetConsoleWindow.restype=c.c_void_p;"
+          "ids=(c.c_uint32*16)();n=k.GetConsoleProcessList(ids,16);"
+          "print(json.dumps({'window':int(k.GetConsoleWindow() or 0),'shared':sorted(ids[:n])}),flush=True)")
+nested = ("import subprocess,sys;sys.stdout.buffer.write(subprocess.run("
+          "[sys.executable,'-I','-S','-c',sys.argv[1]],capture_output=True).stdout)")
+send = ("import ctypes as c,signal,sys,time;signal.signal(signal.SIGINT,signal.SIG_IGN);"
+        "signal.signal(signal.SIGBREAK,signal.SIG_IGN);"
+        "print(c.WinDLL('kernel32').GenerateConsoleCtrlEvent(int(sys.argv[1]),0),flush=True);time.sleep(0.5)")
+def child(*code):
+    return subprocess.run([python, '-I', '-S', '-c', *code], capture_output=True, timeout=30).stdout
+kernel = c.WinDLL('kernel32')
+kernel.GetConsoleWindow.restype = c.c_void_p
+out = {'pid': os.getpid(), 'consoleBefore': bool(kernel.GetConsoleCP())}
+if mode == 'attach':
+    out['status'] = [module.ensure_hidden_console()['status'], module.ensure_hidden_console()['status']]
+    out['hostWindow'] = int(kernel.GetConsoleWindow() or 0)
+out['child'] = json.loads(child(report))
+if mode == 'attach':
+    out['grandchild'] = json.loads(child(nested, report))
+    out['events'] = [int(child(send, str(event))) for event in (0, 1)]
+    out['stdin'] = child('import sys;print(len(sys.stdin.read()))').decode().strip()
+    out['left'] = subprocess.Popen([python, '-I', '-S', '-c', 'import time;time.sleep(120)']).pid
+print(json.dumps(out), flush=True)
+"""
+
+
 @unittest.skipUnless(os.name == "nt", "native Windows Job/handle qualification pending")
 class NativeWindowsTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -1019,6 +1148,66 @@ class NativeWindowsTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(owner.io_finalized)
         finally:
             await owner.close()
+
+    async def _windowless_host(self, mode):
+        python = Path(BASE_PYTHON).with_name("python.exe")
+        windowless = python.with_name("pythonw.exe")
+        if not python.is_file() or not windowless.is_file():
+            self.skipTest("python.exe and pythonw.exe are required beside the base interpreter")
+        owner = await jobs.WindowsOwnedProcess.start(
+            [str(windowless), "-I", "-S", "-c", WINDOWLESS_HOST,
+             str(ROOT / "amplifier_web/windows_hidden_console.py"), str(python), mode],
+            cwd=str(python.parent), env=jobs._Native().bootstrap_env(), trusted_python=BASE_PYTHON)
+        try:
+            owner.stdin.close()
+            stdout, stderr, result = await asyncio.gather(
+                owner.stdout.read(), owner.stderr.read(), owner.wait())
+            self.assertEqual(stderr, b"")
+            # Job containment, captured pipes and normal settlement are unchanged.
+            self.assertEqual((result.payload_returncode, result.guard_returncode,
+                              result.active_processes, result.output_discarded), (0, 0, 0, False))
+            self.assertTrue(owner.tree_empty and owner.io_finalized)
+            return json.loads(stdout)
+        finally:
+            await owner.close()
+
+    async def test_windowless_host_children_share_one_console_without_a_window(self):
+        value = await self._windowless_host("attach")
+        self.assertFalse(value["consoleBefore"])
+        self.assertEqual(value["status"], ["attached", "existing"])
+        self.assertEqual(value["hostWindow"], 0)
+        for name in ("child", "grandchild"):
+            # Default creation flags: the child is on the HOST's console, and
+            # that console has no window.
+            self.assertEqual(value[name]["window"], 0, name)
+            self.assertIn(value["pid"], value[name]["shared"], name)
+        # Ctrl+C and Ctrl+Break from a child on the shared console were
+        # delivered, and the host continued to this report.
+        self.assertEqual(value["events"], [1, 1])
+        # The host's closed stdin pipe is inherited, not unreachable console input.
+        self.assertEqual(value["stdin"], "0")
+        # A default-flags child that was left running was reclaimed with the job.
+        kernel = c.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.restype = c.c_void_p
+        kernel.OpenProcess.argtypes = [c.c_uint32, c.c_int32, c.c_uint32]
+        kernel.WaitForSingleObject.argtypes = [c.c_void_p, c.c_uint32]
+        kernel.CloseHandle.argtypes = [c.c_void_p]
+        handle = kernel.OpenProcess(0x100000, False, value["left"])
+        if handle:
+            try:
+                self.assertEqual(kernel.WaitForSingleObject(handle, 0), 0)
+            finally:
+                kernel.CloseHandle(handle)
+
+        # Control: without the hidden console, the same default-flags child is
+        # NOT on the host's console and Windows creates a console window for
+        # it. This shows that this runner can observe the defect; a runner
+        # desktop is not a person's desktop.
+        control = await self._windowless_host("control")
+        self.assertFalse(control["consoleBefore"])
+        self.assertNotIn(control["pid"], control["child"]["shared"])
+        if not control["child"]["window"]:
+            self.skipTest("mechanism checks passed; this runner shows no console window for the control")
 
     async def test_venv_redirector_rejected_base_guard_preserves_venv_payload(self):
         import venv

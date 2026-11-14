@@ -47,6 +47,7 @@ on:
       - amplifier_web/update_checks.py
       - amplifier_web/windows_jobs.py
       - amplifier_web/windows_launch_guard.py
+      - amplifier_web/windows_hidden_console.py
       - amplifier_web/deployment.py
       - amplifier_web/tls.py
       - amplifier_web/windows_tls.py
