@@ -65,7 +65,20 @@
         "tests/fixtures/provider_isolation_native.py",
         "tests/test_handoff_native_admission.py::test_actual_native_turn_completes_handoff_without_self_wait",
         "tests/test_work_origin.py",
-        "tests/test_work_native_effects.py"
+        "tests/test_work_native_effects.py",
+        "tests/test_app_guidance.py::test_guidance_requires_trusted_role_and_installs_once",
+        "tests/test_app_guidance.py::test_all_installers_supply_an_explicit_execution_role",
+        "tests/test_app_guidance.py::test_real_core_receives_canvas_tool_and_ephemeral_instructions",
+        "tests/test_child_app_authority.py::test_scripted_child_returns_result_after_root_only_refusal",
+        "tests/test_child_app_authority.py::test_mounted_child_app_access_has_own_principal",
+        "tests/test_child_app_assignment_capture.py::test_first_child_mount_retains_invoking_assignment_through_provider_wait",
+        "tests/test_worker_commissioning_native.py::test_native_first_request_sees_isolated_placement_and_saved_objective",
+        "tests/test_native_result_readers.py::test_mounted_full_child_reads_saved_tests_results_and_artifacts",
+        "tests/test_native_result_readers.py::test_child_evidence_reads_obey_current_execution_and_recheck_after_file_io",
+        "tests/test_collaborative_workspaces.py::test_child_identity_cannot_borrow_root_generation",
+        "tests/test_assignment_brief.py::test_child_principal_and_internal_caller_cannot_borrow_brief",
+        "tests/test_native_generation_producer.py::test_nested_child_keeps_original_assignment_when_installed_during_later_root_work",
+        "tests/test_loaded_provenance.py::test_worker_ready_does_not_wait_for_slow_provenance_hashing"
       ],
       "paths": [
         "tests/fixtures/computation_runtime.py",
@@ -143,7 +156,18 @@
         "tests/test_workspace_work.py",
         "tests/test_coordination_delivery.py",
         "tests/test_collaborative_workspaces.py",
-        "tests/test_peer_creation_operation.py"
+        "tests/test_peer_creation_operation.py",
+        "amplifier_web/coordination_guidance.py",
+        "tests/test_app_guidance.py",
+        "tests/fixtures/canvas_runtime_probe.py",
+        "tests/fixtures/collaboration_native_probe.py",
+        "tests/test_child_app_authority.py",
+        "tests/test_child_app_assignment_capture.py",
+        "tests/test_worker_commissioning_native.py",
+        "tests/test_native_result_readers.py",
+        "tests/test_assignment_brief.py",
+        "tests/test_native_generation_producer.py",
+        "tests/test_loaded_provenance.py"
       ]
     },
     "release-runtime": {

@@ -69,7 +69,7 @@ async def environment(tmp_path, *, count=4, fault=None, parallel=False, direct=F
         async def bridge(operation, arguments):
             return {'context.manifest': {'surfaces': [], 'inputIds': ['fixture-input']},
                     'memory.context': {'items': []}, 'coordination.current': {}}[operation]
-        await install_app_access(c, bridge)
+        await install_app_access(c, bridge, execution_role='root')
         delivery = c.get_capability('web.surface_delivery').begin_work.__self__
         state.delivery = delivery
 

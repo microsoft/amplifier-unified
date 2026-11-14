@@ -588,3 +588,58 @@ def test_shared_work_changes_select_only_existing_native_owner(path):
 ])
 def test_shared_work_registration_does_not_expand_native_to_unrelated_paths(path):
     assert 'native' not in {row['lane'] for row in checks.select_lanes([path])}
+
+
+def test_role_guidance_regressions_have_a_focused_native_execution_owner():
+    coverage = checks.manifest()
+    native = coverage['lanes']['native']
+    selectors = [
+        'tests/test_app_guidance.py::test_guidance_requires_trusted_role_and_installs_once',
+        'tests/test_app_guidance.py::test_all_installers_supply_an_explicit_execution_role',
+        'tests/test_app_guidance.py::test_real_core_receives_canvas_tool_and_ephemeral_instructions',
+        'tests/test_child_app_authority.py::test_scripted_child_returns_result_after_root_only_refusal',
+        'tests/test_child_app_authority.py::test_mounted_child_app_access_has_own_principal',
+        'tests/test_child_app_assignment_capture.py::test_first_child_mount_retains_invoking_assignment_through_provider_wait',
+        'tests/test_worker_commissioning_native.py::test_native_first_request_sees_isolated_placement_and_saved_objective',
+        'tests/test_native_result_readers.py::test_mounted_full_child_reads_saved_tests_results_and_artifacts',
+        'tests/test_native_result_readers.py::test_child_evidence_reads_obey_current_execution_and_recheck_after_file_io',
+        'tests/test_collaborative_workspaces.py::test_child_identity_cannot_borrow_root_generation',
+        'tests/test_assignment_brief.py::test_child_principal_and_internal_caller_cannot_borrow_brief',
+        'tests/test_native_generation_producer.py::test_nested_child_keeps_original_assignment_when_installed_during_later_root_work',
+        'tests/test_loaded_provenance.py::test_worker_ready_does_not_wait_for_slow_provenance_hashing',
+    ]
+    for selector in selectors:
+        assert native['selectors'].count(selector) == 1
+        assert checks.select_lanes([selector.split('::')[0]]) == [
+            {'lane': 'native', 'os': 'ubuntu-latest'}]
+    for path in ('amplifier_web/coordination_guidance.py',
+                 'tests/fixtures/canvas_runtime_probe.py',
+                 'tests/fixtures/collaboration_native_probe.py'):
+        assert checks.select_lanes([path]) == [{'lane': 'native', 'os': 'ubuntu-latest'}]
+    # Keep publication qualification and its frozen baseline separate; do not
+    # trade the existing release owner for an automatic-only source assertion.
+    assert selectors[2] in coverage['lanes']['release-runtime']['selectors']
+
+
+def test_native_owner_retains_request_artifacts_in_its_existing_output(tmp_path, monkeypatch):
+    scripts = str(ROOT / 'scripts')
+    monkeypatch.syspath_prepend(scripts)
+    import run_owned_integration as runner
+
+    environment = tmp_path / 'environment.json'
+    environment.write_text('{"UNIFIED_RUNTIME_PYTHON": "prepared-python"}')
+    preparation = tmp_path / 'preparation.json'
+    preparation.write_text('{"fixture": true}')
+    work = tmp_path / 'work'
+    work.mkdir()
+    for name in ('pyproject.toml', 'uv.lock'):
+        (work / name).write_text('synthetic')
+    monkeypatch.setattr(runner.integration_native, 'prepare', lambda *a, **kw: {
+        'environment': str(environment), 'preparation': str(preparation), 'python': 'prepared-python'})
+    observed = []
+    monkeypatch.setattr(runner, 'run_lane', lambda *args: observed.append(args) or 0)
+    output = tmp_path / 'output'
+    assert runner.execute('native', work, output) == 0
+    assert observed[0][3] == {'UNIFIED_RUNTIME_PYTHON': 'prepared-python',
+                             'AMPLIFIER_TEST_ARTIFACTS': str(output / 'artifacts')}
+    assert (output / 'artifacts').is_dir()

@@ -113,7 +113,7 @@ class Runtime:
             if operation.startswith('context.'):
                 args = {**args, '_contextInputs': list(self.epoch), '_contextBindings': []}
             return await pair.app.app_bridge(operation, args, pair.sid)
-        await install_app_access(coordinator, bridge)
+        await install_app_access(coordinator, bridge, execution_role='root')
         self.delivery = self.capabilities['web.surface_delivery']
         self.provider = SelectedProvider(Provider(), {'model': 'selected', 'effort': 'high'},
                                         self.capabilities['web.provider_transform'])
