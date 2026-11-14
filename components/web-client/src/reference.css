@@ -698,11 +698,25 @@ body,
   display: flex;
   gap: 5px;
   min-width: 0;
+  align-items: baseline;
+}
+
+#amp-one .a-model-price-rates dt {
+  min-width: 0;
 }
 
 #amp-one .a-model-price-rates dd {
   margin: 0;
   font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+@media (max-width: 600px) {
+  #amp-one .a-model-price-rates {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 #amp-one .a-model-pricing ol {

@@ -50,7 +50,9 @@ class Provider:
                 **base, 'kind': 'tiered', 'threshold_tokens': 100000,
                 'threshold_basis': 'input_tokens+cache_read_input_tokens+cache_creation_input_tokens',
                 'tiers': [{'up_to': 100000, 'rates': rates},
-                          {'above': 100000, 'rates': {**rates, 'input': '0.50', 'output': '2.50'}}]}},
+                          {'above': 100000, 'rates': {'input': '0.50', 'output': '2.50',
+                              'cache_read': '0.05', 'cache_write_5m': '0.625',
+                              'cache_write_1h': '1.00'}}]}},
             {'id': 'unified-model', 'pricing_details': {**base, 'kind': 'fixed',
                 'rates': {**rates, 'input': '8.00', 'output': '40.00'}}},
         ]

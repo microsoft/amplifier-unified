@@ -233,11 +233,32 @@ try{
  const cacheSummary=tierPrice.locator('summary');
  await cacheSummary.focus();await cacheSummary.press('Enter');
  await expect(tierPrice.getByText('Cache write (1 hour)',{exact:true}).first()).toBeVisible();
+ const cacheTiers=tierPrice.locator('.a-model-pricing-details > section').filter({has:page.locator('h5')});
+ await expect(cacheTiers.nth(0).locator('dd')).toHaveText(['$0.01','$0.125','$0.2']);
+ await expect(cacheTiers.nth(1).locator('dd')).toHaveText(['$0.05','$0.625','$1']);
+ const rateLayout=()=>tierPrice.locator('dd').evaluateAll(nodes=>nodes.filter(node=>node.getClientRects().length).map(node=>{
+  const range=document.createRange();range.selectNodeContents(node);
+  const rect=node.getBoundingClientRect(),row=node.parentElement.getBoundingClientRect();
+  return {text:node.textContent,lines:range.getClientRects().length,
+   insideRow:rect.left>=row.left-1&&rect.right<=row.right+1};
+ }));
+ const assertRates=async label=>{
+  const rates=await rateLayout();
+  assert.ok(rates.length>=10,`${label}: input/output and cache rates are present`);
+  assert.ok(rates.every(rate=>rate.lines===1&&rate.insideRow),`${label}: monetary values stay unbroken and inside their rows: ${JSON.stringify(rates)}`);
+  return rates;
+ };
+ const desktopRates=await assertRates('desktop');
  await page.screenshot({path:`${evidence}/desktop-tiered-pricing.png`});
  await page.setViewportSize({width:390,height:844});
  await expect(tierPrice).toBeVisible();
  assert.ok(await tierPrice.evaluate(node=>node.scrollWidth<=node.clientWidth+1),'Pricing reflows without horizontal clipping');
+ const narrowRates=await assertRates('390px');
+ await tierPrice.locator('strong').first().evaluate(node=>node.scrollIntoView({block:'start'}));
+ await page.screenshot({path:`${evidence}/narrow-tiered-pricing-header.png`});
+ await cacheSummary.evaluate(node=>node.scrollIntoView({block:'start'}));
  await page.screenshot({path:`${evidence}/narrow-tiered-pricing.png`});
+ await save('pricing-rate-layout.json',{desktop:desktopRates,narrow390:narrowRates});
  await page.setViewportSize({width:1280,height:900});
  await closeOptions();
  // Deliberately choose the other real synthetic connection with the SAME model
