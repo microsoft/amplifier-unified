@@ -766,7 +766,9 @@ class Children:
             async def compacted(event, data):
                 await checkpoint()
                 return HookResult()
-            coordinator.hooks.register("context:compaction_finished", compacted, name="unified-child-context-checkpoint")
+            from .media import registration_hooks
+            registration_hooks(coordinator).register("context:compaction_finished", compacted,
+                                                       name="unified-child-context-checkpoint")
             for capability in ("model_role_resolver", "web.activity.install"):
                 value = parent.coordinator.get_capability(capability)
                 if routing_policy and capability == "model_role_resolver" and coordinator.get_capability(capability) is not None:
@@ -803,7 +805,8 @@ class Children:
                 from .media import execution_providers
                 providers = coordinator.get("providers") or {}
                 providers.update(execution_providers(coordinator, providers))
-            unregister = coordinator.hooks.register("orchestrator:complete", completed, name="unified-child-completion", priority=999)
+            unregister = registration_hooks(coordinator).register(
+                "orchestrator:complete", completed, name="unified-child-completion", priority=999)
             if ledger and parent_messages is not None:
                 # Recover evidence only after original history and admission
                 # setup succeed. A pending dispatch becomes interrupted, never

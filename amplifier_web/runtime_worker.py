@@ -745,6 +745,8 @@ class Worker:
 
     def install_activity(self, coordinator):
         from amplifier_core import HookResult
+        from .host.media import registration_hooks
+        hooks = registration_hooks(coordinator)
         # ask_user is delivered over the host's durable approval channel even
         # though this worker has no terminal. This advertises transport only;
         # each request still waits for its own explicit client response.
@@ -770,7 +772,7 @@ class Worker:
                 return HookResult()
             # Run before loop-live's content-block observer (default priority).
             for event in ("content_block:start", "content_block:end"):
-                coordinator.hooks.register(event, response_block, priority=-100,
+                hooks.register(event, response_block, priority=-100,
                     name="amplifier-web-response-" + event)
             async def response_boundary(event, data):
                 from amplifier_web.execution_events import CALL_PURPOSE
@@ -778,7 +780,7 @@ class Worker:
                     self.response_blocks.reset()
                 return HookResult()
             for event in ("provider:request", "llm:request", "tool:pre"):
-                coordinator.hooks.register(event, response_boundary, priority=-100,
+                hooks.register(event, response_boundary, priority=-100,
                     name="amplifier-web-response-boundary-" + event)
         # A resumed child reuses its session ID but owns a new coordinator.
         # Bind hooks to their originating run, never the mutable registry row.
@@ -883,7 +885,7 @@ class Worker:
         for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "context:compaction_started", "context:compaction_progress", "context:compaction_finished"):
             # Exact tool observation identity must precede the canonical
             # context-intelligence logger (priority 100), independent of mount order.
-            coordinator.hooks.register(event, activity, name="amplifier-web-activity-" + event,
+            hooks.register(event, activity, name="amplifier-web-activity-" + event,
                 priority=-100 if event.startswith('tool:') else 0)
 
     async def preparation_progress(self, directory):

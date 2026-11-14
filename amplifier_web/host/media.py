@@ -14,7 +14,110 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 
 NAMESPACE = "experimental.media.v1"
+_HOOK_BRIDGE = "web.media.hook_bridge"
+_HOOK_GRAPH = "web.media.hook_graph"
+_HOST_PARTICIPANT = "unified-host"
 _REQUEST_ONLY = ContextVar("unified_request_only_images", default=None)
+
+
+def registration_coordinator(coordinator):
+    """An explicit registration view; execution keeps the real coordinator."""
+    getter = getattr(coordinator, "get_capability", None)
+    bridge = getter(_HOOK_BRIDGE) if callable(getter) else None
+    if bridge is not None:
+        return bridge.participant(_HOST_PARTICIPANT)
+    return coordinator
+
+
+def registration_hooks(coordinator):
+    """Select the construction-owned registration view, never replace Core."""
+    return getattr(registration_coordinator(coordinator), "hooks", None)
+
+
+def begin_hook_graph(session):
+    """Capture this actual construction, before any host/module registration.
+
+    Participant IDs select the supplied cooperative registration views. They are
+    not qualification: only the issuer's actual construction and emission
+    witnesses can qualify a result. Unknown raw/native registrations stay out.
+    """
+    coordinator = session.coordinator
+    try:
+        from amplifier_core import AmplifierSession
+        from amplifier_foundation.session.media_hook_bridge import (
+            MediaHookBridge, install_media_hook_bridge,
+        )
+    except ImportError:
+        return
+    if type(session) is not AmplifierSession:
+        return  # Structural/text-only hosts cannot manufacture a Core witness.
+    if not callable(getattr(MediaHookBridge, "begin_participating_graph", None)):
+        return
+    config = session.config
+    participants = [_HOST_PARTICIPANT]
+    for kind, default in (("orchestrator", "loop-basic"), ("context", "context-simple")):
+        spec = config.get("session", {}).get(kind, default)
+        participants.append(spec if isinstance(spec, str) else spec["module"])
+    for kind in ("providers", "tools", "hooks"):
+        participants.extend(row["module"] for row in config.get(kind, []) if row.get("module"))
+    bridge = install_media_hook_bridge(coordinator)
+    begin = getattr(bridge, "begin_participating_graph", None)
+    if not callable(begin):
+        return  # Older safe bridges cannot produce a positive construction.
+    graph = begin(session, owner=_HOST_PARTICIPANT, participants=tuple(dict.fromkeys(participants)))
+    coordinator.register_capability(_HOOK_BRIDGE, bridge)
+    coordinator.register_capability(_HOOK_GRAPH, graph)
+
+
+def seal_hook_graph(coordinator):
+    """Called by the actual final host preparation phase, never a readiness hook."""
+    graph = coordinator.get_capability(_HOOK_GRAPH)
+    bridge = coordinator.get_capability(_HOOK_BRIDGE)
+    if graph is None or bridge is None:
+        return False
+    if bridge.graph_receipt is None:
+        try:
+            graph.seal()
+        except ValueError:
+            return False
+    enable_media(coordinator)
+    return bridge.validate_receipt(bridge.graph_receipt) is True
+
+
+async def control_tool_post(coordinator, event):
+    """Settle the separate UI/control invocation once, without claiming a turn.
+
+    These calls have no canonical tool-message append owner. They can return the
+    final post-hook text, but must drop staged durable refs rather than borrow a
+    loop checkpoint or return a promotable uncommitted carrier.
+    """
+    boundary = coordinator.get_capability("session.media.tool_post")
+    if callable(boundary):
+        settled = await boundary(event, hooks=coordinator.hooks, coordinator=coordinator)
+        processed = settled["hook_result"]
+        value = settled["result"] if settled.get("complete") is True else None
+    else:
+        handlers = coordinator.hooks.list_handlers("tool:post").get("tool:post", [])
+        processed = await coordinator.hooks.emit("tool:post", event)
+        processed = await coordinator.process_hook_result(processed, "tool:post", event["tool_name"])
+        # Core's aggregate can lose replacement/null/Continue-after-mutation.
+        # Without the structural owner there is no truthful effective result.
+        value = None if handlers else event["result"]
+    capability = coordinator.get_capability(NAMESPACE)
+    if capability is not None and callable(getattr(capability, "publish", None)):
+        origin = {"kind": "tool", "session_id": coordinator.session_id,
+                  "id": event["tool_call_id"]}
+        await capability.publish([], origin=origin, disposition="drop")
+    if processed.action == "deny":
+        return {"success": False, "error": {"message": processed.reason or "Denied by session policy"}}
+    if isinstance(value, dict):
+        output = value.get("output")
+        if isinstance(output, dict) and NAMESPACE in output:
+            value = copy.deepcopy(value)
+            value["output"].pop(NAMESPACE, None)
+            value["mediaDelivery"] = {"available": False,
+                "reason": "Control invocations do not append canonical media history"}
+    return value
 
 
 def record_request_only(message, *, validate=None):
@@ -166,13 +269,14 @@ def bind_media(session, store):
         # as if it were vision. prepare_media refuses their ref-bearing requests.
         coordinator.register_capability("web.media.unavailable", True)
         return
+    begin_hook_graph(session)
     policy = SourcePolicy(coordinator)
     request_only = RequestOnlyRegistry()
     coordinator.register_capability("web.media.request_only", request_only)
     coordinator.register_capability("computer_use.media_policy", policy.computer)
     coordinator.register_capability("web.media.source_policy", policy)
-    coordinator.hooks.register("tool:pre", policy.observe, name="unified-media-source",
-                               priority=-100)
+    registration_hooks(coordinator).register("tool:pre", policy.observe,
+                                            name="unified-media-source", priority=-100)
     if _durable_media_supported():
         media = store.media(session.session_id, policy_verifier=policy.validate,
                             request_only_verifier=request_only.validate)
@@ -183,6 +287,14 @@ def bind_media(session, store):
     # Module readiness reports describe compatibility, never execution authority.
     # Enable only after the selected loop and actual checkpoint seam are mounted.
     capability = bind_session_media(coordinator, store=media, enabled=False)
+    if coordinator.get_capability(_HOOK_BRIDGE) is not None:
+        original_ingest = capability.ingest
+        async def ingest(*args, **kwargs):
+            # Later raw registration/configuration/remount invalidates its
+            # receipt. A cached flag cannot authorize another producer.
+            enable_media(coordinator)
+            return await original_ingest(*args, **kwargs)
+        capability.ingest = ingest
     original_report = capability.report
     def report(component, *, event, outcome, details=None):
         facts = dict(details or {})
@@ -210,6 +322,9 @@ def bind_media(session, store):
     cleanup = getattr(coordinator, "register_cleanup", None)
     if callable(cleanup):
         async def close():
+            capability.enabled = False
+            if coordinator.get_capability(_HOOK_BRIDGE) is not None:
+                coordinator.register_capability("session.media.tool_post", None)
             request_only.requests.clear()
             projected.clear()
             media.close()
@@ -226,11 +341,10 @@ def enable_media(coordinator):
                      and type(facts.get("contract")) is int and facts["contract"] == 1
                      and facts.get("ready") is True
                      for facts in consumers.values())
-    # The composition owner records this only after qualifying the exact
-    # post-hook carrier/registration graph. Readiness names alone cannot prove
-    # that an unobserved raw/native hook did not replace or redact a result.
-    graph = coordinator.get_capability("web.media.graph_qualified") is True
-    capability.enabled = bool(graph and loop_ready and _durable_media_supported() and
+    bridge = coordinator.get_capability(_HOOK_BRIDGE)
+    qualified = (bridge is not None and
+                 bridge.validate_receipt(bridge.graph_receipt) is True)
+    capability.enabled = bool(qualified and loop_ready and _durable_media_supported() and
                               callable(coordinator.get_capability("session.durable_checkpoint")))
 
 

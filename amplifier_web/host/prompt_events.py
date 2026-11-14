@@ -7,6 +7,7 @@ turn event is the completion boundary. The orchestrator already emits submit.
 
 def install(coordinator):
     from amplifier_core import HookResult
+    from .media import registration_hooks
 
     if coordinator.get_capability('web.prompt_completion'):
         return
@@ -44,4 +45,5 @@ def install(coordinator):
         return HookResult()
 
     for event in ('prompt:submit', 'prompt:complete', 'orchestrator:complete'):
-        coordinator.hooks.register(event, observe, name='unified-prompt-' + event, priority=900)
+        registration_hooks(coordinator).register(event, observe,
+                                                   name='unified-prompt-' + event, priority=900)

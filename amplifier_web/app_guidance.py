@@ -364,9 +364,11 @@ async def install_app_access(coordinator, bridge):
     await coordinator.mount('tools', AppControl(), name='app_control')
     delivery.install_dispatch(coordinator)
     guard_tools()
-    coordinator.hooks.register('tool:pre', bind_nested_pre, priority=-200, name='web-work-nested-origin')
-    coordinator.hooks.register('provider:request', guidance, name='web-canvas-guidance')
-    coordinator.hooks.register('tool:post', bind_image_pair, name='web-image-pair-receipt')
+    from .host.media import registration_hooks
+    hooks = registration_hooks(coordinator)
+    hooks.register('tool:pre', bind_nested_pre, priority=-200, name='web-work-nested-origin')
+    hooks.register('provider:request', guidance, name='web-canvas-guidance')
+    hooks.register('tool:post', bind_image_pair, name='web-image-pair-receipt')
     async def ui_host(operation, args):
         return await bridge('ui.use', {'operation': operation, 'args': args})
     coordinator.register_capability('ui.use.host', ui_host)
@@ -378,5 +380,5 @@ async def install_app_access(coordinator, bridge):
             if current.get('stopped'):
                 return HookResult(action='deny',reason='The user paused UI access. Resume from Browser & computer controls before further input.')
         return HookResult()
-    coordinator.hooks.register('tool:pre',ui_stop_guard,priority=-100,name='web-ui-stop')
+    hooks.register('tool:pre',ui_stop_guard,priority=-100,name='web-ui-stop')
     coordinator.register_capability('web.app_access', True)

@@ -261,9 +261,11 @@ def install_preparation_timing(coordinator):
     async def end(event, data):
         boundary('end', data)
         return HookResult()
-    coordinator.hooks.register('provider:request', start, priority=-10000,
+    from .host.media import registration_hooks
+    hooks = registration_hooks(coordinator)
+    hooks.register('provider:request', start, priority=-10000,
                                name='unified-preparation-start')
-    coordinator.hooks.register('provider:request', end, priority=10000,
+    hooks.register('provider:request', end, priority=10000,
                                name='unified-preparation-end')
 
 

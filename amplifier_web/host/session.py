@@ -1052,7 +1052,9 @@ def install_checkpoint_hooks(coordinator, runtime, checkpoint):
                         pass
         return HookResult()
     for event in ("tool:post", "tool:error", "orchestrator:complete", "context:compaction_finished"):
-        coordinator.hooks.register(event, checkpoint_hook, name="unified-checkpoint-" + event)
+        from .media import registration_hooks
+        registration_hooks(coordinator).register(event, checkpoint_hook,
+                                                  name="unified-checkpoint-" + event)
 
 
 async def prepare_manager(workspace, *, runtime=None, bundle=None, background_delegate=True,

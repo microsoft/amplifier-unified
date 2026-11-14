@@ -95,7 +95,8 @@ class ComputerEpisodes:
             return await original(mount_point, module, name=name)
 
         coordinator.mount = mount
-        hooks = getattr(coordinator, "hooks", None)
+        from .host.media import registration_hooks
+        hooks = registration_hooks(coordinator)
         if hooks is not None:
             from amplifier_core import HookResult
             async def entering(event, data):

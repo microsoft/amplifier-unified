@@ -876,7 +876,9 @@ class RuntimeControls:
                     checker(*expected_process_owner)
             with invocation(arguments):
                 result = await tool.execute(arguments)
-            await hooks.emit("tool:post",{**data,"tool_result":result.model_dump() if hasattr(result,"model_dump") else result})
+            from .host.media import control_tool_post
+            result = await control_tool_post(coordinator, {
+                **data, "result": result.model_dump() if hasattr(result, "model_dump") else result})
             if checkpoint:
                 await self.checkpoint()
             return {"callId":call,"result":public_config(result)}
