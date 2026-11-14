@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 from dataclasses import dataclass
+from amplifier_core.llm_errors import ContextLengthError
 
 
 @dataclass
@@ -36,10 +37,10 @@ class OverflowFeedback:
 
     def capture(self, request, prepared, options, dispatch_options, owner, *, binding=None):
         """Witness dispatch inputs before any provider await; retain no body copy."""
-        method = getattr(owner, 'recover_context_overflow', None)
-        if not callable(method):
-            return None
         try:
+            method = getattr(owner, 'recover_context_overflow', None)
+            if not callable(method):
+                return None
             return _Feedback(request, self.fingerprint(request), prepared, self.fingerprint(prepared),
                              None, self.freeze(options), copy.deepcopy(dispatch_options),
                              owner, method, self.freeze(binding))
@@ -47,7 +48,6 @@ class OverflowFeedback:
             return None  # Opaque inputs cannot be proven unchanged.
 
     def remember(self, row, error):
-        from amplifier_core.llm_errors import ContextLengthError
         if row is None or not isinstance(error, ContextLengthError):
             return
         row.error = error

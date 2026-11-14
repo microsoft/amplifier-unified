@@ -27,7 +27,10 @@ def execute(lane, work, output):
         (output / 'preparation.json').write_text(Path(prepared['preparation']).read_text())
         for name in ('pyproject.toml', 'uv.lock'):
             (output / name).write_bytes((work / name).read_bytes())
-        return run_lane(lane, prepared['python'], output, env)
+        result = run_lane(lane, prepared['python'], output, env)
+        if result == 0:
+            integration_native.overflow_negative_controls(ROOT, work, prepared['python'], output, env)
+        return result
     if lane in integration_clients.LANES:
         prepared = integration_clients.prepare(
             lane, work, ROOT, python=sys.executable,

@@ -638,11 +638,15 @@ def test_native_owner_retains_request_artifacts_in_its_existing_output(tmp_path,
         'environment': str(environment), 'preparation': str(preparation), 'python': 'prepared-python'})
     observed = []
     monkeypatch.setattr(runner, 'run_lane', lambda *args: observed.append(args) or 0)
+    controls = []
+    monkeypatch.setattr(runner.integration_native, 'overflow_negative_controls',
+                        lambda *args: controls.append(args))
     output = tmp_path / 'output'
     assert runner.execute('native', work, output) == 0
     assert observed[0][3] == {'UNIFIED_RUNTIME_PYTHON': 'prepared-python',
                              'AMPLIFIER_TEST_ARTIFACTS': str(output / 'artifacts')}
     assert (output / 'artifacts').is_dir()
+    assert controls[0][0] == runner.ROOT and controls[0][1] == work
 
 
 def test_overflow_regressions_use_existing_native_owner_without_other_lane_expansion():

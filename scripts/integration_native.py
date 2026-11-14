@@ -10,11 +10,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 from pathlib import Path
 import subprocess
 import tomllib
+import xml.etree.ElementTree as ET
 
 EXTRA_DEPENDENCIES = (
     "amplifier-unified",
@@ -177,6 +179,58 @@ print(json.dumps({'python':sys.version,'modules':modules,'distributions':rows}))
     write_json(work / "environment.json", environment)
     return {"python": str(interpreter), "environment": str(work / "environment.json"),
             "preparation": str(work / "preparation.json")}
+
+
+def overflow_negative_controls(root: Path, work: Path, python: str, output: Path, environment: dict) -> None:
+    """Run the same focused assertions against exact old sources, never mutate the candidate."""
+    controls = output / 'overflow-before'
+    controls.mkdir()
+    cases = (
+        ('host', 'https://github.com/microsoft/amplifier-unified',
+         'f9e1578a7a7afc567d91a99c24d9e389b24c0201',
+         'tests/test_provider_overflow_recovery.py', 'exact_overflow_feedback', 6,
+         'assert result is not None'),
+        ('provider', 'https://github.com/microsoft/amplifier-module-provider-anthropic',
+         '46b0d34557dab8914e8eb897a3da6872475db154',
+         'tests/test_provider_context_continuation.py', 'cold_nondefault', 2,
+         'assert decision is not None'),
+    )
+    records = []
+    for name, url, revision, test, keyword, expected, assertion in cases:
+        source = work / ('overflow-before-' + name)
+        subprocess.run(['git', 'clone', '--filter=blob:none', '--no-checkout', url, str(source)], check=True)
+        subprocess.run(['git', '-C', str(source), 'checkout', '--detach', revision], check=True)
+        actual = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
+        if actual != revision:
+            raise ValueError('Negative control source identity changed')
+        junit = controls / (name + '.xml')
+        env = {**os.environ, **environment}
+        env.pop('AMPLIFIER_TEST_ARTIFACTS', None)
+        # Import old host from its own copy, or old provider before the current
+        # host. Each assertion runs in a fresh process with unchanged dependencies.
+        env['PYTHONPATH'] = os.pathsep.join([str(source), str(root)])
+        selected = root / test
+        if name == 'host':
+            selected = source / test
+            shutil.copyfile(root / test, selected)
+        command = [python, '-m', 'pytest', str(selected), '-k', keyword,
+                   '-q', '--tb=short', '--junitxml=' + str(junit)]
+        result = subprocess.run(command, cwd=source, env=env, capture_output=True, text=True)
+        (controls / (name + '.txt')).write_text(result.stdout + result.stderr)
+        tree = ET.parse(junit).getroot()
+        tests = list(tree.iter('testcase'))
+        failures = [case.find('failure') for case in tests]
+        valid = (result.returncode == 1 and len(tests) == expected
+                 and all(failure is not None and assertion in ''.join(failure.itertext())
+                         for failure in failures)
+                 and not list(tree.iter('skipped')) and not list(tree.iter('error')))
+        records.append({'name': name, 'source': url, 'revision': actual,
+                        'test': test, 'keyword': keyword, 'expectedFailures': expected,
+                        'observedTests': len(tests), 'exitCode': result.returncode,
+                        'discriminatingFailure': valid})
+        write_json(controls / 'result.json', {'controls': records})
+        if not valid:
+            raise ValueError('Negative control did not fail at the expected assertion: ' + name)
 
 
 def main() -> None:

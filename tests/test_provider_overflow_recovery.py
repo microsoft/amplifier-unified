@@ -331,5 +331,45 @@ async def test_successful_dispatch_witness_work_against_disabled_baseline(size, 
     evidence(f'overflow-witness-work-{size}', {'bodyCharacters': size, 'measurements': records})
 
 
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('cancelled', [False, True])
+async def test_optional_feedback_lookup_failure_cannot_replace_success_or_cancellation(stream, cancelled):
+    import asyncio
+
+    class DynamicProvider:
+        def __getattr__(self, name):
+            if name == 'recover_context_overflow':
+                raise RuntimeError('Synthetic optional capability lookup failure')
+            raise AttributeError(name)
+
+        async def complete(self, request, **options):
+            if cancelled:
+                raise cancellation
+            return 'done'
+
+        async def stream(self, request, **options):
+            yield await self.complete(request, **options)
+
+    cancellation = asyncio.CancelledError('Original cancellation')
+    raw = DynamicProvider()
+    surface = SurfaceProvider(raw, Delivery())
+    selected = SelectedProvider(raw, {'model': 'selected'}, lambda _: surface)
+    request = ChatRequest(messages=[Message(role='user', content='Synthetic task.')])
+
+    async def invoke():
+        if stream:
+            return [item async for item in selected.stream(request)]
+        return await selected.complete(request)
+
+    if cancelled:
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await invoke()
+        assert caught.value is cancellation
+    else:
+        assert await invoke() == (['done'] if stream else 'done')
+    assert not selected._selected_requests and not selected._overflow_feedback.entries
+    assert not surface.prepared and not surface._overflow_feedback.entries
+
+
 async def _ignore(*args, **kwargs):
     pass
