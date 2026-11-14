@@ -1678,10 +1678,54 @@ The owner can end every browser session with `amplifier-unified browsers sign-ou
 (see the deployment guide). All browser session checks go through one function,
 `auth.valid_session`, so that no check can ignore that sign-out.
 
-Remote browsers need an explicit owner-approved browser-pairing design over
-trusted configured HTTPS. Do not silently reuse terminal/companion grants with
-broader authority. Until that path is qualified, report its limitation rather
-than offering the unusable Windows password form.
+#### Remote browser sign-in on a Windows host
+
+A browser on another device cannot use the local launcher, and a Windows host
+has no password form. The owner starts that sign-in at the PC:
+`amplifier-unified browsers code` prints a code, and the owner types it on the
+sign-in page that the other device shows. Terminal and companion grants are not
+reused for this; they carry broader authority.
+
+- **The code.** Ten symbols from 32 (no `0`, `1`, `I` or `O`): 50 bits. It
+  lasts 120 seconds and works once. The host keeps only its SHA-256, and at
+  most eight codes at a time. Input is upper-cased, and spaces and hyphens are
+  removed. No other character is changed, so a look-alike is a wrong code.
+- **Who can make one.** The command uses the same request as `open`. It pins
+  the privately read leaf certificate before it reads or sends the control
+  credential, and the host accepts that request from this computer only. The
+  code is bound to the host instance, the data folder, the owner SID and one
+  address: an exact HTTPS entry of `public_origins` that is not this computer.
+- **Where it works.** The redeem endpoint has its own narrow check: HTTPS, an
+  explicit `Origin` equal to the address the browser used, and that address an
+  exact configured remote one. It does **not** look at the peer address. A
+  Tailscale TCP forward connects to the host from `127.0.0.1` (measured), so
+  the socket does not say where the browser is. The local ticket keeps its
+  stricter check, where both socket ends must be local.
+- **Wrong codes.** No lockout and no delay. A lockout would let any device
+  that reaches the address keep the owner out. A delay taken in turn would
+  make the owner wait behind a flood of wrong codes. The numbers carry the
+  guess resistance: at 10,000 guesses each second against eight pending codes,
+  the chance of a hit in one code lifetime is about 1 in 100 million. A wrong
+  code never removes a real one and never reaches the owner's command, which
+  uses another endpoint. The host counts wrong codes and logs only the count.
+- **The page.** Server-rendered, with no script, and it shows nothing from the
+  request. It is sent with `Referrer-Policy: same-origin`, not `no-referrer`:
+  from a `no-referrer` page a browser posts the form with `Origin: null`, and
+  the redeem check refuses that. The redeem reply is `no-store`, `no-referrer`.
+- **The session.** The signed cookie from a code is marked remote
+  (`"via": "remote"`), so that a rule for remote sessions only is possible
+  later. Local cookies do not change. The lifetime is the configured one.
+- **The control.** `amplifier-unified browsers sign-out` signs out every
+  browser and drops every pending ticket and code.
+
+Limits: there is no sign-out for one device. A person on the same network who
+gets the owner to type the code into a look-alike page within 120 seconds can
+use it; the command prints the exact address to open. One host process holds
+the pending codes in memory, so a restart drops them and the owner makes a new
+code. Not measured yet: a phone browser, and the whole journey on a real second
+device. Linux, macOS and WSL hosts keep the password form and refuse both code
+endpoints. The steps for the owner are in the
+[deployment guide](../DEPLOYMENT.md#windows-host-reach-unified-from-another-device).
 
 ### Background lifetime
 

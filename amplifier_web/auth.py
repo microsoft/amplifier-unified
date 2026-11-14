@@ -280,9 +280,9 @@ def _epoch_hint(data_dir: Path):
 def refresh_sessions(app, streams=()) -> bool:
     """Apply a newer saved sign-out to the running host; True when applied.
 
-    Pending sign-in tickets are dropped, and open state streams are ended so
-    that a signed-out browser cannot keep watching. A stream that reconnects
-    must pass the session check again.
+    Pending sign-in tickets and codes are dropped, and open state streams are
+    ended so that a signed-out browser cannot keep watching. A stream that
+    reconnects must pass the session check again.
     """
     data_dir = app["service"].data_dir
     hint = _epoch_hint(data_dir)
@@ -293,9 +293,9 @@ def refresh_sessions(app, streams=()) -> bool:
     if value <= app.get("session_epoch", 0):
         return False
     app["session_epoch"] = value
-    store = app.get("browser_entry")
-    if store is not None:
-        store.clear()
+    for store in (app.get("browser_entry"), app.get("browser_codes")):
+        if store is not None:
+            store.clear()
     for task in list(streams):
         task.cancel()
     return True
@@ -312,8 +312,10 @@ async def watch_sessions(app, streams, *, interval=2.0):
             continue
 
 
-def new_session(secret: str) -> str:
-    return _signed(secret, {"kind": "session", "issued": int(time.time()), "nonce": secrets.token_urlsafe(16)})
+def new_session(secret: str, *, remote: bool = False) -> str:
+    """Mark a session from a typed remote code; a local session is unchanged."""
+    payload = {"kind": "session", "issued": int(time.time()), "nonce": secrets.token_urlsafe(16)}
+    return _signed(secret, {**payload, "via": "remote"} if remote else payload)
 
 
 def new_csrf(secret: str) -> str:
@@ -394,15 +396,16 @@ async def auth_required(request: web.Request, handler):
         # This exact handler checks a room/source-bound transport capability.
         # Neither that capability nor an owner cookie grants other API access.
         return await handler(request)
-    if request.path == browser_entry.ISSUE_PATH:
+    if request.path in {browser_entry.ISSUE_PATH, browser_entry.CODE_PATH}:
         authorization = request.headers.get("Authorization", "")
         if (request.method != "POST" or not authorization.startswith("Bearer ")
                 or not hmac.compare_digest(authorization[7:].encode(), request.app["control_token"].encode())):
             return web.json_response({"error": "The owner control credential is required."}, status=403)
         return await handler(request)
-    if request.path == browser_entry.REDEEM_PATH and request.method == "POST":
-        # Only this exact public mutation. The handler requires HTTPS, Origin
-        # and signed form CSRF before atomically consuming the one-use ticket.
+    if request.path in {browser_entry.REDEEM_PATH, browser_entry.CODE_REDEEM_PATH} and request.method == "POST":
+        # Only these exact public mutations. Each handler requires HTTPS, Origin
+        # and signed form CSRF before atomically consuming the one-use ticket
+        # or typed code.
         return await handler(request)
     if extension and request.method == 'OPTIONS':
         return await handler(request)
@@ -471,6 +474,9 @@ async def auth_required(request: web.Request, handler):
 
 
 async def login_page(request: web.Request) -> web.Response:
+    if browser_entry.is_windows() and not browser_entry.loopback_host(urlsplit("//" + request.host).hostname):
+        # Another device cannot use the local launcher; it types an owner-made code.
+        return browser_entry.remote_login_page(request)
     secret = request.app["session_secret"]
     csrf = request.cookies.get(CSRF_COOKIE)
     # Preserve valid issuance for favicon redirects and concurrent login forms.

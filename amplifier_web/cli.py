@@ -98,8 +98,10 @@ def _parse() -> argparse.Namespace:
     runtime.add_argument("runtime_command", choices=["prepare", "status"])
     runtime.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
     browsers = subcommands.add_parser("browsers", help="Manage signed-in browsers")
-    browsers.add_argument("browsers_command", choices=["sign-out"],
-                          help="sign-out: sign out every browser on every device")
+    browsers.add_argument("browsers_command", choices=["sign-out", "code"],
+                          help="sign-out: sign out every browser on every device; "
+                               "code: make a one-use code that signs in a browser on another device (Windows host)")
+    browsers.add_argument("--origin", metavar="URL", help="code: the address that the other device opens")
     setup_tls = subcommands.add_parser("setup-tls", help="Create or inspect the app-owned local CA")
     setup_tls.add_argument("mode", nargs="?", choices=["status", "default", "force", "export"], default="default")
     reset = subcommands.add_parser("reset", help="Reinstall a clean app and runtime while preserving user data")
@@ -356,6 +358,48 @@ def _open_browser(args, data_dir, config):
         raise browser_entry.BrowserEntryUnavailable("The browser did not accept the open request. " + browser_entry.REOPEN)
 
 
+def _code_origin(config, given):
+    """The address a code is for: the given one, or the only one for other devices."""
+    from urllib.parse import urlsplit
+    from .deployment import validate_origin
+    remote = [origin for origin in config["public_origins"] if origin.startswith("https://")
+              and not browser_entry.loopback_host(urlsplit(origin).hostname)]
+    if not remote:
+        raise SystemExit("Amplifier has no address for other devices yet; add one with "
+                         "amplifier-unified config set public_origins (the deployment guide has the steps).")
+    if given is None and len(remote) == 1:
+        return remote[0]
+    try:
+        given = validate_origin(given.rstrip("/")) if given is not None else None
+    except ValueError:
+        given = ""
+    if given in remote:
+        return given
+    raise SystemExit(("That is not one of Amplifier's addresses for other devices." if given is not None
+                      else "Amplifier has more than one address for other devices.")
+                     + " Run the command again with --origin and one of these:\n  " + "\n  ".join(remote))
+
+
+def _browser_code(args, data_dir):
+    """Show the owner one code. The pinned helper alone reads the control credential."""
+    if not browser_entry.is_windows():
+        raise SystemExit("On this computer, sign in with the host account password on the sign-in page.")
+    from .deployment import load_server_config
+    try:
+        config = load_server_config(data_dir, overrides=_server_overrides(args))
+        origin = _code_origin(config, args.origin)
+        code = asyncio.run(browser_entry.owner_browser_code(data_dir, config, origin))
+    except browser_entry.BrowserEntryUnavailable as exc:
+        raise SystemExit(str(exc)) from None
+    except (OSError, ValueError):
+        raise SystemExit("Could not make a code. " + browser_entry.NEW_CODE) from None
+    print(f"Open {origin} on the other device and type this code within two minutes:")
+    print()
+    print("    " + browser_entry.CodeStore.display(code))
+    print()
+    print("The code works once.")
+
+
 def _open_browser_safely(args, data_dir, config):
     try:
         _open_browser(args, data_dir, config)
@@ -507,6 +551,8 @@ def main():
         _config(args, data_dir)
         return
     if args.command == "browsers":
+        if args.browsers_command == "code":
+            return _browser_code(args, data_dir)
         from .auth import sign_out_all
         try:
             sign_out_all(data_dir)
