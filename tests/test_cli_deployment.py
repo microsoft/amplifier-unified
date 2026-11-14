@@ -69,6 +69,24 @@ def test_config_cli_saves_related_settings_in_one_validated_write(tmp_path, monk
     assert config_path(tmp_path).read_bytes() == before
 
 
+@pytest.mark.parametrize("mode,keyless,told", [("force", True, True), ("force", False, False),
+                                              ("default", True, False)])
+def test_forced_renewal_of_a_keyless_windows_identity_says_what_happens_next(
+        tmp_path, monkeypatch, capsys, mode, keyless, told):
+    from amplifier_web import tls, windows_tls
+    calls = []
+    monkeypatch.setattr(cli.browser_entry, "is_windows", lambda: True)
+    monkeypatch.setattr(tls, "setup_local_ca", lambda home, config, *, force: calls.append(force))
+    monkeypatch.setattr(tls, "ca_fingerprint", lambda home: "AA:BB")
+    monkeypatch.setattr(windows_tls, "keyless_identity", lambda home: (b"root", b"leaf") if keyless else None)
+    cli._setup_tls(tmp_path, mode)
+    output = capsys.readouterr().out
+    assert calls == [mode == "force"]
+    # A new certificate needs a new Windows confirmation and a new import elsewhere.
+    assert ("Windows asks you to confirm it" in output) is told
+    assert ("Other devices must import it again" in output) is told
+
+
 def test_serve_options_are_top_level_repeatable_and_overlay_nested_tls(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", [
         "amplifier-unified", "--bind", "127.0.0.1", "--bind", "192.0.2.5",
