@@ -110,7 +110,7 @@ start another retirement or replay work, and failed notification delivery cannot
 undo the completed native retirement.
 
 The request is neither an idle guarantee nor an instruction to retry work.
-Retirement replies do not produce another notification. This reuses the existing
+Reading an already-retired receipt does not produce another notification. This reuses the existing
 retention sweep and settings; no client timer or second retention policy is added.
 Naming completion wakes that owner after its future and persistence settle.
 Background resources, kernel or computer custody and uncertain operations can
