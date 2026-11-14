@@ -1093,6 +1093,16 @@ class HiddenConsoleTests(unittest.TestCase):
             result = hidden_console.ensure_hidden_console()
         self.assertEqual((result["status"], result["consoleReleased"]), ("unavailable", True))
 
+    def test_error_before_the_attach_is_recorded_still_releases_the_console(self):
+        k, helper, popen, folder = self.native()
+        k.AttachConsole.side_effect = MemoryError()  # after Windows attached the console
+        k.GetConsoleCP.side_effect = [0, 437, 0]  # entry; rollback check; after the release
+        self.assertEqual(hidden_console.ensure_hidden_console(), {
+            "status": "unavailable", "errorType": "MemoryError", "windowsError": None,
+            "consoleReleased": True, "standardHandlesRestored": True})
+        k.FreeConsole.assert_called_once()
+        k.SetConsoleCtrlHandler.assert_not_called()
+
     def test_helper_wait_error_cannot_change_a_protected_attach(self):
         k, helper, popen, folder = self.native()
         helper.wait.side_effect = OSError("wait failed")
@@ -1103,7 +1113,7 @@ class HiddenConsoleTests(unittest.TestCase):
     def test_helper_cleanup_errors_cannot_change_a_protected_attach(self):
         k, helper, popen, folder = self.native()
         helper.stdin.close.side_effect = BrokenPipeError()
-        helper.stdout.close.side_effect = OSError()
+        helper.stdout.close.side_effect = ValueError()
         helper.wait.side_effect = subprocess.TimeoutExpired("helper", 10)
         helper.kill.side_effect = PermissionError()
         self.assertEqual(hidden_console.ensure_hidden_console(), {"status": "attached"})

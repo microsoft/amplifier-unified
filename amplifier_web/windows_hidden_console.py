@@ -33,7 +33,9 @@ process that stays attached to a console it could neither protect nor release
 must not continue: one Ctrl+C from a child would end it later, without notice.
 Nothing else in this process may call AttachConsole, AllocConsole or
 FreeConsole afterwards: each one resets the handler table and so removes the
-protection without notice.
+protection without notice. Windows calls a handler that is registered later
+before this one. The handler stays registered until the process ends; do not
+remove it at exit, because that would restore the default result.
 
 The app host always has the launch guard's pipes as standard handles, and a
 child with default standard handles inherits them. A caller with NO standard
@@ -151,7 +153,9 @@ def _attach(timeout, rollback):
         finally:
             timer.cancel()
     except BaseException as error:
-        if attached:
+        # Entry proved that there was no console, so any console now is ours,
+        # even if an error arrived before the flag was set.
+        if attached or kernel.GetConsoleCP():
             kernel.FreeConsole()
             for name, handle in saved:
                 kernel.SetStdHandle(name, handle)
@@ -179,7 +183,7 @@ def _release(helper, timeout):
     for stream in (helper.stdin, helper.stdout):
         try:
             stream.close()
-        except OSError:
+        except Exception:
             pass
     try:
         try:
@@ -187,5 +191,5 @@ def _release(helper, timeout):
         except subprocess.TimeoutExpired:
             helper.kill()
             helper.wait(timeout)
-    except (OSError, subprocess.TimeoutExpired):
+    except Exception:
         pass  # It is a child in the host's Job and ends with it.
