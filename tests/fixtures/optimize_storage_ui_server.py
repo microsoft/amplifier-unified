@@ -26,6 +26,35 @@ PREFIX = 'maintenance.optimize.'
 OLD = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat().replace('+00:00', 'Z')
 REQUEST_SECRET = 'OPTIMIZE-SYNTHETIC-REQUEST-ONLY'
 RESPONSE_SECRET = 'OPTIMIZE-SYNTHETIC-RESPONSE-KEEP'
+OUTBOX_DESTINATION = 'optimize-offline-pending'
+
+
+def assert_pending_outbox(before, after=None):
+    """Nonempty, owner-staged pending rows; an empty equality is not acceptance."""
+    rows = before['deliveries']
+    assert len(rows) == 2, 'Nonempty outbox proof requires both owner-staged pending rows'
+    assert before['outboxTransport'] == {'schedulerStopped': True, 'clientCalls': 0}
+    assert len({row['record_id'] for row in rows}) == 2
+    events = set()
+    for row in rows:
+        assert row['destination'] == OUTBOX_DESTINATION
+        assert row['status'] == 'pending' and row['attempts'] == 0 and row['error'] is None
+        assert row['record_id'] in before['eventIds']
+        assert len(row['revision']) == 64
+        assert REQUEST_SECRET not in row['payload'] and RESPONSE_SECRET not in row['payload']
+        payload = json.loads(row['payload'])
+        assert payload['workspace'] == OUTBOX_DESTINATION
+        assert payload['data']['provider'] == 'fixture'
+        assert payload['data']['model'] == 'outbox-fixture'
+        assert payload['data']['event_id'] == row['record_id']
+        assert 'raw' not in payload['data'] and 'provider_payloads' not in payload['data']
+        assert payload['idempotency_key'].startswith('aci-event-v1:')
+        events.add(payload['event'])
+    assert events == {'llm:request', 'llm:response'}
+    if after is not None:
+        assert after['deliveries'] == rows, 'Outbox identities/status/payloads changed or extra work was enqueued'
+        assert after['outboxTransport'] == before['outboxTransport'], 'Offline transport was contacted'
+    return hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
 
 
 def digest(path):
@@ -113,6 +142,21 @@ async def main(home):
     fixture.Runtime = Runtime
     app = await fixture.main(home)
     service = app['service']
+    diagnostics = service.diagnostics
+    # Pause only this private fixture's outbound scheduler before any destination
+    # exists. Configuration, ingestion, persistence and Optimize remain production
+    # implementations. No transport is opened and no remote ACK is manufactured.
+    if diagnostics.task is not None:
+        diagnostics.task.cancel()
+        await asyncio.gather(diagnostics.task, return_exceptions=True)
+    assert not diagnostics.delivery_tasks
+    transport = {'clientCalls': 0}
+
+    def forbid_transport(_):
+        transport['clientCalls'] += 1
+        raise AssertionError('The offline outbox fixture must never open a CI transport')
+
+    diagnostics._client = forbid_transport
     source = service._session()
     native = source.get('runtimeSessionId') or source['id']
     path = seed_capture(capture_dir(source['workspace'], native), native)
@@ -131,6 +175,26 @@ async def main(home):
     await service.diagnostics.flush()
     with service.diagnostics._db() as db:
         index_shared(db, [(source['workspace'], native)], {'streams': ['usage']})
+    configured = await service.dispatch('diagnostics.configure', {'config': {
+        **diagnostics.config,
+        'enabled': True,
+        'destinations': [{'id': OUTBOX_DESTINATION, 'name': 'Offline pending fixture',
+            'url': 'http://127.0.0.1:9', 'enabled': True, 'streams': ['usage'],
+            'workspace': OUTBOX_DESTINATION, 'workspacePattern': source['workspace'],
+            'includePaths': False, 'authMode': 'static',
+            'apiKeyEnv': 'OPTIMIZE_FIXTURE_UNUSED_CI_KEY', 'authResource': ''}]}},
+        include_state=False)
+    assert configured['accepted'] is True
+    for direction in ('request', 'response'):
+        # Normal Diagnostics ingestion adds identities and idempotency envelopes;
+        # its flush stages the durable outbox. No delivery SQL or timestamp rewrite.
+        diagnostics.record('usage', {'event': 'llm:' + direction,
+            'data': {'provider': 'fixture', 'model': 'outbox-fixture',
+                'usage': {'input_tokens': 5, 'output_tokens': 2},
+                'raw': REQUEST_SECRET if direction == 'request' else RESPONSE_SECRET}},
+            session_id=native, workspace=source['workspace'])
+    await diagnostics.flush()
+    assert not diagnostics.storage_error
     # Initial session/create diagnostics may have appended during flush above.
     # Only this private synthetic fixture is declared genuinely idle.
     os.utime(path, (1, 1))
@@ -163,8 +227,8 @@ async def main(home):
         with service.diagnostics._db() as db:
             ids = [row[0] for row in db.execute(
                 'SELECT id FROM records WHERE session=? ORDER BY id', (native,))]
-            deliveries = [list(row) for row in db.execute(
-                'SELECT record_id,destination,status,payload FROM deliveries ORDER BY record_id,destination')]
+            deliveries = [dict(row) for row in db.execute(
+                'SELECT * FROM deliveries ORDER BY record_id,destination')]
         # Bounded known synthetic records only. Never return their diagnostic bodies.
         facts = {}
         with path.open() as stream:
@@ -180,6 +244,8 @@ async def main(home):
                         'usage': data.get('usage')}
         return {'nativeId': native, 'sessionId': source['id'], 'eventIds': ids,
             'deliveries': deliveries, 'canonicalUnchanged': digest(transcript) == original_transcript,
+            'outboxTransport': {'schedulerStopped': diagnostics.task is None or diagnostics.task.done(),
+                'clientCalls': transport['clientCalls']},
             'sourceSha256': digest(path), 'runtimeCalls': list(service.runtime.calls),
             'diagnosticFacts': facts,
             'automaticCleanupPolicy': cleanup_policy(service),
@@ -253,6 +319,7 @@ async def main(home):
     app.router.add_post('/fixture/browser-session', browser_session)
     app.on_cleanup.append(cleanup)
     # In-process qualification uses these read-only closures, never a listener.
+    assert_pending_outbox(observations())
     return app, observations
 
 
@@ -318,6 +385,7 @@ async def offline_check(*, export=False):
         try:
             before = observe()
             assert len(before['eventIds']) >= 2, 'Identity preservation needs nonempty real indexed records'
+            outbox_hash = assert_pending_outbox(before)
             default = await dispatch('policy.read', {})
             assert default['requestKeepHours'] is None and default['responseKeepHours'] is None
             saved = await dispatch('policy.save', {'expectedRevision': default['revision'],
@@ -335,6 +403,7 @@ async def offline_check(*, export=False):
             frozen = preview['cutoffs'].copy()
             assert frozen['requestBefore'].endswith('Z') and frozen['responseBefore'] is None
             assert preview['canApply'] is True
+            assert_pending_outbox(before, observe())
             gate = app['optimize_fixture_checkpoint']
             gate['held'] = True
             await dispatch('apply', {'operationId': preview['operationId'],
@@ -347,17 +416,22 @@ async def offline_check(*, export=False):
             cancelled = await settle(preview['operationId'])
             assert cancelled['status'] == 'cancelled' and cancelled['canResume'], cancelled
             assert observe()['sourceSha256'] == before['sourceSha256']
+            assert_pending_outbox(before, observe())
             # Passive receipt reads do not resume or expire anything.
             await dispatch('read', {'commandId': 'offline-apply'})
             assert observe()['sourceSha256'] == before['sourceSha256']
+            assert_pending_outbox(before, observe())
             await dispatch('resume', {'operationId': preview['operationId'],
                 'expectedRevision': cancelled['revision']}, 'offline-resume')
             finished = await settle(preview['operationId'])
             assert finished['summary']['coverage'].get('completed', 0) > 0, finished
             command = await dispatch('read', {'commandId': 'offline-apply'})
             assert command['status'] == 'recorded' and command['operationId'] == preview['operationId']
+            resumed = await dispatch('read', {'commandId': 'offline-resume'})
+            assert resumed['status'] == 'recorded' and resumed['operationId'] == preview['operationId']
             assert finished['cutoffs'] == frozen
             after = observe()
+            assert_pending_outbox(before, after)
             assert before['eventIds'] == after['eventIds']
             assert before['deliveries'] == after['deliveries']
             assert after['canonicalUnchanged'] and after['runtimeCalls'] == before['runtimeCalls']
@@ -376,6 +450,8 @@ async def offline_check(*, export=False):
             assert model.get('responseDetail') and model.get('responseRecording'), model
             assert owner(service).adapter.__class__.__name__ == 'OwnerAdapters'
             export_result = await check_public_usage_export(service, before['nativeId']) if export else {}
+            final = observe()
+            assert_pending_outbox(before, final)
             print(json.dumps({'passed': True, 'browser': False, 'listener': False,
                 'realService': True, 'realRetentionOwner': True, 'syntheticSource': True,
                 'operationId': finished['operationId'], 'status': finished['status'],
@@ -385,7 +461,12 @@ async def offline_check(*, export=False):
                 'actualReaderMarksRequestExpiredAndResponseAvailable': True,
                 'realImagePreviewHoldsMissingHistoricalProvenance': True,
                 'indexedRecordCount': len(before['eventIds']),
-                'deliveryRows': len(before['deliveries']), **export_result}))
+                'deliveryRows': len(before['deliveries']), 'outboxStatus': 'pending',
+                'outboxAttempts': [row['attempts'] for row in after['deliveries']],
+                'outboxClientCalls': after['outboxTransport']['clientCalls'],
+                'outboxRowsSha256': outbox_hash,
+                'outboxBefore': before['deliveries'], 'outboxAfter': final['deliveries'],
+                'nonemptyOutboxPreservedWithoutExtraEnqueue': True, **export_result}))
         finally:
             await runner.cleanup()
 
@@ -429,10 +510,17 @@ def source_check():
             assert digest(asset) == ref['sha256'] and asset.stat().st_size == ref['bytes']
             assert row['timestamp'] == OLD and row['session_id'] == 'fixture-root'
         assert path.stat().st_mtime < 3600
+        try:
+            assert_pending_outbox({'deliveries': []})
+        except AssertionError as error:
+            assert 'Nonempty outbox' in str(error)
+        else:
+            raise AssertionError('An empty outbox must not qualify as positive preservation proof')
         print(json.dumps({'passed': True, 'checks': [
             'two independent synthetic diagnostic directions',
             'stable unique event identities', 'exact real sidecar hashes and sizes',
-            'genuinely old timestamp and filesystem idle time'],
+            'genuinely old timestamp and filesystem idle time',
+            'empty outbox rejected as positive preservation evidence'],
             'productionOwnerExecuted': False, 'browserExecuted': False}))
 
 

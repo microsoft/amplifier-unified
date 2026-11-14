@@ -44,6 +44,33 @@ function assertSafeUsageExport(content){
  return calls;
 }
 
+function assertPendingOutbox(before,after){
+ assert.equal(before.deliveries.length,2,'Nonempty outbox proof requires both owner-staged pending rows');
+ assert.deepEqual(before.outboxTransport,{schedulerStopped:true,clientCalls:0});
+ assert.equal(new Set(before.deliveries.map(row=>row.record_id)).size,2);
+ const events=[];
+ for(const row of before.deliveries){
+  assert.equal(row.destination,'optimize-offline-pending');
+  assert.equal(row.status,'pending');assert.equal(row.attempts,0);assert.equal(row.error,null);
+  assert.ok(before.eventIds.includes(row.record_id));
+  assert.match(row.revision,/^[a-f0-9]{64}$/);
+  assert.doesNotMatch(row.payload,/OPTIMIZE-SYNTHETIC-(REQUEST-ONLY|RESPONSE-KEEP)/);
+  const payload=JSON.parse(row.payload);
+  assert.equal(payload.workspace,'optimize-offline-pending');
+  assert.equal(payload.data.provider,'fixture');assert.equal(payload.data.model,'outbox-fixture');
+  assert.equal(payload.data.event_id,row.record_id);
+  assert.equal('raw' in payload.data,false);assert.equal('provider_payloads' in payload.data,false);
+  assert.match(payload.idempotency_key,/^aci-event-v1:[a-f0-9]{64}$/);
+  events.push(payload.event);
+ }
+ assert.deepEqual(events.sort(),['llm:request','llm:response']);
+ if(after){
+  assert.deepEqual(after.deliveries,before.deliveries,
+   'Outbox identities/status/payloads changed or extra work was enqueued');
+  assert.deepEqual(after.outboxTransport,before.outboxTransport,'Offline transport was contacted');
+ }
+}
+
 function sourceCheck(){
  const command={action:prefix+'apply',id:'fixed-command',args:{confirmExpiry:true}};
  const read={action:prefix+'read',args:{commandId:'fixed-command'}};
@@ -68,12 +95,29 @@ function sourceCheck(){
   data:{...row.data,event_id:'optimize-request'}})))),/known safe/);
  assert.throws(()=>assertSafeUsageExport(jsonl(usage.map(row=>({...row,
   data:{...row.data,raw:'OPTIMIZE-SYNTHETIC-RESPONSE-KEEP'}})))),/Raw diagnostic secrets/);
+ const outbox={eventIds:['one','two'],outboxTransport:{schedulerStopped:true,clientCalls:0},
+  deliveries:['one','two'].map((record_id,index)=>({record_id,destination:'optimize-offline-pending',
+   status:'pending',attempts:0,error:null,revision:'a'.repeat(64),
+   payload:JSON.stringify({event:index?'llm:response':'llm:request',workspace:'optimize-offline-pending',
+    data:{event_id:record_id,provider:'fixture',model:'outbox-fixture'},
+    idempotency_key:'aci-event-v1:'+'b'.repeat(64)})}))};
+ assertPendingOutbox(outbox,structuredClone(outbox));
+ assert.throws(()=>assertPendingOutbox({...outbox,deliveries:[]}),/Nonempty outbox/);
+ assert.throws(()=>assertPendingOutbox(outbox,{...outbox,deliveries:[]}),/changed or extra work/);
+ const extra=structuredClone(outbox);extra.deliveries.push(extra.deliveries[0]);
+ assert.throws(()=>assertPendingOutbox(outbox,extra),/changed or extra work/);
+ const accepted=structuredClone(outbox);accepted.deliveries[0].status='accepted';
+ assert.throws(()=>assertPendingOutbox(outbox,accepted),/changed or extra work/);
+ const changed=structuredClone(outbox);changed.deliveries[0].payload='{}';
+ assert.throws(()=>assertPendingOutbox(outbox,changed),/changed or extra work/);
  console.log(JSON.stringify({passed:true,browserExecuted:false,checks:[
   'exact command read accepted','duplicate mutation rejected',
   'wrong command identity rejected','latest operation is not exact reconciliation',
   'sanitized request and response JSONL accepted without event IDs',
   'empty and missing-direction exports rejected','incorrect provider or usage rejected',
-  'restored private event ID and raw diagnostic secret rejected']}));
+  'restored private event ID and raw diagnostic secret rejected',
+  'nonempty pending outbox equality accepted; empty baseline or result rejected',
+  'extra enqueue, changed status or changed payload rejected']}));
 }
 
 async function serverIdentity(){
@@ -160,6 +204,7 @@ async function run(){
   await page.goto(base);await page.waitForSelector('#amp-one');
   evidence.browserExecuted=true;
   const before=await observe();
+  assertPendingOutbox(before);
   assert.ok(before.eventIds.length>=2,'Preservation assertions require real indexed fixture records');
   // Public new-chat navigation gives a genuine no-selection state, not an
   // injected app-state mutation or widening the Optimize scope by fixture fiat.
@@ -214,6 +259,7 @@ async function run(){
   assert.match(frozenText,/requests 12 hours; responses retained/);
   await section.locator('summary').filter({hasText:'File outcomes'}).click();
   await expect(section).toContainText('eligible');await expect(section).toContainText('held');
+  assertPendingOutbox(before,await observe());
   evidence.checks.push('current and explicitly all scopes','truthful held and positive eligible coverage',
    'separate frozen UTC request cutoff and retained response','explicit expiry confirmation');
   await section.getByLabel('Permanently expire eligible raw diagnostics before the frozen UTC cutoffs above',{exact:true}).check();
@@ -223,6 +269,7 @@ async function run(){
   await expect.poll(async()=>(await observe()).workCheckpoint.entered).toBe(true);
   await section.getByRole('button',{name:'Cancel optimization at a safe checkpoint',exact:true}).click();
   assert.equal((await observe()).sourceSha256,before.sourceSha256,'Cancel checkpoint precedes file effects');
+  assertPendingOutbox(before,await observe());
   const released=await page.request.post(base+'/fixture/optimize',{data:{op:'release-first-file'}});
   assert.equal(released.ok(),true);
   const resume=section.getByRole('button',{name:'Resume saved optimization',exact:true});
@@ -232,6 +279,7 @@ async function run(){
   await expect(resume).toBeEnabled();
   assert.equal(requests.filter(row=>mutations.has(row.action)).length,afterCancelMutations);
   assert.equal((await observe()).sourceSha256,before.sourceSha256,'Reload does not implicitly resume');
+  assertPendingOutbox(before,await observe());
   evidence.checks.push('real apply receipt then cancellation at durable pre-file checkpoint',
    'cancelled operation reload is passive and explicit resume is available');
   // Lose only the HTTP acknowledgement AFTER the actual host returned its receipt.
@@ -261,6 +309,7 @@ async function run(){
   assertReadOnlyReconcile(requests,lost);
   await expect.poll(async()=>Number((await observe()).sourceSha256!==before.sourceSha256)).toBe(1);
   const after=await observe();
+  assertPendingOutbox(before,after);
   assert.equal(after.canonicalUnchanged,true);
   assert.deepEqual(after.eventIds,before.eventIds);assert.deepEqual(after.deliveries,before.deliveries);
   assert.deepEqual(after.runtimeCalls,before.runtimeCalls);
@@ -318,6 +367,10 @@ async function run(){
   const exportedCalls=assertSafeUsageExport(usageBytes);
   evidence.usageExport={events:exportedCalls.map(row=>row.event),
    data:exportedCalls.map(row=>row.data),sha256:sha(usageBytes)};
+  assertPendingOutbox(before,await observe());
+  evidence.outbox={before:before.deliveries,after:(await observe()).deliveries,
+   clientCalls:0,acceptance:'pending rows preserved; no remote ACK or send attempted'};
+  evidence.checks.push('two real owner-staged pending outbox rows remain byte-for-byte unchanged with no extra enqueue');
   evidence.checks.push('usage page export remains available without raw diagnostic bodies');
   await Promise.all(pendingAssets);assert.ok(served.length>0,'Actual built scripts must have been served');
   for(const script of served){
