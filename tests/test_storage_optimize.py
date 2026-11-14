@@ -161,15 +161,18 @@ async def test_accounting_replaces_previous_outcome_without_double_counting(owne
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('giant_bytes', [0, 16 * 1024 * 1024])
-async def test_real_ci_retention_rebinds_without_reenrolling_deliveries(owner, tmp_path, monkeypatch, giant_bytes, record_property):
+@pytest.mark.parametrize('giant_bytes,layout', [
+    (0, 'records'), (16 * 1024 * 1024, 'records'), (0, 'leading'),
+    (0, 'between'), (0, 'trailing'), (0, 'vt'), (0, 'ff'), (0, 'unterminated'),
+])
+async def test_real_ci_retention_rebinds_without_reenrolling_deliveries(owner, tmp_path, monkeypatch, giant_bytes, layout, record_property):
     """Candidate-graph check; selected exact CI source is supplied by the runner."""
     from contextlib import contextmanager
     import hashlib
     import json
     import os
     from amplifier_web import storage_optimize_retention as retention
-    from amplifier_web.capture_index import index_shared
+    from amplifier_web.capture_index import CaptureDrift, index_shared
     from amplifier_web.session_files import capture_dir
     from amplifier_web.runtime import RuntimeManager
 
@@ -195,7 +198,18 @@ async def test_real_ci_retention_rebinds_without_reenrolling_deliveries(owner, t
     if giant_bytes:
         event['data']['raw']['huge'] = 'x' * giant_bytes
     path = directory / 'events.jsonl'
-    path.write_text(json.dumps(event) + '\n')
+    payload = (json.dumps(event) + '\n').encode()
+    if layout == 'leading':
+        payload = b' \t\r\n' + payload
+    elif layout == 'between':
+        payload += b'\n' + payload
+    elif layout == 'trailing':
+        payload += b'\n'
+    elif layout in {'vt', 'ff'}:
+        payload = (b'\x0b\n' if layout == 'vt' else b'\x0c\n') + payload
+    elif layout == 'unterminated':
+        payload = payload.rstrip(b'\n')
+    path.write_bytes(payload)
     os.utime(path, (1, 1))
     diagnostic_db = tmp_path / 'diagnostics.sqlite3'
     @contextmanager
@@ -222,6 +236,9 @@ async def test_real_ci_retention_rebinds_without_reenrolling_deliveries(owner, t
             rows = [('app-giant-reference',)]
         connection.execute('INSERT INTO deliveries VALUES(?,?,?)', (rows[0][0], 'accepted', '{"exact":"receipt"}'))
         original_records = connection.execute('SELECT id FROM records').fetchall()
+        unchanged = (connection.execute('SELECT * FROM records').fetchall(),
+                     connection.execute('SELECT * FROM captures').fetchall(),
+                     connection.execute('SELECT * FROM deliveries').fetchall())
     fake_runtime = SimpleNamespace(_closed=False, _locks={}, _preparations={}, workers={},
                                    _check_execution=lambda *args: None)
     fake_runtime.stopped_boundary = lambda session: RuntimeManager.stopped_boundary(fake_runtime, session)
@@ -250,6 +267,22 @@ async def test_real_ci_retention_rebinds_without_reenrolling_deliveries(owner, t
         tracemalloc.start()
     try:
         with patch.object(retention, 'hold_replacement', off_loop_hold), patch.object(retention, 'file_hash', off_loop_hash):
+            if layout != 'records':
+                if layout in {'vt', 'ff'}:
+                    # CI may refuse these non-JSON whitespace bytes even before
+                    # preparing a commit. Do not pretend our hold ran in that case.
+                    rejected = await retention.apply(owner.app, row, operation)
+                    assert rejected['status'] == 'held'
+                else:
+                    with pytest.raises(CaptureDrift, match='blank physical|unterminated'):
+                        await retention.apply(owner.app, row, operation)
+                assert path.read_bytes() == payload and asset.read_bytes() == body
+                with db() as connection:
+                    assert (connection.execute('SELECT * FROM records').fetchall(),
+                            connection.execute('SELECT * FROM captures').fetchall(),
+                            connection.execute('SELECT * FROM deliveries').fetchall()) == unchanged
+                    assert connection.execute('SELECT count(*) FROM capture_maintenance').fetchone() == (0,)
+                return  # Exact raw diagnostic and sidecar were not expired.
             result = await retention.apply(owner.app, row, operation)
     finally:
         if giant_bytes:

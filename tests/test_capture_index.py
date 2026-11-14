@@ -371,6 +371,32 @@ def test_unindexed_unterminated_source_is_held_before_replacement(db, tmp_path):
     assert db.execute('SELECT count(*) FROM capture_maintenance').fetchone()[0] == 0
 
 
+@pytest.mark.parametrize('layout', [
+    b'\n{event}', b' \t\r\n{event}', b'{event}\n{event}', b'{event} \t\r\n',
+    b' ' * 65536 + b'\n{event}', b'\x0b\n{event}', b'\x0c\n{event}',
+])
+def test_blank_physical_spans_are_held_before_replacement(db, tmp_path, layout):
+    import hashlib
+    path = tmp_path / 'events.jsonl'
+    original = layout.replace(b'{event}', b'{"event":"tool:post","data":{}}\n')
+    path.write_bytes(original)
+    facts = {'bytes': len(original), 'sha256': hashlib.sha256(original).hexdigest()}
+    with pytest.raises(CaptureDrift, match='blank physical'):
+        hold_replacement(db, path, 'blank-layout', {'old': facts, 'new': facts})
+    assert path.read_bytes() == original
+    assert db.execute('SELECT count(*) FROM capture_maintenance').fetchone()[0] == 0
+
+
+def test_large_nonblank_line_crossing_chunks_is_admitted(db, tmp_path):
+    import hashlib
+    path = tmp_path / 'events.jsonl'
+    original = b' \t{"event":"tool:post","data":{"raw":"' + b'x' * 131072 + b'"}}\r\n'
+    path.write_bytes(original)
+    facts = {'bytes': len(original), 'sha256': hashlib.sha256(original).hexdigest()}
+    hold_replacement(db, path, 'large-event', {'old': facts, 'new': facts})
+    assert db.execute('SELECT operation_id FROM capture_maintenance').fetchone() == ('large-event',)
+
+
 @pytest.mark.parametrize('held', ['maintenance', 'inode'])
 def test_capture_quarantine_keeps_other_sources_incremental(db, tmp_path, held):
     workspace = str(tmp_path)

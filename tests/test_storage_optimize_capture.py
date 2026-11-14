@@ -18,11 +18,12 @@ from amplifier_operations import OperationJournal
 from amplifier_web.storage_optimize_capture import apply, apply_combined, operation_directory
 from amplifier_web.storage_optimize_retention import file_hash
 from amplifier_web.session_files import capture_dir
-from amplifier_web.capture_index import index_shared
+from amplifier_web.capture_index import CaptureDrift, index_shared
 
 
 @pytest.mark.parametrize('combined,lost_expiry_ack', [(False, False), (True, False), (True, True)])
-async def test_actual_ci_foundation_private_diagnostic_apply_rebind_and_resume(tmp_path, combined, lost_expiry_ack, monkeypatch):
+@pytest.mark.parametrize('layout', ['records', 'leading-blank', 'between-blank', 'trailing-blank', 'unterminated'])
+async def test_actual_ci_foundation_private_diagnostic_apply_rebind_and_resume(tmp_path, combined, lost_expiry_ack, monkeypatch, layout):
     from PIL import Image
     from amplifier_foundation.session.media import MediaPolicy, SessionMediaStore
     from amplifier_foundation.session.media_conversion_owner import CaptureMediaOwner, BINDING, diagnostic_image_ref
@@ -53,7 +54,18 @@ async def test_actual_ci_foundation_private_diagnostic_apply_rebind_and_resume(t
                 'session_id': 'root', 'data': {'raw': 'old wire diagnostic' * 100,
                 'provider_payloads': {'raw': {'sha256': digest, 'bytes': len(body),
                                             'redacted': True, 'truncated': False}}}}) + '\n')
-    original = path.read_bytes()
+    payload = path.read_bytes()
+    if layout == 'leading-blank':
+        payload = b' \t\r\n' + payload
+    elif layout == 'between-blank':
+        first, rest = payload.split(b'\n', 1)
+        payload = first + b'\n\n' + rest
+    elif layout == 'trailing-blank':
+        payload += b'\n'
+    elif layout == 'unterminated':
+        payload = payload.rstrip(b'\n')
+    path.write_bytes(payload)
+    original = payload
     diagnostic_path = tmp_path / 'diagnostics.sqlite3'
     @contextmanager
     def db():
@@ -68,7 +80,8 @@ async def test_actual_ci_foundation_private_diagnostic_apply_rebind_and_resume(t
             'CREATE TABLE records(id TEXT PRIMARY KEY,at REAL,stream TEXT,session TEXT,workspace TEXT,event TEXT,data TEXT);'
             'CREATE TABLE deliveries(record_id TEXT,status TEXT,payload TEXT);')
         indexed = index_shared(connection, [(str(tmp_path), 'root')], {'streams': ['tools', 'usage']})
-        connection.execute('INSERT INTO deliveries VALUES(?,?,?)', (indexed[0][0], 'accepted', '{"same":"outcome"}'))
+        if indexed:
+            connection.execute('INSERT INTO deliveries VALUES(?,?,?)', (indexed[0][0], 'accepted', '{"same":"outcome"}'))
     appdb = sqlite3.connect(':memory:')
     appdb.execute('CREATE TABLE commands(id TEXT PRIMARY KEY,fingerprint TEXT,receipt TEXT)')
     journal = OperationJournal(tmp_path / 'operations.sqlite3')
@@ -128,6 +141,13 @@ async def test_actual_ci_foundation_private_diagnostic_apply_rebind_and_resume(t
         single_image_origin=lambda snapshot, provenance: provenance == accepted['provenance'])
     from context_intelligence.prune import operations as retention_operations
     actual_prune = retention_operations.prune_file
+    import context_intelligence.optimize as optimize
+    actual_commit = optimize.apply
+    commits = []
+    def observed_commit(*args, **kwargs):
+        commits.append(True)
+        return actual_commit(*args, **kwargs)
+    monkeypatch.setattr(optimize, 'apply', observed_commit)
     retention_results = []
     def observed_prune(*args, **kwargs):
         value = actual_prune(*args, **kwargs)
@@ -137,6 +157,23 @@ async def test_actual_ci_foundation_private_diagnostic_apply_rebind_and_resume(t
         return value
     monkeypatch.setattr(retention_operations, 'prune_file', observed_prune)
     try:
+        if layout != 'records':
+            with db() as connection:
+                before = connection.execute('SELECT * FROM records').fetchall()
+                deliveries = connection.execute('SELECT * FROM deliveries').fetchall()
+                cursors = connection.execute('SELECT * FROM captures').fetchall()
+            with pytest.raises(CaptureDrift, match='blank physical|unterminated'):
+                await (apply_combined if combined else apply)(app, row, operation, media=binding)
+            assert commits == retention_results == []
+            assert path.read_bytes() == original
+            assert (opdir / 'original').read_bytes() == original
+            assert json.loads((opdir / 'journal.json').read_bytes())['state'] == 'staged'
+            with db() as connection:
+                assert connection.execute('SELECT * FROM records').fetchall() == before
+                assert connection.execute('SELECT * FROM deliveries').fetchall() == deliveries
+                assert connection.execute('SELECT * FROM captures').fetchall() == cursors
+                assert connection.execute('SELECT count(*) FROM capture_maintenance').fetchone() == (0,)
+            return  # No replacement/expiry or index repair was needed.
         if lost_expiry_ack:
             with pytest.raises(OSError, match='lost expiry result'):
                 await apply_combined(app, row, operation, media=binding)

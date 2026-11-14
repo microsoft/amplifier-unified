@@ -30,6 +30,35 @@ def _file_digest(path):
     return digest.hexdigest()
 
 
+def _replacement_source_digest(path):
+    """Refuse layouts the current index rebind cannot represent, before commit.
+
+    CI mappings describe nonblank event lines, not blank physical spans. Keep
+    those valid CI files unchanged until the host can qualify their gaps. Scan
+    chunks rather than readline: a single event may contain a giant payload.
+    """
+    digest = hashlib.sha256()
+    nonblank = False
+    terminated = True
+    with path.open('rb') as stream:
+        while chunk := stream.read(65536):
+            digest.update(chunk)
+            for index, part in enumerate(chunk.split(b'\n')):
+                if index:
+                    if not nonblank:
+                        raise CaptureDrift('Capture contains blank physical lines; replacement is held')
+                    nonblank = False
+                    terminated = True
+                if part:
+                    # Retention also skips bytes.strip()-empty physical lines.
+                    # Conservatively hold all ASCII whitespace-only spans.
+                    nonblank = nonblank or bool(part.strip())
+                    terminated = False
+    if not terminated:
+        raise CaptureDrift('Capture has an unterminated tail; replacement is held')
+    return digest.hexdigest()
+
+
 def hold_replacement(db, path, operation_id, witness):
     """Commit before file replacement, while the diagnostics flush lock is held.
 
@@ -55,13 +84,8 @@ def hold_replacement(db, path, operation_id, witness):
     stamp = source.lstat()
     if not stat.S_ISREG(stamp.st_mode) or source.is_symlink():
         raise CaptureDrift('Capture source is not an owned regular file')
-    if stamp.st_size != witness['old']['bytes'] or _file_digest(source) != witness['old']['sha256'] or source.lstat() != stamp:
+    if stamp.st_size != witness['old']['bytes'] or _replacement_source_digest(source) != witness['old']['sha256'] or source.lstat() != stamp:
         raise CaptureDrift('Capture source changed before replacement admission')
-    if stamp.st_size:
-        with source.open('rb') as stream:
-            stream.seek(-1, 2)
-            if stream.read(1) != b'\n':
-                raise CaptureDrift('Capture has an unterminated tail; replacement is held')
     cursor = db.execute('SELECT offset,inode FROM captures WHERE path=?', (path,)).fetchone()
     if cursor and (cursor[0] != witness['old']['bytes'] or cursor[1] != stamp.st_ino):
         raise CaptureDrift('Capture indexing has not reached the qualified source boundary')
@@ -94,9 +118,10 @@ def hold_replacement(db, path, operation_id, witness):
 def rebind_replaced_capture(db, path, operation_id, witness, mappings):
     """Rebind exact byte references, preserving IDs, delivery rows and outcomes.
 
-    ``mappings`` streams all physical JSONL lines, with old/new offset, bytes and
-    sha256. The writer has already durably stored this mapping before replacing
-    the source. The caller retains its real writer fence and flush lock.
+    ``mappings`` streams nonblank event lines, with old/new offset, bytes and
+    sha256. This host currently admits only contiguous, LF-terminated layouts;
+    hold_replacement refuses blank physical spans before replacement. The writer
+    durably stores the mapping first; the caller retains writer/flush ownership.
     """
     from pathlib import Path
     path = Path(path)
