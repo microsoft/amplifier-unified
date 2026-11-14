@@ -481,6 +481,55 @@ def test_private_log_bounds_tail_and_coalesces_writes(monkeypatch):
     assert snapshots[-1].endswith(b"final") and len(snapshots) == 3
 
 
+def test_error_classes_whose_text_reaches_status_are_raised_with_fixed_text():
+    """The failure record copies the text of these classes. Keep it free of values."""
+    import ast
+    root = Path(__file__).resolve().parents[1] / "amplifier_web"
+    allowed = {"WindowsServiceError(f'Its background process ended unexpectedly (exit code {code}).')",
+               "HiddenConsoleError(_UNSAFE)"}
+    found = 0
+    for path in sorted(root.rglob("*.py")):
+        if "static" in path.parts:
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, (ast.Name, ast.Attribute)):
+                continue
+            name = node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+            if name not in runtime._OWNER_SENTENCES:
+                continue
+            found += 1
+            fixed = (len(node.args) == 1 and not node.keywords
+                     and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str))
+            assert fixed or ast.unparse(node) in allowed, (
+                f"{path.name}:{node.lineno}: this text can reach the owner's status output; "
+                "use fixed text, or remove the class from _OWNER_SENTENCES")
+    assert found > 50  # The scan really saw the raise sites.
+    assert "SystemExit" not in runtime._OWNER_SENTENCES
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native private-file boundary required")
+def test_native_failure_record_round_trip_through_the_real_private_files(tmp_path):
+    # Saving never raises, so only a real read-back proves that the record exists.
+    import time
+    from amplifier_web.windows_service import WindowsServiceError
+    value = SimpleNamespace(data_dir=str(tmp_path / "owner-data"), registration_id="a" * 32)
+    assert runtime.last_failure(value) is None
+    runtime.record_failure(value, WindowsServiceError("The saved reason."), "host")
+    saved = runtime.last_failure(value)
+    assert saved is not None, "the failure record was not written through the private boundary"
+    assert (saved["source"], saved["errorType"], saved["message"]) == (
+        "host", "WindowsServiceError", "The saved reason.")
+    assert (tmp_path / "owner-data/config/services" / runtime.FAILURE).is_file()
+    # A later failure replaces it; another class keeps its name only.
+    runtime.record_failure(value, FileNotFoundError(2, "No such file", str(tmp_path / "private.txt")), "launcher")
+    saved = runtime.last_failure(value)
+    assert (saved["source"], saved["errorType"], saved["message"]) == ("launcher", "FileNotFoundError", None)
+    # The launcher keeps a record that is newer than its own start.
+    runtime.record_failure(value, WindowsServiceError("General reason."), "launcher",
+                           unless_since=time.time() - 60)
+    assert runtime.last_failure(value)["errorType"] == "FileNotFoundError"
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Native passive Windows process handle required")
 def test_native_identity_does_not_signal_or_terminate_sentinel():
     child = subprocess.Popen([sys.executable, "-I", "-S", "-c", "import time;time.sleep(2)"])
