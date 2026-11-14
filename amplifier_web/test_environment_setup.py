@@ -528,9 +528,6 @@ def inspect_base_image(config):
 
 
 async def verify_existing(config, raw, owned, record, step):
-    if config.get('backend', 'docker') == 'docker':
-        _, proof = await setup_docker(raw, {'executable': executable('docker'), 'dockerHost': config['dockerHost']}, owned, record, step)
-        return proof
     current = config['incus']
     env = {'PATH': os.defpath, 'HOME': str(owned), 'LANG': 'C.UTF-8', 'INCUS_CONF': current['configDir']}
     prefix = [current['incusExecutable'], '--force-local', '--project', current['project']]

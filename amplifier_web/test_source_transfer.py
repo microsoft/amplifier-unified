@@ -34,6 +34,12 @@ def repository_client(source):
 
 def export_snapshot(source, destination, ordinary_export):
     """Use the existing raw snapshot owner when ignored client inputs are required."""
+    if (Path(source) / '.git').exists():
+        entries = subprocess.run(['git', '-c', 'core.fsmonitor=false', '-C', str(source),
+                                  'ls-files', '--stage', '-z'], check=True,
+                                 capture_output=True, timeout=30).stdout.split(b'\0')
+        if any(entry.startswith(b'160000 ') for entry in entries):
+            raise ValueError('Copied-source snapshots do not traverse submodules. Select each repository explicitly through DTU repository publishing or build the required artifacts first; no environment was started.')
     if not repository_client(source):
         return ordinary_export()
     result = subprocess.run([sys.executable, '-I', '-B',

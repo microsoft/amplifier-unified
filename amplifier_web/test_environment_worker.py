@@ -749,7 +749,10 @@ def compose_file(root, payload):
         if candidate in visited:
             return
         visited.add(candidate)
-        document = yaml.safe_load(candidate.read_text())
+        try:
+            document = yaml.safe_load(candidate.read_text())
+        except yaml.YAMLError as error:
+            raise ValueError('The copied Compose YAML is invalid.') from error
         if not isinstance(document, dict):
             raise ValueError('The Compose file must contain an object.')
         for include in document.get('include', []):
@@ -781,6 +784,8 @@ def compose_file(root, payload):
                 raise ValueError('Compose configuration and secret files must be explicit copied-source inputs.')
     labels = {'io.amplifier.root-owner': payload['rootOwner'], 'io.amplifier.operation-id': payload['operationId']}
     for service in value.get('services', {}).values():
+        if service.get('volumes_from'):
+            raise ValueError('Declare task-owned volumes explicitly; inherited container/service mounts are not copied-source inputs.')
         service['labels'] = {**service.get('labels', {}), **labels}
         service.pop('container_name', None)
         build = service.get('build')
@@ -823,6 +828,10 @@ def compose_file(root, payload):
     twin = value['services'][value['x-dtu']['twin_machine']]
     if str(twin.get('user', '0')) not in {'0', '0:0', 'root', 'root:root'}:
         raise ValueError('The twin supervisor requires root; commands run as the unprivileged workload user.')
+    twin['user'] = '0:0'  # Never inherit an image's USER for the root supervisor.
+    limits = selected_profile(payload)
+    twin.update(mem_limit=str(limits['memoryMiB']) + 'm', cpus=limits['cpus'],
+                pids_limit=limits['pids'], shm_size=str(limits['shmMiB']) + 'm')
     required = {'CHOWN', 'SETUID', 'SETGID', 'KILL'}
     dropped = {cap.removeprefix('CAP_') for cap in twin.get('cap_drop', [])}
     added = {cap.removeprefix('CAP_') for cap in twin.get('cap_add', [])}

@@ -63,7 +63,7 @@ def definitions(schema, string):
             'limit': {'type': 'integer', 'minimum': 1, 'maximum': 20}},
             [*scope, 'id', 'expectedRevision'])),
         'workspace.environments.start': ('Copy this task’s current Git working area into a DTU Compose environment. Optionally select an ordinary trusted Compose file from that source; otherwise use the Python/browser/app preset. Network and normal dependency commands are available unless offline is explicit. No implicit host mounts or credentials. Keep requestId stable; unknown launches never replay.', schema({**request, 'profileId': {'enum': [item['id'] for item in profiles.catalog()]}, **profiles.compose_fields(string)}, [*request, 'profileId'])),
-        'workspace.environments.execute': ('Run an approved command in this task’s environment, retaining bounded output. Use its executionContract for Python, offline build, artifact paths and source identities; the copied source has no Git metadata. Keep requestId stable. Timeout means the command may still be running, not cancelled.', schema({**owned, 'command': {**string(16384), 'minLength': 1}, 'timeoutSeconds': {'type': 'integer', 'minimum': 1, 'maximum': profiles.MAX_SECONDS}}, [*owned, 'command'])),
+        'workspace.environments.execute': ('Run a command in this task’s environment, retaining bounded output. Docker uses normal dependency/build commands; copied source has no Git metadata. Keep selected evidence in /artifacts and verify installed artifacts outside source/PYTHONPATH. Keep requestId stable. Timeout means the command may still be running, not cancelled.', schema({**owned, 'command': {**string(16384), 'minLength': 1}, 'timeoutSeconds': {'type': 'integer', 'minimum': 1, 'maximum': profiles.MAX_SECONDS}}, [*owned, 'command'])),
         'workspace.environments.stop': ('Stop this task’s containers at an exact revision and observe the result. Keeps source, artifacts, containers and volumes; never implies removal.', schema(owned)),
         'workspace.environments.remove': ('Remove an already stopped owned environment after preserving its source and artifacts. Optional full retention preserves the complete Incus environment; Docker supports files only. Unknown export or teardown never replays.', schema({**owned, 'retentionMode': {'enum': ['files', 'full']}}, list(owned))),
         'workspace.environments.finishCleanup': ('Finish cleanup of an exact stopped owned environment after a failed or uncertain removal. Preserve complete bounded archives without following guest links, then verify removal and release ownership. The original request and test result stay unchanged. For interrupted local Docker cleanup, the host first verifies that the previous local executor is settled and the exact owner is stopped. This is a new cleanup attempt, not a replay or a claim about the old outcome. Requires its previousRequestId; keep the new requestId stable.', schema({**owned, 'previousRequestId': {**string(200), 'minLength': 1}})),
@@ -222,7 +222,7 @@ def public(home, row):
                       'workspacePolicy': row.get('workspaceArchivePolicy'), 'workspaceExpiry': row.get('workspaceArchiveExpiry'),
                       'fullAvailable': row.get('backendType') == 'incus',
                       **({'mode': row['retentionMode']} if row.get('retentionMode') is not None else {}),
-                      'policy': 'Stop retains container data. Remove exports source and artifacts before deleting owned containers and volumes. Storage may later expire explicitly temporary workspace copies; source, results and receipts stay.',
+                      'policy': 'Stop retains container data. Remove exports the owner’s selected evidence before deleting owned containers and volumes. Full guest source export is optional only for new disposable Docker copies; old preservation contracts remain. Original source, results and receipts stay.',
                       **({'accounting': row['retainedFiles']} if row.get('retainedFiles') is not None else {})},
     }.items() if value is not None}
 
@@ -1248,7 +1248,7 @@ async def dispatch(app, action, args, origin, caller, authority):
         raise AppError('Choose this conversation’s current workspace.', 403)
     captured = tuple(source.get(key) for key in ('workspace', 'workingDirectory', 'executionRevision', 'interruptionRevision'))
     config, availability, reason = configuration(app)
-    historical = action.rsplit('.', 1)[-1] in {'stop', 'remove', 'finishCleanup', 'reconcile', 'exportArtifacts'}
+    historical = action.rsplit('.', 1)[-1] in {'execute', 'stop', 'remove', 'finishCleanup', 'reconcile', 'exportArtifacts'}
     row = None
     def guard():
         current = app._session(sid, hydrate=False)

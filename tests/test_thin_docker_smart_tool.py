@@ -106,7 +106,7 @@ def test_compose_normalization_cannot_read_outside_copied_source(tmp_path, monke
         worker.compose_file(tmp_path, {'composeFile': 'compose.yaml'})
 
 
-@pytest.mark.parametrize('case', ['single-service', 'invalid-twin', 'nonroot', 'capabilities', 'offline-bridge', 'offline-container', 'copied-env'])
+@pytest.mark.parametrize('case', ['single-service', 'invalid-twin', 'nonroot', 'capabilities', 'offline-bridge', 'offline-container', 'copied-env', 'foreign-volumes', 'inherited-volumes'])
 def test_ordinary_compose_twin_and_supervisor_preflight(tmp_path, monkeypatch, case):
     content = 'services:\n  app:\n    image: python\n'
     with tarfile.open(tmp_path / 'source.tar', 'w') as archive:
@@ -123,6 +123,8 @@ def test_ordinary_compose_twin_and_supervisor_preflight(tmp_path, monkeypatch, c
         normalized['services']['app']['cap_drop'] = ['ALL']
     elif case.startswith('offline-'):
         normalized['services']['app']['network_mode'] = 'bridge' if case.endswith('bridge') else 'container:foreign'
+    elif case.endswith('volumes'):
+        normalized['services']['app']['volumes_from'] = ['container:foreign:rw' if case.startswith('foreign') else 'other:rw']
     monkeypatch.setattr(worker.subprocess, 'run',
         lambda *a, **k: SimpleNamespace(stdout=json.dumps(normalized)))
     payload = {'composeFile': 'compose.yaml', 'dockerHost': 'unix:///owned.sock', 'rootOwner': 'owner',
@@ -130,10 +132,22 @@ def test_ordinary_compose_twin_and_supervisor_preflight(tmp_path, monkeypatch, c
     if case in {'single-service', 'copied-env'}:
         selected = json.loads(worker.compose_file(tmp_path, payload).read_text())
         assert selected['x-dtu']['twin_machine'] == 'app'
+        assert selected['services']['app']['user'] == '0:0'
         assert {v['target'] for v in selected['services']['app']['volumes']} == {'/workspace', '/artifacts', '/var/lib/unified-jobs'}
     else:
         with pytest.raises(ValueError):
             worker.compose_file(tmp_path, payload)
+
+
+def test_malformed_yaml_refuses_before_compose_or_launch(tmp_path, monkeypatch):
+    with tarfile.open(tmp_path / 'source.tar', 'w') as archive:
+        data = b'services: [\n'
+        member = tarfile.TarInfo('compose.yaml')
+        member.size = len(data)
+        archive.addfile(member, io.BytesIO(data))
+    monkeypatch.setattr(worker.subprocess, 'run', lambda *a, **k: pytest.fail('prelaunch parser invoked Docker'))
+    with pytest.raises(ValueError, match='YAML is invalid'):
+        worker.compose_file(tmp_path, {'composeFile': 'compose.yaml'})
 
 
 @pytest.mark.parametrize('backend', ['incus', 'docker'])
