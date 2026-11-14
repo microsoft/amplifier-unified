@@ -74,7 +74,7 @@ async def test_actual_ci_foundation_private_diagnostic_apply_rebind_and_resume(t
         'revision': 0, 'status': 'applying', '_phase': 'apply',
         'summary': {'coverage': {}, 'bytes': {}}}
     with journal.db:
-        controller._save(operation)
+        controller._save_operation(operation)
     row = {'owner': 'context-intelligence', 'sessionId': 'root', 'kind': 'root',
            'bytes': len(original), '_sourceId': 'root', '_path': str(path),
            '_sourceSha256': file_hash(path), 'status': 'eligible'}

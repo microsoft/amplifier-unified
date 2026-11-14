@@ -142,13 +142,21 @@ async def apply(app, row, operation, *, resume=False):
                     if prepared:
                         if prepared['source']['sha256'] != row['_sourceSha256']:
                             raise CaptureDrift('Retention receipt belongs to a different source generation')
-                        with app.diagnostics._db() as db:
-                            hold_replacement(db, path, identity, _witness(prepared))
+
+            def hold(prepared):
+                # Hashing the source and old reference slices can be large.
+                # This runs on the already-owned executor, never under app.lock.
+                with app.diagnostics._db() as db:
+                    hold_replacement(db, path, identity, _witness(prepared))
 
             def poll():
                 receipt = _receipt(path)
                 loop_future = asyncio.run_coroutine_threadsafe(admission(receipt), loop)
                 loop_future.result()
+                if receipt:
+                    hold(receipt)
+                    # Stop/cancel may have arrived during the bounded hash loop.
+                    asyncio.run_coroutine_threadsafe(admission(receipt), loop).result()
 
             def perform():
                 receipt = _receipt(path)
@@ -170,7 +178,7 @@ async def apply(app, row, operation, *, resume=False):
                 return result, _receipt(path)
 
             result, receipt = await settle_owned(perform, cancelled)
-            if receipt and file_hash(path) == receipt['expected']['sha256']:
+            if receipt:
                 def rebind():
                     with app.diagnostics._db() as db:
                         return rebind_replaced_capture(db, path, identity, _witness(receipt),
