@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import shutil
 from pathlib import Path
 import subprocess
@@ -231,6 +232,38 @@ def overflow_negative_controls(root: Path, work: Path, python: str, output: Path
         write_json(controls / 'result.json', {'controls': records})
         if not valid:
             raise ValueError('Negative control did not fail at the expected assertion: ' + name)
+
+
+def overflow_focus(root: Path, python: str, output: Path, environment: dict) -> int:
+    """Retain the focused stage before any unrelated native case can stall."""
+    import resource
+    selected = ['tests/test_provider_overflow_recovery.py',
+                'tests/test_provider_context_continuation.py', 'tests/test_fable_context_loop.py']
+    junit = output / 'overflow-focus.xml'
+    command = [python, '-u', '-m', 'pytest', *selected, '-vv', '-s', '--tb=short',
+               '-o', 'faulthandler_timeout=20', '--junitxml=' + str(junit)]
+    record = {'selectors': selected, 'timeoutSeconds': 120, 'addressSpaceLimitBytes': 2 * 1024**3,
+              'exitCode': None, 'timedOut': False}
+    with (output / 'overflow-focus.log').open('w') as log:
+        process = subprocess.Popen(command, cwd=root, env={**os.environ, **environment},
+                                   stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            # Keep a runaway synthetic fixture from taking down the hosted
+            # runner before its stack file can be uploaded.
+            resource.prlimit(process.pid, resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
+            record['exitCode'] = process.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            record['timedOut'] = True
+            os.killpg(process.pid, signal.SIGKILL)
+            record['exitCode'] = process.wait(timeout=10)
+        finally:
+            write_json(output / 'overflow-focus.json', record)
+    print((output / 'overflow-focus.log').read_text(), flush=True)
+    if record['timedOut'] or record['exitCode']:
+        return 1
+    from integration_checks import verify_junit
+    verify_junit(junit, selected)
+    return 0
 
 
 def main() -> None:
