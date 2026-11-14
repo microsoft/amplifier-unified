@@ -18,9 +18,6 @@ try{
  vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1280,height:900}});page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(installFixtureEvents);
- await page.addInitScript(()=>{if(!sessionStorage.getItem('fixture-seeded')){
-  sessionStorage.setItem('fixture-seeded','1');sessionStorage.setItem('amplifier.messageOutbox.v1',JSON.stringify([{id:'local',commandId:'original',sessionId:'chat',scope:JSON.stringify(['fixture-shell-host','/fixture','chat']),text:'Keep this historical request and its reference.',attachmentIds:['a'],attachments:[{id:'a',name:'reference.txt',size:12}],status:'unknown',error:'Transport interrupted. Delivery is uncertain.'}]));
- }});
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname,response=shell.response(route.request());
   if(response!==undefined)return route.fulfill({json:response});
@@ -80,7 +77,7 @@ try{
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  await original().locator('summary').click();
  await page.screenshot({path:artifact+'/mobile-details.png'});
- // Receipt arrives after original leaves server window: retire exact outbox anyway.
+ // Receipt arrives after original leaves server window: do not recreate it.
  holdChecks=true;
  await original().getByRole('button',{name:'Check delivery',exact:true}).click();await expect.poll(()=>pending.length).toBe(1);
  state.selectedSessionId='other';await emit();
@@ -95,10 +92,112 @@ try{
  const acceptedCheck=pending.shift();
  await acceptedCheck.route.fulfill({json:{accepted:true,result:{sessionId:'chat',inputId:'original',source:acceptedCheck.source,delivery:'accepted',message:'Received. Not resent.'},state:shell.state()}});
  await expect.poll(async()=>(await outbox()).length).toBe(0);
- assert.equal(await page.evaluate(()=>sessionStorage.getItem('amplifier.deliveryWarning.v1:'+JSON.stringify(['chat','original']))),null);
+ // This saved-only row has left the window; its unmounted presentation no longer
+ // owns preference cleanup. No stale warning or message may be recreated.
  await expect(original()).toHaveCount(0);
  assert.deepEqual(effects(),[]);await expect(composer).toHaveDraft('Keep the next unsent thought');
  await page.reload();await expect.poll(async()=>(await outbox()).length).toBe(0);
+ // Historical steering uses the same local presentation controls, never retry.
+ await page.evaluate(()=>sessionStorage.removeItem('amplifier.deliveryWarning.v1:'+JSON.stringify(['chat','original'])));
+ state.sessions[1].messages=[]; // Navigation must not create unrelated passive reads.
+ const steeringStart=calls.length;
+ const held={...structuredClone(message),delivery:{status:'failed'},steering:{generationId:'old-run',disposition:'held',reason:'No active native owner is available for anchored steering.'}};
+ const steeringBefore=structuredClone(held);
+ state.sessions[0].messages=[held];state.sessions[0].status='working';state.sessions[0].execution={currentTurnId:'unrelated-input'};await emit();
+ await expect(original()).toContainText('Message not delivered. The run ended or could not accept steering.');
+ const dismiss=()=>original().getByRole('button',{name:'Dismiss warning',exact:true});
+ await expect(dismiss()).toBeEnabled();await dismiss().focus();await dismiss().press('Enter');
+ await expect(original().locator('summary')).toBeVisible();
+ await expect(original().getByText(/No active native owner/)).not.toBeVisible();
+ await page.screenshot({path:artifact+'/steering-held-collapsed-mobile.png'});
+ state.selectedSessionId='other';await emit();await expect(original()).toHaveCount(0);
+ state.selectedSessionId='chat';await emit();
+ await expect(original().locator('details.a-delivery-warning')).not.toHaveAttribute('open','');
+ await page.reload();await expect(original().locator('summary')).toBeVisible();
+ await original().locator('summary').click();await original().getByRole('button',{name:'Show warning',exact:true}).click();
+ await expect(dismiss()).toBeVisible();await expect(original().getByText(/No active native owner/)).toBeVisible();
+ await expect(original().getByText(/reference.txt/)).toBeVisible();
+ assert.deepEqual(held,steeringBefore);
+ assert.deepEqual(calls.slice(steeringStart).filter(c=>c.action.startsWith('conversation.')),[],'Dismiss/remount/reload/restore perform no delivery action');
+ await page.screenshot({path:artifact+'/steering-held-restored-mobile.png'});
+ // Exact active input and any sending/queued evidence override prior dismissal.
+ await dismiss().click();
+ state.sessions[0].execution.currentTurnId='original';await emit();
+ await expect(dismiss()).toHaveCount(0);await expect(original().getByText(/No active native owner/)).toBeVisible();
+ state.sessions[0].execution.currentTurnId='unrelated-input';
+ for(const status of ['sending','queued','queued_for_update']){
+  held.delivery={status};await emit();await expect(dismiss()).toHaveCount(0);
+  await expect(original().getByText(/No active native owner/)).toBeVisible();
+ }
+ held.delivery={status:'unknown'};
+ for(const disposition of ['sending','queued']){
+  held.steering={disposition};await emit();await expect(dismiss()).toHaveCount(0);
+  await expect(original().getByRole('button',{name:'Check delivery',exact:true})).toBeVisible();
+ }
+ // Explicit unknown check spans remount and reports late success, not stale text.
+ held.steering={disposition:'unknown',reason:'Fixture unknown steering receipt'};await emit();
+ await expect(original().locator('summary')).toBeVisible();await original().locator('summary').click();
+ const beforeReconnect=calls.length;
+ await page.evaluate(()=>window.dispatchEvent(new Event('amplifier-reconnected')));
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ assert.deepEqual(calls.slice(beforeReconnect).filter(c=>c.action.startsWith('conversation.')),[],'Steering never triggers a passive reconnect read');
+ holdChecks=true;
+ await original().getByRole('button',{name:'Check delivery',exact:true}).click();await expect.poll(()=>pending.length).toBe(1);
+ await expect(original().getByRole('button',{name:'Show warning',exact:true})).toBeDisabled();
+ state.selectedSessionId='other';await emit();await expect(original()).toHaveCount(0);
+ state.selectedSessionId='chat';await emit();
+ await expect(original().getByRole('button',{name:'Checking…',exact:true})).toBeDisabled();assert.equal(pending.length,1);
+ const steeringCheck=pending.shift();
+ await steeringCheck.route.fulfill({json:{accepted:true,result:{sessionId:'chat',inputId:'original',source:steeringCheck.source,delivery:'accepted',steering:{disposition:'applied'},message:'Received. Nothing resent.'},state:shell.state()}});
+ holdChecks=false;
+ await expect(original()).toContainText('Added to the active run’s context');
+ await expect(original()).not.toContainText('Steering delivery could not be confirmed');
+ await expect(original().locator('details.a-delivery-warning')).toHaveCount(0);
+ await expect(original().getByRole('button',{name:/Retry|Send again|Send this message again/})).toHaveCount(0);
+ held.delivery={status:'accepted'};
+ for(const disposition of ['applied','next_turn']){
+  held.steering={disposition};await emit();await page.reload();
+  await expect(original()).toContainText(disposition==='applied'?'Added to the active run’s context':'Received for the next turn');
+  await expect(dismiss()).toHaveCount(0);await expect(original().locator('details.a-delivery-warning')).toHaveCount(0);
+ }
+ // A saved steering row can still carry the earlier local unknown overlay.
+ // Seed only this synthetic tab, then exercise real close/reopen controls.
+ held.delivery={status:'unknown'};held.steering={...steeringBefore.steering};
+ const overlay={id:'local-steering',commandId:'original',sessionId:'chat',scope:JSON.stringify(['fixture-shell-host','/fixture','chat']),text:held.text,attachments:held.attachments,attachmentIds:['a'],status:'unknown',error:'Original uncertain transport'};
+ await page.evaluate(row=>sessionStorage.setItem('amplifier.messageOutbox.v1',JSON.stringify([row])),overlay);
+ await page.reload();await expect(original().getByRole('button',{name:'Close delivery item',exact:true})).toBeVisible();
+ const beforeCloseCalls=calls.length;
+ await original().getByRole('button',{name:'Close delivery item',exact:true}).click();
+ await expect(original().getByText(/No active native owner/)).toHaveCount(0);
+ assert.deepEqual(await outbox(),[{...overlay,closed:true}]);
+ await page.reload();await expect(original().getByText(/No active native owner/)).toHaveCount(0);
+ state.view.panel='session-details';await emit();
+ const closedSteering=page.locator('details').filter({has:page.locator('summary').filter({hasText:'Closed delivery items (1)'})});
+ await closedSteering.locator('summary').click();
+ await closedSteering.getByRole('button',{name:'Reopen delivery item',exact:true}).click();
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ await expect(original().getByText(/No active native owner/)).toBeVisible();
+ await original().getByRole('button',{name:'Close delivery item',exact:true}).click();
+ held.delivery={status:'accepted'};held.steering={disposition:'applied'};await emit();
+ await expect(original()).toContainText('Added to the active run’s context');
+ await expect.poll(async()=>(await outbox()).length).toBe(0);
+ assert.deepEqual(calls.slice(beforeCloseCalls).filter(c=>c.action.startsWith('conversation.')),[]);
+ assert.equal(calls.slice(steeringStart).filter(c=>c.action==='conversation.delivery').length,1);
+ assert.deepEqual(effects(),[]);
+ await writeFile(artifact+'/steering-result.json',JSON.stringify({passed:true,sourceMessage:steeringBefore,checks:1,effects:effects(),dismissRemountReloadRestore:true,unrelatedWorkDismissible:true,exactActiveAndQueuedGuarded:true,lateAppliedVisible:true,localCloseReopenPreservesPayload:true},null,2));
+ // Preserve the distinct window-independent acknowledgement proof with a
+ // populated outbox; the saved-only dismissal scenario above has no overlay.
+ state.sessions[0].messages=[structuredClone(message)];state.sessions[0].status='idle';delete state.sessions[0].execution;
+ holdChecks=true;
+ await page.evaluate(row=>sessionStorage.setItem('amplifier.messageOutbox.v1',JSON.stringify([row])),overlay);
+ await page.reload();await expect.poll(()=>pending.length).toBe(1);
+ assert.equal((await outbox()).length,1);
+ state.sessions[0].messages=[];state.revision++;
+ const windowCheck=pending.shift();
+ await windowCheck.route.fulfill({json:{accepted:true,result:{sessionId:'chat',inputId:'original',source:windowCheck.source,delivery:'accepted'},state:shell.state()}});
+ holdChecks=false;
+ await expect.poll(async()=>(await outbox()).length).toBe(0);await expect(original()).toHaveCount(0);
+ await emit();
  // Saved questions distinguish a known non-delivery from an uncertain receipt.
  // Reuse this mounted synthetic peer; never read or deliver a real user's answer.
  const question=(id,status)=>({id,revision:3,contentRevision:1,status:'answered',prompt:'Choose a path',dependency:'',required:true,options:[],allowFreeText:true,
@@ -219,4 +318,7 @@ try{
  assert.deepEqual(errors,[]);
   await writeFile(artifact+'/browser-result.json',JSON.stringify({passed:true,calls:calls.filter(c=>c.action.startsWith('conversation.')||c.action==='updates.forceRestart'||c.action==='question.dismiss'),effects:effects(),errors,attachmentPreserved:true,exactWindowIndependentReceipt:true,savedQuestionStates:['rejected','unknown','accepted'],explicitQuestionChecks:1,durableReminderCleared:true,reminderRefusalPreserved:true,flatHostWorkList:true,historicalDiagnosticsNotWork:true,oneExplicitRestartAction:true,preparedTargetAccessible:true,pendingBusy:true,matchingRejectionOnly:true,noAutomaticRestartOrResend:true},null,2));
   console.log('Delivery warning browser passed: saved question states, explicit check/no resend, flat current-work details without recovery accounting, one keyboard restart action with exact prepared target, pending busy/refusal and no automatic restart.');
+}catch(error){
+ if(page){await page.screenshot({path:artifact+'/failure.png'});await writeFile(artifact+'/failure.html',await page.content())}
+ throw error;
 }finally{if(browser)await browser.close();if(vite)await vite.close()}
