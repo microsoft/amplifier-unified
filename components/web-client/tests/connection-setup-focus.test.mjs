@@ -63,9 +63,9 @@ test('a late empty local catalog cannot displace external connection Settings or
  }finally{await act(async()=>root?.unmount())}
 });
 
-for(const mode of ['draft','chat'])test(`external ${mode} needs no native provider onboarding or focus discovery`,async()=>{
+for(const mode of ['draft','group-draft','chat'])test(`external ${mode} needs no native provider onboarding or focus discovery`,async()=>{
  const calls=[],dispatch=async(action,args)=>{calls.push({action,args});return {accepted:true}};
- const state={settings:{workspace:'/one'},view:{setupJourney:'welcome',...(mode==='draft'?{newSessionDraft:{externalAgentId:'remote'}}:{})},setup:{providersLoadedAt:1,providersWorkspace:'/one',providers:[]}};
+ const state={settings:{workspace:'/one'},view:{setupJourney:'welcome',...(mode==='draft'?{newSessionDraft:{externalAgentId:'remote'}}:mode==='group-draft'?{newSessionDraft:{externalAgentIds:['alpha','beta']}}:{})},setup:{providersLoadedAt:1,providersWorkspace:'/one',providers:[]}};
  const session=mode==='chat'?{id:'external',workspace:'/one',externalAgent:{id:'remote'}}:undefined;let root;
  try{
   await act(async()=>{root=create(React.createElement(Probe,{state,session,dispatch}))});

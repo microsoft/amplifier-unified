@@ -71,7 +71,7 @@ def migrate(home, state):
 # never persist action bodies or lazy event-file references here.
 ACCOUNTING_FIELDS = {'id', 'revision', 'producerId', 'budgetRevision', 'admittedAt',
     'parentId', 'turnId', 'admissionInputId', 'generationId', 'purpose', 'sessionId', 'rootSessionId', 'kind', 'phase', 'provider',
-    'model', 'startedAt', 'endedAt', 'usage', 'lifecycle',
+    'model', 'startedAt', 'endedAt', 'usage', 'lifecycle', 'failure',
     'assignmentId', 'assignmentRevision', 'assignmentReservation'}
 ACCOUNTING_USAGE_FIELDS = {'inputTokens', 'outputTokens', 'totalTokens',
     'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'grossInputTokens',

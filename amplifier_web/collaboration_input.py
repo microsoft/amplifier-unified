@@ -32,7 +32,7 @@ def checkpoint_anchors(rows, runtime):
               if (row.get("metadata") or {}).get("amplifier_input", {}).get("id") in inputs]
     if not starts:
         return []
-    from .automatic_history import display_message
+    from .native_message_projection import display_message
     result = []
     for index in range(min(starts), len(rows)):
         if rows[index].get("role") != "assistant":

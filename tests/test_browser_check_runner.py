@@ -44,9 +44,11 @@ def coverage_plan():
     appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
     responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
     notices_ids = shared_notices_motion_browser_addition(plan['scenarios'])
+    multiparty_ids = external_multiparty_browser_addition(plan['scenarios'])
+    shared_room_ids = shared_room_browser_addition(plan['scenarios'])
     rows = []
     for row in plan['scenarios']:
-        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids:
+        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | multiparty_ids | shared_room_ids:
             continue
         row = {**row, 'command': [coverage_paths(part) for part in row['command']]}
         row.pop('cwd', None)
@@ -294,8 +296,16 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     navigation_ids = agent_navigation_browser_additions(rows, set())
     sidebar_ids = sidebar_controls_browser_addition(rows, set())
     client_addition_ids = input_status_and_action_spacing_browser_additions(rows, set())
+    lifecycle_additions = [
+        {'id': 'session-health-request-failure',
+         'command': ['node', 'tests/session-health-browser.mjs', '--request-failure']},
+        {'id': 'session-health-completed-runtime-fault',
+         'command': ['node', 'tests/session-health-browser.mjs', '--completed-runtime-fault']},
+    ]
+    lifecycle_ids = {row['id'] for row in lifecycle_additions}
+    assert [row for row in rows if row['id'] in lifecycle_ids] == lifecycle_additions
     historical_rows = [row for row in rows
-                       if row['id'] not in navigation_ids | sidebar_ids | client_addition_ids
+                       if row['id'] not in navigation_ids | sidebar_ids | client_addition_ids | lifecycle_ids
                        and not (canvas_additions | breadbin_addition | question_fade_addition | context_addition | immediate_addition | delivery_addition | waiting_addition | resume_addition).intersection(row['command'])]
     # Expanded exact .149 workflow invocations, including compound npm scripts.
     # Deliberate coverage changes must update this migration oracle explicitly.
@@ -390,7 +400,7 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     original = [row for row in historical_rows if row['id'] not in additions and row['id'] not in recovery_ids]
     assert len(original) == 65 and len(historical_rows) == 132
     # Preserve the preceding total after validating all exact additive owners.
-    assert len([row for row in rows if row['id'] not in navigation_ids | sidebar_ids | client_addition_ids | {'context-inspector-layout', 'delivery-warning', 'legacy-outbox-notice', 'delivery-reconciliation', 'delivery-new-chat', 'navigation-waiting', 'canvas-versions', 'question-resume'}]) == 138
+    assert len([row for row in rows if row['id'] not in navigation_ids | sidebar_ids | client_addition_ids | lifecycle_ids | {'context-inspector-layout', 'delivery-warning', 'legacy-outbox-notice', 'delivery-reconciliation', 'delivery-new-chat', 'navigation-waiting', 'canvas-versions', 'question-resume'}]) == 138
     # Existing scenarios retain their commands; only evidence ownership changes.
     evidence = {
         'bundle': {'AMPLIFIER_BUNDLE_SCREENSHOT': '{root}/output/browser-checks/bundle-mobile.png'},
@@ -493,11 +503,15 @@ def test_workflow_keeps_independent_artifacts_and_one_full_python_owner():
     steps = browser['jobs']['browser']['steps']
     assert any('browser_check_runner.py' in step.get('run', '') for step in steps)
     uploads = [step for step in steps if step.get('uses') == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02']
-    assert len(uploads) == 2
+    assert len(uploads) == 3
     by_name = {step['with']['name']: step for step in uploads}
     diagnostics_name = 'extended-browser-evidence-${{ github.run_attempt }}'
     static_name = 'browser-static-${{ steps.build-source.outputs.revision }}-${{ github.run_attempt }}'
-    assert set(by_name) == {diagnostics_name, static_name}
+    captured_name = 'captured-frontend-build-${{ github.sha }}-${{ github.run_attempt }}'
+    assert set(by_name) == {diagnostics_name, static_name, captured_name}
+    assert by_name[captured_name]['if'] == "${{ inputs.captured_message_delivery && steps.frontend-build.outcome == 'success' }}"
+    assert by_name[captured_name]['with']['path'] == '${{ runner.temp }}/captured-frontend-build/'
+    assert by_name[captured_name]['with']['if-no-files-found'] == 'error'
     diagnostics, static = by_name[diagnostics_name], by_name[static_name]
     assert diagnostics['if'] == 'always()'
     assert diagnostics['with'] == {
@@ -1036,6 +1050,80 @@ def shared_notices_motion_browser_addition(rows, readiness_scripts=()):
     return selected_client_browser_addition(rows, readiness_scripts, 'shared-notices-motion', current=True)
 
 
+def shared_room_browser_addition(rows, readiness_scripts=()):
+    return selected_client_browser_addition(rows, readiness_scripts, 'shared-room', current=True)
+
+
+def test_shared_room_is_composed_once_from_selected_client_owner():
+    name = 'shared-room'
+    expected = {'id': name, 'command': ['node', 'tests/shared-room-browser.mjs'],
+                'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/shared-room'}}
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    client_path = source_test('tests/shared-room-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    def owns(row):
+        return row['id'] == name or 'tests/shared-room-browser.mjs' in row['command']
+    assert not any(owns(row) for row in host['scenarios'])
+    assert [row for row in client['scenarios'] if owns(row)] == [expected]
+    assert host['scenarioOrder'].count(name) == 1
+    assert host['scenarioOrder'][-2:] == ['external-multiparty', name]
+    plan, proof = runner.load_plan(ROOT, host_path)
+    assert shared_room_browser_addition(plan['scenarios']) == {name}
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    assert [row for row in plan['scenarios'] if owns(row)] == [{**expected, 'cwd': '.build/web-client'}]
+    assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+    assert (client_path.parent / 'shared-room-browser.mjs').is_file()
+
+
+@pytest.mark.parametrize('fault', ['missing', 'duplicate', 'host-cwd', 'readiness'])
+def test_shared_room_rejects_missing_duplicate_or_wrong_owner(fault):
+    rows = current_plan()['scenarios']
+    assert shared_room_browser_addition(rows) == {'shared-room'}
+    owner = next(row for row in rows if row['id'] == 'shared-room')
+    readiness = set()
+    if fault == 'missing':
+        rows.remove(owner)
+    elif fault == 'duplicate':
+        rows.append(dict(owner))
+    elif fault == 'host-cwd':
+        owner.pop('cwd')
+    else:
+        readiness.add(owner['command'][1])
+    with pytest.raises(AssertionError, match='shared-room'):
+        shared_room_browser_addition(rows, readiness)
+
+
+def external_multiparty_browser_addition(rows, readiness_scripts=()):
+    """Validate the new host journey before subtracting it from frozen counts."""
+    script = 'tests/web/external-multiparty-browser.mjs'
+    expected = {'id': 'external-multiparty', 'command': ['node', script],
+                'env': {'AMPLIFIER_TEST_PYTHON': '{root}/.venv/bin/python',
+                        'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/external-multiparty'}}
+    owners = [row for row in rows if row['id'] == expected['id']
+              or any(Path(part).name == Path(script).name for part in row['command'])]
+    assert owners == [expected], 'external-multiparty: expected one exact host owner'
+    assert coverage_paths(script) not in readiness_scripts, 'external-multiparty: duplicate readiness owner'
+    return {expected['id']}
+
+
+def test_external_multiparty_is_composed_once_from_host_owner():
+    host = json.loads((ROOT / 'tests/web/browser-checks.json').read_text())
+    client = json.loads(source_test('tests/input-status-browser.mjs').with_name('browser-checks.json').read_text())
+    name = 'external-multiparty'
+    assert external_multiparty_browser_addition(host['scenarios']) == {name}
+    assert host['scenarioOrder'].count(name) == 1
+    assert not any(row['id'] == name or any(Path(part).name == name + '-browser.mjs'
+                   for part in row['command']) for row in client['scenarios'])
+    plan = current_plan()
+    assert external_multiparty_browser_addition(plan['scenarios']) == {name}
+    owner = next(row for row in plan['scenarios'] if row['id'] == name)
+    assert (ROOT / owner['command'][1]).is_file()
+    assert (ROOT / 'tests/fixtures/external_multiparty_ui_server.py').is_file()
+    with pytest.raises(AssertionError, match='host owner'):
+        external_multiparty_browser_addition([{**owner, 'cwd': '.build/web-client'}])
+
+
 def test_shared_notices_motion_is_composed_once_from_selected_client_owner():
     name = 'shared-notices-motion'
     script = f'tests/{name}-browser.mjs'
@@ -1308,6 +1396,8 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     appearance_lifecycle_browser_addition(current_plan()['scenarios'], readiness_scripts)
     sidebar_responsive_browser_addition(current_plan()['scenarios'], readiness_scripts)
     shared_notices_motion_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    external_multiparty_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    shared_room_browser_addition(current_plan()['scenarios'], readiness_scripts)
     plan = coverage_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], readiness_scripts)
     sidebar_ids = sidebar_controls_browser_addition(plan['scenarios'], readiness_scripts)
@@ -1470,6 +1560,82 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
                for step in coordination['jobs']['contracts']['steps'])
 
 
+def test_captured_message_delivery_plan_is_fixed_without_changing_default():
+    import copy
+    plan = current_plan()
+    before = copy.deepcopy(plan)
+    focused = runner.captured_message_delivery_plan(plan)
+    assert plan == before
+    assert focused['scenarios'][0] == {
+        'id': 'message-delivery',
+        'command': ['node', 'tests/web/message-delivery-browser.mjs'],
+        'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/message-delivery'},
+    }
+    assert [row['id'] for row in focused['scenarios']] == [
+        'message-delivery', 'message-outbox', 'delivery-reconciliation', 'delivery-new-chat']
+    assert focused['scenarios'][1:] == [
+        next(row for row in plan['scenarios'] if row['id'] == identity)
+        for identity in ('message-outbox', 'delivery-reconciliation', 'delivery-new-chat')]
+    for mutation in ('missing', 'duplicate', 'command', 'environment', 'cwd'):
+        broken = {'schemaVersion': 1, 'scenarios': [copy.deepcopy(next(
+            row for row in plan['scenarios'] if row['id'] == 'message-delivery'))]}
+        if mutation == 'missing':
+            broken['scenarios'] = []
+        elif mutation == 'duplicate':
+            broken['scenarios'] *= 2
+        elif mutation == 'command':
+            broken['scenarios'][0]['command'] = ['node', 'tests/other.mjs']
+        elif mutation == 'environment':
+            broken['scenarios'][0]['env'] = {'UNEXPECTED': 'value'}
+        else:
+            broken['scenarios'][0]['cwd'] = '.build/web-client'
+        with pytest.raises(ValueError):
+            runner.captured_message_delivery_plan(broken)
+
+
+def test_captured_message_delivery_workflow_is_manual_fixed_and_retains_failures():
+    workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
+    inputs = workflow['on']['workflow_dispatch']['inputs']
+    option = inputs['captured_message_delivery']
+    assert option['type'] == 'boolean' and option['default'] == 'false'
+    assert 'captured_message_delivery' not in workflow['on']['workflow_call']['inputs']
+    assert workflow['permissions'] == {'contents': 'read'}
+    job = workflow['jobs']['browser']
+    steps = job['steps']
+    mixed = next(step for step in steps if step.get('name') == 'Reject mixed captured delivery selections')
+    for name, value in inputs.items():
+        if name != 'captured_message_delivery' and value['type'] == 'boolean':
+            assert f'inputs.{name}' in mixed['if']
+    assert mixed['run'] == 'exit 1'
+    for name, other in workflow['jobs'].items():
+        if name != 'browser':
+            assert other['steps'][0] == {
+                'name': 'Reject mixed captured delivery selection',
+                'if': '${{ inputs.captured_message_delivery }}', 'run': 'exit 1'}
+    runs = [step for step in steps if 'python scripts/browser_check_runner.py --plan' in step.get('run', '')]
+    flag = "${{ inputs.captured_message_delivery && '--captured-message-delivery' || '' }}"
+    assert len(runs) == 2 and all(flag in step['run'] for step in runs)
+    assert '--budget-seconds 1500' in runs[1]['run']
+    full = next(step for step in steps if step.get('name') == 'Run full frontend units for unfiltered nightly/manual coverage')
+    assert '!inputs.captured_message_delivery' in full['if']
+    for identity in ('captured-host', 'captured-client'):
+        step = next(step for step in steps if step.get('id') == identity)
+        assert step['if'] == '${{ inputs.captured_message_delivery }}'
+        assert step['continue-on-error'] == 'true'
+        assert 'tee output/browser-checks/' in step['run'] and 'pipefail' in step['run']
+    final = next(step for step in steps if step.get('name') == 'Preserve failed captured delivery contracts')
+    assert 'always()' in final['if'] and "steps.captured-host.outcome != 'success'" in final['if']
+    assert "steps.captured-client.outcome != 'success'" in final['if'] and final['run'] == 'exit 1'
+    assert any(step.get('if') == 'always()' and 'upload-artifact@' in step.get('uses', '') for step in steps)
+    source = next(step for step in steps if step.get('name') == 'Bind captured delivery source before setup')
+    assert 'HEAD^{tree}' in source['run'] and 'selected-client.json' in source['run']
+    assert steps.index(source) < next(i for i, step in enumerate(steps) if 'setup-python@' in step.get('uses', ''))
+    capture = next(step for step in steps if step.get('name') == 'Capture verified captured-delivery build output')
+    assert 'mv output/browser-checks "$RUNNER_TEMP/captured-delivery-evidence"' in capture['run']
+    assert 'trap ' in capture['run'] and '--destination "$RUNNER_TEMP/captured-frontend-build"' in capture['run']
+    assert 'gitignore' not in capture['run'] and 'info/exclude' not in capture['run']
+
+
 def test_attachment_focus_selects_exact_existing_owner_without_changing_plan():
     import copy
     plan = current_plan()
@@ -1501,7 +1667,7 @@ def test_attachment_focus_workflow_retains_failures_and_default_coverage():
     assert 'attachment_consumption' not in workflow['on']['workflow_call']['inputs']
     job = workflow['jobs']['browser']
     assert job['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && !inputs.canvas_qualification && !inputs.peer_messages && !inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic && !inputs.attachment_experience }}'
-    runs = [step for step in job['steps'] if 'scripts/browser_check_runner.py' in step.get('run', '')]
+    runs = [step for step in job['steps'] if 'python scripts/browser_check_runner.py --plan' in step.get('run', '')]
     assert len(runs) == 2
     flag = "${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}"
     assert all(flag in step['run'] for step in runs)
@@ -1571,7 +1737,9 @@ def test_destination_history_manual_route_is_fixed_and_preserves_default_coverag
                    'test_approachable_shell.py', 'test_automation_overview.py', 'test_schedules.py',
                    'test_schedule_new_tasks.py'):
         assert f'tests/{target}' in run
-    assert 'components/scheduling/tests/test_policy_store.py' in run
+    # Standalone policy tests qualify their own wheel in Scheduling package;
+    # this app lane exercises the selected delivery through host schedule tests.
+    assert 'components/scheduling/tests/test_policy_store.py' not in run
     assert 'tests/test_browser_check_runner.py::test_destination_history_manual_route_is_fixed_and_preserves_default_coverage' in run
     assert 'tests/test_release_qualification.py' not in run
     for target in ('destination-history', 'destination-history-ui', 'api',
@@ -3704,12 +3872,22 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     appearance_ids = appearance_lifecycle_browser_addition(plan['scenarios'])
     responsive_ids = sidebar_responsive_browser_addition(plan['scenarios'])
     notices_ids = shared_notices_motion_browser_addition(plan['scenarios'])
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids]
+    multiparty_ids = external_multiparty_browser_addition(plan['scenarios'])
+    shared_room_ids = shared_room_browser_addition(plan['scenarios'])
+    lifecycle_additions = [
+        {'id': 'session-health-request-failure',
+         'command': ['node', 'tests/web/session-health-browser.mjs', '--request-failure']},
+        {'id': 'session-health-completed-runtime-fault',
+         'command': ['node', 'tests/web/session-health-browser.mjs', '--completed-runtime-fault']},
+    ]
+    lifecycle_ids = {row['id'] for row in lifecycle_additions}
+    assert [row for row in plan['scenarios'] if row['id'] in lifecycle_ids] == lifecycle_additions
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | lifecycle_ids | multiparty_ids | shared_room_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
-    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids)
+    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
-    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids) + len(responsive_ids) + len(notices_ids)
+    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(shared_room_ids)
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')

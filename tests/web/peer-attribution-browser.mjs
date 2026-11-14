@@ -172,7 +172,9 @@ try{
   return {selectedSessionId:state.selectedSessionId,draft:state.view.draft};
  });
  assert.deepEqual(preserved,{selectedSessionId:'receiving',draft:'Untouched draft'});
- const presentation=scheme=>page.evaluate(async scheme=>{
+ const presentationRevisions=[];
+ const presentation=async scheme=>{
+  const receipt=await page.evaluate(async scheme=>{
   const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
   const prepared=await window.amplifier.dispatch('shell.changes.prepare',{
    clientId,expectedRevision:shell.revision,
@@ -183,7 +185,24 @@ try{
    clientId,expectedRevision:shell.revision,changeId:prepared.result.id
   });
   if(!applied.accepted)throw Error('Theme commit failed');
- },scheme);
+  if(applied.result?.status!=='awaiting-storage'||!applied.result.commandId)throw Error('Expected the browser storage activation receipt');
+  return {scheme,baseRevision:prepared.result.baseRevision,commandId:applied.result.commandId};
+  },scheme);
+  // The scheme may already match (the zoom loop repeats it). Wait for this
+  // exact storage command and shell revision, not a prior iteration's theme.
+  await expect.poll(()=>page.evaluate(({commandId,baseRevision,scheme})=>{
+   const shell=window.amplifier.getShellState(),command=shell?.preferenceCommand;
+   return command?.id===commandId&&command.status==='stored'&&
+    shell.revision===baseRevision+1&&shell.effectiveComposition.presentation.scheme===scheme;
+  },receipt),{message:'Exact peer presentation activation revision'}).toBe(true);
+  const observed=await page.evaluate(()=>{const shell=window.amplifier.getShellState();return {
+   revision:shell.revision,commandId:shell.preferenceCommand.id,status:shell.preferenceCommand.status,
+   scheme:shell.effectiveComposition.presentation.scheme};
+  });
+  presentationRevisions.push({...receipt,observed});
+  if(process.env.AMPLIFIER_PROOF_DIR)writeFileSync(join(process.env.AMPLIFIER_PROOF_DIR,'peer-presentation-revisions.json'),
+   JSON.stringify(presentationRevisions,null,2));
+ };
  for(const width of [320,390])for(const scheme of ['light','dark'])for(const zoom of [1,2]){
   await page.setViewportSize({width,height:844});
   await presentation(scheme);

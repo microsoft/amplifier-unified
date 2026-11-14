@@ -21,6 +21,9 @@ def execute(lane, work, output):
         prepared = integration_native.prepare(ROOT, work, None, 'uv', sys.executable,
                                               loop_source=sources / 'loop-live')
         env = json.loads(Path(prepared['environment']).read_text())
+        artifacts = output / 'artifacts'
+        artifacts.mkdir(exist_ok=True)
+        env['AMPLIFIER_TEST_ARTIFACTS'] = str(artifacts)
         (output / 'preparation.json').write_text(Path(prepared['preparation']).read_text())
         for name in ('pyproject.toml', 'uv.lock'):
             (output / name).write_bytes((work / name).read_bytes())

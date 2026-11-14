@@ -1,5 +1,12 @@
 # Component projects
 
+[`workspaces/`](workspaces/README.md) is the temporary authoring home for the
+independently buildable workspace registration metadata package and its direct
+tests. Unified includes the same runtime sources and keeps host selection,
+filesystem, native history, authority and persistence. The standalone distribution
+must not be coinstalled with Unified. This prepares metadata ownership; the full
+workspace domain, independent publication and artifact adoption remain separate.
+
 [`amplifier_kernels/`](../amplifier_kernels/README.md) prepares the independently
 buildable computation mechanism in its existing source location, preserving
 runtime bootstrap origin checks. Its real Python/Node tests use selected process
@@ -34,9 +41,13 @@ authorization remain in Unified. It stays here until a separate repository and
 authoring handoff are ready.
 
 [`scheduling/`](scheduling/README.md) is the temporary authoring home for the
-independently buildable scheduling package. Unified consumes its nested runtime
-sources directly in normal editable installs, wheels and source distributions.
-It stays here until its separate repository and authoring handoff are ready.
+independently buildable scheduling package. It stays here until its separate
+repository and authoring handoff are ready. Unified consumes the explicitly
+selected published wheel through the generated `scheduling-delivery/` snapshot
+and [`scheduling.source.json`](scheduling.source.json). Author changes and component
+publication do not change that app default. The app remains the sole installed
+distribution owner; this is artifact assembly, not a separately updatable pip
+dependency. Follow the [selection instructions](scheduling/README.md#unified-artifact-selection).
 The web client has a different ownership arrangement, described below.
 
 ## Web client ownership and assembly

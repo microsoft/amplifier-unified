@@ -142,7 +142,7 @@ async def canonicalize(service, *, apply=False):
                         break
                     await locks.enter_async_context(lock)
                     worker = runtime.workers.get(sid)
-                    if worker and worker['process'].returncode is None and not worker.get('parked'):
+                    if worker and worker['process'].returncode is None:
                         busy = True
                         break
             if busy:

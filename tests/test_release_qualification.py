@@ -845,7 +845,7 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     workflow = yaml.load((ROOT / '.github/workflows/python-checks.yml').read_text(), Loader=yaml.BaseLoader)
     selection = workflow['on']['workflow_dispatch']['inputs']['suite']
     assert selection['type'] == 'choice' and selection['default'] == 'full'
-    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'fresh-cleanup-native', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'cold-control-restore', 'goal-peer-publisher-0410', 'updater-omitted-ref', 'updater-public-selected-source', 'updater-synthetic-acquisition', 'updater-expanded-lock', 'native-child-fixtures', 'question-answer-resume', 'question-answer-installed']
+    assert selection['options'] == ['full', 'inline-chat-card', 'queued-configuration', 'security-redaction', 'patch-placement-recovery', 'patch-placement-native', 'managed-removal-recovery', 'fresh-cleanup-native', 'shared-work-continuity', 'manager-exception-boundary', 'remote-test-origins', 'shared-work-native', 'cold-control-restore', 'goal-peer-publisher-0410', 'updater-omitted-ref', 'updater-public-selected-source', 'updater-synthetic-acquisition', 'updater-expanded-lock', 'native-child-fixtures', 'question-answer-resume', 'question-answer-installed', 'live-first-send', 'live-first-accepted-graph']
     assert workflow['on']['workflow_call']['inputs'] == {'revision': {'type': 'string', 'required': 'true'}}
     assert workflow['on']['workflow_call']['secrets'] == {'LOOP_LIVE_CI_READ_KEY': {'required': 'true'}}
     assert workflow['permissions'] == {'contents': 'read'}
@@ -888,7 +888,7 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     complete = next(step for step in steps if step.get('name') == 'Run the complete Python suite')
     focused = next(step for step in steps if step.get('name') == 'Run the selected repair suite')
     assert complete['if'] == "${{ env.CHECK_SUITE == 'full' }}"
-    assert focused['if'] == "${{ env.CHECK_SUITE != 'full' && env.CHECK_SUITE != 'native-child-fixtures' && env.CHECK_SUITE != 'question-answer-installed' }}" and focused['shell'] == 'bash'
+    assert focused['if'] == "${{ env.CHECK_SUITE != 'full' && env.CHECK_SUITE != 'native-child-fixtures' && env.CHECK_SUITE != 'question-answer-installed' && env.CHECK_SUITE != 'live-first-send' && env.CHECK_SUITE != 'live-first-accepted-graph' }}" and focused['shell'] == 'bash'
     assert 'mapfile -t targets < output/python-checks/targets.txt' in focused['run']
     assert 'test "${#targets[@]}" -gt 0' in focused['run']
     assert '"${targets[@]}"' in focused['run'] and 'set -o pipefail' in focused['run']
@@ -918,6 +918,14 @@ def test_manual_python_selection_is_fixed_and_preserves_full_and_core_modes():
     assert manager['if'] == "${{ env.CHECK_SUITE == 'manager-exception-boundary' }}"
     assert 'assert path.is_relative_to(root)' in manager['run']
     assert 'if [ "$CHECK_SUITE" = manager-exception-boundary ]; then' in focused['run']
+    live = next(step for step in steps if step.get('name') == 'Qualify live-first Send from the installed wheel with scripted external transports')
+    assert live['if'] == "${{ env.CHECK_SUITE == 'live-first-send' || env.CHECK_SUITE == 'live-first-accepted-graph' }}"
+    assert 'web_client_build.py verify' in live['run'] and 'web_client_build.py build' not in live['run']
+    assert '--no-deps --reinstall-package amplifier-unified' in live['run']
+    assert 'DIRECTION_INSTALLED_HOST' in live['run'] and 'unset PYTHONPATH' in live['run']
+    assert 'native ordinary tool completion stale-config stop native-unknown native-stop' in live['run']
+    assert "('failure', 'error', 'skipped')" in live['run'] and "row['cleanupConfirmed']" in live['run']
+    assert "direct['vcs_info']['commit_id']" in live['run']
 
 
 def test_goal_peer_publisher_is_exclusive_fixed_manual_and_preserves_failure_evidence():
@@ -1650,13 +1658,14 @@ def test_browser_retains_only_the_successfully_built_public_web_payload():
     build = next(index for index, step in enumerate(steps) if step.get('id') == 'frontend-build')
     assert identity < build
     assert 'python scripts/web_client_build.py build' in steps[build]['run']
-    upload = steps[build + 1]
+    upload = next(step for step in steps if step.get('name') == 'Retain the successful production web build')
     assert upload['if'] == "${{ steps.frontend-build.outcome == 'success' }}"
     assert upload['uses'] == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
     assert upload['with'] == {
         'name': 'browser-static-${{ steps.build-source.outputs.revision }}-${{ github.run_attempt }}',
         'path': 'amplifier_web/static/', 'include-hidden-files': 'true', 'if-no-files-found': 'error'}
-    assert steps[build + 2]['name'] == 'Install browser dependencies'
+    assert steps.index(upload) > build
+    assert steps[steps.index(upload) + 1]['name'] == 'Install browser dependencies'
     # The artifact includes the builder's metadata and is retained before later
     # scenario failure; an unrun/failed build cannot upload the old tracked tree.
     selection = json.loads((ROOT / 'components/web-client.source.json').read_text())
@@ -1702,6 +1711,7 @@ def test_browser_runner_matcher_excludes_test_names_without_hiding_extra_invocat
 def test_canvas_qualification_is_fixed_manual_and_installed_not_a_release_gate():
     workflow = yaml.load((ROOT / '.github/workflows/browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     job = workflow['jobs']['canvas-qualification']
+    job['steps'] = [step for step in job['steps'] if step.get('name') != 'Reject mixed captured delivery selection']
     assert job['if'] == "${{ !inputs.permissions_history && !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && inputs.canvas_qualification }}"
     assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '20'
     assert workflow['permissions'] == {'contents': 'read'}
@@ -1788,7 +1798,7 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert set(inputs) == {'app004_qualification', 'mcp_boundary', 'attachment_consumption',
                            'canvas_qualification', 'destination_history', 'settings_close_diagnostic',
                            'multi_quote', 'attachment_experience', 'compact_composer', 'peer_messages',
-                           'readiness_trio', 'permissions_history', 'canvas_scope'}
+                           'readiness_trio', 'permissions_history', 'canvas_scope', 'captured_message_delivery'}
     assert inputs['canvas_qualification']['type'] == 'boolean'
     assert inputs['canvas_qualification']['default'] == 'false'
     assert inputs['multi_quote']['type'] == 'boolean'
@@ -1818,6 +1828,8 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     mcp = workflow['jobs']['mcp-boundary']
     assert mcp['if'] == "${{ !inputs.permissions_history && !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && !inputs.canvas_qualification && !inputs.peer_messages && inputs.mcp_boundary && !inputs.compact_composer && !inputs.destination_history && !inputs.settings_close_diagnostic }}"
     history = workflow['jobs']['destination-history']
+    history['steps'] = [step for step in history['steps'] if step.get('name') != 'Reject mixed captured delivery selection']
+    mcp['steps'] = [step for step in mcp['steps'] if step.get('name') != 'Reject mixed captured delivery selection']
     assert history['if'] == '${{ !inputs.permissions_history && !inputs.readiness_trio && !inputs.peer_messages && !inputs.compact_composer && (inputs.destination_history || inputs.settings_close_diagnostic) }}'
     assert history['steps'][0] == {
         'name': 'Require the fixed navigation selection for diagnostic mode',
@@ -1852,13 +1864,15 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert len(commands) == 2
     flag = "${{ inputs.app004_qualification && '--app004-qualification' || '' }}"
     attachment_flag = "${{ inputs.attachment_consumption && '--attachment-consumption' || '' }}"
+    captured_flag = "${{ inputs.captured_message_delivery && '--captured-message-delivery' || '' }}"
     assert all(command.count(flag) == 1 for command in commands)
     assert all(command.count(attachment_flag) == 1 for command in commands)
+    assert all(command.count(captured_flag) == 1 for command in commands)
     # Empty/default selection executes exactly the preexisting plan and budget.
-    assert commands[0].replace(flag, '').replace(attachment_flag, '').strip() == (
+    assert commands[0].replace(flag, '').replace(attachment_flag, '').replace(captured_flag, '').strip() == (
         'python scripts/browser_check_runner.py --plan tests/web/browser-checks.json '
         '--output output/browser-checks --initialize')
-    assert commands[1].replace(flag, '').replace(attachment_flag, '').strip() == (
+    assert commands[1].replace(flag, '').replace(attachment_flag, '').replace(captured_flag, '').strip() == (
         'uv run --no-sync python scripts/browser_check_runner.py '
         '--plan tests/web/browser-checks.json --output output/browser-checks --budget-seconds 1500')
     assert next(i for i, s in enumerate(steps) if '--initialize' in s.get('run', '')) < next(
@@ -1881,7 +1895,8 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     assert any(s.get('with', {}).get('path') == 'amplifier_web/static/' for s in before)
     # The fixed attachment-only contracts are inactive for APP004/default.
     after = [step for step in steps[steps.index(contract) + 1:]
-             if step.get('if') != '${{ inputs.attachment_consumption }}']
+             if step.get('if') not in {'${{ inputs.attachment_consumption }}',
+                                       '${{ inputs.captured_message_delivery }}'}]
     next_step = after[0]
     assert next_step['name'] == 'Run all extended browser scenarios serially'
     # Multi-quote replaces only this explicitly selected run; default/APP004
@@ -1895,8 +1910,9 @@ def test_app004_opt_in_is_fixed_manual_only_and_keeps_default_browser_budget():
     }
     # Opt-in can neither mask a failed step nor bypass the existing always upload.
     continued = [step for step in steps if 'continue-on-error' in step]
-    assert {step['id'] for step in continued} == {'attachment-contracts', 'attachment-client-contracts'}
-    assert all(step['if'] == '${{ inputs.attachment_consumption }}' for step in continued)
+    assert {step['id'] for step in continued} == {'attachment-contracts', 'attachment-client-contracts', 'captured-host', 'captured-client'}
+    assert all(step['if'] == ('${{ inputs.captured_message_delivery }}' if step['id'].startswith('captured-')
+                             else '${{ inputs.attachment_consumption }}') for step in continued)
     failures = next(step for step in steps if step.get('name') == 'Preserve failed attachment contracts')
     assert failures['run'] == 'exit 1' and 'always()' in failures['if']
     diagnostics = steps[-1]
@@ -1936,11 +1952,11 @@ def test_readiness_trio_is_exclusive_manual_fixed_and_not_a_default_gate():
     assert job['if'] == "${{ !inputs.permissions_history && github.event_name == 'workflow_dispatch' && inputs.readiness_trio == true }}"
     assert job['runs-on'] == 'ubuntu-latest' and job['timeout-minutes'] == '15'
     assert 'needs' not in job and 'continue-on-error' not in job
-    steps = job['steps']
+    steps = [step for step in job['steps'] if step.get('name') != 'Reject mixed captured delivery selection']
     mixed = ('attachment_experience', 'peer_messages', 'destination_history', 'settings_close_diagnostic',
              'mcp_boundary', 'app004_qualification', 'attachment_consumption', 'canvas_qualification',
              'multi_quote', 'compact_composer')
-    assert set(inputs) == {'readiness_trio', 'permissions_history', 'canvas_scope', *mixed}
+    assert set(inputs) == {'readiness_trio', 'permissions_history', 'canvas_scope', 'captured_message_delivery', *mixed}
     assert steps[0] == {
         'name': 'Reject mixed readiness trio selections before setup',
         'if': '${{ ' + ' || '.join('inputs.' + name for name in mixed) + ' }}',
@@ -2002,8 +2018,8 @@ def test_permissions_history_is_exclusive_manual_fixed_and_preserves_default_job
         if name != 'permissions-history':
             assert other['if'].startswith('${{ !inputs.permissions_history && ')
             assert 'needs' not in other
-    steps = job['steps']
-    assert set(re.findall(r'inputs\.([a-z_0-9]+)', steps[0]['if'])) == set(inputs) - {'permissions_history', 'canvas_scope'}
+    steps = [step for step in job['steps'] if step.get('name') != 'Reject mixed captured delivery selection']
+    assert set(re.findall(r'inputs\.([a-z_0-9]+)', steps[0]['if'])) == set(inputs) - {'permissions_history', 'canvas_scope', 'captured_message_delivery'}
     assert steps[0]['run'].endswith('exit 1\n')
     assert steps[1]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
     assert steps[2]['run'].startswith('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"\n')
@@ -2277,7 +2293,7 @@ def test_compact_composer_is_fixed_manual_only_with_independent_failure_evidence
     job = workflow['jobs']['compact-composer']
     assert job['if'] == "${{ !inputs.permissions_history && !inputs.readiness_trio && github.event_name == 'workflow_dispatch' && inputs.compact_composer }}"
     assert job['timeout-minutes'] == '30'
-    steps = job['steps']
+    steps = [step for step in job['steps'] if step.get('name') != 'Reject mixed captured delivery selection']
     assert steps[0]['with'] == {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
     assert steps[1] == {'name': 'Reject mixed selections',
                        'if': '${{ inputs.canvas_qualification || inputs.multi_quote || inputs.attachment_experience || inputs.peer_messages || inputs.mcp_boundary || inputs.attachment_consumption || inputs.app004_qualification || inputs.destination_history || inputs.settings_close_diagnostic }}',

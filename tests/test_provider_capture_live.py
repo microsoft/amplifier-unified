@@ -53,7 +53,7 @@ async def test_live_boundary_large_budget(tmp_path, monkeypatch, measured, manag
     raw=Provider();await c.mount('providers',raw,name='fixture')
     events=ExecutionEvents(session.session_id,lambda row:None)
     async def bridge(operation,args):return {'surfaces':[],'inputIds':[]} if operation=='context.manifest' else {}
-    await install_app_access(c,bridge)
+    await install_app_access(c,bridge, execution_role='root')
     loop=c.get('orchestrator');loop.root_provider=SelectedProvider(raw,{'model':'selected','effort':'high','max_output_tokens':321})
     # Execute the exact production ObservedHost class, not a hand-flattened
     # provider chain. Its closure's external activity/checkpoint/bridge IO is
@@ -68,7 +68,7 @@ async def test_live_boundary_large_budget(tmp_path, monkeypatch, measured, manag
     def observe_runtime(event):
         if event['type']=='generation.finished':finished.set()
     runtime=Runtime(session.session_id,observer=observe_runtime)
-    host=runtime_worker.Worker();host.telemetry=events;host.runtime=runtime
+    host=runtime_worker.Worker();host.telemetry=events;host.runtime=runtime;host.session=session
     host.install_collaboration_checkpoint=lambda c:None
     host.app_access_bridge=lambda c:bridge
     monkeypatch.setattr(runtime_worker,'publish',lambda value:None)

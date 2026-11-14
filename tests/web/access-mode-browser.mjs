@@ -20,7 +20,11 @@ try{
  browser=await chromium.launch({headless:true});
  page=await browser.newPage({viewport:{width:1100,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.setDefaultTimeout(10000);
- const errors=[];page.on('pageerror',error=>errors.push(error.message));
+ const errors=[],submissions=[];page.on('pageerror',error=>errors.push(error.message));
+ page.on('request',request=>{
+  if(new URL(request.url()).pathname!=='/api/actions'||request.method()!=='POST')return;
+  const data=request.postDataJSON();if(data?.action==='conversation.send')submissions.push(data);
+ });
  await page.goto(url);await showFixtureConversation(page);
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await composer.fill('Configure the requested local file access');
@@ -78,10 +82,17 @@ try{
  assert.equal(await page.evaluate(id=>window.amplifier.getState().sessions.find(s=>s.id===id).fileAccessPending,current.selected),true);
  await composer.fill('Please finish the current check before changing anything else.');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
- await expect.poll(async()=>(await inspect()).sent.filter(row=>row.kind==='human-steer').length).toBe(1);
- const steered=(await inspect()).sent.find(row=>row.kind==='human-steer');
- assert.equal(steered.allowNextTurn,false);
- assert.equal((await inspect()).contexts[current.selected].generationId,originalGeneration);
+ await expect.poll(async()=>(await inspect()).sent.filter(row=>row.kind==='human-context').length).toBe(1);
+ const observed=await inspect(),steered=observed.sent.find(row=>row.kind==='human-context');
+ const submitted=submissions.find(row=>row.id===steered.inputId);
+ assert.ok(submitted,'The real composer submitted this exact input identity');
+ assert.equal(Object.hasOwn(submitted.args,'expectedGenerationId'),false);
+ assert.equal(Object.hasOwn(submitted.args,'allowNextTurn'),false);
+ assert.equal(observed.contexts[current.selected].generationId,originalGeneration);
+ assert.ok(observed.contexts[current.selected].inputIds.includes(steered.inputId));
+ assert.ok(observed.events.some(row=>row.kind==='runtime.status'&&row.event==='input.delivered'
+  &&row.input_id===steered.inputId&&row.generation_id===originalGeneration&&row.delivery==='request_boundary'));
+ assert.equal(await page.evaluate(id=>window.amplifier.getState().sessions.find(s=>s.id===id).fileAccessPending,current.selected),true,'Guidance does not apply the pending file policy');
  await expect(page.getByText('Not sent',{exact:true})).toHaveCount(0);
  const expiredResponse=await call('capability.request',{sessionId:current.selected,effects:['file_access'],scopes:['local'],reason:'Will expire at Stop'},'stale-request');
  const expiredGrant=(await expiredResponse.json()).result;

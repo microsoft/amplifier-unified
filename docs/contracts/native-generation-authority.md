@@ -25,7 +25,8 @@ Retries of an already accepted input keep its original binding. Internal native
 child/job-result inputs inherit the worker's captured startup revision; they do
 not consult the current host. Stop closes that worker, and admission waits for
 its confirmed exit before a replacement can receive the new startup revision.
-Parking and remounting preserve the original startup capture.
+Idle retains the original startup capture and native writer. Replacement starts
+a fresh worker only after the old owner's confirmed exit.
 
 `Collaboration.active_binding` retains strict root-principal validation by default.
 An effect owner may explicitly opt into a descendant's trusted native bridge

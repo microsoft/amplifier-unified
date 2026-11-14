@@ -90,7 +90,7 @@ async def test_cleanup_scoped_receipt_replaces_pending_snapshot_without_claiming
         receipt = row["computerSettlement"]
         assert receipt == {"state": "settled", "settled": True, "scope": "cleanup",
                            "episodes": [], "omittedEpisodes": 0}
-        assert not row["parked"]  # Report scope does not grant writer handoff.
+        assert "parked" not in row  # Cleanup receipt does not release its writer.
         await manager.stop("cleanup-scope")
         saved = json.loads((manager.home / "runtime-reports/cleanup-scope/computer-settlement.json").read_text())
         assert saved == receipt and "release_confirmed" not in saved

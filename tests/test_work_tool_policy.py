@@ -40,7 +40,7 @@ async def wrapped(late=False):
     original = GatedTool()
     if not late:
         await coordinator.mount('tools', original)
-    await install_app_access(coordinator, AsyncMock(return_value={}))
+    await install_app_access(coordinator, AsyncMock(return_value={}), execution_role='root')
     if late:
         await coordinator.mount('tools', original)
     else:

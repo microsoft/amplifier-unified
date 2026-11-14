@@ -6,12 +6,14 @@ the original logical provider declarations, never an additional account store.
 from __future__ import annotations
 
 import copy
+import errno
 from functools import lru_cache
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import uuid
 
 from .provider_isolation import identity
@@ -26,24 +28,45 @@ def _catalog_snapshot():
     # separate interpreter, before any provider source is imported/authorized.
     # An absolute script also works when the app is bootstrapped, not installed
     # into the worker's environment. -I excludes cwd and injected PYTHONPATH.
+    started = time.monotonic()
+    def unavailable(category, output=None, **extra):
+        return None, {
+            "category": category, "elapsedMs": round((time.monotonic() - started) * 1000),
+            **({"stdoutBytes": len(output)} if isinstance(output, bytes) else {}), **extra,
+        }
     try:
         result = subprocess.run([sys.executable, "-I", str(Path(__file__).with_name("decision_account_catalog.py"))],
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10, check=True,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                                 env={name: value for name, value in os.environ.items()
                                      if name in {"PATH", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL", "TZ",
                                                  "TMPDIR", "TEMP", "TMP"}})
-        if len(result.stdout) > 524288:
-            return None
+    except subprocess.TimeoutExpired as error:
+        return unavailable("timeout", error.output)
+    except subprocess.CalledProcessError as error:
+        return unavailable("nonzero-exit", error.output, exitCode=error.returncode)
+    except OSError as error:
+        return unavailable("spawn", **({"osError": errno.errorcode[error.errno]}
+                                     if error.errno in errno.errorcode else {}))
+    except (subprocess.SubprocessError, ValueError):
+        return unavailable("subprocess-error")
+    if len(result.stdout) > 524288:
+        return unavailable("oversized-output", result.stdout)
+    try:
         value = json.loads(result.stdout)
-        return value if isinstance(value, dict) else None
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return None
+    except ValueError:
+        return unavailable("invalid-json", result.stdout)
+    if not isinstance(value, dict):
+        return unavailable("non-object", result.stdout)
+    return value, None
 
 
 def catalogs():
-    value = _catalog_snapshot()
+    value, failure = _catalog_snapshot()
     if value is None:
-        raise ValueError("Decision adapter metadata is unavailable in this worker")
+        error = ValueError("Decision adapter metadata is unavailable in this worker")
+        error.diagnostic_facts = {"decisionCatalog": copy.deepcopy(failure)}
+        raise error from None
     return copy.deepcopy(value)
 
 

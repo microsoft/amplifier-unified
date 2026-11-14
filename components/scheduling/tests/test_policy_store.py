@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from amplifier_scheduling.policy import instant, normalize, preview, due_occurrence
@@ -30,7 +30,7 @@ def test_missed_run_policy_interval_is_bounded_and_exact():
 
 
 def put(store, start=100):
-    record = {'id': 'one', 'sessionId': 'session', 'revision': 1, 'status': 'active', 'taskId': 'task', 'taskRevision': 2, 'nextDue': start, 'missedRunPolicy': 'latest', 'spec': normalize({'kind': 'interval', 'timezone': 'UTC', 'startAt': datetime.fromtimestamp(start).astimezone().isoformat(), 'intervalSeconds': 60})}
+    record = {'id': 'one', 'sessionId': 'session', 'revision': 1, 'status': 'active', 'taskId': 'task', 'taskRevision': 2, 'nextDue': start, 'missedRunPolicy': 'latest', 'spec': normalize({'kind': 'interval', 'timezone': 'UTC', 'startAt': datetime.fromtimestamp(start, timezone.utc).isoformat(), 'intervalSeconds': 60})}
     store.put(record)
     return record
 

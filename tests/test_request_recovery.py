@@ -157,7 +157,7 @@ async def test_stream_close_releases_provider_immediately_without_leaking_scope(
 async def test_root_and_child_app_access_share_recovery_policy(host):
     from amplifier_web.app_guidance import install_app_access
     host.mount = AsyncMock()
-    await install_app_access(host, AsyncMock())
+    await install_app_access(host, AsyncMock(), execution_role='root')
     transform = host.get_capability('web.provider_transform')
     original = SimpleNamespace(complete=AsyncMock(return_value='done'))
     wrapped = transform(original)

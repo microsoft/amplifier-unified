@@ -565,7 +565,7 @@ class InstalledWorkAdapter:
             if operation == 'memory.context':
                 return {'items': []}
             return await app.app_bridge(operation, {**args, **transport(child)}, child['id'])
-        await install_app_access(coordinator, bridge)
+        await install_app_access(coordinator, bridge, execution_role='root')
         self.delivery = self.capabilities['web.surface_delivery']
         return self
 

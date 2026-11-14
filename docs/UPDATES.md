@@ -309,7 +309,7 @@ Installation stages changed source bindings and prepares the **currently offered
 
 A proven catalog-data-only change reuses an already qualified runtime. This requires an exact tree comparison, an allowlisted data contract and unchanged app-profile inputs. Unknown files, code, dependency or profile changes take the qualification path. Failed qualification leaves the active pointer unchanged.
 
-Qualified component generations use per-worker activation. Promotion atomically changes the generation selected by new starts. Running workers retain their source generation and environment; after they park with no active jobs, queued input, approval or uncertain operation, the existing retirement handshake releases them. The next explicit work starts a fresh worker on the current generation and resumes native history. Active voice protects its worker. The updater does not interrupt a turn, automatically replay an operation, or add another checkpoint format. Application replacements, incompatible worker protocols and legacy generations retain the coordinated restart boundary.
+Qualified component generations use per-worker activation. Promotion atomically changes the generation selected by new starts. Running workers retain their source generation, environment and native writer, including while idle. The existing retirement handshake saves, rechecks pending work/resources and exits before releasing ownership. The next explicit work starts a fresh worker on the current generation and resumes native history. Active voice protects its worker. The updater does not interrupt a turn, automatically replay an operation, or add another checkpoint format. Application replacements, incompatible worker protocols and legacy generations retain the coordinated restart boundary.
 
 Custom workspace/session dependency overrides qualify a separate environment on explicit execution, coalesced by effective configuration and source content. Browsing a chat does not prepare it. Identical qualified graphs share immutable environments; provider keys, connection IDs, model selection and prompt text do not define a dependency graph. Conflicting distribution sources in an offered union fail candidate qualification instead of silently choosing one. Local overrides retain their explicit source semantics.
 
@@ -804,7 +804,12 @@ still report on its original request. Other conversations remain usable.
 
 Routine idle configuration refresh retains that exact enrolled worker while its
 authorized update wait remains current, including after its checkpoint is ready.
-It must not destroy the checkpoint owner or manufacture a settings failure. New
+The updater may then use the ordinary acknowledged idle-retirement handshake
+for that exact owner when only saved configuration freshness is pending, before
+requiring writer absence at the application gate. A refused or unknown retirement
+does not prove release; active resources and unresolved configuration operations
+remain held. Retirement is not configuration adoption or a continuation input.
+Routine refresh must not destroy the checkpoint owner or manufacture a settings failure. New
 settings, Stop or task changes still supersede the wait; an absent or replacement
 worker is not retained by an older owner's boundary.
 

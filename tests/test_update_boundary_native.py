@@ -15,7 +15,7 @@ from amplifier_web.runtime_worker import Worker
 
 
 @pytest.mark.parametrize('change', ['none', 'objective', 'cap', 'completed'])
-async def test_real_native_yield_ends_only_current_turn_and_preserves_goal(change):
+async def test_real_native_yield_ends_only_current_turn_and_preserves_goal(change, tmp_path):
     sid = 'native-update-boundary'
     entered, release = asyncio.Event(), asyncio.Event()
     live = Runtime(session_id=sid)
@@ -28,9 +28,23 @@ async def test_real_native_yield_ends_only_current_turn_and_preserves_goal(chang
     coordinator.register_capability('live.runtime', live)
     worker = Worker()
     worker.session, worker.runtime = native, live
+    from amplifier_foundation.session.activation import ActivationGate
+    worker.shared_handle = handle = object()
+    worker.activation_gate = ActivationGate()
+    worker.activation = worker.activation_gate.activate()
+    live.capture_activation = worker.activation_gate.current
+    coordinator.register_capability('live.activation', worker.activation_gate)
     snapshots = []
     worker.controls = SimpleNamespace(persist=lambda **kw: snapshots.append(copy.deepcopy(coordinator.session_state)))
-    worker.parked = False
+    # This bare Core session has no application persistence adapter. Persist its
+    # real context at the same capability boundary used by a full worker.
+    import json
+    checkpoint_path = tmp_path / 'checkpoint.json'
+    async def checkpoint(_status='completed'):
+        worker.activation_gate.check_current()
+        messages = await coordinator.get('context').get_messages()
+        checkpoint_path.write_text(json.dumps(messages, default=str))
+    coordinator.register_capability('live.checkpoint', checkpoint)
     task = {'id': 'existing-task', 'revision': 1, 'continuationEpoch': 1,
             'status': 'active', 'objective': 'Finish the authorized report'}
     goal = {'condition': task['objective'], 'task_id': task['id'], 'task_revision': 1,
@@ -54,11 +68,16 @@ async def test_real_native_yield_ends_only_current_turn_and_preserves_goal(chang
             return ChatResponse(content=[TextBlock(text='Saved this completed step.')])
     provider = Provider()
     await coordinator.mount('providers', provider, name='fixture')
-    execution = asyncio.create_task(native.execute(''))
+    token = worker.activation_gate.bind(worker.activation)
+    try:
+        execution = asyncio.create_task(native.execute(''))
+    finally:
+        worker.activation_gate.reset(token)
     try:
         async with asyncio.timeout(15):
             await live.wait_for(lambda e: e['type'] == 'session.ready', 3)
-            await live.submit(Input('user', 'Continue the existing authorized report.', id='original'))
+            await live.submit(Input('user', 'Continue the existing authorized report.',
+                                    id='original', activation=worker.activation))
             await entered.wait()
             first = await inspect(worker, 'update-attempt', update=True)
             assert not first['ready'] and 'generation' in first['waitingFor']
@@ -68,9 +87,8 @@ async def test_real_native_yield_ends_only_current_turn_and_preserves_goal(chang
             assert coordinator.session_state['goal']['turns_used'] == 3
             assert coordinator.session_state['goal']['continuations'] == 1
             assert snapshots[-1]['goal']['turns_used'] == 3
-            # Park/checkpoint ownership is qualified by the separate real
-            # Worker process probe; this in-process test supplies its observation.
-            worker.parked = True
+            # The boundary must perform the native checkpoint without releasing
+            # this writer. Actual shared locks are covered by the process probe.
             if change == 'objective':
                 coordinator.session_state['task'] = {**task, 'revision': 2, 'continuationEpoch': 2, 'objective': 'Different task'}
                 coordinator.session_state['goal'] = {**coordinator.session_state['goal'], 'condition': 'Different task', 'task_revision': 2}
@@ -79,6 +97,9 @@ async def test_real_native_yield_ends_only_current_turn_and_preserves_goal(chang
                 if change == 'completed': coordinator.session_state['task']['status'] = 'completed'
             result = await inspect(worker, 'update-attempt', update=True)
             assert result['ready'], result
+            assert worker.shared_handle is handle
+            worker.activation_gate.check(worker.activation)
+            assert 'Saved this completed step.' in checkpoint_path.read_text()
             assert ('yieldedGoal' in result) is (change == 'none')
             assert set(live.accepted) == {'original'}
             await inspect(worker, 'update-attempt', cancel=True)
