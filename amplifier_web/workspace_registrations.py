@@ -1,4 +1,4 @@
-"""Reconcile discovered workspace metadata in caller-owned registrations."""
+"""Manual edits and discovery reconciliation of caller-owned registrations."""
 from __future__ import annotations
 
 import copy
@@ -88,3 +88,37 @@ def reconcile(registrations, known, observed, *, hidden_ids, managed_paths):
             registrations_changed = True
     return RegistrationReconciliation(
         workspaces, hidden_workspaces, registrations_changed, hidden_changed, remaps)
+
+
+def register(registrations, candidate, *, name):
+    """Apply an already resolved folder registration, preserving existing rows.
+
+    The host validates the folder and trims the explicit display name first.
+    An omitted name does not replace a prior name with the folder's basename.
+    """
+    existing = next((row for row in registrations if row["id"] == candidate["id"]), None)
+    if not existing:
+        registrations.append(candidate)
+    else:
+        existing["available"] = True
+        if name:
+            existing["name"] = name
+
+
+def edit(registrations, action, args):
+    """Edit one existing row; the host owns selection and reference effects."""
+    row = next((row for row in registrations if row["id"] == args["id"]), None)
+    if not row:
+        raise ValueError("This workspace is no longer registered.")
+    if action in {"workspace.archive", "workspace.restore"}:
+        row["archived"] = action == "workspace.archive"
+    elif action == "workspace.rename":
+        name = args["name"].strip()
+        if not name:
+            raise ValueError("Enter a workspace name.")
+        row["name"] = name
+    elif action == "workspace.remove":
+        if len(registrations) == 1:
+            raise ValueError("Keep at least one workspace registered.")
+        registrations.remove(row)
+    return row
