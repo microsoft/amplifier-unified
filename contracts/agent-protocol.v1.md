@@ -32,8 +32,8 @@ its implementation.
 
 For Constellation participation, the
 [Agent Instance contract](https://github.com/microsoft/amplifier-constellation/blob/main/contracts/agent-instance.md)
-owns the continuing participant's outward promises. AP governs this native
-execution adapter; the [composition mapping](../docs/architecture/VISION.md#constellation-boundaries)
+owns the continuing participant's outward promises. AP governs Unified's ACP
+adapter and host boundary; the [composition mapping](../docs/architecture/VISION.md#constellation-boundaries)
 identifies the other owners without requiring this adapter to implement every role.
 
 ## The promises
