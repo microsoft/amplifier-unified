@@ -11,6 +11,12 @@ const prefix='maintenance.optimize.';
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const mutations=new Set(['preview','policy.save','apply','cancel','resume'].map(name=>prefix+name));
 
+// Use the control's computed accessible name rather than the wrapping label's
+// nested option text. Settings can occupy the shared panel dialog.
+const scopeControl=section=>section.getByRole('combobox',{name:'Saved sessions to review',exact:true});
+const settingsCloseControl=page=>page.locator('[data-part="dialog"]:visible')
+ .getByRole('button',{name:/^Close (panel|settings)$/i});
+
 // Reconciliation means a different, passive action with the original identity.
 // In particular an exact duplicate apply is still a mutation replay here.
 function assertReadOnlyReconcile(requests,command){
@@ -72,6 +78,20 @@ function assertPendingOutbox(before,after){
 }
 
 function sourceCheck(){
+ const locatorCalls=[];
+ const fakeScope={getByRole:(role,options)=>{locatorCalls.push({role,options});return 'scope-control'}};
+ assert.equal(scopeControl(fakeScope),'scope-control');
+ assert.deepEqual(locatorCalls,[{role:'combobox',options:{name:'Saved sessions to review',exact:true}}]);
+ const closeNames=['Close panel','Close settings'];
+ const fakePage={locator:selector=>{
+  assert.equal(selector,'[data-part="dialog"]:visible');
+  return {getByRole:(role,{name})=>{
+   assert.equal(role,'button');assert.ok(closeNames.every(value=>name.test(value)));
+   assert.equal(name.test('Close unrelated panel'),false);
+   return 'visible-panel-close';
+  }};
+ }};
+ assert.equal(settingsCloseControl(fakePage),'visible-panel-close');
  const command={action:prefix+'apply',id:'fixed-command',args:{confirmExpiry:true}};
  const read={action:prefix+'read',args:{commandId:'fixed-command'}};
  assertReadOnlyReconcile([command,read],command);
@@ -117,7 +137,8 @@ function sourceCheck(){
   'empty and missing-direction exports rejected','incorrect provider or usage rejected',
   'restored private event ID and raw diagnostic secret rejected',
   'nonempty pending outbox equality accepted; empty baseline or result rejected',
-  'extra enqueue, changed status or changed payload rejected']}));
+  'extra enqueue, changed status or changed payload rejected',
+  'scope uses exact named combobox; settings dismissal is scoped to visible panel']}));
 }
 
 async function serverIdentity(){
@@ -213,12 +234,12 @@ async function run(){
   await openSettingsPage(page,'repair');
   const noSelection=page.getByRole('region',{name:'Optimize saved session storage',exact:true});
   await expect(noSelection).toContainText('scope is not widened automatically');
-  await expect(noSelection.getByLabel('Saved sessions to review',{exact:true})).toHaveValue('current');
+  await expect(scopeControl(noSelection)).toHaveValue('current');
   await expect(noSelection.getByRole('button',{name:'Preview saved storage optimization',exact:true})).toBeDisabled();
-  await noSelection.getByLabel('Saved sessions to review',{exact:true}).selectOption('all');
+  await scopeControl(noSelection).selectOption('all');
   await expect(noSelection.getByRole('button',{name:'Preview saved storage optimization',exact:true})).toBeEnabled();
   assert.equal(requests.filter(row=>mutations.has(row.action)).length,0);
-  await page.getByRole('button',{name:'Close settings',exact:true}).click();
+  await settingsCloseControl(page).click();
   await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),before.sessionId);
   await openSettingsPage(page,'repair');
   const section=page.getByRole('region',{name:'Optimize saved session storage',exact:true});
@@ -239,7 +260,7 @@ async function run(){
   assert.equal(policy.args.requestKeepHours,12);assert.equal(policy.args.responseKeepHours,null);
   evidence.checks.push('ordinary Settings entry is passive','no-selected-session scope never widens automatically',
    'manual null versus invalid zero and enabled age');
-  const scope=section.getByLabel('Saved sessions to review',{exact:true});
+  const scope=scopeControl(section);
   await scope.selectOption('current');
   const previewButton=section.getByRole('button',{name:'Preview saved storage optimization',exact:true});
   await previewButton.click();
@@ -321,7 +342,7 @@ async function run(){
   assert.deepEqual(after.diagnosticFacts['optimize-response'].usage,before.diagnosticFacts['optimize-response'].usage);
   evidence.checks.push('lost real resume receipt reconciled by exact read without mutation replay',
    'reload only reads','canonical source/event IDs/delivery outbox/runtime preserved');
-  await page.getByRole('button',{name:'Close settings',exact:true}).click();
+  await settingsCloseControl(page).click();
   const {showFixtureConversation}=await import('./browser-chat-pages.mjs');
   await showFixtureConversation(page);
   // Only observed, ordinary expand/load controls. Never inject a model node or
