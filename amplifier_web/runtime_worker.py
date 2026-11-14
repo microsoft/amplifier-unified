@@ -1030,10 +1030,20 @@ class Worker:
                 # Fork conversational context without tool receipts or runtime
                 # ownership. Source operations must never be replayed.
                 from types import SimpleNamespace
-                messages = [{"role": row["role"], "content": encode(SimpleNamespace(
-                    text=row.get("text", ""), attachments=row["attachments"]))
-                    if row["role"] == "user" and row.get("attachments") else row.get("text", "")}
-                    for row in config.get("messages", []) if row.get("role") in {"user", "assistant"} and (row.get("text") or row.get("attachments"))]
+                messages = []
+                encode_attachment = coordinator.get_capability('live.attachments.encode')
+                for row in config.get("messages", []):
+                    if row.get("role") not in {"user", "assistant"} or not (row.get("text") or row.get("attachments")):
+                        continue
+                    content = row.get("text", "")
+                    message = {"role": row["role"], "content": content}
+                    if row["role"] == "user" and row.get("attachments"):
+                        encoded = await encode_attachment(SimpleNamespace(
+                            text=content, attachments=row["attachments"]))
+                        # The current encoder returns refs-only content plus its
+                        # owner-authored attachment bindings, not an awaitable.
+                        message.update(encoded)
+                    messages.append(message)
                 if messages:
                     await self.session.coordinator.get("context").set_messages(messages)
                 report["fork_context_messages"] = len(messages)
