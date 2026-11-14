@@ -1087,7 +1087,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                           application_host="Amplifier Unified", shared_handle=None,
                           shared_handle_getter=None, shared_snapshot=None,
                           write_guard=None, resolved_root=None, execution_workspace=None, owner_session_id=None,
-                          refresh_dependencies=False, install_overrides=None, qualification_readonly=False, global_only=False, runtime_plan=None, startup_timing=None, ephemeral_mcp_servers=None, media_graph_selection=None, **kwargs):
+                          refresh_dependencies=False, install_overrides=None, qualification_readonly=False, global_only=False, runtime_plan=None, startup_timing=None, ephemeral_mcp_servers=None, media_graph_selection=None,
+                          canonical_binding=None, **kwargs):
     from ..worker_diagnostics import StartupTimings
     startup_timing = startup_timing or StartupTimings()
     if refresh_dependencies and resume:
@@ -1114,15 +1115,22 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     from ..session_files import capture_dir
     if not os.environ.get('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'):
         os.environ['AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH'] = str(capture_dir(config.workspace, 'root').parents[3])
-    store = SessionStore.for_app(config.home, config.workspace)
+    store = SessionStore.for_app(config.home, config.workspace,
+        **({"canonical_binding": canonical_binding} if canonical_binding is not None else {}))
     # Native history is authoritative, including an intentionally empty file.
     # A common checkpoint is read only for an explicitly legacy-only session;
     # a stale or corrupt checkpoint cannot prevent opening valid native history.
-    native_guard = NativeTranscriptGuard(store.directory(runtime.session_id) / "transcript.jsonl")
+    if canonical_binding is not None:
+        if (canonical_binding.session_id != runtime.session_id or
+                canonical_binding.directory != store.directory(runtime.session_id)):
+            raise ValueError("The canonical lifetime binding does not match this root")
+        canonical_binding.check()
+    native_guard = (canonical_binding if canonical_binding is not None else
+                    NativeTranscriptGuard(store.directory(runtime.session_id) / "transcript.jsonl"))
     with startup_timing.phase('manager.history.load'):
         saved = store.load(runtime.session_id) if resume else None
         history_source = "native" if saved is not None else "new"
-        if resume and saved is None:
+        if resume and saved is None and canonical_binding is None:
             if shared_snapshot is None and shared_handle is not None:
                 shared_snapshot = shared_handle.read()
             if shared_snapshot is not None:
@@ -1403,13 +1411,24 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                     # native transcript/metadata are the only newly written history.
                     held.check()
                 if timing:timing.mark('store.start')
+                canonical_intent = {}
+                if canonical_binding is not None:
+                    import uuid
+                    canonical_intent = {
+                        "expected": canonical_binding.expected,
+                        "operation_id": uuid.uuid4().hex,
+                        "admit": recovery_write_guard,
+                        "media_store": coordinator.get_capability("web.media.store"),
+                    }
                 saved_rows = store.save(runtime.session_id, transcript, {**metadata, "status": status,
                     "last_updated": datetime.now(UTC).isoformat(),
-                    "turn_count": sum(row.get("role") == "user" for row in transcript)})
+                    "turn_count": sum(row.get("role") == "user" for row in transcript)}, **canonical_intent)
                 from .media import acknowledge_media
-                acknowledge_media(coordinator, store, runtime.session_id, saved_rows)
+                if canonical_binding is None:
+                    acknowledge_media(coordinator, store, runtime.session_id, saved_rows)
                 if timing:timing.mark('store.end')
-                native_guard.saved()
+                if canonical_binding is None:
+                    native_guard.saved()
                 if continuity:
                     if timing:timing.mark('continuity.start')
                     continuity.save()

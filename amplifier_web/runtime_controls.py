@@ -124,11 +124,14 @@ def validate_plan(plan):
 
 
 class RuntimeControls:
-    def __init__(self, session, runtime, telemetry=None, *, preserve_configuration=False, tool_invocation=None):
+    def __init__(self, session, runtime, telemetry=None, *, preserve_configuration=False, tool_invocation=None,
+                 canonical_binding=None, canonical_media_store=None):
         self.session, self.runtime, self.telemetry = session, runtime, telemetry
         self.preserve_configuration = preserve_configuration
         self._restoring = False
         self._tool_invocation = tool_invocation
+        self.canonical_binding = canonical_binding
+        self.canonical_media_store = canonical_media_store
         self.coordinator = session.coordinator
         self.configurator = self.coordinator.get_capability("web.configurator")
         self.prepared = self.coordinator.get_capability("web.prepared")

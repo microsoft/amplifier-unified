@@ -52,10 +52,13 @@ def publish_process_identity():
 
 
 class Worker:
-    def __init__(self, *, media_graph_selection=None):
+    def __init__(self, *, media_graph_selection=None, canonical_binding=None):
         self.session = self.runtime = self.execution = None
         # Assembly-owned object, never a worker command/configuration field.
         self.media_graph_selection = media_graph_selection
+        # Private prospective owner, acquired before this Worker is started.
+        # Never reconstruct it from a command, catalog row or JSON prefix.
+        self.canonical_binding = canonical_binding
         self.approvals = {}
         self.approval_contexts = {}
         self.approval_deliveries = {}
@@ -961,6 +964,12 @@ class Worker:
             self.runtime = Runtime(session_id=config["id"], observer=self.observe, max_input_chars=200_000)
             self.telemetry = ExecutionEvents(config["id"], publish)
             workspace = Path(config.get("workspace") or config.get("workingDirectory") or os.getcwd()).expanduser().resolve(strict=True)
+            if self.canonical_binding is not None:
+                from amplifier_web.session_files import sessions_dir
+                if (self.canonical_binding.session_id != config["id"] or
+                        self.canonical_binding.directory != sessions_dir(workspace) / config["id"]):
+                    raise ValueError("The prospective canonical owner does not match this Worker")
+                self.canonical_binding.check()
             self.workspace = workspace
             self.start_config = dict(config)
             # Execution locking lives in the isolated runtime. The outer host
@@ -1007,6 +1016,7 @@ class Worker:
                     owner_session_id=config.get("ownerSessionId"),
                     ephemeral_mcp_servers=config.get("ephemeralMcpServers"),
                     media_graph_selection=self.media_graph_selection,
+                    **({"canonical_binding": self.canonical_binding} if self.canonical_binding is not None else {}),
                     startup_timing=startup_timing)
             if qualified_overrides is not None:
                 with startup_timing.phase('worker.runtime.verify.after_prepare'):
@@ -1021,7 +1031,10 @@ class Worker:
             with startup_timing.phase('worker.controls.restore'):
                 self.controls = RuntimeControls(self.session, self.runtime, self.telemetry,
                     preserve_configuration=config.get('_preserveConfiguration') is True,
-                    tool_invocation=self.tool_invocation)
+                    tool_invocation=self.tool_invocation,
+                    **({"canonical_binding": self.canonical_binding,
+                        "canonical_media_store": coordinator.get_capability("web.media.store")}
+                       if self.canonical_binding is not None else {}))
                 self.controls.capacity.admit = self.admit_model
                 self.telemetry.admission_guard = self.controls.capacity.guard
                 # Preserve app controls on native mounts. A legacy common snapshot
