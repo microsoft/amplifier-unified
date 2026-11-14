@@ -16,13 +16,14 @@ after this process has exited, are in `windows_removal`.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import ctypes as C
 import json
 import os
 from pathlib import Path, PureWindowsPath
 import re
 import secrets
+import sys
 import time
 
 JOURNAL = "unified-uninstall.json"
@@ -46,7 +47,10 @@ _FOLDER_FORMS = (rf"launcher-{_VERSION}-[0-9a-f]{{8}}(-\d+)?", r"launcher-not-us
 _FILE_FORMS = (rf"amplifier_unified-{_VERSION}-py3-none-any\.whl(\.part)?", r"\.private-[0-9a-f]{32}\.tmp",
                r"child-\d+\.(stderr\.txt|failure\.json)")
 _FOLDERS = frozenset(DATA + RUNNING + CACHES + LAST[:2])
-SECONDS_AFTER_EXIT = 120  # About ten times the measured need for python and tools together.
+SECONDS_AFTER_EXIT = 120  # About seven times the measured need for python and tools together.
+# The steps of `remove` that come after the journal. A failure there leaves a
+# folder that Amplifier does not start from; a second uninstall finishes it.
+AFTER_JOURNAL = frozenset({"setup-record", "data", "program", "apps-entry", "shortcuts", "receipt", "program-last"})
 
 
 def _form(name, forms):
@@ -181,8 +185,14 @@ def single(root, *, wait=10.0):
 
 
 def outside():
-    """Leave the installation folder: Windows keeps a folder that is a program's current folder."""
+    """Leave the installation folder, and write nothing more into its program.
+
+    Windows keeps a folder that is a program's current folder. The step after
+    exit keeps every entry that appears after it started, so this process
+    must not save a compiled module beside the program from here on.
+    """
     from .windows_service import _powershell
+    sys.dont_write_bytecode = True
     os.chdir(PureWindowsPath(_powershell()).parents[2])  # The Windows system folder.
 
 
@@ -280,20 +290,79 @@ def remove_program(owned, *, last=False, wait=time.sleep):
 def remaining(owned):
     """What is in the folder now, sorted for the step after exit, and what is foreign.
 
-    `contents`: the running program's folders and program folders that a
-    program still used; that step empties and removes them. `folders`: data
-    folders that are empty and that Windows still keeps; that step removes one
-    only while it is empty. `files`: this installation's own files.
+    `contents`: the two folders of the running program; that step deletes
+    what is in them. `folders`: every other folder of this installation that
+    is still here, such as an emptied data folder that Windows keeps for a
+    program; that step removes one only while it is empty. `files`: this
+    installation's own files. `foreign` is None when the folder could not be
+    listed; then every exact name is handed over, and absent ones do nothing.
     """
+    if owned is None:
+        return {"contents": list(RUNNING), "folders": list(DATA + CACHES + LAST[:2]),
+                "files": list(FILES + LAST[2:]), "foreign": None}
     groups = sort(owned.names())
-    program = groups["program"] + groups["last"]
-    return {"contents": groups["running"] + [name for name in program if _folder(name)],
-            "folders": groups["data"],
-            "files": groups["setup"] + [name for name in program if not _folder(name)],
+    own = groups["program"] + groups["last"]
+    return {"contents": groups["running"],
+            "folders": groups["data"] + [name for name in own if _folder(name)],
+            "files": groups["setup"] + [name for name in own if not _folder(name)],
             "foreign": groups["foreign"]}
 
 
-def finish_after_exit(root, token, rest):
+def remove(root, *, stop, certificate, progress, choice="delete", data=remove_data, wait=time.sleep, **fields):
+    """Delete this installation's folder, in the one order that keeps every interruption safe.
+
+    1. One start or removal at a time. Leave the folder. Prove it and pin it:
+       setup's completion record, or this removal's own journal, read through
+       the private-file boundary; then the folder's own handle.
+    2. Check and pin the Windows entries. `stop()` stops the app and removes
+       its sign-in task. `certificate()` lets Windows ask once.
+       Up to here nothing in the folder has changed.
+    3. The journal. From here Amplifier does not start from this folder.
+    4. Setup's records, then `data`: the person's data. If any of it stays,
+       this stops. The Windows entries and the launcher are intact, so the
+       person can uninstall again.
+    5. Caches and program files; then the Windows entries; then what the
+       launcher's own check needs.
+
+    `progress(name)` names the step that is about to run. Returns the
+    journal's token, the certificate outcome and what is left for the step
+    after exit. The journal and the running program's two folders stay.
+    """
+    from . import windows_consumer_shell as shell, windows_removal
+    progress("busy")
+    with single(root):
+        progress("folder")
+        outside()
+        with windows_removal.folder(root) as owned:
+            record = pending(root)
+            if not completed(root) and (record is None or record["choice"] != choice):
+                raise ValueError("Neither setup's completion record nor this removal's journal proves the folder.")
+            progress("entries-check")
+            with ExitStack() as entries:
+                finish = (entries.enter_context(shell.removal(root, progress=progress))
+                          if (Path(root) / shell.FILE).exists() else None)
+                stop()
+                trust = certificate()
+                progress("journal")
+                token = begin(root, choice, wait=wait, **fields)
+                progress("setup-record")
+                forget_setup(owned, wait=wait)
+                progress("data")
+                data(owned, wait=wait)
+                progress("program")
+                remove_program(owned, wait=wait)
+                if finish is not None:
+                    finish()  # The Apps-list entry, the shortcuts, their receipt.
+            progress("program-last")
+            try:
+                remove_program(owned, last=True, wait=wait)
+                rest = remaining(owned)
+            except (OSError, ValueError, RuntimeError):
+                rest = remaining(None)  # Every entry is gone already; the step after exit gets every exact name.
+    return {"token": token, "certificate": trust, "rest": rest}
+
+
+def finish_after_exit(root, token, rest, choice="delete"):
     """Start the step that removes the running program's files after this process has exited.
 
     After this call the process must write nothing into the installation and
@@ -302,4 +371,4 @@ def finish_after_exit(root, token, rest):
     from . import windows_removal
     return windows_removal.finish_after_exit(
         root, token, contents=rest["contents"], folders=rest["folders"], files=rest["files"],
-        wait_for=(os.getpid(), os.getppid()), seconds=SECONDS_AFTER_EXIT)
+        wait_for=(os.getpid(), os.getppid()), seconds=SECONDS_AFTER_EXIT, choice=choice)
