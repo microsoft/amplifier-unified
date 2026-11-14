@@ -204,13 +204,19 @@ def installed_probe(plan_path, venv):
     require(not venv.is_relative_to('/workspace'), 'Qualification venv must be outside /workspace')
     require(sys.flags.isolated == 1 and not any(
         Path(p or '.').resolve().is_relative_to('/workspace') for p in sys.path), 'Probe is not isolated')
-    receipts = []
+    # File validation is an all-candidate admission barrier. Even importing the
+    # first package can transitively execute another selected component, so do
+    # not interleave imports with validation of the next installed distribution.
+    validated = []
     for candidate in plan['candidates']:
         dist = importlib.metadata.distribution(candidate['distribution'])
         site = Path(dist.locate_file('')).resolve()
         require(site.is_relative_to(venv), 'Candidate distribution fell back to prepared dependencies')
         require(dist.version == candidate['version'], 'Installed distribution version mismatch')
         receipt = installed_files(site, candidate)
+        validated.append((candidate, site, receipt))
+    receipts = []
+    for candidate, site, receipt in validated:
         modules = {}
         for name, spec in candidate['keyModules'].items():
             module = importlib.import_module(name)

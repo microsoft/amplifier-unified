@@ -195,6 +195,14 @@ def main(argv=None):
         identity = {'wheelSha256': digest(wheel.read_bytes()), 'files': expected, 'static': static}
         write('wheel-identity.json', identity)
         env = {key: value for key, value in os.environ.items() if key not in ('PYTHONPATH', 'PYTHONHOME')}
+        if args.optimize_only:
+            # The component probe performs a NONIMPORTING validation pass over
+            # ALL selected distributions before its import/origin pass. Run it
+            # before the general probe can import Foundation or the app server.
+            shutil.copy2(Path(__file__).with_name('installed_candidate_wheels.py'), OUT / 'installed_candidate_wheels.py')
+            command('component-identity', [str(python), '-I', '-B', str(OUT / 'installed_candidate_wheels.py'),
+                    '--installed-probe', str(OUT / 'candidate-wheel-identity.json'), str(venv)], cwd=OUT, env=env)
+            component_identity = json.loads((OUT / 'component-identity.log').read_text())
         probe = '''import sys,json,hashlib
 from pathlib import Path
 import amplifier_core._engine,amplifier_foundation,aiohttp,amplifier_web.server
@@ -208,13 +216,6 @@ print(json.dumps({'packageRoot':str(root),'verified':True,'fileCount':len(expect
         command('identity', [str(python), '-I', *(['-B'] if args.optimize_only else []),
                 '-c', probe, str(OUT / 'wheel-identity.json'), str(venv)], cwd=OUT, env=env)
         package = json.loads((OUT / 'identity.log').read_text())['packageRoot']
-        if args.optimize_only:
-            # This actual probe runs outside /workspace under -I, after local
-            # component wheels override only the fresh qualification venv.
-            shutil.copy2(Path(__file__).with_name('installed_candidate_wheels.py'), OUT / 'installed_candidate_wheels.py')
-            command('component-identity', [str(python), '-I', '-B', str(OUT / 'installed_candidate_wheels.py'),
-                    '--installed-probe', str(OUT / 'candidate-wheel-identity.json'), str(venv)], cwd=OUT, env=env)
-            component_identity = json.loads((OUT / 'component-identity.log').read_text())
         harness = OUT / 'harness'
         shutil.copytree(ROOT / 'tests/fixtures', harness / 'tests/fixtures')
         shutil.copytree(ROOT / 'tests/web', harness / 'tests/web', ignore=shutil.ignore_patterns('node_modules', '__pycache__'))

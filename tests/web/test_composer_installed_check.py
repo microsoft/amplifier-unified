@@ -1,4 +1,5 @@
 """Pure wrapper safety checks: synthetic ZIPs/files, no build/install/browser."""
+import ast
 import base64
 import copy
 import csv
@@ -253,6 +254,98 @@ class CandidateWheels(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'requires SHA'):
             wheels.installed_files(site, identity)
 
+    def test_corrupt_second_candidate_prevents_every_candidate_import(self):
+        site, foundation = self.install_synthetic_files()
+        path, row, payload = synthetic_wheel(self.root, 'amplifier-bundle-context-intelligence')
+        ci = wheels.wheel_identity(path, row)
+        for name, data in payload.items():
+            target = site / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        (site / 'context_intelligence/__init__.py').write_text('corrupted second candidate')
+        plan = self.root / 'probe.json'
+        plan.write_text(json.dumps({'manifestSha256': 'a' * 64, 'candidates': [foundation, ci]}))
+        fake_dist = unittest.mock.Mock(version='1.0')
+        fake_dist.locate_file.return_value = site
+        with patch.object(wheels.sys, 'flags', unittest.mock.Mock(isolated=1)), \
+             patch.object(wheels.sys, 'path', ['/outside']), \
+             patch.object(wheels.importlib.metadata, 'distribution', return_value=fake_dist), \
+             patch.object(wheels.importlib, 'import_module',
+                          side_effect=AssertionError('Candidate executed before complete file validation')) as imported:
+            with self.assertRaisesRegex(ValueError, 'Installed payload hash mismatch'):
+                wheels.installed_probe(plan, self.root)
+            imported.assert_not_called()
+
+    def test_second_candidate_record_extra_and_symlink_refusals_precede_every_import(self):
+        site, foundation = self.install_synthetic_files()
+        path, row, payload = synthetic_wheel(self.root, 'amplifier-bundle-context-intelligence')
+        ci = wheels.wheel_identity(path, row)
+        for name, data in payload.items():
+            target = site / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        plan = self.root / 'probe.json'
+        plan.write_text(json.dumps({'manifestSha256': 'a' * 64, 'candidates': [foundation, ci]}))
+        fake_dist = unittest.mock.Mock(version='1.0')
+        fake_dist.locate_file.return_value = site
+        extra = site / 'context_intelligence/extra.py'
+        record = site / ci['record']
+        for mutation, expected in [('record', 'RECORD hash'), ('extra', 'Unrecorded'),
+                                   ('symlink', 'Symlink')]:
+            with self.subTest(mutation=mutation):
+                if mutation == 'record':
+                    record.write_bytes(payload[ci['record']].replace(b'sha256=', b'sha256=bad', 1))
+                elif mutation == 'extra':
+                    extra.write_text('unrecorded')
+                else:
+                    extra.symlink_to(site / 'context_intelligence/__init__.py')
+                with patch.object(wheels.sys, 'flags', unittest.mock.Mock(isolated=1)), \
+                     patch.object(wheels.sys, 'path', ['/outside']), \
+                     patch.object(wheels.importlib.metadata, 'distribution', return_value=fake_dist), \
+                     patch.object(wheels.importlib, 'import_module',
+                                  side_effect=AssertionError('No candidate may execute')) as imported:
+                    with self.assertRaisesRegex(ValueError, expected):
+                        wheels.installed_probe(plan, self.root)
+                    imported.assert_not_called()
+                record.write_bytes(payload[ci['record']])
+                if extra.exists() or extra.is_symlink():
+                    extra.unlink()
+
+    def test_all_validated_before_first_import_can_run(self):
+        site, foundation = self.install_synthetic_files()
+        path, row, payload = synthetic_wheel(self.root, 'amplifier-bundle-context-intelligence')
+        ci = wheels.wheel_identity(path, row)
+        for name, data in payload.items():
+            target = site / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        plan = self.root / 'probe.json'
+        plan.write_text(json.dumps({'manifestSha256': 'a' * 64, 'candidates': [foundation, ci]}))
+        fake_dist = unittest.mock.Mock(version='1.0')
+        fake_dist.locate_file.return_value = site
+        events = []
+        original = wheels.installed_files
+
+        def validate(root, identity):
+            result = original(root, identity)
+            events.append('validated:' + identity['distribution'])
+            return result
+
+        def importing(name):
+            events.append('import:' + name)
+            raise RuntimeError('stop at first import')
+
+        with patch.object(wheels.sys, 'flags', unittest.mock.Mock(isolated=1)), \
+             patch.object(wheels.sys, 'path', ['/outside']), \
+             patch.object(wheels.importlib.metadata, 'distribution', return_value=fake_dist), \
+             patch.object(wheels, 'installed_files', side_effect=validate), \
+             patch.object(wheels.importlib, 'import_module', side_effect=importing):
+            with self.assertRaisesRegex(RuntimeError, 'stop at first import'):
+                wheels.installed_probe(plan, self.root)
+        self.assertEqual(events, ['validated:amplifier-foundation',
+                                  'validated:amplifier-bundle-context-intelligence',
+                                  'import:amplifier_foundation'])
+
 
 class Wrapper(unittest.TestCase):
     def setUp(self):
@@ -281,6 +374,58 @@ class Wrapper(unittest.TestCase):
             {'candidates': [{'wheelPath': '/artifacts/one.whl'}, {'wheelPath': '/artifacts/two.whl'}]})
         self.assertEqual(args, ['uv', 'pip', 'install', '--python', '/artifacts/venv/bin/python',
                                '--no-index', '--no-deps', '--reinstall', '/artifacts/one.whl', '/artifacts/two.whl'])
+
+    def test_wrapper_component_probe_precedes_general_identity_probe(self):
+        # Check the real wrapper command sites, not a mocked plan or test-only
+        # sequence. This source control cannot launch either subprocess.
+        tree = ast.parse((HERE / 'composer-installed-check.py').read_text())
+        calls = {node.args[0].value: node.lineno for node in ast.walk(tree)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                 and node.func.id == 'command' and node.args
+                 and isinstance(node.args[0], ast.Constant)
+                 and node.args[0].value in {'component-identity', 'identity'}}
+        self.assertLess(calls['component-identity'], calls['identity'],
+                        'Optimize must validate all installed candidates before the general identity imports')
+
+    def test_failed_component_probe_never_dispatches_general_identity_command(self):
+        contract = self.root / 'contract.json'
+        contract.write_text('{"profileId":"browser-test"}')
+        for name in ['pyproject.toml', 'uv.lock', 'tests/web/package.json',
+                     'tests/web/package-lock.json', '.build/web-client/package.json',
+                     '.build/web-client/package-lock.json', '.build/web-client/vite.config.js',
+                     'components/web-client.source.json']:
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('{}')
+        output = self.root / 'out'
+        calls = []
+
+        def fake_command(name, argv, **kwargs):
+            # Simulate only the filesystem outputs needed to reach probe dispatch.
+            # No command, build, install, venv process or candidate code executes.
+            calls.append(name)
+            if name == 'wheel-build':
+                (output / 'wheel').mkdir()
+                with zipfile.ZipFile(output / 'wheel/synthetic.whl', 'w') as archive:
+                    archive.writestr('amplifier_web/__init__.py', b'# synthetic\n')
+            elif name == 'venv':
+                (output / 'venv/lib' / ('python' + '.'.join(map(str, sys.version_info[:2])))
+                 / 'site-packages').mkdir(parents=True)
+            elif name == 'component-identity':
+                raise ValueError('selected candidate refused before import')
+            elif name == 'identity':
+                self.fail('General identity command dispatched before component admission')
+
+        with patch.object(wrapper, 'ROOT', self.root), patch.object(wrapper, 'OUT', output), \
+             patch.dict('os.environ', {'AMPLIFIER_TEST_CONTRACT': str(contract)}), \
+             patch.object(wrapper, 'manifest', return_value={}), \
+             patch.object(wrapper, 'accepted_client', return_value='a' * 40), \
+             patch.object(wrapper, 'provenance_packet', return_value=(b'{}', 'pinned')), \
+             patch.object(wrapper, 'command', side_effect=fake_command):
+            with self.assertRaisesRegex(ValueError, 'candidate refused before import'):
+                wrapper.main(['--optimize-only'])
+        self.assertEqual(calls, ['wheel-build', 'venv', 'install', 'component-identity'])
+        self.assertEqual(json.loads((output / 'result.json').read_text())['status'], 'error')
 
     def packet(self):
         fixture = self.root / 'tests/fixtures/optimize_storage_ui_server.py'
