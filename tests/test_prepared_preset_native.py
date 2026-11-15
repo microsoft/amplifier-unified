@@ -89,7 +89,34 @@ def test_native_default_prepared_preset_runtime():
                  "assert packaging.__version__=='25.0';assert pytest.__version__=='8.4.2';"
                  "assert Path(os.environ['AMPLIFIER_TEST_CONTRACT']).is_file();"
                  "print(json.dumps({'python':sys.executable,'prefix':sys.prefix,'packaging':packaging.__version__,'pytest':pytest.__version__}))")
-        command = 'python -c ' + shlex.quote(probe)
+        # Exercise the actual executable scratch boundary when capacity is
+        # explicitly assigned to this opt-in native proof. No new dependency:
+        # CPython's existing stdlib extension is copied, not installed/resolved.
+        runtime_probe = """import ctypes, json, os, shutil, stat, _struct
+from pathlib import Path
+contract = json.loads(Path(os.environ['AMPLIFIER_TEST_CONTRACT']).read_text())
+runtime = Path(os.environ['AMPLIFIER_TEST_RUNTIME'])
+assert str(runtime) == contract['runtimeWorkdir']['path'] == '/unified-runtime'
+assert runtime.stat().st_uid == runtime.stat().st_gid == 65534
+assert stat.S_IMODE(runtime.stat().st_mode) == 0o700
+flags = os.statvfs(runtime).f_flag
+assert flags & (os.ST_NOSUID | os.ST_NODEV) == (os.ST_NOSUID | os.ST_NODEV)
+assert not flags & (os.ST_NOEXEC | os.ST_RDONLY)
+native = runtime / 'qualification-native.so'
+shutil.copyfile(_struct.__file__, native)
+ctypes.CDLL(str(native))
+noexec = Path('/tmp/qualification-native.so')
+shutil.copyfile(_struct.__file__, noexec)
+assert os.statvfs(noexec).f_flag & os.ST_NOEXEC
+try:
+    ctypes.CDLL(str(noexec))
+except OSError:
+    pass
+else:
+    raise AssertionError('noexec /tmp unexpectedly allowed native mapping')
+print('runtime-native-map=passed; tmp-native-map=refused')
+"""
+        command = 'python -c ' + shlex.quote(runtime_probe) + ' && python -c ' + shlex.quote(probe)
         if profile == 'browser-test':
             browser = ("from playwright.sync_api import sync_playwright;"
                        "p=sync_playwright().start();b=p.chromium.launch(headless=True,args=['--no-sandbox']);"

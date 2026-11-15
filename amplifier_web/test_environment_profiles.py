@@ -54,8 +54,25 @@ def get(profile_id='linux-python'):
         raise ValueError('Choose one of the supported test profiles.') from None
 
 
-def execution_contract(profile_id, source=None):
+def runtime_workdir(profile_id, resource_request=None):
+    """Fixed Docker scratch, split from (not added to) its temporary budget."""
+    profile = resources(profile_id, resource_request)
+    if not profile['preparationRequired']:
+        return None
+    total = profile['tmpMiB']
+    if type(total) is not int or not 64 <= total <= 1048576:
+        raise ValueError('Prepared Docker runtime scratch requires at least 64 MiB of temporary space.')
+    return {
+        'path': '/unified-runtime', 'environmentVariable': 'AMPLIFIER_TEST_RUNTIME',
+        'sizeMiB': total - total // 4, 'tmpMiB': total // 4,
+        'uid': 65534, 'gid': 65534, 'mode': '0700', 'retained': False,
+    }
+
+
+def execution_contract(profile_id, source=None, *, backend=None, resource_request=None):
     """Presentation/invocation contract, never a substitute for an owner receipt."""
+    if backend not in (None, 'docker', 'incus'):
+        raise ValueError('Unsupported prepared execution backend.')
     if not get(profile_id)['preparationRequired']:
         return None
     return {
@@ -65,6 +82,7 @@ def execution_contract(profile_id, source=None):
         'source': {'gitMetadataAvailable': False, **(source or {})},
         'pythonBuild': {'status': 'pending', 'command': '/opt/unified-prepared/build-venv/bin/python -m build --wheel --no-isolation --outdir /artifacts/dist /workspace'},
         'retention': {'mode': 'archive-only', 'maxBytesPerSelection': 4 * 1024 ** 3},
+        **({'runtimeWorkdir': runtime_workdir(profile_id, resource_request)} if backend == 'docker' else {}),
     }
 
 

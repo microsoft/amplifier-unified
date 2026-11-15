@@ -3,6 +3,7 @@ import copy
 import json
 import os
 import signal
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -14,7 +15,7 @@ from amplifier_web import test_environment_profiles as profiles
 from amplifier_web import test_environment_preparation as preparation
 from amplifier_web import test_environment_prepare_guest as guest
 from amplifier_web import test_environment_initialize_guest as initializer
-from test_environment_preparation import archive
+from test_environment_preparation import archive, backend, config
 from test_test_environment_worker import library, payload, worker
 
 
@@ -32,6 +33,200 @@ def test_profile_advertises_real_interpreter_artifacts_and_git_absence(tmp_path)
         'gitMetadataAvailable': False, 'archiveSha256': snapshot['archive_sha256'],
         'sourceHead': 'a' * 40, 'snapshotCommit': 'b' * 40, 'snapshotTree': 'c' * 40}
     assert 'source_branch' not in plan['executionContract']['source']
+
+
+@pytest.mark.parametrize('profile_id,total', [('python-project', 512), ('browser-test', 1024),
+                                             ('browser-test', 65), ('python-project', 64)])
+def test_docker_runtime_workdir_splits_existing_temporary_budget(profile_id, total):
+    request = profiles.freeze(profile_id, {'tmpMiB': total})
+    contract = profiles.execution_contract(profile_id, backend='docker', resource_request=request)
+    runtime = contract['runtimeWorkdir']
+    assert runtime == {
+        'path': '/unified-runtime', 'environmentVariable': 'AMPLIFIER_TEST_RUNTIME',
+        'sizeMiB': total - total // 4, 'tmpMiB': total // 4,
+        'uid': 65534, 'gid': 65534, 'mode': '0700', 'retained': False,
+    }
+    value = {'profileId': profile_id, 'resourceRequest': request,
+             'rootOwner': 'owner', 'operationId': 'launch', 'preparedRuntime': True,
+             'runtimeWorkdir': runtime}
+    twin = worker.profile('fixture-image', value)['services']['twin']
+    mounts = twin['tmpfs']
+    assert mounts == [
+        '/tmp:rw,noexec,nosuid,nodev,size=' + str(runtime['tmpMiB'] * 1024 ** 2),
+        '/unified-runtime:rw,exec,nosuid,nodev,size=' + str(runtime['sizeMiB'] * 1024 ** 2)
+        + ',mode=0700,uid=65534,gid=65534',
+    ]
+    assert runtime['tmpMiB'] + runtime['sizeMiB'] == total
+    assert twin['read_only'] and twin['cap_drop'] == ['ALL']
+    assert twin['security_opt'] == ['no-new-privileges:true']
+    assert twin['volumes'] == ['workspace:/workspace', 'artifacts:/artifacts', 'control:/var/lib/unified-jobs']
+    environment = worker.job_environment(value)
+    assert environment['AMPLIFIER_TEST_RUNTIME'] == runtime['path']
+    assert environment['HOME'] == '/tmp/unified-test/home'
+    assert environment['XDG_CACHE_HOME'] == '/tmp/unified-test/cache'
+    assert environment['PYTHONPATH'] == '/workspace'  # Source checks keep their existing default.
+
+
+@pytest.mark.parametrize('total', [0, 1, 63, True, '1024', 1048577])
+def test_undersized_or_invalid_runtime_budget_refused_before_preparation(tmp_path, total):
+    snapshot = archive(tmp_path)
+    request = profiles.freeze('python-project', {'tmpMiB': total})
+    with pytest.raises(ValueError):
+        preparation.plan(tmp_path / 'source.tar', snapshot, 'python-project',
+                         backend='docker', resource_request=request)
+
+
+def test_runtime_contract_is_backend_specific_and_bound_before_build(tmp_path, backend):
+    snapshot = archive(tmp_path)
+    request = profiles.freeze('python-project', {'tmpMiB': 65})
+    receipt = preparation.prepare(config(tmp_path), tmp_path, snapshot,
+                                  'python-project', 'runtime', resource_request=request)
+    contract = receipt['executionContract']
+    assert contract['runtimeWorkdir'] == receipt['intent']['executionContract']['runtimeWorkdir']
+    assert contract['runtimeWorkdir']['sizeMiB'] == 49
+    assert contract['runtimeWorkdir']['tmpMiB'] == 16
+    incus = preparation.plan(tmp_path / 'source.tar', snapshot, 'python-project', backend='incus')
+    assert 'runtimeWorkdir' not in incus['executionContract']
+    assert 'runtimeWorkdir' not in profiles.execution_contract('python-project')
+    assert profiles.execution_contract('linux-python', backend='docker') is None
+    with pytest.raises(ValueError):
+        preparation.plan(tmp_path / 'source.tar', snapshot, 'python-project', backend='remote-docker')
+
+
+@pytest.mark.parametrize('change', ['path', 'size', 'owner', 'mode', 'retained', 'profile', 'custom'])
+def test_runtime_contract_cannot_select_arbitrary_mount_or_environment(change):
+    runtime = profiles.execution_contract('browser-test', backend='docker')['runtimeWorkdir']
+    value = {'profileId': 'browser-test', 'rootOwner': 'owner', 'operationId': 'launch',
+             'preparedRuntime': True, 'runtimeWorkdir': copy.deepcopy(runtime)}
+    if change == 'path':
+        value['runtimeWorkdir']['path'] = '/artifacts/installed'
+    elif change == 'size':
+        value['runtimeWorkdir']['sizeMiB'] += 1
+    elif change == 'owner':
+        value['runtimeWorkdir']['uid'] = 0
+    elif change == 'mode':
+        value['runtimeWorkdir']['mode'] = '0777'
+    elif change == 'retained':
+        value['runtimeWorkdir']['retained'] = True
+    elif change == 'profile':
+        value['profileId'] = 'linux-python'
+    else:
+        value['composeFile'] = 'compose.yaml'
+    with pytest.raises(ValueError, match='runtime'):
+        worker.profile('fixture', value)
+    with pytest.raises(ValueError, match='runtime'):
+        worker.job_environment(value)
+    expected = profiles.execution_contract('browser-test', backend='docker')
+    changed = {**expected, 'runtimeWorkdir': value['runtimeWorkdir'],
+               'pythonBuild': {'available': False, 'reason': 'This source declares no Python build backend.'}}
+    if change not in {'profile', 'custom'}:
+        with pytest.raises(ValueError):
+            preparation.validate_execution_contract(changed, expected)
+
+
+@pytest.mark.parametrize('profile_id', ['linux-python', 'python-project', 'browser-test', 'app-preview'])
+def test_legacy_and_unprepared_payloads_do_not_advertise_runtime(profile_id):
+    value = {'profileId': profile_id, 'rootOwner': 'owner', 'operationId': 'launch'}
+    assert 'AMPLIFIER_TEST_RUNTIME' not in worker.job_environment(value)
+    assert len(worker.profile('fixture', value)['services']['twin']['tmpfs']) == 1
+    value.update(composeFile='compose.yaml', preparedRuntime=False)
+    assert 'AMPLIFIER_TEST_RUNTIME' not in worker.job_environment(value)
+
+
+@pytest.fixture
+def runtime_mount(tmp_path, monkeypatch):
+    """Synthetic mount observations only: no mount/chown/container on the host."""
+    path = tmp_path / 'runtime'
+    path.mkdir(mode=0o700)
+    value = profiles.execution_contract('python-project', backend='docker')['runtimeWorkdir']
+    state = {'uid': 65534, 'gid': 65534, 'mount': True,
+             'flags': os.ST_NOSUID | os.ST_NODEV, 'size': value['sizeMiB'] * 1024 ** 2}
+    real_path, real_lstat, real_is_mount, real_statvfs = Path, Path.lstat, Path.is_mount, os.statvfs
+    monkeypatch.setattr(initializer, 'Path', lambda name: path if str(name) == '/unified-runtime' else real_path(name))
+    def lstat(self):
+        info = real_lstat(self)
+        return (SimpleNamespace(st_mode=info.st_mode, st_uid=state['uid'], st_gid=state['gid'])
+                if self == path else info)
+    monkeypatch.setattr(Path, 'lstat', lstat)
+    monkeypatch.setattr(Path, 'is_mount', lambda self: state['mount'] if self == path else real_is_mount(self))
+    monkeypatch.setattr(initializer.os, 'statvfs', lambda name: SimpleNamespace(
+        f_flag=state['flags'], f_frsize=4096, f_blocks=state['size'] // 4096
+    ) if name == path else real_statvfs(name))
+    return path, value, state
+
+
+def test_runtime_mount_verified_before_marker_and_even_on_reinitialization(tmp_path, runtime_mount):
+    path, runtime, state = runtime_mount
+    prefix, workspace, artifacts = [tmp_path / name for name in ('prefix', 'workspace', 'artifacts')]
+    (prefix / 'venv/bin').mkdir(parents=True); workspace.mkdir(); artifacts.mkdir()
+    (prefix / 'venv/bin/python').write_text('fixture')
+    (artifacts / 'report').write_text('retained')
+    contract = profiles.execution_contract('python-project', backend='docker')
+    (prefix / 'plan.json').write_text(json.dumps({
+        'profileId': 'python-project', 'preparationId': 'exact', 'executionContract': contract}))
+    (prefix / 'execution-contract.json').write_text(json.dumps(contract))
+    initializer.initialize(prefix, workspace)
+    marker = workspace / '.unified-prepared-dependencies.json'
+    assert json.loads(marker.read_text()) == {'preparationId': 'exact'}
+    assert list(path.iterdir()) == []  # No defaults/caches/dependencies were moved here.
+    state['flags'] |= os.ST_NOEXEC
+    with pytest.raises(ValueError, match='mount flags'):
+        initializer.initialize(prefix, workspace)
+    assert marker.exists() and (artifacts / 'report').read_text() == 'retained'
+
+
+@pytest.mark.parametrize('damage', ['uid', 'gid', 'mode', 'symlink', 'not-mount',
+                                   'noexec', 'suid', 'device', 'readonly', 'size'])
+def test_runtime_mount_observations_fail_closed(runtime_mount, tmp_path, damage):
+    path, runtime, state = runtime_mount
+    if damage in ('uid', 'gid'):
+        state[damage] = 0
+    elif damage == 'mode':
+        path.chmod(0o755)
+    elif damage == 'symlink':
+        path.rmdir()
+        target = tmp_path / 'artifacts'; target.mkdir()
+        path.symlink_to(target, target_is_directory=True)
+    elif damage == 'not-mount':
+        state['mount'] = False
+    elif damage == 'noexec':
+        state['flags'] |= os.ST_NOEXEC
+    elif damage == 'suid':
+        state['flags'] &= ~os.ST_NOSUID
+    elif damage == 'device':
+        state['flags'] &= ~os.ST_NODEV
+    elif damage == 'readonly':
+        state['flags'] |= os.ST_RDONLY
+    else:
+        state['size'] += 1024 ** 2
+    with pytest.raises(ValueError, match='runtime workdir'):
+        initializer.verify_runtime_workdir(runtime)
+
+
+@pytest.mark.parametrize('path', ['/workspace/installed', '/artifacts/installed',
+                                  '/var/lib/unified-jobs/runtime', '/root', '/tmp/runtime',
+                                  '/unified-runtime/../artifacts', 'relative', '/unified-runtime\x00'])
+def test_runtime_initializer_refuses_untrusted_or_overlapping_contract_paths(path):
+    runtime = profiles.execution_contract('python-project', backend='docker')['runtimeWorkdir']
+    with pytest.raises(ValueError, match='contract'):
+        initializer.verify_runtime_workdir({**runtime, 'path': path})
+
+
+def test_runtime_field_reaches_manual_and_durable_commands_only_from_owner(library, tmp_path):
+    _, calls = library
+    request = {**payload(tmp_path, 'execute'), 'profileId': 'browser-test', 'jobId': 'runtime-job',
+               'preparedRuntime': True,
+               'runtimeWorkdir': profiles.execution_contract('browser-test', backend='docker')['runtimeWorkdir']}
+    worker.retain_source_ready(tmp_path, 'owned', request['snapshot'])
+    worker.execute_call(request)
+    manual = json.loads(shlex.split(calls[-1][1][1])[5])
+    with pytest.raises(json.JSONDecodeError):  # Only the controlled observer response is absent.
+        worker.execute_call({**request, 'action': 'job_start'})
+    durable = json.loads(shlex.split(calls[-1][1][1])[5])
+    assert manual['environment'] == durable['environment']
+    assert manual['environment']['AMPLIFIER_TEST_RUNTIME'] == '/unified-runtime'
+    assert manual['environment']['HOME'] == '/tmp/unified-test/home'
+    assert len(calls) == 2
 
 
 def test_invalid_source_identity_never_becomes_guest_contract(tmp_path):
@@ -73,7 +268,7 @@ def test_build_requirements_are_bounded_package_arguments(requires):
         guest.build_requirements(requires)
 
 
-@pytest.mark.parametrize('change', ['source', 'python', 'profile'])
+@pytest.mark.parametrize('change', ['source', 'python', 'profile', 'runtime'])
 def test_initializer_refuses_missing_or_mismatched_contract_before_marker(tmp_path, change):
     prefix, workspace, artifacts = [tmp_path / name for name in ('prefix', 'workspace', 'artifacts')]
     (prefix / 'venv/bin').mkdir(parents=True); workspace.mkdir()
@@ -85,6 +280,8 @@ def test_initializer_refuses_missing_or_mismatched_contract_before_marker(tmp_pa
         actual['source']['archiveSha256'] = '2' * 64
     elif change == 'profile':
         actual['profileId'] = 'browser-test'
+    elif change == 'runtime':
+        actual['runtimeWorkdir'] = profiles.execution_contract('python-project', backend='docker')['runtimeWorkdir']
     else:
         (prefix / 'venv/bin/python').unlink()
     (prefix / 'execution-contract.json').write_text(json.dumps(actual))
