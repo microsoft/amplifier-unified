@@ -59,6 +59,9 @@ def parse_args(argv=None):
                         help='Optimize fixture source format; committed requires actual T2 inventory evidence.')
     parser.add_argument('--candidate-wheel-manifest', type=Path,
                         help='Optimize only: bounded offline Foundation+CI wheel selections.')
+    parser.add_argument('--installed-runtime-profile', type=Path,
+                        help='Optimize only: reuse an independently artifact-derived installed runtime; no build/install.')
+    parser.add_argument('--installed-runtime-profile-sha256')
     parser.add_argument('--server-provenance', type=Path,
                         help='Optimize only: gitless manager packet (or existing environment ABI).')
     parser.add_argument('--server-provenance-sha256')
@@ -67,8 +70,13 @@ def parse_args(argv=None):
     args = parser.parse_args(argv)
     if not args.optimize_only and any((args.candidate_wheel_manifest, args.server_provenance,
                                        args.server_provenance_sha256, args.expected_client_commit,
-                                       args.canonical_format != 'legacy')):
+                                       args.canonical_format != 'legacy', args.installed_runtime_profile,
+                                       args.installed_runtime_profile_sha256)):
         parser.error('Candidate wheels and server provenance are only for --optimize-only')
+    if bool(args.installed_runtime_profile) != bool(args.installed_runtime_profile_sha256):
+        parser.error('Installed runtime profile and SHA-256 must be supplied together')
+    if args.installed_runtime_profile and args.candidate_wheel_manifest:
+        parser.error('Reuse an installed runtime or install candidate wheels, not both')
     return args
 
 
@@ -110,6 +118,100 @@ def accepted_client(args):
 def candidate_install_args(python, candidates):
     return ['uv', 'pip', 'install', '--python', str(python), '--no-index', '--no-deps', '--reinstall',
             *[row['wheelPath'] for row in candidates['candidates']]]
+
+
+def installed_runtime_selection(path, expected):
+    """Validate manager selection without importing or executing candidate code."""
+    import re
+    require(re.fullmatch('[a-f0-9]{64}', expected or '') is not None, 'Installed profile needs SHA-256')
+    path = regular(path)
+    require(path.stat().st_size <= 8 * 1024 * 1024, 'Installed profile exceeds bound')
+    raw = path.read_bytes()
+    require(sha(raw) == expected, 'Installed profile SHA-256 mismatch')
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            require(key not in value, 'Duplicate installed profile member')
+            value[key] = item
+        return value
+    data = json.loads(raw, object_pairs_hook=unique)
+    require(type(data) is dict, 'Invalid installed runtime profile')
+    values = [data.get(key) for key in ('environment_root', 'python', 'app_root')]
+    require(all(type(value) is str and Path(value).is_absolute() and '..' not in Path(value).parts
+                for value in values), 'Installed runtime paths must be explicit')
+    environment, python, package = map(Path, values)
+    require(environment.resolve(strict=True) == environment
+            and not environment.is_relative_to(ROOT.resolve())
+            and not ROOT.resolve().is_relative_to(environment)
+            and (environment / 'pyvenv.cfg').is_file(), 'Installed runtime must be outside checkout')
+    require(python == environment / 'bin/python' and python.is_file() and os.access(python, os.X_OK),
+            'Select the installed qualification interpreter')
+    require(package.resolve(strict=True) == package and package.name == 'amplifier_web'
+            and package.is_relative_to(environment), 'Installed application escaped runtime')
+    return path, raw, environment, python, package
+
+
+def existing_runtime_identity(args):
+    """Reuse the actual artifact profile and maintained installed-origin guard."""
+    path, raw, venv, python, package = installed_runtime_selection(
+        args.installed_runtime_profile, args.installed_runtime_profile_sha256)
+    require(not OUT.resolve().is_relative_to(venv), 'Evidence output cannot modify installed runtime')
+    import tomllib
+    profile_files = json.loads(raw).get('files')
+    require(type(profile_files) is dict, 'Installed runtime file manifest is missing')
+    prefix = str(package.relative_to(venv)) + '/'
+    files = {'amplifier_web/' + relative[len(prefix):]: expected
+             for relative, expected in profile_files.items()
+             if type(relative) is str and relative.startswith(prefix)}
+    require(files and all(name in files for name in (
+        'amplifier_web/runtime_worker.py', 'amplifier_web/runtime_bootstrap.py',
+        'amplifier_web/host/media_sources.json', 'amplifier_web/host/children.py',
+        'amplifier_web/storage_optimize_canonical.py')), 'Installed application manifest is incomplete')
+    force = tomllib.loads((ROOT / 'pyproject.toml').read_text())['tool']['hatch']['build']['targets']['wheel']['force-include']
+    for name, expected in files.items():
+        source = ROOT / name
+        for source_name, target in sorted(force.items(), key=lambda item: len(item[1]), reverse=True):
+            if name == target or name.startswith(target + '/'):
+                source = ROOT / source_name / name[len(target):].lstrip('/') if name != target else ROOT / source_name
+                break
+        require(source.resolve().is_relative_to(ROOT.resolve()) and source.is_file()
+                and sha(source.read_bytes()) == expected,
+                'Installed application differs from selected source: ' + name)
+    saved = OUT / 'installed-runtime-profile.json'
+    saved.write_bytes(raw)
+    probe = '''import sys,json,hashlib
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+import normal_media_worker_probe as helper
+target=helper.InstalledTarget(sys.argv[2])
+assert hashlib.sha256(target.raw).hexdigest()==sys.argv[3]
+target.check_runtime()
+# Nonimporting validation of ALL profile files precedes app bootstrap/imports.
+for relative in target.files:target.verify_file(target.environment/relative)
+target.bootstrap_app()
+helper.INSTALLED_TARGET=target
+origins=target.check_origins()
+catalog=helper.catalog_status()
+assert not catalog['mismatches']
+print(json.dumps(dict(verified=True,origins=origins,catalog=catalog,
+                     files=target.files,environment=str(target.environment),
+                     packageRoot=str(target.app))))
+'''
+    env = {key: value for key, value in os.environ.items()
+           if key not in ('PYTHONPATH', 'PYTHONHOME', 'PYTHONUSERBASE', 'WARM_LOOP_SOURCE')}
+    command('existing-runtime-identity', [str(python), '-I', '-B', '-c', probe,
+            str(ROOT / 'tests/fixtures'), str(saved), args.installed_runtime_profile_sha256],
+            cwd=OUT, env=env)
+    verified = json.loads((OUT / 'existing-runtime-identity.log').read_text())
+    require(verified.get('verified') is True and verified['packageRoot'] == str(package)
+            and verified['environment'] == str(venv), 'Installed runtime identity differs')
+    require(verified['files'] == profile_files, 'Installed file manifest changed during verification')
+    static = {p.removeprefix('amplifier_web/static/'): value for p, value in files.items()
+              if p.startswith('amplifier_web/static/')}
+    require(static == manifest(ROOT / 'amplifier_web/static'), 'Installed static differs from selected build')
+    identity = {'installedProfileSha256': sha(raw), 'files': files, 'static': static}
+    write('wheel-identity.json', identity)  # Existing consumer filename; no invented wheel hash.
+    return venv, python, str(package), static, identity, verified
 
 
 def optimize_proof(output, static, package, candidates, packet_sha, *, canonical_format='legacy'):
@@ -184,40 +286,43 @@ def main(argv=None):
             inputs['components/web-client.source.json'] = sha(regular(ROOT / 'components/web-client.source.json').read_bytes())
         source = {'inputs': inputs, 'static': manifest(ROOT / 'amplifier_web/static')}
         write('source.json', source)
-        command('wheel-build', ['/opt/unified-prepared/build-venv/bin/python', '-m', 'build', '--wheel', '--no-isolation', '--outdir', str(OUT / 'wheel'), str(ROOT)])
-        wheel, = (OUT / 'wheel').glob('*.whl')
-        venv = OUT / 'venv'
-        command('venv', ['uv', 'venv', '--python', sys.executable, str(venv)])
-        site = venv / 'lib' / ('python' + '.'.join(map(str, sys.version_info[:2]))) / 'site-packages'
-        (site / 'prepared-dependencies.pth').write_text(sysconfig.get_path('purelib') + '\n')
-        python = venv / 'bin/python'
-        install_env = ({**os.environ, 'UV_COMPILE_BYTECODE': '0', 'UV_LINK_MODE': 'copy'}
-                       if args.optimize_only else None)
-        if args.optimize_only and candidates['candidates']:
-            # No resolver, moving dependency, network or shared-layer mutation.
-            command('install-components', candidate_install_args(python, candidates), env=install_env)
-        command('install', ['uv', 'pip', 'install', '--python', str(python), '--no-deps',
-                *(['--no-index'] if args.optimize_only else []),
-                '--reinstall-package', 'amplifier-unified', str(wheel)], env=install_env)
-        expected = {}
-        with zipfile.ZipFile(wheel) as archive:
-            for name in archive.namelist():
-                if name.startswith('amplifier_web/') and not name.endswith('/'):
-                    expected[name] = digest(archive.read(name))
-        static = {p.removeprefix('amplifier_web/static/'): value for p, value in expected.items() if p.startswith('amplifier_web/static/')}
-        assert static == source['static'], 'Wheel differs from built static'
-        identity = {'wheelSha256': digest(wheel.read_bytes()), 'files': expected, 'static': static}
-        write('wheel-identity.json', identity)
         env = {key: value for key, value in os.environ.items() if key not in ('PYTHONPATH', 'PYTHONHOME')}
-        if args.optimize_only:
-            # The component probe performs a NONIMPORTING validation pass over
-            # ALL selected distributions before its import/origin pass. Run it
-            # before the general probe can import Foundation or the app server.
-            shutil.copy2(Path(__file__).with_name('installed_candidate_wheels.py'), OUT / 'installed_candidate_wheels.py')
-            command('component-identity', [str(python), '-I', '-B', str(OUT / 'installed_candidate_wheels.py'),
-                    '--installed-probe', str(OUT / 'candidate-wheel-identity.json'), str(venv)], cwd=OUT, env=env)
-            component_identity = json.loads((OUT / 'component-identity.log').read_text())
-        probe = '''import sys,json,hashlib
+        if args.installed_runtime_profile:
+            venv, python, package, static, identity, component_identity = existing_runtime_identity(args)
+            result['limits'][0] = 'Explicit artifact-profile installed runtime reused without build/install or prepared-dependency fallback'
+            result['installedRuntimeProfileSha256'] = identity['installedProfileSha256']
+        else:
+            command('wheel-build', ['/opt/unified-prepared/build-venv/bin/python', '-m', 'build', '--wheel', '--no-isolation', '--outdir', str(OUT / 'wheel'), str(ROOT)])
+            wheel, = (OUT / 'wheel').glob('*.whl')
+            venv = OUT / 'venv'
+            command('venv', ['uv', 'venv', '--python', sys.executable, str(venv)])
+            site = venv / 'lib' / ('python' + '.'.join(map(str, sys.version_info[:2]))) / 'site-packages'
+            (site / 'prepared-dependencies.pth').write_text(sysconfig.get_path('purelib') + '\n')
+            python = venv / 'bin/python'
+            install_env = ({**os.environ, 'UV_COMPILE_BYTECODE': '0', 'UV_LINK_MODE': 'copy'}
+                           if args.optimize_only else None)
+            if args.optimize_only and candidates['candidates']:
+                # No resolver, moving dependency, network or shared-layer mutation.
+                command('install-components', candidate_install_args(python, candidates), env=install_env)
+            command('install', ['uv', 'pip', 'install', '--python', str(python), '--no-deps',
+                    *(['--no-index'] if args.optimize_only else []),
+                    '--reinstall-package', 'amplifier-unified', str(wheel)], env=install_env)
+            expected = {}
+            with zipfile.ZipFile(wheel) as archive:
+                for name in archive.namelist():
+                    if name.startswith('amplifier_web/') and not name.endswith('/'):
+                        expected[name] = digest(archive.read(name))
+            static = {p.removeprefix('amplifier_web/static/'): value for p, value in expected.items() if p.startswith('amplifier_web/static/')}
+            assert static == source['static'], 'Wheel differs from built static'
+            identity = {'wheelSha256': digest(wheel.read_bytes()), 'files': expected, 'static': static}
+            write('wheel-identity.json', identity)
+            if args.optimize_only:
+                # Validate ALL selected distributions before any candidate imports.
+                shutil.copy2(Path(__file__).with_name('installed_candidate_wheels.py'), OUT / 'installed_candidate_wheels.py')
+                command('component-identity', [str(python), '-I', '-B', str(OUT / 'installed_candidate_wheels.py'),
+                        '--installed-probe', str(OUT / 'candidate-wheel-identity.json'), str(venv)], cwd=OUT, env=env)
+                component_identity = json.loads((OUT / 'component-identity.log').read_text())
+            probe = '''import sys,json,hashlib
 from pathlib import Path
 import amplifier_core._engine,amplifier_foundation,aiohttp,amplifier_web.server
 root=Path(amplifier_web.__file__).resolve().parent
@@ -227,9 +332,9 @@ assert not any(Path(p or '.').resolve().is_relative_to(Path('/workspace')) for p
 assert all(hashlib.sha256((root.parent/p).read_bytes()).hexdigest()==h for p,h in expected['files'].items())
 print(json.dumps({'packageRoot':str(root),'verified':True,'fileCount':len(expected['files']),'wheelSha256':expected['wheelSha256']}))
 '''
-        command('identity', [str(python), '-I', *(['-B'] if args.optimize_only else []),
-                '-c', probe, str(OUT / 'wheel-identity.json'), str(venv)], cwd=OUT, env=env)
-        package = json.loads((OUT / 'identity.log').read_text())['packageRoot']
+            command('identity', [str(python), '-I', *(['-B'] if args.optimize_only else []),
+                    '-c', probe, str(OUT / 'wheel-identity.json'), str(venv)], cwd=OUT, env=env)
+            package = json.loads((OUT / 'identity.log').read_text())['packageRoot']
         harness = OUT / 'harness'
         shutil.copytree(ROOT / 'tests/fixtures', harness / 'tests/fixtures')
         shutil.copytree(ROOT / 'tests/web', harness / 'tests/web', ignore=shutil.ignore_patterns('node_modules', '__pycache__'))
@@ -266,8 +371,9 @@ print(json.dumps({'packageRoot':str(root),'verified':True,'fileCount':len(expect
         plan = {'schemaVersion': 1, 'scenarios': scenarios}
         code = run_scenarios(harness, plan, OUT / 'browser', budget=300,
                              case_timeout=240 if args.optimize_only else 90,
-                             provenance={'inputs': inputs, 'wheel': identity['wheelSha256']})
-        result.update(status='passed' if code == 0 else 'failed', browserExit=code, packageRoot=package, wheelSha256=identity['wheelSha256'], staticCount=len(static))
+                             provenance={'inputs': inputs, 'wheel': identity.get('wheelSha256'),
+                                         'installedProfile': identity.get('installedProfileSha256')})
+        result.update(status='passed' if code == 0 else 'failed', browserExit=code, packageRoot=package, wheelSha256=identity.get('wheelSha256'), staticCount=len(static))
         if code == 0 and args.optimize_only:
             result['optimize'] = optimize_proof(OUT / 'optimize-storage', static, package,
                                                component_identity, packet_sha,

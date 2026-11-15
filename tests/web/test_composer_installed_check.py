@@ -368,7 +368,11 @@ class Wrapper(unittest.TestCase):
     def test_ambiguous_modes_and_candidate_flags_rejected(self):
         for argv in (['--header-only', '--optimize-only'], ['--header-only', '--markdown-only'],
                      ['--candidate-wheel-manifest', 'missing.json'], ['--expected-client-commit', 'a' * 40],
-                     ['--canonical-format', 'committed']):
+                     ['--canonical-format', 'committed'], ['--installed-runtime-profile', 'profile.json'],
+                     ['--optimize-only', '--installed-runtime-profile', 'profile.json'],
+                     ['--optimize-only', '--installed-runtime-profile-sha256', 'a' * 64],
+                     ['--optimize-only', '--installed-runtime-profile', 'profile.json',
+                      '--installed-runtime-profile-sha256', 'a' * 64, '--candidate-wheel-manifest', 'wheels.json']):
             with self.subTest(argv=argv), patch('sys.stderr', new=io.StringIO()):
                 with self.assertRaises(SystemExit):
                     wrapper.parse_args(argv)
@@ -378,6 +382,124 @@ class Wrapper(unittest.TestCase):
             {'candidates': [{'wheelPath': '/artifacts/one.whl'}, {'wheelPath': '/artifacts/two.whl'}]})
         self.assertEqual(args, ['uv', 'pip', 'install', '--python', '/artifacts/venv/bin/python',
                                '--no-index', '--no-deps', '--reinstall', '/artifacts/one.whl', '/artifacts/two.whl'])
+
+    def runtime_profile(self):
+        environment = self.root / 'runtime'
+        (environment / 'bin').mkdir(parents=True)
+        (environment / 'pyvenv.cfg').write_text('Synthetic selector input; never executed')
+        python = environment / 'bin/python'
+        python.write_text('This is not an interpreter')
+        python.chmod(0o700)
+        package = environment / 'lib/python3.13/site-packages/amplifier_web'
+        package.mkdir(parents=True)
+        value = {'environment_root': str(environment), 'python': str(python), 'app_root': str(package)}
+        profile = self.root / 'profile.json'
+        profile.write_text(json.dumps(value))
+        return profile, value
+
+    def test_reuse_profile_selection_is_pinned_outside_checkout_without_execution(self):
+        profile, value = self.runtime_profile()
+        with patch.object(wrapper, 'ROOT', self.root / 'checkout'), patch.object(wrapper, 'command') as command:
+            result = wrapper.installed_runtime_selection(profile, wheels.sha(profile.read_bytes()))
+            self.assertEqual(result[2], Path(value['environment_root']))
+            command.assert_not_called()
+            with self.assertRaisesRegex(ValueError, 'SHA-256 mismatch'):
+                wrapper.installed_runtime_selection(profile, '0' * 64)
+        with patch.object(wrapper, 'ROOT', self.root):
+            with self.assertRaisesRegex(ValueError, 'outside checkout'):
+                wrapper.installed_runtime_selection(profile, wheels.sha(profile.read_bytes()))
+
+    def test_reuse_profile_duplicate_and_redirected_runtime_refused(self):
+        profile, value = self.runtime_profile()
+        original = profile.read_bytes()
+        profile.write_text('{"environment_root":"a","environment_root":"b"}')
+        with self.assertRaisesRegex(ValueError, 'Duplicate'):
+            wrapper.installed_runtime_selection(profile, wheels.sha(profile.read_bytes()))
+        profile.write_bytes(original)
+        alias = self.root / 'alias-runtime'
+        alias.symlink_to(value['environment_root'], target_is_directory=True)
+        profile.write_text(json.dumps({**value, 'environment_root': str(alias)}))
+        with patch.object(wrapper, 'ROOT', self.root / 'checkout'):
+            with self.assertRaisesRegex(ValueError, 'outside checkout'):
+                wrapper.installed_runtime_selection(profile, wheels.sha(profile.read_bytes()))
+
+    def test_reuse_rejects_old_app_before_candidate_import_and_maps_force_include(self):
+        profile, value = self.runtime_profile()
+        checkout = self.root / 'checkout'
+        checkout.mkdir()
+        (checkout / 'pyproject.toml').write_text(
+            '[tool.hatch.build.targets.wheel.force-include]\n'
+            '"bundle.yaml" = "amplifier_web/bundle_data/bundle.yaml"\n')
+        names = ['runtime_worker.py', 'runtime_bootstrap.py', 'host/media_sources.json',
+                 'host/children.py', 'storage_optimize_canonical.py', 'bundle_data/bundle.yaml']
+        files = {}
+        for name in names:
+            source = checkout / ('bundle.yaml' if name.startswith('bundle_data/') else 'amplifier_web/' + name)
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_bytes(b'Synthetic current source')
+            relative = str((Path(value['app_root']) / name).relative_to(value['environment_root']))
+            files[relative] = wheels.sha(source.read_bytes())
+        profile.write_text(json.dumps({**value, 'files': files}))
+        args = wrapper.parse_args(['--optimize-only', '--installed-runtime-profile', str(profile),
+                                   '--installed-runtime-profile-sha256', wheels.sha(profile.read_bytes())])
+        changed = checkout / 'amplifier_web/host/children.py'
+        changed.write_bytes(b'Changed after artifact build')
+        output = self.root / 'out'
+        with patch.object(wrapper, 'ROOT', checkout), patch.object(wrapper, 'OUT', output), \
+             patch.object(wrapper, 'command') as command:
+            with self.assertRaisesRegex(ValueError, 'differs from selected source'):
+                wrapper.existing_runtime_identity(args)
+            command.assert_not_called()
+        changed.write_bytes(b'Synthetic current source')
+        output.mkdir()
+        with patch.object(wrapper, 'ROOT', checkout), patch.object(wrapper, 'OUT', output), \
+             patch.object(wrapper, 'command', side_effect=RuntimeError('stop before candidate import')) as command:
+            with self.assertRaisesRegex(RuntimeError, 'stop before candidate import'):
+                wrapper.existing_runtime_identity(args)
+            command.assert_called_once()  # No command actually executes in this test.
+
+    def test_reuse_guard_validates_every_profile_file_before_candidate_bootstrap(self):
+        tree = ast.parse((HERE / 'composer-installed-check.py').read_text())
+        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                        and n.name == 'existing_runtime_identity')
+        probe = next(node.value.value for node in function.body
+                     if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'probe'
+                                                             for t in node.targets))
+        parsed = ast.parse(probe)
+        loop = next(n for n in parsed.body if isinstance(n, ast.For))
+        bootstrap = next(n for n in parsed.body if isinstance(n, ast.Expr)
+                         and isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Attribute)
+                         and n.value.func.attr == 'bootstrap_app')
+        self.assertLess(loop.lineno, bootstrap.lineno)
+        self.assertIn('target.verify_file(target.environment/relative)', probe)
+        self.assertIn("'-I', '-B'", ast.get_source_segment((HERE / 'composer-installed-check.py').read_text(),
+                                                         function))
+
+    def test_reuse_branch_never_builds_or_installs_another_environment(self):
+        contract = self.root / 'contract.json'
+        contract.write_text('{"profileId":"browser-test"}')
+        selection = self.root / 'checkout/components/web-client.source.json'
+        selection.parent.mkdir(parents=True)
+        selection.write_text('{}')
+        venv = self.root / 'existing-runtime'
+        identity = {'installedProfileSha256': 'a' * 64, 'files': {}, 'static': {}}
+        with patch.object(wrapper, 'ROOT', self.root / 'checkout'), \
+             patch.object(wrapper, 'OUT', self.root / 'out'), \
+             patch.dict('os.environ', {'AMPLIFIER_TEST_CONTRACT': str(contract)}), \
+             patch.object(wrapper, 'accepted_client', return_value='c' * 40), \
+             patch.object(wrapper, 'provenance_packet', return_value=(b'{}', 'pinned')), \
+             patch.object(wrapper, 'manifest', return_value={}), \
+             patch.object(Path, 'read_bytes', return_value=b'input'), \
+             patch.object(wrapper, 'existing_runtime_identity',
+                          return_value=(venv, venv / 'bin/python', str(venv / 'app'), {},
+                                        identity, {'verified': True})) as reused, \
+             patch.object(wrapper, 'command') as command, \
+             patch.object(wrapper.shutil, 'copytree', side_effect=RuntimeError('stop before browser fixtures')):
+            with self.assertRaisesRegex(RuntimeError, 'stop before browser fixtures'):
+                wrapper.main(['--optimize-only', '--installed-runtime-profile', 'profile.json',
+                              '--installed-runtime-profile-sha256', 'a' * 64])
+            reused.assert_called_once()
+            command.assert_not_called()  # The mocked identity, not a real installed proof.
 
     def test_wrapper_component_probe_precedes_general_identity_probe(self):
         # Check the real wrapper command sites, not a mocked plan or test-only
