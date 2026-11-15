@@ -710,7 +710,7 @@ async def _opaque_restart_phase(directory, phase):
             assert store.load(session.session_id) is None and not continuity.path.exists()
             await context.set_messages(seed)
             wire.seed_hashes = [digest(row) for row in seed]
-            with pytest.raises(RuntimeError, match='(?i)(context|count|measur|budget|fit)'):
+            with pytest.raises(RuntimeError, match='Provider overflow repair requires a provider count'):
                 await session.execute(prompt)
             assert len(wire.foreground) == len(wire.summaries) == 1
             assert not wire.counted  # Counting never recovered in this process.
@@ -723,7 +723,7 @@ async def _opaque_restart_phase(directory, phase):
             assert any(event == 'context:compaction_finished' and data['outcome'] == 'completed'
                        for event, data in observed)
             # No manual save here: prove the real automatic host hook saved the
-            # finished semantic checkpoint before final-count failure returned.
+            # finished semantic checkpoint without an explicit test save.
             saved = json.loads(continuity.path.read_text())
             assert wire.summary_marker in saved['summary']['text']
             assert saved['progress'] is None
@@ -835,3 +835,176 @@ def test_opaque_history_checkpoint_survives_process_restart_after_final_count_fa
     assert failed['toolHashes'] == restored['toolHashes']
     assert failed['summaries'] == 1 and restored['summaries'] == 0
     assert failed['foreground'] == restored['foreground'] == 1
+
+
+async def test_provider_count_diagnostics_reach_real_context_intelligence_capture(tmp_path, monkeypatch):
+    """Real mounts, discovery, Core hooks and CI writer; only HTTP is synthetic.
+
+    Optional imports may skip in the ordinary host suite. The existing native
+    qualification guard must require execution with zero skips in its prepared
+    candidate environment; this test alone is not live-vendor or fan-out proof.
+    """
+    module = pytest.importorskip('amplifier_module_provider_anthropic',
+        reason='Native qualification installs exact accepted Anthropic source.')
+    ci = pytest.importorskip('amplifier_module_hook_context_intelligence',
+        reason='Native qualification requires actual CI capture with zero skips.')
+    from anthropic import _base_client
+    from amplifier_core import ChatRequest, Message, ModuleCoordinator
+    from amplifier_module_hook_context_intelligence.handlers.logging_handler import LoggingHandler
+
+    http = getattr(_base_client, 'httpx2', None) or _base_client.httpx
+    event = 'provider:token_count_unavailable'
+    session_id = 'provider-count-offline'
+    project_slug = 'provider-count-diagnostics'
+    private = {
+        'content': 'synthetic-private-count-request-content',
+        'body': 'synthetic-private-count-response-body',
+        # The real SDK includes the error-body message in its exception text.
+        'exception': 'synthetic-private-count-sdk-exception-text',
+        'header': 'synthetic-private-count-unrelated-header',
+        'config': 'synthetic-private-count-config-value',
+        'api_key': 'synthetic-private-count-api-key-not-live',
+    }
+    outcomes = [
+        (400, 'req_count_400'),
+        (500, 'req_count_500_first'),
+        (500, 'req_count_500_second'),
+        (200, 'req_count_valid'),
+    ]
+    calls = []
+
+    def transport(request):
+        # Record before assertions: count failures are deliberately caught by
+        # the provider, so an unexpected endpoint must remain visible outside it.
+        calls.append((request.method, request.url.path))
+        assert request.url.host == 'count-fixture.invalid'
+        assert calls[-1] == ('POST', '/v1/messages/count_tokens')
+        assert request.headers['x-api-key'] == private['api_key']
+        body = json.loads(request.content)
+        assert body['model'] == MODEL
+        assert private['content'] in json.dumps(body)
+        status, request_id = outcomes[len(calls) - 1]
+        if status == 200:
+            return http.Response(200, json={'input_tokens': 123})
+        return http.Response(status,
+            headers={'request-id': request_id, 'x-private-count': private['header']},
+            json={'type': 'error', 'error': {
+                'type': 'invalid_request_error' if status == 400 else 'api_error',
+                'message': private['body'] + ' ' + private['exception']}})
+
+    # Keep both reader and writer resolution inside this test's owned storage.
+    monkeypatch.setenv('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', str(tmp_path))
+    coordinator = ModuleCoordinator()
+    coordinator.hooks.set_default_fields(session_id=session_id)
+    coordinator.register_capability('session.working_dir', str(tmp_path))
+    assert await coordinator.collect_contributions('observability.events') == []
+    ci_cleanup = await ci.mount(coordinator, {
+        'base_path': str(tmp_path), 'project_slug': project_slug,
+        'destinations': {}, 'exclude_events': [],
+    })
+    provider_cleanup = None
+    try:
+        resolver = coordinator.get_capability('context_intelligence.hook_config_resolver')
+        state = coordinator.get_capability('context_intelligence._hook_state')
+        handler = state['logging_handler']
+        assert isinstance(handler, LoggingHandler)
+        assert handler._resolver is resolver
+        assert resolver.base_path == tmp_path
+        assert resolver.project_slug == project_slug
+        assert resolver.working_dir == str(tmp_path)
+        assert resolver.destinations == state['destinations'] == {}
+        assert resolver.additional_events == frozenset()
+        assert resolver.exclude_events == frozenset()
+        session_dir = resolver.session_dir(session_id)
+        assert session_dir == tmp_path / project_slug / 'sessions' / session_id / 'context-intelligence'
+        capture = session_dir / 'events.jsonl'
+        assert not capture.exists()
+        assert event not in coordinator.hooks.list_handlers()
+
+        # Mount CI first, then the provider. Only the real post-mount discovery
+        # may subscribe to this contributed name; no additional_events shortcut.
+        provider_cleanup = await module.mount(coordinator, {
+            'api_key': private['api_key'], 'default_model': MODEL, 'max_retries': 0,
+            'enable_1m_context': True, 'use_streaming': False,
+            'enable_prompt_caching': False,
+            'extra_request_params': {'metadata': {'user_id': private['config']}},
+        })
+        assert callable(provider_cleanup)
+        assert await coordinator.collect_contributions('observability.events') == [[event]]
+        assert coordinator.channels['observability.events'][0]['name'] == 'provider-anthropic'
+        await ci.on_session_ready(coordinator)
+        assert coordinator.hooks.list_handlers()[event] == ['LoggingHandler']
+        assert handler._dispatchers == []
+        assert state['destinations'] == {}
+
+        provider = coordinator.get('providers', 'anthropic')
+        assert provider._client is None  # No live SDK client was constructed.
+        http_client = http.AsyncClient(
+            transport=http.MockTransport(transport), trust_env=False)
+        provider._client = module.AsyncAnthropic(
+            api_key=private['api_key'], base_url='https://count-fixture.invalid/v1/',
+            max_retries=0, http_client=http_client)
+        request = ChatRequest(
+            messages=[Message(role='user', content=private['content'])],
+            max_output_tokens=1000)
+        before = request.model_dump()
+        decisions = [await provider.request_budget(request, context_estimate=200_000)
+                     for _ in outcomes]
+        assert decisions[:3] == [None, None, None]
+        assert decisions[3] == {
+            'estimated_input_tokens': 123 + 4096,
+            'input_limit_tokens': LIMIT,
+            'context_token_budget': 200_000,
+            'max_output_tokens': 1000,
+            'measurement': {
+                'kind': 'provider_count',
+                'source': 'anthropic.messages.count_tokens',
+                'input_tokens': 123,
+            },
+        }
+        assert request.model_dump() == before
+        assert calls == [('POST', '/v1/messages/count_tokens')] * 4
+        assert sum(path == '/v1/messages' for _, path in calls) == 0
+        assert handler._dispatchers == []
+        assert handler._seen_sessions == {session_id}
+    finally:
+        try:
+            if provider_cleanup is not None:
+                await provider_cleanup()
+        finally:
+            await ci_cleanup()
+    assert http_client.is_closed
+    assert provider._client is None
+    assert event not in coordinator.hooks.list_handlers()
+    assert coordinator.get_capability('context_intelligence._hook_state') is None
+
+    # Read only this small synthetic capture, from the resolver-owned path.
+    # Nothing in this test writes event records or invokes LoggingHandler itself.
+    with capture.open('rb') as stream:
+        captured = stream.read(16_385)
+    assert len(captured) <= 16_384
+    serialized = captured.decode('utf-8')
+    assert serialized.endswith('\n')
+    records = [json.loads(line) for line in serialized.splitlines()]
+    assert len(records) == 2
+    expected = [
+        (400, 'BadRequestError', 'req_count_400'),
+        (500, 'InternalServerError', 'req_count_500_first'),
+    ]
+    for record, (status, error_type, request_id) in zip(records, expected, strict=True):
+        timestamp = record['timestamp']
+        assert isinstance(timestamp, str) and timestamp
+        assert record == {
+            'event': event, 'workspace': project_slug, 'timestamp': timestamp,
+            'data': {
+                'session_id': session_id, 'timestamp': timestamp,
+                'provider': 'anthropic', 'model': MODEL,
+                'source': 'anthropic.messages.count_tokens',
+                'category': 'request_error', 'error_type': error_type,
+                'status_code': status, 'request_id': request_id,
+            },
+        }
+    assert json.loads(json.dumps(records, allow_nan=False)) == records
+    assert all(sentinel not in serialized for sentinel in private.values())
+    assert 'req_count_500_second' not in serialized
+    assert not {'body', 'messages', 'headers', 'config', 'api_key'} & records[0]['data'].keys()
