@@ -426,21 +426,20 @@ def finish(root, token, *, choice="delete", wait=time.sleep):
 
     1. Create the flat folder `unified-uninstall-last`, and in it one folder
        with the token as its name. Hold both.
-    2. Start the step after exit in that inner folder. Windows keeps a
-       program's current folder open. From here no program can rename or
-       replace the flat folder, the installation folder or a folder above
-       it, also when this program has ended, and the flat folder is never
-       empty, so no program can turn it into a link.
+    2. Start the step after exit in that inner folder. Before it answers,
+       it creates one file in the flat folder and keeps it open. From here
+       no program can empty, rename or replace the flat folder, the
+       installation folder or a folder above it, also when this program has
+       ended: Windows turns only an empty folder into a link.
     3. Delete `python` and `tools` through handles, as everything before. A
        file that this running program has mapped is moved, through its
        handle, into the held folder instead.
 
-    The step after exit deletes those few files where they are held, then the
-    emptied folders, setup's completion record, the journal and the
+    The step after exit deletes those few files where they are held, then
+    the emptied folders, the journal, setup's completion record and the
     installation folder. It walks no tree. Returns what the walk reports for
-    the two folders. After this the
-    process imports nothing more, writes nothing into the installation, and
-    ends.
+    the two folders. After this the process imports nothing more, writes
+    nothing into the installation, and ends.
     """
     from . import windows_consumer_shell as shell, windows_removal
     with single(root):

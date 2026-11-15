@@ -586,6 +586,10 @@ def test_step_after_exit_keeps_its_own_file_open_until_every_file_is_deleted():
             "$anchor.Close()", "$folder = Get-Item -LiteralPath $park",
             "if ($last) {", "$folder = Get-Item -LiteralPath $p.root"):
         order.append(tail.index(part, order[-1] + 1))  # Each part follows the one before; a missing part fails.
+    # A record that is a link, a folder or a protected file is refused before anything of the end happens.
+    assert ("    if ($null -ne $file -and ($file.PSIsContainer -or\n"
+            "        \"$($file.Attributes)\" -match 'ReparsePoint|ReadOnly|Hidden|System')) { throw 'Record refused' }"
+            ) in script
     # No file is deleted after the step closed its own file.
     assert "Remove-Item" not in tail.split("$anchor.Close()")[1]
     # The step leaves its inner folder once, for the folder above the installation, and stays there.

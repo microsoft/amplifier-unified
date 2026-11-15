@@ -939,67 +939,77 @@ Windows PowerShell 5.1 script, found in the system folder, with the folder
 path and the token as JSON on standard input, outside the launcher's Job,
 with a temporary folder outside the installation.
 
-The step works with paths, so it deletes a file only where the path cannot
-lead anywhere else. It walks no tree:
+The step works with paths, so it deletes a file only while its path cannot
+lead anywhere else. It walks no tree. One fact carries this: a folder cannot
+be replaced while it holds a file that a program keeps open without delete
+sharing. Nobody can delete or move that file, so the folder is never empty;
+Windows turns only an empty folder into a link; and Windows refuses to rename
+a folder with an open file below it. The same holds for every folder above.
 
-- The uninstall program creates one folder inside the flat folder (its name
-  is the token) and holds both. The step starts with that inner folder as its
-  current folder, and the uninstall program goes on only when the step has
-  answered. Windows keeps a program's current folder open without delete
-  sharing. So the inner folder cannot be removed or renamed, and neither can
-  the flat folder, the installation folder or a folder above it, also after
-  the uninstall program has ended.
-- The flat folder is therefore never empty, and Windows turns only an empty
-  folder into a link. The installation folder holds the flat folder, so the
-  same is true for it. A file directly in the flat folder is exactly that
-  file.
-- The step deletes the plain files directly in the flat folder. It never
-  uses `-Force`: a read-only, hidden or system file stays, and no attribute
-  of any file is changed. A folder or a link there stays.
-- Every folder goes by RemoveDirectory only: an empty folder goes, a link
-  goes as a link, a folder with entries refuses. The step removes the named
-  folders of the installation that are empty by then.
-- Every folder goes as the last part of a path whose folder the step holds:
-  it holds the flat folder (its current folder) to remove the inner folder,
-  the installation folder to remove the flat folder, and the folder above to
-  remove the installation folder.
-- The two records go last, directly in the held installation folder, and only
-  when a fresh listing shows nothing else there. Both are checked before
-  either goes; a record that is a link, a folder or a read-only file is
-  refused. The journal goes first. Setup's completion record goes only if
-  nothing appeared meanwhile, and then the folder goes. So the folder exists
-  without setup's record only for the last two commands.
+- Hand-over. The uninstall program creates one folder inside the flat folder
+  (its name is the token) and holds both. The step starts with that inner
+  folder as its current folder. It refuses when that folder or the flat
+  folder is a link.
+- The step's own file. Before it answers, the step creates one new file in
+  the flat folder (`<token>.hold`) and keeps it open with no sharing. Windows
+  deletes that file itself when the step closes it or ends. The uninstall
+  program goes on only when the step has answered.
+- While that file is open, the step deletes the plain files directly in the
+  flat folder. It never uses `-Force`: a read-only, hidden or system file
+  stays, and no attribute of any file is changed. A folder or a link there
+  stays. It removes the named folders of the installation that are empty by
+  then, and at the end the inner folder.
+- Still while that file is open, and only when a fresh listing shows nothing
+  but the flat folder and the two records: the step deletes the journal, and
+  then, if nothing appeared meanwhile, setup's completion record. Both
+  records are checked before anything of the end happens; a record that is a
+  link, a folder or a read-only file is refused. The step opens no existing
+  file for deletion: a plain delete of a path removes a link as a link.
+- Then the step closes its file and removes two empty folders: the flat
+  folder and the installation folder. Every folder goes by RemoveDirectory
+  only: an empty folder goes, a link goes as a link, a folder with entries
+  refuses.
 - It reads the whole journal record before every pass and every named folder,
   and stops when the record is missing or different. An entry that was
   created after the step started stays. A file that a program moves into the
   flat folder while the step runs is deleted with it; that folder is the
   installation's own.
 
-The step no longer deletes other files in the installation folder. A file of
+The step does not delete other files in the installation folder. A file of
 the installation that is still there at the end (a program uses it) stays,
 and then the folder stays with both records.
 
-Two earlier forms of this step were given up after review. The first walked
+Three earlier forms of this step were given up after review. The first walked
 `python` and `tools` by path: a program of the same account could swap a
 folder for a link between the look and the delete. The second deleted in a
-flat folder that could be empty: Windows lets a program turn an empty folder
-into a link in place, without a rename. What no program can defend against
-stays: a program that can control another program of the same person (close
-its handles, change its memory). Under PowerShell constrained language mode
-the step stops at its first check and changes nothing; the parked files and
-both records stay.
+flat folder that could be empty, and the third relied on the step's current
+folder: Windows lets a program turn an empty folder into a link in place,
+without a rename, also when it is another program's current folder.
+
+Limits that stay, all for a program that runs as the same person and acts in
+the moment of the uninstall:
+
+- After the step closed its file, its last two commands remove the flat
+  folder and the installation folder by path with nothing held. They can
+  remove only an empty folder. A program that empties and replaces a folder
+  in that instant could make one of them remove an empty folder of the same
+  name elsewhere. No file can be lost.
+- A program can put files into the installation folder between the step's
+  last listing and its deletion of setup's completion record (one command),
+  and a file with the name of setup's mark of unfinished work among them. The
+  folder then stays without setup's record, and a later setup run empties it.
+  Such a program can delete those files, and setup's record, without us.
+- A program that can control another program of the same person (close its
+  handles, change its memory) can end every hold.
+
+Under PowerShell constrained language mode the step stops at its first check
+and changes nothing; the parked files and both records stay.
 
 **Rule for setup.** An installation must never be made in a folder that holds
 `unified-uninstall.json`. Today's setup keeps this rule without a change:
 while anything is left in the folder, setup's completion record is there too,
 and with that record setup installs and removes nothing. The step after exit
 deletes the journal and then the record, when nothing else is left.
-
-One limit stays. A program of the same account can put files into the folder
-in the moment between the step's last listing and its last two commands, and
-a file with the name of setup's mark of unfinished work among them. The
-folder then stays without setup's record, and a later setup run empties it.
-Such a program can delete those files, and setup's record, without us.
 
 **Leftovers.** If the step after exit cannot run, the parked program files
 and both records stay; they hold none of the person's data, and the message
@@ -1031,7 +1041,11 @@ cleanly. While the step waits, a rename of the installation folder, of the
 folder above it, of the flat folder and of the inner folder is refused.
 Windows refuses to turn the flat folder into a link in place (error 145),
 before and after it allowed that for the empty inner folder; the same call
-works on an empty folder that nobody holds. In the flat folder a junction, a
+works on an empty folder that nobody holds. A folder with an open file in it,
+and the folder above it, can be neither turned into a link nor renamed; the
+step's own file can be neither deleted, renamed nor read by another program,
+and it is gone when the step has ended. A plain delete of a path that has
+become a link removes the link or nothing, never anything behind it. In the flat folder a junction, a
 folder, a file link, a file in use, a read-only file, a hard link to an
 outside read-only file and a later entry all stay. A data file in use stops the removal with the entries and the
 journal in place; Open, Status and Stop refuse; a second window refuses while
