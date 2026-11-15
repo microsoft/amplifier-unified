@@ -36,10 +36,11 @@ distribution includes the same tests. The Git fixtures use a POSIX shell; Linux
 qualification alone does not establish Windows or macOS behavior.
 
 The version alone does not identify published or qualified bytes; use the actual
-release receipt and artifact hashes. Unified currently builds these sources into its
-own distribution. **Do not coinstall `amplifier-outputs` in a Unified environment**:
-both distributions would claim the same import package. Repository delivery and
-the broader resource-lifecycle boundary remain separate decisions.
+release receipt and artifact hashes. Unified builds the explicitly selected public
+artifact into its own distribution; author changes do not refresh that selection.
+**Do not coinstall `amplifier-outputs` in a Unified environment**: both distributions
+would claim the same import package. Repository delivery and the broader
+resource-lifecycle boundary remain separate decisions.
 
 In the Unified checkout, [the output guide](../../docs/OUTPUTS.md) describes host
 actions, resource retention, authorization and integration behavior. Its host
@@ -65,3 +66,29 @@ may produce different archive bytes and is not an exact-byte retry. Once a relea
 exists, download and verify its receipt and checksums before installing its wheel
 in a standalone environment. Independently selected Unified delivery remains a
 separate adoption step.
+
+## Unified artifact selection
+
+From the Unified repository, select the four verified public release assets with
+the published receipt's exact revision and checksum:
+
+```sh
+python scripts/scheduling_delivery.py select --component outputs \
+  --dist /path/to/verified-release-assets \
+  --revision 51551349e1cf437a40318e220dcd50e59680d4ef \
+  --receipt-sha256 bc652d4bc87fa119faa6e66c98e61b33f0346923ed4aaf1928b98f8a2ff88456
+python scripts/scheduling_delivery.py verify --component outputs
+```
+
+The selection creates `components/outputs-delivery/` and
+`components/outputs.source.json`. Never edit the generated copy by hand. Normal
+wheel, source-distribution and editable builds verify it offline; they do not
+fetch artifacts or consult this author tree. Unified includes only the selected
+runtime package, provenance and license, with no standalone outputs distribution.
+The package's mechanism tests continue to run against its own authored wheel in
+the independent publisher; Unified keeps the host integration tests.
+
+Qualify the installed app before adopting a new selection. Ordinary app replacement
+or rollback changes the selected code without migrating output relationships,
+receipts or retained bodies. Transactions, authorization and retention remain
+with the host.

@@ -13,8 +13,10 @@ app selection. This metadata boundary is not the whole workspace domain.
 Python project. Preserve `amplifier_outputs` imports and its saved-body formats.
 Its Git/SQLite mechanism tests belong with the package; Unified retains
 transactions, authorization, source access, content integrity and retention.
-Normal Unified builds these same runtime sources directly; do not coinstall the
-standalone distribution. This is not a generated copy or the whole resources domain.
+Unified consumes only the published artifact selected into `outputs-delivery/`
+by `outputs.source.json`, as the sole installed owner. Never edit that generated
+copy by hand or coinstall the standalone distribution. Author edits and publication
+do not refresh the app selection. This package is not the whole resources domain.
 
 `components/portability/` is temporarily authored here as an independently
 buildable Python project. Preserve `amplifier_portability` imports and its existing

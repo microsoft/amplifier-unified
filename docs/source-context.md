@@ -58,7 +58,7 @@ selected copy; a client-only merge is not delivery here. Follow the mandatory
 Its selection and maintenance guide stay visible; use `--all --under components/web-client`
 to inspect the copy. Generated-context classification does not make synchronization
 optional. The copy is the selected production build source, not another authored owner.
-Scheduling, worktrees, portability and workspace metadata artifact snapshots follow the same author/delivery
+Scheduling, worktrees, portability, outputs and workspace metadata artifact snapshots follow the same author/delivery
 distinction: `components/<name>` is authored, while `components/<name>-delivery`
 is generated and opt-in. Visible `components/<name>.source.json` records the
 selected public wheel. Use `--all --under components/<name>-delivery` to inspect
