@@ -34,7 +34,12 @@ def setup_routes(app):
 
     async def observe(request):
         observations.require_client()
-        value = snapshot(service, observations, request.query)
+        # These observation reads are one synchronous, read-only request.
+        # Share its live scalar preparation, while each leased query retains its
+        # own durable/native fences. The next poll observes in-place edits afresh.
+        directory = getattr(service, 'directory', None)
+        value = (directory.read_frame(snapshot, service, observations, request.query)
+                 if directory is not None else snapshot(service, observations, request.query))
         return observations.response(request, {**value, 'hostIdentity': identity,
                                                'hostInstanceId': service.instance_id})
 
