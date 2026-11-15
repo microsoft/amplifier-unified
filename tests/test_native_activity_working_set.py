@@ -9,7 +9,7 @@ from amplifier_web.automatic_history import read_transcript, revision
 from amplifier_web.cold_display import MARKER
 from amplifier_web.execution_working_set import current, exact, snapshot, working
 from amplifier_web.host.storage import SessionStore
-from amplifier_web.native_activity import apply_activity, _apply_activity
+from amplifier_web.native_activity import apply_activity
 from amplifier_web.service import AppService
 from test_execution_working_set import saved, save
 from test_native_activity import fixture
@@ -70,7 +70,7 @@ async def test_changed_native_revision_keeps_only_noop_activity_cold(tmp_path, m
         result = read_transcript(session, limit=None)
         assert len(result['activity']['nodes']) == (0 if activity_kind == 'empty' else 130)
         expected = {'execution': copy.deepcopy(original), 'messages': copy.deepcopy(session['messages'])}
-        _apply_activity(expected, result['activity'])
+        apply_activity(expected, result['activity'])
         assert snapshot(session) == expected['execution']
         assert session['historyActivity'] == expected['historyActivity']
         fast = activity_kind != 'unshadowed'
@@ -130,7 +130,7 @@ def test_shadowed_merge_matches_plain_result_and_late_aliases(saved, append):
                 'turns': [{'id': 'native-turn', 'nativeHistory': True, 'nativeIndex': 0,
                            'anchorMessageId': 'old-native-id', 'phase': 'completed'}], 'diagnostics': ['fixture']}
     expected = {'execution': snapshot(session), 'messages': copy.deepcopy(session['messages'])}
-    _apply_activity(expected, activity, append=append)
+    apply_activity(expected, activity, append=append)
     owner = working(session)
     apply_activity(session, activity, append=append)
     assert session._working_execution is owner
@@ -152,7 +152,7 @@ def test_native_topology_repair_transfers_original_current_aliases(saved):
                 'turns': [{'id': 'native-turn', 'nativeHistory': True, 'anchorMessageId': 'new',
                            'phase': 'completed'}], 'diagnostics': []}
     expected = {'execution': snapshot(session), 'messages': []}
-    _apply_activity(expected, activity)
+    apply_activity(expected, activity)
     apply_activity(session, activity)
     assert dict.__contains__(session, 'execution')
     assert not hasattr(session, '_working_execution')
