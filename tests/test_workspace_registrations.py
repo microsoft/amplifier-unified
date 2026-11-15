@@ -4,8 +4,22 @@ import uuid
 import pytest
 
 
-@pytest.mark.parametrize('path_fields', [{}, {'path': None}, {'path': ''}],
-                         ids=['absent', 'none', 'empty'])
+def test_selection_boundary_preserves_absent_path():
+    from amplifier_web.workspace_selection import workspace_command
+
+    # Full host rows carry a path key; the metadata interpretation also accepts
+    # an absent key without widening the browser projection's schema here.
+    original = {'id': 'original', 'name': 'Original', 'path': '/missing/original'}
+    unresolved = {'id': 'unresolved', 'name': 'Offline'}
+    state = {'workspaces': [unresolved, original], 'sessions': [],
+             'selectedWorkspaceId': original['id'], 'settings': {'workspace': original['path']}}
+    workspace_command(state, 'workspace.select', {'id': unresolved['id']})
+    assert state['selectedWorkspaceId'] == unresolved['id']
+    assert state['settings']['workspace'] == original['path']
+    assert 'path' not in unresolved
+
+
+@pytest.mark.parametrize('path_fields', [{'path': None}, {'path': ''}], ids=['none', 'empty'])
 async def test_selection_preserves_known_and_unresolved_locations(tmp_path, path_fields):
     from amplifier_web.service import AppService
 
