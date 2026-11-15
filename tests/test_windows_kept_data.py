@@ -553,8 +553,9 @@ def test_set_that_cannot_be_used_is_not_offered_and_is_named_once(tmp_path, noti
     (confirm, shown), = notices.shown
     assert not confirm and str(folder) in shown and text in shown and "They stay where they are." in shown
     assert tree(folder) == before and data(root) == {name: "folder" for name in SETUP}
-    with pytest.raises(kept.Refused):  # The take-back itself runs every check too.
+    with pytest.raises(kept.Refused) as refused:  # The take-back itself runs every check too.
         kept.take_back(root, launcher)
+    assert "Nothing was changed" in refused.value.notice and "already back" not in refused.value.notice
     assert tree(folder) == before and data(root) == {name: "folder" for name in SETUP}
     (root / "app" / "config").mkdir()
     assert kept.first_start(root, launcher, ask=True) is None and len(notices.shown) == 1  # Named once.
@@ -605,7 +606,7 @@ def test_take_back_never_merges_into_a_folder_that_holds_something(tmp_path):
         kept.take_back(root, VERSION)
     assert refused.value.kind == "take-back-not-empty"
     assert str(root / "workspace") in refused.value.notice and "in the way" in refused.value.notice
-    assert "Nothing was deleted" in refused.value.notice
+    assert "Nothing was deleted" in refused.value.notice and "already back" not in refused.value.notice
     assert tree(tmp_path) == snapshot and kept.read(folder)[0] == "complete"  # Not one folder moved.
 
 
@@ -878,13 +879,16 @@ def test_continued_fill_accepts_nothing_that_it_did_not_move(tmp_path, monkeypat
     with pytest.raises(Crash):
         kept.first_start(root, VERSION, ask=True)
     restore()
-    assert kept.read(folder)[1]["entries"] == {"folder": "workspace", "names": ["notes.txt", "project"]}
+    entries = kept.read(folder)[1]["entries"]
+    assert entries["folder"] == "workspace" and sorted(entries["names"]) == ["notes.txt", "project"]
+    assert entries["names"]["notes.txt"] == os.lstat(root / "workspace" / "notes.txt").st_ino  # It moved: same file.
     (root / "workspace" / "new.txt").write_text("another program wrote this")  # A name that the set does not hold.
     snapshot = tree(tmp_path)
     result = kept.first_start(root, VERSION, ask=False)
     assert result["reason"] == "take-back-not-empty" and tree(tmp_path) == snapshot
     assert str(root / "workspace" / "new.txt") in result["message"] and "in the way" in result["message"]
-    assert "Move it to another place, or rename it." in result["message"]  # The entry is named, with the next step.
+    assert "Move it to a place outside these two folders." in result["message"]  # Named, with the next step.
+    assert "do not uninstall Amplifier" in result["message"]  # A part is back.
     os.remove(root / "workspace" / "new.txt")
     os.remove(root / "workspace" / "notes.txt")  # An entry that the person removed in between is not in the way.
     expected = {key: value for key, value in expected.items() if key != "workspace/notes.txt"}
@@ -989,11 +993,16 @@ def test_installation_knows_that_a_take_back_began_also_when_the_record_is_lost(
         else:
             (folder / kept.RECORD).write_text(damage)
         snapshot = tree(tmp_path)
+        # The app never starts on half of the data by itself: not without a person, and not on No.
+        silent = kept.first_start(root, VERSION, ask=False)
+        assert silent["taken"] is False and silent["reason"] == "take-back-record"
         notices.shown.clear()
-        result = kept.first_start(root, VERSION, ask=True)  # The app never starts on half of the data.
+        notices.answers.append(False)
+        result = kept.first_start(root, VERSION, ask=True)
         assert result["taken"] is False and result["reason"] == "take-back-record"
         (confirm, text), = notices.shown
-        assert not confirm and "Do not uninstall Amplifier" in text and str(folder) in text and str(root) in text
+        assert confirm and "cannot read its notes" in text and "The rest is in this folder" in text
+        assert str(folder) in text and "Start Amplifier without the rest?" in text and "Restart this PC" in text
         assert kept.unfinished_take_back(root)
         for attempt in (lambda: kept.check(root, VERSION),
                         lambda: kept.move_out(root, version=VERSION, transfer=T2, remove=shutil.rmtree, wait=0)):
@@ -1006,6 +1015,129 @@ def test_installation_knows_that_a_take_back_began_also_when_the_record_is_lost(
     assert kept.first_start(root, VERSION, ask=False) is None
     assert person(data(root)) == expected and not (root / kept.MARKER).exists() and not folder.exists()
     assert not kept.unfinished_take_back(root)
+
+
+def test_person_can_start_with_the_part_that_is_back_and_the_rest_is_never_merged_later(
+        tmp_path, monkeypatch, notices):
+    """The way out when the records do not say how to go on. The rest stays, and never enters by itself."""
+    root, folder, expected = kept_then_installed(tmp_path)
+    notices.answers.append(True)
+    restore = crash_after(monkeypatch, "rename", 2)  # `shared` and `app` are back.
+    with pytest.raises(Crash):
+        kept.first_start(root, VERSION, ask=True)
+    restore()
+    good = (folder / kept.RECORD).read_text()
+    os.remove(folder / kept.RECORD)  # The person deleted it.
+    rest = tree(folder)
+    notices.answers.append(True)  # Yes: start with the part that is back.
+    assert kept.first_start(root, VERSION, ask=True) is None
+    assert not (root / kept.MARKER).exists() and not kept.unfinished_take_back(root) and tree(folder) == rest
+    assert "updates" not in saved_state(root / "app")[0]  # The part that is back is prepared for this version.
+    back = data(root)
+    # The record comes back (a restore from a backup program). Its take-back is not this installation's any more.
+    (folder / kept.RECORD).write_text(good)
+    shown = len(notices.shown)
+    assert kept.first_start(root, VERSION, ask=True) is None  # It has its own data: no question, no move.
+    assert len(notices.shown) == shown and data(root) == back
+    assert {key: value for key, value in tree(folder).items() if key != kept.RECORD} == rest
+    with pytest.raises(kept.Refused) as refused:
+        kept.take_back(root, VERSION)
+    assert refused.value.kind == "take-back-orphan" and data(root) == back
+    for attempt in (lambda: kept.check(root, VERSION),
+                    lambda: kept.move_out(root, version=VERSION, transfer=T2, remove=shutil.rmtree, wait=0)):
+        with pytest.raises(kept.Refused) as refused:  # A later uninstall never adds to that set.
+            attempt()
+        assert refused.value.kind == "kept-folder" and "Move or rename that folder." in refused.value.notice
+    assert data(root) == back
+
+
+@pytest.mark.parametrize("answer", [True, False])
+def test_note_without_a_usable_record_and_nothing_back_is_one_question_and_never_a_dead_end(
+        tmp_path, monkeypatch, notices, answer):
+    """The take-back wrote its note; then the record was lost before a folder moved. Nothing is back."""
+    root, folder, expected = kept_then_installed(tmp_path)
+    kept._write(root, kept.MARKER, {"schema": 1, "transfer": T1, "kept": str(folder)})
+    good = (folder / kept.RECORD).read_text()
+    (folder / kept.RECORD).write_text("")
+    snapshot = tree(tmp_path)
+    notices.answers.append(answer)
+    result = kept.first_start(root, VERSION, ask=True)
+    (confirm, text), = notices.shown
+    assert confirm and "They are in this folder" in text and "Start Amplifier without them?" in text
+    assert "Yes: start fresh." in text and str(folder) in text
+    if answer:  # Start fresh: the note goes; the kept folder stays as it is.
+        assert result is None and not (root / kept.MARKER).exists()
+        assert {key: value for key, value in tree(tmp_path).items() if not key.startswith(root.name + "/")} == {
+            key: value for key, value in snapshot.items() if not key.startswith(root.name + "/")}
+        assert data(root) == {name: "folder" for name in SETUP}
+        return
+    assert result["taken"] is False and tree(tmp_path) == snapshot
+    (folder / kept.RECORD).write_text(good)  # After a restart the record reads again: the take-back goes on.
+    assert kept.first_start(root, VERSION, ask=False) is None and person(data(root)) == expected
+
+
+def test_take_back_that_began_in_another_installation_is_never_continued(tmp_path, monkeypatch, notices):
+    """The person moves the installation folder away in the middle of a take-back and installs again."""
+    root, folder, _ = kept_then_installed(tmp_path)
+    notices.answers.append(True)
+    restore = crash_after(monkeypatch, "rename", 2)  # `shared` and `app` are back in that installation.
+    with pytest.raises(Crash):
+        kept.first_start(root, VERSION, ask=True)
+    restore()
+    os.rename(root, tmp_path / "Amplifier-moved-away")  # The note goes with it.
+    fresh(root)
+    rest = tree(folder)
+    assert kept.read(folder)[0] == "adopting" and not kept.unfinished_take_back(root)
+    notices.shown.clear()
+    assert kept.first_start(root, VERSION, ask=True) is None  # The new installation starts fresh.
+    (confirm, text), = notices.shown
+    assert not confirm and str(folder) in text and "did not finish" in text and "another place" in text
+    assert tree(folder) == rest and data(root) == {name: "folder" for name in SETUP}
+    with pytest.raises(kept.Refused) as refused:
+        kept.take_back(root, VERSION)
+    assert refused.value.kind == "take-back-orphan" and "Nothing was changed" in refused.value.notice
+    assert tree(folder) == rest and data(root) == {name: "folder" for name in SETUP}
+
+
+def test_replacement_with_the_same_name_is_not_the_entry_that_moved(tmp_path, monkeypatch, notices):
+    """An interrupted fill. The person takes a kept entry away and puts another one of that name into Amplifier."""
+    root, folder, _ = kept_then_installed(tmp_path)
+    refuse(monkeypatch, "rmdir", root / "workspace")
+    notices.answers.append(True)
+    restore = crash_after(monkeypatch, "rename", 6)  # Five folders, then `notes.txt` of the filled folder.
+    with pytest.raises(Crash):
+        kept.first_start(root, VERSION, ask=True)
+    restore()
+    os.rename(folder / "workspace" / "project", tmp_path / "taken-away")
+    (root / "workspace" / "project").mkdir()
+    (root / "workspace" / "project" / "other.md").write_text("another project\n")
+    snapshot = tree(tmp_path)
+    result = kept.first_start(root, VERSION, ask=False)
+    assert result["taken"] is False and result["reason"] == "take-back-not-empty"
+    assert str(root / "workspace" / "project") in result["message"] and tree(tmp_path) == snapshot
+    assert kept.read(folder)[0] == "adopting" and (root / kept.MARKER).exists()
+    # Also an entry of the same name that takes the place of one that already moved.
+    shutil.rmtree(root / "workspace" / "project")
+    (tmp_path / "replacement").write_text("another file with that name\n")  # Made while the first one exists.
+    os.remove(root / "workspace" / "notes.txt")
+    os.rename(tmp_path / "replacement", root / "workspace" / "notes.txt")
+    again = kept.first_start(root, VERSION, ask=False)
+    assert again["reason"] == "take-back-not-empty" and str(root / "workspace" / "notes.txt") in again["message"]
+
+
+def test_rename_keeps_the_identity_of_an_entry_and_another_entry_has_another(tmp_path):
+    """What the fill check rests on. This case also runs on NTFS in the native job."""
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "file.txt").write_text("a")
+    (tmp_path / "a" / "folder").mkdir()
+    (tmp_path / "b").mkdir()
+    file, folder = kept._identity(tmp_path / "a" / "file.txt"), kept._identity(tmp_path / "a" / "folder")
+    assert file and folder and file != folder
+    os.rename(tmp_path / "a" / "file.txt", tmp_path / "b" / "file.txt")
+    os.rename(tmp_path / "a" / "folder", tmp_path / "b" / "folder")
+    assert kept._identity(tmp_path / "b" / "file.txt") == file and kept._identity(tmp_path / "b" / "folder") == folder
+    (tmp_path / "a" / "file.txt").write_text("a")  # The same name and the same text again: another file.
+    assert kept._identity(tmp_path / "a" / "file.txt") != file
 
 
 @pytest.mark.parametrize("answer", [False, True])
@@ -1068,6 +1200,27 @@ def test_note_of_a_finished_take_back_is_only_tidied_and_never_blocks(tmp_path, 
     monkeypatch.setattr(sqlite3, "connect", lambda *args, **kwargs: pytest.fail("The database was opened."))
     kept.check(root, VERSION, T2)
     assert not (root / kept.MARKER).exists()
+
+
+def test_note_of_a_finished_take_back_stays_while_its_record_cannot_be_read(tmp_path, monkeypatch, notices):
+    root, folder, expected = kept_then_installed(tmp_path)
+    notices.answers.append(True)
+    real = kept._finished
+    monkeypatch.setattr(kept, "_finished", lambda root, kept_folder: None)  # The program ends after `done`.
+    assert kept.first_start(root, VERSION, ask=True) is None
+    monkeypatch.setattr(kept, "_finished", real)
+    good = (folder / kept.RECORD).read_text()
+    assert json.loads(good)["state"] == "adopting"
+    # The app can be running from here on: no database is ever opened again for this take-back.
+    monkeypatch.setattr(sqlite3, "connect", lambda *args, **kwargs: pytest.fail("The database was opened."))
+    (folder / kept.RECORD).write_text("")  # One read of the record fails.
+    assert kept.first_start(root, VERSION, ask=False) is None
+    assert json.loads((root / kept.MARKER).read_text())["done"] is True  # The proof that it finished stays.
+    (folder / kept.RECORD).write_text(good)  # The record reads again.
+    assert not kept.unfinished_take_back(root)
+    assert kept.first_start(root, VERSION, ask=False) is None  # Tidied: never taken for an unfinished take-back.
+    assert not folder.exists() and not (root / kept.MARKER).exists() and person(data(root)) == expected
+    assert len(notices.shown) == 1
 
 
 def test_stop_between_the_last_step_and_the_tidying_leaves_only_tidying(tmp_path, monkeypatch, notices):
@@ -1298,7 +1451,19 @@ def test_late_file_with_a_name_that_the_set_holds_stays_and_is_named(tmp_path, m
         result = kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)
         assert result["state"] == "moving" and result["remaining"] == ["app"]
         assert result["stayed"] == [str(root / "app" / "config")] and kept.read(folder)[0] == "moving"
+        assert "is a link" in result["notice"] and "Remove the link." in result["notice"]
+        assert "Restart this PC" not in result["notice"]
     assert late.read_text() == "written late\n" and os.listdir(outside) == []
+    (os.rmdir if os.name == "nt" else os.remove)(root / "app" / "config")  # The link is gone.
+    result = kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)
+    twin = folder / "app" / "sessions" / "first" / "transcript.jsonl"
+    assert result["state"] == "moving" and result["stayed"] == [str(late)]
+    assert "exists two times" in result["notice"] and str(late) in result["notice"] and str(twin) in result["notice"]
+    assert "Move the first one to a place outside these two folders." in result["notice"]
+    assert "Restart this PC" not in result["notice"]
+    os.rename(late, tmp_path / "moved-out-by-the-person.jsonl")  # The step that the message names.
+    done = kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)
+    assert done["state"] == "complete" and data(root) == {}
     assert (folder / "app" / "sessions" / "first" / "transcript.jsonl").read_text() == "chat first\n"
     assert (folder / "app" / "config" / "server.yaml").read_text() == "port: 51234\n"
 
@@ -1357,19 +1522,71 @@ def test_caller_that_is_not_the_launcher_never_keeps_the_lock(tmp_path, notices)
     assert kept.first_start(root, VERSION, ask=True) is None and not kept._STAYING
 
 
-def test_database_with_a_second_name_is_never_changed(tmp_path, notices):
+def test_database_with_a_second_name_is_never_changed_and_never_counts_as_prepared(tmp_path, notices):
     """A hard link: the same file is also another installation's database. A link check does not see it."""
     root, folder, expected = kept_then_installed(tmp_path)
     other = tmp_path / "another-installation.sqlite3"
     os.link(folder / "app" / "app.sqlite3", other)
     before = other.read_bytes()
     notices.answers.append(True)
-    assert kept.first_start(root, VERSION, ask=True) is None
+    result = kept.first_start(root, VERSION, ask=True)
+    assert result["taken"] is False and result["reason"] == "take-back-prepare"
+    assert str(root / "app" / "app.sqlite3") in result["message"] and "second name" in result["message"]
+    assert "choose to keep them" in result["message"] and "Nothing was deleted" in result["message"]
     assert other.read_bytes() == before and (root / "app" / "app.sqlite3").read_bytes() == before
-    with closing(sqlite3.connect(other)) as db:
-        assert json.loads(db.execute("SELECT value FROM state WHERE id=1").fetchone()[0])["updates"] == FENCE
     assert not (root / "app" / "reset-backups").exists()
-    assert person(data(root)) == expected and not folder.exists() and not (root / kept.MARKER).exists()
+    assert kept.read(folder)[0] == "adopting" and kept.unfinished_take_back(root)  # Not finished.
+    # The exit that the message names: an uninstall with "keep" moves everything out again, unchanged.
+    out = kept.move_out(root, version=VERSION, transfer=T2, remove=shutil.rmtree, wait=0)
+    assert out["state"] == "complete" and person(data(folder)) == expected and other.read_bytes() == before
+    # When the second name is gone, a take-back finishes.
+    os.remove(other)
+    shutil.rmtree(root)
+    fresh(root)
+    notices.answers.append(True)
+    assert kept.first_start(root, VERSION, ask=True) is None
+    assert "updates" not in saved_state(root / "app")[0] and person(data(root)) == expected
+
+
+def test_used_version_never_reads_through_a_link(tmp_path):
+    root = fresh(tmp_path / "Amplifier")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "application-active.json").write_text(json.dumps({"version": "9.9.9"}))
+    link(outside, root / "app" / "updates")
+    assert kept.used_version(root, VERSION) == VERSION
+    other = fresh(tmp_path / "Other")
+    os.rmdir(other / "app")
+    (outside / "updates").mkdir()
+    (outside / "updates" / "application-active.json").write_text(json.dumps({"version": "9.9.9"}))
+    link(outside, other / "app")
+    assert kept.used_version(other, VERSION) == VERSION
+
+
+def test_failure_after_a_take_back_that_worked_starts_the_app(tmp_path, monkeypatch, notices):
+    """The data is back. A message that cannot be shown after that must not say that nothing was changed."""
+    from amplifier_web import windows_installation
+    root, folder, expected = kept_then_installed(tmp_path)
+    record(kept.earlier_folders(root)[0])  # An earlier set: it is named after the take-back.
+
+    def owner_notice(text, *, confirm=False):
+        if not confirm:
+            raise OSError("The installation dialog could not be displayed.")
+        return True
+    monkeypatch.setattr(windows_installation, "owner_notice", owner_notice)
+    assert kept.first_start(root, VERSION, ask=True, hold=True) is None
+    assert person(data(root)) == expected and not folder.exists() and not kept._STAYING
+
+
+def test_check_waits_for_the_lock_like_a_move_out(tmp_path, monkeypatch):
+    from filelock import FileLock
+    root = used(tmp_path / "Amplifier")
+    monkeypatch.setattr(kept, "BUSY", 0.2)
+    with FileLock(str(root.with_name(root.name + "-kept.lock"))):
+        with pytest.raises(kept.Refused) as refused:
+            kept.check(root, VERSION)
+        assert refused.value.kind == "busy"
+    kept.check(root, VERSION)
 
 
 def test_failed_attempt_to_retire_the_update_status_leaves_no_empty_folder(tmp_path, monkeypatch, notices):
