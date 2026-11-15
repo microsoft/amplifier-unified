@@ -860,7 +860,9 @@ that runtime. Without this check, a connected AI account made the start run a
 complete first installation: minutes without a window, a new folder on each
 attempt, and in the observed case a failure. The launcher's failure message
 has two forms: the preparation of the remaining parts failed, or the start
-failed (every other step). It names the Start menu as the next step only when
+failed (every other step). A third text replaces both when the start ended
+because the launcher did not confirm its start-at-sign-in task (see "The task
+after a computer rename" below). It names the Start menu as the next step only when
 the entry record says `installed` and the entry that opens Amplifier exists in
 the folder that the record names; setup's second run decides by the same two
 facts. Otherwise the next step is to run the setup file again. The record
@@ -872,18 +874,46 @@ are added again only when all of them are gone. A partly damaged set (a person
 deleted one shortcut) is refused and nothing is overwritten; setup then says
 that it could not add the entries, and starts the app.
 
-Not proven here, and the condition for all of the above: that
-`runtime status` reports a prepared runtime on a real installation after
-chats. Read from source and not run: the running host makes the same checks
-of the recorded runtime before each chat, which supports it and does not prove
-it. When the status is
-negative or cannot be read, the start prepares as before. The real Scheduled
-Task and the real host start also need a clean-room run. The native check on
-a runner runs setup's second-run window and its two steps with a stand-in
-program in place of the installation's Python (exact arguments, the wait, the
-exit codes, a window that closes by itself, and a window that is closed on
-request while the launcher still runs). It does not show the question before
-the window, a message, or the real launcher.
+`.github/workflows/windows-start-again.yml` runs this path on a Windows
+runner with the product's own commands in setup's order: entries, first
+start, an AI account configured without a key, the product's uninstall
+function (called in the test's process, with its question answered Yes),
+entries again, second start. Task Scheduler, the host that the task starts and the
+runtime preparation are real there. It requires that `runtime status` reports
+a prepared runtime with the account configured, and that the second start
+succeeds with a new host process on the same port. It also requires that a
+marker file in the app data and the configured account are unchanged, and
+that no folder under `app\updates\releases` was added or replaced: a
+preparation with an account creates such a folder first. That case does not
+use the setup file or a clean
+ordinary account (the runner's account is elevated). The launcher runs there
+with a console Python and `--no-open`, so the certificate question and the
+browser are not part of it. It has no chat, and no sign-out and sign-in: the
+task starts because it was registered, not because a person signed in.
+
+A runner does not show the state after a chat: a chat installs further parts
+into the same runtime. That state was shown once on a real installation
+(clean-room run in Windows Sandbox, setup 0.98.6, long paths off, November 15,
+2026): after setup, a connected account, one chat and an uninstall from
+Settings > Apps, `runtime status` reported a prepared runtime, and the setup
+file's second run brought Amplifier back with its entries, its task, the same
+port, the earlier chat and the account. No folder under
+`app\updates\releases` was added. Not shown anywhere: a start at sign-in
+after this.
+
+`runtime status` reads the installed parts with Git. Without Git on its
+`PATH` it answers "not prepared" for a runtime that is prepared (seen in the
+same clean-room run, from a plain shell). The launcher always runs it with
+the installation's own tool path, which contains the installation's Git. A
+caller with another `PATH` gets the wrong answer, and a start would then
+prepare as before. When the status is negative or cannot be read, the start
+prepares as before.
+
+A second native check runs setup's second-run window and its two steps with a
+stand-in program in place of the installation's Python (exact arguments, the
+wait, the exit codes, a window that closes by itself, and a window that is
+closed on request while the launcher still runs). It does not show the
+question before the window, a message, or the real launcher.
 
 Not changed, each stated as a limit:
 
@@ -2331,10 +2361,113 @@ The owner can end every browser session with `amplifier-unified browsers sign-ou
 (see the deployment guide). All browser session checks go through one function,
 `auth.valid_session`, so that no check can ignore that sign-out.
 
-Remote browsers need an explicit owner-approved browser-pairing design over
-trusted configured HTTPS. Do not silently reuse terminal/companion grants with
-broader authority. Until that path is qualified, report its limitation rather
-than offering the unusable Windows password form.
+The command and the running host are two processes, and the host looks at the
+saved record every two seconds. A ticket or code from before a sign-out must
+not open a session that outlasts it, also in that gap. Two rules give that,
+with no lock between the two processes:
+
+1. The command saves a second that is not earlier than the second in which its
+   record was saved. When a write ends in a later second, it pauses for a
+   moment and saves again with that later second (`auth.sign_out_all`).
+2. For a ticket or code, the host reads the new session's second first and
+   looks at the saved record after that. When the record has changed and the
+   host has not applied it yet, the ticket or code is used up and opens no
+   session (`auth.sign_in`). The host keeps the mark of a record only when it
+   has read that record.
+3. The host drops pending tickets and codes for every changed record, also
+   when its second is the one already applied. A second sign-out in the same
+   second therefore still drops a ticket or code that was made in between
+   (`auth.refresh_sessions`). Open streams end only for a later second: a
+   session that is valid at that point was made after the record's second.
+
+A session that the host returns was therefore made before any record that is
+saved later, so it carries no later second than that record, and the host
+refuses it when it applies that sign-out. A session in the same second as a
+sign-out is refused. The owner signs in again a few seconds later, with a new
+ticket or code.
+
+The host tells a new record from the file's time, size and identity, not from
+its content. Every save puts a new file in place while the record before it
+still exists, so two saves in a row never have the same identity. The command
+checks this for each save: a save that the host could not tell from the record
+before it is made again. After three saves that were too slow or not visible,
+and after a save that is not confirmed although the record may have changed,
+the command says that it could not confirm the sign-out and asks the owner to
+run it again. It says that nothing was changed only when it looked at the
+record before and after the attempt and found the same record.
+
+A look at the record can fail for another reason than a missing record. Such
+a look is never taken for "no record" and never for "unchanged". The host
+then opens no session for a ticket or code. The watcher applies nothing, keeps
+nothing, and says so once in the host log. The command does not report a
+finished sign-out.
+
+This holds while the PC clock does not go backward. One case is left open: the
+host looks every two seconds, and it misses a change when two or more saves
+between two looks end in a file with the same time, size and identity as the
+file that the host saw last. That needs a file time that does not change
+between saves and a reused identity. It is not measured on any file system.
+Two facts make it narrower. The Windows private store accepts only a local
+fixed NTFS volume. Tickets and codes exist on a Windows host only, so on the
+other systems a missed change can only delay the end of open streams.
+
+A ticket or code that is made after a sign-out and before the host has applied
+it is dropped as well. The owner waits a few seconds after the command.
+
+#### Remote browser sign-in on a Windows host
+
+A browser on another device cannot use the local launcher, and a Windows host
+has no password form. The owner starts that sign-in at the PC:
+`amplifier-unified browsers code` prints a code, and the owner types it on the
+sign-in page that the other device shows. Terminal and companion grants are not
+reused for this; they carry broader authority.
+
+- **The code.** Ten symbols from 32 (no `0`, `1`, `I` or `O`): 50 bits. It
+  lasts 120 seconds and works once. The host keeps only its SHA-256, and at
+  most eight codes at a time. Input is upper-cased, and spaces and hyphens are
+  removed. No other character is changed, so a look-alike is a wrong code.
+- **Who can make one.** The command uses the same request as `open`. It pins
+  the privately read leaf certificate before it reads or sends the control
+  credential, and the host accepts that request from this computer only. The
+  code is bound to the host instance, the data folder, the owner SID and one
+  address: an exact HTTPS entry of `public_origins` that is not this computer.
+- **Where it works.** The redeem endpoint has its own narrow check: HTTPS, an
+  explicit `Origin` equal to the address the browser used, and that address an
+  exact configured remote one. It does **not** look at the peer address. A
+  Tailscale TCP forward connects to the host from `127.0.0.1` (measured), so
+  the socket does not say where the browser is. The local ticket keeps its
+  check that both socket ends are local. With the forward on, that check no
+  longer tells a tailnet device from this computer: a client there can also
+  send the local address as `Host` and `Origin`. It gains nothing by that. The
+  owner endpoints still need the control credential from the owner-only folder,
+  and the local redeem still needs a ticket that only the launcher can get.
+  Loopback was never authority; another Windows account on the PC is in the
+  same position.
+- **Wrong codes.** No lockout and no delay. A lockout would let any device
+  that reaches the address keep the owner out. A delay taken in turn would
+  make the owner wait behind a flood of wrong codes. The numbers carry the
+  guess resistance: at 10,000 guesses each second against eight pending codes,
+  the chance of a hit in one code lifetime is about 1 in 100 million. A wrong
+  code never removes a real one and never reaches the owner's command, which
+  uses another endpoint. The host counts wrong codes and logs only the count.
+- **The page.** Server-rendered, with no script, and it shows nothing from the
+  request. It is sent with `Referrer-Policy: same-origin`, not `no-referrer`:
+  from a `no-referrer` page a browser posts the form with `Origin: null`, and
+  the redeem check refuses that. The redeem reply is `no-store`, `no-referrer`.
+- **The session.** The signed cookie from a code is marked remote
+  (`"via": "remote"`), so that a rule for remote sessions only is possible
+  later. Local cookies do not change. The lifetime is the configured one.
+- **The control.** `amplifier-unified browsers sign-out` signs out every
+  browser and drops every pending ticket and code.
+
+Limits: there is no sign-out for one device. A person on the same network who
+gets the owner to type the code into a look-alike page within 120 seconds can
+use it; the command prints the exact address to open. One host process holds
+the pending codes in memory, so a restart drops them and the owner makes a new
+code. Not measured yet: a phone browser, and the whole journey on a real second
+device. Linux, macOS and WSL hosts keep the password form and refuse both code
+endpoints. The steps for the owner are in the
+[deployment guide](../DEPLOYMENT.md#windows-host-reach-unified-from-another-device).
 
 ### Background lifetime
 
@@ -2347,6 +2480,58 @@ Do not use LocalSystem or S4U to avoid account-password prompts.
 Use absolute executable/data/workspace/shared-state paths and explicit quoting.
 Configure indefinite execution, restart-on-failure and battery behavior
 deliberately. Automatic logon startup must not open a browser.
+
+**The task after a computer rename (measured November 15, 2026).** The app
+registers the task with the owner SID in the principal and in the sign-in
+trigger. Task Scheduler keeps the principal as the SID. It stores the trigger's
+user as a name, `COMPUTER\user`, whatever spelling registration gave, and it
+never rewrites that name: not when the account or the computer is renamed, and
+not when the same definition is registered again. It refuses to register a
+trigger user that does not resolve at that moment. After the computer's name
+changes, Windows still starts the task at sign-in, and `LookupAccountNameW`
+maps the stored name, and the old computer name alone, to nothing (error 1332).
+Measured on Windows Server 2022 and 2025 and on Windows 11 ARM64 runners, and
+in Windows Sandbox, which renames its guest at every boot.
+
+The ownership check compares the whole definition with the one that the app
+generates from the task's own launch record. For the trigger's user text it
+accepts exactly three forms:
+
+1. the owner SID as text;
+2. a name that Windows maps to the owner's user account;
+3. a name `authority\account` that Windows maps to nothing, when the authority
+   alone also maps to nothing and the account part alone maps to the owner's
+   user account.
+
+Form 3 is the renamed computer. It is an equivalence for this one text, not
+proof of who made the task. It also accepts a trigger that someone with the
+owner's or an administrator's rights had set to another account of the same
+account name, once that account's authority no longer exists (and the two
+variants in which an account was also renamed or deleted). In each of them the
+task still runs as the owner, with least privilege and the app's exact action:
+the principal, the task name, the action and every setting stay an exact
+comparison. An authority that still exists is refused, so a deleted or renamed
+account is not accepted. A lookup that Windows did not answer is not "no such
+name": the check then refuses and says that it could not check.
+
+Limits. A renamed Windows account is still refused (the task then needs a new
+registration). On a domain member, a local account with the owner's account
+name makes form 3 refuse a domain owner. Domain-joined, Entra-joined and
+offline PCs are not measured. The launcher runs this check before any app
+version starts, and an in-app update does not replace the launcher: an
+installation whose launcher predates this rule needs a launcher refresh or a
+new setup run before a renamed PC starts the app again.
+
+When the check does not confirm the task, the launcher says that it could not
+confirm that the entry belongs to this installation, names the entry, and
+gives the steps to delete it; a new start then registers a new entry with the
+saved port and settings. It does not say that the entry was changed, because
+it cannot know that. When Windows gave no answer about the account, it asks
+for a restart and deletes nothing. Start, Status, Stop and Uninstall each have
+this text; before, they named the internet connection, an unreachable service
+manager, or a Task Scheduler that could not be read. A start at sign-in shows
+no window: the task ends with an error, and the person sees the text at the
+next start from the Start menu.
 
 Work survives browser/terminal closure while the owner remains signed in.
 This model does **not** promise execution after sign-out or before sign-in.

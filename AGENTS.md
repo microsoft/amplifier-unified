@@ -219,6 +219,18 @@ its current folder.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.
+Task Scheduler stores the sign-in trigger's user as a name (`COMPUTER\user`),
+even when registration gave the SID, and never rewrites it; the principal stays
+a SID. After a computer rename Windows still starts the task, and that name
+maps to nothing. `_same_account` in `windows_service.py` is the one identity
+equivalence in the ownership check: keep "Windows says no such name" apart from a lookup
+that failed, and keep every other field an exact comparison. The launcher runs
+that check before any app version does, so a fix to it reaches an installed PC
+only with a new launcher. `windows-task-after-rename.yml` registers the real
+task on a hosted runner and renames that runner's account domain. Its fixture
+changes the machine's security policy: it runs only with the workflow's opt-in
+in a hosted runner's environment. That guard stops accidental use and does not
+prove the machine; never run the fixture on a machine that is kept.
 Python on Windows accepts only root certificates that the Windows store holds
 at that moment, and aiohttp builds its default list once at import. A new PC's
 store lacks many public roots (seen in Windows Sandbox: the package registry's

@@ -468,6 +468,31 @@ def refusals(deleter, monkeypatch):
     return shown, codes
 
 
+def test_start_entry_that_is_not_confirmed_stops_the_delete_choice_before_anything_changes(deleter, monkeypatch):
+    """Main's text for this cause, in the delete choice: there it is true that nothing was changed."""
+    from amplifier_web import windows_service
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    entry = "AmplifierUnified-S-1-5-21-1-2-3-1001"
+
+    def refuse(home, *, progress):
+        progress("task-read")
+        raise windows_service.TaskNotConfirmed(entry)
+    monkeypatch.setattr(windows_service, "uninstall", refuse)
+    state["choices"], before, registration = ["yes", "yes"], snapshot(root), state["registry"].copy()
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    assert stopped.value.step == "task-read" and not isinstance(stopped.value, consumer.Refused)
+    notice = stopped.value.notice
+    assert notice.startswith("Amplifier was not uninstalled, and nothing was changed.\n\n")
+    assert "could not confirm that its start-at-sign-in entry" in notice and entry in notice
+    assert notice.endswith("5. Uninstall Amplifier again.\n\nReference: task-read, TaskNotConfirmed")
+    # No journal, no deletion, the Windows entries whole: only the private note of the failure was written.
+    after = snapshot(root)
+    after.pop("app/config/services/" + consumer.RECORD)
+    assert after == before and not deletes(state) and state["after"] is None
+    assert not (root / plan.JOURNAL).exists() and state["registry"] == registration and state["task"] == "running"
+
+
 def test_data_that_stays_keeps_the_entries_and_the_journal_and_a_second_uninstall_finishes(deleter, monkeypatch):
     state, root, consumer = deleter.state, deleter.root, deleter.consumer
     state["choices"], state["held"] = ["yes", "yes"], {"app/chats/one/message.txt"}
