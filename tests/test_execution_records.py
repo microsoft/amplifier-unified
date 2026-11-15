@@ -135,13 +135,14 @@ def test_ordered_windows_seek_without_scanning_deleted_history(db, monkeypatch):
     assert sum(len(body.get('order', [])) for body in bodies) <= 4
 
 
-def test_order_root_stays_exact_on_correction_and_reinsertion_gets_new_ordinal(db):
+def test_lookup_index_stays_exact_on_correction_and_reinsertion_gets_new_ordinal(db):
     value = tree(500)
     first = records.import_tree(db, OWNER, value)
     identity = records.key('nodes', value['nodes'][7])
     changed = {**value['nodes'][7], 'revision': 2}
     corrected = records.replace_records(db, first, {'nodes': {identity: changed}})
-    assert records._root(db, first)['collections']['nodes']['order'] == records._root(db, corrected)['collections']['nodes']['order']
+    assert records._root(db, first)['collections']['nodes']['root'] == records._root(db, corrected)['collections']['nodes']['root']
+    assert records._root(db, first)['collections']['nodes']['order'] != records._root(db, corrected)['collections']['nodes']['order']
     assert records.read_window(db, corrected, 'nodes', start=7, limit=1)['rows'] == [{'ordinal': 7, 'value': changed}]
     deleted = records.replace_records(db, corrected, {'nodes': {identity: None}})
     reinserted = records.replace_records(db, deleted, {'nodes': {identity: changed}})
@@ -156,3 +157,24 @@ def test_ordered_window_has_byte_and_row_bounds(db):
         records.read_window(db, first, 'nodes', max_bytes=1)
     with pytest.raises(ValueError, match='bounded execution'):
         records.read_window(db, first, 'nodes', limit=records.PAGE_ROWS + 1)
+
+
+def test_realistic_window_reads_contiguous_bodies_not_hashed_history(db, monkeypatch):
+    value = tree(28000)
+    for row in value['nodes']:
+        row['detail']['text'] = 'representative retained placement ' * 15
+    reference = records.import_tree(db, OWNER, value)
+    db.commit()
+    body_rows, byte_count, original = [], [], resource_files.read_detached
+    def read(source, **kwargs):
+        body = original(source, **kwargs)
+        signature = resource_files.detached_signature(source)
+        byte_count.append(signature[2] if len(signature) == 5 else len(source.indexed.encode()))
+        if 'order' in body:
+            body_rows.append(len(body['order']))
+        return body
+    monkeypatch.setattr(resource_files, 'read_detached', read)
+    selected = records.read_window(db, reference, 'nodes', start=27900, limit=100, owner=OWNER)
+    assert selected['rows'] == [{'ordinal': i, 'value': value['nodes'][i]} for i in range(27900, 28000)]
+    assert len(body_rows) <= 2 and sum(body_rows) <= 2 * records.PAGE_ROWS
+    assert sum(byte_count) < 1024 * 1024

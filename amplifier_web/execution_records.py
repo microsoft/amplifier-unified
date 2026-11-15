@@ -46,9 +46,7 @@ def _facts(kind, rows):
 
 def _page(db, kind, records, depth=0):
     if len(records) <= PAGE_ROWS:
-        rows = [entry['value'] for entry in records.values()]
-        facts = _facts(kind, rows)
-        return {**resource_files.put(db, {'records': records, 'facts': facts}), 'executionFacts': facts}
+        return resource_files.put(db, {'records': records})
     if depth >= 64:
         raise ValueError('Execution record keys cannot be separated.')
     groups = {}
@@ -59,10 +57,7 @@ def _page(db, kind, records, depth=0):
 
 
 def _branch(db, children):
-    facts = [False, False, False, False]
-    for reference in children.values():
-        facts = [old or value for old, value in zip(facts, reference['executionFacts'], strict=True)]
-    return {**resource_files.put(db, {'children': children, 'facts': facts}), 'executionFacts': facts}
+    return resource_files.put(db, {'children': children})
 
 
 def _find(db, reference, identity, depth=0, *, read=None):
@@ -93,63 +88,80 @@ def _replace(db, kind, reference, identity, entry, depth=0):
     return _branch(db, children)
 
 
-def _entries(db, reference):
-    page = _read(db, reference)
-    if 'records' in page:
-        yield from page['records'].values()
-    else:
-        for child in page['children'].values():
-            yield from _entries(db, child)
+def _ordered_branch(db, children):
+    facts = [False, False, False, False]
+    for child in children.values():
+        facts = [old or value for old, value in zip(facts, child['executionFacts'], strict=True)]
+    count = sum(child['count'] for child in children.values())
+    return {**resource_files.put(db, {'children': children, 'count': count, 'facts': facts}),
+            'count': count, 'executionFacts': facts}
 
 
-def _ordered(db, entries, height):
-    """Direct ordinal radix index; leaves hold identities, never record bodies."""
+def _ordered(db, kind, entries, height):
+    """Canonical bodies in ordinal-contiguous pages, with direct radix seek."""
     if not entries:
         return None
     if height == 0:
-        value = {'order': sorted(entries), 'count': len(entries)}
+        facts = _facts(kind, [entry['value'] for _, entry in entries])
+        return {**resource_files.put(db, {'order': sorted(entries), 'count': len(entries), 'facts': facts}),
+                'count': len(entries), 'executionFacts': facts}
     else:
         groups = {}
-        for ordinal, identity in entries:
+        for ordinal, entry in entries:
             digit = (ordinal // (PAGE_ROWS * 16 ** (height - 1))) % 16
-            groups.setdefault(str(digit), []).append((ordinal, identity))
-        children = {digit: _ordered(db, rows, height - 1) for digit, rows in groups.items()}
-        value = {'children': children, 'count': sum(row['count'] for row in children.values())}
-    return {**resource_files.put(db, value), 'count': value['count']}
+            groups.setdefault(str(digit), []).append((ordinal, entry))
+        return _ordered_branch(db, {digit: _ordered(db, kind, rows, height - 1)
+                                    for digit, rows in groups.items()})
 
 
-def _order_replace(db, reference, height, ordinal, identity):
+def _order_replace(db, kind, reference, height, ordinal, value):
     page = _read(db, reference) if reference else {}
     if height == 0:
         entries = dict(page.get('order', []))
-        if identity is None:
+        if value is None:
             entries.pop(ordinal, None)
         else:
-            entries[ordinal] = identity
-        return _ordered(db, list(entries.items()), 0)
+            entries[ordinal] = value
+        return _ordered(db, kind, list(entries.items()), 0)
     children = page.get('children', {})
     digit = str((ordinal // (PAGE_ROWS * 16 ** (height - 1))) % 16)
-    changed = _order_replace(db, children.get(digit), height - 1, ordinal, identity)
+    changed = _order_replace(db, kind, children.get(digit), height - 1, ordinal, value)
     if changed is None:
         children.pop(digit, None)
     else:
         children[digit] = changed
     if not children:
         return None
-    count = sum(row['count'] for row in children.values())
-    return {**resource_files.put(db, {'children': children, 'count': count}), 'count': count}
+    return _ordered_branch(db, children)
 
 
-def _order_update(db, collection, ordinal, identity):
+def _order_update(db, kind, collection, ordinal, value):
     height = collection['orderHeight']
     reference = collection['order']
     while ordinal >= PAGE_ROWS * 16 ** height:
         if reference:
-            reference = {**resource_files.put(db, {'children': {'0': reference}, 'count': reference['count']}),
-                         'count': reference['count']}
+            reference = _ordered_branch(db, {'0': reference})
         height += 1
     collection['orderHeight'] = height
-    collection['order'] = _order_replace(db, reference, height, ordinal, identity)
+    collection['order'] = _order_replace(db, kind, reference, height, ordinal, value)
+
+
+def _ordered_entry(db, collection, identity, metadata, read=None):
+    if metadata is None:
+        return None
+    ordinal = metadata['ordinal']
+    reference, height = collection['order'], collection['orderHeight']
+    while reference:
+        page = (read or _read)(db, reference)
+        if height == 0:
+            entry = next((value for number, value in page['order'] if number == ordinal), None)
+            if entry is None or entry['identity'] != identity:
+                break
+            return {'ordinal': ordinal, 'value': entry['value']}
+        digit = str((ordinal // (PAGE_ROWS * 16 ** (height - 1))) % 16)
+        reference = page['children'].get(digit)
+        height -= 1
+    raise ValueError('Saved execution lookup no longer matches its record.')
 
 
 def _order_window(db, reference, start, stop, read):
@@ -201,7 +213,8 @@ def _root(db, reference, owner=None, *, read=None):
 def _store(db, root):
     facts = [False, False, False, False]
     for collection in root['collections'].values():
-        facts = [old or value for old, value in zip(facts, collection['root']['executionFacts'], strict=True)]
+        if collection['order'] is not None:
+            facts = [old or value for old, value in zip(facts, collection['order']['executionFacts'], strict=True)]
     reference = resource_files.put(db, root)
     return {**reference, 'executionProjection': 2, 'pendingObservation': facts[0],
             'pendingWork': facts[1], 'pendingVoice': facts[2], 'unassignedNodes': facts[3]}
@@ -215,19 +228,20 @@ def import_tree(db, owner, tree):
     """
     collections, active = {}, {}
     for kind in COLLECTIONS:
-        records = {}
+        records, entries = {}, []
         for ordinal, row in enumerate(tree.get(kind, [])):
             identity = key(kind, row)
             if identity in records:
                 raise ValueError('Duplicate execution identities require the legacy projection.')
-            records[identity] = {'ordinal': ordinal, 'value': row}
+            records[identity] = {'ordinal': ordinal}
+            entries.append((ordinal, {'identity': identity, 'value': row}))
         height = 0
         while len(records) > PAGE_ROWS * 16 ** height:
             height += 1
         collections[kind] = {'root': _page(db, kind, records), 'next': len(records),
-                             'order': _ordered(db, [(row['ordinal'], identity) for identity, row in records.items()], height),
+                             'order': _ordered(db, kind, entries, height),
                              'orderHeight': height}
-        active[kind] = [identity for identity, row in records.items() if is_active(row['value'])]
+        active[kind] = [entry['identity'] for _, entry in entries if is_active(entry['value'])]
     fields = {name: value for name, value in tree.items() if name not in COLLECTIONS}
     return _store(db, {'format': FORMAT, 'owner': list(owner),
                        'fields': fields, 'collections': collections, 'active': active})
@@ -242,7 +256,8 @@ def read_record(db, reference, kind, identity, *, owner=None):
 def read_entry(db, reference, kind, identity, *, owner=None):
     """Exact identity plus its stable ordinal for an admitted historical read."""
     root = _root(db, reference, owner)
-    return _find(db, root['collections'][kind]['root'], identity)
+    collection = root['collections'][kind]
+    return _ordered_entry(db, collection, identity, _find(db, collection['root'], identity))
 
 
 def read_window(db, reference, kind, *, start=0, limit=100, owner=None, max_bytes=4 * 1024 * 1024):
@@ -257,16 +272,39 @@ def read_window(db, reference, kind, *, start=0, limit=100, owner=None, max_byte
     collection = _root(db, reference, owner, read=read)['collections'][kind]
     selected = _order_window(db, collection['order'], start, start + limit, read)
     rows = []
-    for ordinal, identity in selected:
-        row = _find(db, collection['root'], identity, read=read)
-        if row is None or row['ordinal'] != ordinal or key(kind, row['value']) != identity:
+    for ordinal, entry in selected:
+        identity = entry['identity']
+        metadata = _find(db, collection['root'], identity, read=read)
+        if metadata is None or metadata['ordinal'] != ordinal or key(kind, entry['value']) != identity:
             raise ValueError('Saved execution order no longer matches its record.')
-        rows.append(row)
+        rows.append({'ordinal': ordinal, 'value': entry['value']})
     return {'rows': rows, 'total': collection['order']['count'] if collection['order'] else 0}
 
 
 def read_fields(db, reference, *, owner=None):
     return _root(db, reference, owner)['fields']
+
+
+def selection_metadata(db, reference, kind, *, owner=None):
+    root = _root(db, reference, owner)
+    collection = root['collections'][kind]
+    return {'fields': root['fields'], 'next': collection['next'],
+            'count': collection['order']['count'] if collection['order'] else 0}
+
+
+def rank(db, reference, kind, ordinal, *, owner=None):
+    """Current ordered position of an exact ordinal, without walking gaps."""
+    collection = _root(db, reference, owner)['collections'][kind]
+    reference, height, position = collection['order'], collection['orderHeight'], 0
+    while reference:
+        page = _read(db, reference)
+        if height == 0:
+            return next((position + i for i, (value, _) in enumerate(page['order']) if value == ordinal), None)
+        digit = (ordinal // (PAGE_ROWS * 16 ** (height - 1))) % 16
+        position += sum(child['count'] for key, child in page['children'].items() if int(key) < digit)
+        reference = page['children'].get(str(digit))
+        height -= 1
+    return None
 
 
 def replace_records(db, reference, changes, *, fields=None, owner=None):
@@ -292,10 +330,11 @@ def replace_records(db, reference, changes, *, fields=None, owner=None):
             ordinal = previous['ordinal'] if previous is not None else collection['next']
             if previous is None:
                 collection['next'] += 1
+            _order_update(db, kind, collection, ordinal,
+                          {'identity': identity, 'value': value} if value is not None else None)
             if previous is None or value is None:
-                _order_update(db, collection, ordinal, identity if value is not None else None)
-            entry = {'ordinal': ordinal, 'value': value} if value is not None else None
-            collection['root'] = _replace(db, kind, collection['root'], identity, entry)
+                entry = {'ordinal': ordinal} if value is not None else None
+                collection['root'] = _replace(db, kind, collection['root'], identity, entry)
             active = root.setdefault('active', {}).setdefault(kind, [])
             if value is not None and is_active(value):
                 if identity not in active:
@@ -310,8 +349,8 @@ def materialize(db, reference, *, owner=None):
     root = _root(db, reference, owner)
     result = root['fields']
     for kind, collection in root['collections'].items():
-        result[kind] = [row['value'] for row in sorted(
-            _entries(db, collection['root']), key=lambda row: row['ordinal'])]
+        count = collection['order']['count'] if collection['order'] else 0
+        result[kind] = [entry['value'] for _, entry in _order_window(db, collection['order'], 0, count, _read)]
     return result
 
 
@@ -325,7 +364,8 @@ def read_active(db, reference, *, owner=None):
     root = _root(db, reference, owner)
     result = root['fields']
     for kind in COLLECTIONS:
-        rows = [_find(db, root['collections'][kind]['root'], identity)
+        collection = root['collections'][kind]
+        rows = [_ordered_entry(db, collection, identity, _find(db, collection['root'], identity))
                 for identity in root.get('active', {}).get(kind, [])]
         if any(row is None for row in rows):
             raise ValueError('A pending execution record is unavailable.')
