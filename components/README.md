@@ -18,11 +18,15 @@ question and recovery tests. Author changes and publication do not update the ap
 selection or ACP's separate public Git dependency. Unified remains the sole
 installed owner; do not coinstall the standalone distribution.
 
-[`outputs/`](outputs/README.md) prepares the independently buildable output
+[`outputs/`](outputs/README.md) authors the independently buildable output
 relationship, saved-body decoder and read-only Git evidence package. Its existing
 Git/SQLite mechanism tests run without Unified or Core; host authorization,
-transactions, resource storage and retention stay in Unified. Normal Unified
-builds the same source directly, without a separately installed outputs dependency.
+transactions, resource storage and retention stay in Unified. Unified consumes the
+published artifact selected into `outputs-delivery/`, recorded by
+`outputs.source.json`. Author edits and publication do not refresh this generated
+copy; Unified remains the sole installed owner. Follow the
+[selection instructions](outputs/README.md#unified-artifact-selection), and do not
+coinstall the standalone distribution.
 
 [`portability/`](portability/README.md) is the temporary authoring home for the
 independently buildable signed transfer journal and Git capsule package. Its
