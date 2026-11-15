@@ -5,6 +5,7 @@ import {create} from 'react-test-renderer';
 import {createServer,transformWithEsbuild} from 'vite';
 import {readFile} from 'node:fs/promises';
 import {workHierarchyData} from './fixtures/work-hierarchy.js';
+import {assertDisclosureBody} from './work-hierarchy-geometry.mjs';
 
 const browserSource=await readFile(new URL('./work-hierarchy-browser.mjs',import.meta.url),'utf8');
 const fixtureStart=browserSource.indexOf('const fixture=`')+'const fixture=`'.length;
@@ -118,6 +119,30 @@ test('hierarchy layout is bounded and uses a component container, not viewport w
  assert.match(css,/data-embedded=false\]>.a-execution-turn-body/);
  assert.match(css,/\.a-execution-content>\.a-work-group-body/);
  assert.match(css,/\.a-execution-content \.a-execution-model-facts\{grid-template-columns:minmax\(0,1fr\) minmax\(0,2fr\)/);
+});
+
+test('native disclosure bodies budget for marker advance without replacing native summaries',async()=>{
+ for(const [path,selector,padding] of [
+  ['questions.css','.a-question-disclosure-body','max(24px,2em) 0'],
+  ['coordination.css','.a-workspace-review-body','max(24px,2em) 0'],
+  ['canvas-workspace.css','.a-canvas-file-path>div','max(28px,2em) 8px'],
+ ]){
+  const css=await readFile(new URL('../src/'+path,import.meta.url),'utf8');
+  const rule=css.split('\n').find(line=>line.includes(selector)&&line.includes('padding-inline:'));
+  assert.ok(rule?.includes('padding-inline:'+padding),path+': child inset clears native marker and scales with text');
+  assert.doesNotMatch(css,/summary(?:::-webkit-details-marker|::marker)\s*\{[^}]*display:\s*none/,'native disclosure semantics and indicator stay intact');
+ }
+});
+
+test('disclosure geometry still rejects a child before its summary text and retains failing coordinates',async()=>{
+ // Contract test of the assertion itself, not browser-layout qualification.
+ const geometry={outer:{left:10,right:310},body:{left:10,right:310},summaryText:{left:28,right:180},inset:12,overflow:false};
+ await assert.rejects(assertDisclosureBody({evaluate:async()=>geometry},'.body','native marker regression'),error=>{
+  assert.match(error.message,/child content does not start before summary text/);
+  assert.match(error.message,/"summaryText":\{"left":28/);
+  assert.match(error.message,/"inset":12/);
+  return true;
+ });
 });
 
 test('Canvas file detail body remains a single demand-loaded child bound to the exact saved version',async()=>{

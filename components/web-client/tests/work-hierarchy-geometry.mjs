@@ -29,12 +29,13 @@ export async function assertWorkHierarchy(turn,label='expanded work'){
 export async function assertDisclosureBody(details,bodySelector,label){
  const geometry=await details.evaluate((node,selector)=>{
   const summary=node.querySelector(':scope>summary'),body=node.querySelector(':scope>'+selector),outer=node.getBoundingClientRect();
-  const b=body.getBoundingClientRect(),style=getComputedStyle(body),range=document.createRange();range.selectNodeContents(summary);
+  const b=body.getBoundingClientRect(),style=getComputedStyle(body),summaryStyle=getComputedStyle(summary),range=document.createRange();range.selectNodeContents(summary);
   const text=range.getBoundingClientRect();
-  return {outer:{left:outer.left,right:outer.right},body:{left:b.left,right:b.right},summaryText:{left:text.left,right:text.right},inset:parseFloat(style.paddingInlineStart),overflow:body.scrollWidth>body.clientWidth+1};
+  return {outer:{left:outer.left,right:outer.right},body:{left:b.left,right:b.right},summaryText:{left:text.left,right:text.right},inset:parseFloat(style.paddingInlineStart),bodyFontSize:style.fontSize,summaryFontSize:summaryStyle.fontSize,summaryPadding:summaryStyle.paddingInlineStart,markerPosition:summaryStyle.listStylePosition,overflow:body.scrollWidth>body.clientWidth+1};
  },bodySelector);
- assert.ok(geometry.inset>=12,label+': scoped child-body inset');
- assert.ok(geometry.body.left+geometry.inset>=geometry.summaryText.left,label+': child content does not start before summary text');
- assert.equal(geometry.overflow,false,label+': child text/path wraps without overflow');
+ const evidence='; geometry='+JSON.stringify(geometry);
+ assert.ok(geometry.inset>=12,label+': scoped child-body inset'+evidence);
+ assert.ok(geometry.body.left+geometry.inset>=geometry.summaryText.left,label+': child content does not start before summary text'+evidence);
+ assert.equal(geometry.overflow,false,label+': child text/path wraps without overflow'+evidence);
  return geometry;
 }

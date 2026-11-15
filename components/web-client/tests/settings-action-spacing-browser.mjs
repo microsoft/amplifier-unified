@@ -129,9 +129,17 @@ try{
      // which that component overrides. It is a text reflow probe, not OS zoom.
      for(const button of node.querySelectorAll('[data-part=update-support] button'))button.style.fontSize=enlarged?'24px':'';
     },{dir,density,enlarged});
+    // 24px Copy/Save still fits a 320px viewport in the actual Reference font.
+    // Exercise genuine constrained Settings content, not a guessed wrap caused
+    // by viewport width alone; leave button padding, text and layout untouched.
+    const wrapProbe=width===320&&enlarged;
+    if(wrapProbe)await support.evaluate(node=>{node.style.maxInlineSize='200px'});
     const supportGeometry=await assertUpdateSupportGeometry(support,label);
     metrics.push(supportGeometry);
-    if(width===320&&enlarged)assert.ok(supportGeometry.updateSupport.buttons.some(button=>button.text.length>1),'Narrow enlarged scene actually wraps a diagnostic label');
+    if(wrapProbe){
+     assert.ok(supportGeometry.updateSupport.box.right-supportGeometry.updateSupport.box.left<=200,'Wrap probe uses the declared constrained content width');
+     assert.ok(supportGeometry.updateSupport.buttons.some(button=>button.text.length>1),'Narrow enlarged scene actually wraps a diagnostic label');
+    }
     await copy.focus();await page.keyboard.press('Tab');await expect(save).toBeFocused();
     await expect(save).toHaveCSS('outline-style','solid');
     for(const group of await preferences.locator('.a-control-actions').all()){

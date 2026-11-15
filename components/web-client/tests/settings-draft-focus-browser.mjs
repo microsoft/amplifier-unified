@@ -16,6 +16,9 @@ import {SettingsLayoutContext} from '/src/settings-layout.jsx';
 import {SettingsExperience} from '/src/settings-experience.jsx';
 import {settingsBaseNavigation} from '/src/settings-mobile.js';
 import '/src/reference.css';
+import '/src/canvas-workspace.css';
+import '/src/canvas-experience.css';
+import '/src/setup-journey.css';
 import '/src/settings-experience.css';
 import '/src/settings-mobile.css';
 window.calls=[];
@@ -33,6 +36,7 @@ function Owner({mode,root,guard}){
 }
 function Fixture(){
  const mode=new URLSearchParams(location.search).get('mode')||'modal',root=useRef(null);
+ document.getElementById('amp-one').className=mode==='canvas'?'a-chat-shell a-approachable-shell':'';
  const guard=useSettingsDrafts(mode==='workspace'?{}:{ownerRef:root,scope:mode});
  window.confirmSettings=guard.confirmClose;
  if(mode!=='workspace')return <ActualSettings mode={mode}/>;
@@ -54,11 +58,23 @@ function ActualSettings({mode}){
   if(name==='view.update'){setState(current=>({...current,view:{...current.view,...args.patch}}));return {accepted:true}};
   return dispatch(name,args);
  };
- const content=<><header className="a-dialog-head"><button type="button" id="test-close-settings" onClick={()=>navigation.current.confirmClose()}>Attempt close</button></header>
-  <SettingsExperience state={state} act={act} dispatch={act} navigationRef={navigation}/></>;
+ const settings=<SettingsExperience state={state} act={act} dispatch={act} navigationRef={navigation}/>;
+ const close=<button type="button" id="test-close-settings" onClick={()=>navigation.current.confirmClose()}>Attempt close</button>;
+ // Keep Canvas's real bounded scroll chain. A bare .a-canvas-panel plus a
+ // document-sized Settings child exercises document scrolling, not this owner.
+ if(mode==='canvas')return <><button id="background">Background action</button>
+  <div className="a-layout" data-pane-layout="canvas" data-canvas-overlay={innerWidth<960} style={{'--canvas-width':'100%'}} data-testid="surface">
+   <aside className="a-canvas-panel" data-part="canvas">
+    <div className="a-canvas-chrome"><header className="a-canvas-head">{close}</header></div>
+    <div className="a-canvas-content"><div className="a-canvas-reader"><div className="a-canvas-body">
+     <div className="a-settings-canvas">{settings}</div>
+    </div></div></div>
+   </aside>
+  </div>
+ </>;
  return <><button id="background">Background action</button>
-  <div className={mode==='modal'?'a-overlay a-settings-overlay a-settings-redesign-overlay':'a-canvas-panel'} data-testid="surface">
-   {mode==='modal'?<section className="a-dialog wide">{content}</section>:content}
+  <div className="a-overlay a-settings-overlay a-settings-redesign-overlay" data-testid="surface">
+   <section className="a-dialog wide"><header className="a-dialog-head">{close}</header>{settings}</section>
   </div>
  </>;
 }
@@ -66,7 +82,7 @@ createRoot(document.getElementById('fixture')).render(<Fixture/>);
 `;
 const cases=[1280,390].flatMap(width=>['modal','canvas','workspace'].map(mode=>({width,height:width===390?420:900,mode})));
 const metrics=[],errors=[];
-let vite,browser,page,failure;
+let vite,browser,page,failure,checkpoint,failureGeometry;
 await mkdir(artifacts,{recursive:true});
 try{
  vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),
@@ -76,7 +92,7 @@ try{
    async load(id){if(id==='/settings-draft-focus.jsx')return (await transformWithEsbuild(fixture,'settings-draft-focus.jsx',{loader:'jsx',jsx:'automatic'})).code},
    configureServer(server){server.middlewares.use((req,res,next)=>{
     if(req.url.split('?')[0]!=='/settings-draft-focus')return next();
-    res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;height:auto!important;overflow:auto!important}#amp-one{padding:12px}</style><main id="amp-one"><div id="fixture"></div></main><script type="module" src="/settings-draft-focus.jsx"></script>');
+    res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;height:auto!important;overflow:auto!important}#amp-one:not(.a-chat-shell){padding:12px}#fixture{display:contents}</style><main id="amp-one"><div id="fixture"></div></main><script type="module" src="/settings-draft-focus.jsx"></script>');
    })}
   }]});
  await vite.listen();browser=await chromium.launch({headless:true,
@@ -88,12 +104,27 @@ try{
   await page.goto(vite.resolvedUrls.local[0]+'settings-draft-focus?mode='+scene.mode);
   await page.getByRole('button',{name:'Add external agent',exact:true}).click();
   const editor=page.getByRole('textbox',{name:'Name',exact:true});
+  checkpoint={...scene,phase:'owner-precondition'};
+  if(scene.mode==='canvas'){
+   const owner=await editor.evaluate(node=>{
+    const content=node.closest('.a-settings-content'),area=content.getBoundingClientRect();
+    return {productionChain:!!content.closest('.a-canvas-panel>.a-canvas-content>.a-canvas-reader>.a-canvas-body>.a-settings-canvas'),
+     content:{top:area.top,bottom:area.bottom,height:content.clientHeight,scrollHeight:content.scrollHeight,overflow:getComputedStyle(content).overflowY},
+     document:{scrollTop:document.scrollingElement.scrollTop,height:document.scrollingElement.scrollHeight},viewport:innerHeight};
+   });
+   metrics.push({...checkpoint,owner});
+   assert.equal(owner.productionChain,true,'Canvas uses its production Settings scroll ancestry');
+   assert.ok(owner.content.height>0&&owner.content.bottom<=owner.viewport,'Actual Canvas Settings content is bounded by its viewport');
+   if(scene.width===390)assert.ok(owner.content.scrollHeight>owner.content.height,'Long compact external-agent editor scrolls inside Canvas Settings, not the document');
+   assert.equal(owner.content.overflow,'auto');
+  }
   // Modal's actual outer header can invoke the guard. Canvas uses the actual
   // Settings mobile Close, or its current editor at desktop, not a foreign pane.
   const trigger=scene.mode==='workspace'?page.locator('#close-settings'):scene.mode==='modal'&&scene.width===1280?page.locator('#test-close-settings'):
    scene.width===390?page.getByRole('button',{name:'Close settings',exact:true}):editor;
   await editor.fill('Synthetic private draft');
   for(const choice of ['Keep settings open','Escape','Review and save']){
+   checkpoint={...scene,choice,phase:'prompt'};
    await trigger.focus();
    if(scene.mode==='canvas'&&scene.width===1280)await page.evaluate(()=>{void window.confirmActualSettings()});
    else await trigger.press('Enter');
@@ -108,18 +139,24 @@ try{
    await expect(prompt).toHaveCount(0);
    const target=choice==='Review and save'?editor:trigger;
    await expect(target).toBeFocused();
+   checkpoint={...scene,choice,phase:'focus-return'};
    const focus=await target.evaluate(node=>{
     const r=node.getBoundingClientRect();
+    const content=node.closest('.a-settings-content'),area=content?.getBoundingClientRect();
     return {tag:node.tagName,owner:!!node.closest('.a-settings-experience')||(node.id==='test-close-settings'&&!!node.closest('.a-dialog')),hidden:!!node.closest('[hidden],[inert]'),
-     visible:r.width>0&&r.height>0&&r.top>=0&&r.bottom<=innerHeight};
+     box:{top:r.top,bottom:r.bottom,left:r.left,right:r.right},viewport:{width:innerWidth,height:innerHeight},
+     content:area?{top:area.top,bottom:area.bottom,scrollTop:content.scrollTop,clientHeight:content.clientHeight,scrollHeight:content.scrollHeight}:null,
+     visible:r.width>0&&r.height>0&&r.top>=0&&r.bottom<=innerHeight&&(!area||(r.top>=area.top&&r.bottom<=area.bottom))};
    });
+   // Retain failed geometry too, rather than appending only after assertions.
+   metrics.push({...scene,choice,focus});
    assert.equal(focus.owner,true);assert.equal(focus.hidden,false);assert.equal(focus.visible,true);
    await expect(editor).toHaveValue('Synthetic private draft');
    await page.keyboard.press('Tab');
    assert.notEqual(await page.evaluate(()=>document.activeElement.tagName),'BODY','Next native Tab starts from the restored meaningful owner');
-   metrics.push({...scene,choice,focus});
   }
   if(scene.mode!=='workspace'){
+   checkpoint={...scene,choice:'Review from retained hidden page',phase:'retained-page'};
    // Actual SettingsExperience keeps this dirty editor mounted while another
    // page is visible. Review navigation must reveal it and not lose its focus
    // to the production page-heading effect.
@@ -162,8 +199,20 @@ try{
  }
  assert.deepEqual(errors,[]);
  console.log('PASS: six owner/viewport scenes retain drafts and meaningful focus after Keep/Escape/Review.');
-}catch(error){failure=String(error.stack||error);throw error}
+}catch(error){
+ failure=String(error.stack||error);
+ if(page)failureGeometry=await page.evaluate(()=>{
+  const rect=node=>{const r=node.getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right}};
+  const active=document.activeElement,ancestors=[];
+  for(let node=active;node;node=node.parentElement){
+   const style=getComputedStyle(node);
+   ancestors.push({tag:node.tagName,id:node.id,className:node.className,box:rect(node),clientHeight:node.clientHeight,scrollHeight:node.scrollHeight,scrollTop:node.scrollTop,overflow:style.overflowY});
+  }
+  return {active:{tag:active.tagName,id:active.id},viewport:{width:innerWidth,height:innerHeight},documentScroll:{x:scrollX,y:scrollY},ancestors};
+ }).catch(error=>({unavailable:String(error)}));
+ throw error;
+}
 finally{
- await writeFile(artifacts+'/result.json',JSON.stringify({passed:!failure,scope:'Production hook/editor; synthetic owners/receipts, not installed host acceptance',cases,metrics,errors,failure},null,2)+'\n');
+ await writeFile(artifacts+'/result.json',JSON.stringify({passed:!failure,scope:'Production hook/editor/owner structure; synthetic receipts, not installed host acceptance',cases,metrics,errors,checkpoint,failureGeometry,failure},null,2)+'\n');
  if(browser)await browser.close();if(vite)await vite.close();
 }
