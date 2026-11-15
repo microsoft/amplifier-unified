@@ -18,6 +18,10 @@ class HandoffSuperseded(ValueError):
     """A current human/task anchor revoked unperformed placement work."""
 
 
+class HandoffPreflightRejected(ValueError):
+    """A read-only check refused placement before physical writer release."""
+
+
 def definitions(schema, string):
     sid = {'sessionId': {**string(200), 'description': 'This chat, or a current commissioned member of your owned active assignment for inspect/list/status/create/attach/handoff. Other worktree actions remain caller-owned.'}}
     identity = {**sid, 'id': string(200)}
@@ -945,7 +949,13 @@ class Worktrees:
                     await asyncio.sleep(1)
                 # The saved boundary may take a whole turn. Recheck actual Git
                 # identity after waiting, before releasing the current writer.
-                await asyncio.to_thread(self.preflight, record, self.app._session(record['sessionId']))
+                try:
+                    await asyncio.to_thread(self.preflight, record, self.app._session(record['sessionId']))
+                except (ValueError, OSError) as exc:
+                    # The awaited boundary returned; this error belongs only
+                    # to a subsequent read-only Git check, not an uncertain
+                    # runtime RPC. Rejection still requires confirmed cleanup.
+                    raise HandoffPreflightRejected(str(exc)) from exc
             # Persist before crossing the effect boundary. A lost release
             # response is uncertain; a failed read-only preflight is not.
             async with self.app.lock:
@@ -1013,7 +1023,7 @@ class Worktrees:
                 elif isinstance(exc, asyncio.CancelledError) and record.get('step') == 'released':
                     record['detail'] = 'Host shutdown paused a retained handoff boundary. No input was replayed.'
                 elif ((record.get('step') == 'preflight' and not record.get('boundaryAttempted'))
-                        or isinstance(exc, (HandoffNotStartedError, HandoffSuperseded))):
+                        or isinstance(exc, (HandoffNotStartedError, HandoffSuperseded, HandoffPreflightRejected))):
                     # Agent-side admission may already have installed its
                     # provisional drain marker before host preflight. A current
                     # rejection must retire that hook too, not just RPC polls.
@@ -1027,6 +1037,7 @@ class Worktrees:
                         detail=('Handoff was superseded; the source execution folder is unchanged. '
                                 if isinstance(exc, HandoffSuperseded) else
                                 'Handoff was rejected before runtime release. The source execution folder is unchanged. ') + str(exc)[:1000])
+                    record['rejectionDetail'] = record['detail']
                     current = self.app._session(record['sessionId'])
                     current['configurationBusy'] = self.unresolved(record)
                     if record.get('release', {}).get('quiesced'):
