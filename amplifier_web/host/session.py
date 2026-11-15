@@ -1427,7 +1427,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         coordinator.register_capability("live.checkpoint", checkpoint)
         from ..context_continuity import install as install_continuity
         continuity = install_continuity(coordinator, runtime.session_id, edited_path.parent,
-                                       checkpoint, writer_guard=recovery_write_guard)
+                                       partial(checkpoint, capture_messages=False), writer_guard=recovery_write_guard)
         install_checkpoint_hooks(coordinator, runtime, partial(checkpoint, capture_messages=False))
         async def cleanup_jobs():
             jobs.close()
