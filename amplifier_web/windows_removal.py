@@ -64,18 +64,26 @@ def same_name(name):
 
 
 # All variable data travels on stdin, never in this program. This last step
-# works with paths, so it deletes a file only where the path cannot lead
-# anywhere else, and everything else it removes is a folder (RemoveDirectory:
-# an empty folder goes, a link goes as a link, a folder with entries refuses).
+# works with paths, so every path that it uses leads through folders that
+# cannot be replaced at that moment. It walks no tree.
 #
-# Why the paths are safe. The uninstall program creates the flat folder and one
-# "hold" folder in it, holds both open, and starts this step with the hold
-# folder as its current folder. Windows keeps a program's current folder open
-# without delete sharing: the hold folder cannot be removed or renamed, and
-# neither can a folder above it. The flat folder is therefore never empty, and
-# Windows turns only an empty folder into a link. The installation folder holds
-# the flat folder, so the same is true for it. A file directly in the flat
-# folder, or directly in the installation folder, is then exactly that file.
+# A folder cannot be replaced while it holds a file that a program keeps open
+# without delete sharing: nobody can delete or move that file, so the folder is
+# never empty, Windows turns only an empty folder into a link, and Windows
+# refuses to rename a folder with an open file below it.
+#
+# - Hand-over: the uninstall program holds the flat folder and one inner folder
+#   in it, and starts this step with the inner folder as its current folder.
+# - The step then creates one file in the flat folder and keeps it open. That
+#   keeps the flat folder, the installation folder and the folders above.
+# - At the end it opens the journal and keeps it open; that keeps the
+#   installation folder when the flat folder goes. Windows deletes each of the
+#   two files itself, through its handle, when the step closes it.
+#
+# The step deletes files only directly in the flat folder, and setup's
+# completion record directly in the installation folder. Everything else it
+# removes is a folder (RemoveDirectory: an empty folder goes, a link goes as a
+# link, a folder with entries refuses).
 FINISH_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
 $p = $null
@@ -125,23 +133,21 @@ function Authorized {
     } catch { return $false }
 }
 function Clear-Folder($entry) {
-    # RemoveDirectory only: no file is deleted here, whatever the entry is by
-    # the time Windows removes it. A plain file with a folder's name stays.
+    # RemoveDirectory only: no file is deleted here. A plain file stays.
     if (Later $entry) { return }
     try {
         if ($entry.PSIsContainer) { $entry.Delete() } else { Keep $entry.FullName }
     } catch { Keep $entry.FullName }
 }
 function Get-Record($name) {
-    # One of the two records directly in the held installation folder. A link,
-    # a folder, or a file that only -Force could delete is refused.
+    # One of the two records. A link, a folder or a protected file is refused.
     $file = Get-Item -LiteralPath (Join-Path $p.root $name) -Force -ErrorAction SilentlyContinue
     if ($null -ne $file -and ($file.PSIsContainer -or
         "$($file.Attributes)" -match 'ReparsePoint|ReadOnly|Hidden|System')) { throw 'Record refused' }
     return $file
 }
 function Only($names) {
-    # The held installation folder holds these names and nothing else.
+    # The installation folder holds these names and nothing else.
     return -not @(Get-ChildItem -LiteralPath $p.root -Force | Where-Object { $names -cnotcontains $_.Name }).Count
 }
 try {
@@ -162,18 +168,23 @@ try {
         if ($p.seconds -lt 0 -or $p.seconds -gt 3600) { throw 'Invalid duration' }
         $park = Join-Path $p.root $p.park
         $hold = Join-Path $park $p.token
-        # This program's own current folder is the hold folder. PowerShell's
-        # location is a separate thing; it moves away so that no cmdlet refuses.
+        # The process's current folder is the inner folder. PowerShell's own
+        # location is separate; it moves away so that no cmdlet refuses.
         if ([Environment]::CurrentDirectory -ne $hold) { throw 'Not started in the held folder' }
         Set-Location -LiteralPath $p.outside
         if (-not (Authorized)) { throw 'Root or token refused' }
         if (-not (Real-Folder (Get-Item -LiteralPath $hold -Force)) -or
             -not (Real-Folder (Get-Item -LiteralPath $park -Force))) { throw 'Held folder refused' }
+        # One open file in the flat folder. Nobody else can delete or move it;
+        # Windows deletes it when this handle closes.
+        $own = @($p.token, ($p.token + '.hold'))
+        $anchor = New-Object System.IO.FileStream -ArgumentList (Join-Path $park $own[1]),
+            'CreateNew', 'Write', 'None', 1, 'DeleteOnClose'
         Write-Host 'ready'
         $until = (Get-Date) + (New-TimeSpan -Seconds $p.seconds)
         $done = $false
-        # 1. With the hold folder held: the parked program files, directly in
-        #    the flat folder, and the named folders that are empty by now.
+        # 1. The parked program files, directly in the flat folder, and the
+        #    named folders that are empty by now.
         do {
             if (-not (Authorized)) { throw 'Root or token refused' }
             $passes++
@@ -182,7 +193,7 @@ try {
                 Get-Process -Id $_ -ErrorAction SilentlyContinue
             })
             foreach ($entry in @(Get-ChildItem -LiteralPath $park -Force)) {
-                if ($entry.Name -ceq $p.token) { continue }
+                if ($own -ccontains $entry.Name) { continue }
                 if ($entry.PSIsContainer -or
                     "$($entry.Attributes)" -match 'ReparsePoint|ReadOnly|Hidden|System') {
                     Keep $entry.FullName
@@ -197,7 +208,7 @@ try {
                     Clear-Folder $entry
                 }
             }
-            $inside = @(Get-ChildItem -LiteralPath $park -Force | Where-Object { $_.Name -cne $p.token })
+            $inside = @(Get-ChildItem -LiteralPath $park -Force | Where-Object { $own -cnotcontains $_.Name })
             foreach ($entry in $inside) { Keep $entry.FullName }
             $rest = @(Get-ChildItem -LiteralPath $p.root -Force | Where-Object {
                 $_.Name -cne $p.park -and $_.Name -cne 'unified-uninstall.json' -and
@@ -205,43 +216,45 @@ try {
             })
             foreach ($entry in $rest) { Keep $entry.FullName }
             $done = (-not $alive.Count -and -not $inside.Count -and -not $rest.Count)
-            # Waiting helps only for a program that still runs, a parked file
-            # that is still there, or a named folder that is not empty yet.
+            # Waiting helps only for a live program, a parked file or a
+            # named folder that is not empty yet.
             $named = @($rest | Where-Object { @($p.folders) -ccontains $_.Name })
             $idle = (-not $alive.Count -and -not $inside.Count -and -not $named.Count)
             if ($idle -or (Get-Date) -ge $until) { break }
             Start-Sleep -Seconds 1
         } while ((Get-Date) -lt $until)
         if (-not (Authorized)) { throw 'Root or token refused' }
-        # 2. Folders by RemoveDirectory, each as the last part of a path whose
-        #    folder is held. Hold the flat folder: that gives the hold folder
-        #    free. Then hold the installation folder for the flat folder.
-        [Environment]::CurrentDirectory = $park
+        # 2. An open handle on the journal: the installation folder cannot be
+        #    emptied. If only the flat folder and the two records are left,
+        #    that handle also deletes the journal when it closes.
+        $both = @('unified-uninstall.json', 'unified-setup-complete.json')
+        $last = ($done -and (Only (@($p.park) + $both)))
+        $journal = Get-Record $both[0]
+        $complete = Get-Record $both[1]
+        $option = 'None'
+        if ($last) { $option = 'DeleteOnClose' }
+        $lock = New-Object System.IO.FileStream -ArgumentList $journal.FullName,
+            'Open', 'Read', 'Read', 1, $option
+        # 3. The inner folder goes while the open file keeps the flat folder;
+        #    the flat folder while the journal handle keeps the installation.
+        [Environment]::CurrentDirectory = $p.parent
         $folder = Get-Item -LiteralPath $hold -Force -ErrorAction SilentlyContinue
         if ($null -ne $folder) { Clear-Folder $folder }
-        [Environment]::CurrentDirectory = $p.root
+        $anchor.Close()
         $folder = Get-Item -LiteralPath $park -Force -ErrorAction SilentlyContinue
         if ($null -ne $folder) { Clear-Folder $folder }
-        $both = @('unified-uninstall.json', 'unified-setup-complete.json')
-        if ($done -and (Only $both)) {
-            # 3. Nothing but the two records is left, directly in the held
-            #    installation folder. Both are checked before either goes. The
-            #    journal goes first. Setup's completion record goes last, and
-            #    only if nothing appeared meanwhile: while that record is here,
-            #    setup changes nothing in this folder.
-            if (-not (Authorized)) { throw 'Root or token refused' }
-            $journal = Get-Record $both[0]
-            $complete = Get-Record $both[1]
-            Remove-Item -LiteralPath $journal.FullName
-            if (Only @($both[1])) {
-                if ($null -ne $complete) { Remove-Item -LiteralPath $complete.FullName }
-                # 4. Hold the folder above; that gives the installation folder free.
-                [Environment]::CurrentDirectory = $p.parent
+        if ($last -and (Only $both)) {
+            # 4. Setup's record, the journal (by its handle), the folder; each
+            #    only if nothing appeared meanwhile.
+            if ($null -ne $complete) { Remove-Item -LiteralPath $complete.FullName }
+            if (Only @($both[0])) {
+                $lock.Close()
                 $folder = Get-Item -LiteralPath $p.root -Force -ErrorAction SilentlyContinue
                 if ($null -ne $folder) { Clear-Folder $folder }
                 $removed = -not (Test-Path -LiteralPath $p.root)
             }
         }
+        $lock.Close()
     } | Out-Null
 } catch { $reason = $_.Exception.Message }
 finally {
@@ -262,18 +275,19 @@ def finish_after_exit(root, token, *, park, folders, wait_for=(), seconds=60, re
 
     `park` names a folder directly in `root`, with a folder named `token` in
     it; the caller holds both open, as `Folder.aside` does. The step starts
-    with that inner folder as its current folder, and this call returns only
-    when the step has said that it runs. From then on Windows keeps that
-    folder open for the step: no program can remove or rename it, the flat
-    folder or a folder above, also when the caller has ended, and the flat
-    folder is never empty.
+    with that inner folder as its current folder, creates one file in `park`
+    and keeps it open, and only then says that it runs; this call returns
+    after that. From then on no program can empty, rename or replace the flat
+    folder, the installation folder or a folder above, also when the caller
+    has ended.
 
     The step deletes plain files directly in `park` (never with -Force), and
-    removes the `folders` only when they are empty. When nothing but this
-    removal's own entries is left, it removes the two held folders, deletes
-    the journal and setup's completion record, and removes `root`. Folders go
-    by RemoveDirectory, each as the last part of a path whose folder the step
-    holds: a link goes as a link, a folder with entries refuses.
+    removes the `folders` only when they are empty. At the end it keeps the
+    journal open and removes the inner folder and the flat folder. When
+    nothing but the two records is left, it deletes setup's completion
+    record, lets Windows delete the journal through the open handle, and
+    removes `root`. Folders go by RemoveDirectory: a link goes as a link, a
+    folder with entries refuses.
 
     A return does not mean that anything was removed. A step that does not
     answer within `ready` seconds raises OSError. If Windows refuses Job
