@@ -1285,6 +1285,12 @@ def _tree(root):
                   for name in folders + files)
 
 
+def _without_kept_file(names):
+    kept = [name for name in names if re.fullmatch(r"[0-9a-f]{32}\.hold", name)]
+    assert len(kept) == 1, names
+    return set(names) - set(kept)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Real folder, Windows entries, start chain and step after exit")
 def test_native_delete_choice_removes_the_folder_and_nothing_outside_it(native_installation):
     """Yes, Yes on a whole installation: afterwards the folder does not exist."""
@@ -1299,7 +1305,7 @@ def test_native_delete_choice_removes_the_folder_and_nothing_outside_it(native_i
     assert Path(done["folder"]) == root / "workspace" and not Path(done["folderAfter"]).is_relative_to(root)
     assert done["process"] != done["parent"]
     # Before exit only the flat folder, journal and at most the emptied workspace stayed.
-    assert {plan.PARK, plan.JOURNAL, plan.COMPLETE} <= set(done["left"]) <= {
+    assert {plan.PARK, plan.JOURNAL, plan.COMPLETE} <= _without_kept_file(done["left"]) <= {
         plan.PARK, plan.JOURNAL, plan.COMPLETE, "workspace"}
     # The Windows entries are gone.
     assert shell.registry(root) is None and not native["entries"].exists()
@@ -1408,7 +1414,7 @@ with open(evidence, "w", encoding="utf-8") as stream:
         assert done["result"] == {"ok": True, "operation": "uninstall", "userDataRetained": False,
                                   "certificate": "none", "kept": [], "afterExit": True, "programLeft": []}
         assert done["parked"] >= 4, done
-        assert {plan.PARK, plan.JOURNAL, plan.COMPLETE} <= set(done["left"]) <= {
+        assert {plan.PARK, plan.JOURNAL, plan.COMPLETE} <= _without_kept_file(done["left"]) <= {
             plan.PARK, plan.JOURNAL, plan.COMPLETE, "workspace"}
         assert not (root / "python").exists() and not (root / "tools").exists()
         # The helper can already have finished. It may only remove these entries.
@@ -1416,7 +1422,8 @@ with open(evidence, "w", encoding="utf-8") as stream:
             after = set(os.listdir(root))
         except FileNotFoundError:
             after = set()
-        assert after <= {plan.PARK, plan.JOURNAL, plan.COMPLETE, "workspace"}
+        assert {name for name in after if not re.fullmatch(r"[0-9a-f]{32}\.hold", name)} <= {
+            plan.PARK, plan.JOURNAL, plan.COMPLETE, "workspace"}
         finished = _finish_report(report, timeout=30)
         assert finished["folderRemoved"] and finished["reason"] == "", finished
         assert finished["left"] == [] and finished["leftCount"] == 0, finished
@@ -1494,7 +1501,7 @@ def test_native_interrupted_removal_refuses_to_start_and_a_second_uninstall_fini
     assert done["result"]["afterExit"] and done["result"]["kept"] == ["mine.txt"], done
     assert done["result"]["programLeft"] == []
     assert set(done["images"].values()) <= set(done["parked"].values())
-    assert {plan.PARK, plan.JOURNAL, plan.COMPLETE, "mine.txt"} <= set(done["left"]) <= {
+    assert {plan.PARK, plan.JOURNAL, plan.COMPLETE, "mine.txt"} <= _without_kept_file(done["left"]) <= {
         plan.PARK, plan.JOURNAL, plan.COMPLETE, "mine.txt", "workspace"}
     assert done["events"] == ["question", "question", "stop", "after-exit"]
     assert shell.registry(root) is None and not native["entries"].exists()
