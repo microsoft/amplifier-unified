@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import contextmanager
 import hashlib
 import importlib.util
 import json
@@ -25,6 +26,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 import time
 import tomllib
 import uuid
@@ -180,6 +182,57 @@ def task_facts(home):
         return {"managed": False, "errorType": type(error).__name__, "error": str(error)[-1000:]}
 
 
+@contextmanager
+def no_message_box():
+    """Product code that opens a message box here fails the case at once.
+
+    A message box waits for a person. On a runner it would hold the job until
+    its time limit. The test answers the questions that it knows through the
+    product's message function; any other message box is a changed product
+    behaviour that this case must report, with its text.
+    """
+    import ctypes
+    real = ctypes.WinDLL
+
+    def refuse(owner, text, caption, flags):
+        raise AssertionError("Product code opened a message box in this case: " + str(text)[:600])
+
+    class User32:
+        def __init__(self, library):
+            self._library = library
+
+        def __getattr__(self, name):
+            return refuse if name == "MessageBoxW" else getattr(self._library, name)
+
+    def load(name, *args, **kwargs):
+        library = real(name, *args, **kwargs)
+        return User32(library) if str(name).lower() in ("user32", "user32.dll") else library
+
+    ctypes.WinDLL = load
+    try:
+        yield
+    finally:
+        ctypes.WinDLL = real
+
+
+def guard_refuses(message_function):
+    """Prove the guard on the product's real message function, without a wait."""
+    seen = []
+
+    def probe():
+        try:
+            message_function("message-box guard probe")
+        except AssertionError as refused:
+            seen.append(str(refused))
+        except BaseException as other:
+            seen.append("other failure: " + type(other).__name__)
+
+    thread = threading.Thread(target=probe, daemon=True)
+    thread.start()
+    thread.join(15)
+    return not thread.is_alive() and len(seen) == 1 and "message-box guard probe" in seen[0]
+
+
 def uninstall(root, notices):
     from amplifier_web import windows_consumer, windows_installation
     original = windows_installation.owner_notice
@@ -188,11 +241,13 @@ def uninstall(root, notices):
         notices.append({"confirm": confirm, "message": message})
         return True
 
-    windows_installation.owner_notice = yes
-    try:
-        return asyncio.run(windows_consumer.maintenance(root, "uninstall"))
-    finally:
-        windows_installation.owner_notice = original
+    with no_message_box():
+        assert guard_refuses(original), "The guard did not refuse the product's message box"
+        windows_installation.owner_notice = yes
+        try:
+            return asyncio.run(windows_consumer.maintenance(root, "uninstall"))
+        finally:
+            windows_installation.owner_notice = original
 
 
 def kept_folder_question(notices):

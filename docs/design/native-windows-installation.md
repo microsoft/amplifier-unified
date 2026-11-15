@@ -886,14 +886,25 @@ with a console Python and `--no-open`, so the certificate question and the
 browser are not part of it. It has no chat, and no sign-out and sign-in: the
 task starts because it was registered, not because a person signed in.
 
-Not proven on a runner, and still the condition for a real PC: that
-`runtime status` reports a prepared runtime after chats. A chat installs
-further parts into the same runtime. Read from source and not run: the
-running host makes the same checks of the recorded runtime before each chat,
-which supports it and does not prove it. When the status is negative or
-cannot be read, the start prepares as before. This, the setup file's second
-run on a clean account, and a start at sign-in need a clean-room run. A
-second native check runs setup's second-run window and its two steps with a
+A runner does not show the state after a chat: a chat installs further parts
+into the same runtime. That state was shown once on a real installation
+(clean-room run in Windows Sandbox, setup 0.98.6, long paths off, November 15,
+2026): after setup, a connected account, one chat and an uninstall from
+Settings > Apps, `runtime status` reported a prepared runtime, and the setup
+file's second run brought Amplifier back with its entries, its task, the same
+port, the earlier chat and the account. No folder under
+`app\updates\releases` was added. Not shown anywhere: a start at sign-in
+after this.
+
+`runtime status` reads the installed parts with Git. Without Git on its
+`PATH` it answers "not prepared" for a runtime that is prepared (seen in the
+same clean-room run, from a plain shell). The launcher always runs it with
+the installation's own tool path, which contains the installation's Git. A
+caller with another `PATH` gets the wrong answer, and a start would then
+prepare as before. When the status is negative or cannot be read, the start
+prepares as before.
+
+A second native check runs setup's second-run window and its two steps with a
 stand-in program in place of the installation's Python (exact arguments, the
 wait, the exit codes, a window that closes by itself, and a window that is
 closed on request while the launcher still runs). It does not show the
