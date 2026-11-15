@@ -809,21 +809,25 @@ accepts writes in the same state.
 The cause is Amplifier Foundation's session ownership. A live worker holds it
 below `<folder>\ownership`, and Foundation pins every folder from the drive
 root down to the session's own folder. Before Foundation `e37a946b` no pin
-shared write access. So the refusal also applied to the folders above the
+shared write access. So Windows refused a rename, a move or a replacement of
+an entry directly in each pinned folder, also in the folders above the
 installation folder: `AppData\Local`, `AppData` and the profile folder
-(measured). From `e37a946b` a pin on a folder above `ownership` shares read
-and write, and other programs can write, replace, rename and move entries
-there. Two refusals remain while a worker lives, by intent: a pinned folder
-itself cannot be renamed or moved, and nothing can be renamed or moved into
-`ownership` or a folder below it. `tests/test_windows_live_worker_folders.py`
-holds a real ownership in setup's layout on a Windows runner and requires
-both halves; it runs in the `windows-path-length.yml` job, which installs the
-locked Foundation. The order above stays. A worker runs the Foundation that
-its own environment selected, not the one in the root `uv.lock`; that
-revision moves with a component update, and a running worker keeps the
-revision that it started with. The app's own directory reads
-(`windows_read_files`) hold a folder without write sharing while a read runs;
-they are unchanged.
+(measured). An ordinary new file was not refused. The app's private writer
+publishes a file by a rename, so it failed. From `e37a946b` a pin on a folder
+above `ownership` shares read and write, and other programs can rename,
+replace and move entries there. These refusals remain while a worker lives,
+by intent: a pinned folder itself cannot be renamed, moved or deleted, and
+nothing can be renamed or moved into `ownership` or a pinned folder below it.
+Foundation's history operations hold the folder that they work in (below
+`shared\projects`) in the same way while one operation runs.
+`tests/test_windows_live_worker_folders.py` holds a real ownership in
+setup's layout on a Windows runner and requires both halves; it runs in the
+`windows-path-length.yml` job, which installs the locked Foundation. The
+order above stays. A worker runs the Foundation that its own environment
+selected, not the one in the root `uv.lock`; that revision moves with a
+component update, and a running worker keeps the revision that it started
+with. The app's own directory reads (`windows_read_files`) hold a folder
+without write sharing while a read runs; they are unchanged.
 
 Uninstall can be repeated. An entry that an earlier, interrupted uninstall
 already removed is skipped; a task that is already gone is not an error.
