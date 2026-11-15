@@ -9,6 +9,8 @@ import {startFixture} from './fixture-readiness.mjs';
 import {finishFixture} from './fixture-lifecycle.mjs';
 import {showFixtureConversation} from './browser-chat-pages.mjs';
 import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
+import {assertUpdateSupportGeometry} from '../../.build/web-client/tests/update-support-geometry.mjs';
+import {assertConversationErrorActionAlignment} from '../../.build/web-client/tests/conversation-error-geometry.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const output=process.env.AMPLIFIER_TEST_ARTIFACTS;assert.ok(output&&process.env.AMPLIFIER_TEST_PACKAGE_ROOT);
 await mkdir(output,{recursive:true});
@@ -36,7 +38,9 @@ try{
   const support=page.locator('[data-part=update-support]');await support.scrollIntoViewIfNeeded();await page.keyboard.press('Tab');const copy=support.getByRole('button',{name:'Copy diagnostics',exact:true}),download=support.getByRole('button',{name:'Save diagnostics',exact:true});await copy.focus();
   const metrics={variant:v,copy:await paint(copy),save:await paint(download)};report.checkpoints.push({id:`update-padding-${i}`,type:'geometry',metrics});
   if(metrics.copy.paddingInlineStart<6||metrics.copy.paddingInlineEnd<6)report.findings.push({id:'updates-diagnostics-inline-padding',variant:v,evidence:`update-support-${i}.png`,measured:metrics.copy});
-  if(process.env.LAYOUT_REQUIRE_FIXED==='1'){assert.ok(metrics.copy.paddingInlineStart>=6&&metrics.copy.paddingInlineEnd>=6);assert.ok(metrics.save.paddingInlineStart>=6&&metrics.save.paddingInlineEnd>=6)}
+  if(process.env.LAYOUT_REQUIRE_FIXED==='1'){
+   metrics.strictGeometry=await assertUpdateSupportGeometry(support,`installed ${v.id} ${v.width}`);
+  }
   await capture(page,`update-support-${i}`,support);
  }
  await activate('Copy diagnostics with deliberately denied clipboard',page.getByRole('button',{name:'Copy diagnostics',exact:true}));await expect(page.getByRole('textbox',{name:'Update diagnostic report',exact:true})).toBeVisible();await capture(page,'update-clipboard-fallback',page.locator('[data-part=update-support]'));
@@ -47,7 +51,7 @@ try{
  await page.goto(fixture.base);report.errorInstalled=await bindServed(page);await showFixtureConversation(page,{navPinned:false});await page.evaluate(()=>window.amplifier.dispatch('session.create',{title:'Synthetic second-pass error'}));const sid=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Preserve unsent audit draft');
  await page.route('**/api/actions',route=>{const b=route.request().postDataJSON();if(b.action==='session.recover'||b.action==='conversation.send'||b.action.startsWith('feedback.submit')){report.actions.push({refused:b.action});return route.fulfill({status:409,json:{accepted:false,error:'Synthetic audit refuses operation'}})}return route.continue()});
  assert.equal((await page.request.post(fixture.base+'/fixture/conversation-error',{data:{sessionId:sid}})).status(),200);const banner=page.locator('[data-part=conversation-trouble]');await expect(banner).toBeVisible();
- for(const width of [1440,768,390,320]){await page.setViewportSize({width,height:1000});const nav=page.getByRole('button',{name:'Close navigation',exact:true});if(await nav.isVisible())await nav.click();for(const open of [false,true]){const summary=banner.locator('summary');if(await banner.locator('details').evaluate(n=>n.open)!==open)await summary.click();await page.keyboard.press('Tab');await summary.focus();const recovery=banner.getByRole('button',{name:'Create recovery copy',exact:true});const values={summary:await paint(summary),recovery:await paint(recovery),text:await banner.innerText()};report.checkpoints.push({id:`error-alignment-${width}-${open}`,type:'geometry',metrics:values});await capture(page,`error-${width}-${open?'open':'closed'}`,banner)}}
+ for(const width of [1440,768,390,320]){await page.setViewportSize({width,height:1000});const nav=page.getByRole('button',{name:'Close navigation',exact:true});if(await nav.isVisible())await nav.click();for(const open of [false,true]){const summary=banner.locator('summary');if(await banner.locator('details').evaluate(n=>n.open)!==open)await summary.click();await page.keyboard.press('Tab');await summary.focus();const recovery=banner.getByRole('button',{name:'Create recovery copy',exact:true});const values={summary:await paint(summary),recovery:await paint(recovery),text:await banner.innerText()};if(process.env.LAYOUT_REQUIRE_FIXED==='1')values.strictAlignment=await assertConversationErrorActionAlignment(banner,`installed ${width} ${open}`,{requireAdjacentSingleLine:width===1440});report.checkpoints.push({id:`error-alignment-${width}-${open}`,type:'geometry',metrics:values});await capture(page,`error-${width}-${open?'open':'closed'}`,banner)}}
  await activate('Technical details',banner.getByRole('button',{name:'Technical details',exact:true}));await expect(page.getByRole('dialog',{name:'Error details',exact:true})).toBeVisible();await capture(page,'error-technical-details',page.getByRole('dialog',{name:'Error details',exact:true}));await page.getByRole('button',{name:/^Close (settings|panel)$/}).last().click();
  await activate('Report a problem (unsent)',banner.getByRole('button',{name:'Report a problem',exact:true}));await expect(page.getByRole('dialog')).toBeVisible();await capture(page,'error-unsent-report',page.getByRole('dialog'));await page.getByRole('button',{name:/^Close (settings|panel)$/}).last().click();
  report.complete=true;await save();
