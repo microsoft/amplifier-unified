@@ -217,8 +217,11 @@ async def test_new_send_interruption_does_not_inherit_dismissed_prior_failure(ap
     from amplifier_web.runtime import RuntimeHostClosingError
     from amplifier_web.input_status import annotate
     target = app.state['sessions'][1]
-    await terminal(app, target, inputs=['old-input'])
+    await observed(app, target, 'started', inputs=['old-input'])
+    await observed(app, target, 'failed', inputs=['old-input'],
+                   error_type='ValueError', error_category='unknown')
     failure = copy.deepcopy(target['failure'])
+    assert annotate(target, {'role': 'user', 'inputId': 'old-input'})['inputStatus']['failure'] == failure
     original = next(row for row in app.browser_state()['attention']['items']
                     if row['id'] == 'session:' + target['id'])
     await app.dispatch('attention.read', {'ids': [original['id']],
