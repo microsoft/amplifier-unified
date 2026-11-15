@@ -34,10 +34,18 @@ async def test_changed_native_revision_keeps_only_noop_activity_cold(tmp_path, m
     tree = {'nodes': [{'id': f'old-{i}', 'kind': 'tool', 'turnId': 'old',
                        'phase': 'completed', 'detail': {'values': [i]}} for i in range(160)],
             'turns': [{'id': 'old', 'phase': 'completed', 'anchorMessageId': anchor}],
-            'retiredUsageNodes': [], 'currentTurnId': None}
+            'retiredUsageNodes': [{'id': f'prior-call-{i}', 'sessionId': 'native-root',
+                                  'kind': 'llm', 'phase': 'completed', 'revision': 1,
+                                  'usage': {'inputTokens': 1, 'outputTokens': 1}}
+                                 for i in range(160)], 'currentTurnId': None}
     execution.refresh_usage(tree)
     session['execution'] = tree
     seed._publish_changes(sessions={sid})
+    # Ordinary persistence selects v1 once the retained accounting collection
+    # reaches its existing 128-row boundary; tool count alone is not that gate.
+    from amplifier_web.state_records import load
+    saved_owner = next(row for row in load(seed.db)['sessions'] if row['id'] == sid)
+    assert saved_owner[MARKER]['execution']['executionProjection'] == 1
     await seed.close()
 
     # A real saved transcript and CI event change, larger than the accounting
