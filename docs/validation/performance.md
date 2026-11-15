@@ -118,7 +118,7 @@ An object identity, list length or file size alone does not prove unchanged nest
 content. Count cache-validation work too. Moving a full scan to another process
 changes responsiveness, but does not by itself reduce total work or memory.
 
-Execution reuse still requires a fresh witness of the relevant borrowed builtin
+Legacy/full mutable execution reuse still requires a fresh witness of the relevant borrowed builtin
 content. Within that synchronous invocation, placement encoding can reuse fresh raw-node digests
 while witnessing receipt and turn dependencies after projection. Bound this
 temporary metadata and conservatively fall back to the complete fragment witness
@@ -126,6 +126,25 @@ near serialization limits; retain no borrowed graph between saves. Canonical JSO
 commit authority and existing memory budgets remain unchanged. Measure changed
 and unchanged saves separately: this removes repeated work, not the full history
 scan or the broader causes of multi-second UI latency.
+
+For immutable completed execution records, hold current work fixed while growing
+the same owner's retained messages, nodes, accounting receipts and workers. Count
+actual page bytes and decoded rows for ordinary Work windows and older details,
+including near leaf-split sizes, gaps after deletion, and very large individual
+records. The existing row/byte bounds still apply; a page count alone does not bound
+bytes. Include actual model admission, token/usage changes, new completion, Stop,
+late corrections and borrowed aliases rather than qualifying only tool progress.
+Report full reducer and replay reads separately from serialization and root traversal.
+Pair browser switching measurements with current resident counts and complete saved
+readback; moving old history off the hot tree is not evidence that every path is bounded.
+
+Execution format checks include the actual prior application's attempted read/save
+and collection against a synthetic copy: the typed root index must refuse old readers
+while preserving durable root selection and artifact bytes. Same-format restart,
+failed/cancelled preparation, failed commit, missing-index recovery and collection of
+retained client/operation roots must preserve exact records. Qualify startup and
+conversion separately from subsequent ordinary saves; an initial legacy conversion
+does not establish a steady-state saving.
 
 Exercise interleaved owners whose combined history exceeds a cache's capacity,
 not only warm inputs that fit. A scan must not evict every reusable fragment

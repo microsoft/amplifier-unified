@@ -272,15 +272,41 @@ save cost or the model request. A compaction summary is not a replacement for th
 original messages, receipts or pending command authority.
 
 The current implementation has bounded `TranscriptWindows` and `WorkWindows` for
-the bundled web client, plus an explicitly complete compatibility reader. It does
-not yet meet the target throughout the host. Admitted mutable session records can
-retain completed messages, worker reports and execution/accounting rows.
-`session_projection.persist`, `MessagePreparation` and `ExecutionPreparation`
-still inspect historical content during current-owner saves. Caching prepared
+the bundled web client, plus an explicitly complete compatibility reader. Cold host
+execution records use one immutable root over ordered body pages and an ID-to-ordinal
+lookup; the body is stored once. Canonical writers admit current or exactly requested
+historical records into `WorkingExecution`. A save replaces affected pages and selects
+both indexes in the existing transaction. Completed records remain correctable;
+neither completion nor an object identity is evidence that borrowed values stopped
+changing. Public full mutable reads transfer to the conservative complete owner,
+and deliberate borrowed aliases can keep admitted records resident.
+
+Ordered web reads select bounded pages without exposing the full mutable execution
+tree. Ordinals preserve insertion order, survive corrections and are never reused
+after deletion. Open details bind exact identity/ordinal pairs, so unrelated appends
+and rank changes preserve access while deletion/reinsertion does not inherit it.
+Detached metadata reads freeze the root and current overlay without loading history.
+The last committed root and retained client/operation roots remain GC authorities
+until their owning transactions release them; failed saves never adopt a staged root.
+
+This does not yet meet the target throughout the host. Retained messages and worker
+reports can still grow the admitted record. Full accounting/topology reduction and
+capacity replay checks still inspect the required complete history without promoting
+it into the current owner. Legacy/full mutable execution saves retain their content
+witness, and `MessagePreparation` still inspects historical messages. Caching prepared
 bytes reduces encoding but does not make those comparisons independent of history.
 The complete `EventIndex` reader also verifies its previous file prefix after an
 append; this is not the bounded web-reader path. Do not describe all readers as
 incremental merely because they retain an offset.
+
+File-backed execution roots use an `execution-root/1:` tag in their SQLite `$blob`
+pointer; the resource ID and canonical file bytes are unchanged. Older applications
+reject that pointer during reads and collection rather than treating the index as
+an execution tree or an empty resource leaf. An application-only rollback therefore
+does not make newly selected roots readable by an older binary. Preserve the state
+and reopen with a compatible application, or deliberately restore a complete earlier
+backup with its known recovery point; do not rewrite the pointer to bypass the check.
+In-memory test resources remain inline and have no cross-process recovery lifetime.
 
 Implement the remaining separation at the owning write/read boundary:
 
