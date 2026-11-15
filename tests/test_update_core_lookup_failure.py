@@ -1,4 +1,4 @@
-"""What the Updates page says when the registry lookup for app-managed Core fails.
+"""What the Updates page says after the registry lookup for app-managed Core.
 
 The real update manager, application check and current-status projection run.
 Only external answers are injected: release metadata, the release tag lookup,
@@ -16,6 +16,7 @@ from amplifier_web import __version__, app_component_graph, app_updates
 from amplifier_web import runtime_registry_updates as registry
 from amplifier_web import update_health
 from amplifier_web.service import AppService
+from amplifier_web.update_checks import LOOKUP_REASONS, lookup_guidance
 from amplifier_web.updates import UpdateManager
 from test_runtime_registry_updates import core, worker  # noqa: F401
 from test_service import Runtime
@@ -86,26 +87,72 @@ async def test_current_install_with_a_working_lookup_is_up_to_date(current_insta
     assert not status['actionRequired'] and status['component'] is None
 
 
-async def test_failed_core_lookup_prints_the_clean_room_page_text(current_install):
-    """Reproduction: one failed request gives both failure texts of the defect report."""
+FAILURES = {
+    'certificate': certificate_failure,
+    'timeout': TimeoutError,
+    'unavailable': lambda: aiohttp.ClientConnectorError(SimpleNamespace(host='pypi.org', port=443, ssl=True),
+                                                        OSError(101, SECRET)),
+    'invalid_response': lambda: KeyError(SECRET),
+}
+
+
+def release_directories(manager):
+    return sorted((manager.directory / 'releases').glob('*'))
+
+
+@pytest.mark.parametrize('reason', sorted(FAILURES))
+async def test_a_failed_core_lookup_is_reported_in_plain_words_and_never_offered(current_install, reason):
+    """Before the trust fix, a certificate failure here printed the clean-room defect text."""
     c = current_install
-    c.index.side_effect = certificate_failure()
+    c.index.side_effect = FAILURES[reason]()
+    before = release_directories(c.manager)  # The fixture's own receipt folder.
     await c.manager.check()
 
     application = c.state['application']
     assert application['status'] == 'check_failed'
-    assert (application['checkStage'], application['checkReason']) == ('components', 'invalid_response')
+    assert (application['checkStage'], application['checkReason']) == ('components', reason)
+    assert application['detail'] == (lookup_guidance(reason, application=True)
+                                     + ' No update was installed by this check.')
     assert application['releaseNotesWarning'] == (
-        'The update check failed. Showing saved release notes; check again to confirm the latest release.')
+        'One component of the installed app could not be checked. '
+        'The newest app release is installed; its saved release notes are shown.')
 
     checked = c.manager.inventory[0]
     assert checked['package'] == registry.CORE and checked['status'] == 'check_failed'
-    assert checked['registryManaged'] is True and 'detail' not in checked and 'latest' not in checked
+    assert checked['registryManaged'] is True and 'latest' not in checked
+    assert checked['checkReason'] == reason and checked['detail'] == lookup_guidance(reason)
 
     assert c.state['currentStatus'] == page_status(c.state)  # Evidence does not change it.
     status = c.state['currentStatus']
     assert status['title'] == 'A source could not be checked'
-    assert status['detail'] == 'The installed source is preserved. Review its source details before updating.'
+    assert status['detail'] == lookup_guidance(reason)
     assert status['component'] == 'amplifier-core'
     assert status['actionRequired'] and status['action'] == 'sources'
+
+    # Reported, and not offered: nothing is available and nothing can be prepared.
+    assert c.state['phase'] == 'error' and c.state['error']
+    assert c.state['available'] == 0 and not c.state.get('includedCanProceed')
+    await c.manager.tick()  # The automatic installer finds nothing to install.
+    assert release_directories(c.manager) == before and not c.state.get('pendingRelease')
     assert SECRET not in json.dumps(c.state)
+
+
+async def test_a_core_release_that_cannot_be_verified_keeps_the_generic_report(current_install):
+    """Not a lookup failure: the registry answers, but with a release below the app's minimum."""
+    c = current_install
+    c.index.return_value = '2.0.1'
+    before = release_directories(c.manager)
+    await c.manager.check()
+    checked = c.manager.inventory[0]
+    assert checked['status'] == 'check_failed' and 'latest' not in checked
+    assert 'checkReason' not in checked and 'detail' not in checked
+    status = page_status(c.state)
+    assert status['title'] == 'A source could not be checked' and status['component'] == 'amplifier-core'
+    assert status['detail'] == 'The installed source is preserved. Review its source details before updating.'
+    assert c.state['available'] == 0 and not c.state.get('includedCanProceed')
+    await c.manager.tick()
+    assert release_directories(c.manager) == before and not c.state.get('pendingRelease')
+
+
+def test_saved_diagnostics_can_name_every_lookup_reason():
+    assert LOOKUP_REASONS <= app_updates.RELEASE_CHECK_REASONS
