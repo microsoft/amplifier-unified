@@ -2,8 +2,12 @@
 import hashlib
 import inspect
 import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import amplifier_module_context_managed as managed
@@ -320,7 +324,8 @@ class OpaqueHistoryWire:
             # Keep the opaque request uncountable after the rejection too.
             # Otherwise a restored >1M count would trigger ordinary compaction
             # and hide the missing provider_overflow force reason.
-            available = (bool(self.foreground) and self.control != 'count-unavailable'
+            available = ((bool(self.foreground) or self.control == 'restored')
+                         and self.control != 'count-unavailable'
                          and self.private_marker not in text and self.signature_marker not in text)
             self.timeline.append({'kind': 'count', 'available': available, **record})
             if not available:
@@ -340,7 +345,7 @@ class OpaqueHistoryWire:
             self.foreground.append(body)
             if len(self.foreground) == 1:
                 self.initial_pressure = dict(self.context.last_budget)
-            if len(self.foreground) == 1 or (
+            if (len(self.foreground) == 1 and self.control != 'restored') or (
                     self.control == 'second-overflow' and len(self.foreground) == 2):
                 self.timeline.append({'kind': 'overflow_response', 'status': 400, **record})
                 return self.http.Response(400,
@@ -355,6 +360,31 @@ class OpaqueHistoryWire:
             'stop_reason': 'end_turn', 'stop_sequence': None,
             'usage': {'input_tokens': 100, 'cache_read_input_tokens': count - 100,
                       'output_tokens': 30}})
+
+
+def opaque_history_seed(wire):
+    seed = [{'role': 'user', 'content': 'Accepted ORBIT task. Preserve the original evidence.'}]
+    for index in (1, 2):
+        seed.extend([
+            {'role': 'assistant', 'content': [
+                # Match the saved failure's shape: empty public thinking text
+                # with most wire bytes in an opaque encrypted signature.
+                {'type': 'thinking', 'thinking': '',
+                 'signature': f'{wire.signature_marker}-{index}. ' * 80_000},
+                {'type': 'text', 'text': f'Public completed evidence {index}.'},
+                {'type': 'tool_call', 'id': f'call-{index}', 'name': 'record',
+                 'input': {'index': index}}]},
+            {'role': 'tool', 'name': 'record', 'tool_call_id': f'call-{index}',
+             'content': json.dumps({'receipt': f'RECEIPT-{index}', 'outcome': 'completed',
+                                   'filler': FILLER * 2})}])
+    # More than two ordinary human boundaries make the complete old tool prefix
+    # eligible, while the latest correction and current input remain in the tail.
+    seed.extend([
+        {'role': 'user', 'content': 'Accepted earlier correction: keep ORBIT.'},
+        {'role': 'assistant', 'content': 'Earlier correction acknowledged.'},
+        {'role': 'user', 'content': 'LATEST_RETAINED_CORRECTION: preserve completed work.'},
+        {'role': 'assistant', 'content': 'Latest correction acknowledged.'}])
+    return seed
 
 
 @pytest.mark.parametrize('control', ['recovered', 'count-unavailable', 'second-overflow'])
@@ -426,27 +456,7 @@ async def test_opaque_history_overflow_requires_one_different_counted_retry(cont
     await context.set_system_prompt_factory(instructions)
     for event in ('context:compaction_started', 'context:compaction_finished'):
         coordinator.hooks.register(event, observe_compaction, name='opaque-compaction-witness')
-    seed = [{'role': 'user', 'content': 'Accepted ORBIT task. Preserve the original evidence.'}]
-    for index in (1, 2):
-        seed.extend([
-            {'role': 'assistant', 'content': [
-                # Match the saved failure's shape: empty public thinking text
-                # with most wire bytes in an opaque encrypted signature.
-                {'type': 'thinking', 'thinking': '',
-                 'signature': f'{wire.signature_marker}-{index}. ' * 80_000},
-                {'type': 'text', 'text': f'Public completed evidence {index}.'},
-                {'type': 'tool_call', 'id': f'call-{index}', 'name': 'record',
-                 'input': {'index': index}}]},
-            {'role': 'tool', 'name': 'record', 'tool_call_id': f'call-{index}',
-             'content': json.dumps({'receipt': f'RECEIPT-{index}', 'outcome': 'completed',
-                                   'filler': FILLER * 2})}])
-    # More than two ordinary human boundaries make the complete old tool prefix
-    # eligible, while the latest correction and current input remain in the tail.
-    seed.extend([
-        {'role': 'user', 'content': 'Accepted earlier correction: keep ORBIT.'},
-        {'role': 'assistant', 'content': 'Earlier correction acknowledged.'},
-        {'role': 'user', 'content': 'LATEST_RETAINED_CORRECTION: preserve completed work.'},
-        {'role': 'assistant', 'content': 'Latest correction acknowledged.'}])
+    seed = opaque_history_seed(wire)
     prompt = 'CURRENT_INPUT_ONLY: finish ORBIT without repeating completed operations.'
     try:
         assert context.config['token_meter'] == 'actual'
@@ -590,3 +600,238 @@ async def test_opaque_history_overflow_requires_one_different_counted_retry(cont
         await sdk.close()
         await session.cleanup()
         assert wire.violations == [], 'Canonical history changed during preparation'
+
+
+async def _opaque_restart_phase(directory, phase):
+    """Fresh interpreter/native session with real host storage and continuity.
+
+    The cold phase prepares and dispatches an already-saved request, not a new
+    session.execute(input). This qualifies disk/process checkpoint continuity,
+    not Worker startup, live-input admission or automatic failed-turn replay.
+    """
+    import amplifier_module_provider_anthropic as module
+    from anthropic import _base_client
+    from amplifier_core import ChatRequest, Message, ToolSpec
+    from amplifier_foundation.session.activation import ActivationGate
+    from amplifier_web.context_continuity import install as install_continuity
+    from amplifier_web.host.session import install_checkpoint_hooks
+    from amplifier_web.host.storage import SessionStore
+
+    assert phase in {'failed', 'restored'}
+    directory = Path(directory)
+    http = getattr(_base_client, 'httpx2', None) or _base_client.httpx
+    wire = OpaqueHistoryWire(http, 'count-unavailable' if phase == 'failed' else 'restored')
+    plan = {'session': {
+        'orchestrator': {'module': 'loop-streaming', 'config': {
+            'use_streaming': False, 'min_delay_between_calls_ms': 0,
+            'ephemeral_injection_mode': 'tail'}},
+        'context': {'module': 'context-managed', 'config': {
+            'durable_checkpoints': True, 'max_tokens': LIMIT, 'summarize_trigger': .7,
+            'compaction_notice_enabled': False, 'archive_recovery': False}}}}
+    paths = {'loop-streaming': Path(streaming.__file__).parent,
+             'context-managed': Path(managed.__file__).parent}
+    session = await PreparedBundle(plan, BundleModuleResolver(paths),
+        Bundle(name='opaque-restart', session=plan['session'])).create_session(
+            session_id='opaque-restart')
+    coordinator = session.coordinator
+    context = coordinator.get('context')
+    wire.context = context
+    sdk = module.AsyncAnthropic(api_key='synthetic-not-live', max_retries=0,
+        http_client=http.AsyncClient(transport=http.MockTransport(wire.transport)))
+    raw = module.AnthropicProvider(api_key='synthetic-not-live', coordinator=coordinator, config={
+        'default_model': 'claude-sonnet-5', 'enable_1m_context': True,
+        'use_streaming': False, 'max_retries': 0, 'enable_prompt_caching': False})
+    raw._client = sdk
+    current = CurrentContext()
+    if phase == 'restored':
+        current.version = 2
+        current.memory = {'items': [{'id': 'preference', 'text': 'MEMORY_TWO'}]}
+    surface = SurfaceProvider(raw, current.delivery(), coordinator=coordinator)
+    selected = SelectedProvider(raw, {'model': MODEL, 'max_output_tokens': 1000},
+                                lambda _: surface)
+    await coordinator.mount('providers', selected, name='anthropic')
+    coordinator.get('orchestrator').root_provider = selected
+    effects = []
+
+    class NoReplay:
+        description = 'Synthetic completed operation; never execute again'
+        input_schema = {'type': 'object', 'properties': {'index': {'type': 'integer'}}}
+
+        def __init__(self, name):
+            self.name = name
+
+        async def execute(self, arguments):
+            effects.append(self.name)
+            raise AssertionError('Restart repeated a completed tool')
+
+    for name in ('record', 'app_control'):
+        await coordinator.mount('tools', NoReplay(name), name=name)
+
+    async def instructions():
+        return 'Preserve ORBIT and every completed receipt. Never replay operations.'
+
+    await context.set_system_prompt_factory(instructions)
+    gate = ActivationGate()
+    gate.activate()
+    store = SessionStore(directory / 'sessions', legacy_home=directory / 'unused-legacy')
+    runtime = SimpleNamespace(session_id=session.session_id, generation=None)
+    continuity = None
+
+    async def checkpoint(status='in_progress', *, timing=None, transcript_required=True):
+        gate.check_current()
+        if transcript_required:
+            store.save(session.session_id, await context.get_messages(), {
+                'working_dir': str(directory), 'bundle_name': 'opaque-restart', 'status': status})
+            if continuity:
+                continuity.save()
+
+    # Same host owner and automatic compaction hook as prepare_manager. Loading
+    # is intentionally lazy through preserve(), not a direct export/restore call.
+    host_directory = directory / 'host'
+    host_directory.mkdir(exist_ok=True)
+    continuity = install_continuity(coordinator, session.session_id, host_directory,
+        checkpoint, writer_guard=gate.check_current)
+    coordinator.register_capability('live.checkpoint', checkpoint)
+    install_checkpoint_hooks(coordinator, runtime, checkpoint)
+    observed = []
+
+    async def observe(event, data):
+        observed.append((event, dict(data)))
+        wire.timeline.append({'kind': 'hook', 'event': event, 'data': dict(data)})
+        return HookResult()
+
+    for event in ('context:checkpoint_restored', 'context:compaction_started',
+                  'context:compaction_finished'):
+        coordinator.hooks.register(event, observe, name='opaque-restart-' + event)
+    seed = opaque_history_seed(wire)
+    prompt = 'CURRENT_INPUT_ONLY: finish ORBIT without repeating completed operations.'
+    try:
+        if phase == 'failed':
+            assert store.load(session.session_id) is None and not continuity.path.exists()
+            await context.set_messages(seed)
+            wire.seed_hashes = [digest(row) for row in seed]
+            with pytest.raises(RuntimeError, match='(?i)(context|count|measur|budget|fit)'):
+                await session.execute(prompt)
+            assert len(wire.foreground) == len(wire.summaries) == 1
+            assert not wire.counted  # Counting never recovered in this process.
+            assert wire.tokens(wire.foreground[0]) > LIMIT
+            assert wire.initial_pressure['semantic_input_tokens'] < wire.initial_pressure['semantic_trigger']
+            last_summary = max(index for index, entry in enumerate(wire.timeline)
+                               if entry['kind'] == 'send' and entry['summary'])
+            assert any(entry['kind'] == 'count' and not entry['available'] and not entry['summary']
+                       for entry in wire.timeline[last_summary + 1:])
+            assert any(event == 'context:compaction_finished' and data['outcome'] == 'completed'
+                       for event, data in observed)
+            # No manual save here: prove the real automatic host hook saved the
+            # finished semantic checkpoint before final-count failure returned.
+            saved = json.loads(continuity.path.read_text())
+            assert wire.summary_marker in saved['summary']['text']
+            assert saved['progress'] is None
+            assert context.summary == (saved['summary']['throughMessage'], saved['summary']['text'])
+        else:
+            saved = json.loads(continuity.path.read_text())
+            previous = json.loads((directory / 'failed.json').read_text())
+            assert digest(saved) == previous['checkpointHash']
+            loaded = store.load(session.session_id)
+            assert loaded is not None
+            await context.set_messages(loaded[0])
+            wire.seed_hashes = [digest(row) for row in loaded[0]]
+            assert wire.seed_hashes == previous['canonicalHashes']
+            assert context.summary is None and continuity.loaded is False
+            assert raw._runtime_model_info_cache == {}
+            specs = [ToolSpec(name=name, description=tool.description, parameters=tool.input_schema)
+                     for name, tool in coordinator.get('tools').items()]
+            counted = []
+
+            async def count_view(view):
+                request = ChatRequest(messages=[Message(**row) for row in view],
+                                      tools=specs, max_output_tokens=1000)
+                decision = await selected.request_budget(request,
+                    context_estimate=len(json.dumps(view)) // 4)
+                counted.append((request, decision))
+                return {'dispatch': request, 'budget_decision': decision}
+
+            measured = coordinator.get_capability('context.measured_request_view')
+            result = await measured(provider=selected, retain_contents=[], count_view=count_view)
+            assert continuity.loaded and continuity.public()['status'] == 'restored'
+            assert any(event == 'context:checkpoint_restored' and data['status'] == 'restored'
+                       for event, data in observed)
+            assert not any(event.startswith('context:compaction_') for event, _ in observed)
+            assert context.summary == (saved['summary']['throughMessage'], saved['summary']['text'])
+            attempt = result['final_attempt']
+            request, decision = attempt['dispatch'], attempt['budget_decision']
+            assert any(candidate is request and budget == decision for candidate, budget in counted)
+            assert decision['measurement']['kind'] == 'provider_count'
+            assert decision['estimated_input_tokens'] <= decision['input_limit_tokens']
+            assert not wire.foreground and not wire.summaries
+            reply = await selected.complete(request)
+            assert wire.final_marker in str(reply.content)
+            assert len(wire.foreground) == 1 and not wire.summaries
+            body = wire.foreground[0]
+            assert wire.counted[digest(projection(body))] == decision['measurement']['input_tokens']
+            assert wire.tokens(body) < LIMIT
+            text = json.dumps(body)
+            assert text.count(wire.summary_marker) == 1
+            for marker in (wire.summary_marker, 'RECEIPT-1', 'RECEIPT-2', 'CURRENT_INPUT_ONLY',
+                           'LATEST_RETAINED_CORRECTION', 'CURRENT_REFERENCE_2', 'SURFACE_2', 'MEMORY_TWO'):
+                assert marker in text
+            for marker in ('CURRENT_REFERENCE_1', 'SURFACE_1', 'MEMORY_ONE', wire.signature_marker):
+                assert marker not in text
+            # No second ordinary input and no manual restore or canonical edit:
+            # cold measured preparation and dispatch leave native history exact.
+            assert [digest(row) for row in await context.get_messages()] == previous['canonicalHashes']
+            await checkpoint()
+            assert digest(json.loads(continuity.path.read_text())) == previous['checkpointHash']
+        canonical = (store.load(session.session_id))[0]
+        assert [digest(row) for row in canonical[:len(seed)]] == [digest(row) for row in seed]
+        assert [row['content'] for row in canonical if row['role'] == 'user'] == (
+            [row['content'] for row in seed if row['role'] == 'user'] + [prompt])
+        tools = [row for row in canonical if row['role'] == 'tool']
+        tool_hashes = {row['tool_call_id']: hashlib.sha256(row['content'].encode()).hexdigest()
+                       for row in tools}
+        assert [row['tool_call_id'] for row in tools] == ['call-1', 'call-2']
+        assert tool_hashes == {row['tool_call_id']: hashlib.sha256(row['content'].encode()).hexdigest()
+                               for row in seed if row['role'] == 'tool'}
+        for body in wire.summaries:
+            assert wire.signature_marker not in json.dumps(body)
+        assert effects == [] and wire.violations == []
+        receipt = {'pid': os.getpid(), 'phase': phase, 'canonicalHashes': [digest(row) for row in canonical],
+                   'checkpointHash': digest(json.loads(continuity.path.read_text())),
+                   'toolHashes': tool_hashes, 'summaries': len(wire.summaries),
+                   'foreground': len(wire.foreground)}
+        (directory / (phase + '.json')).write_text(json.dumps(receipt))
+    finally:
+        await sdk.close()
+        await session.cleanup()
+
+
+def test_opaque_history_checkpoint_survives_process_restart_after_final_count_failure(tmp_path):
+    """Two exited/rebuilt interpreters, not two contexts sharing Python objects."""
+    source = Path(__file__).resolve().parents[1]
+    code = (
+        "import asyncio, sys; from pathlib import Path; "
+        "sys.path[:0] = [str(Path(sys.argv[1]) / 'tests'), sys.argv[1]]; "
+        "from test_fable_context_loop import _opaque_restart_phase; "
+        "asyncio.run(_opaque_restart_phase(sys.argv[2], sys.argv[3]))"
+    )
+    environment = {**os.environ, 'HOME': str(tmp_path / 'home'), 'TMPDIR': str(tmp_path / 'tmp'),
+        'AMPLIFIER_HOME': str(tmp_path / 'amplifier'), 'AMPLIFIER_WEB_HOME': str(tmp_path / 'app'),
+        'AMPLIFIER_UNIFIED_IMPORT_HOME': str(tmp_path / 'legacy'),
+        'AMPLIFIER_SESSION_STATE_HOME': str(tmp_path / 'ownership')}
+    for name in ('home', 'tmp'):
+        (tmp_path / name).mkdir()
+    receipts = []
+    for phase in ('failed', 'restored'):
+        # Each call waits for process exit. No module object, response, SDK cache
+        # or in-memory checkpoint can cross phases; only the owned disk survives.
+        process = subprocess.run([sys.executable, '-c', code, str(source), str(tmp_path), phase],
+            cwd=source, env=environment, capture_output=True, text=True, timeout=120)
+        assert process.returncode == 0, (phase, process.stdout[-2000:], process.stderr[-4000:])
+        receipts.append(json.loads((tmp_path / (phase + '.json')).read_text()))
+    failed, restored = receipts
+    assert failed['pid'] != restored['pid'] and failed['pid'] != os.getpid() != restored['pid']
+    assert failed['canonicalHashes'] == restored['canonicalHashes']
+    assert failed['checkpointHash'] == restored['checkpointHash']
+    assert failed['toolHashes'] == restored['toolHashes']
+    assert failed['summaries'] == 1 and restored['summaries'] == 0
+    assert failed['foreground'] == restored['foreground'] == 1
