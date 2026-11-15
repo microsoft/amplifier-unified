@@ -31,10 +31,12 @@ def amplifier_home():
     return Path(os.environ.get('AMPLIFIER_HOME') or Path.home() / '.amplifier').expanduser().resolve()
 
 
-# On Windows the app's own chat folders get a short project name (see project_slug).
+# On Windows the app's own folders get a short project name (see project_slug):
+# a chat folder, and the folder in which an update checks its candidate.
 # A separate name lets tests exercise that rule on any platform.
 _SHORT_CHAT_PROJECTS = _WINDOWS
 _CHAT_ID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
+_STAGE_ID = re.compile(r'[0-9a-f]{32}')
 # What shows that a chat was saved under a project name: its conversation,
 # its session record or its own settings. Capture and view files do not.
 _HISTORY = ('transcript.jsonl', 'transcript.jsonl.backup', 'metadata.json', 'metadata.json.backup',
@@ -55,6 +57,32 @@ def chat_project_name(path):
             or not _CHAT_ID.fullmatch(identity)):
         return None
     return 'chat-' + identity.replace('-', '')[:16]
+
+
+def update_check_project_name(path):
+    """Short project name for the check folder of the update stage this process runs in, else None.
+
+    An update checks its candidate in ``<stage>/qualification-workspace``. The
+    stage is ``<app home>/updates/releases/<32 hex>``, and the check runs with
+    that stage as its own app home (``AMPLIFIER_WEB_HOME``). The CLI name of the
+    folder repeats the installation path below the stage, so no session path
+    fits under the Windows path limit. The name comes from the stage ID. It
+    starts with neither '-' nor 'chat-', so it never equals a CLI name or a
+    chat name.
+
+    Every other folder keeps its name, also a folder of the same shape: the
+    app and a person's own tools never run with a stage as their app home.
+    """
+    path = Path(path)
+    stage = path.parent
+    identity = stage.name.lower()
+    if (path.name.lower() != 'qualification-workspace' or not _STAGE_ID.fullmatch(identity)
+            or stage.parent.name.lower() != 'releases' or stage.parent.parent.name.lower() != 'updates'):
+        return None  # A string test only, as for every folder a person chose.
+    home = os.environ.get('AMPLIFIER_WEB_HOME')
+    if not home or os.path.normcase(str(Path(home).expanduser().resolve())) != os.path.normcase(str(stage)):
+        return None
+    return 'update-' + identity[:12]
 
 
 def _unlimited(path):
@@ -127,7 +155,9 @@ def project_slug(workspace):
     # transfer fence under that name there. On Windows it only reads it.
     short = chat_project_name(resolved) if _SHORT_CHAT_PROJECTS else None
     if short is None:
-        return slug  # Every folder a person chose: no file access beyond resolve().
+        # The update's own check folder has no history to keep: each check is a new session.
+        # Every folder a person chose: no file access beyond resolve().
+        return (update_check_project_name(resolved) if _SHORT_CHAT_PROJECTS else None) or slug
     # A folder shaped like the app's own chat folder. Its CLI name repeats the
     # installation path inside every session path, which then exceeds the
     # Windows path limit.
