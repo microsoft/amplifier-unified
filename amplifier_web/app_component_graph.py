@@ -156,16 +156,21 @@ def validate_graph(graph):
 
 async def index_latest(name):
     import aiohttp
+    from .update_checks import (REGISTRY_JSON, RegistryLookupFailure, loaded_registry_trust,
+                                lookup_failure_reason)
     try:
+        trust = await loaded_registry_trust()
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as client:
-            async with client.get('https://pypi.org/pypi/' + name + '/json') as response:
+            async with client.get(REGISTRY_JSON.format(name), ssl=trust) as response:
                 response.raise_for_status()
                 value = (await response.json())['info']['version']
                 if not re.fullmatch(r'\d+\.\d+\.\d+', value):
                     raise ValueError('Unsupported component release version')
                 return value
-    except (aiohttp.ClientError, KeyError, TypeError, asyncio.TimeoutError) as error:
-        raise ValueError('Component release could not be checked') from error
+    except RegistryLookupFailure:
+        raise
+    except (aiohttp.ClientError, KeyError, TypeError, ValueError, asyncio.TimeoutError) as error:
+        raise RegistryLookupFailure(lookup_failure_reason(error)) from error
 
 
 async def updates(process, environment):
