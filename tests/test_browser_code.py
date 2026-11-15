@@ -60,10 +60,15 @@ def home(tmp_path_factory):
 
 
 class PrivateFiles:
-    """The two existing owner credentials behind the private-directory seam."""
+    """The two existing owner credentials behind the private-directory seam.
 
-    def __init__(self):
-        self.events = []
+    The sign-out record is not a model. On native Windows it goes through this
+    seam to the real private store (`native`); the other systems do not use
+    the seam for it.
+    """
+
+    def __init__(self, native=None):
+        self.events, self.native = [], native
 
     @contextmanager
     def directory(self, path, *, owned_root, create=False):
@@ -73,16 +78,24 @@ class PrivateFiles:
         class Pinned:
             def read_private(self, name, *, limit):
                 files.events.append(name)
+                if name == "session-epoch" and files.native is not None:
+                    with files.native(path, owned_root=owned_root) as real:
+                        return real.read_private(name, limit=limit)
                 if Path(path).parts[-2:] != ("config", "auth") or name not in {"session-secret", "control-token"}:
                     raise FileNotFoundError(name)
                 return (SECRET if name == "session-secret" else TOKEN).encode()
+
+            def publish_private(self, name, content, *, replace=False):
+                assert name == "session-epoch"              # Nothing else is ever written through this seam.
+                with files.native(path, owned_root=owned_root, create=True) as real:
+                    real.publish_private(name, content, replace=replace)
         yield Pinned()
 
 
 @pytest.fixture
 def files(monkeypatch):
     from amplifier_web import windows_files
-    model = PrivateFiles()
+    model = PrivateFiles(windows_files.directory)           # The real store, before the seam replaces it.
     monkeypatch.setattr(entry, "is_windows", lambda: True)
     monkeypatch.setattr(entry, "current_owner_sid", lambda: SID)
     monkeypatch.setattr(windows_files, "directory", model.directory)
