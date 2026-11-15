@@ -109,11 +109,11 @@ def long_paths_off(base):
 class Installation:
     """Private folders laid out like a consumer installation, at an exact path length."""
 
-    def __init__(self, base, size, monkeypatch, store=budget.SOURCE_FOLDER):
+    def __init__(self, base, size, monkeypatch, store=budget.SOURCE_FOLDER, letter='r'):
         from amplifier_web.windows_files import directory
         if size - len(str(base)) < 2:
             unavailable(f'The temporary folder path is too long for an installation folder of {size} characters.')
-        self.root = base / ('r' * (size - len(str(base)) - 1))
+        self.root = base / (letter * (size - len(str(base)) - 1))
         assert len(str(self.root)) == size and not self.root.exists()
         for folder in ('', 'app', 'shared', 'capture', 'ownership', store):
             with directory(self.root / folder, owned_root=self.root, create=True):
@@ -146,7 +146,8 @@ def installation(base, long_paths_off, monkeypatch):
     created = []
 
     def create(size=budget.MAX_ROOT, store=budget.SOURCE_FOLDER):
-        created.append(Installation(base, size, monkeypatch, store))
+        # One test may make several installations of the same path length: each gets its own name.
+        created.append(Installation(base, size, monkeypatch, store, 'rqponm'[len(created)]))
         return created[-1]
 
     yield create

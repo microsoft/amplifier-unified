@@ -650,7 +650,7 @@ table with `python tests/test_windows_path_budget.py`.
   default module more than 6 characters deeper fails on the longest accepted
   account name until the budget changes. An entry that already exists under a
   64-digit name stays in use and is 48 characters longer.
-- **Source store, the earlier folder name:** setup files up to 0.98.3 named the
+- **Source store, the earlier folder name:** earlier setup files named the
   folder `source-store`, 11 characters longer. There module source is folder
   path + 205. It fits up to a folder path of **54** and is 264 at 59. Those
   setup files accepted an account whose profile-folder name has 22 to 26
@@ -660,8 +660,8 @@ table with `python tests/test_windows_path_budget.py`.
   is: the launcher uses `source-store` when that folder exists and `s`
   otherwise (`source_store` in `amplifier_web/windows_consumer.py`). Nothing
   is moved, renamed or downloaded again, by a second setup run, by an update
-  or by the launcher refresh. A person with such an account gets the short
-  name only from a new installation.
+  or by the launcher refresh. So an existing installation also keeps its limit
+  of 54. Nothing renames its store folder.
 
 `.github/workflows/windows-path-length.yml` is the native check. It turns
 `LongPathsEnabled` off on its own runner, proves in a new process that a
