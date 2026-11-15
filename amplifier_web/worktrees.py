@@ -218,10 +218,6 @@ class Worktrees:
         operations = getattr(self.app, 'operations', None)
         if operations and hasattr(operations, 'register_source'):
             operations.register_source('worktree', self.operation_records, self.operation_record)
-        for identity in self.recoverable:
-            record = json.loads((self.receipt_dir / (identity + '.json')).read_text())
-            self.launch(record, copy.deepcopy(self.app._session(record['sessionId'])))
-        self.recoverable.clear()
         # Startup is synchronous before input admission. Reconcile only new,
         # pre-release cleanup records whose original worker absence is provable.
         recovered = set()
@@ -232,6 +228,12 @@ class Worktrees:
                     recovered.add(session['id'])
         if recovered:
             self.changed(recovered)
+        for identity in self.recoverable:
+            # Read after proof reconciliation. A queued notification must not
+            # later save its stale pre-recovery phase/revision over that proof.
+            record = json.loads((self.receipt_dir / (identity + '.json')).read_text())
+            self.launch(record, copy.deepcopy(self.app._session(record['sessionId'])))
+        self.recoverable.clear()
 
     def launch(self, record, session):
         job = asyncio.create_task(self.finish(record, session))
