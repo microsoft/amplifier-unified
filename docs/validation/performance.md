@@ -80,6 +80,13 @@ and cancellation cleanup; a manual index refresh is not production qualification
 
 ## Separate current presentation from historical evidence
 
+The native status adapter prepares its live scalar rows once per synchronous
+poll, sharing the existing directory read frame across its observation reads.
+Each leased query retains its own durable/native fences, and the next poll must
+observe in-place edits even without a publication or revision bump. Compare small
+and paginated catalogs, cold and warm polls, and exact public facts; this reduces
+status polling cost, not the model's response time or all chat-loading work.
+
 The first web chat view contains at most 20 recent messages. Explicit earlier
 history reads keep their existing cursor and up-to-100-message page; canonical
 history and execution input are unchanged. Measure both server delivery and

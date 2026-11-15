@@ -629,3 +629,38 @@ async def test_agent_creation_classification_is_shared_with_navigation(observati
     service.projections.invalidate()
     changed = await traverse(client, '/api/sessions', {'view': 'observation'})
     assert not any(row['agentCreated'] for row in changed)
+
+
+@pytest.mark.parametrize('count', [8, 230])
+async def test_companion_poll_prepares_live_rows_once_and_observes_next_poll_edits(observation_host, monkeypatch, count):
+    from amplifier_web import history_directory
+    app, client = observation_host
+    service = app['service']
+    catalog(service, count)
+    rows = service.state['sessions']
+    prepared = []
+    original = history_directory._scalars
+
+    def scalar(row, *args, **kwargs):
+        prepared.append(row['id'])
+        return original(row, *args, **kwargs)
+
+    monkeypatch.setattr(history_directory, '_scalars', scalar)
+    first = await client.get('/api/companion')
+    assert first.status == 200
+    before = await first.json()
+    assert prepared == [row['id'] for row in rows]
+    assert before['workingCount'] == 0 and len(before['sessions']) == min(count, 50)
+    assert len(before['items']) == min(count * 2, 200)
+
+    # No publication/revision bump: another request must still see fresh facts.
+    rows[0].update(title='Changed between polls', status='working')
+    prepared.clear()
+    second = await client.get('/api/companion')
+    assert second.status == 200
+    after = await second.json()
+    assert prepared == [row['id'] for row in rows]
+    assert after['workingCount'] == 1
+    assert next(row for row in after['sessions'] if row['id'] == 's0')['title'] == 'Changed between polls'
+    assert after['observationRevision'] != before['observationRevision']
+    assert service.directory._read_frame.get() is None
