@@ -523,6 +523,14 @@ Only covered failures predating that installation remain historical; newer
 failures, missing source scope and uncertain operations retain their priority.
 This explanatory proof cannot authorize partial-source retention or declare the
 changed configuration qualified. No settings or qualification receipts are rewritten.
+A new installation has no selected generation until its first component update.
+When setup recorded the worker dependencies it installed, health verifies the
+installed lock, manifest, recorded packages and installer policy against that
+record, as a conversation-worker start does. A complete check that finds nothing
+newer is then reported as up to date, in words that name setup's record and do
+not call those components qualified. This record has no activation time: it
+cannot supersede a recorded failure and cannot authorize preparation. A missing
+or changed record keeps the incomplete-verification report.
 An ordinary Check offers an included runtime qualification when app-level source
 declarations differ, even if every Git branch is unchanged. Install still uses
 the checked selection and existing unchanged-input, source-policy and activation

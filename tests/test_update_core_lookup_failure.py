@@ -4,6 +4,7 @@ The real update manager, application check and current-status projection run.
 Only external answers are injected: release metadata, the release tag lookup,
 the host's installed-component list and the registry request for Core.
 """
+from contextlib import asynccontextmanager
 import json
 import ssl
 from types import SimpleNamespace
@@ -45,10 +46,17 @@ def page_status(state):
 @pytest.fixture
 async def current_install(worker, monkeypatch):  # noqa: F811 -- pytest fixture reuse
     """An install on the newest release whose worker uses the app-managed Core wheel."""
-    service = AppService(worker.home, Runtime(), workspace=worker.home.parent)
+    async with checked_install(worker.home, core(worker), monkeypatch) as install:
+        yield install
+
+
+@asynccontextmanager
+async def checked_install(home, row, monkeypatch):
+    """The real service and update manager for `home`; only external answers are injected."""
+    service = AppService(home, Runtime(), workspace=home.parent)
     manager = UpdateManager(service)
     service.update_manager = manager
-    row = core(worker)
+    row = dict(row)
     row['updateTier'] = 'included'
     # The real inventory stamps every row with the checked app selection.
     from amplifier_web.update_sequence import app_selection

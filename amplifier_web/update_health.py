@@ -105,6 +105,36 @@ def active_evidence(manager, *, explain_configuration=False):
         return {}  # Unknown evidence is not a healthy installed graph.
 
 
+def setup_evidence(manager):
+    """Verify setup's own record on an installation with no component generation.
+
+    Setup installs the declared worker dependencies and records them. No
+    generation is selected until the first component update, so the generation
+    proof above is always empty there, and no check can produce it.
+
+    This applies the checks of a conversation-worker start to that record: lock,
+    manifest, recorded packages (later additions allowed) and installer policy.
+    It is not a qualification. It carries no activation time, so it cannot
+    supersede a recorded failure, and preparation never consults it.
+    """
+    import subprocess
+    from .installation_runtime import status
+    from .updates import active_release
+    try:
+        pointer = active_release(manager.home)
+        if pointer.get('current'):
+            return {}  # A selected generation is verified by its own receipts only.
+        observed = status(manager.home)
+        if (observed.get('ok') is not True or observed.get('prepared') is not True
+                or observed.get('generation') is not None
+                or type(observed.get('packageCount')) is not int or observed['packageCount'] < 1
+                or active_release(manager.home) != pointer):
+            return {}
+        return {'setupRecord': True, 'packageCount': observed['packageCount']}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError):
+        return {}  # Unknown evidence is not a healthy installed graph.
+
+
 def preparation_key(manager, rows):
     """Private witness for expensive work, not permission to install or a URL log."""
     from .updates import active_release
@@ -501,6 +531,11 @@ def current(state, evidence=None, *, manual_verified=None, explicit_retry=False)
         if local_changes:
             return result('unchecked', 'Custom sources kept',
                           'Local source changes are kept as configured and are not replaced automatically. Source details remain available; no repair is required for intentional customization.')
+        if evidence.get('setupRecord'):
+            # A new installation: the check found nothing newer, and setup's
+            # record still matches. Do not call these components qualified.
+            return result('current', 'You’re up to date',
+                          'No newer version of the app or its components was found. The components that setup installed are unchanged.')
         return result('current', 'You’re up to date', 'The current application and qualified components are ready. Earlier attempts remain in history; configured fixed versions are kept.')
     return result('unchecked', 'Check for updates', 'The full desired component state has not been checked.', action='check')
 
@@ -532,6 +567,9 @@ async def refresh(manager):
     import asyncio
     revision = manager.service.state.get('configurationRevision')
     evidence = await asyncio.to_thread(active_evidence, manager, explain_configuration=True)
+    if not evidence:
+        # With no selected generation, setup's record is the only installed proof.
+        evidence = await asyncio.to_thread(setup_evidence, manager)
     from .update_partial import retained_after_check
     from .update_sequence import verify_app_selection
     def retry_action():
