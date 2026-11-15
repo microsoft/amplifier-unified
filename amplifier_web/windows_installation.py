@@ -366,8 +366,8 @@ async def prepare_background(root, launcher, environment, *, port=None, identity
             preparation = json.loads(await command("runtime", "status", "--json"))
         except (OSError, ValueError, RuntimeError, TimeoutError):
             preparation = None
-        if not (isinstance(preparation, dict) and preparation.get("ok") is True
-                and preparation.get("prepared") is True):
+        # CONTROL RUN ONLY, NEVER MERGE: prepare always, as before the status check.
+        if True:
             step("prepare")
             preparation = json.loads(await command("runtime", "prepare", "--json", timeout=1800))
             if preparation.get("ok") is not True or preparation.get("prepared") is not True:
