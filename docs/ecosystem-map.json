@@ -105,6 +105,10 @@
     "amplifier-client-web is the authoring owner; Unified selects a copied delivery and ships built assets. Source merge is not automatic app delivery.",
     "Role mapping describes responsibility, not a claim that every Constellation family contract has been qualified."
   ],
+  "product_site": {
+    "label": "Visit product website",
+    "url": "https://unified.amplifier.ms/"
+  },
   "purpose": "Work with AI across conversations, tools and shared visual surfaces using your configured accounts.",
   "ref": "6225ca5c0d3a50cf6c96c4674dedd2514125cdfa",
   "repository": "microsoft/amplifier-unified",

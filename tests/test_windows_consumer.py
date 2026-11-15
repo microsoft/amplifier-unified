@@ -31,12 +31,64 @@ def test_process_local_roots_preserve_accounts_and_user_git_policy(tmp_path, mon
     assert result["AMPLIFIER_HOME"] == str(tmp_path / "shared")
     assert result["AMPLIFIER_SESSION_STATE_HOME"] == str(tmp_path / "ownership")
     assert result["AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH"] == str(tmp_path / "capture")
+    # This installation has the earlier store folder, so it keeps that one.
     assert result["AMPLIFIER_SOURCE_STORE"] == str(tmp_path / "source-store")
     assert "PYTHONPATH" not in result
     assert result["GIT_CONFIG_VALUE_0"] == "owner-helper"
     assert result["OPENAI_API_KEY"] == "synthetic-never-persisted"
     assert dict(consumer.os.environ) == before
     assert len(roots) == 13 and all(kwargs == {"owned_root": tmp_path, "create": False} for _, kwargs in roots)
+
+
+def test_each_installation_resolves_the_source_store_folder_it_has(tmp_path, monkeypatch):
+    """New setup makes "s"; an earlier installation keeps "source-store". Nothing is created or moved."""
+    from amplifier_web import windows_files
+    checked = []
+    @contextmanager
+    def directory(path, **kwargs):
+        # The real owner opens the folder with its checks and never creates it here.
+        assert kwargs == {"owned_root": path.parent, "create": False}
+        checked.append(path.name)
+        if not path.is_dir():
+            raise FileNotFoundError(path)
+        yield
+    monkeypatch.setattr(windows_files, "directory", directory)
+    tools = {"uv": "uv/uv.exe", "git": "git/cmd/git.exe"}
+    folders = ("app", "shared", "ownership", "capture", "import", "tools", "tool-bin", "cache",
+               "python", "python-bin", "temp")
+
+    def installation(name, store):
+        root = tmp_path / name
+        for folder in (*folders, *store):
+            (root / folder).mkdir(parents=True)
+        return root
+
+    assert (consumer.SOURCE_STORE, consumer.EARLIER_SOURCE_STORE) == ("s", "source-store")
+    new = installation("new", ["s"])
+    assert consumer.environment(new, tools)["AMPLIFIER_SOURCE_STORE"] == str(new / "s")
+    assert checked[-2:] == ["source-store", "s"]
+    earlier = installation("earlier", ["source-store"])
+    assert consumer.environment(earlier, tools)["AMPLIFIER_SOURCE_STORE"] == str(earlier / "source-store")
+    assert checked[-1] == "source-store"
+    # Both folders: the one that an earlier launcher already uses stays in use.
+    both = installation("both", ["s", "source-store"])
+    assert consumer.source_store(both) == both / "source-store"
+    # Neither folder: a damaged installation stops, as for every other private folder.
+    damaged = installation("damaged", [])
+    with pytest.raises(FileNotFoundError):
+        consumer.environment(damaged, tools)
+    # A store folder that exists and fails its checks is never replaced by the other name.
+    refused = installation("refused", ["s", "source-store"])
+    @contextmanager
+    def unsafe(path, **kwargs):
+        if path.name == "source-store":
+            raise PermissionError("Windows private directory ACL differs")
+        yield
+    monkeypatch.setattr(windows_files, "directory", unsafe)
+    with pytest.raises(PermissionError):
+        consumer.source_store(refused)
+    assert sorted(path.name for path in new.iterdir()) == sorted([*folders, "s"])
+    assert sorted(path.name for path in earlier.iterdir()) == sorted([*folders, "source-store"])
 
 
 def test_shortcut_and_first_task_put_the_installations_shell_first(tmp_path, monkeypatch):
@@ -198,12 +250,16 @@ def test_no_browser_launch_composes_existing_background_owner_without_reinstall(
     calls = []
     monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {})
-    async def prepare(root, launcher, env, *, identity):
+    async def prepare(root, launcher, env, *, identity, progress):
         assert callable(identity)
+        assert progress == steps.append
+        progress("ready")
         calls.append((root, launcher, env))
         return {"background": True, "created": False, "health": {"ok": True}}
     monkeypatch.setattr(windows_installation, "prepare_background", prepare)
-    assert asyncio.run(consumer.launch(tmp_path, open_browser=False))["health"]["ok"]
+    steps = []
+    assert asyncio.run(consumer.launch(tmp_path, open_browser=False, progress=steps.append))["health"]["ok"]
+    assert steps == ["ready"]
     assert calls == [(tmp_path, tmp_path / "tools/amplifier-unified/Scripts/amplifier-unified.exe", {})]
 
 
@@ -214,7 +270,9 @@ def address_launch(tmp_path, monkeypatch, *, answer, kinds=("in-use",)):
     monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {})
     pending = list(kinds)
-    async def prepare(root, launcher, env, *, identity):
+    async def prepare(root, launcher, env, *, identity, progress):
+        if progress is not None:
+            progress("address" if pending else "ready")
         events.append(("prepare", launcher))
         if pending:
             raise windows_installation.AddressUnavailable(pending.pop(0), 23456)
@@ -248,8 +306,10 @@ def test_confirmed_address_repair_selects_once_then_starts_the_same_installation
     monkeypatch.setattr(deployment, "load_server_config", lambda home: {})
     monkeypatch.setattr(browser_entry, "_owner_probe_targets", lambda *a: (["private-target"], "private-pin"))
     monkeypatch.setattr(windows_installation, "review_browser_trust", lambda *a, **kw: False)
-    result = asyncio.run(consumer.launch(tmp_path))
+    steps = []
+    result = asyncio.run(consumer.launch(tmp_path, progress=steps.append))
     assert result["health"]["ok"] and result["browser"]["opened"] is False
+    assert steps == ["address", "ready"]
     assert [event[0] for event in events] == ["prepare", "notice", "change", "prepare"]
     assert events[2][1] == events[3][1] == launcher
 
@@ -272,7 +332,7 @@ def test_pending_certificate_review_does_not_issue_browser_grant(tmp_path, monke
     from amplifier_web import windows_installation, deployment, browser_entry, updates
     monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {})
-    async def prepared(*args, identity):
+    async def prepared(*args, identity, progress):
         return {"background": True, "created": False, "health": {"ok": True}}
     monkeypatch.setattr(windows_installation, "prepare_background", prepared)
     monkeypatch.setattr(deployment, "load_server_config", lambda home: {})
@@ -300,7 +360,7 @@ def test_first_setup_creates_the_identity_in_this_process_and_hands_windows_that
     fresh = b"root-created-in-this-process"
     monkeypatch.setattr(windows_tls, "create_identity", lambda home, value:
                         created.append((home, value)) or fresh)
-    async def prepare(root, launcher, env, *, identity):
+    async def prepare(root, launcher, env, *, identity, progress):
         if first_setup:
             identity()
             # A repeated call finds the material and creates nothing; the first
@@ -432,25 +492,45 @@ def test_maintenance_on_a_folder_that_fails_the_installation_check_writes_nothin
         assert "nothing was changed" in consumer.Unfinished(step, ValueError()).notice
 
 
-@pytest.mark.parametrize("registered, expected", [
-    (False, "could not finish its first start"), (True, "Amplifier could not start.")])
+@pytest.mark.parametrize("listed", [False, True])
+@pytest.mark.parametrize("step", ["prepare", "ready", None])
+def test_start_failure_message_matrix(tmp_path, monkeypatch, listed, step):
+    from amplifier_web import windows_consumer_shell
+    monkeypatch.setattr(windows_consumer_shell, "listed", lambda root: listed)
+    next_step = ("open Amplifier from the Start menu: Amplifier Unified" if listed else
+                 "run the Amplifier setup file again. It keeps your chats and settings")
+    if step == "prepare":
+        expected = ("Amplifier could not prepare the remaining parts of the app. It downloads them from the internet.\n\n"
+                    "Check that this PC is connected to the internet. Then " + next_step + "." +
+                    (" You do not need to install it again." if listed else ""))
+    else:
+        expected = "Amplifier could not start.\n\nRestart Windows. Then " + next_step + "."
+    assert consumer.start_failure(tmp_path, step) == expected
+    if not listed:
+        assert "Start menu" not in expected
+
+
+@pytest.mark.parametrize("listed", [False, True])
+@pytest.mark.parametrize("steps", [[], ["address", "tls", "prepare"], ["address", "task", "ready"]])
 def test_a_shortcut_that_cannot_start_the_app_says_the_cause_and_the_next_step(
-        tmp_path, monkeypatch, capsys, registered, expected):
-    from amplifier_web import windows_installation, windows_service
+        tmp_path, monkeypatch, capsys, listed, steps):
+    from amplifier_web import windows_installation, windows_consumer_shell
     shown = []
 
-    async def failing(root, *, open_browser=True):
+    async def failing(root, *, open_browser=True, progress):
+        for step in steps:
+            progress(step)
         raise RuntimeError("Runtime dependency preparation did not complete; private detail")
     monkeypatch.setattr(consumer, "launch", failing)
-    monkeypatch.setattr(windows_service, "managed", lambda home: registered)
+    monkeypatch.setattr(windows_consumer_shell, "listed", lambda root: listed)
     monkeypatch.setattr(windows_installation, "owner_notice", lambda message, **kw: shown.append(message))
     with pytest.raises(SystemExit):
         consumer.main(["--root", str(tmp_path)])
     result = json.loads(capsys.readouterr().out)
-    assert result["ok"] is False and expected in result["message"] and "private detail" not in json.dumps(result)
-    assert "Start menu: Amplifier Unified" in result["message"]
-    if not registered:
-        assert "connected to the internet" in result["message"] and "do not need to install it again" in result["message"]
+    assert result["ok"] is False and "private detail" not in json.dumps(result)
+    assert result["message"] == consumer.start_failure(tmp_path, steps[-1] if steps else None)
+    if not listed:
+        assert "Start menu" not in result["message"]
     # Without a console (the shortcut uses pythonw) the same text is shown in a window.
     monkeypatch.setattr(consumer.sys, "stdout", None)
     with pytest.raises(SystemExit):

@@ -587,12 +587,14 @@ environment 162, private Python 142, tools 124, private Git 68. Those fit at
 59 today.
 
 The short folder is necessary and not sufficient. The app must also keep what
-it adds below the folder inside the budget of the next section. One row of that
-budget does not fit at 59: module source in the source store fits only up to a
-folder path of 54 (see the source-store item below). A change to the
-folder name must respect this number, and `tests/test_windows_setup_folder.py`
-fails when code and document disagree. Setup stops before it asks anything when
-the path would be longer.
+it adds below the folder inside the budget of the next section. In a new
+installation every row of that budget fits at 59; the next section also names
+the cases that the budget does not cover. The tightest row is module
+source in the source store (253 characters at 59; see the source-store items
+below), and it fits only because the store folder is named `s`. A change to
+the folder name must respect this number, and
+`tests/test_windows_setup_folder.py` fails when code and document disagree.
+Setup stops before it asks anything when the path would be longer.
 
 ### Path budget below the installation folder
 
@@ -632,25 +634,43 @@ table with `python tests/test_windows_path_budget.py`.
   finds such history through the extended-length path form and does not start
   a second history for that chat.
 - **Source store:** Amplifier Foundation owns its layout; the app supplies the
-  folder, `<folder>\source-store`. A Foundation revision before `7526bb55`
+  folder: `<folder>\s` in a new installation, `<folder>\source-store` in an
+  installation that an earlier setup file made. A Foundation revision before `7526bb55`
   cannot stage the default bundles at any supported folder path (measured at
   51; arithmetic for the others), so the conversation worker cannot start on a
   default PC. From `7526bb55` the store
   reaches every staged file itself through extended-length paths, and new
   entries on Windows have 16-digit folder names. Repository depth then no
   longer limits staging, sealing, cleanup or the copy into a build view.
-- **Source store, the row that does not fit at 59:** other programs still open
-  store files by ordinary paths. Python imports module source from the store
-  object: folder path + 80 (`\source-store\objects\<16>\<40>\`) + the path
-  inside the repository. The deepest module file of the default bundles is 125
-  characters (measured), so the path is folder path + 205. It fits up to a
-  folder path of **54** and is 264 at 59. Setup accepts an account whose
-  profile-folder name has 22 to 26 characters, and that account then cannot
-  load the default bundles. This is arithmetic from measured depths; it has
-  not been run on such an account. Setup owns the fix, which is not decided:
-  the store folder name `s` (11 characters shorter, 253 at 59) or a limit of
-  54. An entry that already exists under a 64-digit name stays in use and is
-  48 characters longer.
+- **Source store, the tightest row:** other programs still open store files by
+  ordinary paths. Python imports module source from the store object: folder
+  path + 69 (`\s\objects\<16>\<40>\`) + the path inside the repository. The
+  deepest module file of the default bundles is 125 characters (measured), so
+  the path is folder path + 194: **253 at 59**, with 6 characters to spare.
+  The measured depth is a number in the budget test, not a live check: a
+  default module more than 6 characters deeper fails on the longest accepted
+  account name until the budget changes. An entry that already exists under a
+  64-digit name stays in use and is 48 characters longer.
+- **Source store, the earlier folder name:** earlier setup files named the
+  folder `source-store`, 11 characters longer. There module source is folder
+  path + 205. It fits up to a folder path of **54** and is 264 at 59. Those
+  setup files accepted an account whose profile-folder name has 22 to 26
+  characters, and that account cannot load the deepest default module. This is
+  arithmetic from measured depths plus the native case below; it has not been
+  run on such an account. An existing installation keeps its store where it
+  is: the launcher uses `source-store` when that folder exists and `s`
+  otherwise (`source_store` in `amplifier_web/windows_consumer.py`). Nothing
+  is moved, renamed or downloaded again, by a second setup run, by an update
+  or by the launcher refresh. So an existing installation also keeps its limit
+  of 54. Nothing renames its store folder, and a second setup run on a
+  finished installation does not give it the short name.
+  The earlier name wins when both folders exist, because an earlier launcher
+  and the recorded sign-in task use it, and one installation must not have two
+  stores. The cost: a `source-store` folder that something adds to a new
+  installation sends its store to the long name. Setup, the app, an update and
+  the launcher refresh do not create that folder. A `source-store` entry that
+  exists and fails the private-folder check (a link, another owner) stops the
+  start; the other name never replaces it.
 
 `.github/workflows/windows-path-length.yml` is the native check. It turns
 `LongPathsEnabled` off on its own runner, proves in a new process that a
@@ -658,11 +678,14 @@ table with `python tests/test_windows_path_budget.py`.
 folder path of exactly 59 characters, and restores the runner's value. It
 installs the locked dependencies, and the lock selects Foundation `7526bb55`.
 Its source-store case stages a repository as deep as the default bundles
-through Foundation's real store, at folder paths of 59 and 54. It requires
-that the store seals, builds and cleans up files beyond the limit, and that
-Windows accepts or refuses each ordinary path exactly as the budget table
-says: the deepest module file is refused at 59 (264 characters) and opens at
-54 (259). It is not setup-file or clean-account acceptance.
+through Foundation's real store. It requires that the store seals, builds and
+cleans up files beyond the limit, and that Windows accepts or refuses each
+ordinary path exactly as the budget table says. In the folder `s` the deepest
+module file opens at a folder path of 59 (253 characters). In the earlier
+folder `source-store` it is refused at 59 (264) and opens at 54 (259). The
+same job requires that an installation with each folder name resolves its own
+store through the real private-folder checks. It is not setup-file or
+clean-account acceptance.
 
 Setup checks the PC and the folder before its first question. Each stop names
 one cause and one next step in plain language, and never shows exception text,
@@ -676,7 +699,7 @@ child output or network values:
 | A folder above the installation folder lets other accounts change it | Stop: names that folder. The storage check is unchanged |
 | Less than 4 GB free | Stop |
 | The folder exists and setup did not create it | Stop. Setup never changes it |
-| The folder holds a finished installation | "Amplifier is already installed." Yes opens it. Nothing is installed or changed |
+| The folder holds a finished installation | "Amplifier is already installed." Yes adds missing Start-menu and Apps-list entries again, then opens it. No app files are installed again or removed. The launcher and its code stay the ones that the earlier setup file installed |
 | The folder holds setup's own unfinished attempt, or is empty | Setup removes it and installs |
 | The folder has setup's first marker and app data, but no completion record | Stop. Setup never removes it |
 | Another installation already starts at sign-in for this account | Stop: remove it first. One sign-in task exists per account |
@@ -723,8 +746,8 @@ Not in this change: Repair and Update on a second run, refresh of the launcher
 and private tools, removal of program files at uninstall, removal of a leftover
 sign-in entry, the setup file's icon and version information, and a restart of
 an elevated setup without elevation. A person who removed Amplifier through the
-Apps list keeps the folder; a later setup run says so and starts that
-installation again, and its Start-menu entry returns only with the Repair step.
+Apps list keeps the folder; a later setup run restores its Start-menu and
+Apps-list entries, then starts that installation again.
 An installation in an earlier long folder is not moved or read: setup asks the
 person to remove it and then installs into the short folder. The real setup
 file on a clean ordinary account remains clean-room acceptance. The native
@@ -787,11 +810,75 @@ Uninstall can be repeated. An entry that an earlier, interrupted uninstall
 already removed is skipped; a task that is already gone is not an error.
 
 The last step rewrites the entry record with the status `removed`; a later
-setup run reads that status to choose its wording. Worker programs end a
+setup run reads that status to restore the app entries. Worker programs end a
 moment after the task reports that it stopped, so this write waits up to 15
 seconds for them. A write that is still refused does not fail a finished
 uninstall, because every entry is already gone; it is saved as a failed
 `receipt` step.
+
+After an uninstall, a second setup run adds the Start-menu and Apps-list
+entries again (the entry record with the status `removed` permits exactly
+that), then starts the launcher and waits for it. Setup's window with the
+current step stays open during both steps. Chats and settings stay in place.
+If the entries cannot be added, setup says so and still starts the app, as it
+did before this step existed; the next step it names is to run the setup file
+again. While setup adds the entries and starts the launcher, its window does
+not close, as during a first installation. Once the launcher runs, the window
+says that the person can close it; the launcher goes on. Setup's result is 0
+only when the entries exist and setup saw the launcher finish; a window that
+the person closed earlier leaves it at 1. The launcher skips preparation when
+`runtime status` reports a prepared runtime, just as a start at sign-in uses
+that runtime. Without this check, a connected AI account made the start run a
+complete first installation: minutes without a window, a new folder on each
+attempt, and in the observed case a failure. The launcher's failure message
+has two forms: the preparation of the remaining parts failed, or the start
+failed (every other step). It names the Start menu as the next step only when
+the entry record says `installed` and the entry that opens Amplifier exists in
+the folder that the record names; setup's second run decides by the same two
+facts. Otherwise the next step is to run the setup file again. The record
+alone is not enough: the last write of an uninstall can be refused after every
+entry is gone. For the same reason the entries can be added again over a
+record that still says `installed`, when the folder that the record names,
+today's Start-menu folder and the Apps-list entry are all absent. The entries
+are added again only when all of them are gone. A partly damaged set (a person
+deleted one shortcut) is refused and nothing is overwritten; setup then says
+that it could not add the entries, and starts the app.
+
+Not proven here, and the condition for all of the above: that
+`runtime status` reports a prepared runtime on a real installation after
+chats. Read from source and not run: the running host makes the same checks
+of the recorded runtime before each chat, which supports it and does not prove
+it. When the status is
+negative or cannot be read, the start prepares as before. The real Scheduled
+Task and the real host start also need a clean-room run. The native check on
+a runner runs setup's second-run window and its two steps with a stand-in
+program in place of the installation's Python (exact arguments, the wait, the
+exit codes, a window that closes by itself, and a window that is closed on
+request while the launcher still runs). It does not show the question before
+the window, a message, or the real launcher.
+
+Not changed, each stated as a limit:
+
+- When the runtime is not prepared and an AI account is connected, a start
+  without a task still runs the complete first installation. A failed attempt
+  leaves its folder under `app\updates\releases` (failed candidates are
+  retained by design), and the next start begins again; it does not continue
+  the failed attempt. After an uninstall this path is avoided only when
+  `runtime status` reports a prepared runtime.
+- The limits of a preparation stay as they were: 1800 seconds for the whole
+  preparation and 900 seconds for each of its steps. No shorter limit exists.
+  The failure that was observed was not a time limit. Read from its saved
+  progress record: after about four minutes of other work, four parallel
+  checks started and all four ended as failed within the same second. The
+  saved failure record names a cancellation, which is what the other three
+  record when one of them fails.
+- A start from the Start menu has no window while it prepares. Only a start
+  from the setup file shows setup's window.
+- An installation that an earlier setup file made keeps that setup file's
+  launcher. A second run of a newer setup file starts that launcher and asks
+  it to add the entries; it does not replace it. That launcher refuses to add
+  the entries again and prepares as before. Such an installation gets this
+  change only from a new installation.
 
 The Start-menu commands Stop and Status use the same form of message: what
 did not happen, the next action and the reference. They no longer show the

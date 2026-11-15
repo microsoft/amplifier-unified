@@ -45,6 +45,7 @@ on:
       - amplifier_web/CPYTHON-LICENSE.txt
       - amplifier_web/voice_diagnostics.py
       - amplifier_web/update_checks.py
+      - amplifier_web/app_component_graph.py
       - amplifier_web/windows_jobs.py
       - amplifier_web/windows_launch_guard.py
       - amplifier_web/windows_hidden_console.py
@@ -88,6 +89,7 @@ on:
       - tests/fixtures/windows_native_bootstrap_ci.py
       - tests/test_deployment.py
       - tests/test_update_checks.py
+      - tests/test_update_registry_trust.py
       - tests/test_windows_tls.py
       - tests/test_windows_trust.py
       - tests/test_session_sign_out.py
@@ -227,6 +229,7 @@ jobs:
       # A skipped native case would hide the answer; on this lane it fails.
       AMPLIFIER_REQUIRE_PORT_RESERVATION_CHECK: '1'
       AMPLIFIER_REQUIRE_WINDOWS_TRUST_CHECKS: '1'
+      AMPLIFIER_REQUIRE_WINDOWS_SHELL_CHECKS: '1'
       AMPLIFIER_TEST_EDGE_WITH_MACHINE_ROOT: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -242,7 +245,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python -m venv .native-test-venv
           if ($LASTEXITCODE -ne 0) { throw 'Test environment creation failed.' }
-          .\.native-test-venv\Scripts\python.exe -m pip install --index-url https://pypi.org/simple --only-binary=:all: "pytest>=8,<10" "cryptography>=44,<51" "PyYAML>=6.0.3,<7" "filelock>=4.2.1,<5" "aiohttp==3.14.4"
+          .\.native-test-venv\Scripts\python.exe -m pip install --index-url https://pypi.org/simple --only-binary=:all: "pytest>=8,<10" "cryptography>=44,<51" "PyYAML>=6.0.3,<7" "filelock>=4.2.1,<5" "aiohttp==3.14.4" "certifi>=2025.1.31"
           if ($LASTEXITCODE -ne 0) { throw 'Focused test dependency installation failed.' }
       - name: Check saved-port selection against this runner's real TCP ranges and a real reservation
         shell: pwsh
@@ -254,6 +257,15 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -s -p no:cacheprovider tests/test_windows_trust.py
           if ($LASTEXITCODE -ne 0) { throw 'Windows local-root trust checks failed.' }
+      # The update check's registry lookup: real TLS against a local server
+      # with a private root. On this lane the root also goes into the runner's
+      # MACHINE store and is removed again, to show that a root in the Windows
+      # store is accepted by the next lookup of the same process.
+      - name: Check which server certificates the update check's registry lookup accepts
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_update_registry_trust.py
+          if ($LASTEXITCODE -ne 0) { throw 'Registry lookup trust checks failed.' }
       - name: Check sign-out of all browsers and remote sign-in by code (real private store, real HTTPS)
         shell: pwsh
         run: |
@@ -262,7 +274,7 @@ jobs:
       # Uninstall: real Start-menu shortcuts (ShellLink COM), the real HKCU
       # registry transaction, private files and NTFS sharing, in a throwaway
       # installation folder that the test removes. Task Scheduler is a stand-in.
-      - name: Check uninstall order, a failed stop and a second uninstall with the real Windows entries
+      - name: Check uninstall order, a failed stop and restored real Windows entries
         shell: pwsh
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_consumer_shell.py

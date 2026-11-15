@@ -1,14 +1,18 @@
 // Compile beside the actual consumer setup sources with this explicit entry.
 // Native checks of the installation folder, its ownership checks, removal and
 // plain stop messages. Everything stays inside two new folders below the
-// caller's own temporary folder, and both are removed. No setup window,
-// download, task change, registry, trust or policy effect.
+// caller's own temporary folder, and both are removed. No download, task
+// change, registry, trust or policy effect. The one window is the second
+// setup run's progress window, with this program in place of the
+// installation's Python; it closes by itself and no message is shown.
 using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Reflection;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Threading;
 
 namespace UnifiedBootstrap {
     internal static class NativeSetupTests {
@@ -46,7 +50,52 @@ namespace UnifiedBootstrap {
             }
             Directory.Delete(folder,false);
         }
-        static int Main() {
+        static int StandIn(string[] args) {
+            // This test program in place of the installation's Python, for the
+            // second setup run. It accepts only the exact arguments that setup
+            // gives, and ends with the exit code that the test asked for.
+            string root=Environment.GetEnvironmentVariable("AMPLIFIER_SETUP_TEST_ROOT");
+            bool integrate=args.Length==7;
+            string[] expected=integrate
+                ? new[]{"-I","-B","-m","amplifier_web.windows_consumer","--root",root,"--integrate"}
+                : new[]{"-I","-m","amplifier_web.windows_consumer","--root",root};
+            if(root==null || args.Length!=expected.Length) return 9;
+            for(int index=0;index<args.Length;index++) if(args[index]!=expected[index]) return 9;
+            int wait, code;
+            if(Int32.TryParse(Environment.GetEnvironmentVariable("AMPLIFIER_SETUP_TEST_WAIT_MS"),out wait)) Thread.Sleep(wait);
+            if(integrate) Console.WriteLine("{\"startMenu\":true}");
+            return Int32.TryParse(Environment.GetEnvironmentVariable("AMPLIFIER_SETUP_TEST_EXIT"),out code)?code:0;
+        }
+        static int Window(string root, bool listed) {
+            // Setup's second-run window on a thread of its own, as setup's entry
+            // runs it. A window that does not close by itself fails the case.
+            int result=-1;
+            var thread=new Thread(()=>{ result=NativeInstaller.SecondRun(root,listed); });
+            thread.IsBackground=true; thread.SetApartmentState(ApartmentState.STA); thread.Start();
+            return thread.Join(45000)?result:-2;
+        }
+        static int ClosedEarly(string root) {
+            // The person closes setup's window while setup only waits for the
+            // launcher. A request that comes before that is refused; ask again.
+            int result=-1;
+            var thread=new Thread(()=>{ result=NativeInstaller.SecondRun(root,true); });
+            thread.IsBackground=true; thread.SetApartmentState(ApartmentState.STA); thread.Start();
+            Thread.Sleep(1500);
+            for(int attempt=0;attempt<12 && !thread.Join(500);attempt++) {
+                try {
+                    if(System.Windows.Forms.Application.OpenForms.Count>0) {
+                        var form=System.Windows.Forms.Application.OpenForms[0];
+                        form.BeginInvoke(new Action(form.Close));
+                    }
+                } catch(Exception) {}
+            }
+            return thread.Join(1000)?result:-2;
+        }
+        static int Main(string[] args) {
+            // Only a stand-in inherits this value: the checks below set it, and
+            // nothing sets it for the checks themselves. Any other arguments end
+            // the stand-in with 9; they never run the checks a second time.
+            if(Environment.GetEnvironmentVariable("AMPLIFIER_SETUP_TEST_ROOT")!=null) return StandIn(args);
             string local=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             string work=Path.Combine(local,"Temp","amplifier-setup-test-"+Guid.NewGuid().ToString("N").Substring(0,8));
             Directory.CreateDirectory(work);
@@ -54,6 +103,7 @@ namespace UnifiedBootstrap {
             try {
                 // The fixed folder: short, and the same on every run.
                 Need(NativeInstaller.RootName=="Amplifier" && NativeInstaller.MaxRootLength==59,"folder constants");
+                Need(NativeInstaller.SourceStore=="s" && NativeInstaller.EarlierSourceStore=="source-store","source store folder names");
                 InstallStorage.Check(work);
 
                 // Folder states, in a folder that this person owns privately.
@@ -71,6 +121,15 @@ namespace UnifiedBootstrap {
                 Need(NativeInstaller.RootState(root)=="unfinished","started marker");
                 Directory.CreateDirectory(Path.Combine(root,"app"));
                 Need(NativeInstaller.RootState(root)=="unfinished","empty data folders are not use");
+                // Component sources are app data under both store folder names.
+                foreach(string store in new[]{NativeInstaller.SourceStore,NativeInstaller.EarlierSourceStore}) {
+                    Directory.CreateDirectory(Path.Combine(root,store));
+                    Need(NativeInstaller.RootState(root)=="unfinished","an empty source store is not use: "+store);
+                    File.WriteAllText(Path.Combine(root,store,"object"),"component source");
+                    Need(NativeInstaller.RootState(root)=="damaged","component sources without a completion record: "+store);
+                    File.Delete(Path.Combine(root,store,"object")); Directory.Delete(Path.Combine(root,store));
+                }
+                Need(NativeInstaller.RootState(root)=="unfinished","the store folders are gone again");
                 File.WriteAllText(Path.Combine(root,"app","settings.yaml"),"a person's settings");
                 Need(NativeInstaller.RootState(root)=="damaged","app data without a completion record");
                 Need(Refused(()=>NativeInstaller.RemoveUnfinished(root)) && File.Exists(Path.Combine(root,"app","settings.yaml")),
@@ -163,6 +222,52 @@ namespace UnifiedBootstrap {
                 Directory.Move(installed,installed+"-moved"); Directory.Move(installed+"-moved",installed);
                 File.Delete(Path.Combine(installed,NativeInstaller.Complete));
                 Need(Refused(()=>NativeInstaller.PinInstalled(installed,program)),"only a finished installation is opened");
+
+                // The second setup run: its two steps and its window, with this test
+                // program in place of the installation's Python. Nothing is installed.
+                // Every case here ends without a message.
+                byte[] self=File.ReadAllBytes(Assembly.GetExecutingAssembly().Location);
+                string second, empty;
+                using(var storage=new InstallStorage(work,"Second")) {
+                    second=storage.Root;
+                    string scripts=Path.Combine(second,"tools","amplifier-unified","Scripts");
+                    storage.EnsureDirectory(scripts); storage.EnsureDirectory(Path.Combine(second,"workspace"));
+                    foreach(string name in new[]{"python.exe","pythonw.exe"})
+                        using(var stream=storage.CreateFile(Path.Combine(scripts,name))) stream.Write(self,0,self.Length);
+                    using(var stream=storage.CreateFile(Path.Combine(second,NativeInstaller.Complete))) stream.WriteByte(123);
+                }
+                Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_ROOT",second);
+                Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_EXIT","0");
+                Need(NativeInstaller.AddEntries(second),"entries step: the program got setup's exact arguments and ended with 0");
+                Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_WAIT_MS","1500");
+                var clock=Stopwatch.StartNew();
+                int shown=Window(second,true);
+                Need(shown==0 && clock.ElapsedMilliseconds>=1400,"second run with entries: setup waits for the launcher, then the window closes (result "+shown+")");
+                Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_WAIT_MS",null);
+                shown=Window(second,false);
+                Need(shown==0,"second run without entries: added, started, closed (result "+shown+")");
+                Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_EXIT","1");
+                Need(!NativeInstaller.AddEntries(second),"entries step: a program that fails is a failure");
+                shown=Window(second,true);
+                Need(shown==1,"second run: the launcher's failure is setup's result, with no second message (result "+shown+")");
+                Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_EXIT","0");
+                // The window is closed while the launcher still runs (10 seconds
+                // here). Setup did not see the outcome: 1, although the launcher
+                // will end with 0. Then wait for the stand-in to end.
+                Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_WAIT_MS","10000");
+                clock=Stopwatch.StartNew();
+                shown=ClosedEarly(second);
+                Need(shown==1 && clock.ElapsedMilliseconds<9000,"second run: the window closes on request while the launcher runs (result "+shown+")");
+                Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_WAIT_MS",null);
+                while(clock.ElapsedMilliseconds<11500) Thread.Sleep(250);
+                // A finished installation whose programs are missing: no start.
+                using(var storage=new InstallStorage(work,"Empty")) {
+                    empty=storage.Root;
+                    storage.EnsureDirectory(Path.Combine(empty,"workspace"));
+                    using(var stream=storage.CreateFile(Path.Combine(empty,NativeInstaller.Complete))) stream.WriteByte(123);
+                }
+                Need(!NativeInstaller.AddEntries(empty),"entries step: a missing program is a failure");
+                Need(Refused(()=>NativeInstaller.StartApp(empty)),"start step: a missing launcher is refused");
 
                 // A folder above the target that other accounts can change is named.
                 string open=Path.Combine(work,"open"); Directory.CreateDirectory(Path.Combine(open,"inner"));

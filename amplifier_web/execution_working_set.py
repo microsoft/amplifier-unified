@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from . import execution_records as records
@@ -32,15 +33,16 @@ def _stored(db, reference):
 
 
 class WorkingExecution:
-    def __init__(self, session, reference):
+    def __init__(self, session, reference, *, legacy=None):
         self.db = session.db
         self.owner = _owner(session)
         self.reference = copy.deepcopy(reference)
+        self._legacy_read = None
         if reference.get('executionProjection') == 2:
             self.current = records.read_active(self.db, reference, owner=self.owner)
         else:
             # One legacy ownership transition, not a repeated current update.
-            value = _stored(self.db, reference)
+            value = _stored(self.db, reference) if legacy is None else legacy
             for kind in records.COLLECTIONS:
                 try:
                     identities = [records.key(kind, row) for row in value.get(kind, [])]
@@ -51,10 +53,19 @@ class WorkingExecution:
             self.current = {name: value for name, value in value.items() if name not in records.COLLECTIONS}
             self.current.update({kind: [row for row in value.get(kind, []) if records.is_active(row)]
                                  for kind in records.COLLECTIONS})
+            if legacy is not None:
+                self.current = copy.deepcopy(self.current)
         self.admitted = {kind: {records.key(kind, row) for row in self.current[kind]}
                          for kind in records.COLLECTIONS}
         self.usage_prefix = None
         self._usage_stage = None
+
+    def _stored(self, *, detach=True):
+        if self._legacy_read is not None and self._legacy_read[0] == self.reference:
+            # Each public read used to receive an independent JSON value.
+            # Only private read-only projections may borrow this verified input.
+            return copy.deepcopy(self._legacy_read[1]) if detach else self._legacy_read[1]
+        return _stored(self.db, self.reference)
 
     def record(self, kind, identity, *, derived=False):
         present = next((row for row in self.current[kind] if records.key(kind, row) == identity), None)
@@ -63,7 +74,7 @@ class WorkingExecution:
         if self.reference.get('executionProjection') == 2:
             value = records.read_record(self.db, self.reference, kind, identity, owner=self.owner)
         else:
-            value = next((row for row in _stored(self.db, self.reference).get(kind, [])
+            value = next((row for row in self._stored().get(kind, [])
                           if records.key(kind, row) == identity), None)
         if value is not None:
             if kind in ('nodes', 'turns') and not derived:
@@ -74,14 +85,14 @@ class WorkingExecution:
             self.admitted[kind].add(identity)
         return value
 
-    def _complete(self, *, detach_current=False, collections=records.COLLECTIONS):
+    def _complete(self, *, detach_current=False, collections=records.COLLECTIONS, borrow_stored=False):
         current = copy.deepcopy(self.current) if detach_current else self.current
         value = {name: item for name, item in current.items() if name not in records.COLLECTIONS}
         if self.reference.get('executionProjection') == 2 and collections != records.COLLECTIONS:
             stored = {kind: records.read_collection(self.db, self.reference, kind, owner=self.owner)
                       for kind in collections}
         else:
-            stored = _stored(self.db, self.reference)
+            stored = self._stored(detach=not borrow_stored)
         for kind in collections:
             changes = {records.key(kind, row): row for row in current[kind]}
             rows = []
@@ -98,6 +109,12 @@ class WorkingExecution:
         # Durable JSON reads are already detached. Copy only the mutable current
         # overlay, preserving its internal aliases, not the completed ledger.
         return self._complete(detach_current=True)
+
+    def _native_activity_input(self):
+        # Native selection/rollup only read rows and replace the returned outer
+        # aggregate. No historical row escapes to a mutable caller or owner.
+        # Without a matching operation-local binding, the normal read detaches.
+        return self._complete(detach_current=True, borrow_stored=True)
 
     def usage_input(self):
         """Complete ordered accounting inputs, keeping current aliases live."""
@@ -131,6 +148,7 @@ class WorkingExecution:
         value.admitted = {kind: set(identities) for kind, identities in self.admitted.items()}
         value.usage_prefix = None
         value._usage_stage = None
+        value._legacy_read = None
         return value
 
     def expose(self):
@@ -145,7 +163,7 @@ class WorkingExecution:
         reference = self.reference
         if reference.get('executionProjection') != 2:
             from .session_projection import stored_execution
-            reference = records.import_tree(self.db, self.owner, stored_execution(_stored(self.db, reference)))
+            reference = records.import_tree(self.db, self.owner, stored_execution(self._stored(detach=False)))
         changes = {kind: {identity: None for identity in self.admitted[kind]
                           - {records.key(kind, row) for row in self.current[kind]}}
                    for kind in records.COLLECTIONS}
@@ -227,7 +245,7 @@ class PendingExecution:
             self.owner.committed(self.reference)
 
 
-def working(session):
+def working(session, *, _legacy=None):
     """Acquire only at an unexposed ColdRecord boundary; plain callers stay plain."""
     from .cold_display import ColdRecord, MARKER
     if not isinstance(session, ColdRecord) or dict.__contains__(session, 'execution'):
@@ -238,11 +256,38 @@ def working(session):
     owner = getattr(session, '_working_execution', None)
     if owner is None or owner.owner != _owner(session):
         try:
-            owner = session._working_execution = WorkingExecution(session, reference)
+            owner = session._working_execution = WorkingExecution(session, reference, legacy=_legacy)
         except LegacyExecution:
             session['execution']  # Transfer the exact old mutable representation.
             return None
     return owner
+
+
+@contextmanager
+def native_refresh(session):
+    """Share one verified v1 read through synchronous native merge/publication.
+
+    The caller holds the session writer lock and must not await in this scope.
+    No historical read binding survives the operation or enters detached views.
+    Durable selection still changes only after the existing successful commit.
+    """
+    from .cold_display import ColdRecord, MARKER
+    reference = (dict.get(session, MARKER, {}).get('execution')
+                 if isinstance(session, ColdRecord) and not dict.__contains__(session, 'execution') else None)
+    if reference is None or reference.get('executionProjection') != 1:
+        yield
+        return
+    value = _stored(session.db, reference)
+    owner = working(session, _legacy=value)
+    if owner is None:
+        yield
+        return
+    previous = owner._legacy_read
+    owner._legacy_read = (copy.deepcopy(reference), value)
+    try:
+        yield
+    finally:
+        owner._legacy_read = previous
 
 
 def current(session):
