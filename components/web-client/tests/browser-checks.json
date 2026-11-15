@@ -7,6 +7,11 @@
       "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/work-hierarchy"}
     },
     {
+      "id": "settings-draft-focus",
+      "command": ["node", "tests/settings-draft-focus-browser.mjs"],
+      "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/settings-draft-focus"}
+    },
+    {
       "id": "settings-action-spacing",
       "command": ["node", "tests/settings-action-spacing-browser.mjs"],
       "env": {

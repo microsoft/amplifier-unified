@@ -3975,11 +3975,13 @@ def test_layout_return_addition_rejects_missing_or_mutated_owner(name, fault):
         layout_return_browser_additions(rows, readiness)
 
 
-LAYOUT_PASS2_BROWSER_IDS = ('worktree-move', 'work-hierarchy', 'settings-action-spacing')
+LAYOUT_PASS2_BROWSER_IDS = (
+    'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus',
+)
 
 
 def layout_pass2_browser_additions(rows, readiness_scripts=()):
-    """Validate all three exact selected-client owners before historical exclusion."""
+    """Validate all four exact selected-client owners before historical exclusion."""
     identities = set()
     for name in LAYOUT_PASS2_BROWSER_IDS:
         script = f'tests/{name}-browser.mjs'
@@ -4012,13 +4014,16 @@ def layout_pass2_registry_rows():
          'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/settings-action-spacing',
                  'AMPLIFIER_TEST_APPEARANCES': '{root}/tests/fixtures/appearance-cases.json'},
          'cwd': '.build/web-client'},
+        {'id': 'settings-draft-focus', 'command': ['node', 'tests/settings-draft-focus-browser.mjs'],
+         'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/settings-draft-focus'},
+         'cwd': '.build/web-client'},
     ]
 
 
-def test_layout_pass2_guard_requires_all_three_independent_fixture_owners():
+def test_layout_pass2_guard_requires_all_four_independent_fixture_owners():
     rows = layout_pass2_registry_rows()
     assert layout_pass2_browser_additions(rows) == {
-        'worktree-move', 'work-hierarchy', 'settings-action-spacing'}
+        'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
     for owner in rows:
         name = owner['id']
         with pytest.raises(AssertionError, match=name):
@@ -4099,12 +4104,13 @@ def test_settings_action_spacing_requires_exact_appearance_fixture_before_exclus
         coverage_plan()
 
 
-def test_layout_pass2_assembly_retains_prior_order_and_binds_all_three_selected_owners():
+def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_owners():
     host_path = ROOT / 'tests/web/browser-checks.json'
     host = json.loads(host_path.read_text())
     plan, proof = runner.load_plan(ROOT, host_path)
     identities = layout_pass2_browser_additions(plan['scenarios'])
-    assert identities == {'worktree-move', 'work-hierarchy', 'settings-action-spacing'}
+    assert identities == {
+        'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
     client_path = source_test('tests/worktree-move-browser.mjs').with_name('browser-checks.json')
     client = json.loads(client_path.read_text())
     expected = layout_pass2_registry_rows()
@@ -4133,7 +4139,10 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_three_selected_
     ]
     assert len(preceding_client_ids) == 25
     assert len(client['scenarios']) == 25 + len(identities)
-    # Independent preceding 164-row host order, not derived from the new registry.
+    # Accepted f544781 host order includes worktree-move after assignment-adoption.
+    # The other three guarded owners are additive to these exact 165 identities.
+    new_ids = identities - {'worktree-move'}
+    assert new_ids == {'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
     preceding_order = '''
         agent-chat-navigation agent-chat-navigation-settings navigation-waiting
         context-inspector context-inspector-layout adaptive-work home-sidebar shared-landing
@@ -4167,18 +4176,21 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_three_selected_
         session-health-context-limit session-health-context-limit-active-worker
         session-health-request-failure session-health-completed-runtime-fault session-health-module-failure
         activity-feedback capacity request-cancellation coordination shared-work connectors
-        test-environments assignment-adoption access-mode storage-cleanup-settings model-capacity-settings
+        test-environments assignment-adoption worktree-move access-mode storage-cleanup-settings model-capacity-settings
         compact-composer composer-panel-ownership peer-preview peer-preview-header peer-preview-focus
         canvas-chrome canvas-close chat-scroll-call-boundaries semantic-settings history-refresh
         voice-work-message external-multiparty shared-room
     '''.split()
-    assert len(preceding_order) == len(set(preceding_order)) == 164
-    assert [name for name in host['scenarioOrder'] if name not in identities] == preceding_order
-    assert host['scenarioOrder'][host['scenarioOrder'].index('shared-controls') + 1:
-                                 host['scenarioOrder'].index('delivery-warning')] == ['settings-action-spacing']
-    assert host['scenarioOrder'][-3:] == ['shared-room', 'work-hierarchy', 'worktree-move']
+    assert len(preceding_order) == len(set(preceding_order)) == 165
+    assert [name for name in host['scenarioOrder'] if name not in new_ids] == preceding_order
+    # Preserve the prior spacing/hierarchy placements independently of where the
+    # newly validated draft-focus journey is inserted into the host order.
+    before_focus = [name for name in host['scenarioOrder'] if name != 'settings-draft-focus']
+    assert before_focus[before_focus.index('shared-controls') + 1:
+                        before_focus.index('delivery-warning')] == ['settings-action-spacing']
+    assert before_focus[-2:] == ['shared-room', 'work-hierarchy']
     assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
-    assert len(plan['scenarios']) == len(host['scenarioOrder']) == 164 + len(identities) == 167
+    assert len(plan['scenarios']) == len(host['scenarioOrder']) == 165 + len(new_ids) == 168
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
     assert not identities & {row['id'] for row in coverage_plan()['scenarios']}
@@ -4193,12 +4205,13 @@ def test_layout_pass2_assembly_order_cannot_drop_or_repeat_new_client_rows(tmp_p
     client_plan['scenarios'].extend(
         {key: value for key, value in row.items() if key != 'cwd'}
         for row in layout_pass2_registry_rows())
-    host_plan['scenarioOrder'].extend(['worktree-move', 'work-hierarchy', 'settings-action-spacing'])
+    host_plan['scenarioOrder'].extend([
+        'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'])
     host.write_text(json.dumps(host_plan))
     client.write_text(json.dumps(client_plan))
     plan, _ = runner.load_plan(tmp_path, host)
     assert layout_pass2_browser_additions(plan['scenarios']) == {
-        'worktree-move', 'work-hierarchy', 'settings-action-spacing'}
+        'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
     if fault == 'omitted':
         host_plan['scenarioOrder'].remove(name)
     else:

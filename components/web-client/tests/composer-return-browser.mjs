@@ -20,6 +20,24 @@ const cases=[
  {name:'unknown-touch-capability',viewport:{width:1280,height:900},unknown:true,safe:true},
 ];
 const results=[],compactGeometry=[];let browser,vite,activeScenario,activePage;
+async function resizeForComposer(page,viewport){
+ await page.setViewportSize(viewport);
+ // Resizing the browser precedes React's matchMedia and ResizeObserver commits.
+ // Measure the settled app, not a transient desktop sidebar squeezed beside a
+ // phone-width composer. Do not mutate the saved navigation preference to fit.
+ const layout=page.locator('[data-part="workspace"][data-pane-layout]');
+ const expected=await page.evaluate(()=>({
+  navigation:matchMedia('(max-width: 640px)').matches,
+  canvas:matchMedia('(max-width: 900px)').matches,
+ }));
+ await expect(layout).toHaveAttribute('data-navigation-narrow',String(expected.navigation));
+ await expect(layout).toHaveAttribute('data-narrow',String(expected.canvas));
+ if(expected.navigation){
+  const navigation=page.locator('#workspace-navigation');
+  await expect(navigation).toHaveAttribute('data-docked','false');
+  await expect(navigation).toBeHidden();
+ }
+}
 async function compactHelpLayout(page,composer,expectedHelp,scenario){
  const help=page.locator('[data-part="composer-return-help"]'),surface=page.locator('[data-part="composer-surface"]');
  await expect(help).toHaveCount(1);await expect(help).toHaveText(expectedHelp);
@@ -29,7 +47,12 @@ async function compactHelpLayout(page,composer,expectedHelp,scenario){
  const measure=()=>surface.evaluate(el=>{
   const rect=node=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height};};
   const field=el.querySelector('[role="textbox"]'),form=el.closest('form'),help=form.querySelector('[data-part="composer-return-help"]');
+  const layout=el.closest('[data-part="workspace"]'),navigation=layout.querySelector('#workspace-navigation');
   return {surface:rect(el),editor:rect(field),help:rect(help),configuration:rect(form.querySelector('.a-compose-configuration')),
+   responsive:{navigationNarrow:layout.dataset.navigationNarrow,narrow:layout.dataset.narrow,
+    navigationHidden:navigation.hidden,navigationDocked:navigation.dataset.docked,navigation:rect(navigation),
+    navigationQuery:matchMedia('(max-width: 640px)').matches,canvasQuery:matchMedia('(max-width: 900px)').matches},
+   widths:{surfaceScroll:el.scrollWidth,surfaceClient:el.clientWidth,pageScroll:document.documentElement.scrollWidth,viewport:innerWidth},
    helpStyle:{position:getComputedStyle(help).position,visibility:getComputedStyle(help).visibility,display:getComputedStyle(help).display,
     clip:getComputedStyle(help).clip,clipPath:getComputedStyle(help).clipPath,margin:getComputedStyle(help).margin,
     hidden:!!help.closest('[hidden],[aria-hidden="true"]')},
@@ -39,7 +62,14 @@ async function compactHelpLayout(page,composer,expectedHelp,scenario){
  const check=geometry=>{
   assert.ok(geometry.surface.height<=72,`Idle field remains compact, not a relaxed cap: ${geometry.surface.height}`);
   assert.ok(geometry.editor.height>=44);
-  assert.equal(geometry.overflow,false);assert.equal(geometry.pageOverflow,false);
+  assert.equal(geometry.responsive.navigationNarrow,String(geometry.responsive.navigationQuery),'Measure only after the rendered navigation breakpoint matches this viewport');
+  assert.equal(geometry.responsive.narrow,String(geometry.responsive.canvasQuery),'Measure only after the rendered workspace breakpoint matches this viewport');
+  if(geometry.responsive.navigationQuery){
+   assert.equal(geometry.responsive.navigationHidden,true,'Saved desktop pin must not leave mobile navigation in the chat layout');
+   assert.equal(geometry.responsive.navigationDocked,'false');
+  }
+  assert.equal(geometry.overflow,false,`Composer surface overflows at ${geometry.widths.viewport}px: scroll=${geometry.widths.surfaceScroll}, client=${geometry.widths.surfaceClient}`);
+  assert.equal(geometry.pageOverflow,false,`Page overflows: scroll=${geometry.widths.pageScroll}, viewport=${geometry.widths.viewport}`);
   // User follow-up removes the persistent visible instruction. Retain the same
   // effective aria-describedby text, but no painted hint or blank spacer row.
   assert.equal(geometry.helpStyle.position,'absolute');
@@ -56,7 +86,7 @@ async function compactHelpLayout(page,composer,expectedHelp,scenario){
  };
  const originalViewport=page.viewportSize();
  for(const width of [900,390,320]){
-  await page.setViewportSize({width,height:900});
+  await resizeForComposer(page,{width,height:900});
   await expect(surface).toHaveAttribute('data-expanded','false');
   const geometry=await measure();compactGeometry.push({scenario,width,...geometry});
   check(geometry);
@@ -74,7 +104,7 @@ async function compactHelpLayout(page,composer,expectedHelp,scenario){
  finally{await help.evaluate((node,value)=>node.className=value,originalClass);}
  compactGeometry.push({scenario,negativeControl:'persistent visible Return instruction restored',rejected:true,...broken});
  check(await measure());
- await page.setViewportSize(originalViewport);
+ await resizeForComposer(page,originalViewport);
 }
 await mkdir(artifact,{recursive:true});
 try{
@@ -192,7 +222,7 @@ try{
     await page.keyboard.type('Second');await retained('Kept\n\nSecond');
     await composer.fill('First\n\nSecond\n\nThird');
    }
-   await page.setViewportSize({width:scenario.viewport.width===390?1280:390,height:844});
+   await resizeForComposer(page,{width:scenario.viewport.width===390?1280:390,height:844});
    await expect(composer).toHaveAccessibleDescription(scenario.safe?/Return adds/:/Enter to send/);
    if(!scenario.safe){
     await composer.press('Enter');
@@ -243,9 +273,13 @@ try{
    assert.deepEqual(errors,[]);
    results.push({scenario:scenario.name,passed:true,nativeEvents:events,submissions:sends().length});
   }catch(error){
-   const live=activePage&&!activePage.isClosed()?await activePage.evaluate(()=>({
-    events:window.returnEvents,draft:window.amplifier?.getState?.().view?.draft,
-   })).catch(()=>null):null;
+   const live=activePage&&!activePage.isClosed()?await activePage.evaluate(()=>{
+    const layout=document.querySelector('[data-part="workspace"][data-pane-layout]'),navigation=document.querySelector('#workspace-navigation');
+    return {events:window.returnEvents,draft:window.amplifier?.getState?.().view?.draft,
+     viewport:{width:innerWidth,height:innerHeight},
+     responsive:layout?{narrow:layout.dataset.narrow,navigationNarrow:layout.dataset.navigationNarrow,
+      navigationHidden:navigation?.hidden,navigationDocked:navigation?.dataset.docked}:null};
+   }).catch(()=>null):null;
    await writeFile(artifact+'/failure.json',JSON.stringify({scope:'synthetic client Chromium',scenario:activeScenario,results,compactGeometry,live,failure:error.stack||String(error)},null,2)+'\n');
    throw error;
   }finally{await context.close();activePage=null;}

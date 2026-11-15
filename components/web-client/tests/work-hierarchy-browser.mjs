@@ -9,7 +9,7 @@ import {assertConversationErrorFocus as assertFocus} from './conversation-error-
 import {workHierarchyData} from './fixtures/work-hierarchy.js';
 const artifacts=process.env.AMPLIFIER_TEST_ARTIFACTS||'/artifacts/work-hierarchy';
 const fixture=`
-import React,{useState} from 'react';
+import React,{useEffect,useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {TurnTimeline,WorkTimeline} from '/src/timeline.jsx';
 import {ShellContext} from '/src/shell/runtime.jsx';
@@ -28,10 +28,11 @@ const dispatch=async(name,args)=>{window.calls.push({name,args});
 };
 function Scene(){
  const [expanded,setExpanded]=useState([]),[detail,setDetail]=useState('standard');
+ useEffect(()=>{window.fixtureMounted=true;return()=>{window.fixtureMounted=false}},[]);
  window.setDetail=setDetail;
  const act=(name,args)=>{if(name==='view.update'&&args.patch.executionExpanded){setExpanded(args.patch.executionExpanded);return Promise.resolve({accepted:true})}return dispatch(name,args)};
  const state={selectedSessionId:'main-fixture',view:{executionExpanded:expanded}};
- const pending={id:'question',revision:1,contentRevision:1,status:'pending',prompt:'Choose a **synthetic** path',required:true,allowFreeText:true,options:[{id:'keep',label:'Keep retained data'}]};
+ const pending={id:'question',revision:1,contentRevision:1,status:'pending',prompt:'Choose a **synthetic** path',dependency:'',required:true,allowFreeText:true,options:[{id:'keep',label:'Keep retained data'}]};
  const history={...pending,id:'answered',status:'answered',delivery:{status:'accepted'},answer:{text:'Retained answer',questionRevision:1}};
  return <ShellContext.Provider value={{composition:{presentation:{interfaceDetail:detail,executionMetrics:['elapsedSeconds','calls']}}}}>
  <section aria-label="Single failed turn"><TurnTimeline data={{...data,nodes:[],detailsDeferred:true}} turnId="failed-turn" state={state} act={act}/></section>
@@ -41,7 +42,9 @@ function Scene(){
  <section aria-label="Workspace review"><WorkspaceReview sessionId="main-fixture" workspace="/fixture" dispatch={dispatch}/></section>
  </ShellContext.Provider>;
 }
-createRoot(document.getElementById('fixture')).render(<Scene/>);
+createRoot(document.getElementById('fixture'),{onUncaughtError(error,info){
+ window.fixtureFailure={message:error.message,stack:error.stack,componentStack:info.componentStack};
+}}).render(<Scene/>);
 `;
 let vite,browser,page;const metrics=[],failures=[];
 try{
@@ -63,7 +66,9 @@ try{
   });
   for(const scheme of ['light','dark'])for(const pane of [null,...(width===1280?[360]:[])])for(const detail of ['minimal','standard','detailed']){
    await page.emulateMedia({colorScheme:scheme});await page.goto(vite.resolvedUrls.local[0]+'work-hierarchy');
-   await page.waitForFunction(()=>window.setDetail);
+   await page.waitForFunction(()=>window.fixtureMounted||window.fixtureFailure);
+   const renderFailure=await page.evaluate(()=>window.fixtureFailure||null);
+   assert.equal(renderFailure,null,'production-component fixture failed to render: '+JSON.stringify(renderFailure));
    await page.evaluate(({pane,detail})=>{document.getElementById('fixture').style.maxWidth=pane?pane+'px':'760px';document.getElementById('amp-one').dataset.executionDetail=detail;window.setDetail(detail)},{pane,detail});
    const label=[width,scheme,pane||'full',detail].join('-'),single=page.getByRole('region',{name:'Single failed turn',exact:true}),turn=single.locator('[data-part=execution]');
    const summary=turn.locator(':scope>.a-execution-turn-line');await expect(summary).toBeVisible();

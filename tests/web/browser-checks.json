@@ -1307,6 +1307,7 @@
     "action-spacing",
     "shared-controls",
     "settings-action-spacing",
+    "settings-draft-focus",
     "delivery-warning",
     "legacy-outbox-notice",
     "delivery-reconciliation",

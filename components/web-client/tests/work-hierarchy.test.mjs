@@ -2,11 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import React,{act} from 'react';
 import {create} from 'react-test-renderer';
-import {createServer} from 'vite';
+import {createServer,transformWithEsbuild} from 'vite';
 import {readFile} from 'node:fs/promises';
 import {workHierarchyData} from './fixtures/work-hierarchy.js';
 
-const server=await createServer({configFile:false,server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
+const browserSource=await readFile(new URL('./work-hierarchy-browser.mjs',import.meta.url),'utf8');
+const fixtureStart=browserSource.indexOf('const fixture=`')+'const fixture=`'.length;
+const fixtureEnd=browserSource.indexOf('\n`;\nlet vite',fixtureStart);
+assert.ok(fixtureStart>14&&fixtureEnd>fixtureStart,'the exact browser scene is available to render preflight');
+const fixture=browserSource.slice(fixtureStart,fixtureEnd);
+const scene=fixture.slice(0,fixture.lastIndexOf('\ncreateRoot('))+'\nexport {Scene};';
+const server=await createServer({configFile:false,server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]},plugins:[{
+ name:'work-hierarchy-scene-preflight',
+ resolveId(id){if(id==='virtual:work-hierarchy-scene.jsx')return id},
+ async load(id){if(id==='virtual:work-hierarchy-scene.jsx')return (await transformWithEsbuild(scene,'work-hierarchy-scene.jsx',{loader:'jsx',jsx:'automatic'})).code},
+}]});
 const {TurnTimeline,WorkTimeline}=await server.ssrLoadModule('/src/timeline.jsx');
 const {ShellContext}=await server.ssrLoadModule('/src/shell/runtime.jsx');
 const {ArtifactFileDetails}=await server.ssrLoadModule('/src/artifact-file-details.jsx');
@@ -15,6 +25,26 @@ test.after(()=>server.close());
 const wrap=child=>React.createElement(ShellContext.Provider,{value:{composition:{presentation:{interfaceDetail:'standard',executionMetrics:['elapsedSeconds','calls']}}}},child);
 const hostParent=node=>{let parent=node.parent;while(parent&&typeof parent.type!=='string')parent=parent.parent;return parent};
 const allText=node=>typeof node==='string'?node:(node.children||[]).map(allText).join('');
+
+test('the exact browser scene commits every production surface before geometry or detail-level changes',async()=>{
+ const previousWindow=globalThis.window;
+ globalThis.window={};
+ let root;
+ try{
+  const {Scene}=await server.ssrLoadModule('virtual:work-hierarchy-scene.jsx');
+  await act(async()=>{root=create(React.createElement(Scene))});
+  assert.equal(window.fixtureMounted,true,'readiness comes from a committed effect, not a setter assigned during a failed render');
+  for(const label of ['Single failed turn','Grouped turns','Questions','Canvas file','Workspace review']){
+   assert.equal(root.root.findByProps({'aria-label':label}).type,'section');
+  }
+  for(const detail of ['minimal','standard','detailed']){
+   await act(async()=>window.setDetail(detail));
+   assert.equal(root.root.findByProps({'aria-label':'Single failed turn'}).findAllByProps({'data-part':'execution'}).length,1);
+   assert.equal(root.root.findByProps({'aria-label':'Questions'}).findAllByType('textarea').length,1);
+  }
+  assert.deepEqual(window.calls.map(call=>call.name),['coordination.review'],'only the production review component makes its expected passive initial read');
+ }finally{await act(async()=>root?.unmount());assert.equal(window.fixtureMounted,false);globalThis.window=previousWindow}
+});
 
 for(const phase of ['error','completed'])test(`${phase} turn details are one controlled child body; operation siblings and exact identities are retained`,async()=>{
  const data=workHierarchyData();data.turns[0].phase=phase;

@@ -105,7 +105,7 @@ try{
    await expect(page.getByRole('button',{name:'Copy diagnostics',exact:true})).toBeVisible();
    // Apply actual paired appearance CSS after the production component styles,
    // as the app does. Only document/fixture stacking is synthetic geometry.
-   await page.addStyleTag({content:appearance.css});
+   if(appearance.css.trim())await page.addStyleTag({content:appearance.css});
    await page.addStyleTag({content:'html,body{height:auto!important;overflow:auto!important;margin:0}#amp-one.a-chat-shell{height:auto;overflow:visible;display:block;padding:16px}#fixture{display:grid;gap:24px;max-width:800px;margin:auto}#fixture>section{min-width:0;width:100%;box-sizing:border-box}#fixture>.a-dialog{max-height:none;overflow:visible}'});
    await page.evaluate(()=>document.fonts.ready);
    await page.locator('#amp-one').evaluate((node,scheme)=>node.dataset.themeScheme=scheme,scheme);
