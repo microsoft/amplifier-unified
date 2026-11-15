@@ -10,3 +10,19 @@
 @media(prefers-reduced-motion:reduce){#amp-one .a-name-spinning{animation:none}}
 
 #amp-one .a-error-message{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:16rem;overflow:auto}
+
+/* This notice is a sibling of the composer, not a viewport-wide app error.
+   Reuse its reading-width token and responsive conversation gutters. */
+#amp-one.a-approachable-shell [data-part=conversation-trouble]{box-sizing:border-box;max-width:var(--a-reading-width,760px);width:calc(100% - 48px);margin-inline:auto}
+#amp-one .a-alert[data-part=conversation-trouble]{display:grid;grid-template-columns:minmax(0,1fr);align-items:start;gap:8px 12px}
+#amp-one .a-alert[data-part=conversation-trouble]:has(>.a-conversation-trouble-dismiss){grid-template-columns:minmax(0,1fr) 44px}
+#amp-one .a-conversation-trouble-content{display:grid;gap:10px;min-width:0}
+#amp-one .a-conversation-trouble-actions,#amp-one .a-conversation-trouble-details-actions{display:flex;align-items:flex-start;flex-wrap:wrap;gap:8px 12px;min-width:0}
+#amp-one .a-conversation-trouble-actions>details{flex:0 1 auto;min-width:0;max-width:100%}
+#amp-one .a-conversation-trouble-actions>details[open]{flex-basis:100%}
+#amp-one .a-conversation-trouble-actions summary{cursor:pointer;min-height:44px;padding:8px;box-sizing:border-box;white-space:normal;overflow-wrap:anywhere}
+#amp-one .a-conversation-trouble-actions details>p{margin:8px 0 12px}
+#amp-one .a-alert[data-part=conversation-trouble] button{min-height:44px;white-space:normal;overflow-wrap:anywhere}
+#amp-one [data-part=conversation-trouble]>.a-conversation-trouble-dismiss{grid-column:2;grid-row:1;width:44px;height:44px;padding:10px;margin:0}
+#amp-one .a-conversation-trouble-content>p{margin:0}
+@container conversation (max-width:520px){#amp-one.a-approachable-shell [data-part=conversation-trouble]{width:calc(100% - 28px);padding-inline:12px;column-gap:8px}}

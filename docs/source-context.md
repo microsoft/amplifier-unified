@@ -69,6 +69,9 @@ Operations is authored in `components/operations`; its generated selection stays
 at top-level `amplifier_operations` to preserve editable and isolated-worker import
 paths. `components/operations.source.json` records its published artifact.
 Use `--all --under amplifier_operations` to inspect that selected runtime.
+Kernels follows the same root-layout rule: author in `components/kernels`,
+select through `components/kernels.source.json`, and use
+`--all --under amplifier_kernels` to inspect the generated Python/Node runtime.
 Source bootstrap files in the canonical client's `public/` remain authored inputs;
 their delivery copy has the same generated-context classification as other copied
 client source. Shipped documentation in `docs/shell` is authored here. Frozen UX inventory/control

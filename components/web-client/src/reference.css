@@ -229,6 +229,27 @@
   accent-color: var(--a-accent);
 }
 
+/* Only collapsed native selects get a decorative indicator. The actual select
+   retains keyboard, form and mobile-picker behavior. Listboxes stay native;
+   bespoke select presentations can explicitly keep their native indicator. */
+#amp-one select:not([multiple]):is(:not([size]), [size="1"]):not([data-native-indicator]) {
+  appearance: none;
+  padding-inline-end: 36px;
+  /* 12px start + 36px indicator + 2px border + 4px text/rounding reserve.
+     clientWidth rounds to whole pixels; an exact 3ch content box can clip. */
+  min-inline-size: min(100%, calc(3ch + 54px));
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 17px center, right 12px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+
+#amp-one select:not([multiple]):is(:not([size]), [size="1"]):not([data-native-indicator]):dir(rtl) {
+  background-position: left 12px center, left 17px center;
+}
+
 #amp-one :where(.a-primary, .a-send) {
   color: var(--a-on-accent);
   background-color: var(--a-accent);
@@ -576,7 +597,8 @@ body,
   margin-bottom: 22px;
 }
 
-#amp-one .a-dialog label {
+/* Field labels are defaults, not a layout override for choices or searches. */
+#amp-one :where(.a-dialog label) {
   display: block;
   margin: 16px 0 6px;
   color: var(--a-muted);
@@ -597,10 +619,16 @@ body,
 }
 
 /* Native choice inputs must not inherit full-width text-field geometry. */
-#amp-one .a-dialog :where(label:has(> input:is([type="checkbox"], [type="radio"]))) {
+#amp-one :where(.a-dialog) label:has(> input:is([type="checkbox"], [type="radio"])) {
   display: flex;
   align-items: flex-start;
   gap: 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#amp-one :where(.a-dialog) label:has(> input:is([type="checkbox"], [type="radio"])) > input {
+  margin-block-start: .15em;
 }
 
 #amp-one .a-dialog :where(input:is([type="checkbox"], [type="radio"])) {
@@ -630,6 +658,86 @@ body,
   align-items: center;
   gap: 9px;
   margin-top: 20px;
+}
+
+/* Adjacent actions share alignment and keep clearance when they wrap. */
+#amp-one .a-control-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+#amp-one .a-control-actions > button {
+  max-width: 100%;
+  white-space: normal;
+}
+
+/* Bordered navigation searches share one field boundary. Buttons inside them
+   remain independent focus targets; ordinary inputs keep the global outline. */
+#amp-one .a-nav-search:focus-within {
+  outline: 2px solid var(--a-accent);
+  outline-offset: 2px;
+}
+
+#amp-one .a-nav-search > input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* History feedback is functional layout, not an appearance delta. */
+#amp-one .a-session-history {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+  color: var(--a-muted);
+  font-size: var(--a-text-base, 14px);
+}
+
+#amp-one .a-history-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  color: var(--a-muted);
+  font-size: var(--a-text-base, 14px);
+}
+
+#amp-one .a-history-status > svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  margin-block-start: .2em;
+}
+
+#amp-one .a-history-status > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#amp-one .a-session-history-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  color: var(--a-danger);
+}
+
+#amp-one .a-session-history-error > .a-history-status {
+  flex: 1 1 18rem;
+  color: inherit;
+}
+
+#amp-one .a-session-history-error > button {
+  flex: none;
+}
+
+#amp-one .a-session-history > button {
+  align-self: center;
 }
 
 /* The native action, not an overlay or its label, owns the touch target. */
@@ -1161,5 +1269,10 @@ body,
   #amp-one ::selection {
     color: HighlightText;
     background-color: Highlight;
+  }
+
+  #amp-one select:not([multiple]):is(:not([size]), [size="1"]):not([data-native-indicator]) {
+    appearance: auto;
+    background-image: none;
   }
 }

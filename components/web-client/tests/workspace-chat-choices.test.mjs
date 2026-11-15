@@ -114,6 +114,13 @@ test('resource navigation reads real inventory and lifecycle owners, never coope
   assert.match(JSON.stringify(root.toJSON()),/outcome unknown/,'uncertain real operations remain visible');
   assert.equal(root.root.findByProps({'aria-label':'Task storage'}).type,'section');
   assert.equal(root.root.findByProps({'aria-label':'Test environments'}).type,'section');
+  for(const label of ['Local publishing','Recorded processes and kernels','Task storage','Test environments']){
+   const group=root.root.findByProps({'aria-label':label});
+   assert.equal(group.type,'section');
+   let parent=group.parent;
+   while(parent&&typeof parent.type!=='string')parent=parent.parent;
+   assert.equal(parent?.props.className,'a-managed-resources','resource kinds are sibling groups, not nested cards');
+  }
   const reads=calls.length;
   await act(async()=>root.update(element(undefined)));
   assert.equal(calls.length,reads,'hidden lifecycle views stop reading');
@@ -163,5 +170,29 @@ test('resource drafts and late save receipts stay with their registered workspac
   await act(async()=>root.update(element({...other,path:'/replacement'})));
   assert.equal(editor('Other').findAllByType('form').length,0,'explicit unavailability discards the retired registration');
   assert.equal(calls.filter(([name])=>name==='workspace.resources.add').length,1,'navigation never replays saves');
+ }finally{await act(async()=>root?.unmount());globalThis.window=priorWindow}
+});
+
+test('resource observation names its exact sibling target and preserves the update revision',async()=>{
+ let root;const calls=[],priorWindow=globalThis.window;
+ globalThis.window={addEventListener(){},removeEventListener(){}};
+ const resources=[
+  {id:'first',revision:3,kind:'database',resourceId:'db:first',owner:'First owner',status:'active'},
+  {id:'second',revision:8,kind:'preview',resourceId:'preview:second',owner:'Second owner',status:'active'},
+ ];
+ const dispatch=async(name,args)=>{calls.push([name,args]);return {accepted:true,result:{resources}}};
+ try{
+  await act(async()=>{root=create(React.createElement(WorkspaceResources,{state:{workspaces:[workspace]},act:dispatch,workspaceId:workspace.id}))});
+  await act(async()=>root.root.findAllByType('button').filter(node=>node.children.includes('Record observation'))[1].props.onClick());
+  const form=root.root.findByProps({'aria-label':'Record observation: preview · preview:second'});
+  assert.equal(form.type,'form');
+  assert.equal(form.findByType('h4').children.join(''),'Record observation: preview · preview:second');
+  assert.equal(form.findAllByType('button')[0].parent.props.className,'a-dialog-actions');
+  await act(async()=>form.findByType('textarea').props.onChange({target:{value:'Independently observed absent'}}));
+  assert.equal(calls.length,1,'opening and editing an observation do not mutate a resource');
+  await act(async()=>form.props.onSubmit({preventDefault(){}}));
+  assert.deepEqual(calls.find(([name])=>name==='workspace.resources.update'),['workspace.resources.update',{
+   workspaceId:workspace.id,id:'second',expectedRevision:8,status:'observed_absent',evidence:'Independently observed absent',
+  }]);
  }finally{await act(async()=>root?.unmount());globalThis.window=priorWindow}
 });

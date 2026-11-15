@@ -64,11 +64,11 @@ export function SessionHistoryControls({session,messages=session?.messages,act,o
  // child adds a gap and can disturb the independent reading-position owner.
  if(!(pending&&!messages?.length)&&!session.historyError&&!earlier&&!unavailable&&!readOnly&&!partial&&!recovered)return null;
  return <div className="a-session-history" data-part="session-history">
-  {(unavailable||readOnly)&&<p role="status"><FolderOpen/>{readOnly||'This workspace folder is unavailable. You can read its saved chats here.'}</p>}
-  {recovered&&<p role="status"><AlertCircle/>Showing a recovered history backup. Original files are unchanged.</p>}
-  {partial&&<p role="status"><AlertCircle/>Some saved activity is unavailable or outside the loaded window. Conversation text comes from the saved transcript.</p>}
-  {pending&&!messages?.length&&<p role="status"><LoaderCircle className="a-progress-spinner"/>Loading conversation…</p>}
-  {session.historyError&&<div className="a-session-history-error" role="alert"><AlertCircle/><span>{session.historyError}</span><button type="button" className="a-link" data-action="session.select" disabled={pending} onClick={retry}>Try again</button></div>}
+  {(unavailable||readOnly)&&<p role="status" className="a-history-status"><FolderOpen aria-hidden="true"/><span>{readOnly||'This workspace folder is unavailable. You can read its saved chats here.'}</span></p>}
+  {recovered&&<p role="status" className="a-history-status"><AlertCircle aria-hidden="true"/><span>Showing a recovered history backup. Original files are unchanged.</span></p>}
+  {partial&&<p role="status" className="a-history-status"><AlertCircle aria-hidden="true"/><span>Some saved activity is unavailable or outside the loaded window. Conversation text comes from the saved transcript.</span></p>}
+  {pending&&!messages?.length&&<p role="status" className="a-history-status"><LoaderCircle className="a-progress-spinner" aria-hidden="true"/><span>Loading conversation…</span></p>}
+  {session.historyError&&<div className="a-session-history-error" role="alert"><span className="a-history-status"><AlertCircle aria-hidden="true"/><span>{session.historyError}</span></span><button type="button" className="a-link" data-action="session.select" disabled={pending} onClick={retry}>Try again</button></div>}
   {earlier&&<button type="button" className="a-soft" data-action="session.history" disabled={pending} onClick={loadEarlier}>{pending?'Loading earlier messages…':'Load earlier messages'}</button>}
  </div>;
 }

@@ -461,6 +461,9 @@ test('native history paging, failures and unavailable workspaces have visible sh
  await renderAct(async()=>root.update(render()));
  assert.match(JSON.stringify(root.toJSON()),/read its saved chats/);
  assert.equal(root.root.findAllByProps({role:'alert'}).length,1);
+ const notice=root.root.findByProps({role:'alert'});
+ assert.equal(notice.findByProps({className:'a-history-status'}).findByType('svg').props['aria-hidden'],'true');
+ assert.equal(notice.findByType('button').children.join(''),'Try again');
  await renderAct(async()=>root.root.findByProps({'data-action':'session.select'}).props.onClick());
  assert.deepEqual(calls.at(-1),{name:'session.select',args:{id:'native-chat'}});
  await renderAct(async()=>root.unmount());

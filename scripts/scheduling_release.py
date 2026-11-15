@@ -22,14 +22,14 @@ COMPONENTS = {
     "portability": ("components/portability", "amplifier_portability/"),
     "operations": ("components/operations", ""),
     "workspace-metadata": ("components/workspaces", "amplifier_workspace_metadata/"),
-    "kernels": ("amplifier_kernels", ""),
+    "kernels": ("components/kernels", ""),
 }
 
 
 def component_name(selected):
-    # The original published operations receipt retains its authored root path.
-    if selected["subdirectory"] == "amplifier_operations":
-        return "operations"
+    # Original published flat projects retain their historical authored paths.
+    if selected["subdirectory"] in {"amplifier_operations", "amplifier_kernels"}:
+        return selected["subdirectory"].removeprefix("amplifier_")
     for name in COMPONENTS:
         if selected["subdirectory"] == COMPONENTS[name][0]:
             return name
@@ -56,11 +56,11 @@ def selection(root, revision, *, qualification=False, component="scheduling"):
         raise ValueError("Select a full merged commit SHA.")
     if not qualification:
         run("git", "merge-base", "--is-ancestor", revision, "origin/main", cwd=root)
-    if component == "operations":
+    if component in {"operations", "kernels"}:
         projects = run("git", "ls-tree", "--name-only", revision, "--",
-                       project_path + "/pyproject.toml", "amplifier_operations/pyproject.toml", cwd=root).decode().splitlines()
+                       project_path + "/pyproject.toml", f"amplifier_{component}/pyproject.toml", cwd=root).decode().splitlines()
         if len(projects) != 1:
-            raise ValueError("Expected one operations author project at the selected revision.")
+            raise ValueError(f"Expected one {component} author project at the selected revision.")
         project_path = projects[0].removesuffix("/pyproject.toml")
     project = tomllib.loads(run("git", "show", f"{revision}:{project_path}/pyproject.toml", cwd=root).decode())
     version = project["project"]["version"]

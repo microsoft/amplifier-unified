@@ -56,6 +56,40 @@ def test_generated_changes_are_retained_for_exact_source_without_qualifying_it(s
     assert module.verify(source, output) == manifest
 
 
+def test_transferred_output_capture_does_not_replace_checkout_or_grant_builder_proof(source, tmp_path, monkeypatch):
+    transferred = tmp_path / 'transferred'
+    transferred.mkdir()
+    (transferred / 'external.js').write_text('detached build')
+    checked = []
+    monkeypatch.setattr(module, 'verify_transferred_build', lambda root, output: checked.append((root, output)))
+    output = tmp_path / 'captured'
+    manifest = module.create(source, output, {}, static_directory=transferred)
+    assert set(manifest['assets']) == {'external.js'}
+    assert manifest['qualified'] is False
+    assert (source / module.STATIC / 'new.js').read_text() == 'new output'
+    assert module.verify(source, output) == manifest
+    assert checked == [(source, transferred), (source, transferred)]
+
+
+def test_transferred_capture_requires_selected_build_provenance(source, tmp_path, monkeypatch):
+    def reject(root, output):
+        raise ValueError('Installed client assets or provenance differ from the selected build')
+    monkeypatch.setattr(module, 'verify_transferred_build', reject)
+    with pytest.raises(ValueError, match='provenance differ'):
+        module.create(source, tmp_path / 'rejected', {}, static_directory=source / module.STATIC)
+    assert not (tmp_path / 'rejected').exists()
+
+
+def test_transferred_capture_rejects_linked_root_and_dirty_source(source, tmp_path):
+    linked = tmp_path / 'linked'
+    linked.symlink_to(source / module.STATIC, target_is_directory=True)
+    with pytest.raises(ValueError):
+        module.create(source, tmp_path / 'linked-capture', {}, static_directory=linked)
+    (source / 'components/web-client/input.js').write_text('dirty')
+    with pytest.raises(subprocess.CalledProcessError):
+        module.create(source, tmp_path / 'dirty-capture', {}, static_directory=source / module.STATIC)
+
+
 @pytest.mark.parametrize('change', ['source-dirty', 'source-committed', 'new-source', 'version',
                                     'environment', 'client-environment', 'host-environment'])
 def test_changed_build_inputs_cannot_reuse_old_output(source, tmp_path, change):

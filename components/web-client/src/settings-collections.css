@@ -34,7 +34,7 @@
 #amp-one .a-settings-experience .a-routing-profile-picker>div{flex:1;min-width:160px}
 #amp-one .a-settings-experience .a-routing-profile-picker select{margin-bottom:0}
 #amp-one .a-settings-experience .a-routing-candidates{border:1px solid var(--a-line);border-radius:8px;overflow:clip;margin:16px 0}
-#amp-one .a-settings-experience .a-routing-selected{padding:16px;border:1px solid var(--a-line);border-radius:8px}
+#amp-one .a-settings-experience .a-routing-selected{padding:16px 0 0;border:0;border-top:1px solid var(--a-line);border-radius:0}
 #amp-one .a-settings-experience .a-catalog-pages{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:16px 0}
 @media(max-width:959px){#amp-one .a-settings-experience .a-collection{grid-template-columns:1fr}#amp-one .a-settings-experience .a-collection-list{border-right:0}#amp-one .a-settings-experience .a-collection.detail-open>.a-collection-list{display:none}#amp-one .a-settings-experience .a-collection:not(.detail-open)>.a-collection-detail{display:none}#amp-one .a-settings-experience .a-collection-back{display:inline-flex;margin-bottom:16px}#amp-one .a-settings-experience .a-order-editor{padding:14px}#amp-one .a-settings-experience .a-order-item{gap:6px;padding:8px}#amp-one .a-settings-experience .a-collection-detail{padding:16px}}
 #amp-one .a-settings-experience .a-module-row:hover,#amp-one .a-settings-experience .a-module-row:focus-within{background:var(--a-tint)}
@@ -50,3 +50,11 @@
 #amp-one .a-settings-experience .a-order-arrows{display:flex;flex-direction:column;flex-shrink:0}
 #amp-one .a-settings-experience .a-order-arrows .a-icon{width:26px;height:24px;padding:3px}
 #amp-one .a-settings-experience .a-order-arrows svg{width:15px;height:15px}
+
+/* A collection supplies the outer boundary; choice and JSON editing use headings
+   and whitespace, not successively inset cards around real input boundaries. */
+#amp-one [data-part=routing-settings] .a-routing-advanced{border-top:1px solid var(--a-line);margin-top:20px;padding-top:16px}
+#amp-one [data-part=routing-settings] .a-routing-json{display:grid;gap:8px;min-width:0;margin-top:12px}
+#amp-one [data-part=routing-settings] .a-routing-json>label{margin:0}
+#amp-one [data-part=routing-settings] .a-routing-json>:is(textarea,p,.a-dialog-actions){margin:0}
+#amp-one [data-part=routing-settings] .a-routing-json>.a-dialog-actions{margin-top:4px}

@@ -438,6 +438,66 @@ async def serve(home, *, pre_import=None):
             return web.json_response({'ok': True})
         app.router.add_post('/fixture/report-selection', report_selection)
     if '--chat-controls' in sys.argv:
+        async def composer_eligibility(request):
+            # Synthetic history classification only. Publish through the real
+            # installed host so React/ProseMirror receive their actual props.
+            if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+                raise web.HTTPForbidden()
+            data = await request.json()
+            if (set(data) != {'sessionId', 'readOnlyReason'}
+                    or not isinstance(data['readOnlyReason'], (str, type(None)))):
+                raise web.HTTPBadRequest()
+            service = app['service']
+            service._session(data['sessionId'])['historyReadOnlyReason'] = data['readOnlyReason']
+            service._publish()
+            return web.json_response({'ok': True})
+        app.router.add_post('/fixture/composer-eligibility', composer_eligibility)
+
+        async def conversation_error(request):
+            if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+                raise web.HTTPForbidden()
+            data = await request.json()
+            if set(data) != {'sessionId'}:
+                raise web.HTTPBadRequest()
+            service = app['service']
+            session = service._session(data['sessionId'])
+            # Presentation seed only, confined to disposable test history.
+            # No recovery, retry, provider or feedback operation runs.
+            session.update(status='error', error='Synthetic context-limit failure.',
+                           errorAt=time.time(), failure={
+                'category': 'context_limit',
+                'summary': 'Synthetic conversation reached its context limit.',
+                'guidance': 'Saved messages are kept. Review recovery options. ' + 'long-provider-detail-' * 25,
+                'recordedAt': time.time(),
+            })
+            service._publish()
+            return web.json_response({'ok': True})
+        app.router.add_post('/fixture/conversation-error', conversation_error)
+
+        async def layout_status(request):
+            if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+                raise web.HTTPForbidden()
+            data = await request.json()
+            if set(data) != {'sessionId', 'status'} or data['status'] not in {'loading', 'retrying', 'ready'}:
+                raise web.HTTPBadRequest()
+            service = app['service']
+            session = service._session(data['sessionId'])
+            session['messages'] = []
+            # TranscriptWindows owns the published history-error field. Seed its
+            # synthetic unavailable entry rather than a session field that its
+            # normal saved-history projection would overwrite.
+            session['historyManaged'] = data['status'] == 'retrying'
+            service.history.windows.initial[session['id']] = ({
+                'status': 'unavailable',
+                'error': 'Synthetic history read is unavailable. Original files are unchanged.',
+            } if data['status'] == 'retrying' else {})
+            service.event_log_view.windows.status[session['id']] = {
+                'status': data['status'], 'current': data['status'] == 'ready'}
+            session['workProjection'] = dict(service.event_log_view.windows.status[session['id']])
+            service._publish()
+            return web.json_response({'ok': True})
+        app.router.add_post('/fixture/layout-status', layout_status)
+
         async def provider_preference(request):
             preferred_model[0] = (await request.json())['model']
             save_provider_settings()

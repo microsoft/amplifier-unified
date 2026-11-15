@@ -229,3 +229,35 @@
 #amp-one .a-connection-preference>select{width:100%;min-width:0;max-width:100%;margin-top:0}
 #amp-one .a-connection-secondary-actions button{display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
 @media(max-width:600px){#amp-one .a-connection-capability{align-items:flex-start;flex-direction:column;gap:10px}}
+
+/* Voice: one connection boundary and lightweight secondary disclosures. */
+#amp-one .a-voice-settings .a-everyday-disclosure{border:0;border-top:1px solid var(--a-line);border-radius:0;padding:0;margin:20px 0}
+#amp-one .a-voice-settings .a-voice-connection .a-everyday-disclosure{margin:12px 0 0}
+#amp-one .a-voice-settings .a-everyday-disclosure>summary{padding:12px 0}
+#amp-one .a-voice-settings .a-voice-field{display:grid;gap:8px;min-width:0;margin:18px 0}
+#amp-one .a-voice-settings .a-voice-field>:is(label,input,select,p){margin:0}
+#amp-one .a-voice-settings .a-voice-field>.a-dialog-actions{margin-top:4px}
+#amp-one .a-voice-key-sources{border:0;padding:0;margin:16px 0;min-width:0;display:grid;gap:10px}
+#amp-one .a-voice-key-sources>legend{font-weight:600;padding:0;margin-bottom:8px}
+#amp-one .a-voice-settings .a-voice-key-sources>.a-inline-checkbox{display:flex;flex-direction:row;align-items:flex-start;gap:10px;margin:0}
+#amp-one .a-voice-key-sources>.a-inline-checkbox>span{min-width:0;overflow-wrap:anywhere}
+#amp-one .a-voice-settings .a-voice-picker{padding:16px 0;border:0;border-block:1px solid var(--a-line);border-radius:0}
+#amp-one .a-voice-settings .a-voice-option{border:0;border-bottom:1px solid var(--a-line);border-radius:0;padding:12px 4px}
+
+/* Dense Testing editors retain semantic fieldsets without browser-default boxes
+   or accumulated indentation. Separate fields more than label/control/help. */
+#amp-one .a-testing-settings,#amp-one .a-testing-section{min-width:0}
+#amp-one .a-testing-settings>.a-testing-section{margin-top:28px;padding-top:24px;border-top:1px solid var(--a-line)}
+#amp-one .a-testing-section .a-testing-section{margin-top:24px;padding-top:20px;border-top:1px solid var(--a-line)}
+#amp-one :is(.a-testing-settings,.a-testing-section) fieldset{min-width:0;border:0;padding:0;margin:20px 0;display:grid;gap:18px}
+#amp-one :is(.a-testing-settings,.a-testing-section) legend{padding:0;margin-bottom:12px;font-weight:600;color:var(--a-ink)}
+#amp-one :is(.a-testing-settings,.a-testing-section) label.a-field{display:flex;flex-direction:column;align-items:stretch;gap:6px;margin:0;min-width:0}
+#amp-one :is(.a-testing-settings,.a-testing-section) .a-field>input{width:100%;min-width:0;margin:0}
+#amp-one :is(.a-testing-settings,.a-testing-section) .a-field>small{display:block;margin:0;font-size:var(--a-text-sm,13px);line-height:1.5;color:var(--a-muted)}
+#amp-one :is(.a-testing-settings,.a-testing-section) details{margin:20px 0;padding:0;border:0;border-top:1px solid var(--a-line);border-radius:0}
+#amp-one :is(.a-testing-settings,.a-testing-section) summary{padding:12px 0;font-weight:600;cursor:pointer}
+#amp-one .a-testing-settings dl{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px 20px;margin:16px 0}
+#amp-one .a-testing-settings :is(dt,dd){margin:0;overflow-wrap:anywhere}
+#amp-one .a-testing-settings dd>small{display:block;color:var(--a-muted)}
+#amp-one :is(.a-testing-settings,.a-testing-section) .a-dialog-actions{gap:10px;margin-top:16px}
+@media(max-width:600px){#amp-one .a-voice-connection{padding:14px}#amp-one .a-testing-settings dl{grid-template-columns:minmax(0,1fr);gap:4px}#amp-one .a-testing-settings dd+dt{margin-top:12px}}
