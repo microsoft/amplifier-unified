@@ -45,10 +45,17 @@ rejected reconciliation leaves the original unknown receipt fenced.
 After restart, positive retained release/placement facts can finish the existing
 placement/notification path. A pre-release observation with unconfirmed marker
 cleanup is shown as needing recovery until machine evidence proves the original
-worker absent and the saved source placement unchanged. `worktree.check` observes
-the same receipt and may settle that proven no-move result; it never requests a
+marker removed (or its worker absent) and the saved source placement unchanged.
+Startup tries that absence proof once without warming or stopping a writer.
+`worktree.check` observes the same receipt and may record that proven no-move
+result; it never requests a
 writer release, changes execution placement, warms a runtime or submits input.
 A genuinely uncertain release or commit stays unknown.
+
+Stop does not wait indefinitely on a boundary cleanup reply. Its bounded caller
+wait can end at Needs recovery while the one original reply owner remains alive;
+a late ordered removal acknowledgement or exact worker-absence proof can settle
+that same receipt. Neither the missing reply nor a user's explanation is proof.
 
 The existing Task execution folder card shows Waiting for this turn, Moving,
 Moved, Not moved or Needs recovery, the actual source/target folder names and

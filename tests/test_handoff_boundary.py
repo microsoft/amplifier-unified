@@ -171,11 +171,14 @@ for line in sys.stdin:
         await manager.close()
 
 
-async def test_shutdown_during_pending_boundary_keeps_uncertainty_until_absence_check(tmp_path, monkeypatch):
+@pytest.mark.parametrize('during_cleanup', [False, True])
+async def test_shutdown_during_pending_boundary_keeps_uncertainty_until_absence_check(tmp_path, monkeypatch, during_cleanup):
     from amplifier_web.runtime import RuntimeManager
     app, adapter, root, sid = await fixture(tmp_path, monkeypatch)
     entered = asyncio.Event()
     async def pending(*args, **kwargs):
+        if during_cleanup and not kwargs.get('cancel'):
+            raise ValueError('Test pre-release refusal before cleanup')
         entered.set()
         await asyncio.Future()
     adapter.handoff_boundary = pending
@@ -197,6 +200,73 @@ async def test_shutdown_during_pending_boundary_keeps_uncertainty_until_absence_
         assert checked['displayState'] == 'not_moved' and checked['phase'] == 'rejected'
         assert app._session(sid).get('workingDirectory', str(root)) == str(root)
         assert not app._session(sid)['messages'] and not app.worktrees.jobs
+    finally:
+        await app.close()
+
+
+async def test_stop_with_wedged_reply_finishes_cleanup_wait_then_late_ack_settles_same_move(tmp_path, monkeypatch):
+    from amplifier_web.runtime import RuntimeManager
+    app, adapter, root, sid = await fixture(tmp_path, monkeypatch)
+    manager = RuntimeManager()
+    manager.boundary_reply_timeout = .01
+    reply = asyncio.get_running_loop().create_future()
+    entered = asyncio.Event()
+    calls = []
+    async def request(owner, op, **args):
+        calls.append(args)
+        if args.get('cancel'):
+            return {'cancelled': True}
+        entered.set()
+        return await reply
+    manager._request = request
+    manager.workers[sid] = {'process': SimpleNamespace(returncode=None),
+                            'runtimeOwnerId': 'original-worker'}
+    app.runtime = manager
+    app.worktrees.bind_runtime()
+    try:
+        target = await checkout(app, sid)
+        receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': target['id'],
+            'expectedExecutionRevision': 0}, command_id='wedged'))['result']
+        await entered.wait()
+        app._session(sid).update(interruptionRevision=1, status='stopped')
+        await asyncio.wait_for(settle(app), 3)
+        current = app.worktrees.read(sid, receipt['id'])
+        assert current['phase'] == 'unknown' and current['step'] == 'boundary-unconfirmed'
+        assert current['displayState'] == 'needs_recovery'
+        assert 'Check move' in current['detail'] and len(calls) == 1 and not reply.cancelled()
+        before = (await app.dispatch('worktree.check', {'sessionId': sid, 'id': receipt['id']}))['result']
+        assert before['phase'] == 'unknown' and len(calls) == 1
+        reply.set_result({'ready': False, 'waitingFor': ['command']})
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await asyncio.gather(*[row['task'] for row in manager.workers[sid]['boundary_waits'].values()])
+        checked = (await app.dispatch('worktree.check', {'sessionId': sid, 'id': receipt['id']}))['result']
+        assert checked['phase'] == 'rejected' and checked['displayState'] == 'not_moved'
+        assert checked['id'] == receipt['id'] and checked['boundaryCleanup']['markerRemoved']
+        assert len(calls) == 2 and calls[-1]['cancel'] and len(app.worktrees.receipts(sid)) == 1
+        assert app._session(sid).get('workingDirectory', str(root)) == str(root)
+        assert app._session(sid)['status'] == 'stopped' and not app._session(sid)['messages']
+    finally:
+        manager.workers.clear()
+        await app.close()
+
+
+async def test_check_reads_receipt_only_after_acquiring_host_lock(tmp_path, monkeypatch):
+    app, _, _, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        target = await checkout(app, sid)
+        receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': target['id'],
+            'expectedExecutionRevision': 0}, command_id='move'))['result']
+        await settle(app)
+        async with app.lock:
+            check = asyncio.create_task(app.worktrees._dispatch('worktree.check',
+                {'sessionId': sid, 'id': receipt['id']}, 'ui', 'check'))
+            await asyncio.sleep(0)
+            row = app.worktrees.read(sid, receipt['id'])
+            row.update(revision=row['revision'] + 1, detail='Newer confirmed status')
+            app.worktrees.save(row)
+        result = await check
+        assert result['revision'] == row['revision'] and result['detail'] == 'Newer confirmed status'
     finally:
         await app.close()
 
@@ -273,6 +343,8 @@ async def test_restart_before_release_check_confirms_absence_without_releasing_o
     app = AppService(tmp_path / 'app', actual, workspace=root)
     try:
         assert app.worktrees.read(sid, receipt['id'])['phase'] == 'unknown'
+        app.worktrees.start()
+        assert app.worktrees.read(sid, receipt['id'])['phase'] == 'rejected'
         observed = (await app.dispatch('worktree.check', {'sessionId': sid, 'id': receipt['id']}))['result']
         assert observed['phase'] == 'rejected' and observed['displayState'] == 'not_moved'
         assert observed['boundaryCleanup']['workerAbsent'] and not observed['inputsReplayed']

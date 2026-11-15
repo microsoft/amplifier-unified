@@ -27,7 +27,7 @@ def definitions(schema, string):
         'worktree.inspect': ('Inspect a repository inside this task\'s workspace/execution folders. Use mode=clean and optional ref for lightweight committed-source inspection: returns expectedCommit without reading local changes or untracked files. Omitted mode retains full snapshot inspection for sourceRevision/carry_dirty. Keep the returned absolute repository root for later creation/attachment.', schema({**sid, **repository, 'mode': {'enum': ['clean', 'carry_dirty']}, 'ref': string(500)}, ['sessionId'])),
         'worktree.list': ('List checkouts associated with this task and durable handoff receipts.', schema(sid)),
         'worktree.status': ('Inspect a checkout, its original source manifest, conflicts and Git ownership.', schema(identity)),
-        'worktree.check': ('Check this saved move and its current status without starting work, changing folders, releasing a writer or repeating input. Unconfirmed release remains explicit.', schema(identity, ['sessionId', 'id'])),
+        'worktree.check': ('Read this saved move and record a proven no-move result when its original waiting marker is confirmed removed. Does not start work, change folders, request writer release or repeat input. Unconfirmed release remains explicit.', schema(identity, ['sessionId', 'id'])),
         'worktree.create': ('Create a managed checkout. For clean creation, pass expectedCommit from mode=clean inspection (a full Git commit ID); optional ref must resolve to that commit. Local changes are neither scanned nor copied. Legacy sourceRevision is a full inspected snapshot digest, not a Git SHA, and remains required for carry_dirty. Supply exactly one binding. Does not move execution or configure dependencies. A direct commissioning manager may prepare a checkout for its idle member.', schema({**sid, **repository, 'sourceRevision': string(100), 'expectedCommit': string(64), 'mode': {'enum': ['clean', 'carry_dirty']}, 'ref': string(500), 'branch': string(500)}, ['sessionId'])),
         'worktree.attach': ('Associate an existing Git worktree from the selected repositoryPath (canonical home by default); does not copy history or start work. Attached folders cannot be deleted through managed cleanup.', schema({**sid, **repository, 'path': string(4000)}, ['sessionId', 'path'])),
         'worktree.archive': ('Retire an unused app-created checkout while retaining every file and its Git registration. Moves the whole checkout to private archive storage; does not reclaim disk space or create an immutable snapshot. Active or ambiguous ownership is refused.', schema({**identity, **revision})),
@@ -222,6 +222,16 @@ class Worktrees:
             record = json.loads((self.receipt_dir / (identity + '.json')).read_text())
             self.launch(record, copy.deepcopy(self.app._session(record['sessionId'])))
         self.recoverable.clear()
+        # Startup is synchronous before input admission. Reconcile only new,
+        # pre-release cleanup records whose original worker absence is provable.
+        recovered = set()
+        for record in self.receipts(None):
+            if record['phase'] == 'unknown' and record.get('step') == 'boundary-unconfirmed':
+                session = self.app._session(record['sessionId'])
+                if self.confirm_unmoved(record, session):
+                    recovered.add(session['id'])
+        if recovered:
+            self.changed(recovered)
 
     def launch(self, record, session):
         job = asyncio.create_task(self.finish(record, session))
@@ -277,6 +287,43 @@ class Worktrees:
         value = json.loads(path.read_text())
         if value['sessionId'] != sid: raise ValueError('This handoff belongs to another task')
         return self.display(value)
+
+    def confirm_unmoved(self, record, session):
+        """Under app.lock or startup, settle only this pre-release marker."""
+        from .runtime import RuntimeManager
+        runtime = self.app.runtime
+        if (record['phase'] != 'unknown' or record.get('step') != 'boundary-unconfirmed'
+                or record.get('release') or not isinstance(runtime, RuntimeManager)):
+            return False
+        try:
+            self.check_host(record)
+            self.check_host(session)
+        except ValueError:
+            return False
+        saved = self.saved_owner(session['id'], durable=True)
+        if (not saved or saved.get('executionRevision', 0) != record['executionRevision']
+                or (saved.get('workingDirectory') or saved['workspace']) != record['source']):
+            return False
+
+        def commit(proof):
+            record.update(phase='rejected', revision=record['revision'] + 1,
+                boundaryCleanup=proof, updatedAt=time.time(),
+                detail='The move did not begin. Its waiting marker is gone and the saved execution folder is unchanged.')
+            self.save(record)
+            if not any(row['phase'] in {'pending', 'unknown'} for row in self.receipts(session['id'])):
+                from .management import Management
+                if not Management.unresolved_configuration(session):
+                    session['configurationBusy'] = False
+            return True
+
+        proof = runtime.boundary_cleanup(session['id'], record['id'], record.get('boundaryOwner'))
+        if proof:
+            return commit(proof)
+        try:
+            with runtime.stopped_boundary(session, allow_fenced=True) as proof:
+                return commit(proof)
+        except (RuntimeError, ValueError, OSError):
+            return False  # Live/foreign writers and uncertain effects stay held.
 
     def record(self, sid, identity):
         record = self.git.get(identity)
@@ -558,37 +605,15 @@ class Worktrees:
             if origin == 'agent' and action in manager_placement.WRITES:
                 self.app.collaboration.source({}, origin, caller)
         if action == 'worktree.check':
-            record = self.read(sid, args['id'])
             async with self.app.lock:
                 manager_placement.check_preparation(self.app, action, sid, manager)
+                record = self.read(sid, args['id'])
                 # This is an observation, not a second finisher. In particular
                 # unknown release never becomes safe from a path or user essay.
                 saved = self.saved_owner(sid, durable=True)
                 result = self.display(record)
-                if record['phase'] == 'unknown' and record.get('step') == 'boundary-unconfirmed':
-                    self.check_host(record)
-                    self.check_host(session)
-                    from .runtime import RuntimeManager
-                    runtime = self.app.runtime
-                    if (isinstance(runtime, RuntimeManager) and saved
-                            and saved.get('executionRevision', 0) == record['executionRevision']
-                            and (saved.get('workingDirectory') or saved['workspace']) == record['source']):
-                        try:
-                            # A temporary existing-session lease proves absence
-                            # of the old writer/marker. This never asks a live
-                            # writer to release or changes execution placement.
-                            with runtime.stopped_boundary(session, allow_fenced=True) as proof:
-                                record.update(phase='rejected', revision=record['revision'] + 1,
-                                    boundaryCleanup=proof, updatedAt=time.time(),
-                                    detail='The move did not begin. The original worker has ended and the saved execution folder is unchanged.')
-                                self.save(record)
-                                if not any(row['phase'] in {'pending', 'unknown'} for row in self.receipts(sid)):
-                                    from .management import Management
-                                    if not Management.unresolved_configuration(session):
-                                        session['configurationBusy'] = False
-                                result = self.display(record)
-                        except (RuntimeError, ValueError, OSError):
-                            pass  # A live/foreign writer is not evidence of absence.
+                if self.confirm_unmoved(record, session):
+                    result = self.display(record)
                 if (record['phase'] == 'applied' and not self.placement_committed(record, saved)
                         and (saved or {}).get('executionRevision', 0) <= record['executionRevision'] + 1):
                     result.update(displayState='needs_recovery',
@@ -940,18 +965,16 @@ class Worktrees:
                 self.save(record)
                 self.changed()
                 try:
-                    while True:
-                        cancelled = await boundary(record['sessionId'], record['id'], cancel=True,
-                            **({'receipt': {'boundaryOwner': record['boundaryOwner']}}
-                               if record.get('boundaryOwner') else {}))
-                        if cancelled.get('cancelled'):
-                            break
-                        if not cancelled.get('requestPending'):
-                            raise RuntimeError('The original waiting marker removal was not confirmed.')
-                        await asyncio.sleep(1)
-                except (RuntimeError, ValueError, OSError) as cleanup_error:
-                    record.update(step='boundary-unconfirmed',
-                        detail='Writer release did not begin, but removal of the original waiting marker is unconfirmed. ' + str(cleanup_error)[:1000])
+                    cancelled = await boundary(record['sessionId'], record['id'], cancel=True,
+                        **({'receipt': {'boundaryOwner': record['boundaryOwner']}}
+                           if record.get('boundaryOwner') else {}))
+                    if not cancelled.get('cancelled'):
+                        record.update(step='boundary-unconfirmed')
+                except (RuntimeError, ValueError, OSError):
+                    record.update(step='boundary-unconfirmed')
+                except asyncio.CancelledError as interrupted:
+                    record.update(step='boundary-unconfirmed')
+                    exc = interrupted
             async with self.app.lock:
                 try:
                     saved = self.saved_owner(record['sessionId'], durable=True)
@@ -968,12 +991,16 @@ class Worktrees:
                         # by the error receipt's own projection update.
                         self.restore_placement(current, saved)
                     record.update(phase='unknown', revision=record['revision']+1,
-                        detail='Execution placement was not confirmed in its saved owner. Inspect and reconcile; no input was replayed. ' + str(exc)[:1000])
+                        detail='The saved execution folder could not be confirmed. Choose Check move to read its saved facts. No move or input will be repeated.',
+                        failureType=type(exc).__name__)
                 elif isinstance(exc, asyncio.CancelledError) and record.get('step') == 'released':
                     record['detail'] = 'Host shutdown paused a retained handoff boundary. No input was replayed.'
                 elif isinstance(exc, asyncio.CancelledError) and record.get('step') in {'preflight', 'waiting', 'cancelling'}:
                     record.update(phase='unknown', step='boundary-unconfirmed', revision=record['revision']+1,
                         detail='Host shutdown interrupted the original waiting marker cleanup before writer release. Check the move after the original worker ends; no input was replayed.')
+                elif record.get('step') == 'boundary-unconfirmed':
+                    record.update(phase='unknown', revision=record['revision']+1,
+                        detail='The move did not reach writer release, but its original waiting marker is not confirmed removed. Choose Check move after the original worker replies or ends. Nothing will be sent again.')
                 elif record.get('step') != 'boundary-unconfirmed' and (
                         record.get('step') in {'preflight', 'waiting', 'cancelling'} or
                         isinstance(exc, (HandoffNotStartedError, HandoffSuperseded))):
@@ -989,7 +1016,9 @@ class Worktrees:
                         current['ownership'] = {'status': 'available'}
                         current.pop('lockOwner', None)
                 else:
-                    record.update(phase='unknown', revision=record['revision']+1, detail='Handoff did not reach a confirmed boundary. Inspect and reconcile; no input was replayed. ' + str(exc)[:1000])
+                    record.update(phase='unknown', revision=record['revision']+1,
+                        detail='The writer release or folder placement is not confirmed. No input was replayed. Check move shows the saved facts without repeating work. If it remains unconfirmed, the original host must finish or its owner must inspect recovery; choosing a folder is not proof.',
+                        failureType=type(exc).__name__)
                 self.save(record)
                 if saved is None:
                     # Storage uncertainty cannot prove the candidate placement
@@ -999,7 +1028,7 @@ class Worktrees:
                     self.sync()
                 else:
                     self.changed()
-            if isinstance(exc, asyncio.CancelledError): raise
+            if isinstance(exc, asyncio.CancelledError): raise exc
         finally:
             if record.get('managerPlacement') and record['phase'] in {'rejected', 'unknown'}:
                 async with self.app.lock:

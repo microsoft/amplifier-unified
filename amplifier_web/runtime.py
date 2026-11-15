@@ -2036,6 +2036,22 @@ class RuntimeManager:
             return {'ready': False, 'waitingFor': ['cancelled'], 'cancelled': True}
         return result
 
+    def boundary_cleanup(self, session_id, request_id, owner):
+        """Observe an exact retained removal reply; never send another request."""
+        row = self.workers.get(session_id)
+        if not owner or not row or row.get('runtimeOwnerId') != owner:
+            return None
+        waiting = row.get('boundary_waits', {}).get(request_id)
+        if not waiting or not waiting['cancel'] or not waiting['task'].done() or waiting['task'].cancelled():
+            return None
+        try:
+            if waiting['task'].result().get('cancelled') is True:
+                return {'boundaryId': request_id, 'runtimeOwnerId': owner, 'markerRemoved': True,
+                        'inputsReplayed': False}
+        except Exception:
+            pass
+        return None
+
     @contextmanager
     def stopped_boundary(self, session, *, allow_fenced=False):
         """Hold existing native ownership while proving a stopped root is absent.
