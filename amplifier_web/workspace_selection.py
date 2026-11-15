@@ -10,13 +10,20 @@ from pathlib import Path
 import uuid
 
 from .errors import _error
-from amplifier_workspace_metadata import edit, register
+from amplifier_workspace_metadata import edit, local_location, register
 
 
 def _registration(path, name=None):
     path = str(Path(path).expanduser().resolve())
     return {"id": uuid.uuid5(uuid.NAMESPACE_URL, path).hex, "name": name or Path(path).name or path, "path": path,
             "available": Path(path).is_dir()}
+
+
+def _select_registration(state, row):
+    state["selectedWorkspaceId"] = row["id"]
+    location = local_location(row)
+    if location is not None:
+        state["settings"]["workspace"] = location.path
 
 
 def refresh_workspace_availability(workspaces):
@@ -70,9 +77,7 @@ def select_session_workspace(state, session):
     if not any(item["id"] == row["id"] for item in state["workspaces"]):
         state["workspaces"].append(row)
     changed = state["selectedWorkspaceId"] != row["id"]
-    state["selectedWorkspaceId"] = row["id"]
-    if row.get('path'):
-        state["settings"]["workspace"] = row["path"]
+    _select_registration(state, row)
     if changed:
         state["canvas"]["open"] = False
 
@@ -105,8 +110,7 @@ def workspace_command(state, action, args):
         name = args.get("name", "").strip()
         row = _registration(path, name or None)
         register(rows, row, name=name)
-        state["selectedWorkspaceId"] = row["id"]
-        state["settings"]["workspace"] = row["path"]
+        _select_registration(state, row)
     else:
         try:
             row = edit(rows, action, args)
@@ -118,13 +122,9 @@ def workspace_command(state, action, args):
             from .pinned_navigation import ordered_ids
             state['pinnedItemIds'] = ordered_ids(state)
             if state["selectedWorkspaceId"] == row["id"]:
-                state["selectedWorkspaceId"] = rows[0]["id"]
-                if rows[0].get("path"):
-                    state["settings"]["workspace"] = rows[0]["path"]
+                _select_registration(state, rows[0])
         elif action == "workspace.select":
-            state["selectedWorkspaceId"] = row["id"]
-            if row.get('path'):
-                state["settings"]["workspace"] = row["path"]
+            _select_registration(state, row)
     # Close the old workspace's preview; conversation histories are untouched.
     if action not in {"workspace.rename", "workspace.archive", "workspace.restore"}:
         state["canvas"]["open"] = False
