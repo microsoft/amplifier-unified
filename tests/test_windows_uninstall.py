@@ -1305,3 +1305,182 @@ def test_native_entry_that_the_walk_holds_cannot_be_moved_out_of_the_folder():
             os.rmdir(link)
         shutil.rmtree(root, ignore_errors=True)
         shutil.rmtree(outside, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# PROBE (temporary, not product behavior): can the last step be bound to
+# handles without compiled code?
+#   1. A program file that is mapped by a running process cannot be deleted.
+#      Can it be moved, by handle, into one flat folder of the installation?
+#   2. A helper that starts with that folder as its current folder: does
+#      Windows then refuse to rename or replace that folder, the installation
+#      folder and the folders above, also after the uninstall process ended?
+#   3. Can the helper give the folder free again and remove it?
+PROBE_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+$text = $input | Out-String
+$p = ConvertFrom-Json -InputObject $text
+Set-Location -LiteralPath $p.system
+Write-Host 'ready'
+$r = @{ error = '' }
+try {
+    $until = (Get-Date) + (New-TimeSpan -Seconds 90)
+    while (-not (Test-Path -LiteralPath $p.go) -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 200 }
+    $r.processFolder = [Environment]::CurrentDirectory
+    $last = Join-Path $p.root 'unified-uninstall-last'
+    foreach ($f in @(Get-ChildItem -LiteralPath $last -Force)) { Remove-Item -LiteralPath $f.FullName }
+    $r.lastLeft = @(Get-ChildItem -LiteralPath $last -Force).Count
+    try { Remove-Item -LiteralPath $last -Force; $r.lastRemovedWhileHeld = $true } catch { $r.lastRemovedWhileHeld = $false }
+    [Environment]::CurrentDirectory = $p.root
+    Remove-Item -LiteralPath $last -Force
+    Remove-Item -LiteralPath (Join-Path $p.root 'workspace') -Force
+    Remove-Item -LiteralPath (Join-Path $p.root 'unified-uninstall.json')
+    try { Remove-Item -LiteralPath $p.root -Force; $r.rootRemovedWhileHeld = $true } catch { $r.rootRemovedWhileHeld = $false }
+    [Environment]::CurrentDirectory = $p.system
+    Remove-Item -LiteralPath $p.root -Force
+    $r.rootGone = -not (Test-Path -LiteralPath $p.root)
+} catch { $r.error = $_.Exception.Message }
+$r | ConvertTo-Json -Compress | Set-Content -LiteralPath $p.report -Encoding UTF8
+"""
+
+PROBE_CHILD = r"""
+import ctypes as C, json, os, subprocess, sys, threading
+from pathlib import Path
+repository, packages, folder, evidence, report, go, script = sys.argv[1:8]
+sys.path[:0] = [repository, packages]
+from amplifier_web import windows_files, windows_removal as removal
+from amplifier_web.windows_files import FILE_RENAME_INFO
+from amplifier_web.windows_service import _powershell
+root = windows_files.address(folder)
+system = Path(_powershell()).parents[2]
+os.chdir(system)
+out = {}
+library = C.WinDLL(str(root / "python" / "probe" / "probe.dll"))  # A mapped image inside the folder.
+
+def rename(api, handle, directory, name):
+    encoded = name.encode("utf-16-le")
+    buffer = C.create_string_buffer(C.sizeof(FILE_RENAME_INFO) + len(encoded))
+    info = FILE_RENAME_INFO.from_buffer(buffer)
+    info.Flags, info.RootDirectory, info.FileNameLength = 0, directory, len(encoded)
+    C.memmove(C.addressof(buffer) + FILE_RENAME_INFO.FileName.offset, encoded, len(encoded))
+    api.ok(api.SetFileInformationByHandle(handle, 22, buffer, len(buffer)))
+
+try:
+    with removal.folder(root) as owned:
+        api, top = owned._api, owned._handle
+        out["first"] = owned.remove(["python", "tools"])
+        os.mkdir(root / "unified-uninstall-last")
+        last = api.open(top, "unified-uninstall-last", enter=True, delete=False)
+        moved = {}
+        for trail in out["first"]["left"]:
+            parts, handles, row = trail.split("\\"), [top], {}
+            try:
+                for part in parts[:-1]:
+                    handles.append(api.open(handles[-1], part, enter=True, delete=False))
+                handle = api.open(handles[-1], parts[-1], enter=False)
+                try:
+                    row["kind"] = api.kind(handle)
+                    try:
+                        api.delete(handle)
+                        row["deleted"] = True
+                    except OSError as error:
+                        row["deleteError"] = error.winerror
+                        try:
+                            rename(api, handle, last, str(len(moved) + 1))
+                            row["moved"] = True
+                        except OSError as error:
+                            row["moveError"] = error.winerror
+                finally:
+                    api.close(handle)
+            except OSError as error:
+                row["openError"] = error.winerror
+            finally:
+                for handle in handles[:0:-1]:
+                    api.close(handle)
+            moved[trail] = row
+        out["moved"] = moved
+        out["inLast"] = sorted(os.listdir(root / "unified-uninstall-last"))
+        out["second"] = owned.remove(["python", "tools"])
+        out["names"] = owned.names()
+        out["libraryStillLoaded"] = bool(library._handle)
+        command = [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", script]
+        options = dict(cwd=str(root / "unified-uninstall-last"), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                       stderr=subprocess.DEVNULL)
+        try:
+            helper = subprocess.Popen(command, creationflags=0x08000000 | 0x00000200 | 0x01000000, **options)
+            out["breakaway"] = True
+        except OSError:
+            helper = subprocess.Popen(command, creationflags=0x08000000 | 0x00000200, **options)
+            out["breakaway"] = False
+        helper.stdin.write(json.dumps({"root": str(root), "system": str(system), "go": go, "report": report}).encode("ascii"))
+        helper.stdin.close()
+        line = []
+        reader = threading.Thread(target=lambda: line.append(helper.stdout.readline()), daemon=True)
+        reader.start()
+        reader.join(45)
+        out["ready"] = line[0].decode("ascii", "replace").strip() if line else None
+        api.close(last)
+        out["helper"] = helper.pid
+except BaseException as error:
+    out["failure"] = repr(error)
+Path(evidence).write_text(json.dumps(out))
+"""
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Probe of real Windows sharing rules")
+def test_native_probe_last_step_bound_to_handles(tmp_path):
+    import base64
+    from amplifier_web import windows_files
+    tag = uuid.uuid4().hex[:10]
+    root = windows_files.address(Path.home() / ("au-probe-test-" + tag))
+    with windows_files.directory(root, owned_root=root, create=True):
+        pass
+    seen = {}
+    try:
+        made = subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(root / "tools" / "amplifier-unified")],
+                              capture_output=True, text=True, timeout=120)
+        assert made.returncode == 0, made.stderr[-1500:]
+        (root / "workspace").mkdir()
+        (root / "python" / "probe" / "Lib").mkdir(parents=True)
+        (root / "python" / "probe" / "Lib" / "os.py").write_text("#")
+        source = next(path for path in (Path(sys.base_prefix) / "vcruntime140.dll",
+                                        Path(os.environ["SystemRoot"]) / "System32" / "version.dll") if path.exists())
+        shutil.copyfile(source, root / "python" / "probe" / "probe.dll")
+        (root / plan.JOURNAL).write_text("{}")
+        evidence, report, go = tmp_path / "evidence.json", tmp_path / "report.json", tmp_path / "go"
+        script = base64.b64encode(PROBE_SCRIPT.encode("utf-16-le")).decode("ascii")
+        process = subprocess.run(
+            [str(root / "tools" / "amplifier-unified" / "Scripts" / "python.exe"), "-I", "-c", PROBE_CHILD,
+             str(REPOSITORY), sysconfig.get_paths()["purelib"], str(root), str(evidence), str(report), str(go), script],
+            cwd=root / "workspace", capture_output=True, timeout=180)
+        seen["exit"] = process.returncode
+        seen["stderr"] = process.stderr.decode("utf-8", errors="replace")[-1500:]
+        seen["child"] = json.loads(evidence.read_text()) if evidence.exists() else None
+        seen["leftAfterExit"] = sorted(os.listdir(root))
+        seen["inLastAfterExit"] = sorted(os.listdir(root / "unified-uninstall-last")) if (
+            root / "unified-uninstall-last").exists() else None
+        # The uninstall process and its start program have ended. Only the helper is left.
+        for label, source, target in (("renameRoot", root, Path(str(root) + "-moved")),
+                                      ("renameLast", root / "unified-uninstall-last", root / "moved-last")):
+            try:
+                os.rename(source, target)
+                seen[label] = "renamed"
+                os.rename(target, source)
+            except OSError as error:
+                seen[label] = error.winerror
+        go.write_text("go")
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline and not report.exists():
+            time.sleep(0.2)
+        time.sleep(0.5)
+        seen["helper"] = json.loads(report.read_text(encoding="utf-8-sig")) if report.exists() else None
+        seen["rootExists"] = os.path.lexists(root)
+    finally:
+        print("LAST_STEP_PROBE " + json.dumps(seen, separators=(",", ":")))
+        shutil.rmtree(root, ignore_errors=True)
+    child, helper = seen["child"], seen["helper"]
+    assert child and "failure" not in child and child["ready"] == "ready", seen
+    assert all(row.get("moved") for row in child["moved"].values()) and child["second"]["leftCount"] == 0, seen
+    assert seen["renameRoot"] != "renamed" and seen["renameLast"] != "renamed", seen
+    assert helper and helper["error"] == "" and helper["rootGone"] and not seen["rootExists"], seen
+    assert helper["lastRemovedWhileHeld"] is False and helper["rootRemovedWhileHeld"] is False, seen
