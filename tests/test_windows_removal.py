@@ -1108,6 +1108,43 @@ def test_native_nonempty_flat_folder_cannot_become_a_junction_in_place(finish_tr
     _assert_outside_unchanged(tree)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="What the step's file-deleting command does when its path is a link")
+def test_native_plain_remove_item_never_deletes_behind_a_link(finish_tree):
+    """The step deletes a file with `Remove-Item -LiteralPath <path>`: no -Recurse, no -Force.
+
+    If a program swaps that file for a link between the step's listing and this command, the
+    command must delete nothing behind the link. Each kind of link is given to the same command,
+    in the same non-interactive Windows PowerShell.
+    """
+    import _winapi
+    from amplifier_web.windows_service import _powershell
+
+    tree, root, outside = finish_tree, finish_tree["root"], finish_tree["outside"]
+    (outside / "empty").mkdir()
+    tree["outside_before"] = _outside_state(outside)
+    _winapi.CreateJunction(str(outside), str(root / "junction-to-full"))
+    _winapi.CreateJunction(str(outside / "empty"), str(root / "junction-to-empty"))
+    os.symlink(outside, root / "folderlink", target_is_directory=True)
+    os.symlink(outside / "keep.txt", root / "filelink")
+    os.link(outside / "keep.txt", root / "hardlink")
+    names = ["junction-to-full", "junction-to-empty", "folderlink", "filelink", "hardlink"]
+    tree["links"] += [root / name for name in names]
+    program, gone = _powershell(), {}
+    for name in names:
+        for ending in (" -ErrorAction SilentlyContinue", ""):  # Both forms that the step uses.
+            subprocess.run(
+                [program, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                 "Remove-Item -LiteralPath '" + str(root / name) + "'" + ending],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=60, cwd=str(Path(program).parents[2]))
+            # After every single command: every outside name, content and attribute is as before.
+            _assert_outside_unchanged(tree)
+        gone[name] = not os.path.lexists(root / name)
+    print("REMOVE_ITEM_LINKS " + json.dumps(gone))
+    # A link to a file goes as a link. The outside file keeps its content and is still one file.
+    assert gone["filelink"] and gone["hardlink"]
+    assert (outside / "keep.txt").read_text() == "keep outside" and (outside / "keep.txt").stat().st_nlink == 1
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Real PowerShell hard-link attribute preservation")
 @pytest.mark.parametrize("location", ["flat", "root-files"])
 def test_native_finish_never_clears_attributes_through_a_hard_link(finish_tree, location):
