@@ -179,7 +179,7 @@ try {
         # Windows deletes it when this handle closes.
         $own = @($p.token, ($p.token + '.hold'))
         $anchor = New-Object System.IO.FileStream -ArgumentList (Join-Path $park $own[1]),
-            'CreateNew', 'Write', 'None', 1, 'DeleteOnClose'
+            'CreateNew', 'Write', 'None', 1, ([System.IO.FileOptions]'DeleteOnClose')
         Write-Host 'ready'
         $until = (Get-Date) + (New-TimeSpan -Seconds $p.seconds)
         $done = $false
@@ -234,7 +234,7 @@ try {
         $option = 'None'
         if ($last) { $option = 'DeleteOnClose' }
         $lock = New-Object System.IO.FileStream -ArgumentList $journal.FullName,
-            'Open', 'Read', 'Read', 1, $option
+            'Open', 'Read', 'Read', 1, ([System.IO.FileOptions]$option)
         # 3. The inner folder goes while the open file keeps the flat folder;
         #    the flat folder while the journal handle keeps the installation.
         [Environment]::CurrentDirectory = $p.parent

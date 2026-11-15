@@ -370,6 +370,7 @@ def test_finish_static_program_and_stdin_only_payload(finish_start):
     assert re.findall(r"\$\w+\.\w+\s*\([^)]*\)", removal.FINISH_SCRIPT) == [
         "$entry.Delete()", "$anchor.Close()", "$lock.Close()", "$lock.Close()"]
     assert removal.FINISH_SCRIPT.count("New-Object ") == 2
+    assert removal.FINISH_SCRIPT.count("[System.IO.FileOptions]") == 2
     assert token not in removal.FINISH_SCRIPT
     assert options["cwd"] == r"C:\My [private]\Amplifier" + "\\" + PARK + "\\" + TOKEN
     assert options["creationflags"] == 0x09000200
@@ -558,7 +559,7 @@ def test_step_after_exit_keeps_a_file_open_in_every_folder_that_its_paths_lead_t
     # Before it answers, it creates one new file in the flat folder and keeps it open: no sharing at all,
     # and Windows deletes the file when the handle closes. The flat folder is then never empty.
     assert ("$anchor = New-Object System.IO.FileStream -ArgumentList (Join-Path $park $own[1]),\n"
-            "            'CreateNew', 'Write', 'None', 1, 'DeleteOnClose'") in start
+            "            'CreateNew', 'Write', 'None', 1, ([System.IO.FileOptions]'DeleteOnClose')") in start
     assert "$own = @($p.token, ($p.token + '.hold'))" in start
     # The wait ends when waiting cannot help: no program left, no parked file, no named folder.
     assert "$idle = (-not $alive.Count -and -not $inside.Count -and -not $named.Count)" in script
@@ -572,7 +573,7 @@ def test_step_after_exit_keeps_a_file_open_in_every_folder_that_its_paths_lead_t
             "$journal = Get-Record $both[0]", "$complete = Get-Record $both[1]",
             "if ($last) { $option = 'DeleteOnClose' }",
             "$lock = New-Object System.IO.FileStream -ArgumentList $journal.FullName,",
-            "'Open', 'Read', 'Read', 1, $option",
+            "'Open', 'Read', 'Read', 1, ([System.IO.FileOptions]$option)",
             # The inner folder goes while the open file keeps the flat folder.
             "[Environment]::CurrentDirectory = $p.parent", "$folder = Get-Item -LiteralPath $hold",
             # The flat folder goes while the journal handle keeps the installation folder.
