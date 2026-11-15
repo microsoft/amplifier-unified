@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -23,6 +24,7 @@ from amplifier_web import runtime_environment as environments
 from amplifier_web import runtime_qualification as qualification
 from amplifier_web import runtime_registry_updates as registry
 from amplifier_web import update_health as health
+from amplifier_web import update_report
 from amplifier_web.updates import active_release
 from test_runtime_registry_updates import BASE, lock
 from test_update_core_lookup_failure import certificate_failure, checked_install
@@ -96,6 +98,8 @@ async def test_a_new_installation_on_the_newest_release_is_up_to_date(setup_reco
         assert (status['status'], status['title'], status['detail']) == ('current', 'You\u2019re up to date', UP_TO_DATE)
         assert status['actionRequired'] is False and status['action'] is None and status['component'] is None
         assert not active_release(setup_record.home)  # The check selected and prepared nothing.
+        # Saved diagnostics name the proof that this host process found.
+        assert (await update_report.collect(c.manager))['updateState']['healthProof'] == 'setup-record'
 
 
 # A complete check that found nothing newer, as the update manager publishes it.
@@ -150,6 +154,63 @@ def test_a_missing_or_changed_setup_record_keeps_the_incomplete_report(setup_rec
     assert (status['status'], status['title'], status['detail']) == (
         'unverified', 'Component verification is incomplete', INCOMPLETE)
     assert status['actionRequired'] is True and status['action'] == 'check'
+
+
+TOOL_FAULTS = {
+    'tool-missing': FileNotFoundError(2, 'git'),  # A PATH with no Git: the read cannot start its tool.
+    'tool-denied': PermissionError(13, 'git'),
+    'tool-failed': subprocess.CalledProcessError(128, ['git', 'rev-parse', 'HEAD']),
+    'tool-timeout': subprocess.TimeoutExpired(['git', 'status'], 10),
+}
+
+
+@pytest.mark.parametrize('fault', sorted(TOOL_FAULTS))
+def test_a_package_read_that_cannot_run_keeps_the_incomplete_report(setup_record, monkeypatch, fault):
+    def unreadable(project):
+        raise TOOL_FAULTS[fault]
+    monkeypatch.setattr(qualification, 'installed_graph', unreadable)
+    assert health.setup_evidence(SimpleNamespace(home=setup_record.home)) == {}  # No error leaves the reader.
+    assert reported(setup_record)['title'] == 'Component verification is incomplete'
+
+
+def local_checkout(install, name='amplifier-module-local'):
+    """A recorded package that was installed from a local source checkout.
+
+    The installed-package reader runs Git for such a package (revision, status
+    and tracked files), so the proof needs Git on the PATH of the reading process.
+    """
+    checkout = install.home / 'foundation/cache' / name
+    checkout.mkdir(parents=True)
+    (checkout / 'module.py').write_text('value = 1\n')
+    (checkout / '.amplifier_cache_meta.json').write_text(json.dumps(
+        {'git_url': 'https://example.invalid/' + name, 'ref': 'main'}))
+    for command in (['init', '-q', '-b', 'main'], ['add', 'module.py'],
+                    ['-c', 'user.email=test@example.invalid', '-c', 'user.name=Fixture', 'commit', '-q', '-m', 'one']):
+        subprocess.run(['git', *command], cwd=checkout, check=True, capture_output=True, timeout=30)
+    folder = distribution(install.project, name, '0.1.0')
+    (folder / 'direct_url.json').write_text(json.dumps({'url': checkout.as_uri(), 'dir_info': {'editable': True}}))
+    graph = qualification.installed_graph(install.project)
+    assert next(row for row in graph if row['name'] == name)['cacheSource']['revision']  # Git was read.
+    (install.receipt / 'runtime-installed.json').write_text(json.dumps(graph))
+    return checkout
+
+
+def test_the_proof_needs_git_on_the_path_when_a_package_comes_from_a_local_checkout(
+        setup_record, tmp_path, monkeypatch):
+    checkout = local_checkout(setup_record)
+    assert reported(setup_record)['detail'] == UP_TO_DATE
+    # A process whose PATH holds no Git cannot make the read: no proof, and no crash.
+    empty = tmp_path / 'no-tools'
+    empty.mkdir()
+    with monkeypatch.context() as patch:
+        patch.setenv('PATH', str(empty))
+        assert shutil.which('git') is None
+        assert installation_runtime.status(setup_record.home)['ok'] is False
+        assert reported(setup_record)['title'] == 'Component verification is incomplete'
+    assert reported(setup_record)['detail'] == UP_TO_DATE  # With Git again, the same record verifies.
+    # A changed tracked file of that checkout is a changed component.
+    (checkout / 'module.py').write_text('value = 2\n')
+    assert reported(setup_record)['title'] == 'Component verification is incomplete'
 
 
 def test_a_selected_generation_is_never_verified_by_setups_record(setup_record):
@@ -208,3 +269,4 @@ async def test_each_check_reads_the_record_again_and_preparation_never_uses_it(s
         assert (status['status'], status['title'], status['detail']) == (
             'unverified', 'Component verification is incomplete', INCOMPLETE)
         assert status['actionRequired'] is True
+        assert (await update_report.collect(c.manager))['updateState']['healthProof'] == 'none'

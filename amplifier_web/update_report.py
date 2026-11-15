@@ -186,6 +186,10 @@ async def collect(manager):
         'hasError': bool(state.get('error')),
         'checkInProgress': bool(getattr(manager, 'check_task', None) and not manager.check_task.done()),
     }
+    # Which installed proof the last health refresh of this host process found.
+    proof = getattr(manager, '_active_update_evidence', None) or {}
+    report['updateState']['healthProof'] = ('generation' if proof.get('generation') else
+                                            'setup-record' if proof.get('setupRecord') else 'none')
     from .app_updates import RELEASE_CHECK_STAGES, RELEASE_CHECK_REASONS
     application = state.get('application') or {}
     if (application.get('status') == 'check_failed'
