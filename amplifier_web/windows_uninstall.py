@@ -47,9 +47,10 @@ _VERSION = r"\d+\.\d+\.\d+"
 # Folders that the launcher refresh keeps beside the installation's own.
 _FOLDER_FORMS = (rf"launcher-{_VERSION}-[0-9a-f]{{8}}(-\d+)?", r"launcher-not-used(-\d+)?")
 # The release file (also a partial download), the private writer's temporary
-# file, and setup's notes about a helper program that failed.
+# file, setup's notes about a helper program that failed, and the file that
+# the last step of a removal keeps open (Windows deletes it with that step).
 _FILE_FORMS = (rf"amplifier_unified-{_VERSION}-py3-none-any\.whl(\.part)?", r"\.private-[0-9a-f]{32}\.tmp",
-               r"child-\d+\.(stderr\.txt|failure\.json)")
+               r"child-\d+\.(stderr\.txt|failure\.json)", r"[0-9a-f]{32}\.hold")
 _FOLDERS = frozenset(DATA + RUNNING + CACHES + LAST[:2] + (PARK,))
 _EXACT = frozenset(DATA + RUNNING + CACHES + FILES + LAST + (STARTED, COMPLETE, JOURNAL, PARK))
 SECONDS_AFTER_EXIT = 120  # For a handful of files. A program that closes late gets this long.
@@ -424,10 +425,10 @@ def finish(root, token, *, choice="delete", wait=time.sleep):
     them. So, under the lock, with the installation folder proven and pinned
     again and the journal still this removal's own:
 
-    1. Create the flat folder `unified-uninstall-last`, and in it one folder
-       with the token as its name. Hold both.
-    2. Start the step after exit in that inner folder. Before it answers,
-       it creates one file in the flat folder and keeps it open. From here
+    1. Create the flat folder `unified-uninstall-last` and two kept files,
+       `<token>.hold` in the installation folder and in the flat folder,
+       through handles. Nobody else can open them.
+    2. Start the step after exit. It inherits the two open files. From here
        no program can empty, rename or replace the flat folder, the
        installation folder or a folder above it, also when this program has
        ended: Windows turns only an empty folder into a link.
@@ -449,12 +450,14 @@ def finish(root, token, *, choice="delete", wait=time.sleep):
                 raise ValueError("Another removal of this folder began.")
             if altered(owned.names()):
                 raise ValueError("An entry differs from this installation's own name only by case.")
-            # What an earlier last step left. It is this installation's own
-            # folder; a new one is made, or the name refuses.
-            owned.remove([PARK], settle=shell.SETTLE_SECONDS, wait=wait)
+            # What an earlier last step left: its flat folder, and a kept file
+            # after a power loss. They are this installation's own; new ones
+            # are made, or the name refuses.
+            earlier = [name for name in owned.names() if re.fullmatch(r"[0-9a-f]{32}\.hold", name, re.ASCII)]
+            owned.remove([PARK, *earlier], settle=shell.SETTLE_SECONDS, wait=wait)
             folders = last_names(owned)
             with owned.aside(PARK, token) as park:
                 windows_removal.finish_after_exit(
-                    root, token, park=PARK, folders=folders,
+                    root, token, park=PARK, keep=park.keep, folders=folders,
                     wait_for=(os.getpid(), os.getppid()), seconds=SECONDS_AFTER_EXIT, choice=choice)
                 return owned.remove(RUNNING, settle=shell.SETTLE_SECONDS, wait=wait, park=park)

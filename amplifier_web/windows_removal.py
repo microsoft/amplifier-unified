@@ -25,14 +25,14 @@ Setup installs only into an absent or empty folder. The after-exit step checks
 the journal before every named top-level entry.
 
 A running program cannot delete the files that it runs from. It can move
-them. `Folder.aside` holds one flat folder, `Folder.remove(..., park=...)`
-moves such a file into it through its handle, and the step after exit starts
-with that folder as its current folder. Windows keeps a program's current
-folder open without delete sharing. So the folder that the uninstall program
-held stays held when that program has ended, and no program can rename or
-replace it, the installation folder or a folder above it. The step deletes
-the few parked files there. Everything else it removes is a folder, by
-RemoveDirectory, plus setup's completion record and the journal at the end.
+them. `Folder.aside` creates one flat folder and two kept files (one in the
+installation folder, one in the flat folder), `Folder.remove(..., park=...)`
+moves such a file into the flat folder through its handle, and the step after
+exit inherits the two kept files open. A folder cannot be emptied, renamed or
+turned into a link while it holds a file that a program keeps open. So the
+step deletes the few parked files where their path cannot lead anywhere else.
+Everything else it removes is a folder, by RemoveDirectory, plus the journal
+and setup's completion record at the end.
 """
 from __future__ import annotations
 
@@ -68,23 +68,25 @@ def same_name(name):
 # anywhere else. It walks no tree.
 #
 # A folder cannot be replaced while it holds a file that a program keeps open
-# without delete sharing: nobody can delete or move that file, so the folder is
+# without any sharing: nobody can delete or move that file, so the folder is
 # never empty, Windows turns only an empty folder into a link, and Windows
 # refuses to rename a folder with an open file below it. The same holds for
 # every folder above.
 #
-# - Hand-over: the uninstall program holds the flat folder and one inner folder
-#   in it, and starts this step with the inner folder as its current folder.
-# - Before it answers, the step creates one new file in the flat folder and
-#   keeps it open until every file is deleted. Windows deletes that file itself
-#   when the step closes it or ends.
-# - While it is open, the step deletes the parked files directly in the flat
-#   folder and, at the end, the journal and setup's completion record directly
-#   in the installation folder. It opens no existing file for deletion.
-# - Everything else it removes is a folder (RemoveDirectory: an empty folder
-#   goes, a link goes as a link, a folder with entries refuses). After the file
-#   is closed it removes two empty folders: the flat folder and the
-#   installation folder.
+# The uninstall program creates two such files through handles, one in the
+# installation folder and one in the flat folder, and this step inherits both
+# handles when it is created. Windows deletes each file when its last handle
+# closes. This step creates no file and opens no existing file.
+#
+# - While both are open, the step deletes the parked files directly in the
+#   flat folder and, at the end, the journal and setup's completion record
+#   directly in the installation folder.
+# - It closes the file in the flat folder and removes that folder while the
+#   file in the installation folder is still open.
+# - It closes that last file and removes the installation folder, if the
+#   folder above holds something else.
+# Folders go by RemoveDirectory: an empty folder goes, a link goes as a link,
+# a folder with entries refuses.
 FINISH_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
 $p = $null
@@ -140,6 +142,10 @@ function Clear-Folder($entry) {
         if ($entry.PSIsContainer) { $entry.Delete() } else { Keep $entry.FullName }
     } catch { Keep $entry.FullName }
 }
+function Plain($path) {
+    $file = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    return ($null -ne $file -and -not $file.PSIsContainer -and "$($file.Attributes)" -notmatch 'ReparsePoint')
+}
 function Get-Record($name) {
     # One of the two records. A link, a folder or a protected file is refused.
     $file = Get-Item -LiteralPath (Join-Path $p.root $name) -Force -ErrorAction SilentlyContinue
@@ -168,19 +174,19 @@ try {
         }
         if ($p.seconds -lt 0 -or $p.seconds -gt 3600) { throw 'Invalid duration' }
         $park = Join-Path $p.root $p.park
-        $hold = Join-Path $park $p.token
-        # The process's current folder is the inner folder. PowerShell's own
-        # location is separate; it moves away so that no cmdlet refuses.
-        if ([Environment]::CurrentDirectory -ne $hold) { throw 'Not started in the held folder' }
-        Set-Location -LiteralPath $p.outside
+        $own = $p.token + '.hold'
         if (-not (Authorized)) { throw 'Root or token refused' }
-        if (-not (Real-Folder (Get-Item -LiteralPath $hold -Force)) -or
-            -not (Real-Folder (Get-Item -LiteralPath $park -Force))) { throw 'Held folder refused' }
-        # One unshared file keeps the flat folder nonempty until its handle closes.
-        $own = @($p.token, ($p.token + '.hold'))
-        $anchor = New-Object System.IO.FileStream -ArgumentList (Join-Path $park $own[1]),
-            ([System.IO.FileMode]'CreateNew'), ([System.IO.FileAccess]'Write'),
-            ([System.IO.FileShare]'None'), 1, ([System.IO.FileOptions]'DeleteOnClose')
+        # The two kept files, open since before this program existed: [0] in
+        # the installation folder, [1] in the flat folder. Taking over a handle
+        # that is not an open file fails here.
+        $kept = @($p.keep | ForEach-Object {
+            $handle = New-Object Microsoft.Win32.SafeHandles.SafeFileHandle -ArgumentList ([IntPtr][long]$_), $true
+            New-Object System.IO.FileStream -ArgumentList $handle, ([System.IO.FileAccess]'Write')
+        })
+        if ($kept.Count -ne 2 -or -not (Real-Folder (Get-Item -LiteralPath $park -Force)) -or
+            -not (Plain (Join-Path $p.root $own)) -or -not (Plain (Join-Path $park $own))) {
+            throw 'Kept files refused'
+        }
         Write-Host 'ready'
         $until = (Get-Date) + (New-TimeSpan -Seconds $p.seconds)
         $done = $false
@@ -194,8 +200,9 @@ try {
                 Get-Process -Id $_ -ErrorAction SilentlyContinue
             })
             foreach ($entry in @(Get-ChildItem -LiteralPath $park -Force)) {
-                if ($own -ccontains $entry.Name) { continue }
-                if ($entry.PSIsContainer -or
+                if ($entry.Name -ceq $own) { continue }
+                # A parked file has a number as its name. Anything else stays.
+                if ($entry.PSIsContainer -or $entry.Name -cnotmatch '^[0-9]+$' -or
                     "$($entry.Attributes)" -match 'ReparsePoint|ReadOnly|Hidden|System') {
                     Keep $entry.FullName
                 } elseif (-not (Later $entry)) {
@@ -209,12 +216,10 @@ try {
                     Clear-Folder $entry
                 }
             }
-            $inside = @(Get-ChildItem -LiteralPath $park -Force | Where-Object { $own -cnotcontains $_.Name })
+            $inside = @(Get-ChildItem -LiteralPath $park -Force | Where-Object { $_.Name -cne $own })
             foreach ($entry in $inside) { Keep $entry.FullName }
-            $rest = @(Get-ChildItem -LiteralPath $p.root -Force | Where-Object {
-                $_.Name -cne $p.park -and $_.Name -cne 'unified-uninstall.json' -and
-                $_.Name -cne 'unified-setup-complete.json'
-            })
+            $mine = @($p.park, $own, 'unified-uninstall.json', 'unified-setup-complete.json')
+            $rest = @(Get-ChildItem -LiteralPath $p.root -Force | Where-Object { $mine -cnotcontains $_.Name })
             foreach ($entry in $rest) { Keep $entry.FullName }
             $done = (-not $alive.Count -and -not $inside.Count -and -not $rest.Count)
             # Waiting helps only for a live program, a parked file or a
@@ -226,29 +231,26 @@ try {
         } while ((Get-Date) -lt $until)
         if (-not (Authorized)) { throw 'Root or token refused' }
         # 2. Both records are checked before anything of the end happens.
-        $both = @('unified-uninstall.json', 'unified-setup-complete.json')
-        $journal = Get-Record $both[0]
-        $complete = Get-Record $both[1]
-        # 3. The open file still keeps the flat folder, the installation folder
-        #    and the folders above. The inner folder goes.
-        [Environment]::CurrentDirectory = $p.parent
-        $folder = Get-Item -LiteralPath $hold -Force -ErrorAction SilentlyContinue
-        if ($null -ne $folder) { Clear-Folder $folder }
-        $mine = @($p.park) + $both
-        $last = ($done -and (Only $park @($own[1])) -and (Only $p.root $mine))
+        $journal = Get-Record $mine[2]
+        $complete = Get-Record $mine[3]
+        $last = ($done -and (Only $park @($own)) -and (Only $p.root $mine))
         if ($last) {
-            # 4. Nothing but this step's own file and the two records is left.
-            #    The journal goes first. Setup's completion record goes only if
+            # 3. Nothing but the kept files and the two records is left. The
+            #    journal goes first. Setup's completion record goes only if
             #    nothing appeared meanwhile: with it, setup changes nothing here.
             Remove-Item -LiteralPath $journal.FullName
-            $last = (Only $p.root @($p.park, $both[1]))
+            $last = (Only $p.root @($p.park, $own, $mine[3]))
             if ($last -and $null -ne $complete) { Remove-Item -LiteralPath $complete.FullName }
         }
-        # 5. Only empty folders from here: the flat folder, then the installation.
-        $anchor.Close()
+        # 4. No file is deleted from here. The flat folder goes while the file
+        #    in the installation folder is still open.
+        $kept[1].Close()
         $folder = Get-Item -LiteralPath $park -Force -ErrorAction SilentlyContinue
         if ($null -ne $folder) { Clear-Folder $folder }
-        if ($last) {
+        # 5. The installation folder, if the folder above holds something else:
+        #    that folder then cannot be emptied and turned into a link.
+        if ($last -and @(Get-ChildItem -LiteralPath $p.parent -Force).Count -gt 1) {
+            $kept[0].Close()
             $folder = Get-Item -LiteralPath $p.root -Force -ErrorAction SilentlyContinue
             if ($null -ne $folder) { Clear-Folder $folder }
             $removed = -not (Test-Path -LiteralPath $p.root)
@@ -267,24 +269,25 @@ finally {
 """
 
 
-def finish_after_exit(root, token, *, park, folders, wait_for=(), seconds=60, report=None,
+def finish_after_exit(root, token, *, park, keep, folders, wait_for=(), seconds=60, report=None,
                       choice="delete", ready=30):
-    """Start the token-guarded last step in a held folder, outside the installation's Job.
+    """Start the token-guarded last step with two kept files, outside the installation's Job.
 
-    `park` names a folder directly in `root`, with a folder named `token` in
-    it; the caller holds both open, as `Folder.aside` does. The step starts
-    with that inner folder as its current folder, creates one file in `park`
-    and keeps it open, and only then says that it runs; this call returns
-    after that. Until the step has deleted its last file, no program can
-    empty, rename or replace the flat folder, the installation folder or a
-    folder above, also when the caller has ended.
+    `park` names a folder directly in `root`. `keep` are the two open handles
+    that `Folder.aside` made: a file `<token>.hold` in `root` and one in
+    `park`. The step inherits both when it is created, so there is no moment
+    in which nobody holds them. This call returns only when the step has said
+    that it runs; the caller then closes its own two handles. Until the step
+    has deleted its last file, no program can empty, rename or replace the
+    flat folder, the installation folder or a folder above, also when the
+    caller has ended.
 
-    The step deletes plain files directly in `park` (never with -Force), and
-    removes the `folders` only when they are empty. At the end it removes
-    the inner folder. When nothing but its own file and the two records is
-    left, it deletes the journal and then setup's completion record. Then it
-    closes its file and removes the flat folder and `root`. Folders go by
-    RemoveDirectory: a link goes as a link, a folder with entries refuses.
+    The step deletes the parked files directly in `park` (never with -Force),
+    and removes the `folders` only when they are empty. When nothing but the
+    kept files and the two records is left, it deletes the journal and then
+    setup's completion record. Then it removes the flat folder and `root`.
+    Folders go by RemoveDirectory: a link goes as a link, a folder with
+    entries refuses. The step creates no file and opens no existing file.
 
     A return does not mean that anything was removed. A step that does not
     answer within `ready` seconds raises OSError. If Windows refuses Job
@@ -317,6 +320,9 @@ def finish_after_exit(root, token, *, park, folders, wait_for=(), seconds=60, re
     wait_for = list(wait_for)
     if any(type(pid) is not int or pid <= 0 for pid in wait_for):
         raise ValueError("Wait targets must be positive process IDs.")
+    keep = list(keep)
+    if len(keep) != 2 or keep[0] == keep[1] or any(type(handle) is not int or handle <= 0 for handle in keep):
+        raise ValueError("Two different open file handles are required.")
     try:
         program = _powershell()
     except WindowsServiceError as error:
@@ -324,7 +330,7 @@ def finish_after_exit(root, token, *, park, folders, wait_for=(), seconds=60, re
     outside = str(PureWindowsPath(program).parents[2])  # The Windows folder.
     payload = json.dumps({
         "root": root, "parent": parent, "token": token, "choice": choice, "park": park,
-        "outside": outside, "folders": names[1:], "wait_for": wait_for, "seconds": seconds,
+        "keep": keep, "folders": names[1:], "wait_for": wait_for, "seconds": seconds,
         "report": os.fspath(report) if report is not None else None,
     }, ensure_ascii=True).encode("ascii")
     environment = os.environ.copy()
@@ -341,26 +347,34 @@ def finish_after_exit(root, token, *, park, folders, wait_for=(), seconds=60, re
             environment[key] = ntpath.join(environment["LOCALAPPDATA"], "Temp")
     arguments = [program, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
                  base64.b64encode(FINISH_SCRIPT.encode("utf-16-le")).decode("ascii")]
-    # The hold folder is the step's current folder from its first moment.
-    options = dict(cwd=ntpath.join(root, park, token), env=environment,
-                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    # The step gets exactly these two handles (and its pipes) from this
+    # process, at its creation. Its current folder is outside the installation.
+    for handle in keep:
+        os.set_handle_inheritable(handle, True)
+    options = dict(cwd=outside, env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                   stderr=subprocess.DEVNULL,
+                   startupinfo=subprocess.STARTUPINFO(lpAttributeList={"handle_list": list(keep)}))
     flags = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
     try:
-        process = subprocess.Popen(arguments, creationflags=flags | 0x01000000, **options)
-    except OSError:
-        process = subprocess.Popen(arguments, creationflags=flags, **options)
+        try:
+            process = subprocess.Popen(arguments, creationflags=flags | 0x01000000, **options)
+        except OSError:
+            process = subprocess.Popen(arguments, creationflags=flags, **options)
+    finally:
+        for handle in keep:  # No later child of this process gets them.
+            os.set_handle_inheritable(handle, False)
     try:
         process.stdin.write(payload)
     finally:
         process.stdin.close()
-    # The step writes one line when it runs in the held folder and its checks
-    # passed. Until then the caller must not let the folders go.
+    # The step writes one line when it has taken over the two kept files and
+    # its checks passed. Until then the caller must not let its handles go.
     answer = []
     reader = threading.Thread(target=lambda: answer.append(process.stdout.readline()), daemon=True)
     reader.start()
     reader.join(ready)
     if not answer or answer[0].strip() != b"ready":
-        raise OSError("The last step did not start in the held folder.")
+        raise OSError("The last step did not take over the kept files.")
     process.stdout.close()
     return process.pid
 
@@ -446,6 +460,28 @@ class _Native(_ReadAPI):
         # refuses. A folder; synchronous; never through a link.
         result = self.create(C.byref(handle), 0x100081, C.byref(attributes), C.byref(status),
                              None, 0, 3, 2, 0x200021, None, 0)
+        if result < 0:
+            raise C.WinError(self.dos_error(result))
+        return handle.value
+
+    def keep(self, parent, name):
+        """Create one new, empty file in an open folder and return it open. Nobody else can open it.
+
+        Windows deletes the file when its last handle closes. An existing
+        entry of that name refuses, also a link: nothing is created elsewhere.
+        """
+        if not name or name in {".", ".."} or any(mark in name for mark in "\\/:"):
+            raise OSError(22, "not a single entry name")
+        text = C.create_unicode_buffer(name)
+        size = len(name.encode("utf-16-le", "surrogatepass"))
+        unicode = _Unicode(size, size + 2, C.cast(text, C.c_wchar_p))
+        attributes = _Attributes(C.sizeof(_Attributes), parent, C.pointer(unicode), 0, None, None)
+        handle, status = HANDLE(), _Status()
+        # DELETE | SYNCHRONIZE | FILE_READ_ATTRIBUTES | FILE_WRITE_DATA; an
+        # ordinary file; no sharing at all; FILE_CREATE: an existing entry
+        # refuses. A file; synchronous; FILE_DELETE_ON_CLOSE.
+        result = self.create(C.byref(handle), 0x110082, C.byref(attributes), C.byref(status),
+                             None, 0x80, 0, 2, 0x1060, None, 0)
         if result < 0:
             raise C.WinError(self.dos_error(result))
         return handle.value
@@ -622,19 +658,25 @@ class Folder:
 
     @contextmanager
     def aside(self, name, hold):
-        """Create one new folder directly in this folder, and the folder `hold` in it; hold both open.
+        """Create one new folder directly in this folder, and two kept files; hold all three open.
+
+        The kept files are named `<hold>.hold`: one in this folder, one in the
+        new folder. Nobody else can open, delete or move them, and Windows
+        deletes each when its last handle closes. While a folder holds such a
+        file it is never empty, Windows turns only an empty folder into a
+        link, and Windows refuses to rename it. An entry with one of the three
+        names that exists already refuses, and nothing is created elsewhere.
 
         Yields the function that moves an open file into the new folder under
-        the next free number. While both are held, no program can rename or
-        replace the new folder, and it is never empty: Windows turns only an
-        empty folder into a link, so a path into it stays a path into it. An
-        entry of that name that exists already refuses.
+        the next free number. Its attribute `keep` is the two open handles,
+        the file in this folder first, for `finish_after_exit`.
         """
-        handle, inner = self._api.make(self._handle, name), None
+        handle, kept = self._api.make(self._handle, name), []
         try:
-            inner = self._api.make(handle, hold)
+            for parent in (self._handle, handle):
+                kept.append(self._api.keep(parent, hold + ".hold"))
             # The new folder was empty for a moment. It must still be a folder.
-            if self._api.kind(handle) != "folder" or self._api.kind(inner) != "folder":
+            if self._api.kind(handle) != "folder" or any(self._api.kind(file) != "file" for file in kept):
                 raise OSError(22, "the held folder changed into a link")
             count = [0]
 
@@ -646,10 +688,11 @@ class Folder:
                     except FileExistsError:
                         continue
                 raise OSError(17, "no free name in the held folder")
+            park.keep = tuple(kept)
             yield park
         finally:
-            if inner is not None:
-                self._api.close(inner)
+            for file in reversed(kept):
+                self._api.close(file)
             self._api.close(handle)
 
 
