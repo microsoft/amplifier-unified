@@ -122,6 +122,7 @@ def redact_request(value, *, limit=MAX_CAPTURE_CHARS):
 def install_request_redaction(coordinator, *, directory=None):
     """Sanitize diagnostic copies ahead of CI's priority-100 logging hook."""
     from amplifier_core import HookResult
+    from .host.media import registration_hooks
     if coordinator.get_capability('web.provider_request_redaction'):
         return
     coordinator.register_capability('web.provider_request_redaction', True)
@@ -161,5 +162,5 @@ def install_request_redaction(coordinator, *, directory=None):
                                      'limit_chars': MAX_CAPTURE_CHARS}
         return HookResult(action='modify', data=result)
     for event in ('llm:request', 'llm:response'):
-        coordinator.hooks.register(event, observe,
+        registration_hooks(coordinator).register(event, observe,
             name='unified-provider-request-redaction', priority=-100)

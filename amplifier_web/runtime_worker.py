@@ -52,8 +52,24 @@ def publish_process_identity():
 
 
 class Worker:
-    def __init__(self):
+    def __init__(self, *, media_graph_selection=None, canonical_binding=None,
+                 canonical_binding_factory=None, canonical_resume=None,
+                 canonical_bootstrap=True):
+        if canonical_binding is not None and type(canonical_resume) is not bool:
+            raise ValueError("A canonical Worker needs explicit new-versus-resume intent")
         self.session = self.runtime = self.execution = None
+        # Assembly-owned object, never a worker command/configuration field.
+        self.media_graph_selection = media_graph_selection
+        # Private prospective owner, acquired before this Worker is started.
+        # Never reconstruct it from a command, catalog row or JSON prefix.
+        self.canonical_binding = canonical_binding
+        self.canonical_binding_factory = canonical_binding_factory
+        self.canonical_resume = canonical_resume
+        # Ordinary packaged entry participates prospectively; isolated legacy
+        # checks may explicitly retain their existing constructor-only cohort.
+        self.canonical_bootstrap = canonical_bootstrap
+        self._cleanup_settled = False
+        self.retiring = False
         self.approvals = {}
         self.approval_contexts = {}
         self.approval_deliveries = {}
@@ -748,6 +764,8 @@ class Worker:
 
     def install_activity(self, coordinator):
         from amplifier_core import HookResult
+        from .host.media import registration_hooks
+        hooks = registration_hooks(coordinator)
         # ask_user is delivered over the host's durable approval channel even
         # though this worker has no terminal. This advertises transport only;
         # each request still waits for its own explicit client response.
@@ -758,8 +776,10 @@ class Worker:
             if self.telemetry:
                 providers = coordinator.get("providers") or {}
                 for name, provider in list(providers.items()):
-                    providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider,
-                        run_id=coordinator.get_capability("web.worker_run"))
+                    from .host.media import replace_media_adapter
+                    replace_media_adapter(coordinator, "providers", name, provider,
+                        self.telemetry.instrument_provider(coordinator.session_id, provider,
+                            run_id=coordinator.get_capability("web.worker_run")))
             return
         coordinator.register_capability("web.activity", True)
         from amplifier_web.performance_diagnostics import install_preparation_timing
@@ -773,7 +793,7 @@ class Worker:
                 return HookResult()
             # Run before loop-live's content-block observer (default priority).
             for event in ("content_block:start", "content_block:end"):
-                coordinator.hooks.register(event, response_block, priority=-100,
+                hooks.register(event, response_block, priority=-100,
                     name="amplifier-web-response-" + event)
             async def response_boundary(event, data):
                 from amplifier_web.execution_events import CALL_PURPOSE
@@ -781,7 +801,7 @@ class Worker:
                     self.response_blocks.reset()
                 return HookResult()
             for event in ("provider:request", "llm:request", "tool:pre"):
-                coordinator.hooks.register(event, response_boundary, priority=-100,
+                hooks.register(event, response_boundary, priority=-100,
                     name="amplifier-web-response-boundary-" + event)
         # A resumed child reuses its session ID but owns a new coordinator.
         # Bind hooks to their originating run, never the mutable registry row.
@@ -828,8 +848,10 @@ class Worker:
                 self.telemetry.lifecycle({"type":"child.updated", **registry.rows[coordinator.session_id]})
             providers = coordinator.get("providers") or {}
             for name, provider in list(providers.items()):
-                providers[name] = self.telemetry.instrument_provider(coordinator.session_id, provider,
-                        run_id=coordinator.get_capability("web.worker_run"))
+                from .host.media import replace_media_adapter
+                replace_media_adapter(coordinator, "providers", name, provider,
+                    self.telemetry.instrument_provider(coordinator.session_id, provider,
+                        run_id=coordinator.get_capability("web.worker_run")))
         async def activity(event, data):
             identity = coordinator.session_id
             if data.get("session_id", identity) != identity:
@@ -883,7 +905,7 @@ class Worker:
         for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "context:compaction_started", "context:compaction_progress", "context:compaction_finished"):
             # Exact tool observation identity must precede the canonical
             # context-intelligence logger (priority 100), independent of mount order.
-            coordinator.hooks.register(event, activity, name="amplifier-web-activity-" + event,
+            hooks.register(event, activity, name="amplifier-web-activity-" + event,
                 priority=-100 if event.startswith('tool:') else 0)
 
     async def preparation_progress(self, directory):
@@ -903,6 +925,36 @@ class Worker:
             if self.stop_revision != stop_revision or self.shutdown.is_set():
                 raise RuntimeError('Bundle application was stopped before commit.')
         replacement.commit()
+
+    async def media_preflight(self, config, workspace):
+        """A tentative positive recipe must never replace normal root selection."""
+        try:
+            from amplifier_web.runtime_controls import override_path
+            if override_path(config["id"]).exists() or config.get("bundleReplacement") is not None:
+                return None, None
+            from amplifier_web.host.config import load_config, prepare_registry
+            from amplifier_web.host.bundle_paths import canonical_bundle_reference
+            from amplifier_web.host.session import load_root_bundle, live_plan, ResolvedRoot, required_components
+            from amplifier_web.host.media_assembly import select_from_declaration
+            authored = load_config(workspace, session_id=config["id"],
+                **({"owner_session_id": config["ownerSessionId"]}
+                   if config.get("ownerSessionId") is not None else {}))
+            prepare_registry(authored)
+            chosen = canonical_bundle_reference(authored, config.get("bundle") or authored.active_bundle)
+            cwd = Path(config.get("workingDirectory") or workspace).expanduser().resolve(strict=True)
+            root = await load_root_bundle(authored, chosen, execution_workspace=cwd)
+            loaded = root[1]
+            declaration, _ = live_plan(loaded.to_mount_plan())
+            components = getattr(loaded, "_host_components", None) or required_components()
+            declaration = components.normalize(declaration)
+            selected = select_from_declaration(declaration,
+                workspace=workspace, session_id=config["id"], bundle_name=root[2])
+            return selected, ResolvedRoot(authored, chosen, root, execution_workspace=cwd)
+        except Exception:
+            # This is an optional media-only probe, not authoritative bundle
+            # resolution. The manager still resolves saved history/overrides
+            # and reports their actual errors. Cancellation is not suppressed.
+            return None, None
 
     async def start(self, config, *, raise_errors=False, recover_bundle=True, resolved_root=None):
         started = (time.monotonic_ns(), time.process_time_ns())
@@ -953,6 +1005,26 @@ class Worker:
             self.runtime = Runtime(session_id=config["id"], observer=self.observe, max_input_chars=200_000)
             self.telemetry = ExecutionEvents(config["id"], publish)
             workspace = Path(config.get("workspace") or config.get("workingDirectory") or os.getcwd()).expanduser().resolve(strict=True)
+            media_assembly_root = None
+            if self.media_graph_selection is None and resolved_root is None and self.canonical_bootstrap:
+                self.media_graph_selection, media_assembly_root = await self.media_preflight(config, workspace)
+            if self.canonical_binding is None and self.canonical_bootstrap:
+                from amplifier_web.host.canonical_bootstrap import SourceBootstrap
+                def source_admission():
+                    if self.shutdown.is_set() or self.stop_revision != stop_revision:
+                        raise RuntimeError("Source ownership admission was stopped.")
+                    if self.activation_gate is not None and self.activation is not None:
+                        self.activation_gate.check_current()
+                selected_source = SourceBootstrap.acquire(workspace, config["id"], admit=source_admission)
+                self.canonical_binding = selected_source.binding
+                self.canonical_resume = selected_source.resumed
+                self.canonical_binding_factory = selected_source.child_factory
+            if self.canonical_binding is not None:
+                from amplifier_web.session_files import sessions_dir
+                if (self.canonical_binding.session_id != config["id"] or
+                        self.canonical_binding.directory != sessions_dir(workspace) / config["id"]):
+                    raise ValueError("The prospective canonical owner does not match this Worker")
+                self.canonical_binding.check()
             self.workspace = workspace
             self.start_config = dict(config)
             # Execution locking lives in the isolated runtime. The outer host
@@ -968,13 +1040,19 @@ class Worker:
             with startup_timing.phase('worker.recovery'):
                 if recover_bundle:
                     from amplifier_web.bundle_selection import BundleTransaction
-                    BundleTransaction(self.home, workspace, config["id"]).restore()
+                    BundleTransaction(self.home, workspace, config["id"],
+                        **({"canonical_binding": self.canonical_binding}
+                           if self.canonical_binding is not None else {})).restore()
                 from amplifier_web.history_revision import recover_pending
-                recover_pending(self.home, workspace, config['id'])
+                recover_pending(self.home, workspace, config['id'],
+                    **({"canonical_binding": self.canonical_binding}
+                       if self.canonical_binding is not None else {}))
                 if config.get('bundleReplacement') is not None:
                     from amplifier_web.bundle_selection import begin_replacement
                     replacement, resolved_root = await begin_replacement(self.home, workspace, config,
-                        admit=lambda: self.bridge('configuration.nextMessage.admit', {}))
+                        admit=lambda: self.bridge('configuration.nextMessage.admit', {}),
+                        **({"canonical_binding": self.canonical_binding}
+                           if self.canonical_binding is not None else {}))
             self.activation = self.activation_gate.activate()
             self.runtime.capture_activation = self.activation_gate.current
             # Always allow loading the saved transcript when one exists; the
@@ -998,6 +1076,13 @@ class Worker:
                     execution_workspace=config.get("workingDirectory"), install_overrides=install_overrides,
                     owner_session_id=config.get("ownerSessionId"),
                     ephemeral_mcp_servers=config.get("ephemeralMcpServers"),
+                    media_graph_selection=self.media_graph_selection,
+                    **({"media_assembly_root": media_assembly_root} if media_assembly_root is not None else {}),
+                    **({"canonical_binding": self.canonical_binding} if self.canonical_binding is not None else {}),
+                    **({"canonical_resume": self.canonical_resume}
+                       if self.canonical_binding is not None else {}),
+                    **({"canonical_binding_factory": self.canonical_binding_factory}
+                       if self.canonical_binding_factory is not None else {}),
                     startup_timing=startup_timing)
             if qualified_overrides is not None:
                 with startup_timing.phase('worker.runtime.verify.after_prepare'):
@@ -1006,13 +1091,18 @@ class Worker:
             from amplifier_web.attachments import encode
             coordinator = self.session.coordinator
             if not callable(coordinator.get_capability('live.attachments.encode')):
-                async def encode_input(command):
+                async def encode_input(command, current=None):
+                    if current is not None and current.get_capability("live.attachments.encode") is not encode_input:
+                        raise ValueError("Attachment encoder belongs to another construction")
                     return await encode(command, coordinator)
                 coordinator.register_capability('live.attachments.encode', encode_input)
             with startup_timing.phase('worker.controls.restore'):
                 self.controls = RuntimeControls(self.session, self.runtime, self.telemetry,
                     preserve_configuration=config.get('_preserveConfiguration') is True,
-                    tool_invocation=self.tool_invocation)
+                    tool_invocation=self.tool_invocation,
+                    **({"canonical_binding": self.canonical_binding,
+                        "canonical_media_store": coordinator.get_capability("web.media.store")}
+                       if self.canonical_binding is not None else {}))
                 self.controls.capacity.admit = self.admit_model
                 self.telemetry.admission_guard = self.controls.capacity.guard
                 # Preserve app controls on native mounts. A legacy common snapshot
@@ -1074,9 +1164,35 @@ class Worker:
                 self.install_collaboration_checkpoint(self.session.coordinator)
             original_host = self.session.coordinator.get_capability("live.host")
             class ObservedHost:
+                registrations = {}
                 def __getattr__(self, name):
                     return getattr(original_host, name)
+                def execution_registration(self, coordinator, hooks):
+                    from contextlib import contextmanager
+                    from amplifier_web.host.media import hook_configuration, registration_coordinator
+                    @contextmanager
+                    def construction():
+                        native = coordinator
+                        view = None
+                        try:
+                            with hook_configuration(native):
+                                view = registration_coordinator(native)
+                                self.registrations[id(view)] = (view, native)
+                                bridge = native.get_capability("web.media.hook_bridge")
+                                selection = native.get_capability("web.media.graph_selection")
+                                if bridge is not None and selection is not None:
+                                    selection.bind_registration_view(native, bridge, view)
+                                yield view, view.hooks
+                            from amplifier_web.host.media import seal_hook_graph
+                            seal_hook_graph(native)
+                        finally:
+                            if view is not None:
+                                self.registrations.pop(id(view), None)
+                    return construction()
                 async def prepare_execution(self, loop, coordinator, providers):
+                    entry = self.registrations.get(id(coordinator))
+                    if entry is not None and entry[0] is coordinator:
+                        coordinator = entry[1]
                     result = await original_host.prepare_execution(loop, coordinator, providers)
                     if coordinator:
                         host.install_activity(coordinator)
@@ -1089,18 +1205,41 @@ class Worker:
                         if isinstance(getattr(loop,'root_provider',None), SelectedProvider):
                             loop.root_provider.execution_adapter = transform
                         runtime, selected, scope = result
+                        from amplifier_web.host.media import flush_media_adapters
+                        await flush_media_adapters(coordinator)
+                        from amplifier_web.host.media import mount_media_adapter
+                        for name, value in selected.items():
+                            mounted = (coordinator.get("providers") or {}).get(name)
+                            wrapped = transform(value)
+                            await mount_media_adapter(coordinator, "providers", wrapped,
+                                                      previous=mounted, name=name)
                         return runtime, {name: transform(value) for name, value in selected.items()}, scope
                     return result
             # loop-live propagates this host through its existing ContextVar to
             # delegated sessions. Observe their public lifecycle without changing
             # spawning, provider routing, approvals, or execution ownership.
             self.session.coordinator.register_capability("live.host", ObservedHost())
+            from amplifier_web.host.media import mint_graph_owner
+            minted_session, minted_runtime = self.session, self.runtime
+            mint_graph_owner(self.session.coordinator, self, kind="worker",
+                associations=((self, "session", minted_session), (self, "runtime", minted_runtime)))
+            mint_graph_owner(self.session.coordinator, self.runtime, kind="runtime")
             self.session.coordinator.register_capability("web.activity.install", self.install_activity)
             self.session.coordinator.register_capability("live.activation", self.activation_gate)
             self.session.coordinator.register_capability("web.context_recovery.epoch", lambda: self.stop_revision)
             from amplifier_web.host.naming import LiveSessionNaming
             completed=[identity for event in config.get('generations',[]) if event.get('event')=='generation.finished' for identity in event.get('input_ids',[]) if identity in {t['id'] for t in config.get('execution',{}).get('turns',[])}]
             self.naming=LiveSessionNaming(self.session.coordinator,self.home,publish,completed)
+            # Finish the actual host graph before attachment admission. The
+            # live execution task is not started yet; no tool is run here.
+            self.install_activity(self.session.coordinator)
+            from amplifier_web.host.media import flush_media_adapters, mount_media_adapter
+            await flush_media_adapters(self.session.coordinator)
+            transform = self.session.coordinator.get_capability('web.provider_transform')
+            if callable(transform):
+                for name, provider in list((self.session.coordinator.get("providers") or {}).items()):
+                    await mount_media_adapter(self.session.coordinator, "providers", transform(provider),
+                                              previous=provider, name=name)
             from amplifier_web.loaded_provenance import capture_mount
             self.provenance_mount = capture_mount(self.session)
             with startup_timing.phase('worker.ownership.register'):
@@ -1416,7 +1555,10 @@ class Worker:
                          **({'executionFailure': capture,
                              **({'generationId': capture['generationId']} if capture.get('generationId') else {})}
                             if capture else {})})
-        self.shutdown.set()
+        # A successful idle retirement owns the ordered execution join and its
+        # reply. Let that command publish before shutdown cancels commands.
+        if not (self.retiring and not task.cancelled() and task.exception() is None):
+            self.shutdown.set()
 
     async def command(self, data):
         """Serialize admission with retirement and bind a per-work write token."""
@@ -1467,8 +1609,19 @@ class Worker:
                     settled = await self.checkpoint_idle()
                     # No await between final recheck and closing admission.
                     if settled:
-                        self.shutdown.set()
+                        self.retiring = True
+                        if (self.execution is not None and not self.execution.done()
+                                and self.session is not None
+                                and self.session.coordinator.get_capability("live.runtime") is self.runtime):
+                            # Finish the actual idle LIVE owner before cancelling
+                            # Core's outer execute future. That future is not a
+                            # physical-inner-task cleanup acknowledgement.
+                            from amplifier_module_loop_live.runtime import Input
+                            await self.runtime.submit(Input("stop", target="finish"))
+                            await asyncio.shield(self.execution)
                     publish({"op": "reply", "id": data.get("id"), "result": {"retired": settled}})
+                    if settled:
+                        self.shutdown.set()
             except Exception as error:
                 from amplifier_web.worker_diagnostics import command_failure_facts
                 publish({"op": "reply", "id": data.get("id"), "error": "Worker retirement could not save the conversation.",
@@ -1484,7 +1637,7 @@ class Worker:
                         'accepted': False, 'delivery': 'failed', 'effect': 'none',
                         'reason': 'This input was stopped before admission. Nothing was sent.'}})
                     return
-                if self.ownership.yielding or self.shutdown.is_set():
+                if self.ownership.yielding or self.retiring or self.shutdown.is_set():
                     from amplifier_foundation.session import SessionBusyError
                     raise SessionBusyError(self.shared_handle.owner if self.shared_handle else None)
                 # A memory call can finish admission while a foreground command
@@ -1851,7 +2004,9 @@ class Worker:
                     from amplifier_web.history_revision import rewind
                     from amplifier_web.message_interactions import prepare_input
                     text = await prepare_input(self.session.coordinator, arguments['text'], arguments.get('reply_context'), max_chars=self.runtime.max_input_chars)
-                    result = await rewind(self.controls, arguments)
+                    result = await rewind(self.controls, arguments,
+                        **({"canonical_binding": self.canonical_binding}
+                           if self.canonical_binding is not None else {}))
                     publish({'type': 'history.revised', **result})
                     from amplifier_module_loop_live.runtime import Input
                     await self.runtime.submit(Input('user', text, id=arguments['operationId'],
@@ -1939,7 +2094,24 @@ class Worker:
         # Bind before creating any worker task and retain through joined cleanup.
         # Foundation captures this policy for later lazy module activation.
         with preparation_scope() as self.preparation_report:
-            await self._run()
+            owner = asyncio.create_task(self._run())
+            cancelled = None
+            try:
+                while not owner.done():
+                    try:
+                        await asyncio.shield(owner)
+                    except asyncio.CancelledError as error:
+                        cancelled = cancelled or error
+                        self.shutdown.set()
+                await owner
+            finally:
+                if self.canonical_binding is not None and self._cleanup_settled:
+                    # The owner joins any physical operation before releasing
+                    # descriptors, including cancellation during worker cleanup.
+                    await self.canonical_binding.aclose()
+                    self.canonical_binding = None
+            if cancelled is not None:
+                raise cancelled
 
     async def _run(self):
         # The host verifies membership/creation time before sending even start.
@@ -1986,8 +2158,24 @@ class Worker:
                         await asyncio.to_thread(self.shared_handle.release)
                     finally:
                         self.shared_handle = None
+                self._cleanup_settled = True
+
+
+def main():
+    """Run only the canonical packaged module's Worker and protocol owner."""
+    configure_protocol()
+    asyncio.run(Worker().run())
 
 
 if __name__ == "__main__":
-    configure_protocol()
-    asyncio.run(Worker().run())
+    # RuntimeManager intentionally executes this file without adding the outer
+    # host environment to sys.path. Bootstrap app code only, then enter the
+    # canonical module: its Worker class, relative imports and publish globals
+    # must be the same objects selected by the packaged media assembly.
+    if __package__:
+        from .runtime_bootstrap import bootstrap_app_package
+    else:
+        from runtime_bootstrap import bootstrap_app_package
+    bootstrap_app_package()
+    from amplifier_web.runtime_worker import main as canonical_main
+    canonical_main()

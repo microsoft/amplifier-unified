@@ -21,6 +21,7 @@ def install(coordinator):
     if coordinator.get_capability('web.request_recovery'):
         return
     from amplifier_core import HookResult
+    from .host.media import registration_hooks
     async def exposed(event, data):
         scope = _ACTIVE.get()
         if scope is not None:
@@ -30,7 +31,8 @@ def install(coordinator):
     # Once anything escapes, replay needs provider-specific reconciliation.
     for event in ('content_block:start', 'content_block:delta', 'content_block:end',
                   'provider:response', 'llm:response', 'tool:pre'):
-        coordinator.hooks.register(event, exposed, name='unified-request-recovery', priority=-200)
+        registration_hooks(coordinator).register(event, exposed,
+                                                   name='unified-request-recovery', priority=-200)
     coordinator.register_capability('web.request_recovery', True)
 
 

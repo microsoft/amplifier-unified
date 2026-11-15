@@ -49,7 +49,8 @@ def claim_root_lifecycle(coordinator):
         return
     expected = sum(row.get('module') == 'hooks-session-naming' and row.get('enabled', True)
                    for row in coordinator.config.get('hooks', []))
-    registry = coordinator.hooks
+    from .media import registration_hooks
+    registry = registration_hooks(coordinator)
     handlers = registry.list_handlers()
     if (expected != 1 or handlers.get('prompt:complete', []).count('session-naming') != expected
             or handlers.get('session:end', []).count('session-naming-drain') != expected
@@ -140,7 +141,10 @@ class LiveSessionNaming:
                         adapter.accepted_change = changed
                         return accepted
                     return read(session_dir)
-            self.hook=AppNamingHook(coordinator,settings)
+            # The host naming adapter is an explicit construction participant;
+            # its callbacks must use that view, not a newly borrowed raw registry.
+            from .media import registration_coordinator, registration_hooks
+            self.hook=AppNamingHook(registration_coordinator(coordinator),settings)
             self.accepted_change=False
             async def result(event,data):
                 from amplifier_core import HookResult
@@ -149,7 +153,7 @@ class LiveSessionNaming:
                     accepted=read(adapter.directory)
                     self.publish({'type':'session.naming','name':accepted.get('name'),'description':accepted.get('description'),'nameRevision':accepted.get('name_revision')})
                 return HookResult()
-            coordinator.hooks.register('session-naming:set',result,name='unified-session-naming')
+            registration_hooks(coordinator).register('session-naming:set',result,name='unified-session-naming')
             coordinator.register_cleanup(self.close)
         except (ImportError,AttributeError,TypeError,ValueError):
             log.warning('Configured session naming is unavailable; the conversation can continue.',exc_info=True)

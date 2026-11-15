@@ -309,9 +309,11 @@ class TaskController:
         self.history = []
         self.coordinator.register_capability("live.continuation_guard", self.continuation_allowed)
         self.coordinator.register_capability("goal.turn_already_charged", self.turn_already_charged)
-        if getattr(self.coordinator, "hooks", None):
-            self.coordinator.hooks.register("provider:request", self.boundary, name="unified-task-boundary", priority=5)
-            self.coordinator.hooks.register("orchestrator:goal_progress", self.yield_to_peer,
+        from .host.media import registration_hooks
+        hooks = registration_hooks(self.coordinator)
+        if hooks is not None:
+            hooks.register("provider:request", self.boundary, name="unified-task-boundary", priority=5)
+            hooks.register("orchestrator:goal_progress", self.yield_to_peer,
                                             name="unified-peer-goal-boundary", priority=5)
 
     def record(self):

@@ -141,7 +141,8 @@ def _freeze(worker):
                     for key, (_, job) in jobs.items()):
                 return HookResult(action='deny', reason=detail)
             return HookResult()
-        unregistrations.append(session.coordinator.hooks.register('tool:pre', no_new_delegation,
+        from .host.media import registration_hooks
+        unregistrations.append(registration_hooks(session.coordinator).register('tool:pre', no_new_delegation,
             name='unified-checkout-drain', priority=-100))
     return copy.deepcopy(snapshot)
 

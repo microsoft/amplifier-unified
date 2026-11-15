@@ -92,7 +92,8 @@ async def inspect(worker, request_id, cancel=False, *, update=False, configurati
                         raise
                 return HookResult()
 
-            unregister = coordinator.hooks.register('orchestrator:goal_progress', finish_turn,
+            from .host.media import registration_hooks
+            unregister = registration_hooks(coordinator).register('orchestrator:goal_progress', finish_turn,
                 name='unified-checkout-boundary', priority=0)
             worker._handoff_boundary = {'id': request_id, 'unregister': unregister, 'update': continuing,
                 'hadGoal': bool(coordinator.session_state.get('goal'))}
