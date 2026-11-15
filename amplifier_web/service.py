@@ -1573,7 +1573,7 @@ class AppService:
                 # Optional legacy compaction cannot commit a caller's in-flight
                 # command. When this admission owns the transaction, its new blob
                 # and exact owner pointer commit together before returning.
-                compacted = bool(reference and reference.get('executionProjection') != 1
+                compacted = bool(reference and reference.get('executionProjection') not in {1, 2}
                                  and not self.db.in_transaction)
                 if compacted:
                     compact_execution_references(context, self.db)

@@ -67,11 +67,12 @@ class WorkingExecution:
             self.admitted[kind].add(identity)
         return value
 
-    def _complete(self):
-        value = {name: item for name, item in self.current.items() if name not in records.COLLECTIONS}
+    def _complete(self, *, detach_current=False):
+        current = copy.deepcopy(self.current) if detach_current else self.current
+        value = {name: item for name, item in current.items() if name not in records.COLLECTIONS}
         stored = _stored(self.db, self.reference)
         for kind in records.COLLECTIONS:
-            changes = {records.key(kind, row): row for row in self.current[kind]}
+            changes = {records.key(kind, row): row for row in current[kind]}
             rows = []
             for row in stored.get(kind, []):
                 identity = records.key(kind, row)
@@ -83,7 +84,9 @@ class WorkingExecution:
 
     def snapshot(self):
         """Full detached read, without handing historical mutation to a caller."""
-        return copy.deepcopy(self._complete())
+        # Durable JSON reads are already detached. Copy only the mutable current
+        # overlay, preserving its internal aliases, not the completed ledger.
+        return self._complete(detach_current=True)
 
     def detached(self):
         """Freeze the current overlay while leaving its immutable history cold."""
@@ -202,6 +205,18 @@ def exact(session, kind, value):
 def snapshot(session):
     owner = working(session)
     return owner.snapshot() if owner is not None else copy.deepcopy(session.get('execution', {}))
+
+
+def readonly(session):
+    """Complete nonmutating consumer; ordinary mutable callers keep their form."""
+    from .cold_display import ColdRecord, MARKER, load
+    if isinstance(session, ColdRecord) and not dict.__contains__(session, 'execution'):
+        owner = getattr(session, '_working_execution', None)
+        if owner is not None:
+            return owner.snapshot()
+        reference = dict.get(session, MARKER, {}).get('execution')
+        return load(session.db, reference) if reference is not None else {}
+    return session.get('execution', {})
 
 
 def refresh_usage(session):

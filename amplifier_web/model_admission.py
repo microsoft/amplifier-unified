@@ -65,7 +65,8 @@ async def admit(service, session_id, args):
         if before != binding(session, args):
             return result  # A late observation cannot attach across Stop/input changes.
         row = args['call']
-        tree = session.get('execution') or {}
+        from .execution_working_set import readonly
+        tree = readonly(session)
         if any(item.get('id') == row['id'] for item in
                tree.get('nodes', []) + tree.get('retiredUsageNodes', [])):
             return result  # A duplicate admitted ID can have prior unknown effects.

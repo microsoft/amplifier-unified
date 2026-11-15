@@ -203,3 +203,63 @@ def test_model_rollup_does_not_promote_disposable_historical_aggregates(saved):
     actual = records.materialize(db, save(db, session))
     assert len(actual['nodes']) == 501 and len(actual['retiredUsageNodes']) == 501
     assert actual['aggregateUsage']['totalTokens'] == 503
+
+
+def test_restart_without_pending_observation_does_not_load_execution(saved, monkeypatch):
+    _, session, _ = saved
+    from amplifier_web import cold_display
+    from amplifier_web.capacity import restore_observation
+    assert dict.get(session, MARKER)['execution']['pendingObservation'] is False
+    monkeypatch.setattr(cold_display, 'load', lambda *args: pytest.fail('Unexpected full execution read'))
+    monkeypatch.setattr(records, 'materialize', lambda *args, **kwargs: pytest.fail('Unexpected full execution read'))
+    restore_observation(session)
+    assert not hasattr(session, '_working_execution')
+    assert not dict.__contains__(session, 'execution')
+
+
+def test_configuration_pending_fact_includes_uncommitted_current_turn(saved):
+    db, session, original = saved
+    from types import SimpleNamespace
+    from amplifier_web.next_message_configuration import pending_input
+    for turn in original['turns']:
+        turn['phase'] = 'completed'
+    reference = records.import_tree(db, ('chat',), original)
+    db.commit()
+    session[MARKER] = {'execution': reference}
+    assert reference['pendingWork'] is False
+    current(session)['turns'].append({'id': 'new input', 'phase': 'running'})
+    assert pending_input(SimpleNamespace(db=db), session)
+    assert dict.get(session, MARKER)['execution']['pendingWork'] is False
+
+
+async def test_ordinary_model_admission_preserves_indexed_history_budget_and_replay_refusal(tmp_path, monkeypatch):
+    from test_capacity import setup, call
+    from amplifier_web.capacity import admission, usage_snapshot
+    from amplifier_web.session_projection import stored_execution
+    app, worker, sid = await setup(tmp_path, monkeypatch)
+    try:
+        session = app._session(sid)
+        tree = {'currentTurnId': 'turn', 'turns': [{'id': 'turn', 'phase': 'running', 'anchorMessageId': None}],
+                'nodes': [call(str(i), sid, rootSessionId=sid, turnId='turn', liveObservation=True,
+                               producerId='producer') for i in range(500)], 'retiredUsageNodes': []}
+        execution.refresh_usage(tree)
+        reference = records.import_tree(app.db, (sid,), stored_execution(tree))
+        app.db.commit()
+        dict.pop(session, 'execution', None)
+        dict.setdefault(session, MARKER, {})['execution'] = reference
+        session['capacityProducerId'] = 'producer'
+        assert usage_snapshot(session)['calls'] == 500
+        assert not dict.__contains__(session, 'execution')
+        admitted = call('new', sid, rootSessionId=sid, turnId='turn', liveObservation=True,
+                        producerId='producer', phase='running', endedAt=None, usage={})
+        assert (await admission(app, sid, {'call': admitted}))['allowed']
+        assert not dict.__contains__(session, 'execution')
+        assert dict.get(session, MARKER)['execution']['executionProjection'] == 2
+        assert not (await admission(app, sid, {'call': admitted}))['allowed']
+        result = usage_snapshot(session)
+        assert result['calls'] == 501
+        assert result['metrics']['totalTokens']['value'] == 5000
+        assert result['metrics']['totalTokens']['unknownCalls'] == 1
+    finally:
+        await worker.close()
+        await app.close()

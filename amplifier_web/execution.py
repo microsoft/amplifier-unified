@@ -378,9 +378,9 @@ def generation_turns(session):
                     previous[1].get('event') == 'generation.failed' or kind == 'generation.started')):
                 continue
             outcomes[identity] = (rank, event)
-    from .execution_working_set import snapshot
+    from .execution_working_set import readonly
     turns = []
-    for turn in snapshot(session).get('turns', []):
+    for turn in readonly(session).get('turns', []):
         receipt = outcomes.get(turn.get('inputId', turn.get('id')))
         event = receipt[1] if receipt else {}
         if event.get('event') == 'generation.failed':
