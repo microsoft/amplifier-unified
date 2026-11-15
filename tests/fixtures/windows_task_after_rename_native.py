@@ -41,9 +41,6 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
 OPT_IN = "AMPLIFIER_RENAME_THIS_RUNNERS_ACCOUNT_DOMAIN"
-PUBLIC = set("SYSTEMROOT WINDIR SYSTEMDRIVE COMSPEC PATHEXT OS COMPUTERNAME USERNAME USERDOMAIN USERPROFILE "
-             "HOMEDRIVE HOMEPATH APPDATA LOCALAPPDATA PROGRAMDATA PROCESSOR_ARCHITECTURE PROCESSOR_IDENTIFIER "
-             "NUMBER_OF_PROCESSORS".split())
 
 
 def require_disposable_runner():
@@ -188,7 +185,11 @@ def run():
             with windows_files.directory(path, owned_root=root, create=True):
                 pass
         scripts = Path(sys.executable).parent
-        env = {key: value for key, value in os.environ.items() if key.upper() in PUBLIC}
+        # The account's own environment, as for an installed app, without the
+        # variables that select another Python, package source or Amplifier folder.
+        env = {key: value for key, value in os.environ.items()
+               if not key.upper().startswith(("UV_", "PIP_", "AMPLIFIER_", "GITHUB_", "RUNNER_", "ACTIONS_"))
+               and key.upper() not in {"PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"}}
         git = shutil.which("git")
         env.update({
             "PATH": os.pathsep.join([str(scripts), str(Path(sys._base_executable).parent),
@@ -204,9 +205,11 @@ def run():
                  "--workspace", str(root / "workspace")]
 
         def cli(label, *args, expect=0, timeout=150):
+            began = time.monotonic()
             result = subprocess.run([*scope, *args], cwd=root / "workspace", env=env, stdin=subprocess.DEVNULL,
                                     capture_output=True, timeout=timeout)
             output = result.stdout.decode("utf-8", "replace")
+            report.setdefault("seconds", {})[label] = round(time.monotonic() - began, 1)
             if (result.returncode == 0) != (expect == 0):
                 # A throwaway folder on a throwaway runner: show why the command ended.
                 print(f"[{label}] exit {result.returncode}\n{output[-3000:]}\n"

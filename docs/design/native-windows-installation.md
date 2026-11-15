@@ -1866,6 +1866,54 @@ Use absolute executable/data/workspace/shared-state paths and explicit quoting.
 Configure indefinite execution, restart-on-failure and battery behavior
 deliberately. Automatic logon startup must not open a browser.
 
+**The task after a computer rename (measured November 15, 2026).** The app
+registers the task with the owner SID in the principal and in the sign-in
+trigger. Task Scheduler keeps the principal as the SID. It stores the trigger's
+user as a name, `COMPUTER\user`, whatever spelling registration gave, and it
+never rewrites that name: not when the account or the computer is renamed, and
+not when the same definition is registered again. It refuses to register a
+trigger user that does not resolve at that moment. After the computer's name
+changes, Windows still starts the task at sign-in, and `LookupAccountNameW`
+maps the stored name, and the old computer name alone, to nothing (error 1332).
+Measured on Windows Server 2022 and 2025 and on Windows 11 ARM64 runners, and
+in Windows Sandbox, which renames its guest at every boot.
+
+The ownership check compares the whole definition with the one that the app
+generates from the task's own launch record. For the trigger's user text it
+accepts exactly three forms:
+
+1. the owner SID as text;
+2. a name that Windows maps to the owner's user account;
+3. a name `authority\account` that Windows maps to nothing, when the authority
+   alone also maps to nothing and the account part alone maps to the owner's
+   user account.
+
+Form 3 is the renamed computer. It is an equivalence for this one text, not
+proof of who made the task. It also accepts a trigger that someone with the
+owner's or an administrator's rights had set to another account of the same
+account name, once that account's authority no longer exists (and the two
+variants in which an account was also renamed or deleted). In each of them the
+task still runs as the owner, with least privilege and the app's exact action:
+the principal, the task name, the action and every setting stay an exact
+comparison. An authority that still exists is refused, so a deleted or renamed
+account is not accepted. A lookup that Windows did not answer is not "no such
+name": the check then refuses and says that it could not check.
+
+Limits. A renamed Windows account is still refused (the task then needs a new
+registration). On a domain member, a local account with the owner's account
+name makes form 3 refuse a domain owner. Domain-joined, Entra-joined and
+offline PCs are not measured. The launcher runs this check before any app
+version starts, and an in-app update does not replace the launcher: an
+installation whose launcher predates this rule needs a launcher refresh or a
+new setup run before a renamed PC starts the app again.
+
+When the check does not confirm the task, the launcher says that it could not
+confirm that the entry belongs to this installation, names the entry, and
+gives the steps to delete it; a new start then registers a new entry with the
+saved port and settings. It does not say that the entry was changed, because
+it cannot know that. When Windows gave no answer about the account, it asks
+for a restart and deletes nothing.
+
 Work survives browser/terminal closure while the owner remains signed in.
 This model does **not** promise execution after sign-out or before sign-in.
 If that is required, design a separate headless service deployment, including
