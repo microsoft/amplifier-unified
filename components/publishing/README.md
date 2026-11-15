@@ -37,9 +37,31 @@ Core, provider, credentials or SSH host. SSH transport remains simulated.
 The existing `python -m amplifier_publishing.service` entrypoint is unchanged.
 Unified keeps its host adapters, authorization, target selection and integration
 tests. The wheel contains runtime files only; the source distribution also carries
-these portable tests. The `0.1.0` version is preparation metadata, not a published
-release. Use a separate environment for this distribution: do not coinstall it
+these portable tests. A version alone does not identify published or qualified
+bytes; use the actual release receipt and artifact hashes. Use a separate
+environment for this distribution: do not coinstall it
 with `amplifier-unified` while Unified still owns the same installed package files.
+
+## Independent artifact delivery
+
+The `Publishing package` workflow qualifies an exact source revision and publishes
+only through a manual dispatch from `main` with a full merged commit SHA. Its
+`publishing-vX.Y.Z` release contains the original wheel, source distribution,
+`publishing-source.json` and `SHA256SUMS`. The receipt binds the package source,
+runtime payload and artifact hashes. The component release does not replace the
+application's latest release or change Unified's dependency selection.
+
+Qualification installs the original wheel into an isolated Linux environment and
+runs all four package test files outside the source checkout. This covers the
+local POSIX listener, Unix-socket and recovery mechanisms; SSH remains simulated.
+It makes no Windows runtime claim. Unified adoption is a separate change: this
+workflow does not install the standalone distribution beside Unified or change
+its current authored-source mapping.
+
+Publication refuses conflicting tags or artifact bytes. Retry a failed publish
+job with the original retained build artifact; an already completed release can
+be verified against those exact bytes. A full rebuild may change archive bytes
+and is not an exact-byte retry.
 
 ## API
 

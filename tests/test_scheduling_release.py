@@ -494,21 +494,22 @@ def test_workspace_metadata_preserves_distribution_import_and_source_identity(tm
         release.selection(root, revision, component="workspaces")
 
 
-def test_outputs_preserves_source_and_artifact_identity(tmp_path):
-    root, revision, dist, _ = make_candidate(tmp_path, "outputs")
-    selected = release.verify(root, revision, dist, component="outputs")
-    assert selected["tag"] == "outputs-v0.1.0"
-    assert selected["subdirectory"] == "components/outputs"
-    assert "amplifier_outputs/__init__.py" in selected["sourceFiles"]
+@pytest.mark.parametrize("component", ["outputs", "publishing"])
+def test_nested_component_preserves_source_and_artifact_identity(tmp_path, component):
+    root, revision, dist, _ = make_candidate(tmp_path, component)
+    selected = release.verify(root, revision, dist, component=component)
+    assert selected["tag"] == component + "-v0.1.0"
+    assert selected["subdirectory"] == "components/" + component
+    assert f"amplifier_{component}/__init__.py" in selected["sourceFiles"]
     assert {path.name for path in dist.iterdir()} == {
-        "amplifier_outputs-0.1.0-py3-none-any.whl",
-        "amplifier_outputs-0.1.0.tar.gz", "outputs-source.json", "SHA256SUMS",
+        f"amplifier_{component}-0.1.0-py3-none-any.whl",
+        f"amplifier_{component}-0.1.0.tar.gz", component + "-source.json", "SHA256SUMS",
     }
     with pytest.raises(subprocess.CalledProcessError):
         release.verify(root, revision, dist)
 
 
-@pytest.mark.parametrize("component", ["workspace-metadata", "outputs"])
+@pytest.mark.parametrize("component", ["workspace-metadata", "outputs", "publishing"])
 @pytest.mark.parametrize("state", ["new", "partial", "complete"])
 def test_nested_component_uses_existing_exact_publication_recovery(tmp_path, monkeypatch, state, component):
     candidate = make_candidate(tmp_path, component)
@@ -525,7 +526,7 @@ def test_nested_component_uses_existing_exact_publication_recovery(tmp_path, mon
         assert remote.mutations == []
 
 
-@pytest.mark.parametrize("component", ["workspace-metadata", "outputs"])
+@pytest.mark.parametrize("component", ["workspace-metadata", "outputs", "publishing"])
 def test_nested_component_changed_asset_remains_an_immutable_conflict(tmp_path, monkeypatch, component):
     candidate = make_candidate(tmp_path, component)
     remote = Remote(candidate)
