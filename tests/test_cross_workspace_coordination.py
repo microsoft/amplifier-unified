@@ -252,11 +252,13 @@ async def test_queued_send_keeps_indexed_owners_and_passes_one_detached_snapshot
     assert sent['delivery'] == 'queued' and not app.runtime.inputs
     indexed()
     await app.collaboration.drain(target['id'])
-    assert app.collaboration.receipt('cross-request')['delivery'] == 'queued'
+    # Auto may enter the supported busy request boundary; queue waits for idle.
+    assert app.collaboration.receipt('cross-request')['delivery'] == ('accepted' if mode == 'auto' else 'queued')
     indexed()
     assert (await request(app, mode=mode))['duplicate']
     indexed()
-    await app.on_runtime_event('runtime.status', {'sessionId': target['id'], 'status': 'idle'})
+    if mode == 'queue':
+        await app.on_runtime_event('runtime.status', {'sessionId': target['id'], 'status': 'idle'})
     accepted = await settled(app, 'cross-request', 'accepted')
     assert accepted['admission']['accepted'] is True
     indexed()
