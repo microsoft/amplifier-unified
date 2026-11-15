@@ -835,10 +835,13 @@ completion record `unified-setup-complete.json` is in the folder.
   that this cannot be undone. No changes nothing: Amplifier stays installed.
 - Then the question about a working chat, as before.
 
-**The order.** Steps 1 to 4 change nothing in the folder.
+**The order.** Steps 1 to 4 delete nothing. A step that fails there writes
+only the private note of the failure, as an uninstall that keeps the folder
+does.
 
 1. One start or removal at a time for one installation: a named semaphore
-   whose name comes from the folder path. Opening Amplifier takes it around
+   whose name comes from the folder path, in the name space that all sign-in
+   sessions of this PC share. Opening Amplifier takes it around
    its start step, and an uninstall that keeps the folder takes it too. When
    it is taken, the second window says so and changes nothing. An uninstall
    that keeps the folder looks for the journal again under the lock: if
@@ -912,13 +915,17 @@ Job, with a working folder and temporary folder outside the installation. The
 script deletes inside those two folders only. It reads the whole journal
 record before every top-level entry and stops when the record is missing or
 different. It lists one level at a time, never uses `-Recurse`, removes a link
-as a link, and never deletes an entry that appeared after it started. Other
+as a link, and never deletes an entry that was created after it started. It
+looks at every folder again immediately before it lists it, and keeps a folder
+that has become a link. Other
 leftover folders of this installation are named to it, and it removes one only
 while it is empty. It deletes the journal last and the folder only when the
 folder is empty. It works with paths, not handles, so it cannot hold a pin: a
-program of the same account that swaps a folder for a link between its check
-and its delete could redirect one delete. Such a program can delete the
-person's files without us.
+program of the same account that swaps a folder for a link between that look
+and the listing (two consecutive commands) could make it delete in another
+folder. Such a program can delete the person's files without us. A file that
+is moved into `python` or `tools` while the step runs is deleted with them; it
+is inside the folder that the person chose to delete.
 
 **Rule for setup.** An installation must never be made in a folder that holds
 `unified-uninstall.json`. Today's setup keeps this rule without a change. It
@@ -930,9 +937,12 @@ mark of unfinished work before the completion record.
 
 **Leftovers.** If the step after exit cannot run, program files and the
 journal stay; they hold none of the person's data, and the message says that
-the folder can be deleted. If something that is not Amplifier's is in the
-folder, that entry and the journal stay. A later setup run stops at such a
-folder and says to move or rename it.
+the folder can be deleted. The same leftover stays when the PC loses power in
+the last seconds, after the Windows entries are gone and before the step
+after exit has run; then no message was shown and no entry exists to uninstall
+again. If something that is not Amplifier's is in the folder, that entry and
+the journal stay. A later setup run stops at such a folder and says to move or
+rename it. In none of these states can Amplifier start.
 
 **Which installations get it.** This is launcher code: a new installation from
 a setup file of a release that has it, and an earlier installation after a
@@ -950,7 +960,8 @@ Task Scheduler, the check of an installed release, and the dialogs.
 
 **Not proven:** the dialogs on screen; a real stop with live conversation
 workers followed by the deletion; uv's own start program (the check uses a
-venv start program); PowerShell constrained language mode; a complete
+venv start program); PowerShell constrained language mode; the lock between
+two sign-in sessions of one person; a complete
 uninstall of an installed build. These remain clean-room acceptance. Not
 built: "keep my chats, remove the program". The launcher refresh command does
 not look at the journal.

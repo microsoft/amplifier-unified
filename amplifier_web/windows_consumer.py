@@ -242,6 +242,9 @@ _UNFINISHED.update({
     # Nothing failed: another Amplifier window is at work, or a removal did not finish.
     "busy": "Amplifier is being opened or uninstalled in another window right now. Nothing was changed.\n\n"
             "If another Amplifier message is open, answer it first. Otherwise wait a minute, then try again.",
+    # The installation's lock itself could not be taken or read.
+    "lock": _UNCHANGED + "Amplifier could not find out whether it is being opened or uninstalled in another "
+            "window. Restart this PC, then uninstall again.",
     "removing": "Amplifier is being removed from this PC, and the removal did not finish. "
                 "Amplifier does not open until it has finished.\n\n"
                 "To finish, select Uninstall Amplifier in the Start menu.",
@@ -391,8 +394,8 @@ async def _uninstall(root):
         # The person chose to delete, twice, and that removal did not finish.
         if windows_uninstall.question(
                 "The removal of Amplifier from this PC did not finish.\n\n"
-                "Select Yes to finish it now. This deletes everything that is still in this folder, "
-                "including chats, settings, saved accounts and stored keys. This cannot be undone.\n"
+                "Select Yes to finish it now. This deletes everything that Amplifier still keeps in this "
+                "folder, including chats, settings, saved accounts and stored keys. This cannot be undone.\n"
                 + str(root) + "\n\n"
                 "Select No to change nothing now. Amplifier does not open until the removal has finished.") != "yes":
             return unchanged
@@ -405,7 +408,8 @@ async def _uninstall(root):
             "Do you also want to delete your chats, settings and saved accounts?\n\n"
             "Select No to keep them. They stay in this folder, together with the program files:\n"
             + str(root) + "\n\n"
-            "Select Yes to delete that folder. Amplifier asks you once more before it deletes anything.\n\n"
+            "Select Yes to delete them, together with the program files. Amplifier asks you once more "
+            "before it deletes anything.\n\n"
             "Select Cancel to keep Amplifier installed."
             + (f'\n\nDuring the uninstall, Windows asks whether to delete the certificate "{ROOT_NAME}". '
                "That is a separate question." if certificate else ""),
@@ -414,11 +418,11 @@ async def _uninstall(root):
             return unchanged
         if answer == "yes":
             if windows_uninstall.question(
-                    "Delete this folder and everything in it?\n\n" + str(root) + "\n\n"
+                    "Delete everything that Amplifier keeps in this folder?\n\n" + str(root) + "\n\n"
                     "This deletes all your Amplifier chats, your settings, your saved accounts and your "
-                    "stored keys. It also deletes every file that Amplifier or you saved in that folder. "
-                    "This cannot be undone.\n\n"
-                    "Select Yes to delete the folder and uninstall Amplifier.\n"
+                    "stored keys. It also deletes the files that Amplifier or you saved in its workspace "
+                    "folder there. This cannot be undone.\n\n"
+                    "Select Yes to delete all of that and uninstall Amplifier.\n"
                     "Select No to change nothing. Amplifier stays installed.") != "yes":
                 return unchanged
             delete = True
@@ -444,7 +448,7 @@ async def _uninstall(root):
         return await _delete(root, certificate, resumed=resumed)
 
     def remove():
-        at, result = ["entries-check"], None
+        at, result = ["lock"], None
 
         def mark(name):
             at[0] = name
@@ -454,6 +458,7 @@ async def _uninstall(root):
                     # Another window began to delete this folder after the
                     # question. Its entries must stay for the second uninstall.
                     raise Refused("removing")
+                mark("entries-check")
                 if (root / shell.FILE).exists():
                     # Check and pin every entry first: a changed entry refuses before
                     # the app stops. Remove the entries only when the task is gone.
@@ -499,7 +504,7 @@ def _removed_notice(root, foreign, trust):
     from .windows_trust import ROOT_NAME
     text = ("Amplifier is uninstalled. It no longer runs, and it no longer starts when you sign in.\n\n"
             "Your chats, settings, saved accounts and stored keys are deleted.\n\n"
-            "The last program files are removed when you close this message. ")
+            "When you close this message, Amplifier starts to remove its last program files. ")
     if foreign:
         text += ("The folder itself stays, because it holds entries that are not Amplifier's. "
                  "They were not changed:\n" + "\n".join(foreign[:5])
@@ -526,7 +531,7 @@ async def _delete(root, certificate, *, resumed):
     from . import windows_uninstall
     from .windows_installation import owner_notice
     from .windows_service import uninstall
-    at = ["busy"]
+    at = ["lock"]
 
     def mark(name):
         at[0] = name
@@ -563,8 +568,10 @@ async def _delete(root, certificate, *, resumed):
     except (OSError, ValueError, RuntimeError):
         started = False
         if sys.stdout is None:
+            # Advice to delete the folder only when nothing in it is someone else's.
             owner_notice("Windows did not let Amplifier remove its last program files. They are in this "
-                         "folder, and they hold none of your data. You can delete them:\n" + str(root))
+                         "folder, and they hold none of your chats, settings or accounts:\n" + str(root)
+                         + ("\n\nYou can delete that folder." if rest["foreign"] == [] else ""))
     return {"ok": True, "operation": "uninstall", "userDataRetained": False,
             "installationFilesRetained": not started, "certificate": done["certificate"],
             "kept": rest["foreign"] or [], "afterExit": started}

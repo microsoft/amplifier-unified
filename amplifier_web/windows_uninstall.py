@@ -179,8 +179,9 @@ def single(root, *, wait=10.0):
     kernel.ReleaseSemaphore.restype = C.c_int
     kernel.CloseHandle.argtypes = [C.c_void_p]
     kernel.CloseHandle.restype = C.c_int
-    # This sign-in session only: no other account can create or hold it.
-    handle = kernel.CreateSemaphoreW(None, 1, 1, "Local\\AmplifierUnified-installation-" + identity(root))
+    # One name for every sign-in session of this person on this PC. The name
+    # comes from the folder's path, and only this person can use that folder.
+    handle = kernel.CreateSemaphoreW(None, 1, 1, "Global\\AmplifierUnified-installation-" + identity(root))
     if not handle:
         raise C.WinError(C.get_last_error())
     try:
@@ -331,7 +332,8 @@ def remove(root, *, stop, certificate, progress, choice="delete", data=remove_da
     2. Check and pin the Windows entries. `stop()` stops the app and removes
        its sign-in task. `certificate()` lets Windows ask once.
        Up to here nothing in the folder has changed.
-    3. The journal. From here Amplifier does not start from this folder.
+    3. The journal. Nothing in the folder is deleted before it exists. From
+       here Amplifier does not start from this folder.
     4. Setup's records, then `data`: the person's data. If any of it stays,
        this stops. The Windows entries and the launcher are intact, so the
        person can uninstall again.
@@ -343,7 +345,7 @@ def remove(root, *, stop, certificate, progress, choice="delete", data=remove_da
     after exit. The journal and the running program's two folders stay.
     """
     from . import windows_consumer_shell as shell, windows_removal
-    progress("busy")
+    progress("lock")
     with single(root):
         progress("folder")
         outside()

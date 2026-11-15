@@ -43,7 +43,8 @@ _DIRECTORY, _LINK = 0x10, 0x400  # FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPA
 
 # All variable data travels on stdin, never in this program. Unlike the pinned
 # in-process walk below, this path-based last step deletes links only as links.
-# It cannot prevent a same-account program swapping an entry between cmdlets.
+# It looks at every folder again immediately before it lists it. It cannot
+# prevent a same-account program swapping that folder between those two cmdlets.
 FINISH_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
 $p = $null
@@ -113,6 +114,10 @@ function Clear-Entry($entry) {
     try {
         if ($entry.PSIsContainer) {
             if ((Get-Date) -ge $until) { Keep $path; return }
+            # The listing that gave this entry can be seconds old. Look again
+            # now: a folder that has become a link is kept and never entered.
+            $now = Get-Item -LiteralPath $path -Force
+            if (-not (Real-Folder $now) -or (Later $now)) { Keep $path; return }
             $children = @(Get-ChildItem -LiteralPath $path -Force)
             $plain = @($children | Where-Object {
                 -not (Later $_) -and -not $_.PSIsContainer -and

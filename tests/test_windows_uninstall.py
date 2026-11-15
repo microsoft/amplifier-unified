@@ -140,11 +140,13 @@ def deleter(uninstaller, monkeypatch):
             (root / name).parent.mkdir(parents=True, exist_ok=True)
             (root / name).write_text(text)
     state.update(choices=[], questions=[], held=set(), kept=set(), locked=False, busy=False, pin_failure=None,
-                 after=None, after_failure=None)
+                 after=None, after_failure=None, lock_failure=None)
 
     @contextmanager
     def single(folder, **options):
         assert folder == root and not state["locked"]
+        if state["lock_failure"]:
+            raise state["lock_failure"]
         if state["busy"]:
             raise plan.Busy()
         state["locked"] = True
@@ -242,9 +244,11 @@ def test_cancel_and_no_to_the_second_question_change_nothing(deleter, choices):
         second = state["questions"][1][0]
         # The last warning names the folder and everything that goes, and it has no certificate text.
         for words in (str(root), "chats", "settings", "saved accounts", "stored keys", "This cannot be undone",
-                      "Select No to change nothing"):
+                      "saved in its workspace folder", "Select No to change nothing"):
             assert words in second
-        assert "certificate" not in second
+        # Something in the folder that is not Amplifier's stays, so the question does not promise "everything".
+        assert "certificate" not in second and "everything in it" not in second
+        assert "everything that Amplifier keeps in this folder" in second
 
 
 def test_without_setups_completion_record_the_question_is_the_earlier_one(deleter):
@@ -290,7 +294,9 @@ def test_yes_twice_deletes_in_the_one_order_that_keeps_every_interruption_safe(d
     # One confirmation, before the step after exit starts. It says only what was observed.
     (confirmation, confirm), = state["notices"]
     assert not confirm and "Your chats, settings, saved accounts and stored keys are deleted" in confirmation
-    assert "removed when you close this message" in confirmation and str(root) in confirmation
+    # A step that has not run yet is announced, not claimed.
+    assert "When you close this message, Amplifier starts to remove its last program files" in confirmation
+    assert "are removed" not in confirmation and str(root) in confirmation
     assert "If this folder still exists a minute later, you can delete it" in confirmation
     assert "certificate" not in confirmation and "Reference:" not in confirmation
 
@@ -306,6 +312,7 @@ def test_certificate_answer_never_stops_the_removal_and_is_said_in_the_confirmat
 
 @pytest.mark.parametrize("failure,step,phrase", [
     ("busy", "busy", "in another window right now. Nothing was changed"),
+    ("lock", "lock", "could not find out whether it is being opened or uninstalled"),
     ("pin", "folder", "could not check its own folder, so it deleted nothing"),
     ("proof", "folder", "could not check its own folder, so it deleted nothing"),
     ("entry", "entries-check", "nothing was changed"),
@@ -318,6 +325,8 @@ def test_nothing_in_the_folder_changes_before_the_journal(deleter, monkeypatch, 
     state["choices"], state["certificate"] = ["yes", "yes"], b"this installation's root"
     if failure == "busy":
         state["busy"] = True
+    elif failure == "lock":
+        state["lock_failure"] = OSError(5, "The lock could not be created")
     elif failure == "pin":
         state["pin_failure"] = PermissionError(5, "Access is denied")
     elif failure == "proof":
@@ -335,7 +344,8 @@ def test_nothing_in_the_folder_changes_before_the_journal(deleter, monkeypatch, 
         deleter.run()
     assert stopped.value.step == step and phrase in stopped.value.notice
     assert isinstance(stopped.value, consumer.Refused) is (failure == "busy")
-    # No journal, no deletion, every entry: the installation is whole. Only a private note of the failure is new.
+    # No journal, no deletion, every entry: the installation is whole. Only a private note of the failure is
+    # new, beside the app's other service records, as in an uninstall that keeps the folder.
     after = snapshot(root)
     note = after.pop("app/config/services/" + consumer.RECORD, None)
     assert after == before and not deletes(state) and state["after"] is None
@@ -345,7 +355,8 @@ def test_nothing_in_the_folder_changes_before_the_journal(deleter, monkeypatch, 
     assert (("certificate",) in state["calls"]) is (failure == "journal")
     # The cause is gone: the same command now deletes the folder.
     if failure not in {"proof", "entry"}:
-        state.update(busy=False, pin_failure=None, refuse_write=None, task_failure=None, choices=["yes", "yes"])
+        state.update(busy=False, lock_failure=None, pin_failure=None, refuse_write=None, task_failure=None,
+                     choices=["yes", "yes"])
         assert deleter.run()["afterExit"] and {path.name for path in root.iterdir()} == {"python", "tools", plan.JOURNAL}
 
 
@@ -627,7 +638,13 @@ def test_step_after_exit_that_cannot_start_is_said_plainly(deleter, monkeypatch)
     assert result["ok"] and result["afterExit"] is False and result["installationFilesRetained"] is True
     confirmation, leftover = (text for text, _ in state["notices"])
     assert "are deleted" in confirmation and "did not let Amplifier remove its last program files" in leftover
-    assert "none of your data" in leftover and str(deleter.root) in leftover
+    assert "none of your chats, settings or accounts" in leftover and str(deleter.root) in leftover
+    assert leftover.endswith("You can delete that folder.")
+    # With something in the folder that is not Amplifier's, there is no advice to delete the folder.
+    state.update(choices=["yes"], notices=[])
+    (deleter.root / "mine.txt").write_text("not Amplifier's")
+    assert deleter.run()["kept"] == ["mine.txt"]
+    assert "You can delete" not in state["notices"][-1][0] and "You can delete" not in state["notices"][0][0]
 
 
 def test_data_removal_gives_a_closing_program_time_and_then_stops(deleter):
@@ -679,6 +696,51 @@ def test_open_takes_the_same_lock_around_its_start_step_and_refuses_when_it_is_t
         deleter.run()
     assert not state["calls"] and state["task"] == "running" and state["registry"] is not None
     assert not (deleter.root / "app/config/services" / consumer.RECORD).exists()
+    # A lock that cannot be taken at all is a failure with its own text, never "in another window".
+    state.update(busy=False, lock_failure=OSError(5, "The lock could not be created"), choices=["no"])
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    assert stopped.value.step == "lock" and not isinstance(stopped.value, consumer.Refused)
+    assert "nothing was changed" in stopped.value.notice and "in another window. Restart" in stopped.value.notice
+    assert "right now" not in stopped.value.notice and stopped.value.notice.endswith("Reference: lock, OSError")
+    # Only the private note of the failure was written.
+    assert state["calls"] == [("write", "app/config/services/" + consumer.RECORD)]
+    assert state["task"] == "running" and state["registry"] is not None
+
+
+def test_the_lock_has_one_name_for_every_sign_in_session_of_this_person(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    names, waits = [], [0, 0x102]
+    kernel = SimpleNamespace(
+        CreateSemaphoreW=lambda security, count, most, name: names.append((count, most, name)) or 77,
+        WaitForSingleObject=lambda handle, milliseconds: waits.pop(0),
+        ReleaseSemaphore=lambda handle, count, previous: names.append("released") or 1,
+        CloseHandle=lambda handle: names.append("closed") or 1)
+    monkeypatch.setattr(plan, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(plan.C, "WinDLL", lambda name, **options: kernel, raising=False)
+    with plan.single(tmp_path):
+        pass
+    count, most, name = names[0]
+    # One holder at a time. The global name space: a second session of this person meets the same lock.
+    assert (count, most) == (1, 1) and name == "Global\\AmplifierUnified-installation-" + shell.identity(tmp_path)
+    assert names[1:] == ["released", "closed"]
+    # Taken by another window: Busy, and this window releases nothing that it does not hold.
+    del names[:]
+    with pytest.raises(plan.Busy):
+        with plan.single(tmp_path):
+            raise AssertionError("not entered")
+    assert names[1:] == ["closed"]
+
+
+def test_step_after_exit_looks_at_a_folder_again_immediately_before_it_lists_it():
+    # The listing that named a folder can be seconds old. A folder that became a link is kept, never entered.
+    script = removal.FINISH_SCRIPT
+    body = script.split("function Clear-Entry($entry) {")[1].split("\ntry {\n    # Enumerate the entire stdin")[0]
+    look, list_it = body.index("$now = Get-Item -LiteralPath $path -Force"), body.index("Get-ChildItem -LiteralPath $path -Force")
+    check = body.index("if (-not (Real-Folder $now) -or (Later $now)) { Keep $path; return }")
+    assert look < check < list_it and body.count("Get-ChildItem -LiteralPath $path -Force") == 2
+    # Nothing between the fresh look and the listing but the check itself.
+    assert body[check:list_it].count("\n") == 1 and "-recurse" not in script.lower()
 
 
 def _setup_source():
