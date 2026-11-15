@@ -770,12 +770,13 @@ with removal.folder(root) as owned:
         pid = removal.finish_after_exit(root, '0123456789abcdef0123456789abcdef',
             park='unified-uninstall-last', folders=['python', 'tools', 'workspace'],
             files=[], wait_for=(os.getpid(), os.getppid()), seconds=30, report=report)
-        first = owned.remove(['python', 'tools', 'workspace'], park=park)
+        workspace = owned.remove(['workspace'])
+        first = owned.remove(['python', 'tools'], park=park)
         parked = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                   for path in (root / 'unified-uninstall-last').iterdir()}
         left = owned.names()
 evidence.write_text(json.dumps(dict(
-    inProcess=first, parked=parked, images=images, left=left, pid=pid,
+    inProcess=first, workspace=workspace, parked=parked, images=images, left=left, pid=pid,
     realPid=os.getpid(), redirectorPid=os.getppid(), inJob=bool(in_job.value),
     attempts=attempts)))
 """
@@ -798,7 +799,8 @@ evidence.write_text(json.dumps(dict(
     assert first["inProcess"]["parked"] >= 2
     assert set(first["images"].values()) <= set(first["parked"].values())
     assert set(first["left"]) <= {PARK, "unified-uninstall.json", "workspace"}
-    assert first["inProcess"]["left"] in ([], ["workspace"])
+    assert first["inProcess"]["left"] == [] and first["inProcess"]["leftCount"] == 0
+    assert first["workspace"]["left"] in ([], ["workspace"])
     result = _finish_report(tree["report"])
     assert result["reason"] == "", result
     assert result["folderRemoved"] and result["passes"] >= 1 and not root.exists(), result
@@ -940,18 +942,22 @@ def _check_native_hardlink(tree, location, ctypes):
     root = tree["root"]
     parent = root / PARK if location == "flat" else root
     outside = tree["outside"] / "keep.txt"
-    hardlink, readonly, hidden = (parent / name for name in ("hardlink.txt", "readonly.txt", "hidden.txt"))
+    hardlink, readonly, hidden, system = (parent / name for name in (
+        "hardlink.txt", "readonly.txt", "hidden.txt", "system.txt"))
     os.chmod(outside, stat.S_IREAD)
     os.link(outside, hardlink)
     readonly.write_text("single read-only file")
     os.chmod(readonly, stat.S_IREAD)
     hidden.write_text("single hidden file")
+    system.write_text("single system file")
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.SetFileAttributesW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
     kernel.SetFileAttributesW.restype = ctypes.c_int
     assert kernel.SetFileAttributesW(str(hidden), stat.FILE_ATTRIBUTE_HIDDEN)
+    assert kernel.SetFileAttributesW(str(system), stat.FILE_ATTRIBUTE_SYSTEM)
     assert readonly.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
     assert hidden.stat().st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN
+    assert system.stat().st_file_attributes & stat.FILE_ATTRIBUTE_SYSTEM
     code = r"""
 $p = $input | Out-String | ConvertFrom-Json
 (Get-Item -LiteralPath $p.path -Force).LinkType
@@ -967,13 +973,13 @@ $p = $input | Out-String | ConvertFrom-Json
     tree["outside_before"] = _outside_state(tree["outside"])
     options = _finish_options(tree)
     if location == "root-files":
-        options["files"].extend(path.name for path in (hardlink, readonly, hidden))
+        options["files"].extend(path.name for path in (hardlink, readonly, hidden, system))
     removal.finish_after_exit(root, TOKEN, **options)
     result = _finish_report(tree["report"])
     assert result["reason"] == "" and not result["folderRemoved"], result
     # Phase 2 reports the flat folder as a whole when something inside stayed.
     assert hardlink.exists() and str(root / PARK if location == "flat" else hardlink) in result["left"]
-    assert not readonly.exists() and not hidden.exists()
+    assert not readonly.exists() and not hidden.exists() and not system.exists()
     assert outside.exists() and outside.read_text() == "keep outside"
     assert outside.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
     assert hardlink.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY

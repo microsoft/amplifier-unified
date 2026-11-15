@@ -110,9 +110,9 @@ class Disk:
     """A stand-in for the proven, pinned folder: real files in a temporary folder.
 
     The link rules have their own cases (test_windows_removal.py and the two
-    cases above). Here the order and the choice of names matter. `held` are
-    files that a program still uses; `kept` are folders that Windows keeps
-    although they are empty.
+    cases above). Here the order and the choice of names matter. `held` files
+    refuse the walk's open; `mapped` files refuse deletion but can be moved.
+    `kept` folders stay although they are empty.
     """
 
     def __init__(self, root, state):
@@ -139,10 +139,8 @@ class Disk:
                 left.append(relative.replace("/", "\\"))
             else:
                 park(path)
-                return 1
         else:
             path.unlink()
-        return 0
 
     def remove(self, names, *, settle=0, wait=None, park=None):
         listed, left, parked = set(os.listdir(self.root)), [], []
@@ -859,9 +857,11 @@ def test_both_questions_have_no_as_their_default_and_only_the_first_can_be_cance
     assert shown[0][:3] == (None, "one", "Amplifier Unified")
 
 
-def test_step_after_exit_that_cannot_start_is_said_plainly(deleter, monkeypatch):
+@pytest.mark.parametrize("error", [OSError("Cannot locate Windows PowerShell."),
+                                  ValueError("Journal changed"), RuntimeError("Cannot start")])
+def test_step_after_exit_that_cannot_start_is_said_plainly(deleter, monkeypatch, error):
     state = deleter.state
-    state["choices"], state["after_failure"] = ["yes", "yes"], OSError("Cannot locate Windows PowerShell.")
+    state["choices"], state["after_failure"] = ["yes", "yes"], error
     monkeypatch.setattr(deleter.consumer.sys, "stdout", None)
     result = deleter.run()
     assert result["ok"] and result["afterExit"] is False and result["programLeft"] is None
