@@ -959,12 +959,16 @@ lead anywhere else. It walks no tree:
 - Every folder goes by RemoveDirectory only: an empty folder goes, a link
   goes as a link, a folder with entries refuses. The step removes the named
   folders of the installation that are empty by then.
-- When nothing but this removal's own entries is left, and still with the
-  inner folder held, it deletes setup's completion record and then the
-  journal. A record that is a link, a folder or a read-only file is refused.
-- Then it holds the installation folder (its current folder) and removes the
-  inner folder and the flat folder; then it holds the folder above and
-  removes the installation folder.
+- Every folder goes as the last part of a path whose folder the step holds:
+  it holds the flat folder (its current folder) to remove the inner folder,
+  the installation folder to remove the flat folder, and the folder above to
+  remove the installation folder.
+- The two records go last, directly in the held installation folder, and only
+  when a fresh listing shows nothing else there. Both are checked before
+  either goes; a record that is a link, a folder or a read-only file is
+  refused. The journal goes first. Setup's completion record goes only if
+  nothing appeared meanwhile, and then the folder goes. So the folder exists
+  without setup's record only for the last two commands.
 - It reads the whole journal record before every pass and every named folder,
   and stops when the record is missing or different. An entry that was
   created after the step started stays. A file that a program moves into the
@@ -989,8 +993,13 @@ both records stay.
 `unified-uninstall.json`. Today's setup keeps this rule without a change:
 while anything is left in the folder, setup's completion record is there too,
 and with that record setup installs and removes nothing. The step after exit
-deletes the record and the journal one after the other, when nothing else is
-left.
+deletes the journal and then the record, when nothing else is left.
+
+One limit stays. A program of the same account can put files into the folder
+in the moment between the step's last listing and its last two commands, and
+a file with the name of setup's mark of unfinished work among them. The
+folder then stays without setup's record, and a later setup run empties it.
+Such a program can delete those files, and setup's record, without us.
 
 **Leftovers.** If the step after exit cannot run, the parked program files
 and both records stay; they hold none of the person's data, and the message
