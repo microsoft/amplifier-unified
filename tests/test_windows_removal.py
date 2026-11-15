@@ -248,10 +248,18 @@ def test_mapped_file_is_moved_and_its_empty_parents_go(opened):
             result = owned.remove(["tools"], park=park)
             assert len(tree.handles) == 4
             assert park.keep == (3, 4)
+            assert tree.handles[park.keep[0]][1] is root
+            assert tree.handles[park.keep[1]][1] is root["children"][PARK]
             assert root["children"][TOKEN + ".hold"] == file(held=True)
+            closed, close = [], tree.close
+            def record(handle):
+                closed.append(handle)
+                close(handle)
+            tree.close = record
     assert result == {"removed": 3, "left": [], "leftCount": 0, "parked": 1}
     assert root["children"] == {PARK: folder(**{"1": mapped})}
     assert tree.closed[-4:] == [TOKEN + ".hold", TOKEN + ".hold", PARK, None]
+    assert closed == [4, 3, 2, 1]
     assert not tree.handles
 
 
