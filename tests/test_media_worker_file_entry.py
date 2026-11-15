@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -150,16 +151,28 @@ def test_actual_media_file_entry_json_pipes_count_send_idle_retire_ack_and_resum
     python = os.environ.get("UNIFIED_RUNTIME_PYTHON")
     assert python, "Select an existing prepared interpreter; this test never installs"
     tmp_path.chmod(0o700)
-    result = subprocess.run([python, str(PROBE), str(tmp_path)], cwd=ROOT, text=True,
-                            capture_output=True, timeout=120,
-                            env={**os.environ, "AMPLIFIER_RUNTIME_IMMUTABLE": "1", "UV_OFFLINE": "1"})
+    profile, worker = (os.environ.get("NORMAL_MEDIA_INSTALLED_PROFILE"),
+                       os.environ.get("NORMAL_MEDIA_INSTALLED_WORKER"))
+    command = [python, str(PROBE), str(tmp_path)]
+    env = {**os.environ, "AMPLIFIER_RUNTIME_IMMUTABLE": "1", "UV_OFFLINE": "1"}
+    if profile or worker:
+        assert profile and worker, "Installed inputs must be supplied together"
+        command.extend(["--installed-profile", profile, "--installed-worker", worker])
+        env.pop("WARM_LOOP_SOURCE", None)
+        env.pop("PYTHONHOME", None)
+        env.pop("PYTHONUSERBASE", None)
+        env.update(PYTHONPATH=str(PROBE.parent), PYTHONNOUSERSITE="1")
+    result = subprocess.run(command, cwd=tmp_path if profile else ROOT, text=True,
+                            capture_output=True, timeout=120, env=env)
     assert result.returncode == 0, result.stdout + result.stderr
     evidence = json.loads(result.stdout)
     # Keep the consumed, pixel-free parent pipe receipts alongside both exact
     # child observers and stderr readbacks, after the fresh-root launch finished.
     (tmp_path / "pipe-result.json").write_text(result.stdout)
-    assert evidence["mode"] == "source-only" and evidence["installed_package_parity"] is False
-    assert evidence["real_file_entry"][1] == str(ROOT / "amplifier_web/runtime_worker.py")
+    assert evidence["mode"] == ("installed-offline-transport" if profile else "source-only")
+    assert evidence["installed_package_parity"] is bool(profile)
+    assert evidence["real_file_entry"][1] == (worker if profile else str(ROOT / "amplifier_web/runtime_worker.py"))
+    assert evidence["manager_preparation_executed"] is False
     for name in ("actual_vendor_provider_and_sdk", "offline_transport_not_inference",
                  "two_turn_idle_custody", "fresh_process_resume_without_replay",
                  "canonical_t2_ack", "canonical_and_protocol_no_pixels"):
@@ -185,3 +198,200 @@ def test_actual_media_file_entry_json_pipes_count_send_idle_retire_ack_and_resum
         assert receipt["reply_before_eof"] and receipt["exit_code"] == 0
         assert receipt["retirement_reply_index"] < receipt["stdout_eof_index"]
         assert "context.prepare" in receipt["bridge_operations"]
+        if profile:
+            assert child["source"]["profile"]["sha256"] == hashlib.sha256(Path(profile).read_bytes()).hexdigest()
+            assert {"amplifier_web", "openai", "httpx", "httpx2"} <= set(child["source"]["imports"])
+
+
+@pytest.fixture
+def installed_inputs(probe, tmp_path):
+    """Synthetic file identities for selector tests only; NOT an installed runtime."""
+    fixture = probe.helpers()
+    environment = tmp_path / "qualification"
+    environment.mkdir()
+    (environment / "pyvenv.cfg").write_text("fixture only; never executed")
+    python = environment / "bin/python"
+    python.parent.mkdir()
+    python.write_text("# fixture interpreter; never execute")
+    python.chmod(0o700)
+    site = environment / "lib/python3.13/site-packages"
+    packages, files = {}, {}
+    for name in fixture.INSTALLED_PACKAGES:
+        directory = site / name
+        directory.mkdir(parents=True)
+        (directory / "__init__.py").write_text("# " + name)
+        packages[name] = {"root": str(directory), "distribution": name.replace("_", "-"), "version": "1.0"}
+    app = site / "amplifier_web"
+    for relative, value in {"runtime_worker.py": "# selected entry", "runtime_bootstrap.py": "# bootstrap",
+                            "host/media_sources.json": '{"recipe":"fixture","sources":{},"revisions":{}}'}.items():
+        path = app / relative
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(value)
+    for path in site.rglob("*"):
+        if path.is_file():
+            files[str(path.relative_to(environment))] = hashlib.sha256(path.read_bytes()).hexdigest()
+    profile = tmp_path / "installed-profile.json"
+    value = {"v": 1, "environment_root": str(environment), "python": str(python),
+             "app_root": str(app), "packages": packages, "files": files}
+    profile.write_text(json.dumps(value))
+    return fixture, profile, value
+
+
+def test_installed_selector_pins_artifact_files_not_current_catalog_observations(installed_inputs):
+    fixture, profile, value = installed_inputs
+    target = fixture.InstalledTarget(profile)
+    assert target.worker == Path(value["app_root"]) / "runtime_worker.py"
+    assert target.verify_file(target.catalog)["sha256"] == value["files"][
+        str(target.catalog.relative_to(target.environment))]
+    target.worker.write_text("# unexpected new bytes")
+    with pytest.raises(ValueError, match="hash differs"):
+        target.verify_file(target.worker)
+
+
+@pytest.mark.parametrize("change", ["version-bool", "source-root", "missing-file", "traversal",
+                                   "missing-package", "foreign-app", "bad-hash"])
+def test_installed_selector_refuses_incomplete_or_source_fallback_profiles(installed_inputs, change):
+    fixture, profile, value = installed_inputs
+    if change == "version-bool":
+        value["v"] = True
+    elif change == "source-root":
+        value["environment_root"] = str(ROOT)
+    elif change == "missing-file":
+        value["files"] = {}
+    elif change == "traversal":
+        value["files"]["../outside"] = "0" * 64
+    elif change == "missing-package":
+        del value["packages"]["amplifier_web"]
+    elif change == "foreign-app":
+        value["app_root"] = str(ROOT / "amplifier_web")
+    else:
+        key = next(k for k in value["files"] if k.endswith("/runtime_worker.py"))
+        value["files"][key] = "0" * 64
+    profile.write_text(json.dumps(value))
+    with pytest.raises(ValueError):
+        fixture.InstalledTarget(profile)
+
+
+def test_installed_selector_refuses_symlink_and_profile_mutation(installed_inputs, tmp_path):
+    fixture, profile, value = installed_inputs
+    target = fixture.InstalledTarget(profile)
+    bootstrap = target.app / "runtime_bootstrap.py"
+    original = bootstrap.read_bytes()
+    other = tmp_path / "outside.py"
+    other.write_bytes(original)
+    bootstrap.unlink()
+    bootstrap.symlink_to(other)
+    with pytest.raises(ValueError, match="escaped"):
+        target.verify_file(bootstrap)
+    profile.write_text(json.dumps(value) + "\n")
+    with pytest.raises(ValueError, match="profile changed"):
+        target.verify_file(target.catalog)
+
+
+def test_installed_mode_requires_explicit_pair_and_correct_interpreter(probe, installed_inputs, monkeypatch):
+    fixture, profile, value = installed_inputs
+    monkeypatch.setattr(fixture, "INSTALLED_TARGET", None)
+    assert probe.installed_target(None, None) is None
+    with pytest.raises(ValueError, match="together"):
+        probe.installed_target(str(profile), None)
+    with pytest.raises(ValueError, match="does not match"):
+        probe.installed_target(str(profile), str(ROOT / "amplifier_web/runtime_worker.py"))
+    with pytest.raises(ValueError, match="interpreter"):
+        probe.installed_target(str(profile), str(Path(value["app_root"]) / "runtime_worker.py"))
+    assert fixture.INSTALLED_TARGET is None
+
+
+def test_installed_child_environment_drops_all_inherited_dependency_overlays(
+        probe, installed_inputs, tmp_path, monkeypatch):
+    fixture, profile, _ = installed_inputs
+    target = fixture.InstalledTarget(profile)
+    monkeypatch.setenv("PYTHONPATH", "/unreviewed/source:/another/dependency")
+    monkeypatch.setenv("WARM_LOOP_SOURCE", "/unreviewed/loop")
+    monkeypatch.setenv("PYTHONHOME", "/outer/runtime")
+    monkeypatch.setenv("PYTHONUSERBASE", "/outer/user")
+    bootstrap = tmp_path / "bootstrap"
+    selected = probe.child_environment(bootstrap, {"loop-live": "/source-loop"}, tmp_path, target)
+    assert selected["PYTHONPATH"].split(os.pathsep) == [str(bootstrap), str(PROBE.parent)]
+    assert all(key not in selected for key in ("WARM_LOOP_SOURCE", "PYTHONHOME", "PYTHONUSERBASE"))
+    assert selected["PYTHONNOUSERSITE"] == "1"
+    assert selected["NORMAL_MEDIA_INSTALLED_PROFILE"] == str(profile)
+    # Original source mode keeps its deliberate source overlays.
+    source = probe.child_environment(bootstrap, {"loop-live": "/source-loop"}, tmp_path)
+    assert "/unreviewed/source" in source["PYTHONPATH"] and source["WARM_LOOP_SOURCE"] == "/source-loop"
+
+
+def test_installed_source_resolver_cannot_replace_the_production_loop_locator():
+    tree = ast.parse(PROBE.read_text())
+    resolver = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "finite_sources")
+    writes = [node for node in ast.walk(resolver) if isinstance(node, ast.Assign)
+              and any(isinstance(t, ast.Attribute) and t.attr == "installed_loop_source" for t in node.targets)]
+    assert len(writes) == 1
+    guard = next(node for node in ast.walk(resolver) if isinstance(node, ast.If)
+                 and writes[0] in node.body)
+    assert "not installed" in ast.unparse(guard.test)
+
+
+@pytest.mark.parametrize("forbidden", ["source", "installation"])
+def test_installed_output_refuses_symlinked_ancestor_before_any_writes(
+        probe, installed_inputs, tmp_path, monkeypatch, forbidden):
+    fixture, profile, _ = installed_inputs
+    target = fixture.InstalledTarget(profile)
+    source = tmp_path / "source-checkout"
+    source.mkdir()
+    monkeypatch.setattr(probe, "ROOT", source)
+    parent = source if forbidden == "source" else target.environment
+    root = parent / "private-empty"
+    root.mkdir(mode=0o700)
+    alias = tmp_path / "alias"
+    alias.symlink_to(parent, target_is_directory=True)
+    with pytest.raises(ValueError, match="without aliases"):
+        probe.qualification_root(alias / root.name, target)
+    assert list(root.iterdir()) == []
+    with pytest.raises(ValueError, match="outside source"):
+        probe.qualification_root(root, target)
+    allowed = tmp_path / "outside"
+    allowed.mkdir(mode=0o700)
+    assert probe.qualification_root(allowed, target) == allowed
+
+
+@pytest.mark.parametrize("change", ["none", "editable", "version", "unrecorded", "foreign-loaded-module",
+                                   "altered-loaded-module"])
+def test_installed_loaded_origins_require_manifest_and_distribution_membership(
+        installed_inputs, monkeypatch, tmp_path, change):
+    """Synthetic metadata exercises refusal logic, not actual installed qualification."""
+    from types import SimpleNamespace
+    import importlib.metadata
+    fixture, profile, value = installed_inputs
+    target = fixture.InstalledTarget(profile)
+    app = target.app / "__init__.py"
+    modules = {"amplifier_web": SimpleNamespace(__file__=str(app))}
+    if change == "foreign-loaded-module":
+        foreign = tmp_path / "checkout.py"
+        foreign.write_text("# source fallback")
+        modules["amplifier_web.runtime_worker"] = SimpleNamespace(__file__=str(foreign))
+    elif change == "altered-loaded-module":
+        app.write_text("# different bytes")
+    monkeypatch.setattr(fixture, "sys", SimpleNamespace(
+        executable=str(target.python), prefix=str(target.environment), path=[], modules=modules))
+    monkeypatch.setattr(fixture, "origin",
+                        lambda name: Path(target.packages[name]["root"]) / "__init__.py")
+    by_distribution = {row["distribution"]: (name, row) for name, row in target.packages.items()}
+
+    def distribution(name):
+        package, item = by_distribution[name]
+        member = Path(package) / "__init__.py"
+        return SimpleNamespace(
+            version="changed" if change == "version" else item["version"],
+            read_text=lambda _: '{"dir_info":{"editable":true}}' if change == "editable" else "{}",
+            files=[] if change == "unrecorded" else [member],
+            locate_file=lambda row: Path(item["root"]).parent / row)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", distribution)
+    if change == "none":
+        evidence = target.check_origins()
+        assert evidence["mode"] == "installed-offline-transport"
+        assert len(evidence["imports"]) == len(fixture.INSTALLED_PACKAGES)
+        assert evidence["loaded_modules"]["amplifier_web"]["path"] == str(app)
+    else:
+        with pytest.raises(ValueError):
+            target.check_origins()
