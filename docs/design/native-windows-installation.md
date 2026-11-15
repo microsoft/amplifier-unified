@@ -208,9 +208,10 @@ Steps, in order:
 4. Copy the generation's verified release file beside the installation.
    Confirm that the app is stopped, then rename the launcher folder aside. It
    is kept. Every change in the installation folder waits up to 30 seconds for
-   a program that is still closing: while the app's worker programs are alive,
-   Windows refuses a rename into that folder, and they end a moment after the
-   task reports that it stopped (measured in the clean room).
+   a program that is still closing: a live worker program whose Foundation is
+   older than `e37a946b` makes Windows refuse a rename into that folder, and
+   the workers end a moment after the task reports that it stopped (measured
+   in the clean room; see "Why the app stops first").
 5. Install the launcher at the same path with the generation's exact package
    list and the launcher's own interpreter. The task, the shortcuts and the
    private Python do not change.
@@ -676,7 +677,7 @@ table with `python tests/test_windows_path_budget.py`.
 `LongPathsEnabled` off on its own runner, proves in a new process that a
 260-character path is refused, runs the real session and capture stores under a
 folder path of exactly 59 characters, and restores the runner's value. It
-installs the locked dependencies, and the lock selects Foundation `7526bb55`.
+installs the locked dependencies, and the lock selects Foundation `e37a946b`.
 Its source-store case stages a repository as deep as the default bundles
 through Foundation's real store. It requires that the store seals, builds and
 cleans up files beyond the limit, and that Windows accepts or refuses each
@@ -799,15 +800,39 @@ installation folder when that folder cannot be written.
 
 Why the app stops first. The earlier order removed the entries, rewrote
 setup's entry record `consumer-shell.json` in the installation folder, and
-only then stopped the app. While a conversation worker is alive, Windows
-refuses a new or replaced file directly in the installation folder (sharing
+only then stopped the app. While a conversation worker was alive, Windows
+refused the private write of a new or replaced file directly in the
+installation folder (sharing
 violation, error 32); a worker stays alive after its chat turn ends. So after
 any chat the rewrite failed, the app was never asked to stop, and it kept
 running and starting at sign-in with no entry left. Two clean-room runs showed
 this, and a probe in the second one measured the refusal: it is present with
-live workers and gone after the app's normal stop. Which handle in the worker
-tree causes it is not yet known. `app\config\services` accepts writes in the
-same state.
+live workers and gone after the app's normal stop. `app\config\services`
+accepts writes in the same state.
+
+The cause is Amplifier Foundation's session ownership. A live worker holds it
+below `<folder>\ownership`, and Foundation pins every folder from the drive
+root down to the session's own folder. Before Foundation `e37a946b` no pin
+shared write access. So Windows refused a rename, a move or a replacement of
+an entry directly in each pinned folder, also in the folders above the
+installation folder: `AppData\Local`, `AppData` and the profile folder
+(measured). An ordinary new file was not refused. The app's private writer
+publishes a file by a rename, so it failed. From `e37a946b` a pin on a folder
+above `ownership` shares read and write, and other programs can rename,
+replace and move entries there (measured in the clean room with three live
+workers at `e37a946b`). These refusals remain while a worker lives,
+by intent: a pinned folder itself cannot be renamed, moved or deleted, and
+nothing can be renamed or moved into `ownership` or a pinned folder below it.
+Foundation's history operations hold the folder that they work in (below
+`shared\projects`) in the same way while one operation runs.
+`tests/test_windows_live_worker_folders.py` holds a real ownership in
+setup's layout on a Windows runner and requires both halves; it runs in the
+`windows-path-length.yml` job, which installs the locked Foundation. The
+order above stays. A worker runs the Foundation that its own environment
+selected, not the one in the root `uv.lock`; that revision moves with a
+component update, and a running worker keeps the revision that it started
+with. The app's own directory reads (`windows_read_files`) hold a folder
+without write sharing while a read runs; they are unchanged.
 
 Uninstall can be repeated. An entry that an earlier, interrupted uninstall
 already removed is skipped; a task that is already gone is not an error.

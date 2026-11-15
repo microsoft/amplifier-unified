@@ -355,7 +355,8 @@ def test_removal_finishes_what_an_interrupted_removal_left(model, gone):
 
 def test_refused_receipt_write_after_removal_is_reported_not_raised(model):
     # The last step of removal is a private write into the installation folder.
-    # Windows refuses it (sharing violation) while a conversation worker is alive.
+    # Windows refuses it (sharing violation) while a conversation worker is alive
+    # whose Foundation is older than e37a946b.
     root, programs, state = model
     shell.install(root, "1.0.0")
     folder = programs / ("Amplifier Unified - " + shell.identity(root))
@@ -571,8 +572,9 @@ def test_app_left_running_without_entries_by_the_earlier_order_can_be_uninstalle
 
 
 def test_folder_that_refuses_writes_while_the_app_runs_no_longer_strands_it(uninstaller):
-    # Clean-room run 3: while a conversation worker lives, Windows refuses a new
-    # or replaced file directly in the installation folder. The earlier order
+    # Clean-room run 3 (worker Foundation before e37a946b): while a conversation
+    # worker lived, Windows refused the private write of a new or replaced file
+    # directly in the installation folder. The earlier order
     # met that refusal after it had removed every entry. Workers end with the app.
     state, root = uninstaller.state, uninstaller.root
     state["refuse_write"] = lambda path: path.parent == root and state["task"] == "running"
@@ -708,8 +710,11 @@ def test_native_uninstall_order_failure_and_second_uninstall(monkeypatch):
     While the stand-in app "runs", the test holds the installation folder open
     for listing without write sharing. That kind of handle gives the refusal
     that the clean room measured with a live conversation worker (a rename into
-    the folder fails with WinError 32). Which handle a real worker holds is not
-    known; this is the same refusal, not the same owner. The stand-in releases
+    the folder fails with WinError 32). The real owner was Foundation's session
+    ownership before revision e37a946b, and a worker that still runs such a
+    revision gives this refusal. This is the same refusal, not the same owner;
+    tests/test_windows_live_worker_folders.py holds the real ownership at the
+    locked revision. The stand-in releases
     the folder about one second after its stop reports, because real worker
     programs end a moment after the task reports that it stopped.
     """

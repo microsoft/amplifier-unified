@@ -331,7 +331,8 @@ def _record(root, operation, step, error, *, services=True):
 
     Nothing else records why a windowless maintenance step failed. The note
     goes beside the app's other service records. The installation folder is
-    the second choice: while a conversation worker is alive, Windows refuses a
+    the second choice: while a conversation worker is alive, and its Foundation
+    is older than e37a946b, Windows refuses a
     new or replaced file directly in that folder (sharing violation).
     Without `services` the note goes only into the installation folder: the
     app's own folder is the person's data, and it is being deleted.
