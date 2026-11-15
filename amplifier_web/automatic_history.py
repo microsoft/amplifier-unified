@@ -177,6 +177,7 @@ def remove_internal_copies(session, hidden):
     """
     session['messages'] = [message for message in session['messages']
         if type(message.get('nativeIndex')) is not int
+        or message['nativeIndex'] not in hidden
         or hidden.get(message['nativeIndex']) != display_identity(
             session, message['nativeIndex'], message.get('role'), message.get('text', ''))]
     boundary = session.get('nativeBoundary')
