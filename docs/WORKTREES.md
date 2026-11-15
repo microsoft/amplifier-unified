@@ -55,7 +55,8 @@ A genuinely uncertain release or commit stays unknown.
 Stop does not wait indefinitely on a boundary cleanup reply. Its bounded caller
 wait can end at Needs recovery while the one original reply owner remains alive;
 a late ordered removal acknowledgement or exact worker-absence proof can settle
-that same receipt. Neither the missing reply nor a user's explanation is proof.
+that same receipt when Check move reads it. Neither the missing reply nor a
+user's explanation is proof.
 
 The existing Task execution folder card shows Waiting for this turn, Moving,
 Moved, Not moved or Needs recovery, the actual source/target folder names and

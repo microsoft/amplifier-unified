@@ -508,7 +508,7 @@ class RuntimeManager:
         if current.get('hostMatches') is False and not allow_fenced:
             raise ValueError('The saved execution host differs from this local host. Cross-host execution is unavailable.')
         if current['fenced'] and not allow_fenced:
-            raise ValueError('The task execution handoff is pending or unknown. Inspect and reconcile it before starting more work.')
+            raise ValueError('The task execution handoff is pending or unconfirmed. Choose Check move in Task execution folder to read its saved facts without repeating work. An unconfirmed writer release still needs recovery by its original owner.')
         if session is not None and (
             session.get('executionRevision', 0) != current['revision']
             or (session.get('workingDirectory') or session.get('workspace')) != current['directory']

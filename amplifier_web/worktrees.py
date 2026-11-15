@@ -18,6 +18,10 @@ class HandoffSuperseded(ValueError):
     """A current human/task anchor revoked unperformed placement work."""
 
 
+class HandoffRepositoryChanged(ValueError):
+    """Fixed, non-payload diagnostics for a substituted source or target."""
+
+
 def definitions(schema, string):
     sid = {'sessionId': {**string(200), 'description': 'This chat, or a current commissioned member of your owned active assignment for inspect/list/status/create/attach/handoff. Other worktree actions remain caller-owned.'}}
     identity = {**sid, 'id': string(200)}
@@ -84,7 +88,7 @@ class Worktrees:
                     detail='The app restarted before writer release. Check the move to confirm that its original worker has ended. No input was replayed.')
                 self.save(record)
             elif record['phase'] == 'pending' or inconsistent:
-                record.update(phase='unknown', revision=record['revision']+1, detail='The app restarted during handoff. No input was replayed; inspect and reconcile explicitly.')
+                record.update(phase='unknown', revision=record['revision']+1, detail='The app restarted before writer release or folder placement was confirmed. Choose Check move to read the saved facts without repeating work. If it stays unconfirmed, the original owner must inspect recovery. No input was replayed.')
                 self.save(record)
             if (record.get('managerPlacement') and notification_pending
                     and record['phase'] in {'rejected', 'unknown'}):
@@ -404,7 +408,7 @@ class Worktrees:
                 # identity validation independent of preservation manifest limits.
                 root, repository = common(path)
                 if str(root) != binding['path'] or str(repository) != binding['repository']:
-                    raise ValueError(f'The {side} is no longer in the recorded repository')
+                    raise HandoffRepositoryChanged(f'The {side} is no longer in the recorded repository')
 
     def require_available_path(self, path):
         """Fence admission without scanning dormant histories or Git records."""
@@ -1019,7 +1023,8 @@ class Worktrees:
                         current.pop('lockOwner', None)
                 else:
                     record.update(phase='unknown', revision=record['revision']+1,
-                        detail='The writer release or folder placement is not confirmed. No input was replayed. Check move shows the saved facts without repeating work. If it remains unconfirmed, the original host must finish or its owner must inspect recovery; choosing a folder is not proof.',
+                        detail=(str(exc) + '. ' if isinstance(exc, HandoffRepositoryChanged) else '') +
+                            'The writer release or folder placement is not confirmed. No input was replayed. Check move shows the saved facts without repeating work. If it remains unconfirmed, the original host must finish or its owner must inspect recovery; choosing a folder is not proof.',
                         failureType=type(exc).__name__)
                 self.save(record)
                 if saved is None:
