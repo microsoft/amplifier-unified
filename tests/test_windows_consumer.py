@@ -384,7 +384,8 @@ def test_first_start_reports_the_browser_on_the_open_commands_own_confirmation(t
     assert events == [("trust",), ("command", (launcher, "--data-dir", tmp_path / "app", "--workspace",
                                                tmp_path / "workspace", "open"),
                                    {"private": "environment"}, 90)]
-    # `open` waits for a restarting host. The launcher's limit must be longer.
+    # `open` waits for a restarting host, then makes its last requests (at
+    # most 15 seconds more). The launcher's limit must be longer than both.
     assert events[1][3] > browser_entry.HOST_WAIT + 15
 
 
@@ -406,8 +407,12 @@ def test_browser_that_did_not_open_gives_one_plain_message_and_no_second_attempt
     assert [event[0] for event in events] == ["trust", "command", "notice"]  # One command, one message.
     message, options = events[2][1:]
     assert options == {}  # A statement, not a question.
-    assert message == ("Amplifier is running, but it did not open in your browser.\n\n"
-                       "Open it from the Start menu: Amplifier Unified. "
+    # Not "did not open" and not "is running": after its limit the launcher
+    # knows neither. A command that a generation took over can still open the
+    # browser, so the person looks for a tab first.
+    assert message == ("Amplifier may not have opened in your browser.\n\n"
+                       "Look for an Amplifier tab in your browser. If there is none, "
+                       "open Amplifier from the Start menu: Amplifier Unified. "
                        "If this message appears again, restart this PC.")
 
 
@@ -418,8 +423,9 @@ def test_browser_message_names_setup_when_the_start_menu_entry_does_not_exist(tm
     result, events = opening_launch(tmp_path, monkeypatch, CommandOutput(""), listed=False)
     assert result["browser"] == {"opened": False, "reason": "not-confirmed"}
     assert [event[0] for event in events] == ["trust", "command", "notice"]
-    assert events[2][1] == ("Amplifier is running, but it did not open in your browser.\n\n"
-                            "Run the Amplifier setup file again. It keeps your chats and settings.")
+    assert events[2][1] == ("Amplifier may not have opened in your browser.\n\n"
+                            "Look for an Amplifier tab in your browser. If there is none, "
+                            "run the Amplifier setup file again. It keeps your chats and settings.")
 
 
 @pytest.mark.parametrize("first_setup", [True, False])

@@ -81,13 +81,22 @@ def test_the_launcher_step_reads_the_confirmation_line_not_the_exit_status(tmp_p
 
 def test_an_argument_with_a_space_reaches_the_program_that_takes_over_as_one_argument(tmp_path):
     """A user name such as "Jane Doe" is in the path of every command of the app."""
+    import venv
     show = script(tmp_path, "show.py", "import json, sys\nprint(json.dumps(sys.argv[1:]))\n")
     values = ["C:\\Users\\Jane Doe\\AppData\\Local\\Amplifier\\app", "", 'say "hello"', "open"]
-    def received(program):
-        done = subprocess.run([sys.executable, str(program), str(show), *values],
+    def received(program, python=sys.executable):
+        done = subprocess.run([str(python), str(program), str(show), *values],
                               capture_output=True, text=True, timeout=120, env=ENVIRONMENT)
         return json.loads(done.stdout)
-    assert received(script(tmp_path, "handover.py", HANDOVER)) == values
+    handover = script(tmp_path, "handover.py", HANDOVER)
+    assert received(handover) == values
+    # The interpreter of an app generation is itself under that folder: a
+    # virtual environment's python, which starts the real one with the same
+    # arguments. So the first exec argument has the space too.
+    home = tmp_path / "Jane Doe"
+    venv.create(home / "generation", with_pip=False)
+    python = home / "generation" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    assert " " in str(python) and received(handover, python) == values
     # The reason for the product's own list: Windows joins a plain exec list
     # with spaces and quotes nothing. Measured here, not assumed.
     plain = script(tmp_path, "plain.py", "import os, sys\n"
@@ -98,11 +107,11 @@ def test_an_argument_with_a_space_reaches_the_program_that_takes_over_as_one_arg
         assert received(plain) == values
 
 
-def test_the_launcher_step_ends_at_its_limit_and_says_not_opened(tmp_path):
-    slow = script(tmp_path, "slow.py", "import time\ntime.sleep(20)\n")
+def test_the_launcher_step_ends_at_its_limit_and_says_not_confirmed(tmp_path):
+    slow = script(tmp_path, "slow.py", "import time\ntime.sleep(60)\n")
     started = time.monotonic()
     assert asyncio.run(consumer.browser_opened((sys.executable, slow), dict(os.environ), limit=2)) is False
-    assert time.monotonic() - started < 30
+    assert time.monotonic() - started < 20  # The limit ended it, not the program's own 60 seconds.
 
 
 @pytest.fixture
@@ -225,19 +234,35 @@ def test_native_first_open_waits_for_the_restarting_host_and_opens_the_browser_o
     assert asyncio.run(first_start()) is True
     print(f"\nfirst open: browser recorded after {time.monotonic() - started:.1f} s; "
           f"health requests: earlier host {earlier.asked}, new host {current.asked}")
+    # Compare facts only. A failed comparison prints its values, and the
+    # address holds a grant: neither it nor the credential may reach a CI log.
     addresses = opened.read_text(encoding="utf-8").splitlines()
-    assert len(addresses) == 1  # One browser start.
-    assert addresses[0].startswith(installation.origin + "/login#ticket=")
-    assert auth.control_token(installation.home) not in addresses[0]
-    # One grant request, and only to the host that the restart brought up.
-    assert (earlier.requested, current.requested) == (0, 1)
-    assert not earlier.app["browser_entry"]._grants and len(current.app["browser_entry"]._grants) == 1
-    # The address that the browser got holds that host's grant; it works once.
+    address = addresses[0] if addresses else ""
+    start, _, ticket = address.partition("#ticket=")
     binding = entry.Binding(current.instance, auth.data_identity(installation.home),
                             installation.origin, entry.current_owner_sid())
-    ticket = addresses[0].split("#ticket=")[1]
-    assert current.app["browser_entry"].consume(ticket, binding) == "/"
-    assert current.app["browser_entry"].consume(ticket, binding) is None
+    store = current.app["browser_entry"]
+    facts = {
+        "browser starts": len(addresses),
+        "login address of this installation": start == installation.origin + "/login",
+        "address holds the owner credential": auth.control_token(installation.home) in address,
+        # One grant request, and only to the host that the restart brought up.
+        "grant requests (earlier host, new host)": (earlier.requested, current.requested),
+        "grants held (earlier host, new host)": (len(earlier.app["browser_entry"]._grants), len(store._grants)),
+        # The address that the browser got holds that host's grant; it works once.
+        "first use of the grant": store.consume(ticket, binding),
+        "second use of the grant": store.consume(ticket, binding),
+    }
+    del addresses, address, ticket
+    assert facts == {
+        "browser starts": 1,
+        "login address of this installation": True,
+        "address holds the owner credential": False,
+        "grant requests (earlier host, new host)": (0, 1),
+        "grants held (earlier host, new host)": (0, 1),
+        "first use of the grant": "/",
+        "second use of the grant": None,
+    }
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows private files, the owner token and loopback connection timing")

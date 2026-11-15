@@ -427,11 +427,17 @@ The launcher learns the result from one line of the command's output
 (`browser_entry.OPENED`), not from its exit status. On Windows a command that
 a generation takes over ends with exit status 0 for its caller, whatever it
 did: `os.execv` starts a new process there and ends the calling one. The
-launcher allows the command 90 seconds. Without the confirmation line it shows
-one message: Amplifier is running, but it did not open in your browser; open it
-from the Start menu: Amplifier Unified. When the Start-menu entry does not
-exist, the message names the setup file instead, by the same two facts as the
-launcher's failure message. The launcher is the code that setup
+launcher allows the command 90 seconds; `open` needs at most 75 (the wait, then
+5 seconds for a last health request to each of two local addresses, then 5 for
+the grant request). Without the confirmation line the launcher knows only that
+the browser was not confirmed: after its limit, a command that a generation
+took over still runs and can open the browser. So its one message says that
+Amplifier may not have opened in the browser, to look for an Amplifier tab
+first, and otherwise to open it from the Start menu: Amplifier Unified. When
+the Start-menu entry does not exist, the message names the setup file instead,
+by the same two facts as the launcher's failure message. The message does not
+say that Amplifier is running; the launcher made no new check of that.
+The launcher is the code that setup
 installed and an in-app update does not change it, so the line's text is fixed.
 For the same reason the wait is in `open`: a launcher from an earlier setup file
 gets it from the new generation. Such a launcher allows the command 30 seconds

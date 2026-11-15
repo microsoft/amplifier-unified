@@ -179,8 +179,12 @@ async def browser_opened(command, env, *, limit=90):
     The confirmation is a line of its output, never its exit status. On
     Windows a command that an app generation takes over ends with status 0 for
     this caller, whatever it did; a first start that updates the app is such a
-    case. `open` itself waits up to a minute for a host that is restarting, so
-    the limit here is longer. The command is never run a second time.
+    case. `open` itself waits up to a minute for a host that is restarting
+    (at most 75 seconds with its last requests), so the limit here is longer.
+    The command is never run a second time.
+
+    False means "not confirmed", not "not opened": after the limit, a command
+    that a generation took over still runs and can open the browser later.
     """
     from . import browser_entry
     from .updates import process
@@ -233,13 +237,16 @@ async def launch(root, *, open_browser=True, progress=None):
         # behavior. Do not print or expose its transient grant in this process.
         if not await browser_opened((launcher, "--data-dir", root / "app",
                                      "--workspace", root / "workspace"), env):
+            # Say only what is known here: the browser was not confirmed. It
+            # can still open, so the person looks for a tab before a new start.
             # The same next step as a failed start: the Start menu only when
             # its entry exists (after an uninstall, setup adds it again).
             from .windows_consumer_shell import listed
-            owner_notice("Amplifier is running, but it did not open in your browser.\n\n" + (
-                "Open it from the Start menu: Amplifier Unified. "
+            owner_notice("Amplifier may not have opened in your browser.\n\n"
+                         "Look for an Amplifier tab in your browser. If there is none, " + (
+                "open Amplifier from the Start menu: Amplifier Unified. "
                 "If this message appears again, restart this PC." if listed(root) else
-                "Run the Amplifier setup file again. It keeps your chats and settings."))
+                "run the Amplifier setup file again. It keeps your chats and settings."))
             return {**result, "browser": {"opened": False, "reason": "not-confirmed"}}
         return {**result, "browser": {"opened": True}}
     return result

@@ -544,6 +544,15 @@ async def test_open_stops_at_its_limit_without_a_grant_request(tmp_path, monkeyp
     assert sum(seconds for name, seconds in calls if name == "pause") == 3
 
 
+async def test_open_never_pauses_past_its_limit(tmp_path, monkeypatch):
+    calls = restarting_host(monkeypatch, tmp_path, ["0.0.1"])
+    with pytest.raises(entry.BrowserEntryUnavailable, match="not reachable or its identity"):
+        await entry.owner_browser_url(tmp_path, {}, wait=2.5)
+    # The last pause is the rest of the limit, not a whole second.
+    assert [seconds for name, seconds in calls if name == "pause"] == [1.0, 1.0, 0.5]
+    assert calls[-1] == ("get", "0.0.1")  # No health request starts after the limit.
+
+
 @pytest.mark.parametrize("failure,phrase", [("timeout", "no retry"), ("refused", "refused browser entry"),
                                             ("malformed", "no retry")])
 async def test_a_refused_or_unconfirmed_grant_request_is_never_repeated_while_waiting(

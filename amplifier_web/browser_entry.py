@@ -324,6 +324,9 @@ async def owner_browser_url(data_dir: Path, config: dict, *, wait=0.0, pause=1.0
     called once before the first pause. Only the health request is repeated.
     The grant request is sent once, to the first host that matches; a refused
     or unconfirmed grant request ends the call.
+
+    No health request starts after `wait` seconds. One that started before can
+    take 5 more seconds for each local address, and the grant request 5 more.
     """
     import aiohttp
     from .auth import data_identity
@@ -374,10 +377,11 @@ async def owner_browser_url(data_dir: Path, config: dict, *, wait=0.0, pause=1.0
                 except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
                     raise BrowserEntryUnavailable("Browser entry response was not confirmed; no retry was made. " + REOPEN) from None
                 return origin + "/login#ticket=" + ticket
-            if time.monotonic() >= deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 break
             if waiting is not None:
                 waiting()
                 waiting = None
-            await asyncio.sleep(pause)
+            await asyncio.sleep(min(pause, remaining))
     raise BrowserEntryUnavailable("The owned local host is not reachable or its identity does not match. " + REOPEN)
