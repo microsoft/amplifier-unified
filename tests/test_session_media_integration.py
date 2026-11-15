@@ -141,6 +141,9 @@ def provider(session, *, support=True):
                                for message in request.messages if isinstance(message.content, list)
                                for block in message.content if block.type == "image")
             return "done"
+
+        async def stream(self, request, **kwargs):
+            yield await self.complete(request, **kwargs)
     raw = Provider()
     wrapped = SurfaceProvider(raw, NoWorkDelivery(), coordinator=session.coordinator)
     return wrapped, seen
@@ -167,6 +170,150 @@ async def test_actual_asset_checkpoint_count_send_and_release(session, support):
     for path in session.store.directory("root").rglob("*"):
         if path.is_file() and path.suffix in {".json", ".jsonl"}:
             assert base64.b64encode(session.raw) not in path.read_bytes()
+
+
+@pytest.mark.parametrize("selected", [False, True], ids=["surface-root", "selected-root"])
+async def test_repeated_private_fit_and_reuse_keep_canonical_refs_only(session, selected):
+    """Actual Surface/selection seams: two counts, send, and a new fit of SAME input."""
+    from amplifier_web.host.session import SelectedProvider
+    value = await accepted(session)
+    canonical = value.model_dump_json()
+    wrapped, seen = provider(session)
+    if selected:
+        wrapped = SelectedProvider(wrapped, {"model": "fixture"})
+    held = []
+    for turn in range(2):
+        start = len(seen.count)
+        await wrapped.request_budget(value)
+        await wrapped.request_budget(value)
+        private = seen.count[start]
+        held.append(private)
+        assert seen.count[start + 1] is private
+        assert private is not value
+        assert base64.b64encode(session.raw).decode() in private.model_dump_json()
+        assert value.model_dump_json() == canonical
+        assert await wrapped.complete(value) == "done"
+        assert seen.sent[turn] is private
+        assert private.messages == []
+        assert value.model_dump_json() == canonical
+        saved, _ = session.store.load("root")
+        assert saved[0]["metadata"][NAMESPACE]["refs"] == value.messages[0].metadata[NAMESPACE]["refs"]
+        assert base64.b64encode(session.raw).decode() not in str(saved)
+    assert held[0] is not held[1], "A released private request must not be resurrected"
+    for path in session.store.directory("root").rglob("*"):
+        if path.is_file() and path.suffix in {".json", ".jsonl"}:
+            assert base64.b64encode(session.raw) not in path.read_bytes()
+
+
+@pytest.mark.parametrize("mode", ["complete", "stream", "captured-stream", "compact", "captured-compact"])
+async def test_selected_execution_owner_change_rejects_uncounted_private_send(session, mode):
+    from amplifier_web.host.session import SelectedProvider
+    value = await accepted(session)
+    canonical = value.model_dump_json()
+    original, counted = provider(session)
+    replacement, foreign = provider(session)
+    if "compact" in mode:
+        async def compact(request, **kwargs):
+            foreign.sent.append(request)
+            return "uncounted"
+        original.original.compact_context = compact
+        replacement.original.compact_context = compact
+    active = [original]
+    selected = SelectedProvider(original.original, {}, execution_adapter=lambda _: active[0])
+    await selected.request_budget(value)
+    private = counted.count[0]
+    captured_stream = selected.stream if mode == "captured-stream" else None
+    captured_compact = selected.compact_context if mode == "captured-compact" else None
+    active[0] = replacement
+    with pytest.raises(ValueError, match="execution provider changed"):
+        if mode == "complete":
+            await selected.complete(value)
+        elif "compact" in mode:
+            await (captured_compact or selected.compact_context)(value)
+        else:
+            async for _ in (captured_stream or selected.stream)(value):
+                pass
+    assert not counted.sent and not foreign.sent and not foreign.count
+    assert private.messages == [] and original.prepared == []
+    assert value.model_dump_json() == canonical
+    assert selected._selected_requests == selected._release_bindings == []
+
+
+async def test_cached_pretransport_refusal_drops_serialized_private_frame(session):
+    value = await accepted(session)
+    wrapped, seen = provider(session)
+    await wrapped.request_budget(value)
+    private = seen.count[0]
+    session.caps["web.worker_run"] = "changed-generation"
+    with pytest.raises(ValueError) as failed:
+        await wrapped.complete(value)
+    sentinel = base64.b64encode(session.raw).decode()
+    frame = failed.value.__traceback__
+    while frame is not None:
+        if frame.tb_frame.f_code.co_filename.endswith("surface_delivery.py"):
+            locals_ = frame.tb_frame.f_locals
+            assert sentinel not in str(locals_.get("existing")), "Cached fitted JSON leaked in failure frame"
+        frame = frame.tb_next
+    assert private.messages == [] and not seen.sent and wrapped.prepared == []
+
+
+async def test_selected_rebudget_retires_previous_private_execution_owner(session):
+    from amplifier_web.host.session import SelectedProvider
+    value = await accepted(session)
+    canonical = value.model_dump_json()
+    original, counted = provider(session)
+    replacement, foreign = provider(session)
+    active = [original]
+    selected = SelectedProvider(original.original, {}, execution_adapter=lambda _: active[0])
+    await selected.request_budget(value)
+    previous = counted.count[0]
+    active[0] = replacement
+    await selected.request_budget(value)
+    assert previous.messages == [] and original.prepared == [], "Re-budget stranded the prior private fit"
+    assert await selected.complete(value) == "done"
+    assert foreign.count[0] is foreign.sent[0]
+    assert foreign.sent[0].messages == [] and not counted.sent
+    assert value.model_dump_json() == canonical
+
+
+async def test_selected_rebudget_preserves_custody_if_previous_release_refuses(session, monkeypatch):
+    from amplifier_web.host.session import SelectedProvider
+    value = await accepted(session)
+    original, counted = provider(session)
+    replacement, foreign = provider(session)
+    active = [original]
+    selected = SelectedProvider(original.original, {}, execution_adapter=lambda _: active[0])
+    await selected.request_budget(value)
+    previous = counted.count[0]
+    release = original.release_media_request
+    monkeypatch.setattr(original, "release_media_request", lambda *args, **kwargs: False)
+    active[0] = replacement
+    with pytest.raises(ValueError, match="could not be released"):
+        await selected.request_budget(value)
+    assert selected._release_bindings[0][2] is original
+    assert previous.messages and not foreign.count and not foreign.sent
+    monkeypatch.setattr(original, "release_media_request", release)
+    await selected.request_budget(value)
+    assert previous.messages == []
+    assert await selected.complete(value) == "done"
+    assert foreign.count[0] is foreign.sent[0] and foreign.sent[0].messages == []
+
+
+async def test_selected_invalid_rebudget_options_leave_existing_fit_releasable(session):
+    from amplifier_web.host.session import SelectedProvider
+    value = await accepted(session)
+    canonical = value.model_dump_json()
+    surface, seen = provider(session)
+    selected = SelectedProvider(surface, {})
+    await selected.request_budget(value)
+    private = seen.count[0]
+    with pytest.raises((ValueError, TypeError)):
+        await selected.request_budget(value, request_options=object())
+    assert selected._release_bindings and selected._release_bindings[0][2] is surface
+    assert not seen.sent and private.messages
+    assert selected.release_media_request(value, request_options={}) is True
+    assert private.messages == [] and surface.prepared == []
+    assert value.model_dump_json() == canonical
 
 
 async def test_asset_publication_without_settled_checkpoint_refuses_count(session):
@@ -629,7 +776,7 @@ async def test_actual_child_provider_receives_own_adopted_pixels_without_parent_
     paths = {name: Path(importlib.util.find_spec(
         "amplifier_module_" + name.replace("-", "_")).origin).parent
         for name in ("loop-live", "context-simple")}
-    seen, capabilities = [], []
+    seen, capabilities, counted, private_requests, child_ids = [], [], [], [], []
 
     class Provider:
         default_model = "fixture"
@@ -640,9 +787,12 @@ async def test_actual_child_provider_receives_own_adopted_pixels_without_parent_
             return {"v": 1, "positions": ["tool"]}
 
         async def request_budget(self, request, *, request_options=None):
+            counted.append(request)
             return {"input_tokens": 42}
 
         async def complete(self, request, **kwargs):
+            assert counted[-1] is request
+            private_requests.append(request)
             seen.append((request.model_copy(deep=True), id(request)))
             return "done"
 
@@ -668,6 +818,8 @@ async def test_actual_child_provider_receives_own_adopted_pixels_without_parent_
         assert cap is not session.caps[NAMESPACE]
         assert cap.session_id == coordinator.session_id
         source = await context.get_messages()
+        child_ids.append(coordinator.session_id)
+        assert base64.b64encode(session.raw).decode() not in str(source)
         request = ChatRequest(messages=[Message.model_validate(row) for row in source])
         from amplifier_web.host.session import SelectedProvider
         selected = self.root_provider or next(iter(providers.values()))
@@ -675,6 +827,11 @@ async def test_actual_child_provider_receives_own_adopted_pixels_without_parent_
             assert _provider_owner(selected.original) is _provider_owner(providers["fixture"])
         await selected.request_budget(request)
         assert await selected.complete(request) == "done"
+        assert request.messages and all(
+            getattr(block, "type", None) != "image"
+            for message in request.messages
+            for block in message.content if isinstance(message.content, list))
+        assert private_requests[-1].messages == []
         assert "base64" not in str(await context.get_messages())
         if mode == "nested" and coordinator.session_id == "child":
             registry = coordinator.get_capability("live.children")
@@ -706,11 +863,19 @@ async def test_actual_child_provider_receives_own_adopted_pixels_without_parent_
             await registry.resume("child", "Continue", parent)
         expected = 2 if mode in {"nested", "resumed"} else 1
         assert len(seen) == expected
+        assert len(counted) == len(private_requests) == expected
+        assert len({id(request) for request in private_requests}) == expected
         assert len({id(cap) for cap in capabilities}) == expected
         for request, _ in seen:
             block = next(block for message in request.messages for block in message.content
                          if getattr(block, "type", None) == "image")
             assert hashlib.sha256(base64.b64decode(block.source["data"])).hexdigest() == hashlib.sha256(session.raw).hexdigest()
+        for child_id in child_ids:
+            child_rows, _ = session.store.load(child_id)
+            assert child_rows and base64.b64encode(session.raw).decode() not in str(child_rows)
+            refs = [ref for row in child_rows
+                    for ref in (row.get("metadata") or {}).get(NAMESPACE, {}).get("refs", [])]
+            assert refs and all(ref["session_id"] == child_id for ref in refs)
     finally:
         _PERSISTENT.reset(token)
         await parent.cleanup()
