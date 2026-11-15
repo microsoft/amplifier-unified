@@ -505,7 +505,7 @@ def remove_owned(payload, identity, backend, config, lib, backend_error, binding
         try:
             if selected_only:
                 source_transfer.preflight(Path(payload['root']) / 'source.tar', payload['snapshot'])
-                retained = {**retention.verify_artifacts(archives), 'policy': 'selected-artifacts',
+                retained = {**retention.verify_artifacts(archives, archive_only=archive_only), 'policy': 'selected-artifacts',
                             'sourceSha256': payload['snapshot']['archive_sha256']}
                 retention.publish_record(destination / 'retention.json', retained)
             else:
@@ -652,7 +652,8 @@ def inspect_removal(payload):
             return held
         if mode == 'selected-artifacts':
             source_transfer.preflight(Path(payload['root']) / 'source.tar', payload['snapshot'])
-        checked = ({**retention.verify_artifacts(archives, publish=False), 'policy': mode,
+        checked = ({**retention.verify_artifacts(archives, publish=False,
+                    archive_only=accounting.get('archiveOnly') is True), 'policy': mode,
                     'sourceSha256': payload['snapshot']['archive_sha256']} if mode == 'selected-artifacts'
                    else retention.verify_retention(Path(payload['root']), archives, mode, publish=False))
         if checked != accounting:
