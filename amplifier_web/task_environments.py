@@ -364,7 +364,8 @@ def cleanup_refusal_code(exc):
     }.get(str(exc), 'cleanup_admission_refused')
 
 
-def invoke(config, home, row, action, args, *, _qualification=False):
+def invoke(config, home, row, action, args, *, _qualification=False,
+           _cleanup_gate=None, _cleanup_permit=None):
     """Bound helper output and lifetime; killing a helper is not command cancellation."""
     try:
         if not _qualification and action not in {'capacity', 'read', 'reconcile', 'job_read'}:
@@ -379,6 +380,13 @@ def invoke(config, home, row, action, args, *, _qualification=False):
         return helper_not_started(row, action)
     if action == 'execute' and args.get('durableJob') is True:
         action = 'job_start'
+    cleanup = (action in {'remove', 'finishCleanup'}
+               and config.get('backend', 'docker') == 'docker' and not config.get('remoteRunner'))
+    if cleanup and (_cleanup_gate is None or _cleanup_permit is None):
+        # Direct local callers cannot silently bypass the same-process proof.
+        # Incus/registered runners retain their existing transport, with no
+        # loaded-input attestation claim.
+        return cleanup_not_started(row)
     folder = (home / 'workspace-resources' / 'backend-probes' / config_key(config)
               if action == 'capacity' else storage.directory(home, row))
     if action == 'capacity':
@@ -417,7 +425,11 @@ def invoke(config, home, row, action, args, *, _qualification=False):
             else:
                 payload['image'] = prepared['image']
         environment = {'PATH': os.defpath, 'HOME': str(folder), 'LANG': 'C.UTF-8'}
-        process = subprocess.Popen([config['python'], '-I', '-B', str(helper)], stdin=subprocess.PIPE,
+        command = [config['python'], '-I', '-B', str(helper)]
+        if cleanup:
+            from .environment_cleanup_execution import BOOTSTRAP
+            command = [config['python'], '-I', '-B', '-c', BOOTSTRAP]
+        process = subprocess.Popen(command, stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=folder, env=environment, start_new_session=True)
     except (OSError, ValueError, KeyError, TypeError):
         # Popen raises only after its failed child was reaped; no helper ran.
@@ -427,7 +439,38 @@ def invoke(config, home, row, action, args, *, _qualification=False):
     drained = False
     deadline = time.monotonic() + (450 if action == 'exportArtifacts' else 650 if action == 'start' else 750 if action == 'finishCleanup' else 750 if action == 'remove' and row.get('preparedDependencies', {}).get('executionContract') else 650 if action == 'remove' and config.get('backend') == 'incus' else 300 if action == 'prepare' else 30 if action in {'read', 'capacity', 'reconcile', 'job_start', 'job_read', 'job_cancel'} else args.get('timeoutSeconds', 60) + 150)
     try:
-        process.stdin.write(json.dumps(payload).encode())
+        if cleanup:
+            try:
+                for frame in (_cleanup_gate.bootstrap(),
+                              {'nonce': _cleanup_gate.nonce, 'members': _cleanup_gate.members}):
+                    from .environment_cleanup_execution import send
+                    send(process, frame)
+                ready = _cleanup_gate.receive(process)
+                lifecycle = _cleanup_gate.validate(ready, process, config['python'])
+                _cleanup_gate.recheck()
+                # Callback durably records the permit, then repeats actual
+                # authority/owner/receipt/source/backend checks after the wait.
+                final_guard = _cleanup_permit(_cleanup_gate.evidence(ready), lifecycle)
+                _cleanup_gate.recheck()
+                _cleanup_gate.validate(ready, process, config['python'])
+            except Exception:
+                # No operation payload/permit was written. Reap the actual
+                # blocked child in finally before returning this positive proof.
+                return {**cleanup_not_started(row), 'code': 'cleanup_loaded_inputs_refused',
+                        'message': 'Cleanup was not permitted. The stopped environment is unchanged; inspect the qualified application and original receipt.'}
+            # Any failure from here can follow a delivered permit. Never report
+            # not_sent or replay from a missing write/acknowledgement.
+            payload = {'nonce': _cleanup_gate.nonce,
+                       'readySha256': _cleanup_gate.evidence(ready)['readySha256'],
+                       'payload': payload}
+        if cleanup:
+            def commit_guard():
+                final_guard()
+                _cleanup_gate.recheck()
+                _cleanup_gate.validate(ready, process, config['python'])
+            send(process, payload, maximum=65536, before_commit=commit_guard)
+        else:
+            process.stdin.write(json.dumps(payload).encode())
         process.stdin.close()
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ, output)
@@ -462,6 +505,19 @@ def invoke(config, home, row, action, args, *, _qualification=False):
             process.stdin.close()
         process.stdout.close()
         process.stderr.close()
+
+
+def invoke_cleanup(app, config, row, action, args, permit):
+    """Normal owned invocation, never a separate probe or imported-module census."""
+    if config.get('backend', 'docker') != 'docker' or config.get('remoteRunner'):
+        return invoke(config, app.data_dir, row, action, args)
+    try:
+        from .environment_cleanup_execution import Gate
+        gate = Gate(app)
+    except (AttributeError, OSError, ValueError, KeyError, TypeError):
+        return cleanup_not_started(row)
+    return invoke(config, app.data_dir, row, action, args,
+                  _cleanup_gate=gate, _cleanup_permit=permit)
 
 
 def capacity(app, config, *, _qualification=False):
@@ -794,7 +850,8 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
                 failure.get('phase') in {'preserving', 'verifying'}
                 and failure.get('code') in {'preservation_failed', 'archive_verification_failed'}
                 or failure.get('phase') == 'preserving' and failure.get('code') == 'retention_storage'
-                or failure.get('phase') == 'preparing' and failure.get('code') == 'cleanup_helper_not_started')
+                or failure.get('phase') == 'preparing' and failure.get('code') in {
+                    'cleanup_helper_not_started', 'cleanup_loaded_inputs_refused'})
             if not legacy and not fresh_cleanup and (not known_refusal or failure.get('effectAdmitted') is not False):
                 raise ValueError('The previous cleanup does not establish a safe pre-removal failure.')
             row = save(home, row, previousCleanup=row.get('previousCleanup') or prior)
@@ -869,6 +926,68 @@ def effect(app, row, action, args, config, request, admit, policy_admit=None):
                 request = app.operations.requests.finish(request, 'running', resourceId=row['id'],
                     message='The durable guest admission is being observed; it will not be replayed.')
                 result = invoke(config, home, row, action, args)
+            elif action in {'remove', 'finishCleanup'}:
+                previous = (app.operations.requests.read(sid, args['previousRequestId'])
+                            if action == 'finishCleanup' else None)
+
+                def recheck_cleanup(lifecycle):
+                    # Held under the same resource lock. A readiness wait does
+                    # not preserve authority, revisions or the original receipt.
+                    admit()
+                    current = get(home, sid, row['id'])
+                    if current != row or current.get('pendingRequest') != request['requestId']:
+                        raise ValueError('The environment changed. Inspect its current revision.')
+                    if app.operations.requests.read(sid, request['requestId']) != request:
+                        raise ValueError('The original removal admission cannot be rebound or replayed.')
+                    if (storage.observe(home, row)['observation'] != 'present'
+                            or config_key(resolve_configuration(app, row, config)) != row['backendKey']):
+                        raise ValueError('The retained environment directory or backend changed.')
+                    if previous is not None and app.operations.requests.read(sid, args['previousRequestId']) != previous:
+                        raise ValueError('The original cleanup owner or receipt changed.')
+                    require_resolved_removal(app, row, request['requestId'], legacy, fresh_cleanup)
+                    if fresh_cleanup:
+                        from .test_environment_fresh_cleanup import qualify
+                        # Exempt ONLY this exact live, loaded, payload-free waiter.
+                        # Other helpers/children/changed PID identities still hold.
+                        if qualify(app, {**row, 'environmentState': 'stopped'}, previous,
+                                   config, args, waiting_executor=lifecycle) != fresh_cleanup:
+                            raise ValueError('The fresh cleanup inspection changed before admission.')
+                    # Backend/executor inspection can block. Revalidate authority
+                    # after that wait, then the exact owner/journal/source adjacent
+                    # to permit delivery. Never treat an earlier guard as a lease.
+                    admit()
+                    if get(home, sid, row['id']) != row or app.operations.requests.read(sid, request['requestId']) != request:
+                        raise ValueError('The cleanup owner or admission changed after inspection.')
+                    from . import test_source_transfer
+                    test_source_transfer.preflight(storage.directory(home, row) / 'source.tar', row['snapshot'])
+                    if fresh_cleanup:
+                        from .test_environment_fresh_cleanup import local_executor_quiescent
+                        if not local_executor_quiescent(storage.directory(home, row),
+                                (row['universeId'], row['launchOperationId']), waiting_executor=lifecycle):
+                            raise ValueError('The local cleanup executor changed during inspection. No removal was started.')
+                    # Source hashing/process inspection can also take time.
+                    # The final guard must follow them, never precede them.
+                    admit()
+                    if (get(home, sid, row['id']) != row
+                            or app.operations.requests.read(sid, request['requestId']) != request
+                            or previous is not None and app.operations.requests.read(sid, args['previousRequestId']) != previous
+                            or config_key(resolve_configuration(app, row, config)) != row['backendKey']
+                            or storage.observe(home, row)['observation'] != 'present'):
+                        raise ValueError('The cleanup owner changed after its final wait.')
+                    require_resolved_removal(app, row, request['requestId'], legacy, fresh_cleanup)
+
+                def permit_cleanup(evidence, lifecycle):
+                    nonlocal request
+                    recheck_cleanup(lifecycle)
+                    request = app.operations.requests.finish(request, 'admitting', resourceId=row['id'],
+                        cleanupExecution={**evidence, 'status': 'permit-recorded',
+                                          'delivery': 'not-observed'})
+                    # Durability is not dispatch. Check again after persistence
+                    # and after every authority/backend wait before continuation.
+                    recheck_cleanup(lifecycle)
+                    return lambda: recheck_cleanup(lifecycle)
+
+                result = invoke_cleanup(app, config, row, action, args, permit_cleanup)
             else:
                 result = invoke(config, home, row, action, args)
         if result.get('code') == 'environment_helper_not_started' and result.get('effectAdmitted') is False:

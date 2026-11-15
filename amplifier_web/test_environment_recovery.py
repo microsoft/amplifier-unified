@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import closing
+import hashlib
 import json
 import os
 import re
@@ -31,6 +32,51 @@ def _retained_verification(row, original):
     from .environment_retention import validation_diagnostic
     diagnostic = validation_diagnostic(result['verification'])
     return {'status': 'recorded', **diagnostic} if diagnostic else {'status': 'unverified'}
+
+
+def _retained_execution(original):
+    """Historical normal-operation proof only; never starts/imports a helper."""
+    value = original.get('cleanupExecution')
+    if value is None:
+        return {'status': 'not_retained'}
+    try:
+        ready = value['ready']
+        fields = {'schema', 'status', 'delivery', 'serving', 'hostInstanceId',
+                  'installationSha256', 'qualificationSha256', 'wheelSha256', 'ready', 'readySha256'}
+        if (set(value) != fields or type(value['schema']) is not int or value['schema'] != 1 or value['status'] != 'permit-recorded'
+                or value['delivery'] != 'not-observed'
+                or set(ready) != {'schema', 'phase', 'nonce', 'pid', 'start', 'interpreter', 'prefix', 'members'}
+                or type(ready['schema']) is not int or ready['schema'] != 1 or ready['phase'] != 'loaded'
+                or not re.fullmatch('[a-f0-9]{64}', ready['nonce'])
+                or type(ready['pid']) is not int or ready['pid'] <= 0
+                or not re.fullmatch('[0-9]{1,24}', ready['start'])
+                or any(not isinstance(ready[key], str) or not ready[key].startswith('/')
+                       or len(ready[key]) > 2000 for key in ('interpreter', 'prefix'))
+                or len(ready['members']) != 2
+                or any(set(member) != {'name', 'bytes', 'sha256', 'capture'}
+                       or member['name'] != 'amplifier_web/' + name
+                       or type(member['bytes']) is not int or not 0 < member['bytes'] <= 262144
+                       or member['capture'] != 'executed-source-buffer'
+                       or not re.fullmatch('[a-f0-9]{64}', member['sha256'])
+                       for member, name in zip(ready['members'],
+                           ('environment_retention.py', 'test_environment_worker.py')))
+                or set(value['serving']) != {'version', 'revision', 'instanceId'}
+                or not re.fullmatch(r'\d+\.\d+\.\d+', value['serving']['version'])
+                or not re.fullmatch('[a-f0-9]{40}', value['serving']['revision'])
+                or any(not isinstance(identity, str) or not 0 < len(identity) <= 200
+                       for identity in (value['hostInstanceId'], value['serving']['instanceId']))
+                or any(not re.fullmatch('[a-f0-9]{64}', value[key])
+                       for key in ('installationSha256', 'qualificationSha256', 'wheelSha256', 'readySha256'))
+                or hashlib.sha256(json.dumps(ready, sort_keys=True, separators=(',', ':'),
+                    allow_nan=False).encode()).hexdigest() != value['readySha256']
+                or len(json.dumps(value, allow_nan=False).encode()) > 3072):
+            return {'status': 'unverified'}
+        # The writer stores payload-free fields only. Keep historical evidence
+        # distinct from current import bytes, process liveness or dispatch ACK.
+        return {'status': 'retained_permit', 'currentExecutor': 'not_observed',
+                'dispatch': 'not_established', 'proof': value}
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return {'status': 'unverified'}
 
 
 def _removal_page(app, sid, rid, offset, limit):
@@ -187,6 +233,8 @@ def read_removal(app, args, origin, caller, *, listing=False):
                     raise AppError('Original removal record is unavailable.', 404) from None
                 if (not isinstance(original, dict) or original.get('sessionId') != sid or original.get('requestId') != args['originalRequestId']
                         or original.get('action') != 'workspace.environments.remove'
+                           and not (original.get('action') == 'workspace.environments.finishCleanup'
+                                    and isinstance(original.get('cleanupExecution'), dict))
                         or original.get('resourceId') not in (None, rid)):
                     raise AppError('Original removal is not bound to this resource.', 409)
                 state = original.get('state')
@@ -217,6 +265,8 @@ def read_removal(app, args, origin, caller, *, listing=False):
                     'continuationAvailable': available,
                     'riskDecisionAvailable': False,
                     'verification': _retained_verification(row, original),
+                    **({'loadedInputs': _retained_execution(original)}
+                       if 'cleanupExecution' in original else {}),
                 }
                 if not legacy and row.get('environmentState') == 'stopped':
                     from .test_environment_fresh_cleanup import binding
