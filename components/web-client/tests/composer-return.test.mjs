@@ -42,7 +42,7 @@ function editor(text='First'){
  view.dispatch(view.state.tr.setSelection(TextSelection.atEnd(view.state.doc)));
  return view;
 }
-function event(overrides={}){return {key:'Enter',cancelable:true,prevented:false,preventDefault(){this.prevented=true;},...overrides};}
+function event(overrides={}){return {key:'Enter',cancelable:true,prevented:false,defaultPrevented:false,preventDefault(){this.prevented=this.defaultPrevented=true;},...overrides};}
 const before=(view,overrides={},options={})=>composerReturnBeforeInput(view,event({inputType:'insertParagraph',...overrides}),options);
 test('desktop plain Enter sends exactly once; repeated Enter cannot submit another draft',()=>{
  const view=editor();let sends=0;
@@ -70,48 +70,129 @@ test('noncancelable beforeinput leaves editing to the browser, with no custom tr
  assert.equal(input.prevented,false);assert.ok(view.state.doc.eq(doc));
  assert.equal(before(view,{inputType:'insertText'}),false);
 });
-test('a platform-deferred native Return finishes through ProseMirror, not a second custom beforeinput edit',()=>{
- const view=editor(),doc=view.state.doc,input=event({inputType:'insertParagraph'});let sends=0;
- assert.equal(composerReturnBeforeInput(view,input,{nativeReturnPending:true}),false);
- assert.equal(input.prevented,false);assert.ok(view.state.doc.eq(doc));
- // The DOM observer/platform fallback invokes the editor key handler with a
- // different synthesized event. Its editing-only mode consumes one operation.
- composerReturnKeyDown(view,event(),{mode:'newline',onSend:()=>sends++});
- assert.equal(view.state.doc.childCount,2);assert.equal(sends,0);
-});
-test('event routing lets ProseMirror protect and synchronize native keydown; synthesized edits never send',()=>{
- const view=editor();let sends=0;
- const events=composerReturnEvents({mode:()=>'desktop-send',onSend:()=>sends++});
- const native=event();
- assert.equal(events.observeKeyDown(view,native),false,'ProseMirror runs its guards/flush first');
- assert.equal(native.prevented,false);
- assert.equal(events.keyDown(view,event()),true,'A separate synthesized Enter is editing-only');
- assert.equal(view.state.doc.childCount,2);assert.equal(sends,0);
- // DOM flush can synthesize an editing event before passing the original
- // keydown through. It must not consume the original event identity.
- assert.equal(events.keyDown(view,native),true);assert.equal(sends,1);
- assert.equal(events.keyDown(view,native),true);assert.equal(sends,1,'Identity is usable only once');
-});
-test('deferred native keydown+beforeinput has one editing owner and bare beforeinput retains rich semantics',()=>{
+// Adapter-only simulated prelude, NOT browser/PM acceptance. Mounted browser
+// cases use real PM 1.42.6 and assert exact document, caret, undo and native events.
+function routedEditor(options={}){
+ const view=editor(options.text),seen=[];let reject=false,beforeAdmission=null,sends=0,admitTwice=false;
+ class Keyboard{
+  constructor(type,init){Object.assign(this,init);this.type=type;this.defaultPrevented=false;}
+  preventDefault(){this.defaultPrevented=true;}
+ }
+ const events=composerReturnEvents({mode:()=>options.mode||'newline',editable:()=>options.editable!==false,onSend:()=>sends++});
+ view.dom={ownerDocument:{defaultView:{KeyboardEvent:Keyboard}},dispatchEvent(input){
+  seen.push(input);
+  if(events.observeKeyDown(view,input)||reject||view.composing)return true;
+  assert.equal(input.keyCode,0,'Relay does not arm legacy Enter13 platform scheduler');
+  beforeAdmission?.();
+  if(events.keyDown(view,input))input.preventDefault();
+  if(admitTwice)events.keyDown(view,input);
+  return !input.defaultPrevented;
+ }};
+ return {view,events,seen,sends:()=>sends,reject:value=>{reject=value;},beforeAdmission:fn=>{beforeAdmission=fn;},admitTwice:()=>{admitTwice=true;}};
+}
+test('safe Return preserves native keydown and owns exactly one cancelable editing event after PM admission',()=>{
  for(const inputType of ['insertParagraph','insertLineBreak']){
-  const view=editor(),doc=view.state.doc;let sends=0;
-  const events=composerReturnEvents({mode:()=>'desktop-send',onSend:()=>sends++});
-  events.observeKeyDown(view,event());
+  const {view,events,seen,sends}=routedEditor(),doc=view.state.doc,key=event({keyCode:13});
+  assert.equal(events.observeKeyDown(view,key),true);
+  assert.equal(key.prevented,false,'Do not cancel mobile-safe keydown');
+  assert.ok(view.state.doc.eq(doc),'Admission is not an edit');
+  assert.equal(seen.length,1);assert.equal(seen[0].bubbles,false);
   const input=event({inputType});
-  assert.equal(events.beforeInput(view,input),false,'Native edit must reach ProseMirror');
-  assert.equal(input.prevented,false);assert.ok(view.state.doc.eq(doc));
-  events.keyDown(view,event());assert.equal(view.state.doc.childCount,2);assert.equal(sends,0);
-  assert.equal(events.beforeInput(view,event({inputType})),true,'A later bare edit is handled normally');
-  assert.equal(view.state.doc.childCount,3);assert.equal(sends,0);
+  assert.equal(events.beforeInput(view,input),true);
+  assert.equal(input.prevented,true);assert.equal(view.state.doc.childCount,2);assert.equal(sends(),0);
  }
 });
-test('a synthesized flush edit cannot consume a platform-deferred native Return beforeinput',()=>{
- const view=editor(),events=composerReturnEvents({mode:()=>'desktop-send'});
- events.observeKeyDown(view,event());
- events.keyDown(view,event()); // Flush of a prior native mutation, not this Return
- const doc=view.state.doc,input=event({inputType:'insertParagraph'});
- assert.equal(events.beforeInput(view,input),false);
- assert.equal(input.prevented,false);assert.ok(view.state.doc.eq(doc));
+test('Ctrl+Enter executes rich continuation after admission even when the native chord has no editing default',()=>{
+ const {view,events,sends}=routedEditor(),key=event({keyCode:13,ctrlKey:true});
+ events.observeKeyDown(view,key);
+ assert.equal(key.prevented,true);assert.equal(view.state.doc.childCount,2);assert.equal(sends(),0);
+});
+test('safe Meta+Enter retains explicit continuation ownership without relying on native default',()=>{
+ const {view,events,sends}=routedEditor(),key=event({keyCode:13,metaKey:true});
+ events.observeKeyDown(view,key);assert.equal(key.defaultPrevented,true);
+ assert.equal(view.state.doc.childCount,2);assert.equal(sends(),0);
+});
+test('admitted native code Return has one beforeinput owner, exact indentation and usable undo',()=>{
+ const {view,events,sends}=routedEditor({text:'```js\n  code\n```'}),doc=view.state.doc;
+ const key=event({keyCode:13});events.observeKeyDown(view,key);
+ assert.equal(key.prevented,false);assert.ok(view.state.doc.eq(doc));
+ const input=event({inputType:'insertParagraph'});
+ assert.equal(events.beforeInput(view,input),true);assert.equal(input.prevented,true);
+ assert.equal(view.state.doc.textContent,'  code\n  ');
+ assert.equal(view.state.doc.childCount,1);assert.equal(sends(),0);
+ const after=view.state.doc;
+ assert.ok(undo(view.state,view.dispatch));assert.ok(view.state.doc.eq(doc));
+ assert.ok(redo(view.state,view.dispatch));assert.ok(view.state.doc.eq(after));
+});
+test('desktop Send requires exact admitted DOM relay; a separate synthesized flush command never acquires Send',()=>{
+ const routed=routedEditor({mode:'desktop-send'}),{view,events}=routed;
+ routed.beforeAdmission(()=>events.keyDown(view,event())); // Reconciliation of older native edit.
+ const key=event({keyCode:13});events.observeKeyDown(view,key);
+ assert.equal(key.prevented,true);assert.equal(routed.sends(),1);
+ assert.equal(view.state.doc.childCount,2,'Old native edit still uses continuation');
+ assert.equal(events.keyDown(view,event()),true);assert.equal(routed.sends(),1);
+});
+test('relay admission is single-use and original event cancellation does not leak to ordinary safe Return',()=>{
+ const routed=routedEditor({mode:'desktop-send'}),key=event({keyCode:13});
+ routed.admitTwice();routed.events.observeKeyDown(routed.view,key);
+ assert.equal(routed.seen.length,1,'One relay, no recursive redispatch');
+ assert.equal(routed.sends(),1,'Revisiting exact relay cannot run callback twice');
+ assert.equal(key.defaultPrevented,true);
+ const safe=routedEditor(),native=event({keyCode:13});
+ safe.events.observeKeyDown(safe.view,native);
+ assert.equal(safe.seen[0].defaultPrevented,true,'Admission relay is consumed by PM');
+ assert.equal(native.defaultPrevented,false,'Relay cancellation is not native keydown cancellation');
+});
+test('rejected PM near-composition admission leaves the original confirmation and paired edit native',()=>{
+ const routed=routedEditor({mode:'desktop-send'}),{view,events}=routed,doc=view.state.doc;
+ routed.reject(true);
+ const key=event({keyCode:13});assert.equal(events.observeKeyDown(view,key),true);
+ assert.equal(key.prevented,false);
+ const input=event({inputType:'insertParagraph'});assert.equal(events.beforeInput(view,input),false);
+ assert.equal(input.prevented,false);assert.ok(view.state.doc.eq(doc));assert.equal(routed.sends(),0);
+ events.release();routed.reject(false);
+ events.observeKeyDown(view,event({keyCode:13}));assert.equal(routed.sends(),1,'Later deliberate Enter works');
+});
+test('bare beforeinput receives PM admission/flush but never Send, and noncancelable events stay native',()=>{
+ const routed=routedEditor({mode:'desktop-send'}),{view,events}=routed;
+ const input=event({inputType:'insertParagraph'});
+ assert.equal(events.beforeInput(view,input),true);assert.equal(view.state.doc.childCount,2);
+ assert.equal(routed.sends(),0);
+ const doc=view.state.doc,noncancelable=event({inputType:'insertLineBreak',cancelable:false});
+ assert.equal(events.beforeInput(view,noncancelable),false);assert.ok(view.state.doc.eq(doc));assert.equal(routed.sends(),0);
+ routed.reject(true);
+ assert.equal(events.beforeInput(view,event({inputType:'insertParagraph'})),false);assert.ok(view.state.doc.eq(doc));
+});
+test('causal ownership is released on native input/key-up/focus/composition boundaries, never a timer',()=>{
+ for(const releaseAfter of ['handled-keydown','admission']){
+  const routed=routedEditor({mode:releaseAfter==='handled-keydown'?'desktop-send':'newline'}),{events,view}=routed;
+  events.observeKeyDown(view,event({keyCode:13}));
+  events.release();routed.reject(false);
+  const beforeDoc=view.state.doc,input=event({inputType:'insertParagraph'});
+  assert.equal(events.beforeInput(view,input),true);
+  assert.equal(input.prevented,true);assert.notDeepEqual(view.state.doc.toJSON(),beforeDoc.toJSON(),'Later bare edit is not swallowed');
+ }
+});
+test('one-shot PM composition veto survives intervening text input and key-up until its Return intent',()=>{
+ const routed=routedEditor(),{view,events}=routed,doc=view.state.doc;
+ routed.reject(true);events.observeKeyDown(view,event({keyCode:13}));
+ routed.reject(false); // PM's real Safari veto is consumed once, not persistent.
+ events.beforeInput(view,event({inputType:'insertText'}));
+ events.release(view,{type:'input'});events.release(view,{type:'keyup'});
+ const input=event({inputType:'insertParagraph'});
+ assert.equal(events.beforeInput(view,input),false);assert.equal(input.defaultPrevented,false);
+ assert.ok(view.state.doc.eq(doc));
+ const deliberate=event({keyCode:13,ctrlKey:true});events.observeKeyDown(view,deliberate);
+ assert.equal(deliberate.defaultPrevented,true);assert.equal(view.state.doc.childCount,2);
+});
+test('composing/229, disabled and noncancelable keydown never relay or start custom edit',()=>{
+ for(const override of [{isComposing:true},{keyCode:229},{cancelable:false},{defaultPrevented:true}]){
+  const {view,events,seen,sends}=routedEditor(),doc=view.state.doc,key=event(override);
+  assert.equal(events.observeKeyDown(view,key),true);assert.equal(seen.length,0);
+  assert.ok(view.state.doc.eq(doc));assert.equal(sends(),0);
+ }
+ const {events,seen,sends}=routedEditor({editable:false});
+ events.observeKeyDown({},event({keyCode:13}));assert.equal(seen.length,0);assert.equal(sends(),0);
 });
 test('IME, legacy 229, disabled and read-only adapters do not edit, prevent native commit or send',()=>{
  for(const overrides of [{isComposing:true},{keyCode:229},{viewComposing:true},{editable:false}]){

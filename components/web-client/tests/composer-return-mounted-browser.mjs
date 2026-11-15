@@ -200,7 +200,7 @@ async function richReturn(platform,kind){
   await editor.evaluate(node=>{
    window.returnEventLog=[];
    for(const type of ['keydown','beforeinput','input'])node.addEventListener(type,event=>{
-    window.returnEventLog.push({type,key:event.key,inputType:event.inputType,prevented:event.defaultPrevented,cancelable:event.cancelable,trusted:event.isTrusted});
+    window.returnEventLog.push({type,key:event.key,keyCode:event.keyCode,inputType:event.inputType,prevented:event.defaultPrevented,cancelable:event.cancelable,trusted:event.isTrusted});
    });
   });
   await editor.press('Enter');await settle(page);
@@ -208,13 +208,13 @@ async function richReturn(platform,kind){
   const proof={case:platform+'-'+kind,before,after,events};report.checks.push(proof);
   assert.equal(after.sameEditor,true);assert.deepEqual(after.sends,[]);
   assert.ok(events.some(event=>event.type==='keydown'&&event.key==='Enter'&&event.trusted),'Actual Chromium keydown reaches the mounted editor');
-  if(platform==='touch'){
-   assert.ok(events.some(event=>event.type==='keydown'&&event.key==='Enter'&&event.prevented));
-   assert.equal(events.filter(event=>event.type==='beforeinput'&&['insertParagraph','insertLineBreak'].includes(event.inputType)).length,0,'Handled keydown cancels native paragraph edit');
-  }else{
-   assert.ok(events.some(event=>event.type==='keydown'&&event.key==='Enter'&&!event.prevented),'Pinned PM platform-deferred path was entered');
-   assert.ok(events.some(event=>event.type==='beforeinput'&&['insertParagraph','insertLineBreak'].includes(event.inputType)&&!event.prevented),'Paired native edit stays PM-owned');
-  }
+  // The compatibility adapter keeps real safe-mode keydown native, rather than
+  // arming PM's legacy iOS/Android deferred Enter. The real cancelable editing
+  // event owns the rich transaction; its native DOM mutation must be canceled.
+  assert.ok(events.some(event=>event.type==='keydown'&&event.key==='Enter'&&event.trusted&&!event.prevented),'Safe Return does not cancel mobile keydown');
+  assert.ok(events.some(event=>event.type==='keydown'&&event.key==='Enter'&&!event.trusted&&event.keyCode===0),'Exact relay traverses the pinned PM guard/flush');
+  assert.equal(events.filter(event=>event.type==='beforeinput'&&['insertParagraph','insertLineBreak'].includes(event.inputType)).length,1,'One native editing intent');
+  assert.ok(events.some(event=>event.type==='beforeinput'&&event.cancelable&&event.prevented),'Rich edit cancels the native beforeinput default');
   if(kind==='list'){
    assert.equal(after.document.content.length,1);
    const list=after.document.content[0];assert.equal(list.type,'bullet_list');

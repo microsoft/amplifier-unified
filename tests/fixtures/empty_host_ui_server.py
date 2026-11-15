@@ -453,6 +453,45 @@ async def serve(home, *, pre_import=None):
             return web.json_response({'ok': True})
         app.router.add_post('/fixture/composer-eligibility', composer_eligibility)
 
+        async def conversation_error(request):
+            if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+                raise web.HTTPForbidden()
+            data = await request.json()
+            if set(data) != {'sessionId'}:
+                raise web.HTTPBadRequest()
+            service = app['service']
+            session = service._session(data['sessionId'])
+            # Presentation seed only, confined to disposable test history.
+            # No recovery, retry, provider or feedback operation runs.
+            session.update(status='error', error='Synthetic context-limit failure.',
+                           errorAt=time.time(), failure={
+                'category': 'context_limit',
+                'summary': 'Synthetic conversation reached its context limit.',
+                'guidance': 'Saved messages are kept. Review recovery options. ' + 'long-provider-detail-' * 25,
+                'recordedAt': time.time(),
+            })
+            service._publish()
+            return web.json_response({'ok': True})
+        app.router.add_post('/fixture/conversation-error', conversation_error)
+
+        async def layout_status(request):
+            if request.headers.get('Authorization') != 'Bearer fixture-browser-control-token':
+                raise web.HTTPForbidden()
+            data = await request.json()
+            if set(data) != {'sessionId', 'status'} or data['status'] not in {'loading', 'retrying', 'ready'}:
+                raise web.HTTPBadRequest()
+            service = app['service']
+            session = service._session(data['sessionId'])
+            session['messages'] = []
+            session['historyError'] = (None if data['status'] == 'ready' else
+                'Synthetic history read is unavailable. Original files are unchanged.')
+            service.event_log_view.windows.status[session['id']] = {
+                'status': data['status'], 'current': data['status'] == 'ready'}
+            session['workProjection'] = dict(service.event_log_view.windows.status[session['id']])
+            service._publish()
+            return web.json_response({'ok': True})
+        app.router.add_post('/fixture/layout-status', layout_status)
+
         async def provider_preference(request):
             preferred_model[0] = (await request.json())['model']
             save_provider_settings()

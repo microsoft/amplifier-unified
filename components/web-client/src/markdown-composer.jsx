@@ -50,9 +50,8 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
      event.preventDefault();refresh.current();requestAnimationFrame(()=>toolbar.current?.querySelector('button:not(:disabled),select')?.focus());return true;
     }
     if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'&&!view.state.selection.empty){event.preventDefault();openLink();return true;}
-    // ProseMirror also synthesizes Enter while reconciling native DOM paragraph
-    // edits (including non-cancelable beforeinput). Only the same observed DOM
-    // keydown may request Send; generated editing commands always keep writing.
+    // PM admits exact DOM relays after its composition guard/flush. Other Enter
+    // commands synthesized by native reconciliation are always editing-only.
     if(returnEvents.keyDown(view,event))return true;
     return false;
    },
@@ -61,14 +60,16 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
     // keymaps (whose Enter binding would otherwise split a paragraph).
     // DOM handlers do not prevent the native default merely by returning true.
     keydown(view,event){
-     // Do not consume Return here: ProseMirror must first synchronize pending
-     // native edits and apply its platform-specific post-composition protection.
      return returnEvents.observeKeyDown(view,event);
     },
     beforeinput(view,event){
      // Bare editing events are never consent to send, even on desktop.
      return returnEvents.beforeInput(view,event);
     },
+    keyup:returnEvents.release,
+    input:returnEvents.release,
+    blur:returnEvents.release,
+    compositionstart:returnEvents.release,
     contextmenu(){
      // Keep native copy/paste/spelling. Our same selection toolbar remains
      // available after the native menu closes; Alt+F10 focuses it directly.

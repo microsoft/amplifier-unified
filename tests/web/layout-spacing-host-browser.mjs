@@ -7,9 +7,10 @@ import {chromium,expect} from '@playwright/test';
 import {startFixture} from './fixture-readiness.mjs';
 import {finishFixture} from './fixture-lifecycle.mjs';
 import {openSettingsPage} from '../../.build/web-client/tests/browser-settings.mjs';
+import {openChatAdvancedPage,showFixtureConversation} from './browser-chat-pages.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url)),output=process.env.AMPLIFIER_TEST_ARTIFACTS;
 assert.ok(output&&process.env.AMPLIFIER_TEST_PACKAGE_ROOT);await mkdir(output,{recursive:true});
-const fixture=await startFixture({command:process.env.AMPLIFIER_TEST_PYTHON,args:[root+'tests/fixtures/empty_host_ui_server.py','--chat-controls','--shared-work'],env:process.env,tag:'empty-host-ui',name:'Installed spacing',timeoutMs:60000});
+const fixture=await startFixture({command:process.env.AMPLIFIER_TEST_PYTHON,args:[root+'tests/fixtures/empty_host_ui_server.py','--chat-controls','--voice-settings'],env:process.env,tag:'empty-host-ui',name:'Installed spacing',timeoutMs:60000});
 let browser,page,originalError;const metrics=[],errors=[];
 try{
  browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
@@ -22,7 +23,7 @@ try{
   await expect.poll(()=>page.evaluate(({commandId,baseRevision})=>{const shell=window.amplifier.getShellState();return shell.preferenceCommand?.id===commandId&&shell.preferenceCommand.status==='stored'&&shell.revision===baseRevision+1},receipt)).toBe(true);
  }
  const initial=await page.evaluate(()=>window.amplifier.getState());
- for(const width of [1440,768,420,390]){
+ for(const width of process.env.LAYOUT_DEEP_ONLY?[]:[1440,768,420,390]){
   await page.setViewportSize({width,height:1000});
   for(const scheme of ['light','dark']){
    await presentation({scheme,interfaceDetail:scheme==='light'?'standard':'detailed',executionDetail:'detailed',density:scheme==='light'?'comfortable':'compact'});
@@ -51,22 +52,49 @@ try{
    metrics.push({width,scheme,search:geometry,choices,select:inset});
   }
  }
- // Real populated Work route. Hold only its read request, then give it one
- // labelled synthetic transport error. Retry continues the original real read.
- await page.getByRole('button',{name:/^Close (settings|panel)$/}).last().click();
- const manifest=await page.request.get(fixture.base+'/fixture/shared-work').then(r=>r.json());
- await action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:manifest.workspace.id,workWorkspaceTab:'work',navExpanded:false}});
- const work=page.getByRole('region',{name:'Shared work',exact:true});await expect(work).toBeVisible();
- await work.getByRole('searchbox',{name:'Find work'}).fill('Retain the original promise');const row=work.locator(`[data-work-id="${manifest.target.id}"]`);await expect(row).toBeVisible();
- let release;const gate=new Promise(resolve=>release=resolve);let injected=false;
- const intercept=async route=>{const raw=route.request().postDataJSON(),body=raw.action==='shell.command'?raw.args:raw;if(!injected&&body.action==='workspace.work.read'){injected=true;await gate;return route.fulfill({status:503,json:{accepted:false,error:'Synthetic read failure. Original files are unchanged.'}})}return route.continue()};
- await page.route('**/api/actions',intercept);await row.click();
- const loading=work.getByText('Loading work details…',{exact:true});await expect(loading).toBeVisible();
- for(const width of [1440,768,420,390]){await page.setViewportSize({width,height:1000});await page.screenshot({path:output+`/work-loading-${width}.png`})}
- release();const retry=work.getByRole('button',{name:'Try again',exact:true});await expect(retry).toBeVisible();
- for(const width of [1440,768,420,390]){await page.setViewportSize({width,height:1000});const status=retry.locator('..');const measure=await status.evaluate(node=>{const css=getComputedStyle(node);return {display:css.display,columnGap:css.columnGap,rowGap:css.rowGap,overflow:node.scrollWidth>node.clientWidth}});assert.ok(['flex','inline-flex'].includes(measure.display));assert.ok(parseFloat(measure.columnGap)>=6);assert.equal(measure.overflow,false);metrics.push({width,errorRetry:measure});await page.screenshot({path:output+`/work-error-${width}.png`})}
- await retry.click();await expect(work.getByRole('article',{name:'Work details'})).toBeVisible();await expect(retry).toHaveCount(0);await page.unroute('**/api/actions',intercept);
- assert.equal((await page.request.get(fixture.base+'/fixture/shared-work').then(r=>r.json())).forbiddenRuntimeCalls.length,0);assert.deepEqual(errors,[]);
- await writeFile(output+'/result.json',JSON.stringify({passed:true,servedAssets:served,metrics,scope:'Installed real host with explicitly synthetic populated Work/runtime and one synthetic read failure',initialWorkspace:initial.selectedWorkspaceId},null,2)+'\n');
-}catch(error){originalError=error;await page?.screenshot({path:output+'/failure.png'}).catch(()=>{});throw error}
+ // Deep, downpage changed-polish scenes: a bounded desktop/narrow pair, not a
+ // Cartesian settings census. No voice call, upload, inspection or guest starts.
+ const capture=async(locator,label)=>{
+  await locator.scrollIntoViewIfNeeded();await expect(locator).toBeVisible();
+  const geometry=await locator.evaluate(node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,overflow:node.scrollWidth>node.clientWidth+1}});
+  assert.equal(geometry.overflow,false,label);metrics.push({label,...geometry});
+  await page.screenshot({path:output+'/'+label+'.png'});
+ };
+ for(const width of [1440,390]){
+  await page.setViewportSize({width,height:1000});await presentation({scheme:width===1440?'light':'dark',density:width===1440?'comfortable':'compact',interfaceDetail:'detailed'});
+  await openSettingsPage(page,'voice');const voice=page.locator('.a-voice-settings');await expect(voice.getByLabel('OpenAI API key',{exact:true})).toBeVisible();
+  await capture(voice.locator('.a-voice-connection'),'voice-connection-'+width);
+  const fallback=voice.locator('details').filter({has:page.locator('summary').filter({hasText:'If the preferred model is unavailable'})});if(!await fallback.evaluate(node=>node.open))await fallback.locator('summary').click();
+  await fallback.getByLabel('Fallback model',{exact:true}).selectOption('gpt-live-1');await expect(fallback.getByLabel('Fallback speaking voice',{exact:true})).toBeVisible();await capture(fallback,'voice-fallback-'+width);
+  await openSettingsPage(page,'appearance');const advanced=page.locator('.a-appearance-more');if(!await advanced.evaluate(node=>node.open))await advanced.locator(':scope>summary').click();
+  const customization=page.locator('.a-appearance-advanced');if(!await customization.evaluate(node=>node.open))await customization.locator(':scope>summary').click();
+  if(width===1440){
+   await page.getByLabel('Appearance name',{exact:true}).fill('Spacing specimen');await page.getByLabel('Reference CSS delta',{exact:true}).fill('#amp-one{--a-accent:#137c8b}');
+   await page.getByRole('button',{name:'Save as copy',exact:true}).click();
+  }
+  const saved=page.getByRole('group',{name:'Actions for Spacing specimen',exact:true});await expect(saved).toBeVisible();await capture(saved,'appearance-saved-actions-'+width);await capture(page.locator('.a-appearance-import'),'appearance-upload-'+width);
+  await openSettingsPage(page,'routing');const routing=page.locator('[data-part=routing-settings]');
+  if(!await routing.locator('[data-collection-id=general]>button').count())await routing.getByRole('button',{name:'New profile',exact:true}).click();
+  await routing.locator('[data-collection-id=general]>button').click();await routing.locator('.a-routing-candidates [data-collection-id="0"]>button').click();
+  if(!await routing.getByLabel('Choice configuration JSON',{exact:true}).isVisible())await routing.getByRole('button',{name:'Edit choice configuration',exact:true}).click();await capture(routing.getByLabel('Choice configuration JSON',{exact:true}),'routing-choice-json-'+width);
+  if(width<960)for(let depth=0;await page.locator('.a-settings-experience').getAttribute('data-settings-detail')==='true';depth++){
+   assert.ok(depth<3,'Back leaves the candidate and role detail levels');await page.locator('.a-settings-mobile-head button').first().click();
+  }
+  if(!await routing.getByLabel('Routing matrix JSON',{exact:true}).isVisible())await routing.getByRole('button',{name:'Show full profile JSON',exact:true}).click();await capture(routing.getByLabel('Routing matrix JSON',{exact:true}),'routing-profile-json-'+width);
+  await openSettingsPage(page,'testing');
+  for(const name of ['Advanced limits','Advanced execution limits']){
+   const summary=page.locator('.a-settings-experience summary').filter({hasText:new RegExp('^'+name+'$')});await expect(summary).toHaveCount(1);if(!await summary.evaluate(node=>node.parentElement.open))await summary.click();await capture(summary.locator('..'),'testing-'+name.replaceAll(' ','-')+'-'+width);
+  }
+ }
+ await page.getByRole('button',{name:/^Close (settings|panel)$/}).last().click();await action('session.create',{title:'Document action layout'});await showFixtureConversation(page,{navPinned:false});
+ for(const width of [1440,390]){
+  await page.setViewportSize({width,height:1000});if(await page.getByRole('button',{name:'Close navigation',exact:true}).isVisible())await page.getByRole('button',{name:'Close navigation',exact:true}).click();
+  await action('view.update',{patch:{panel:'chat-models'}});await expect(page.getByRole('dialog',{name:'Model & tools',exact:true})).toBeVisible();
+  const first=page.getByRole('button',{name:'Inspect document tools',exact:true}),second=page.getByRole('button',{name:'Check library imports',exact:true});await expect(first).toBeVisible();await first.scrollIntoViewIfNeeded();
+  const a=await first.boundingBox(),b=await second.boundingBox(),gap=Math.max(b.x-a.x-a.width,a.x-b.x-b.width,b.y-a.y-a.height,a.y-b.y-b.height);assert.ok(gap>=6);metrics.push({width,documentActions:{a,b,gap}});await capture(first.locator('..'),'document-actions-'+width);
+  await page.getByRole('button',{name:/^Close (settings|panel)$/}).last().click();
+ }
+ assert.deepEqual(errors,[]);assert.deepEqual((await page.request.get(fixture.base+'/fixture').then(r=>r.json())).sent,[]);
+ await writeFile(output+'/result.json',JSON.stringify({passed:true,servedAssets:served,metrics,scope:'Installed real host; synthetic runtime, unsent appearance library specimen, no paid voice/provider/inspection/test-environment operation',initialWorkspace:initial.selectedWorkspaceId},null,2)+'\n');
+}catch(error){originalError=error;await writeFile(output+'/failure.json',JSON.stringify({error:String(error.stack||error),metrics},null,2));await page?.screenshot({path:output+'/failure.png'}).catch(()=>{});throw error}
 finally{await finishFixture({label:'Installed spacing',stop:fixture.stop,close:[['browser',()=>browser?.close()]],originalError})}

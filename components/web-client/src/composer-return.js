@@ -30,12 +30,8 @@ export function composerReturnKeyDown(view,event,{editable=true,mode='newline',o
  return true;
 }
 
-export function composerReturnBeforeInput(view,event,{editable=true,nativeReturnPending=false}={}){
+export function composerReturnBeforeInput(view,event,{editable=true}={}){
  if(!editable||composingReturn(view,event)||!['insertParagraph','insertLineBreak'].includes(event.inputType))return false;
- // A DOM Return that ProseMirror deferred (iOS/Android) must finish through its
- // native edit/reconciliation path. A second custom edit here would race its
- // own deferred Enter fallback. That synthesized command is editing-only.
- if(nativeReturnPending)return false;
  // A non-cancelable edit must go through the browser/ProseMirror DOM observer.
  // Applying our own transaction as well would insert twice. Neither route sends.
  if(!event.cancelable)return false;
@@ -44,29 +40,76 @@ export function composerReturnBeforeInput(view,event,{editable=true,nativeReturn
  return true;
 }
 
-// Preserve ProseMirror's composition guards, DOM flush and deferred platform
-// paths. Event identity only distinguishes observed DOM input from editor-made
-// commands; it says nothing about physical versus virtual keyboards.
+// Compatibility boundary for pinned prosemirror-view 1.42.6:
+// Enter13 is discarded on Android (even Ctrl+Enter); iOS schedules a fallback
+// that can follow an already-applied inline code newline. Route an identity-tagged
+// DOM relay with no legacy key code through PM's normal composition/near-
+// composition guard and pending-edit flush, without arming those Enter13 paths.
+// This is not keyboard detection. Ordinary newline Return leaves KEYDOWN native
+// and owns the cancelable BEFOREINPUT edit, preserving mobile keyboard defaults.
+// Requalify this boundary, including IME and rich undo, on PM upgrades.
 export function composerReturnEvents({editable=()=>true,mode=()=>'newline',onSend}={}){
- const observed=new WeakSet();
- let pending=false;
+ const relays=new WeakMap();
+ let pending=null;
+ const relay=(view,source,run)=>{
+  const Keyboard=view.dom.ownerDocument.defaultView.KeyboardEvent;
+  const input=new Keyboard('keydown',{
+   key:'Enter',code:'Enter',keyCode:0,which:0,bubbles:false,cancelable:true,
+   shiftKey:!!source.shiftKey,ctrlKey:!!source.ctrlKey,altKey:!!source.altKey,
+   metaKey:!!source.metaKey,repeat:!!source.repeat,
+  });
+  const context={run,admitted:false};relays.set(input,context);
+  try{view.dom.dispatchEvent(input);}finally{relays.delete(input);}
+  return context.admitted;
+ };
  return {
   observeKeyDown(view,event){
-   pending=false;
-   if(composingReturn(view,event))return true;
-   observed.add(event);pending=event.key==='Enter';
-   return false;
+   if(relays.has(event))return false; // Let PM run its own pre-command guards.
+   pending=null;
+   if(composingReturn(view,event)){pending='native';return true;}
+   if(event.key!=='Enter')return false;
+   if(!editable()||event.defaultPrevented||!event.cancelable){pending='native';return true;}
+   pending='native';
+   relay(view,event,()=>{
+    // Chords may have no native edit at all. Desktop retains the existing
+    // command policy. Plain safe Return instead waits for its editing event.
+    if(mode()==='desktop-send'||event.ctrlKey||event.altKey||event.metaKey){
+     composerReturnKeyDown(view,event,{editable:editable(),mode:mode(),onSend});
+     pending='handled';
+    }else pending='edit';
+   });
+   return true; // Do not also pass the original Enter13 to PM's scheduler.
   },
   keyDown(view,event){
-   const native=observed.delete(event);
-   // A flush may synthesize an older edit before passing this DOM Return on to
-   // platform handling. Do not let that separate command steal its native edit.
-   if(native&&event.key==='Enter')pending=false;
-   return composerReturnKeyDown(view,event,{editable:editable(),mode:native?mode():'newline',onSend});
+   const context=relays.get(event);
+   if(context){
+    if(context.admitted)return true;
+    context.admitted=true;context.run();
+    return true; // Admission relay itself must not reach later keymaps.
+   }
+   // DOM reconciliation can synthesize Enter during the relay's flush. It
+   // remains editing-only and cannot acquire authority from pending input.
+   return composerReturnKeyDown(view,event,{editable:editable(),mode:'newline'});
   },
   beforeInput(view,event){
-   const nativeReturnPending=pending;pending=false;
-   return composerReturnBeforeInput(view,event,{editable:editable(),nativeReturnPending});
+   if(!['insertParagraph','insertLineBreak'].includes(event.inputType))return false;
+   const ownership=pending;pending=null;
+   if(!editable()||composingReturn(view,event)||!event.cancelable||ownership==='native')return false;
+   if(ownership==='handled'){event.preventDefault();return true;}
+   if(ownership==='edit')return composerReturnBeforeInput(view,event);
+   // Bare dictation/accessibility/browser edits receive the same PM guard and
+   // flush, but never desktop Send semantics, even when no keydown preceded it.
+   let handled=false;
+   relay(view,event,()=>{handled=composerReturnBeforeInput(view,event);});
+   return handled;
+  },
+  release(view,event){
+   // Composition/autocorrection can interleave text input or key-up between a
+   // rejected confirmation and its paragraph intent. Preserve that one-shot
+   // native veto until the Return edit, next keydown or explicit focus/composition
+   // boundary, rather than spending PM's near-composition guard a second time.
+   if(pending!=='native'||event?.type==='blur'||event?.type==='compositionstart')pending=null;
+   return false;
   },
  };
 }

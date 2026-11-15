@@ -197,7 +197,27 @@ try{
    await ordinary.focus();await expect(ordinary).toHaveCSS('outline-style','solid');
    assert.equal((await rect(page.locator('label[for=ordinary]'))).width,1,'Generic label does not unhide sr-only');
    const radio=page.getByRole('radio',{name:'Appearance card'});
-   await radio.focus();await expect(radio.locator('..')).toHaveCSS('outline-style','solid');
+   // Programmatic focus is not a keyboard-modality guarantee for a radio:
+   // text inputs can match :focus-visible without a preceding keyboard action.
+   // Keep the old path as diagnostic evidence, then exercise real native Tab
+   // traversal and require BOTH the pseudo-class and its visible card outline.
+   const cardFocusState=()=>radio.evaluate(node=>({
+    focused:document.activeElement===node,focusVisible:node.matches(':focus-visible'),
+    outline:getComputedStyle(node.parentElement).outlineStyle,
+   }));
+   await radio.focus();
+   const programmatic=await cardFocusState(),beforeCardFocus=await page.evaluate(()=>window.calls.length);
+   const metricChoice=page.getByRole('checkbox',{name:'Metric choice',exact:true});
+   await metricChoice.focus();await expect(metricChoice).toBeFocused();
+   await page.keyboard.press('Tab');
+   const keyboard=await cardFocusState();
+   metrics.push({label,appearanceCardFocus:{programmatic,keyboard}});
+   await expect(radio,'Native Tab reaches the card radio').toBeFocused();
+   assert.equal(keyboard.focusVisible,true,'Native keyboard focus must match :focus-visible');
+   await expect(radio.locator('..')).toHaveCSS('outline-style','solid');
+   await expect(radio.locator('..')).toHaveCSS('outline-width','2px');
+   await expect(radio).not.toBeChecked();
+   assert.equal(await page.evaluate(()=>window.calls.length),beforeCardFocus,'Keyboard focus alone cannot select an appearance or dispatch an action');
    const actions=page.locator('.a-control-actions button'),a=await rect(actions.nth(0)),b=await rect(actions.nth(1));
    assert.ok(gap(a,b)>=8,'Document actions keep horizontal/vertical clearance');
    if(Math.abs(a.top-b.top)<2)assert.equal(a.top,b.top,'Same-line buttons are aligned');

@@ -19,15 +19,17 @@ const cases=[
  {name:'ipad-desktop',viewport:{width:1280,height:900},hybrid:true,userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15',safe:true,deferred:true,safari:true},
  {name:'unknown-touch-capability',viewport:{width:1280,height:900},unknown:true,safe:true},
 ];
-const results=[];let browser,vite;
+const results=[];let browser,vite,activeScenario,activePage;
 await mkdir(artifact,{recursive:true});
 try{
  vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
  browser=await chromium.launch({headless:true});
  for(const scenario of cases){
+  activeScenario=scenario.name;
   const context=await browser.newContext({viewport:scenario.viewport,hasTouch:!!scenario.hasTouch,isMobile:!!scenario.isMobile,...(scenario.userAgent?{userAgent:scenario.userAgent}:{})});
   try{
    const page=await context.newPage(),calls=[],errors=[];
+   activePage=page;
    const state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{navPinned:true},sessions:[{id:'chat',title:'Return fixture',sessionKind:'root',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[],workers:[]}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',setup:{providers:[{id:'fixture',module:'provider-fixture',config:{default_model:'fixture-model'}}],providersLoadedAt:1,providersWorkspace:'/fixture'},canvas:{open:false}};
    const shell=createShellHttpFixture(()=>state);
    page.on('pageerror',error=>errors.push(error.message));
@@ -76,20 +78,24 @@ try{
    assert.equal(noncancelable.before,noncancelable.after);assert.equal(noncancelable.prevented,false);
    await composer.evaluate(()=>document.execCommand('insertParagraph'));
    await page.keyboard.type('Second');await retained('First\n\nSecond');
-   // Native keydown/default sequencing: canceled Return must not double-insert.
+   // Native keydown/default sequencing: one editing owner must not double-insert.
    await composer.fill('First');await composer.press('End');
    await composer.evaluate(node=>{
     window.returnEvents=[];
-    for(const type of ['keydown','beforeinput'])node.addEventListener(type,event=>window.returnEvents.push({type:event.type,key:event.key,inputType:event.inputType,prevented:event.defaultPrevented}));
+    for(const type of ['keydown','beforeinput'])node.addEventListener(type,event=>window.returnEvents.push({type:event.type,key:event.key,keyCode:event.keyCode,trusted:event.isTrusted,inputType:event.inputType,prevented:event.defaultPrevented}));
    });
    await composer.press(scenario.safe?'Enter':'Shift+Enter');await page.keyboard.type('Second');
    await retained('First\n\nSecond');
    const events=await page.evaluate(()=>window.returnEvents);
    if(scenario.deferred)await page.waitForTimeout(300); // Beyond PM's iOS fallback, not application dedup.
    await retained('First\n\nSecond');
-   if(!scenario.deferred){
-    assert.ok(events.some(event=>event.type==='keydown'&&event.key==='Enter'&&event.prevented));
-    assert.equal(events.filter(event=>event.type==='beforeinput'&&['insertParagraph','insertLineBreak'].includes(event.inputType)).length,0,'Canceled keydown suppresses the native paragraph default');
+   if(scenario.safe){
+    assert.ok(events.some(event=>event.type==='keydown'&&event.key==='Enter'&&event.trusted&&!event.prevented),'Safe Return keeps the native keydown default');
+    assert.equal(events.filter(event=>event.type==='beforeinput'&&['insertParagraph','insertLineBreak'].includes(event.inputType)).length,1);
+    assert.ok(events.some(event=>event.type==='beforeinput'&&event.prevented),'Rich beforeinput transaction is the one editing owner');
+   }else{
+    assert.ok(events.some(event=>event.type==='keydown'&&event.key==='Enter'&&event.trusted&&event.prevented));
+    assert.equal(events.filter(event=>event.type==='beforeinput'&&['insertParagraph','insertLineBreak'].includes(event.inputType)).length,0,'Desktop chord handles the command on keydown');
    }
    await composer.press('Control+Enter');await page.keyboard.type('Third');await retained('First\n\nSecond\n\nThird');
    // Candidate confirmation is left native; these flags are synthetic guards,
@@ -124,8 +130,8 @@ try{
      // Let the MutationObserver observe the edit before the next input. A
      // same-task script mutation+keydown is not a native browser input stream.
      await new Promise(resolve=>queueMicrotask(resolve));
-     node.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'Enter',keyCode:13}));
     });
+    await composer.press('Enter');
     await page.keyboard.type('Second');await retained('Kept\n\nSecond');
     await composer.fill('First\n\nSecond\n\nThird');
    }
@@ -176,7 +182,13 @@ try{
    await expect(composer).toHaveDraft('');
    assert.deepEqual(errors,[]);
    results.push({scenario:scenario.name,passed:true,nativeEvents:events,submissions:sends().length});
-  }finally{await context.close();}
+  }catch(error){
+   const live=activePage&&!activePage.isClosed()?await activePage.evaluate(()=>({
+    events:window.returnEvents,draft:window.amplifier?.getState?.().view?.draft,
+   })).catch(()=>null):null;
+   await writeFile(artifact+'/failure.json',JSON.stringify({scope:'synthetic client Chromium',scenario:activeScenario,results,live,failure:error.stack||String(error)},null,2)+'\n');
+   throw error;
+  }finally{await context.close();activePage=null;}
  }
  await writeFile(artifact+'/result.json',JSON.stringify({scope:'synthetic client Chromium',results},null,2)+'\n');
  console.log(JSON.stringify({scope:'synthetic client Chromium',results}));

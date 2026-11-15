@@ -60,7 +60,7 @@ print(root)
     (harness / '.venv').symlink_to(python.parent.parent, target_is_directory=True)
     scenarios = []
     for name in args.scenario:
-        assert name in {'compact-composer', 'markdown-composer', 'composer-return-host', 'layout-spacing-host', 'settings-mobile'}
+        assert name in {'compact-composer', 'markdown-composer', 'composer-return-host', 'layout-spacing-host', 'conversation-error-host', 'settings-mobile'}
         target = output / name
         scenarios.append({'id': name, 'command': ['node', f'tests/web/{name}-browser.mjs'], 'env': {
             'AMPLIFIER_TEST_PYTHON': str(python), 'AMPLIFIER_TEST_PACKAGE_ROOT': package,
