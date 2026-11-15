@@ -954,6 +954,8 @@ def test_journal_that_loses_its_store_after_the_questions_deletes_nothing(delete
         deleter.run()
     # Not a new removal that decides from the listing: it stops before it changes anything.
     assert stopped.value.step == "folder" and isinstance(stopped.value.error, ValueError)
+    # The text of a removal that did not finish, which is true: Amplifier does not open from this folder.
+    assert "could not finish its removal" in stopped.value.notice and "You can keep using it" not in stopped.value.notice
     assert len(state["questions"]) == 2 and not deletes(state) and state["after"] is None
     after = snapshot(root)
     assert after.pop(plan.JOURNAL) == json.dumps(record).encode() and before.pop(plan.JOURNAL)
@@ -976,6 +978,23 @@ def test_last_step_uses_the_removals_own_store_when_the_other_name_appears(delet
     assert deleter.journal()["store"] == "s"
     assert "s" in state["after"]["folders"] and "source-store" not in state["after"]["folders"]
     assert (root / "source-store").is_dir()
+
+
+def test_the_guard_of_every_deletion_refuses_the_other_store_name(deleter):
+    """Every deletion goes through `_clear`. Under a removal's decision, the other store name is foreign there too."""
+    state, root = deleter.state, deleter.root
+    mine = _both_stores(root)
+    owned, later = Disk(root, state), time.monotonic() + 1
+    for names, store in ((["s"], "source-store"), (["cache", "s"], "source-store"), (["source-store"], "s"),
+                         (["s", "source-store"], "source-store"), (["s", "source-store"], None)):
+        with pytest.raises(ValueError):
+            plan._clear(owned, names, later, lambda seconds: None, store)
+    assert not deletes(state) and mine.read_text() == "not Amplifier's"
+    assert (root / "source-store" / "objects" / "s").read_text() == "s"
+    # The removal's own store passes, after its journal exists.
+    plan.begin(root, store="source-store")
+    assert plan._clear(owned, ["source-store"], later, lambda seconds: None, "source-store") == []
+    assert deletes(state) == ["source-store"] and mine.read_text() == "not Amplifier's"
 
 
 @pytest.mark.parametrize("store", STORES)

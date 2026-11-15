@@ -304,11 +304,13 @@ class Held(OSError):
         self.names = list(names)
 
 
-def _clear(owned, names, deadline, wait):
+def _clear(owned, names, deadline, wait, store=None):
     """Delete these entries in their order. Returns those that still hold something.
 
     Every deletion of this module goes through here. Until `deadline` a
-    closing program gets time to release its files.
+    closing program gets time to release its files. `store` is the removal's
+    one decision about the source store: the other store name is foreign
+    here, as everywhere.
 
     An entry whose name now differs from a wanted name only by case is the
     same entry to Windows and to setup. A program renamed it after the check.
@@ -317,7 +319,7 @@ def _clear(owned, names, deadline, wait):
     completion record is never deleted past such an entry, and the data is
     never reported as deleted.
     """
-    names, groups = list(names), sort(names)
+    names, groups = list(names), sort(names, store)
     # Never the journal, never a foreign name, never the running program.
     if JOURNAL in names or groups["foreign"] or groups["running"]:
         raise ValueError("Not an entry that uninstall deletes in this step.")
@@ -371,7 +373,7 @@ def remove_program(owned, *, last=False, wait=time.sleep, store=None):
     """
     from . import windows_consumer_shell as shell
     names = sort(owned.names(), store)["last" if last else "program"]
-    return _clear(owned, names, time.monotonic() + shell.SETTLE_SECONDS, wait)
+    return _clear(owned, names, time.monotonic() + shell.SETTLE_SECONDS, wait, store)
 
 
 def last_names(owned=None, store=None):
