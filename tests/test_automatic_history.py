@@ -244,7 +244,7 @@ async def test_history_refresh_copies_only_reader_inputs_and_keeps_paging(tmp_pa
     row = app._session('bounded-reader', hydrate=False)
     original = automatic_history.read_transcript
     seen = []
-    phases = ('history.merge', 'history.activity.apply', 'history.publish')
+    phases = ('history.merge', 'history.native.refresh', 'history.activity.apply', 'history.publish')
     phase_calls = []
     original_measure = automatic_history.measure
     previous_counts = app.performance_diagnostics.snapshot()['operations']

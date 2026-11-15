@@ -1010,21 +1010,22 @@ class AutomaticHistory:
                                 session['nativeRevision'] = result['revision']
                         from .native_activity import apply_activity
                         from .execution_working_set import native_refresh
-                        with native_refresh(session):
-                            with measure(self.service, 'history.activity.apply', synchronous=True, session_id=session_id):
-                                apply_activity(session, result['activity'], append=before is not None)
-                            offset = source.get('sharedHistoryOffset', 0)
-                            user_offset = source.get('sharedHistoryUserTurnOffset', 0)
-                            if (not paging and session.get('historyManaged')) or (paging and result['offset'] <= offset):
-                                offset, user_offset = result['offset'], result['userOffset']
-                            # A page does not refresh the tail. Keep its old stamp
-                            # so a later refresh still discovers any new appends.
-                            session.update(historyLoaded=True,
-                                sharedHistoryOffset=offset, sharedHistoryUserTurnOffset=user_offset,
-                                sharedHistoryTotal=result['total'])
-                            session['historyLoading'] = False
-                            with measure(self.service, 'history.publish', synchronous=True, session_id=session_id):
-                                self.service._publish_changes(sessions={session_id}, detail_only=True)
+                        with measure(self.service, 'history.native.refresh', synchronous=True, session_id=session_id):
+                            with native_refresh(session):
+                                with measure(self.service, 'history.activity.apply', synchronous=True, session_id=session_id):
+                                    apply_activity(session, result['activity'], append=before is not None)
+                                offset = source.get('sharedHistoryOffset', 0)
+                                user_offset = source.get('sharedHistoryUserTurnOffset', 0)
+                                if (not paging and session.get('historyManaged')) or (paging and result['offset'] <= offset):
+                                    offset, user_offset = result['offset'], result['userOffset']
+                                # A page does not refresh the tail. Keep its old stamp
+                                # so a later refresh still discovers any new appends.
+                                session.update(historyLoaded=True,
+                                    sharedHistoryOffset=offset, sharedHistoryUserTurnOffset=user_offset,
+                                    sharedHistoryTotal=result['total'])
+                                session['historyLoading'] = False
+                                with measure(self.service, 'history.publish', synchronous=True, session_id=session_id):
+                                    self.service._publish_changes(sessions={session_id}, detail_only=True)
                     else:
                         session['historyLoading'] = False
                         self.service._publish_changes(sessions={session_id}, detail_only=True)
