@@ -1,6 +1,8 @@
 # Native Windows installation
 
-Status: implementation design and trial preparation; **not a native Windows support claim**.
+Status: implementation design and qualification record. The README offers the
+consumer setup file for Windows 11 as an unsigned preview. This document is
+**not a native Windows support claim**.
 
 ## Consumer lifecycle completion
 
@@ -2041,8 +2043,13 @@ not an implicit promise or a silent scope reduction.
 ## Qualification record
 
 This document records the design, source audit and bounded qualification results.
-The README selects 3.13 in manual commands and identifies the native-Windows
-limitation. No working native Windows installer is claimed. Earlier results below
+The README selects 3.13 in manual commands. It offers the consumer setup file
+for Windows 11 as an unsigned preview and states its limits: one stable
+download link, the browser's hold on the unsigned file, Windows 11 on an Intel
+or AMD processor, one Windows account, the installation folder, and an
+uninstall that leaves that folder. `tests/test_installation_guidance.py` keeps
+that section and the product's own names in agreement. Qualified native Windows
+support is not claimed. Earlier results below
 are historical evidence for their exact candidates, not current release acceptance.
 
 The accompanying safety increment replaces Windows lease liveness signaling with

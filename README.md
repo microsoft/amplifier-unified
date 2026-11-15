@@ -8,10 +8,13 @@ Explore the [Amplifier Unified website](https://unified.amplifier.ms/) for examp
 
 ## Install
 
+Choose your computer: [macOS or Linux](#macos-and-linux), or
+[Windows 11 (preview)](#windows-11-preview).
+
+### macOS and Linux
+
 The installer supports **macOS and Linux**, including **Windows through WSL with
-systemd**. **Native Windows is not yet supported.**
-See the [native Windows design and trial status](docs/design/native-windows-installation.md)
-for that separate work.
+systemd**.
 
 You need Git, curl, and CA certificates. On Ubuntu or Debian, install them with:
 
@@ -31,6 +34,43 @@ Amplifier Unified as a per-user service, and opens your browser. Existing Amplif
 configuration, accounts, and history are preserved. For manual installation, see
 the [platform and recovery instructions](docs/DEPLOYMENT.md#manual-installation).
 
+### Windows 11 (preview)
+
+This is a preview. The setup file is not signed yet, so your browser asks you to
+confirm the download. You do not need WSL, Python, Git or a terminal.
+
+1. Download the setup file:
+   [AmplifierUnifiedSetup-windows-x64.exe](https://github.com/microsoft/amplifier-unified/releases/latest/download/AmplifierUnifiedSetup-windows-x64.exe).
+2. Microsoft Edge holds the download. In the Downloads list, point at the file
+   and select **More actions (…)**, then **Keep**. In the message that follows,
+   select the arrow next to **Delete**, then **Keep anyway**.
+3. Open the file with a double-click. Do not use "Run as administrator". Select
+   **OK** to install. Setup takes about 3 minutes.
+4. Amplifier starts and opens in your browser. The first start can take a few
+   minutes. Windows asks one question: whether to install a certificate named
+   "Amplifier Unified (this PC only)". Select **Yes**. Amplifier uses this
+   certificate only for the connection between your browser and Amplifier on
+   this PC.
+5. Connect an AI account in the app.
+
+To open Amplifier later, use the Start menu: **Amplifier Unified**.
+
+Limits of this preview:
+
+- **PC:** Windows 11 with an Intel or AMD processor. ARM processors are not
+  supported yet.
+- **Account:** Amplifier installs for your own Windows account only. It does not
+  need administrator rights.
+- **Folder:** everything is in `%LOCALAPPDATA%\Amplifier`.
+- **Uninstall:** open **Settings > Apps > Installed apps**, find
+  **Amplifier Unified (unsigned preview)**, select **More options (…)**, then
+  **Uninstall**. In this version, uninstall stops Amplifier and removes it from
+  the Start menu and the Apps list. It leaves the folder with your chats,
+  settings and accounts, and the program files.
+
+The [native Windows design and status](docs/design/native-windows-installation.md)
+records what is tested.
+
 ## Start a conversation
 
 1. Sign in to Amplifier Unified in the browser and connect a model account if needed.
@@ -39,7 +79,9 @@ the [platform and recovery instructions](docs/DEPLOYMENT.md#manual-installation)
 3. Describe the outcome you want. Review progress and results in the conversation.
 
 The first message can take a few minutes while Amplifier Unified prepares its runtime.
-You can reopen the workspace at [http://127.0.0.1:8941](http://127.0.0.1:8941).
+On macOS and Linux, you can reopen the workspace at
+[http://127.0.0.1:8941](http://127.0.0.1:8941). On Windows 11, open
+**Amplifier Unified** from the Start menu.
 
 Use **Enter** to send and **Shift+Enter** for a new line. You can format messages
 with Markdown and attach files or images. In a code block, Enter inserts a line;
