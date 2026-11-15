@@ -335,7 +335,10 @@ def owned_spec(xml: str, sid: str, data_dir=None) -> TaskSpec:
     A customized/foreign definition is never overwritten, even with --replace.
     The one equivalence is the trigger's user text: see _same_account.
     """
-    entry = task_name(sid)
+    try:
+        entry = task_name(sid)
+    except ValueError as error:
+        raise WindowsServiceError("An owner user SID is required.") from error
     try:
         if not isinstance(xml, str) or len(xml.encode("utf-8")) > LIMIT or "<!" in xml:
             raise ValueError("Invalid task XML.")

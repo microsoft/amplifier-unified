@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import contextmanager
 import ctypes as C
 from ctypes import wintypes as W
 import importlib.util
@@ -187,6 +188,9 @@ def run():
         scripts = Path(sys.executable).parent
         # The account's own environment, as for an installed app, without the
         # variables that select another Python, package source or Amplifier folder.
+        # Not a reduced environment: without PSModulePath, Windows PowerShell on a
+        # hosted runner needs 12 to 17 seconds for each Task Scheduler call
+        # (measured), and the app allows 20.
         env = {key: value for key, value in os.environ.items()
                if not key.upper().startswith(("UV_", "PIP_", "AMPLIFIER_", "GITHUB_", "RUNNER_", "ACTIONS_"))
                and key.upper() not in {"PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"}}
@@ -219,7 +223,7 @@ def run():
                                           stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
                     print("[task output]\n" + logs.stdout.decode("utf-8", "replace")[-4000:], flush=True)
             need((result.returncode == 0) == (expect == 0), label)
-            return output
+            return output if expect == 0 else result.stderr.decode("utf-8", "replace")
 
         def ready(label):
             lines = cli(label, "service", "status", "--wait", "90", "--json").splitlines()
@@ -250,7 +254,9 @@ def run():
                 need(error.retry is False and error.entry == service.task_name(sid),
                      label + ": the app's check refuses this task")
             for operation in ("start", "stop", "uninstall"):
-                cli(f"{label}: service {operation} is refused", "service", operation, expect=1)
+                said = cli(f"{label}: service {operation} ends with an error", "service", operation, expect=1)
+                need("could not confirm that its start-at-sign-in task" in said,
+                     f"{label}: service {operation} says that the task was not confirmed")
             now = service._scheduler("query", sid)
             need(now["exists"] and now["xml"] == task["xml"] and now["instances"] == 0,
                  label + ": the task is neither started nor changed nor removed")
@@ -272,7 +278,7 @@ def run():
         need(service._lookup(name) == (sid, 1), "that name is this account today")
         stopped("stop before the changes")
 
-        # ---- 2. Another account's trigger is refused (the computer has its name).
+        # ---- 2. A second account, for a trigger that names another person.
         other = "amp" + uuid.uuid4().hex[:10]
         save("ownership.json", {"root": str(root), "sid": sid, "user": other})
         code, _ = powershell(f"New-LocalUser -Name '{other}' -NoPassword -Disabled "
@@ -281,35 +287,65 @@ def run():
         found = service._lookup(authority + "\\" + other)
         need(found is not None and found[1] == 1 and found[0] != sid, "the second account has its own SID")
         other_sid = found[0]
+        original = account_domain()
+        need(original.casefold() == authority.casefold(), "the stored name's first part is the account domain")
+
+        @contextmanager
+        def renamed(label):
+            """The state that a computer rename leaves for a stored account name. Always restored."""
+            temporary = ("RENAMED-" + uuid.uuid4().hex[:6]).upper()
+            # Saved before the change: `cleanup` restores from this record after any stop.
+            save("account-domain.json", {"original": original, "temporary": temporary, "qualified": name, "sid": sid})
+            try:
+                account_domain(temporary)
+                deadline = time.monotonic() + 15
+                while service._lookup(name) is not None and time.monotonic() < deadline:
+                    time.sleep(0.5)
+                need(account_domain() == temporary, label + ": the account domain has another name")
+                need(service._lookup(name) is None and service._lookup(authority) is None,
+                     label + ": Windows maps the stored name and the old computer name to nothing")
+                need(service._lookup(user) == (sid, 1) == service._lookup(temporary + "\\" + user),
+                     label + ": the account itself is unchanged")
+                yield
+            finally:
+                restored = restore_account_domain()
+            need(restored and service._lookup(name) == (sid, 1),
+                 label + ": the account domain has its own name again")
 
         def other_trigger(node):
             node("Triggers/LogonTrigger/UserId").text = other_sid
-        current = service._scheduler("replace", sid, previous=task["xml"], xml=variant(spec, other_trigger))
-        need(stored(current["xml"]).casefold() == (authority + "\\" + other).casefold(),
-             "Task Scheduler stored the second account's name in the trigger")
-        refused("another account's trigger", current)
+
+        def arguments(node):
+            node("Actions/Exec/Arguments").text = "-I -S -c pass"
+
+        def program(node):
+            node("Actions/Exec/Command").text = str(Path(spec.python).with_name("python.exe"))
+
+        # ---- 3. A task for another account, or with a changed action, is refused:
+        # with the computer's name, and with the old name stored. Each one is
+        # registered BEFORE the name changes, as on a renamed PC.
+        current = task
+        for label, change in (("another account's trigger", other_trigger),
+                              ("changed arguments", arguments), ("changed program", program)):
+            current = service._scheduler("replace", sid, previous=current["xml"], xml=variant(spec, change))
+            kept = stored(current["xml"])
+            expected = other if change is other_trigger else user
+            need(kept.casefold() == (authority + "\\" + expected).casefold(),
+                 label + ": Task Scheduler stored the trigger's user under this computer's name")
+            refused(label, current)
+            with renamed(label):
+                need(service._scheduler("query", sid)["xml"] == current["xml"] and service._lookup(kept) is None,
+                     label + ", old name stored: Windows maps the trigger's user to nothing")
+                refused(label + ", old name stored", current)
+
+        # ---- 4. The app's own task, registered before the name changes.
         current = service._scheduler("replace", sid, previous=current["xml"], xml=service.task_xml(spec))
         need(service._read(home)[1] == spec and stored(current["xml"]).casefold() == name.casefold(),
-             "the app's own task is back")
-
-        # ---- 3. The state after a computer rename.
-        renamed = ("RENAMED-" + uuid.uuid4().hex[:6]).upper()
-        original = account_domain()
-        need(original.casefold() == authority.casefold(), "the stored name's first part is the account domain")
-        save("account-domain.json", {"original": original, "temporary": renamed, "qualified": name, "sid": sid})
-        try:
-            account_domain(renamed)
-            deadline = time.monotonic() + 15
-            while service._lookup(name) is not None and time.monotonic() < deadline:
-                time.sleep(0.5)
-            need(account_domain() == renamed, "the account domain has another name")
-            need(service._lookup(name) is None, "Windows maps the stored name to nothing")
-            need(service._lookup(authority) is None, "Windows maps the old computer name to nothing")
-            need(service._lookup(user) == (sid, 1) == service._lookup(renamed + "\\" + user),
-                 "the account itself is unchanged")
+             "the app's own task is back, with this computer's name stored")
+        with renamed("own task"):
             now = service._scheduler("query", sid)
-            need(now["xml"] == current["xml"], "Task Scheduler still holds the old name")
-
+            need(now["xml"] == current["xml"] and service._lookup(stored(now["xml"])) is None,
+                 "Task Scheduler still holds the old name")
             # The defect: every one of these refused the app's own task.
             need(service._read(home)[1] == spec, "the app's check accepts its own task")
             cli("service start with the old name stored", "service", "start")
@@ -319,32 +355,9 @@ def run():
             need(now["xml"] == current["xml"] and now["instances"] == 1,
                  "the task runs and was not registered again")
             stopped("stop with the old name stored")
-
-            # A changed action and another account stay refused in this state.
-            def arguments(node):
-                node("Actions/Exec/Arguments").text = "-I -S -c pass"
-
-            def program(node):
-                node("Actions/Exec/Command").text = str(Path(spec.python).with_name("python.exe"))
-            for label, change in (("changed arguments", arguments), ("changed program", program),
-                                  ("another account's trigger, old name stored", other_trigger)):
-                current = service._scheduler("replace", sid, previous=current["xml"], xml=variant(spec, change))
-                if change is other_trigger:
-                    kept = stored(current["xml"])
-                    report["otherAccountTrigger"] = {
-                        "storedUnderOldName": kept.casefold() == (authority + "\\" + other).casefold(),
-                        "mapsToNothing": service._lookup(kept) is None}
-                    need(kept.casefold().endswith("\\" + other.casefold()), "the trigger names the second account")
-                refused(label, current)
-            current = service._scheduler("replace", sid, previous=current["xml"], xml=service.task_xml(spec))
-            report["reRegisteredTrigger"] = {"storedUnderOldName": stored(current["xml"]) == name}
-            need(service._read(home)[1] == spec, "the app's own task is accepted again")
-
             # Uninstall of the task, which the earlier check refused at its first step.
             cli("service uninstall with the old name stored", "service", "uninstall")
             need(service._scheduler("query", sid)["exists"] is False, "the task is removed")
-        finally:
-            need(restore_account_domain(), "the account domain has its own name again")
         need(service._lookup(name) == (sid, 1), "the stored name is this account again")
         report.update(status="PASS", stage="complete")
     except BaseException as error:
@@ -352,6 +365,11 @@ def run():
         if not isinstance(error, AssertionError):
             report["detail"] = str(error)[:300]
     finally:
+        try:
+            if not restore_account_domain():
+                report.update(status="FAIL", stage="the account domain was NOT restored")
+        except BaseException as error:
+            report.update(status="FAIL", stage="the account domain was NOT restored", errorType=type(error).__name__)
         save("result.json", report)
         print(json.dumps(report, indent=2), flush=True)
     return report["status"] == "PASS"
