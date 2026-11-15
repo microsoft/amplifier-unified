@@ -945,7 +945,7 @@ class Collaboration:
             from .updates import work_paused
             if work_paused(self.service.state):
                 return "Host work is paused for an update; peer admission is suppressed."
-            source = self.service._session(receipt["senderSessionId"])
+            source = self.service._session(receipt["senderSessionId"], hydrate=False)
             reason = self.service.assignments.blocked(source, receipt.get('assignmentId'))
             if reason:
                 return reason
@@ -984,7 +984,7 @@ class Collaboration:
                     return 'This outcome notification was superseded or its qualification changed; inspect the current result.'
             elif 'taskContinuationEpoch' in receipt:
                 return 'Only retained outcome notifications can follow a continuing objective.'
-            target = self.request_target(source, receipt)
+            target = self.request_target(source, receipt, hydrate=False)
             if target.get('fileAccessPending'):
                 return 'The recipient has pending file-access settings; existing work must settle before new input.'
             reason = self.service.assignments.blocked(target)
@@ -1162,7 +1162,7 @@ class Collaboration:
                     if receipt.get("delivery") != "queued":
                         self.cancel_expiry(identity)
                         continue
-                    target = self.service._session(sid)
+                    target = self.service._session(sid, hydrate=False)
                     if suppress_input(target, receipt):
                         continue  # Retain older input; fresh explicit work may run.
                     from .update_drain import held, owner_waiting
@@ -1257,13 +1257,13 @@ class Collaboration:
             # The newest outcome may have been backpressured by the old queued
             # return. Reuse the released slot now; no unrelated event is needed.
             async with self.service.lock:
-                if not suppress_input(self.service._session(sid)):
+                if not suppress_input(self.service._session(sid, hydrate=False)):
                     self.resume_outcomes(sid)
 
     def admission(self, sid, args):
         receipt = self.receipt(args["inputId"])
         from .configuration_recovery import suppress_input
-        if suppress_input(self.service._session(sid), receipt):
+        if suppress_input(self.service._session(sid, hydrate=False), receipt):
             return {'admitted': False, 'reason': 'Operator configuration recovery did not authorize conversation input.'}
         binding = intake_task_binding(receipt)
         if (receipt.get("commandAction") != "coordination.send" or receipt.get("delivery") != "submitting"
@@ -1280,14 +1280,14 @@ class Collaboration:
         if (held(self.service) or owner_waiting(self.service, sid)) and receipt.get('mode') != 'steer':
             return {'admitted': False, 'waitingForUpdate': True, 'reason': 'Waiting for the app update.'}
         reason = self.guard(receipt)
-        message = next((row for row in self.service._session(sid).get("messages", [])
+        message = next((row for row in self.service._session(sid, hydrate=False).get("messages", [])
                         if row.get("inputId") == args["inputId"] and row.get("inputOrigin") == "peer"), None)
         if message is None:
             return {"admitted": False, "reason": "The saved host-attributed input is unavailable."}
         from .peer_resume import pending
         from .completed_followup import matches_request
-        task = self.service._session(sid).get("task") or self.service.coordination.task(sid)
-        active = self.service._session(sid).get('collaborationGeneration') or {}
+        task = self.service._session(sid, hydrate=False).get("task") or self.service.coordination.task(sid)
+        active = self.service._session(sid, hydrate=False).get('collaborationGeneration') or {}
         return {"admitted": not reason, "reason": reason, "message": copy.deepcopy(message),
                 "currentGenerationId": active.get('id') if not active.get('terminal') else None,
                 "humanResume": not reason and pending(receipt),
@@ -1903,9 +1903,13 @@ class Collaboration:
             return await self.watches.dispatch(action, args, origin, command_id, caller)
         if action in {"coordination.grant", "coordination.decide", "coordination.revoke"}:
             self.error("Coordination approval APIs are retired. Historical records are read-only.", 410)
+        ordinary_send = (action == 'coordination.send' and args.get('mode', 'auto') in {'queue', 'auto'}
+            and not CREATION.get()
+            and not any(args.get(key) for key in ('resume', 'resumeHandoff', 'scheduleRepair', 'returnNotification')))
         source = (self.result_source(args, origin, caller) if action == 'coordination.artifact'
                   else self.source(args, origin, caller, hydrate=False) if action == 'coordination.artifact.save'
-                  else self.source(args, origin, caller) if action not in {"coordination.result", "coordination.read"} else None)
+                  else self.source(args, origin, caller, hydrate=not ordinary_send)
+                  if action not in {"coordination.result", "coordination.read"} else None)
         if action == 'coordination.acknowledge':
             from .outcome_acknowledgement import acknowledge
             return await acknowledge(self, source, args, origin, command_id)
@@ -2018,7 +2022,7 @@ class Collaboration:
             # Refuse unsupported return modes before hydration or fresh effects.
             if args.get('returnNotification') is True and args.get('mode', 'auto') not in {'queue', 'auto'}:
                 self.error('returnNotification:true requires auto or queue mode; no input or wait was created.', 400)
-            if args.get('mode') == 'notify':
+            if args.get('mode') == 'notify' or ordinary_send:
                 await self.service.history.ensure_loaded(args['sessionId'], hydrate=False)
             else:
                 await self.service.history.ensure_loaded(args["sessionId"])
@@ -2123,7 +2127,7 @@ class Collaboration:
                 receipt = None
             else:
                 target = self.authorize(source, args, cross_workspace=True,
-                                        hydrate=args.get('mode') != 'notify')
+                                        hydrate=args.get('mode') != 'notify' and not ordinary_send)
                 if args.get('resume') and source['workspace'] != target['workspace']:
                     self.error('Cross-workspace messaging does not authorize commissioned-member resume.')
                 reason = self.service.assignments.blocked(source)
