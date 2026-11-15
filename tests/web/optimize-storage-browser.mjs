@@ -542,7 +542,12 @@ async function run(){
   assertSettledOptimize(evidence.lastOptimizationStatus,evidence.resumeReceipt);
   if(before.canonicalFormat==='committed'){
    evidence.committedCanonicalHold=assertCommittedCanonicalHold(evidence.lastOptimizationStatus,before.nativeId);
-   await expect(section).toContainText(evidence.committedCanonicalHold.reason);
+   const outcomes=section.locator('details').filter({has:section.locator('summary').filter({hasText:'File outcomes'})});
+   if(!await outcomes.evaluate(element=>element.open))await outcomes.locator('summary').click();
+   const canonicalOutcome=outcomes.locator('li').filter({has:outcomes.locator('code').filter({hasText:before.nativeId})})
+    .filter({hasText:evidence.committedCanonicalHold.reason});
+   await expect(canonicalOutcome).toHaveCount(1);
+   await expect(canonicalOutcome.getByText(evidence.committedCanonicalHold.reason,{exact:true})).toBeVisible();
    evidence.checks.push('committed canonical prefix is inventoried once and remains visibly held without fabricated admission');
   }
   assert.equal(requests.filter(row=>mutations.has(row.action)).length,mutationCount,
