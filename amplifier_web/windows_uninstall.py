@@ -36,7 +36,11 @@ RUNNING = ("python", "tools")
 # The flat folder that `finish` creates and holds for those few files. Only
 # the step after exit deletes in it.
 PARK = "unified-uninstall-last"
-CACHES = ("source-store", "cache", "temp", "python-bin", "tool-bin")
+# The source store has two names: setup names it "s" in a new installation,
+# and an earlier installation keeps "source-store" (`windows_consumer`).
+# Both are this installation's own names in every installation, as in setup's
+# own check of a folder.
+CACHES = ("source-store", "s", "cache", "temp", "python-bin", "tool-bin")
 FILES = ("components.txt", "install.log", "private-git.json", "private-git.py", "uv.zip", "git.tar.bz2",
          "consumer-maintenance.json", "Launch Unified.lnk", "Amplifier status.lnk", "Stop Amplifier.lnk",
          "Remove Amplifier sign-in host.lnk")

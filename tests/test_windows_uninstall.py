@@ -89,6 +89,8 @@ PROGRAM = {"cache/wheels/x.whl": "x", "source-store/objects/s": "s", "temp/t.tmp
            "launcher-1.0.0-0a1b2c3d/Scripts/pythonw.exe": "MZ", "child-2.stderr.txt": "e"}
 LAST = {"git/cmd/git.exe": "MZ", "uv/uv.exe": "MZ", "consumer-install.json": "{}", "consumer-qualified.json": "{}"}
 RUNNING = {"python/cpython-3.13.17/python.exe": "MZ", "tools/amplifier-unified/Scripts/pythonw.exe": "MZ"}
+# The source store of a new installation, and of an earlier one (the fixtures above and below).
+STORES = ("s", "source-store")
 
 
 def top(group):
@@ -577,7 +579,7 @@ def test_foreign_top_level_entries_stay_and_then_the_folder_stays(deleter, monke
 
 
 @pytest.mark.parametrize("name", ["App", "SHARED", "Workspace", "Tools", "Consumer-Install.json",
-                                  "Unified-Uninstall.json", "Unified-Uninstall-Last"])
+                                  "Unified-Uninstall.json", "Unified-Uninstall-Last", "S", "Source-Store"])
 def test_entry_that_differs_from_an_own_name_only_by_case_deletes_nothing(deleter, name):
     # Windows opens `App` under the name `app`, but it is not the entry that this installation made.
     state, root, consumer = deleter.state, deleter.root, deleter.consumer
@@ -808,6 +810,64 @@ def test_finish_removes_earlier_kept_files_but_not_a_foreign_hold_name(deleter):
     assert state["calls"].index(("delete", earlier)) < state["calls"].index(("hold", plan.PARK))
     assert plan.sort([earlier])["program"] == [earlier]
     assert plan.sort(["X.hold", "B" * 32 + ".hold"])["foreign"] == ["X.hold", "B" * 32 + ".hold"]
+
+
+def _only_store(root, store):
+    """Give the installation the one source store that its setup file made."""
+    if store != "source-store":
+        (root / "source-store").rename(root / store)
+    other, = set(STORES) - {store}
+    assert (root / store / "objects" / "s").read_text() == "s" and not os.path.lexists(root / other)
+    return other
+
+
+@pytest.mark.parametrize("store", STORES)
+def test_delete_everything_removes_the_source_store_of_a_new_and_of_an_earlier_installation(deleter, monkeypatch, store):
+    state, root = deleter.state, deleter.root
+    other = _only_store(root, store)
+    state["choices"] = ["yes", "yes"]
+    monkeypatch.setattr(deleter.consumer.sys, "stdout", None)
+    result = deleter.run()
+    # The store is program files: it goes with the caches, after the person's data.
+    calls = deletes(state)
+    assert "export" in calls and calls.index("export") < calls.index(store) < calls.index("git") and other not in calls
+    assert not os.path.lexists(root / store)
+    # It is not named as something that is not Amplifier's, so the folder does not stay because of it.
+    assert result == {"ok": True, "operation": "uninstall", "userDataRetained": False, "certificate": "none",
+                      "kept": [], "programLeft": [], "afterExit": True}
+    assert {path.name for path in root.iterdir()} == kept_names(deleter)
+    confirmation = state["notices"][-1][0]
+    assert "The folder itself stays" not in confirmation and "you can delete it" in confirmation
+    # The step after exit is asked about both names. It removes a named folder only while it is empty.
+    assert set(STORES) <= set(state["after"]["folders"])
+
+
+@pytest.mark.parametrize("store", STORES)
+def test_keep_leaves_the_source_store_of_a_new_and_of_an_earlier_installation(deleter, monkeypatch, store):
+    state, root = deleter.state, deleter.root
+    _only_store(root, store)
+    state["choices"], before = ["no"], snapshot(root)
+    monkeypatch.setattr(deleter.consumer.sys, "stdout", None)
+    assert deleter.run() == {"ok": True, "operation": "uninstall", "userDataRetained": True,
+                             "installationFilesRetained": True, "certificate": "none"}
+    assert not deletes(state) and state["after"] is None and not (root / plan.JOURNAL).exists()
+    after = snapshot(root)
+    after.pop(shell.FILE)
+    before.pop(shell.FILE)
+    assert after == before and after[store + "/objects/s"] == b"s"
+
+
+def test_both_names_of_the_source_store_are_program_files_only_in_their_exact_spelling():
+    from amplifier_web import windows_consumer as consumer
+    # The launcher's two names, and no third one.
+    assert set(STORES) == {consumer.SOURCE_STORE, consumer.EARLIER_SOURCE_STORE}
+    assert set(STORES) <= set(plan.CACHES) and set(STORES) <= plan._FOLDERS and set(STORES) <= plan._EXACT
+    others = ["S", "Source-Store", "ss", "s.txt", "s ", "source-store-2", "source_store", "sourcestore"]
+    groups = plan.sort(list(STORES) + others)
+    assert groups["program"] == list(STORES) and groups["foreign"] == others
+    assert sum(map(len, groups.values())) == len(STORES) + len(others)
+    # Another spelling of either name is not this installation's entry: uninstall then deletes nothing.
+    assert plan.altered(list(STORES) + others) == ["S", "Source-Store"]
 
 
 def test_last_names_has_every_own_folder_but_never_a_file_or_the_flat_folder(deleter):
@@ -1099,12 +1159,19 @@ def test_setup_creates_no_top_level_name_that_uninstall_does_not_know():
         literal = re.fullmatch(r'"([^"]+)"', argument)
         (names if literal else forms).add(literal.group(1) if literal else argument)
     # Every way in which setup builds a name directly in the folder. A new way fails here.
-    assert forms == {"Started", "Complete", "name", 'name+".zip"', 'name+".lnk"', 'name+".stderr.txt"',
+    assert forms == {"Started", "Complete", "SourceStore", "name", 'name+".zip"', 'name+".lnk"', 'name+".stderr.txt"',
                      'name+".failure.json"', "relative", "pair.Substring(split+1"}
     names.update(re.search(r'Started="([^"]+)", Complete="([^"]+)"', text).groups())
+    # Setup names the source store through two constants: the folder that it creates in a new
+    # installation, and the earlier name that its check of a folder still knows.
+    stores = re.search(r'SourceStore="([^"]+)", EarlierSourceStore="([^"]+)"', text).groups()
+    assert stores == STORES
+    names.update(stores)
     lists = re.findall(r"foreach\((?:string|var) relative in new\[\]\{([^}]*)\}\)", text)
     pairs = re.search(r"foreach\(var pair in new\[\]\{([^}]*)\}\)", text).group(1)
     assert len(lists) == 2
+    # In those lists only the new store's name is not a quoted text.
+    assert {item for row in lists for item in row.split(",") if not re.fullmatch(r'"[^"]*"', item)} == {"SourceStore"}
     names.update(name for row in lists for name in re.findall(r'"([^"]*)"', row) if name)
     names.update(re.findall(r'"[A-Z_]+:([^"]+)"', pairs))
     helpers = re.findall(r'Helper\("([^"]+)"', text)
@@ -1134,8 +1201,10 @@ def test_launcher_and_launcher_refresh_names_are_known_and_exact():
                  'Path(f"{path}-{count}")', 'Path(target).name + ".part"', "store / filename(version)"):
         assert form in refresh, form
     roots = re.search(r"roots = \{(.*?)\}\n", environment, re.S).group(1)
+    # The launcher names the source store beside that mapping, by two constants.
+    assert "source_store(root)" in environment and "source-store" not in roots
     known = [consumer.RECEIPT, consumer.QUALIFICATION, consumer.RECORD, windows_consumer_shell.FILE, "export",
-             "workspace", *re.findall(r': "([a-z-]+)"', roots),
+             "workspace", consumer.SOURCE_STORE, consumer.EARLIER_SOURCE_STORE, *re.findall(r': "([a-z-]+)"', roots),
              "launcher-0.95.0-0a1b2c3d", "launcher-0.95.0-0a1b2c3d-2", "launcher-not-used", "launcher-not-used-3",
              "amplifier_unified-0.96.0-py3-none-any.whl", "amplifier_unified-0.96.0-py3-none-any.whl.part",
              ".private-" + "0f" * 16 + ".tmp"]
@@ -1215,8 +1284,11 @@ Path(evidence).write_text(json.dumps(outcome))
 
 
 @pytest.fixture
-def native_installation(tmp_path):
+def native_installation(tmp_path, request):
     """A used installation in a private throwaway folder, with its real Windows entries.
+
+    Its source store has the name that an earlier setup file gave it, or the
+    name that a case asks for (`STORES`).
 
     Real: the private folder and its records, the Start-menu shortcuts
     (ShellLink COM), the Apps-list entry (HKCU), the launcher's start chain (a
@@ -1227,6 +1299,8 @@ def native_installation(tmp_path):
     import winreg
     from amplifier_web import windows_files
     from amplifier_web.deployment import write_private
+    store = getattr(request, "param", "source-store")
+    assert store in STORES
     tag = uuid.uuid4().hex[:10]
     root = windows_files.address(Path.home() / ("au-delete-test-" + tag))
     outside = Path.home() / ("au-delete-outside-" + tag)
@@ -1245,7 +1319,7 @@ def native_installation(tmp_path):
         tree = {"shared/keys.env": "KEY=not-a-real-key", "shared/settings.yaml": "a: 1",
                 "app/chats/one/message.txt": "hello", "app/app.sqlite3": "data", "capture/c.jsonl": "{}",
                 "ownership/o.json": "{}", "import/i.txt": "i", "workspace/project/notes.txt": "the person's own file",
-                "export/local-ca.cer": "certificate", "cache/wheels/x.whl": "x", "source-store/objects/s": "s",
+                "export/local-ca.cer": "certificate", "cache/wheels/x.whl": "x", store + "/objects/s": "s",
                 "temp/t.tmp": "t", "python-bin/python.exe": "MZ", "tool-bin/amplifier-unified.exe": "MZ",
                 "components.txt": "c", "install.log": "l", "uv.zip": "z", "private-git.json": "{}",
                 "private-git.py": "#", "amplifier_unified-1.0.0-py3-none-any.whl": "w", "Launch Unified.lnk": "l",
@@ -1293,7 +1367,7 @@ def native_installation(tmp_path):
             return json.loads(evidence.read_text())
 
         yield dict(root=root, outside=outside, entries=entries, registration=registration, run=run,
-                   report=tmp_path / "after-exit.json")
+                   report=tmp_path / "after-exit.json", store=store)
     finally:
         for path in links:  # A link that a failed run left: the link itself, never its target.
             if os.path.lexists(path):
@@ -1324,9 +1398,17 @@ def _without_kept_file(names):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Real folder, Windows entries, start chain and step after exit")
+@pytest.mark.parametrize("native_installation", STORES, indirect=True)
 def test_native_delete_choice_removes_the_folder_and_nothing_outside_it(native_installation):
-    """Yes, Yes on a whole installation: afterwards the folder does not exist."""
+    """Yes, Yes on a whole installation: afterwards the folder does not exist.
+
+    Once with the source store of a new installation (`s`) and once with the
+    store of an earlier one (`source-store`). Neither is something that is not
+    Amplifier's (`kept` is empty), and no store is left.
+    """
     native, root = native_installation, native_installation["root"]
+    other, = set(STORES) - {native["store"]}
+    assert (root / native["store"] / "objects" / "s").read_text() == "s" and not os.path.lexists(root / other)
     done = native["run"]("uninstall", ["yes", "yes"])
     assert done["result"] == {"ok": True, "operation": "uninstall", "userDataRetained": False,
                               "certificate": "none", "kept": [], "afterExit": True, "programLeft": []}
@@ -1347,6 +1429,28 @@ def test_native_delete_choice_removes_the_folder_and_nothing_outside_it(native_i
     assert not os.path.lexists(root)
     _outside_unchanged(native["outside"])
     print("UNINSTALL_CHAIN " + json.dumps({"process": done, "afterExit": report}, separators=(",", ":")))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real folder, Windows entries and start chain")
+@pytest.mark.parametrize("native_installation", STORES, indirect=True)
+def test_native_keep_choice_leaves_the_source_store_and_every_file(native_installation):
+    """No on a whole installation: the Windows entries go, and nothing in the folder is deleted."""
+    native, root = native_installation, native_installation["root"]
+    store = root / native["store"] / "objects" / "s"
+    before = _tree(root)
+    assert str(store.relative_to(root)) in before
+    done = native["run"]("uninstall", ["no"])
+    assert done["result"] == {"ok": True, "operation": "uninstall", "userDataRetained": True,
+                              "installationFilesRetained": True, "certificate": "none"}
+    assert done["events"] == ["question", "stop"]
+    # Every entry that was in the folder is still there, the store with its bytes. No removal began.
+    assert set(before) <= set(_tree(root)) and store.read_text() == "s"
+    assert (root / "shared" / "keys.env").read_text() == "KEY=not-a-real-key"
+    assert not plan.unfinished(root) and plan.completed(root) and not os.path.lexists(root / plan.PARK)
+    assert not native["report"].exists()
+    # The Windows entries are gone.
+    assert shell.registry(root) is None and not native["entries"].exists()
+    _outside_unchanged(native["outside"])
 
 
 @pytest.mark.skipif(os.name != "nt", reason="The running Python and installed package are deleted on native Windows")
