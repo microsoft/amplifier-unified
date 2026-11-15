@@ -453,7 +453,8 @@ async def test_opaque_history_overflow_requires_one_different_counted_retry(cont
         measured_view = coordinator.get_capability('context.measured_request_view')
         assert callable(measured_view) and measured_view.__self__ is context
         reason = inspect.signature(measured_view).parameters.get('reason')
-        assert reason is not None and reason.kind == inspect.Parameter.KEYWORD_ONLY
+        # Check the extension after the behavioral oracle below, so a baseline
+        # control discriminates the unchanged retry rather than just its API.
         await context.set_messages(seed)
         wire.seed_hashes = [digest(row) for row in await context.get_messages()]
         tool_hashes = {row['tool_call_id']: hashlib.sha256(row['content'].encode()).hexdigest()
@@ -490,6 +491,7 @@ async def test_opaque_history_overflow_requires_one_different_counted_retry(cont
         assert all(f'{wire.signature_marker}-{index}' in json.dumps(wire.foreground[0])
                    for index in (1, 2))
         assert wire.summaries, 'A provider overflow must force the eligible public prefix'
+        assert reason is not None and reason.kind == inspect.Parameter.KEYWORD_ONLY
         first_summary = next(index for index, entry in enumerate(wire.timeline)
                              if entry['kind'] == 'send' and entry['summary'])
         rejected = next(index for index, entry in enumerate(wire.timeline)
