@@ -251,6 +251,40 @@ def test_update_stage_and_its_probe_fit_under_the_longest_root():
     assert max(length(relative) for name, kind, relative in chat if name not in STAGE_NEVER_WRITTEN) == 250
 
 
+# Documented limit, not fixed here: a chat with its own setup (dependency
+# overrides of its workspace or session) is checked in a stage too, with the
+# chat's folder as the workspace (``runtime_profiles.py``). An app chat folder
+# has its short name there and fits (250 above). A folder that a person chose
+# keeps the CLI name inside the stage. Each number is the longest installation
+# folder path at which that row fits for the default workspace folder
+# (``<root>\workspace``). Arithmetic from the code; not run on a PC.
+CHAT_SETUP_IN_DEFAULT_WORKSPACE_LONGEST_ROOT = {
+    'probe history temporary': 39,
+    'probe request observation': 42,
+    'probe oversized-request copy': 42,
+    'probe pending transcript append': 46,
+    'probe transcript backup': 50,
+    'probe job-store lock': 52,
+    'probe request observation temporary': 54,
+    'probe metadata lock beside the folder': 55,
+    'probe session folder': 56,
+}
+
+
+def test_chat_setup_limits_in_a_persons_folder_are_stated_not_hidden():
+    def longest_root(name):
+        for root in range(MAX_ROOT, 0, -1):
+            kind, relative = next(row[1:] for row in update_stage(cli_project(root, 'workspace')) if row[0] == name)
+            if fits(kind, relative, root):
+                return root
+
+    measured = {name: longest_root(name) for name, kind, relative in update_stage() if name not in STAGE_NEVER_WRITTEN}
+    assert {name: root for name, root in measured.items() if root < MAX_ROOT} == CHAT_SETUP_IN_DEFAULT_WORKSPACE_LONGEST_ROOT
+    profiles = (ROOT / 'amplifier_web/runtime_profiles.py').read_text(encoding='utf-8')
+    assert 'stage = receipt_directory(home, selected)' in profiles and 'workspace = config.workspace' in profiles
+    assert '"AMPLIFIER_HOME": str(shared)' in profiles and 'shared = stage / "shared-config"' in profiles
+
+
 def test_the_model_reproduces_the_measured_update_stage_failure():
     # Clean-room Run B, update from 0.98.4 to 0.98.5: installation folder path 51, long paths off.
     assert (length(STAGE, 51), length(CHECK_FOLDER, 51), length(f'{STAGE}\\shared-config\\projects', 51)) == (

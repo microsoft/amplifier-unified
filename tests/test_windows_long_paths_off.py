@@ -432,7 +432,7 @@ def test_the_update_probe_fails_under_the_cli_name_the_failure_this_fix_removes(
 
 
 @pytest.mark.parametrize('size', [CLEAN_ROOM_ROOT, budget.MAX_ROOT])
-def test_the_real_update_probe_completes_in_a_stage_with_long_paths_off(stage, size):
+def test_the_real_update_probe_completes_in_a_stage_with_long_paths_off(stage, monkeypatch, size):
     install, made = stage(size)
     update_stage_probe.passed(run_probe(install, made))
     assert update_stage_probe.expected_project(made) == PROJECT
@@ -463,6 +463,18 @@ def test_the_real_update_probe_completes_in_a_stage_with_long_paths_off(stage, s
     print(f'MEASURED installation folder {size}: the real probe completed under the project name {PROJECT}; '
           f'session folder {len(str(folder))}, capture folder {len(str(capture))}, longest file that exists '
           f'{files}, longest folder that exists {folders}; longest path that the budget allows there {longest}')
+    # The same stores at the same depth, through their real writers: a second
+    # save also writes the backup files and goes through every temporary name.
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(made.stage))
+    monkeypatch.setenv('AMPLIFIER_HOME', str(made.shared))
+    other = str(uuid.uuid4())
+    saved = save_session(made.stage, made.workspace, other)
+    assert saved == folder.with_name(other) and (saved / 'transcript.jsonl.backup').is_file()
+    assert len(str(saved / 'transcript.jsonl.backup')) == rows['probe transcript backup']
+    assert capture_events(made.workspace, other) == capture.parents[1] / other / 'context-intelligence'
+    assert os.listdir(made.shared / 'projects') == [PROJECT]
+    files, folders = install.longest()
+    assert files <= longest and folders <= budget.FOLDER_LIMIT
 
 
 # The deepest module source file of the default bundles, by its real name (125

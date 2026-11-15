@@ -474,6 +474,26 @@ def test_a_stage_needs_the_layout_and_the_id_that_the_updater_makes(tmp_path, wi
         assert project_slug(folder / 'qualification-workspace') == cli_name(folder / 'qualification-workspace')
 
 
+def test_a_stage_that_an_earlier_version_checked_keeps_its_folder_and_the_next_check_gets_the_short_name(
+        stage, windows_rule):
+    # Where long paths are on, an earlier app version saved its check sessions
+    # under the CLI name. The stage is still on disk when the app checks it again
+    # after an app update. A check never continues a session, so nothing is read
+    # from the earlier folder, and it stays as it is.
+    workspace = stage / 'qualification-workspace'
+    earlier = history(cli_name(workspace), str(uuid.uuid4()), workspace)
+    (earlier / 'transcript.jsonl').write_text('{"role":"user","content":"earlier check"}\n')
+    before = sorted(str(path) for path in (stage / 'shared-config').rglob('*'))
+    assert project_slug(workspace) == 'update-7260914d5698'
+    from amplifier_web.host.storage import SessionStore
+    store = SessionStore.for_app(stage, workspace)
+    store.save('new-check', [{'role': 'user', 'content': 'next check'}], {'working_dir': str(workspace)})
+    assert store.directory('new-check').parent == sessions_dir(workspace)
+    assert sorted(os.listdir(stage / 'shared-config' / 'projects')) == sorted(['update-7260914d5698', cli_name(workspace)])
+    assert [path for path in before if not Path(path).exists()] == []
+    assert (earlier / 'transcript.jsonl').read_text() == '{"role":"user","content":"earlier check"}\n'
+
+
 def test_update_check_name_reads_no_file(stage, windows_rule, monkeypatch):
     workspace = stage / 'qualification-workspace'
 
