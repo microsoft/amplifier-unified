@@ -1,7 +1,8 @@
 name: Windows start again
 # The product's own launcher on a Windows runner: entries, first start, an AI
-# account configured without a key, the public keep-folder uninstall, entries
-# again, second start. Task Scheduler, the host that the task starts and the
+# account configured without a key, the product's keep-folder uninstall (its
+# function, with the question answered Yes), entries again, second start.
+# Task Scheduler, the host that the task starts and the
 # runtime preparation are real. Required: the second start succeeds on the same
 # port with the same data and without a new preparation.
 # Not a setup file run or a clean ordinary account. No certificate question,
@@ -17,6 +18,10 @@ on:
       - amplifier_web/windows_consumer_shell.py
       - amplifier_web/windows_service.py
       - amplifier_web/installation_runtime.py
+      # Names the preparation folder that check 8 watches.
+      - amplifier_web/runtime_environment.py
+      - amplifier_web/windows_files.py
+      - scripts/release.py
       - tests/fixtures/windows_launcher_refresh_native.py
       - tests/fixtures/manual_app_handoff_native.py
       - pyproject.toml
@@ -26,7 +31,7 @@ permissions:
 jobs:
   windows-start-again:
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUTF8: '1'
@@ -47,13 +52,13 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         timeout-minutes: 2
       - name: Prepare the candidate launcher in setup's private layout
-        timeout-minutes: 18
+        timeout-minutes: 10
         shell: pwsh
         run: |
           python -I -B tests/fixtures/windows_start_again_native.py prepare
           if ($LASTEXITCODE -ne 0) { throw 'Preparation failed; inspect preparation.json.' }
       - name: Start, configure, uninstall and start again
-        timeout-minutes: 30
+        timeout-minutes: 25
         shell: pwsh
         run: |
           & "$env:START_AGAIN_PYTHON" -I -B tests/fixtures/windows_start_again_native.py run

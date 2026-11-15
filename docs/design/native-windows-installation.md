@@ -846,12 +846,16 @@ that it could not add the entries, and starts the app.
 
 `.github/workflows/windows-start-again.yml` runs this path on a Windows
 runner with the product's own commands in setup's order: entries, first
-start, an AI account configured without a key, the public uninstall, entries
-again, second start. Task Scheduler, the host that the task starts and the
+start, an AI account configured without a key, the product's uninstall
+function (called in the test's process, with its question answered Yes),
+entries again, second start. Task Scheduler, the host that the task starts and the
 runtime preparation are real there. It requires that `runtime status` reports
 a prepared runtime with the account configured, and that the second start
-succeeds on the same port with the same data and without a new folder under
-`app\updates\releases`. That case does not use the setup file or a clean
+succeeds with a new host process on the same port. It also requires that a
+marker file in the app data and the configured account are unchanged, and
+that no folder under `app\updates\releases` was added or replaced: a
+preparation with an account creates such a folder first. That case does not
+use the setup file or a clean
 ordinary account (the runner's account is elevated). The launcher runs there
 with a console Python and `--no-open`, so the certificate question and the
 browser are not part of it. It has no chat, and no sign-out and sign-in: the

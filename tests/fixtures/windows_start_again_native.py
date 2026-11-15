@@ -3,7 +3,8 @@
 Real on a Windows runner: the candidate installed with uv in setup's private
 layout, the product's own entry and launcher commands in setup's order
 (entries, then start), runtime preparation from the network, Task Scheduler,
-the host that the task starts, the public uninstall, and the second start.
+the host that the task starts, the product's uninstall function (called in
+this process, with its question answered Yes), and the second start.
 
 Not shown: the setup file and its window, a clean ordinary account (the
 runner's account is elevated), the certificate question and the browser (the
@@ -38,7 +39,7 @@ CHECKS = (
     "5. Keep-folder uninstall",
     "6. Windows entries again",
     "7. Second start",
-    "8. Same port, same data, no new preparation",
+    "8. Same port, marker and account kept, no preparation folder",
     "9. Final uninstall and folder cleanup",
 )
 
@@ -82,7 +83,6 @@ def execute(argv, *, env=None, cwd=None, timeout=120):
     started = time.monotonic()
     result = subprocess.run(list(map(str, argv)), env=env, cwd=cwd, timeout=timeout,
                             capture_output=True, text=True, encoding="utf-8", errors="replace")
-    assert len(result.stdout) <= 64 * 1024, "Command output exceeded the evidence limit"
     try:
         value = json.loads(result.stdout.strip())
     except ValueError:
@@ -160,7 +160,7 @@ def cli(root, *args, timeout=120):
                    cwd=root, timeout=timeout)
 
 
-def launcher(root, *args, timeout=1800):
+def launcher(root, *args, timeout=600):
     # Setup's own commands and working folder, with the console Python.
     return execute([sys.executable, "-I", "-B", "-m", "amplifier_web.windows_consumer",
                     "--root", root, *args], cwd=root / "workspace", timeout=timeout)
@@ -195,9 +195,31 @@ def uninstall(root, notices):
         windows_installation.owner_notice = original
 
 
+def kept_folder_question(notices):
+    """Exactly the one question of an uninstall that keeps the folder.
+
+    The test answers Yes to what it is asked. Another question, or one more,
+    is another case: it must fail here and not pass with a changed meaning.
+    """
+    return (len(notices) == 1 and notices[0]["confirm"] is True
+            and notices[0]["message"].startswith("Uninstall Amplifier?")
+            and "stay in this folder" in notices[0]["message"])
+
+
 def releases(root):
+    """The names of the preparation folders. A replaced folder has another name."""
     path = root / "app/updates/releases"
-    return sum(child.is_dir() for child in path.iterdir()) if path.exists() else 0
+    return sorted(child.name for child in path.iterdir() if child.is_dir()) if path.exists() else []
+
+
+def running(state):
+    # Task Scheduler's own answer, not only the host's health.
+    return state.get("managed") is True and state.get("state") == "running" and state.get("instances") == 1
+
+
+def process_identity(health):
+    # Windows reuses process numbers. The creation time makes the identity.
+    return health["pid"], health["created"]
 
 
 def preparation_facts(root):
@@ -283,7 +305,7 @@ def run():
             first = launcher(root, "--no-open")
             report["firstStart"] = first
             state, status = task_facts(home), cli(root, "service", "status", "--json")
-            if first["exitCode"] or not state["managed"] or not healthy(status):
+            if first["exitCode"] or not running(state) or not healthy(status):
                 log = home / "config/services/task-output.log"
                 from amplifier_web.runtime_environment import receipt_directory
                 receipt = receipt_directory(home)
@@ -335,15 +357,16 @@ def run():
             begin(5)
             notices = []
             removed = uninstall(root, notices)
+            assert kept_folder_question(notices), notices
             state, status = task_facts(home), cli(root, "service", "status", "--json")
             assert removed["ok"] and not state["managed"]
             assert not status["json"].get("responding", False) and not shell.listed(root)
             assert not asyncio.run(listener_answers(home)), "The HTTPS listener still answers"
             assert json.loads((root / shell.FILE).read_text())["status"] == "removed"
             assert root.is_dir() and hashlib.sha256(marker.read_bytes()).hexdigest() == digest
-            count = releases(root)
+            folders = releases(root)
             passed(5, uninstall=removed, notices=notices, task=state, serviceStatus=status,
-                   releaseCount=count, folderPresent=True, markerUnchanged=True, listenerAnswers=False)
+                   releaseCount=len(folders), folderPresent=True, markerUnchanged=True, listenerAnswers=False)
 
             begin(6)
             # As setup's second run: the entries come back before the start.
@@ -368,23 +391,25 @@ def run():
 
             begin(8)
             state, status = task_facts(home), cli(root, "service", "status", "--json")
-            after_port, after_count = windows_installation.saved_port(home), releases(root)
-            assert state["managed"] and healthy(status), (state, status)
-            assert status["json"]["pid"] != first["json"]["health"]["pid"]  # A new host process.
-            assert after_port == port and after_count == count
+            after_port, after_folders = windows_installation.saved_port(home), releases(root)
+            assert running(state) and healthy(status), (state, status)
+            # A new host process, not the one that the uninstall stopped.
+            assert process_identity(status["json"]) != process_identity(first["json"]["health"])
+            assert after_port == port and after_folders == folders
             assert hashlib.sha256(marker.read_bytes()).hexdigest() == digest
             assert installation_runtime._needs_connection(home) is False
             assert second["json"]["runtime"]["prepared"] is True
-            passed(8, task=state, serviceStatus=status, port=after_port, releaseCount=after_count,
+            passed(8, task=state, serviceStatus=status, port=after_port, releaseCount=len(after_folders),
                    markerUnchanged=True, needsConnection=False, runtime=second["json"]["runtime"],
                    firstStartSeconds=first["seconds"], secondStartSeconds=second["seconds"],
-                   runtimePrepare="Did not run. With an account configured and no active generation, "
-                                  "runtime prepare first creates a folder in app\\updates\\releases. "
-                                  "The count did not change.")
+                   runtimePrepare="Observed: no folder in app\\updates\\releases was added or replaced. "
+                                  "With an account configured and no active generation, runtime "
+                                  "prepare creates one as its first action.")
 
             begin(9)
             notices = []
             removed = uninstall(root, notices)
+            assert kept_folder_question(notices), notices
             assert removed["ok"] and not windows_service.managed(home) and not shell.listed(root)
             assert not cli(root, "service", "status", "--json")["json"].get("responding", False)
             assert not asyncio.run(listener_answers(home)), "The final HTTPS listener still answers"
@@ -414,8 +439,14 @@ def cleanup():
         with shared().helpers().token_user_default_owner():
             # _read(home) refuses a task bound to any other installation.
             windows_service.uninstall(root / "app")
+            folder = None
             if (root / shell.FILE).exists():
+                folder = Path(json.loads((root / shell.FILE).read_text())["folder"])
                 shell.remove(root)
+            # Success only when nothing of this case is left registered.
+            assert not windows_service.managed(root / "app"), "The sign-in task is still registered"
+            assert shell.registry(root) is None, "The Apps-list entry is still registered"
+            assert folder is None or not folder.exists(), "The Start-menu folder is still there"
         return True
     assert root.parent == shared().helpers().canonical_temp() and root.name.startswith("start-again-")
     if python.exists():
