@@ -20,7 +20,7 @@ def saved(tmp_path):
             'turns': [{'id': 'old', 'phase': 'completed', 'anchorMessageId': None},
                       {'id': 'turn', 'phase': 'running', 'anchorMessageId': None}],
             'retiredUsageNodes': []}
-    reference = records.import_tree(db, ('chat', 'native', '/workspace'), tree)
+    reference = records.import_tree(db, ('chat',), tree)
     db.commit()
     session = ColdRecord({'id': 'chat', 'runtimeSessionId': 'native', 'workspace': '/workspace',
                           'messages': [], MARKER: {'execution': reference}}, db)
@@ -127,3 +127,35 @@ def test_stop_and_late_tool_correction_keep_completed_history_and_unknown_outcom
     assert actual['nodes'][-1]['output'] == {'data': 'actual result'}
     assert actual['nodes'][0]['detail'] == original['nodes'][0]['detail']
     assert actual['turns'][-1]['phase'] == 'stopped'
+
+
+def test_runtime_replacement_and_workspace_move_keep_the_same_chat_records(saved):
+    db, session, original = saved
+    owner = working(session)
+    session.update(runtimeSessionId='replacement-native', workspace='/other-workspace')
+    assert working(session) is owner
+    exact(session, 'nodes', {'id': '7'})['detail']['values'].append('after move')
+    reference = save(db, session)
+    restored = ColdRecord({'id': 'chat', 'runtimeSessionId': 'replacement-native',
+                          'workspace': '/other-workspace', MARKER: {'execution': reference}}, db)
+    assert snapshot(restored)['nodes'][7]['detail']['values'] == [7, 'after move']
+    assert snapshot(restored)['nodes'][8] == original['nodes'][8]
+
+
+def test_duplicate_legacy_ids_keep_complete_mutable_save_semantics(saved):
+    db, session, original = saved
+    from amplifier_web.cold_display import execution_reference
+    from amplifier_web.session_projection import stored_execution
+    duplicate = copy.deepcopy(original['nodes'][7])
+    duplicate['detail'] = {'values': ['second occurrence']}
+    original['nodes'].append(duplicate)
+    reference = execution_reference(db, original)
+    db.commit()
+    legacy = ColdRecord({'id': 'chat', MARKER: {'execution': reference}}, db)
+    assert working(legacy) is None
+    assert legacy['execution']['nodes'] == original['nodes']
+    alias = legacy['execution']['nodes'][-1]['detail']['values']
+    alias.append('late edit')
+    tree, _ = ExecutionPreparation().stored(db, legacy, legacy['execution'], {})
+    assert tree == stored_execution(legacy['execution'])
+    assert tree['nodes'][-1]['detail']['values'] == ['second occurrence', 'late edit']

@@ -14,7 +14,13 @@ from . import execution_records as records
 
 
 def _owner(session):
-    return session['id'], session.get('runtimeSessionId'), session.get('workspace')
+    # Runtime replacement and moving a chat do not replace its history owner.
+    # Individual rows retain their existing source/producer/account identities.
+    return (session['id'],)
+
+
+class LegacyExecution(ValueError):
+    """An older complete mutable representation cannot use keyed records."""
 
 
 def _stored(db, reference):
@@ -34,6 +40,13 @@ class WorkingExecution:
         else:
             # One legacy ownership transition, not a repeated current update.
             value = _stored(self.db, reference)
+            for kind in records.COLLECTIONS:
+                try:
+                    identities = [records.key(kind, row) for row in value.get(kind, [])]
+                except (ValueError, AttributeError):
+                    raise LegacyExecution() from None
+                if len(identities) != len(set(identities)):
+                    raise LegacyExecution()
             self.current = {name: value for name, value in value.items() if name not in records.COLLECTIONS}
             self.current.update({kind: [row for row in value.get(kind, []) if records.is_active(row)]
                                  for kind in records.COLLECTIONS})
@@ -156,7 +169,11 @@ def working(session):
         return None
     owner = getattr(session, '_working_execution', None)
     if owner is None or owner.owner != _owner(session):
-        owner = session._working_execution = WorkingExecution(session, reference)
+        try:
+            owner = session._working_execution = WorkingExecution(session, reference)
+        except LegacyExecution:
+            session['execution']  # Transfer the exact old mutable representation.
+            return None
     return owner
 
 
