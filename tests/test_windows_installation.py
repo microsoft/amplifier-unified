@@ -127,10 +127,23 @@ def test_progress_is_reported_immediately_before_each_step(installation, prepare
     if not prepared:
         expected += [("progress", "prepare"), ("command", ("runtime", "prepare", "--json"))]
     expected += [
+        ("progress", "address"),
         ("command", ("config", "set", "port", "23456", "public_origins", "[https://127.0.0.1:23456]")),
         ("progress", "task"), ("command", ("service", "install")),
         ("progress", "ready"), ("command", ("service", "status", "--wait", "60", "--json"))]
     assert events == expected
+
+
+def test_a_failure_after_a_finished_preparation_is_not_reported_as_preparation(installation, monkeypatch):
+    root, value, calls, _ = installation
+    steps = []
+    def no_port():
+        raise RuntimeError("no free port")
+    monkeypatch.setattr(windows_ports, "select", no_port)
+    with pytest.raises(RuntimeError, match="no free port"):
+        asyncio.run(setup.prepare_background(
+            root, root / "host/Scripts/amplifier-unified.exe", {"PUBLIC": "only"}, progress=steps.append))
+    assert calls[-1] == ("runtime", "prepare", "--json") and steps == ["address", "tls", "prepare", "address"]
 
 
 def test_stopped_task_reports_start_then_health_without_preparation(installation):

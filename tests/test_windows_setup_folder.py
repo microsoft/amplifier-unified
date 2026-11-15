@@ -149,8 +149,13 @@ def test_second_setup_restores_entries_before_start_and_waits_without_pins():
     order = [opened.index(text) for text in (
         "if(!listed) {", "listed=await Task.Run(()=>AddEntries(root));",
         'Say("Setup could not add Amplifier to the Start menu. Amplifier starts now.',
-        "int started=await Task.Run(()=>StartAndWait(root));", "result=started==0?0:1;")]
+        "result=listed?0:1;waiting=true;",
+        "int started=await Task.Run(()=>StartAndWait(root));", "result=started==0 && listed?0:1;")]
     assert order == sorted(order)
+    # "Listed" needs the entry record AND the Start-menu entry itself: a removal
+    # whose last record write was refused leaves the record with no entry.
+    assert ('listed=receipt!=null && Text(receipt,"status")=="installed" &&\n'
+            '                    File.Exists(Path.Combine(Text(receipt,"folder"),"Amplifier Unified.lnk"));') in opened
     # A failed entries step does not keep the person from the app, and its
     # message never sends the person to a Start-menu entry that is not there.
     failure = between('Say("Setup could not add Amplifier', "MessageBoxIcon.Warning", opened)
@@ -164,7 +169,10 @@ def test_second_setup_restores_entries_before_start_and_waits_without_pins():
     assert "ProgressBarStyle.Marquee" in opened and "new System.Windows.Forms.Timer" in opened
     assert 'label.Text=Stage+"...\\n\\nKeep this window open."' in opened
     assert 'Stage="Starting Amplifier (this can take a few minutes)";' in opened
-    assert "if(!settled)e.Cancel=true;" in opened and "settled=true;timer.Stop();form.Close();" in opened
+    # The window stays while setup works. While setup only waits for the
+    # launcher, the person can close it: the launcher does not need setup.
+    assert "if(!settled && !waiting)e.Cancel=true;" in opened and "settled=true;timer.Stop();form.Close();" in opened
+    assert opened.index("listed=await Task.Run(()=>AddEntries(root));") < opened.index("waiting=true;")
 
     entries = between("static bool AddEntries(", "static int StartAndWait(")
     assert 'Path.Combine(root,"tools","amplifier-unified","Scripts","python.exe")' in entries

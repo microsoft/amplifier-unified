@@ -374,6 +374,7 @@ async def prepare_background(root, launcher, environment, *, port=None, identity
                 raise RuntimeError("Runtime dependency preparation did not complete; no task was registered.")
         if saved is None:
             # Select last: the host's own listener claims the port seconds later.
+            step("address")  # Preparation is over; a failure here is not its failure.
             if port is None:
                 port = await asyncio.to_thread(windows_ports.select)
             await command("config", "set", "port", str(port),

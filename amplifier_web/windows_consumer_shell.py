@@ -224,10 +224,19 @@ def _receipt(root):
 
 
 def listed(root) -> bool:
+    """The Start-menu entry that opens Amplifier exists, and the entry record says so.
+
+    The record alone is not enough. The last write of an uninstall can be
+    refused after every entry is gone, and a person can delete the folder.
+    """
     from .windows_files import address
     try:
-        row = _receipt(address(root))
-        return isinstance(row, dict) and row.get("status") == "installed"
+        root = address(root)
+        row = _receipt(root)
+        if not isinstance(row, dict) or row.get("status") != "installed":
+            return False
+        folder = programs() / ("Amplifier Unified - " + identity(root))
+        return (folder / next(iter(LINKS))).is_file()
     except (OSError, ValueError):
         return False
 
@@ -238,12 +247,18 @@ def install(root, version):
     root = address(root)
     manifest = root / FILE
     if manifest.exists():
+        # The entries can be added again over the record of a finished
+        # removal. A record that still says `installed` counts the same when
+        # the entries are gone: the last write of an uninstall can be refused
+        # after every entry is removed. The check below refuses when the
+        # Start-menu folder or the Apps-list entry exists, so nothing is ever
+        # overwritten. Every other record is refused.
         try:
             row = _receipt(root)
-            removed = isinstance(row, dict) and row.get("status") == "removed"
+            again = isinstance(row, dict) and row.get("status") in {"removed", "installed"}
         except (OSError, ValueError):
-            removed = False
-        if not removed:
+            again = False
+        if not again:
             raise ValueError("Windows shell integration already has a receipt; inspect it before retrying.")
     folder = programs() / ("Amplifier Unified - " + identity(root))
     if folder.exists() or registry(root) is not None:

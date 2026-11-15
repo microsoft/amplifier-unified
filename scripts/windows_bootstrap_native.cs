@@ -722,8 +722,9 @@ namespace UnifiedBootstrap {
             } catch(Exception) { return false; }
         }
         static int StartAndWait(string root) {
-            // 0: the launcher finished. 1: it failed and said so in its own
-            // message. 2: Windows could not start it.
+            // 0: the launcher finished, or Windows gave no process to wait for.
+            // 1: the launcher failed and said so in its own message.
+            // 2: Windows could not start it.
             try {
                 var start=AppStart(root);
                 Process app;
@@ -742,10 +743,14 @@ namespace UnifiedBootstrap {
                     MessageBoxButtons.OK,MessageBoxIcon.Warning);
                 return 1;
             }
-            bool listed=false;  // False after the person removed Amplifier in the Windows Apps list.
+            // True only when the entry record says so and the Start-menu entry
+            // exists. False after the person removed Amplifier in the Windows
+            // Apps list; also when that removal could not write its record.
+            bool listed=false;
             try {
                 var receipt=Json.Deserialize<Dictionary<string,object>>(File.ReadAllText(Path.Combine(root,"consumer-shell.json")));
-                listed=receipt!=null && Text(receipt,"status")=="installed";
+                listed=receipt!=null && Text(receipt,"status")=="installed" &&
+                    File.Exists(Path.Combine(Text(receipt,"folder"),"Amplifier Unified.lnk"));
             } catch(Exception) {}
             if(Say(listed
                 ? "Amplifier is already installed on this PC.\n\nSelect Yes to open it now.\n\n"+
@@ -763,8 +768,10 @@ namespace UnifiedBootstrap {
                 form.Controls.Add(label);form.Controls.Add(bar);
                 var timer=new System.Windows.Forms.Timer {Interval=250};
                 timer.Tick+=(sender,e)=>{label.Text=Stage+"...\n\nKeep this window open.";};
-                int result=1;bool settled=false;
-                form.FormClosing+=(sender,e)=>{if(!settled)e.Cancel=true;};
+                // The launcher does not need setup. While setup only waits for
+                // it, the person can close this window; Amplifier goes on.
+                int result=1;bool settled=false,waiting=false;
+                form.FormClosing+=(sender,e)=>{if(!settled && !waiting)e.Cancel=true;};
                 form.Shown+=async(sender,e)=>{
                     timer.Start();
                     try {
@@ -777,6 +784,7 @@ namespace UnifiedBootstrap {
                                 MessageBoxButtons.OK,MessageBoxIcon.Warning);
                         }
                         Stage="Starting Amplifier (this can take a few minutes)";
+                        result=listed?0:1;waiting=true;
                         int started=await Task.Run(()=>StartAndWait(root));
                         // The launcher shows its own messages. Setup adds one
                         // only when Windows could not start the launcher.
@@ -784,7 +792,7 @@ namespace UnifiedBootstrap {
                             ? "Open it from the Start menu: Amplifier Unified."
                             : "Restart Windows. Then run this setup file again."),
                             MessageBoxButtons.OK,MessageBoxIcon.Warning);
-                        result=started==0?0:1;
+                        result=started==0 && listed?0:1;
                     } catch(Exception) {
                     } finally {settled=true;timer.Stop();form.Close();}
                 };

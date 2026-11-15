@@ -183,8 +183,29 @@ def test_entries_can_be_installed_again_after_uninstall(uninstaller):
     assert json.loads((root / shell.FILE).read_text())["status"] == "installed"
 
 
+def test_a_record_that_still_says_installed_with_every_entry_gone_does_not_block(uninstaller):
+    """The last write of an uninstall can be refused after every entry is removed."""
+    root, state = uninstaller.root, uninstaller.state
+    installed = (root / shell.FILE).read_text()
+    assert json.loads(installed)["status"] == "installed" and shell.listed(root)
+    assert uninstaller.run()["ok"]
+    (root / shell.FILE).write_text(installed)  # As if that last write had been refused.
+    assert not uninstaller.folder.exists() and state["registry"] is None
+    # The record alone never sends a person to a Start-menu entry that is gone.
+    assert shell.listed(root) is False
+    assert shell.install(root, "1.0.0")["shortcuts"] == 4 and shell.listed(root)
+    # With the entries present the same record refuses, and nothing is overwritten.
+    before = dict(state["links"])
+    with pytest.raises(ValueError, match="entries already exist; nothing was overwritten"):
+        shell.install(root, "1.0.0")
+    assert state["links"] == before and shell.listed(root)
+    # A person deleted only the entry that opens Amplifier: not listed.
+    (uninstaller.folder / next(iter(shell.LINKS))).unlink()
+    assert shell.listed(root) is False
+
+
 @pytest.mark.parametrize("raw", [
-    '{"status":"installed"}', '{"status":"preparing"}', '{"status":"other"}', '{}', '[]', 'null', 'not json'])
+    '{"status":"preparing"}', '{"status":"other"}', '{}', '[]', 'null', 'not json'])
 def test_only_a_removed_receipt_allows_installing_entries_again(model, raw):
     root, _, state = model
     (root / shell.FILE).write_text(raw)
@@ -205,13 +226,18 @@ def test_unreadable_receipt_refuses_install_and_is_not_listed(model, monkeypatch
     assert shell.listed(root) is False
 
 
-@pytest.mark.parametrize("raw,expected", [
-    (None, False), ('{"status":"removed"}', False), ('{"status":"installed"}', True),
-    ('{"status":"preparing"}', False), ('[]', False), ('not json', False)])
-def test_listed_reads_only_the_installed_receipt(model, raw, expected):
-    root, _, _ = model
+@pytest.mark.parametrize("raw,shortcut,expected", [
+    (None, True, False), ('{"status":"removed"}', True, False), ('{"status":"installed"}', True, True),
+    ('{"status":"installed"}', False, False), ('{"status":"preparing"}', True, False),
+    ('[]', True, False), ('not json', True, False)])
+def test_listed_needs_the_installed_record_and_the_entry_that_opens_amplifier(model, raw, shortcut, expected):
+    root, programs, _ = model
     if raw is not None:
         (root / shell.FILE).write_text(raw)
+    if shortcut:
+        folder = programs / ("Amplifier Unified - " + shell.identity(root))
+        folder.mkdir()
+        (folder / "Amplifier Unified.lnk").write_bytes(b"shortcut")
     assert shell.listed(root) is expected
 
 
@@ -267,8 +293,12 @@ def test_modified_shell_entries_never_remove_anything(model, change):
 def test_existing_or_partial_registration_does_not_replay(model):
     root, programs, state = model
     shell.install(root, "1.0.0")
-    with pytest.raises(ValueError, match="receipt"): shell.install(root, "1.0.0")
+    before = dict(state["links"]), state["registry"], (root / shell.FILE).read_text()
+    # A second install over existing entries refuses, and nothing is replayed or overwritten.
+    with pytest.raises(ValueError, match="entries already exist; nothing was overwritten"):
+        shell.install(root, "1.0.0")
     assert not state["calls"]
+    assert (dict(state["links"]), state["registry"], (root / shell.FILE).read_text()) == before
 
 
 @pytest.mark.parametrize("gone", [

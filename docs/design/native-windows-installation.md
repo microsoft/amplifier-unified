@@ -699,7 +699,7 @@ child output or network values:
 | A folder above the installation folder lets other accounts change it | Stop: names that folder. The storage check is unchanged |
 | Less than 4 GB free | Stop |
 | The folder exists and setup did not create it | Stop. Setup never changes it |
-| The folder holds a finished installation | "Amplifier is already installed." Yes restores missing Start-menu and Apps-list entries, then opens it. No app files are installed again or removed |
+| The folder holds a finished installation | "Amplifier is already installed." Yes adds missing Start-menu and Apps-list entries again, then opens it. No app files are installed again or removed. The launcher and its code stay the ones that the earlier setup file installed |
 | The folder holds setup's own unfinished attempt, or is empty | Setup removes it and installs |
 | The folder has setup's first marker and app data, but no completion record | Stop. Setup never removes it |
 | Another installation already starts at sign-in for this account | Stop: remove it first. One sign-in task exists per account |
@@ -822,21 +822,48 @@ that), then starts the launcher and waits for it. Setup's window with the
 current step stays open during both steps. Chats and settings stay in place.
 If the entries cannot be added, setup says so and still starts the app, as it
 did before this step existed; the next step it names is to run the setup file
-again. The launcher skips preparation when `runtime status` reports a prepared
-runtime, just as a start at sign-in uses that runtime. Without this check, a
-connected AI account made the start run a complete first installation: minutes
-without a window, a new folder on each attempt, and in the observed case a
-failure. The launcher's failure message names the step that failed. It names
-the Start menu as the next step only when the entry record says `installed`;
-otherwise the next step is to run the setup file again. The real Scheduled
-Task, the real host start, and `runtime status` on a real installation after
-chats still need a clean-room run.
+again. While setup only waits for the launcher, the person can close setup's
+window; the launcher goes on. The launcher skips preparation when
+`runtime status` reports a prepared runtime, just as a start at sign-in uses
+that runtime. Without this check, a connected AI account made the start run a
+complete first installation: minutes without a window, a new folder on each
+attempt, and in the observed case a failure. The launcher's failure message
+names the step that failed: the preparation, or the start. It names the Start
+menu as the next step only when the entry record says `installed` and the
+entry that opens Amplifier exists; otherwise the next step is to run the setup
+file again. The record alone is not enough: the last write of an uninstall can
+be refused after every entry is gone. For the same reason the entries can be
+added again over a record that still says `installed`, when neither the
+Start-menu folder nor the Apps-list entry exists.
 
-Not changed: when the runtime is not prepared and an AI account is connected,
-a start without a task still runs the complete first installation, and a
-failed attempt leaves its folder under `app\updates\releases` (failed
-candidates are retained by design). After an uninstall this no longer
-happens, because the prepared runtime is used.
+Not proven here, and the condition for all of the above: that
+`runtime status` reports a prepared runtime on a real installation after
+chats. The running host makes the same checks of the recorded runtime before
+each chat, which supports it and does not prove it. When the status is
+negative or cannot be read, the start prepares as before. The real Scheduled
+Task, the real host start and setup's second-run window also need a
+clean-room run; the checks on a runner compile the setup source and read it as
+text, and they do not run that window.
+
+Not changed, each stated as a limit:
+
+- When the runtime is not prepared and an AI account is connected, a start
+  without a task still runs the complete first installation. A failed attempt
+  leaves its folder under `app\updates\releases` (failed candidates are
+  retained by design), and the next start begins again; it does not continue
+  the failed attempt. After an uninstall this path is avoided only when
+  `runtime status` reports a prepared runtime.
+- The limits of a preparation stay as they were: 1800 seconds for the whole
+  preparation and 900 seconds for each of its steps. No shorter limit exists.
+  The failure that was observed was not a time limit: one of four parallel
+  checks failed after about four minutes of other work, and the saved record
+  names only the cancellation of the other three.
+- A start from the Start menu has no window while it prepares. Only a start
+  from the setup file shows setup's window.
+- An installation that an earlier setup file made keeps that setup file's
+  launcher. A second run of a newer setup file starts that launcher and asks
+  it to add the entries; it does not replace it. Such an installation gets
+  this change only from a new installation.
 
 The Start-menu commands Stop and Status use the same form of message: what
 did not happen, the next action and the reference. They no longer show the
