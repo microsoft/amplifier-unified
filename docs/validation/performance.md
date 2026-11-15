@@ -71,6 +71,15 @@ and cancellation cleanup; a manual index refresh is not production qualification
 
 ## Separate current presentation from historical evidence
 
+The first web chat view contains at most 20 recent messages. Explicit earlier
+history reads keep their existing cursor and up-to-100-message page; canonical
+history and execution input are unchanged. Measure both server delivery and
+browser paint with long formatted messages: a bounded 100-row response can
+still construct tens of thousands of DOM elements before a chat is usable.
+Pair the initial render budget with complete older-page reachability, exact saved
+IDs/attachments, native display-only meaning, and unchanged authority/Stop state.
+This presentation limit is not a model-context or retention policy.
+
 Routine state carries the current fields its consumers need. Historical bodies
 use existing authorized detail/history reads when they are not needed in that
 view. Apply projection before expensive copying or encoding. Review every removed
