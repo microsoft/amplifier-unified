@@ -47,6 +47,13 @@ caller's existing installation/account, not a new host or location identity.
 The top-level `path` remains the only writable source. The derived snapshot does
 not create a persistent `locations` field or interpret custom fields by that name.
 
+The host's workspace and conversation selection paths consume a fresh
+`local_location` snapshot when projecting a registration into the default folder.
+They keep the existing registration ID and exact stored path, including a known
+but unavailable folder. Selecting an unresolved registration keeps the previous
+default folder. This does not change a saved conversation's workspace or worker
+directory; selection, pins and Canvas effects remain host-owned.
+
 This is a pure metadata API, not a location-binding migration. Future explicit
 associations must preserve current path-based configuration and Personalization
 scopes, native history locators, saved pins, session and Canvas references,
