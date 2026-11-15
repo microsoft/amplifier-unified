@@ -15,10 +15,13 @@ Windows still gives the old name for a SID.
 
 THIS CHANGES THE SECURITY POLICY OF THE MACHINE THAT RUNS IT. A stop between
 the change and the restore leaves every task of that machine's local accounts
-with a name that maps to nothing. It therefore runs only on a GitHub-hosted
-runner (a machine that is deleted after the job), only with an explicit
-opt-in, saves the original name before the change, restores it in every case,
-and `cleanup` restores it once more from the saved record.
+with a name that maps to nothing. It is therefore for the hosted workflow
+only (a machine that is deleted after the job): it refuses to run unless the
+environment is that of a GitHub-hosted runner and the workflow opted in. It
+saves the original name before the change and restores it in every case, and
+`cleanup` restores it once more from the saved record. A job that is ended
+by force between the change and the restore leaves the changed name; the
+runner's deletion is then the last containment.
 
 This is not clean-room acceptance: no setup file, no restart, no sign-in.
 """
@@ -45,7 +48,12 @@ OPT_IN = "AMPLIFIER_RENAME_THIS_RUNNERS_ACCOUNT_DOMAIN"
 
 
 def require_disposable_runner():
-    """Refuse before any import or effect, on every machine that is not thrown away."""
+    """Refuse before any import or effect unless this is the hosted workflow, with its opt-in.
+
+    A guard against accidental use. It reads the environment that GitHub sets
+    on a hosted runner; environment variables do not prove the machine. Never
+    set them by hand on a machine that is kept.
+    """
     if not (sys.platform == "win32" and os.environ.get("GITHUB_ACTIONS") == "true"
             and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted" and os.environ.get(OPT_IN) == "1"):
         raise SystemExit("Refused: this check changes the machine's account-domain name. It runs only on a "
@@ -353,7 +361,7 @@ def run():
             need(second["pid"] != first["pid"] or second["created"] != first["created"], "this is a new app process")
             now = service._scheduler("query", sid)
             need(now["xml"] == current["xml"] and now["instances"] == 1,
-                 "the task runs and was not registered again")
+                 "the task runs, and its definition is the same text as before the start (old name stored)")
             stopped("stop with the old name stored")
             # Uninstall of the task, which the earlier check refused at its first step.
             cli("service uninstall with the old name stored", "service", "uninstall")

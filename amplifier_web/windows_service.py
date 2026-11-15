@@ -49,14 +49,17 @@ class TaskNotConfirmed(WindowsServiceError):
     all end here. `entry` is the task's name in Task Scheduler. `retry` is True
     when Windows gave no answer for an account name: nothing is known about the
     task then, and a later check can pass.
+
+    The sentence states only that the task was not confirmed. It does not say
+    that nothing was changed: `install` checks a task after it registered it.
     """
 
     def __init__(self, entry, *, retry=False):
         super().__init__(
-            "Windows could not check the account of Amplifier's start-at-sign-in task, "
-            "so Amplifier did not use or change that task." if retry else
+            "Windows could not check the account of Amplifier's start-at-sign-in task, so "
+            "Amplifier could not confirm that the task belongs to this installation." if retry else
             "Amplifier could not confirm that its start-at-sign-in task in Windows belongs "
-            "to this installation, so it did not use or change that task.")
+            "to this installation.")
         self.entry, self.retry = entry, retry
 
 
@@ -233,11 +236,14 @@ def _lookup(name):
         raise _LookupFailed("Account names resolve only on native Windows.")
     import ctypes as C
     from ctypes import wintypes as W
-    api = C.WinDLL("advapi32", use_last_error=True)
-    api.LookupAccountNameW.argtypes = [W.LPCWSTR, W.LPCWSTR, C.c_void_p,
-                                      C.POINTER(W.DWORD), W.LPWSTR,
-                                      C.POINTER(W.DWORD), C.POINTER(W.DWORD)]
-    api.LookupAccountNameW.restype = W.BOOL
+    try:
+        api = C.WinDLL("advapi32", use_last_error=True)
+        api.LookupAccountNameW.argtypes = [W.LPCWSTR, W.LPCWSTR, C.c_void_p,
+                                          C.POINTER(W.DWORD), W.LPWSTR,
+                                          C.POINTER(W.DWORD), C.POINTER(W.DWORD)]
+        api.LookupAccountNameW.restype = W.BOOL
+    except (OSError, AttributeError) as error:
+        raise _LookupFailed("The Windows account lookup is unavailable.") from error
     size, domain_size, use = W.DWORD(), W.DWORD(), W.DWORD()
     C.set_last_error(0)
     sized = api.LookupAccountNameW(None, name, None, C.byref(size), None,

@@ -478,23 +478,28 @@ def test_every_operation_uses_its_own_task_after_the_computer_was_renamed(backen
     assert not backend["backups"]
 
 
-def _fake_lookup_api(monkeypatch, answers):
+def _fake_lookup_api(monkeypatch, answers, convert=None):
     """Stand in for advapi32!LookupAccountNameW: one scripted result for each call."""
     import ctypes
     from amplifier_web import windows_files
     state = {"error": 0, "calls": 0}
 
     def lookup(system, name, sid, size, domain, domain_size, use):
-        result, error, sid_size, kind = answers[state["calls"]]
+        result, error, sid_size, kind, *rest = answers[state["calls"]]
         state["calls"] += 1
         state["error"] = error
-        size._obj.value, domain_size._obj.value, use._obj.value = sid_size, 16, kind
+        size._obj.value, domain_size._obj.value, use._obj.value = sid_size, (rest[0] if rest else 16), kind
         return result
+
+    def sid_text(pointer):
+        if convert is not None:
+            raise convert
+        return SID
     monkeypatch.setattr(service, "sys", SimpleNamespace(platform="win32"))
     monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **k: SimpleNamespace(LookupAccountNameW=lookup), raising=False)
     monkeypatch.setattr(ctypes, "set_last_error", lambda value: state.update(error=value), raising=False)
     monkeypatch.setattr(ctypes, "get_last_error", lambda: state["error"], raising=False)
-    monkeypatch.setattr(windows_files, "_API", lambda: SimpleNamespace(sid_text=lambda pointer: SID))
+    monkeypatch.setattr(windows_files, "_API", lambda: SimpleNamespace(sid_text=sid_text))
     return state
 
 
@@ -507,6 +512,7 @@ def _fake_lookup_api(monkeypatch, answers):
     ([(0, 1789, 0, 0)], "failed"), ([(0, 1722, 0, 0)], "failed"), ([(0, 0, 0, 0)], "failed"),
     ([(1, 1332, 0, 0)], "failed"), ([(1, 0, 28, 1)], "failed"),  # No buffers, yet "success".
     ([(0, 122, 0, 0)], "failed"), ([(0, 122, 70000, 0)], "failed"),
+    ([(0, 122, 28, 0, 40000)], "failed"),                    # An oversized authority name.
 ])
 def test_lookup_reports_no_such_name_only_for_windows_own_answer(monkeypatch, answers, expected):
     state = _fake_lookup_api(monkeypatch, answers)
@@ -516,6 +522,57 @@ def test_lookup_reports_no_such_name_only_for_windows_own_answer(monkeypatch, an
     else:
         assert service._lookup("OLDPC\\Owner") == expected
     assert state["calls"] == len(answers)
+
+
+@pytest.mark.parametrize("problem", [OSError("invalid SID"), RuntimeError("not native Win64")])
+def test_lookup_with_a_sid_that_windows_cannot_convert_is_a_failed_lookup(monkeypatch, problem):
+    state = _fake_lookup_api(monkeypatch, [(0, 122, 28, 0), (1, 0, 28, 1)], convert=problem)
+    with pytest.raises(service._LookupFailed):
+        service._lookup("OLDPC\\Owner")
+    assert state["calls"] == 2
+
+
+def test_lookup_without_the_windows_library_is_a_failed_lookup(monkeypatch):
+    import ctypes
+
+    def missing(*args, **kwargs):
+        raise OSError("advapi32 did not load")
+    monkeypatch.setattr(service, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(ctypes, "WinDLL", missing, raising=False)
+    with pytest.raises(service._LookupFailed):
+        service._lookup("OLDPC\\Owner")
+    with pytest.raises(service.TaskNotConfirmed) as refused:
+        service.owned_spec(_trigger_xml("OLDPC\\Owner"), SID)
+    assert refused.value.retry is True
+
+
+@pytest.mark.parametrize("sid", ["", "x", "S-1-5-18", None, "OLDPC\\Owner"])
+def test_an_owner_that_is_no_user_sid_is_refused_before_the_task_is_read(monkeypatch, sid):
+    monkeypatch.setattr(service, "_lookup", lambda name: pytest.fail("no lookup for an invalid owner"))
+    with pytest.raises(service.WindowsServiceError, match="owner user SID") as refused:
+        service.owned_spec(_trigger_xml("OLDPC\\Owner"), sid)
+    assert not isinstance(refused.value, service.TaskNotConfirmed)  # No task name exists for this owner.
+
+
+@pytest.mark.parametrize("answer,retry", [
+    ({"PC\\Owner": service._LookupFailed("1789")}, True), ({"PC\\Owner": (OTHER, 1)}, False)])
+def test_a_task_that_is_not_confirmed_after_its_registration_is_not_started(backend, monkeypatch, answer, retry):
+    # `install` registers first and checks the stored definition after that.
+    _windows_names(monkeypatch, answer)
+    scheduler = service._scheduler
+
+    def stores_a_name(op, sid, *, previous=None, xml=None):
+        result = scheduler(op, sid, previous=previous, xml=xml)
+        if op == "create":
+            backend["xml"] = result["xml"] = _trigger_xml("PC\\Owner")
+        return result
+    monkeypatch.setattr(service, "_scheduler", stores_a_name)
+    with pytest.raises(service.TaskNotConfirmed) as refused:
+        service.install(spec().data_dir)
+    assert backend["calls"] == ["query", "create"] and refused.value.retry is retry
+    # The task WAS changed here: the sentence must not say otherwise.
+    for claim in ("did not use or change", "nothing was changed", "not changed"):
+        assert claim not in str(refused.value)
 
 
 def test_lookup_off_windows_is_a_failed_lookup_not_an_unknown_name(monkeypatch):

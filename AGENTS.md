@@ -206,8 +206,10 @@ in the ownership check: keep "Windows says no such name" apart from a lookup
 that failed, and keep every other field an exact comparison. The launcher runs
 that check before any app version does, so a fix to it reaches an installed PC
 only with a new launcher. `windows-task-after-rename.yml` registers the real
-task on a hosted runner and renames that runner's account domain; its fixture
-refuses to run on any other machine.
+task on a hosted runner and renames that runner's account domain. Its fixture
+changes the machine's security policy: it runs only with the workflow's opt-in
+in a hosted runner's environment. That guard stops accidental use and does not
+prove the machine; never run the fixture on a machine that is kept.
 Python on Windows accepts only root certificates that the Windows store holds
 at that moment, and aiohttp builds its default list once at import. A new PC's
 store lacks many public roots (seen in Windows Sandbox: the package registry's
