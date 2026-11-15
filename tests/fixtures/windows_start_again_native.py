@@ -84,7 +84,7 @@ def prepare():
         assert not git("status", "--porcelain"), "The candidate checkout must be clean"
         revision = git("rev-parse", "HEAD")
         version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
-        root = helpers.canonical_temp() / ("start-again-" + uuid.uuid4().hex[:8])
+        root = helpers.canonical_temp() / ("start-again-" + uuid.uuid4().hex[:7])
         assert len(str(root)) <= 59, "Use a folder within setup's supported length"
         assert not root.exists()
         save("ownership.json", {"root": str(root)})
