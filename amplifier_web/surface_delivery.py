@@ -244,6 +244,9 @@ class SurfaceProvider:
                 and existing[5] is not None
                 and not existing[5].matches_options(kwargs.get('request_options'))):
             self._discard_prepared(request)
+        # The tuple includes serialized fitted pixels. Its use above is purely
+        # synchronous; do not retain it across an await/pretransport traceback.
+        existing = None
         row = self._graph_lifetimes.get(id(request))
         lifetime = row[1] if row is not None and row[0] is request and not row[1].closed else None
         if lifetime is None:
@@ -659,6 +662,11 @@ class SurfaceProvider:
         from . import provider_capture as capture
         capture.observe(capture.invalidate, self, canonical)
         return True
+
+    def has_prepared_media_request(self, canonical):
+        """Whether this host adapter currently owns a private fitted candidate."""
+        return any(row[0] is canonical and len(row) > 5 and row[5] is not None
+                   for row in self.prepared)
 
     async def complete(self, request, **kwargs):
         from . import provider_capture as capture

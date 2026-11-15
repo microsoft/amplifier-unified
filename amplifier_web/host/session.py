@@ -136,6 +136,7 @@ class SelectedProvider:
             return refit
         if name == "compact_context" and callable(method):
             async def compact(request, **kwargs):
+                self._check_fitted_execution(request, execution)
                 selected, _ = self._selected_request(request, {}, consume=True, dispatch=True)
                 # Native compaction owns its own output reservation. Only the
                 # selected model/effort follows the conversation preference.
@@ -161,10 +162,17 @@ class SelectedProvider:
                 # Preserve named-option feature detection through this wrapper,
                 # translating to keywords only for a legacy provider budget.
                 kwargs['request_options'] = request_options
+                # Reject malformed options before touching an earlier fitted
+                # candidate or its captured release association.
+                from ..surface_delivery import SurfaceProvider
+                options = SurfaceProvider._media_options(kwargs.get("request_options"),
+                    {key: value for key, value in kwargs.items() if key != "request_options"})
+                self._retire_replaced_fit(request, execution)
                 selected, kwargs = self._selected_request(request, kwargs)
                 try:
+                    # Selection supplies model/effort overrides; normalize them
+                    # with the provider budget protocol after preflight.
                     self._budget_options(kwargs)
-                    from ..surface_delivery import SurfaceProvider
                     options = SurfaceProvider._media_options(kwargs.get("request_options"),
                         {key: value for key, value in kwargs.items() if key != "request_options"})
                     self._release_bindings = [row for row in self._release_bindings if row[0] is not request]
@@ -209,6 +217,40 @@ class SelectedProvider:
         self._release_bindings = [row for row in self._release_bindings if row[0] is not request]
         self._selected_requests = [row for row in self._selected_requests if row.original is not request]
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
+
+    def _check_fitted_execution(self, request, execution):
+        """A fitted private candidate belongs to its exact execution adapter."""
+        row = next((row for row in self._release_bindings if row[0] is request), None)
+        if row is None:
+            return
+        owns_media = getattr(row[2], "has_prepared_media_request", None)
+        if not callable(owns_media) or not owns_media(row[1]):
+            return  # Preserve text-only adapters that are constructed per call.
+        if row[2] is execution and self._execution_provider() is execution:
+            return
+        # Use the preparation-time owner/options to retire its private request.
+        # Never ask the replacement provider to adopt, refit or send it.
+        release = getattr(row[2], "release_media_request", None)
+        if not callable(release) or release(row[1], request_options=copy.deepcopy(row[4])) is not True:
+            raise ValueError("Previous selected media fit could not be released")
+        self._forget_request(request)
+        raise ValueError("The selected execution provider changed after fitting; request a new explicit budget.")
+
+    def _retire_replaced_fit(self, request, execution):
+        """An explicit new fit must release a previous private owner's candidate."""
+        row = next((row for row in self._release_bindings if row[0] is request), None)
+        if row is None:
+            return
+        owns_media = getattr(row[2], "has_prepared_media_request", None)
+        if not callable(owns_media) or not owns_media(row[1]):
+            return
+        updates, _ = self._selection_overrides(request, {})
+        if row[2] is execution and self._cached_request(request, updates) is not None:
+            return  # Repeated count retains the exact private request.
+        release = getattr(row[2], "release_media_request", None)
+        if not callable(release) or release(row[1], request_options=copy.deepcopy(row[4])) is not True:
+            raise ValueError("Previous selected media fit could not be released")
+        self._forget_request(request)
 
     def _budget_options(self, kwargs):
         budget = getattr(self.original, 'request_budget', None)
@@ -280,6 +322,7 @@ class SelectedProvider:
         return True
 
     async def _stream_selected(self, execution, method, request, kwargs):
+        self._check_fitted_execution(request, execution)
         selected, kwargs = self._selected_request(request, kwargs, dispatch=True)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
         retained, emitted, iterator = False, False, None
@@ -299,8 +342,9 @@ class SelectedProvider:
                 await iterator.aclose()
 
     async def complete(self, request, **kwargs):
-        selected, kwargs = self._selected_request(request, kwargs, dispatch=True)
         execution = self._execution_provider()
+        self._check_fitted_execution(request, execution)
+        selected, kwargs = self._selected_request(request, kwargs, dispatch=True)
         self._refused_requests = [row for row in self._refused_requests if row[0] is not request]
         retained = False
         try:
