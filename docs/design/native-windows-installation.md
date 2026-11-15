@@ -587,12 +587,13 @@ environment 162, private Python 142, tools 124, private Git 68. Those fit at
 59 today.
 
 The short folder is necessary and not sufficient. The app must also keep what
-it adds below the folder inside the budget of the next section. One row of that
-budget does not fit at 59: module source in the source store fits only up to a
-folder path of 54 (see the source-store item below). A change to the
-folder name must respect this number, and `tests/test_windows_setup_folder.py`
-fails when code and document disagree. Setup stops before it asks anything when
-the path would be longer.
+it adds below the folder inside the budget of the next section. Every row of
+that budget fits at 59 in a new installation. The tightest row is module
+source in the source store (253 characters at 59; see the source-store items
+below), and it fits only because the store folder is named `s`. A change to
+the folder name must respect this number, and
+`tests/test_windows_setup_folder.py` fails when code and document disagree.
+Setup stops before it asks anything when the path would be longer.
 
 ### Path budget below the installation folder
 
@@ -632,25 +633,35 @@ table with `python tests/test_windows_path_budget.py`.
   finds such history through the extended-length path form and does not start
   a second history for that chat.
 - **Source store:** Amplifier Foundation owns its layout; the app supplies the
-  folder, `<folder>\source-store`. A Foundation revision before `7526bb55`
+  folder: `<folder>\s` in a new installation, `<folder>\source-store` in an
+  installation that an earlier setup file made. A Foundation revision before `7526bb55`
   cannot stage the default bundles at any supported folder path (measured at
   51; arithmetic for the others), so the conversation worker cannot start on a
   default PC. From `7526bb55` the store
   reaches every staged file itself through extended-length paths, and new
   entries on Windows have 16-digit folder names. Repository depth then no
   longer limits staging, sealing, cleanup or the copy into a build view.
-- **Source store, the row that does not fit at 59:** other programs still open
-  store files by ordinary paths. Python imports module source from the store
-  object: folder path + 80 (`\source-store\objects\<16>\<40>\`) + the path
-  inside the repository. The deepest module file of the default bundles is 125
-  characters (measured), so the path is folder path + 205. It fits up to a
-  folder path of **54** and is 264 at 59. Setup accepts an account whose
-  profile-folder name has 22 to 26 characters, and that account then cannot
-  load the default bundles. This is arithmetic from measured depths; it has
-  not been run on such an account. Setup owns the fix, which is not decided:
-  the store folder name `s` (11 characters shorter, 253 at 59) or a limit of
-  54. An entry that already exists under a 64-digit name stays in use and is
-  48 characters longer.
+- **Source store, the tightest row:** other programs still open store files by
+  ordinary paths. Python imports module source from the store object: folder
+  path + 69 (`\s\objects\<16>\<40>\`) + the path inside the repository. The
+  deepest module file of the default bundles is 125 characters (measured), so
+  the path is folder path + 194: **253 at 59**, with 6 characters to spare.
+  The measured depth is a number in the budget test, not a live check: a
+  default module more than 6 characters deeper fails on the longest accepted
+  account name until the budget changes. An entry that already exists under a
+  64-digit name stays in use and is 48 characters longer.
+- **Source store, the earlier folder name:** setup files up to 0.98.3 named the
+  folder `source-store`, 11 characters longer. There module source is folder
+  path + 205. It fits up to a folder path of **54** and is 264 at 59. Those
+  setup files accepted an account whose profile-folder name has 22 to 26
+  characters, and that account cannot load the deepest default module. This is
+  arithmetic from measured depths plus the native case below; it has not been
+  run on such an account. An existing installation keeps its store where it
+  is: the launcher uses `source-store` when that folder exists and `s`
+  otherwise (`source_store` in `amplifier_web/windows_consumer.py`). Nothing
+  is moved, renamed or downloaded again, by a second setup run, by an update
+  or by the launcher refresh. A person with such an account gets the short
+  name only from a new installation.
 
 `.github/workflows/windows-path-length.yml` is the native check. It turns
 `LongPathsEnabled` off on its own runner, proves in a new process that a
@@ -658,11 +669,14 @@ table with `python tests/test_windows_path_budget.py`.
 folder path of exactly 59 characters, and restores the runner's value. It
 installs the locked dependencies, and the lock selects Foundation `7526bb55`.
 Its source-store case stages a repository as deep as the default bundles
-through Foundation's real store, at folder paths of 59 and 54. It requires
-that the store seals, builds and cleans up files beyond the limit, and that
-Windows accepts or refuses each ordinary path exactly as the budget table
-says: the deepest module file is refused at 59 (264 characters) and opens at
-54 (259). It is not setup-file or clean-account acceptance.
+through Foundation's real store. It requires that the store seals, builds and
+cleans up files beyond the limit, and that Windows accepts or refuses each
+ordinary path exactly as the budget table says. In the folder `s` the deepest
+module file opens at a folder path of 59 (253 characters). In the earlier
+folder `source-store` it is refused at 59 (264) and opens at 54 (259). The
+same job requires that an installation with each folder name resolves its own
+store through the real private-folder checks. It is not setup-file or
+clean-account acceptance.
 
 Setup checks the PC and the folder before its first question. Each stop names
 one cause and one next step in plain language, and never shows exception text,

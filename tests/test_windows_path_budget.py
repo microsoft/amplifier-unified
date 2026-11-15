@@ -201,7 +201,10 @@ def test_default_workspace_folder_limits_are_stated_not_hidden():
 # extended-length paths, so the depth of a repository does not limit them.
 # These rows are the paths that other code opens by an ordinary path.
 SOURCE_NAME = 16
-SOURCE_FOLDER = 'source-store'  # AMPLIFIER_SOURCE_STORE below the installation folder
+# AMPLIFIER_SOURCE_STORE below the installation folder. Setup names it "s" in a
+# new installation. An installation that an earlier setup file made has the
+# longer name and keeps its store there.
+SOURCE_FOLDER, EARLIER_SOURCE_FOLDER = 's', 'source-store'
 MODULE_DEPTH = 125   # deepest module source file in the default bundles (measured)
 BYTECODE = 25        # allowance for the bytecode name of that module file in a build view
 SOURCE_OBJECT, SOURCE_BUILD, SOURCE_STAGE = (
@@ -221,31 +224,43 @@ def source_store(name=SOURCE_NAME, folder=SOURCE_FOLDER):
     ]
 
 
-# Stated limit, not fixed here: the longest installation folder path at which a
-# source-store row fits, for each row that does not fit at the setup limit.
-# Module source in an object is the installation folder path plus 205. Above
-# the number here Python cannot import the deepest default module. Setup owns
-# the two fixes: a shorter name for the store folder of a new installation, or
-# a lower MaxRootLength. Either one changes this table and fails the test.
-SOURCE_STORE_LONGEST_ROOT = {SOURCE_OBJECT: 54}
+# The longest installation folder path at which a source-store row fits, for
+# each row that does not fit at the setup limit. A new installation has no such
+# row: every default module can be imported at MaxRootLength. Module source in
+# an object is the installation folder path plus 194 there.
+SOURCE_STORE_LONGEST_ROOT = {}
+# Stated limit, not fixed: an installation that an earlier setup file made keeps
+# the longer folder name, and module source is the folder path plus 205. Above
+# the number here Python cannot import the deepest default module. Nothing moves
+# that store; a person with such an account installs again to get the short name.
+EARLIER_SOURCE_STORE_LONGEST_ROOT = {SOURCE_OBJECT: 54}
 # The fixed folder with the longest account name that Windows allows locally.
 ROOT_FOR_20_CHARACTER_ACCOUNT = len('C:\\Users\\' + 'u' * 20 + '\\AppData\\Local\\Amplifier')
 
 
 def test_source_store_limits_are_stated_not_hidden():
-    def longest_root(kind, relative):
-        return max(root for root in range(1, MAX_ROOT + 1) if fits(kind, relative, root))
+    def longest_roots(folder):
+        rows = {name: (kind, relative) for name, kind, relative in source_store(folder=folder)}
+        measured = {name: max(root for root in range(1, MAX_ROOT + 1) if fits(kind, relative, root))
+                    for name, (kind, relative) in rows.items()}
+        return {name: root for name, root in measured.items() if root < MAX_ROOT}
 
     rows = {name: (kind, relative) for name, kind, relative in source_store()}
-    assert length(rows[SOURCE_OBJECT][1]) - MAX_ROOT - MODULE_DEPTH == 80             # \source-store\objects\<16>\<40>\
-    assert length(rows[SOURCE_BUILD][1]) - MAX_ROOT - MODULE_DEPTH - BYTECODE == 38  # \source-store\builds\<16>\
-    measured = {name: longest_root(*row) for name, row in rows.items()}
-    assert {name: root for name, root in measured.items() if root < MAX_ROOT} == SOURCE_STORE_LONGEST_ROOT
-    # An account name of 20 characters fits in every row, with one character to spare.
+    assert length(rows[SOURCE_OBJECT][1]) - MAX_ROOT - MODULE_DEPTH == 69             # \s\objects\<16>\<40>\
+    assert length(rows[SOURCE_BUILD][1]) - MAX_ROOT - MODULE_DEPTH - BYTECODE == 27  # \s\builds\<16>\
+    # A new installation: every row fits at the longest folder path that setup accepts.
+    assert longest_roots(SOURCE_FOLDER) == SOURCE_STORE_LONGEST_ROOT == {}
+    assert all(fits(kind, relative) for kind, relative in rows.values())
+    assert max(length(relative) for _, relative in rows.values()) == 253
+    # The deepest default module may grow by this many characters before the row fails.
+    assert FILE_LIMIT - length(rows[SOURCE_OBJECT][1]) == 6
+    # An installation with the earlier folder name: stated, and unchanged.
+    earlier = {name: (kind, relative) for name, kind, relative in source_store(folder=EARLIER_SOURCE_FOLDER)}
+    assert length(earlier[SOURCE_OBJECT][1]) - MAX_ROOT - MODULE_DEPTH == 80         # \source-store\objects\<16>\<40>\
+    assert longest_roots(EARLIER_SOURCE_FOLDER) == EARLIER_SOURCE_STORE_LONGEST_ROOT
+    # There an account name of 20 characters fits in every row, with one character to spare.
     assert ROOT_FOR_20_CHARACTER_ACCOUNT == 53
-    assert max(length(relative, 53) for _, relative in rows.values()) == FILE_LIMIT - 1
-    # With the store folder named "s" every row fits at the setup limit.
-    assert all(fits(kind, relative) for _, kind, relative in source_store(folder='s'))
+    assert max(length(relative, 53) for _, relative in earlier.values()) == FILE_LIMIT - 1
     # An entry that an earlier Foundation made under its 64-digit name stays
     # in use where it is. Its module source has no budget at the setup limit.
     assert not fits(*source_store(name=64)[0][1:]) and not fits(*source_store(name=64)[0][1:], 53)
@@ -301,9 +316,24 @@ def test_store_folders_are_the_ones_the_app_really_uses(tmp_path, monkeypatch):
     consumer = (ROOT / 'amplifier_web/windows_consumer.py').read_text(encoding='utf-8')
     for setting, folder in (('AMPLIFIER_WEB_HOME', 'app'), ('AMPLIFIER_HOME', 'shared'),
                             ('AMPLIFIER_SESSION_STATE_HOME', 'ownership'),
-                            ('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', 'capture'),
-                            ('AMPLIFIER_SOURCE_STORE', SOURCE_FOLDER)):
+                            ('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', 'capture')):
         assert f'"{setting}": "{folder}"' in consumer
+
+
+def test_source_store_folder_names_are_the_ones_setup_and_the_launcher_use():
+    from amplifier_web import windows_consumer
+    assert (windows_consumer.SOURCE_STORE, windows_consumer.EARLIER_SOURCE_STORE) == (
+        SOURCE_FOLDER, EARLIER_SOURCE_FOLDER)
+    consumer = inspect.getsource(windows_consumer.environment)
+    assert 'env["AMPLIFIER_SOURCE_STORE"] = str(source_store(root))' in consumer
+    assert 'AMPLIFIER_SOURCE_STORE"' not in consumer.replace('env["AMPLIFIER_SOURCE_STORE"]', '')
+    setup = (ROOT / 'scripts/windows_bootstrap_native.cs').read_text(encoding='utf-8')
+    assert (f'internal const string SourceStore="{SOURCE_FOLDER}", '
+            f'EarlierSourceStore="{EARLIER_SOURCE_FOLDER}";') in setup
+    # Setup creates the short folder and gives the first installation step the same one.
+    assert '"import",SourceStore,"workspace"' in setup
+    assert 'env["AMPLIFIER_SOURCE_STORE"]=Path.Combine(root,SourceStore);' in setup
+    assert '"source-store"' not in setup.replace('EarlierSourceStore="source-store"', '')
 
 
 def test_temporary_and_sibling_names_are_the_ones_the_code_writes():
@@ -348,11 +378,14 @@ def table():
     lines += [f'  {name:34} {size:3}' for name, size in sorted(LONGEST_SESSION_ID.items(), key=lambda item: item[1])]
     lines += ['', 'Chat in the default workspace folder (CLI name): longest installation folder path that fits:']
     lines += [f'  {name:34} {size:3}' for name, size in DEFAULT_WORKSPACE_LONGEST_ROOT.items()]
-    lines += ['', f'Source store (Foundation, {SOURCE_NAME}-digit folder names). Path length, and the longest',
-              'installation folder path that fits:']
-    for name, kind, relative in source_store():
-        longest = FILE_LIMIT - 1 - len(relative)
-        lines.append(f'  {name:34} {kind:6} +{len(relative) + 1:3} = {length(relative):3}   fits up to {longest}')
+    for title, folder in ((f'Source store "{SOURCE_FOLDER}" (new installation)', SOURCE_FOLDER),
+                          (f'Source store "{EARLIER_SOURCE_FOLDER}" (installation made by an earlier setup file)',
+                           EARLIER_SOURCE_FOLDER)):
+        lines += ['', f'{title}. Foundation, {SOURCE_NAME}-digit folder names. Path length, and the longest',
+                  'installation folder path that fits:']
+        for name, kind, relative in source_store(folder=folder):
+            longest = FILE_LIMIT - 1 - len(relative)
+            lines.append(f'  {name:34} {kind:6} +{len(relative) + 1:3} = {length(relative):3}   fits up to {longest}')
     return '\n'.join(lines)
 
 
