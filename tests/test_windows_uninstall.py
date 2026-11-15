@@ -708,11 +708,27 @@ def test_open_takes_the_same_lock_around_its_start_step_and_refuses_when_it_is_t
     assert state["task"] == "running" and state["registry"] is not None
 
 
-def test_the_lock_has_one_name_for_every_sign_in_session_of_this_person(monkeypatch, tmp_path):
+def test_the_lock_is_this_persons_own_and_has_one_name_for_every_sign_in_session(monkeypatch, tmp_path):
     from types import SimpleNamespace
-    names, waits = [], [0, 0x102]
+    from amplifier_web import windows_files
+    person, other = "S-1-5-21-1-2-3-1001", "S-1-5-21-9-9-9-1002"
+    names, waits, owners = [], [0, 0x102], [person, person, other]
+
+    class API:
+        sid = person
+        @contextmanager
+        def private_security(self):
+            yield plan.C.c_int(0)  # Stands for: this person is the owner; no access for another account.
+        def GetSecurityInfo(self, handle, kind, wanted, owner, group, dacl, sacl, descriptor):
+            assert (handle, kind, wanted, group, dacl, sacl) == (77, 6, 1, None, None, None)
+            return 0
+        def sid_text(self, owner):
+            return owners.pop(0)
+        def LocalFree(self, descriptor):
+            names.append("freed")
+    monkeypatch.setattr(windows_files, "_API", API)
     kernel = SimpleNamespace(
-        CreateSemaphoreW=lambda security, count, most, name: names.append((count, most, name)) or 77,
+        CreateSemaphoreW=lambda security, count, most, name: names.append((security is not None, count, most, name)) or 77,
         WaitForSingleObject=lambda handle, milliseconds: waits.pop(0),
         ReleaseSemaphore=lambda handle, count, previous: names.append("released") or 1,
         CloseHandle=lambda handle: names.append("closed") or 1)
@@ -720,16 +736,24 @@ def test_the_lock_has_one_name_for_every_sign_in_session_of_this_person(monkeypa
     monkeypatch.setattr(plan.C, "WinDLL", lambda name, **options: kernel, raising=False)
     with plan.single(tmp_path):
         pass
-    count, most, name = names[0]
-    # One holder at a time. The global name space: a second session of this person meets the same lock.
-    assert (count, most) == (1, 1) and name == "Global\\AmplifierUnified-installation-" + shell.identity(tmp_path)
-    assert names[1:] == ["released", "closed"]
+    private, count, most, name = names[0]
+    # One holder at a time, created as this person's own. The shared name space: a second session of this
+    # person meets the same lock.
+    assert private and (count, most) == (1, 1)
+    assert name == "Global\\AmplifierUnified-installation-" + shell.identity(tmp_path)
+    assert names[1:] == ["freed", "released", "closed"]
     # Taken by another window: Busy, and this window releases nothing that it does not hold.
     del names[:]
     with pytest.raises(plan.Busy):
         with plan.single(tmp_path):
             raise AssertionError("not entered")
-    assert names[1:] == ["closed"]
+    assert names[1:] == ["freed", "closed"]
+    # A lock of this name that another account made is refused before any wait: never held, never released.
+    del names[:]
+    with pytest.raises(PermissionError):
+        with plan.single(tmp_path):
+            raise AssertionError("not entered")
+    assert names[1:] == ["freed", "closed"] and waits == []
 
 
 def test_step_after_exit_looks_at_a_folder_again_immediately_before_it_lists_it():
@@ -1076,3 +1100,53 @@ def test_native_data_folder_renamed_only_by_case_deletes_nothing(native_installa
     assert {path.name for path in native["entries"].iterdir()} == set(shell.LINKS)
     assert not native["report"].exists()
     _outside_unchanged(native["outside"])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="The real named lock and its real owner check")
+def test_native_lock_refuses_an_object_of_its_name_that_another_owner_made():
+    """Another account can create the lock's name first. Amplifier then refuses; it never uses that object."""
+    import ctypes
+    from amplifier_web import windows_files
+    root = windows_files.address(Path.home() / ("au-lock-test-" + uuid.uuid4().hex[:10]))
+    api = windows_files._API()
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateSemaphoreW.argtypes = [ctypes.c_void_p, ctypes.c_long, ctypes.c_long, ctypes.c_wchar_p]
+    kernel.CreateSemaphoreW.restype = ctypes.c_void_p
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    name = "Global\\AmplifierUnified-installation-" + shell.identity(root)
+
+    def owner_of(handle):
+        owner, descriptor = windows_files.PVOID(), windows_files.PVOID()
+        assert api.GetSecurityInfo(handle, 6, 1, ctypes.byref(owner), None, None, None, ctypes.byref(descriptor)) == 0
+        try:
+            return api.sid_text(owner)
+        finally:
+            api.LocalFree(descriptor)
+
+    # 1. The lock that Amplifier makes is this person's own, also for an elevated account, and it excludes.
+    with plan.single(root):
+        mine = kernel.CreateSemaphoreW(None, 1, 1, name)
+        existed = ctypes.get_last_error()
+        assert mine and existed == 183 and owner_of(mine) == api.sid  # ERROR_ALREADY_EXISTS
+        kernel.CloseHandle(mine)
+        with pytest.raises(plan.Busy):
+            with plan.single(root, wait=0.2):
+                pass
+    with plan.single(root, wait=0.2):  # Released: it can be taken again.
+        pass
+    # 2. An object of the same name with another owner. This lane's account is elevated, so an object
+    #    with default security belongs to the Administrators group, not to this person.
+    foreign = kernel.CreateSemaphoreW(None, 1, 1, name)
+    existed = ctypes.get_last_error()
+    assert foreign and existed != 183
+    try:
+        assert owner_of(foreign) != api.sid, "This lane needs an account whose default owner is not the person."
+        with pytest.raises(PermissionError) as refused:
+            with plan.single(root, wait=0.2):
+                raise AssertionError("not entered")
+        assert "another account" in str(refused.value)
+    finally:
+        kernel.CloseHandle(foreign)
+    with plan.single(root, wait=0.2):  # The foreign object is gone: the lock works again.
+        pass
+    print("UNINSTALL_LOCK own lock: owner is the person; an object with another owner: refused")

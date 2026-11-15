@@ -160,16 +160,25 @@ def question(message, *, cancel=False):
 
 @contextmanager
 def single(root, *, wait=10.0):
-    """One start or removal at a time for one installation, across processes.
+    """One start or removal at a time for one installation, across processes and sign-in sessions.
 
     A named semaphore, not a mutex: a mutex belongs to one thread, and these
     steps move between threads. It goes away with its last handle, so a
     program that ended without releasing it does not block the next one for
     long. When it stays taken this raises Busy and changes nothing.
+
+    The name is in the name space that every session of this PC shares, so
+    another account can create it first. The lock is therefore this person's
+    own: it is created with this person as its owner and with no access for
+    another account, and an existing one with another owner is refused with
+    OSError. Another account can then make Amplifier refuse to open or
+    uninstall while its program runs; it can never hold or release the lock.
     """
     if os.name != "nt":
         raise RuntimeError("The installation lock requires native Windows.")
     from .windows_consumer_shell import identity
+    from .windows_files import PVOID, _API
+    api = _API()
     kernel = C.WinDLL("kernel32", use_last_error=True)
     kernel.CreateSemaphoreW.argtypes = [C.c_void_p, C.c_long, C.c_long, C.c_wchar_p]
     kernel.CreateSemaphoreW.restype = C.c_void_p
@@ -179,12 +188,24 @@ def single(root, *, wait=10.0):
     kernel.ReleaseSemaphore.restype = C.c_int
     kernel.CloseHandle.argtypes = [C.c_void_p]
     kernel.CloseHandle.restype = C.c_int
-    # One name for every sign-in session of this person on this PC. The name
-    # comes from the folder's path, and only this person can use that folder.
-    handle = kernel.CreateSemaphoreW(None, 1, 1, "Global\\AmplifierUnified-installation-" + identity(root))
-    if not handle:
-        raise C.WinError(C.get_last_error())
+    # One name for every sign-in session of this person on this PC. Windows
+    # needs no privilege for a semaphore in this name space.
+    with api.private_security() as security:
+        handle = kernel.CreateSemaphoreW(C.byref(security), 1, 1,
+                                         "Global\\AmplifierUnified-installation-" + identity(root))
+        if not handle:
+            raise C.WinError(C.get_last_error())
     try:
+        owner, descriptor = PVOID(), PVOID()
+        # SE_KERNEL_OBJECT, OWNER_SECURITY_INFORMATION: who made this object.
+        error = api.GetSecurityInfo(handle, 6, 1, C.byref(owner), None, None, None, C.byref(descriptor))
+        if error:
+            raise C.WinError(error)
+        try:
+            if api.sid_text(owner) != api.sid:
+                raise PermissionError(5, "The installation lock belongs to another account.")
+        finally:
+            api.LocalFree(descriptor)
         state = kernel.WaitForSingleObject(handle, int(wait * 1000))
         if state == 0x102:  # WAIT_TIMEOUT
             raise Busy()

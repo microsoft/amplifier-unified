@@ -841,7 +841,11 @@ does.
 
 1. One start or removal at a time for one installation: a named semaphore
    whose name comes from the folder path, in the name space that all sign-in
-   sessions of this PC share. Opening Amplifier takes it around
+   sessions of this PC share. It is created as this person's own, with no
+   access for another account, and one that another account made is refused.
+   So another account that is signed in at the same time can make Amplifier
+   refuse to open or uninstall while its program runs, and can never hold or
+   release the lock. Opening Amplifier takes it around
    its start step, and an uninstall that keeps the folder takes it too. When
    it is taken, the second window says so and changes nothing. An uninstall
    that keeps the folder looks for the journal again under the lock: if
