@@ -1045,8 +1045,15 @@ def test_native_finish_stops_when_the_journal_token_changes_while_it_waits(finis
     (root / "named.txt").write_text("must stay in phase 2")
     with removal.folder(root) as owned:
         with owned.aside(PARK):
+            (root / PARK / "phase-one.txt").write_text("witness the first pass")
             removal.finish_after_exit(root, TOKEN, **{
                 **_finish_options(tree), "files": ["named.txt"], "wait_for": [os.getpid()], "seconds": 20})
+    # Wait for a deletion, not just ready: the token must change during a real wait.
+    witness = root / PARK / "phase-one.txt"
+    deadline = time.monotonic() + 10
+    while witness.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not witness.exists(), "The first pass never reached the flat folder."
     # A live caller keeps phase 1 open. No phase 2 deletion can have run yet.
     assert not tree["report"].exists() and (root / "named.txt").exists()
     (root / "unified-uninstall.json").write_text(json.dumps({
@@ -1055,6 +1062,7 @@ def test_native_finish_stops_when_the_journal_token_changes_while_it_waits(finis
     before = _plain_tree(root)
     result = _finish_report(tree["report"])
     assert result["reason"] == "Root or token refused" and not result["folderRemoved"], result
+    assert result["passes"] >= 1
     assert _plain_tree(root) == before
     _assert_outside_unchanged(tree)
     print("AFTER_EXIT_NEW_TOKEN " + json.dumps(result))

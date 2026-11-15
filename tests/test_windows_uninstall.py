@@ -159,6 +159,7 @@ class Disk:
 
     @contextmanager
     def aside(self, name):
+        assert self.state["locked"] and self.state["pinned"] and self.state["holding"] is None
         held = self.root / name
         held.mkdir()
         self.state["calls"].append(("hold", name))
@@ -731,6 +732,16 @@ def test_finish_stops_when_the_earlier_flat_folder_cannot_go(deleter):
         plan.finish(root, token)
     assert snapshot(root) == before and state["after"] is None
     assert not set(plan.RUNNING) & set(deletes(state)) and state["holding"] is None
+
+
+def test_finish_refuses_an_altered_name_before_it_deletes_anything(deleter):
+    state, root = deleter.state, deleter.root
+    token = plan.begin(root)
+    state["also_listed"] = ["Tools"]
+    before = snapshot(root)
+    with pytest.raises(ValueError, match="differs"):
+        plan.finish(root, token)
+    assert snapshot(root) == before and not deletes(state) and state["after"] is None
 
 
 def test_last_names_has_every_own_name_but_never_the_journal_or_flat_folder(deleter):
