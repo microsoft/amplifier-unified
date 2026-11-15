@@ -2457,13 +2457,16 @@ class AppService:
                 implicit_session = not (args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'session.naming', 'configuration.inspect', 'configuration.apply'} else None))
                 try:
                     with measure(self, 'input.history', session_id=sid) if action in {'conversation.send', 'conversation.retry'} else nullcontext():
-                        await self.history.ensure_loaded(sid)
+                        if action in {'conversation.send', 'conversation.retry'}:
+                            await self.history.ensure_loaded(sid, hydrate=False)
+                        else:
+                            await self.history.ensure_loaded(sid)
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
                 if action in {'conversation.send','conversation.retry','worker.spawn','call.start','runtime.control','configuration.inspect','configuration.apply','bundle.save','bundle.export','bundle.preview','bundle.switch','bundle.fork'}:
                     with measure(self, 'input.configuration', session_id=sid) if action in {'conversation.send', 'conversation.retry'} else nullcontext():
                         await self.refresh_configuration(sid)
-                    current=self._session(sid)
+                    current=self._session(sid, hydrate=False)
                     if current.get('configurationPending') and current.get('configurationRefresh',{}).get('phase')=='error':
                         raise AppError(current['configurationRefresh']['error'],409)
         fingerprint = command_fingerprint(action, args, origin, client_id, caller_session_id=caller_session_id)
@@ -2715,7 +2718,7 @@ class AppService:
             if checked_session:
                 if implicit_session and self.state.get('selectedSessionId') != checked_session:
                     raise AppError('The selected chat changed. Retry in the intended chat.', 409)
-                checked = self._session(checked_session)
+                checked = self._session(checked_session, hydrate=False)
                 if action not in {'conversation.delivery', 'session.takeover', 'session.fork', 'session.recover', 'session.inspect', 'message.edit', 'bundle.export'} and checked.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
                     raise AppError('This session is read-only here. Choose Continue here to request ownership.', 409, code='session_busy')
                 if checked.get('nativeProject') and action != 'session.inspect':
@@ -5499,11 +5502,11 @@ class AppService:
         # Ordinary requests must keep their existing admission-lock order.
         # An extra no-op lock turn lets later maintenance overtake queued input.
         try:
-            session = self._session(identity)
+            session = self._session(identity, hydrate=False)
             if session.get('externalAgent') or not session.get('configurationPending'):return
         except AppError:return
         async with self.lock:
-            try:session=self._session(identity)
+            try:session=self._session(identity, hydrate=False)
             except AppError:return
             previous=bool(session.get('configurationPending'))
             claimed=self._claim_configuration_refresh(session)

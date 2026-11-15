@@ -298,3 +298,58 @@ async def test_ordinary_model_admission_preserves_indexed_history_budget_and_rep
     finally:
         await worker.close()
         await app.close()
+
+
+async def test_ordinary_web_send_claims_legacy_cold_execution_without_full_hydration(tmp_path, monkeypatch):
+    from amplifier_web.service import AppService
+    from amplifier_web.session_projection import stored_execution
+    from test_capacity import call
+    from test_service import Runtime
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'native'))
+    home = tmp_path / 'app'
+    seed = AppService(home, workspace=tmp_path)
+    await seed.dispatch('session.create', {'title': 'Legacy retained execution'})
+    session = seed._session()
+    sid = session['id']
+    tree = {'nodes': [call(str(i), sid, rootSessionId=sid, turnId='old', liveObservation=True)
+                      for i in range(160)],
+            'turns': [{'id': 'old', 'phase': 'completed', 'anchorMessageId': None}],
+            'retiredUsageNodes': [], 'currentTurnId': None}
+    execution.refresh_usage(tree)
+    expected = stored_execution(tree)
+    session['execution'] = tree
+    seed._publish_changes(sessions={sid})
+    await seed.close()
+
+    runtime = Runtime()
+    app = AppService(home, runtime, workspace=tmp_path)
+    try:
+        session = app._session(sid, hydrate=False)
+        assert not dict.__contains__(session, 'execution')
+        assert dict.get(session, MARKER)['execution']['executionProjection'] == 1
+        assert not hasattr(session, '_working_execution')
+        original = ColdRecord.__getitem__
+        def no_full_owner_read(row, key):
+            if row is session and key == 'execution':
+                pytest.fail('Ordinary send promoted the complete execution owner')
+            return original(row, key)
+        app.clients.attach('execution-web', kind='web')
+        with monkeypatch.context() as guard:
+            guard.setattr(ColdRecord, '__getitem__', no_full_owner_read)
+            with app.clients.bind('execution-web'):
+                await app.dispatch('session.select', {'id': sid})
+                result = await app.dispatch('conversation.send', {'sessionId': sid, 'text': 'Continue'},
+                                            command_id='ordinary-input')
+                assert result['accepted']
+        assert len(runtime.sent) == 1
+        assert not dict.__contains__(session, 'execution')
+        assert getattr(session, '_working_execution', None) is not None
+        reference = dict.get(session, MARKER)['execution']
+        assert reference['executionProjection'] == 2
+        saved = records.materialize(app.db, reference)
+        assert saved['nodes'] == expected['nodes']
+        assert saved['retiredUsageNodes'] == expected['retiredUsageNodes']
+        assert saved['turns'][0] == expected['turns'][0]
+        assert any(turn['id'] == 'ordinary-input' for turn in saved['turns'])
+    finally:
+        await app.close()
