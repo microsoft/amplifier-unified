@@ -208,6 +208,12 @@ that check before any app version does, so a fix to it reaches an installed PC
 only with a new launcher. `windows-task-after-rename.yml` registers the real
 task on a hosted runner and renames that runner's account domain; its fixture
 refuses to run on any other machine.
+Python on Windows accepts only root certificates that the Windows store holds
+at that moment, and aiohttp builds its default list once at import. A new PC's
+store lacks many public roots (seen in Windows Sandbox: the package registry's
+root entered only after a Windows program asked for that site). An outbound request
+that must work there verifies against the system store plus the bundled roots,
+built per request (`update_checks.registry_trust`). Never turn verification off.
 
 ## Keep agent context and coordination useful
 

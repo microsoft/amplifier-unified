@@ -856,7 +856,10 @@ class UpdateManager:
                         from .release_notes import history
                         from .app_updates import version_tuple
                         application['releaseNotes']=history(previous.get('releaseNotes',[]),previous.get('latest') if version_tuple(previous.get('latest')) else None)
-                        application['releaseNotesWarning']='The update check failed. Showing saved release notes; check again to confirm the latest release.'
+                        # A failed component stage follows a verified, equal release.
+                        application['releaseNotesWarning']=('One component of the installed app could not be checked. The newest app release is installed; its saved release notes are shown.'
+                            if application.get('checkStage')=='components' else
+                            'The update check failed. Showing saved release notes; check again to confirm the latest release.')
                     elif application.get('releaseNotesWarning') and application.get('revision')==previous.get('revision'):
                         from .release_notes import history
                         application['releaseNotes']=history(previous.get('releaseNotes',[]),application.get('latest'))
@@ -912,8 +915,13 @@ class UpdateManager:
                         from .runtime_registry_updates import check as check_registry
                         try:
                             await check_registry(row)
-                        except (ValueError, RuntimeError, TimeoutError):
+                        except (ValueError, RuntimeError, TimeoutError) as error:
+                            # Still reported and never offered. Add only a closed
+                            # reason and plain words; the status is unchanged.
                             row['status'] = 'check_failed'
+                            from .update_checks import RegistryLookupFailure, lookup_guidance
+                            if isinstance(error, RegistryLookupFailure):
+                                row.update(checkReason=error.reason, detail=lookup_guidance(error.reason))
                         return
                     origin = row.get('policyOrigin') or {}
                     typed_policy = (origin.get('kind') in {'prepared-manifest', 'selected-declaration',

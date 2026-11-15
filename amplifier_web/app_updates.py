@@ -302,7 +302,7 @@ async def github_read(path, *, raw=False, timeout=30):
 
 
 RELEASE_CHECK_STAGES = frozenset({'release_metadata', 'release_revision', 'components'})
-RELEASE_CHECK_REASONS = frozenset({'timeout', 'git_missing', 'invalid_response', 'unavailable'})
+RELEASE_CHECK_REASONS = frozenset({'timeout', 'git_missing', 'invalid_response', 'unavailable', 'certificate', 'roots_unavailable'})
 _RELEASE_CHECK_DETAILS = {
     'release_metadata': 'Could not read published-release metadata. Check this host’s network access to GitHub, then check for updates again.',
     'release_revision': 'Published-release metadata was read, but its Git tag could not be verified. Check Git and this host’s access to the public repository, then check for updates again.',
@@ -362,6 +362,11 @@ async def check():
                 'invalid_response' if isinstance(error,(ValueError,KeyError)) else 'unavailable')
         detail=('Git is not available to this running host. Install Git or use the installer-managed launcher, then check for updates again.'
                 if reason=='git_missing' else _RELEASE_CHECK_DETAILS[stage])
+        from .update_checks import RegistryLookupFailure, lookup_guidance
+        if stage=='components' and isinstance(error,RegistryLookupFailure):
+            # The registry lookup of a component failed: say which kind, in plain words.
+            reason=error.reason
+            detail=lookup_guidance(reason,application=True)
         return {**base,'status':'check_failed','checkStage':stage,'checkReason':reason,
                 'detail':detail+' No update was installed by this check.'}
 
