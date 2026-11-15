@@ -36,11 +36,13 @@ RUNNING = ("python", "tools")
 # The flat folder that `finish` creates and holds for those few files. Only
 # the step after exit deletes in it.
 PARK = "unified-uninstall-last"
-# The source store has one of two names: an earlier setup file named it
-# "source-store", and setup names it "s" in a new installation. Only the one
-# that the launcher uses is this installation's program files (`store_name`).
-STORES = ("source-store", "s")
-CACHES = ("cache", "temp", "python-bin", "tool-bin")
+CACHES = ("source-store", "cache", "temp", "python-bin", "tool-bin")
+# Setup names the source store "s" from release 0.98.5 (`windows_consumer`).
+# An earlier setup file named it "source-store" and made no folder "s". So
+# "s" is this installation's own only when setup's completion record names a
+# release from 0.98.5 (`short_store`). In every other installation a folder
+# "s" is not Amplifier's, and it stays.
+STORE, STORE_SINCE = "s", (0, 98, 5)
 FILES = ("components.txt", "install.log", "private-git.json", "private-git.py", "uv.zip", "git.tar.bz2",
          "consumer-maintenance.json", "Launch Unified.lnk", "Amplifier status.lnk", "Stop Amplifier.lnk",
          "Remove Amplifier sign-in host.lnk")
@@ -55,8 +57,8 @@ _FOLDER_FORMS = (rf"launcher-{_VERSION}-[0-9a-f]{{8}}(-\d+)?", r"launcher-not-us
 # the last step of a removal keeps open (Windows deletes it with that step).
 _FILE_FORMS = (rf"amplifier_unified-{_VERSION}-py3-none-any\.whl(\.part)?", r"\.private-[0-9a-f]{32}\.tmp",
                r"child-\d+\.(stderr\.txt|failure\.json)", r"[0-9a-f]{32}\.hold")
-_FOLDERS = frozenset(DATA + RUNNING + STORES + CACHES + LAST[:2] + (PARK,))
-_EXACT = frozenset(DATA + RUNNING + STORES + CACHES + FILES + LAST + (STARTED, COMPLETE, JOURNAL, PARK))
+_FOLDERS = frozenset(DATA + RUNNING + CACHES + LAST[:2] + (PARK,))
+_EXACT = frozenset(DATA + RUNNING + CACHES + FILES + LAST + (STARTED, COMPLETE, JOURNAL, PARK))
 SECONDS_AFTER_EXIT = 120  # For a handful of files. A program that closes late gets this long.
 # The steps of `remove` that come after the journal. A failure there leaves a
 # folder that Amplifier does not start from; a second uninstall finishes it.
@@ -71,43 +73,21 @@ def _folder(name):
     return name in _FOLDERS or _form(name, _FOLDER_FORMS)
 
 
-def store_name(names, record=None):
-    """The name of this installation's one source store.
-
-    The launcher's rule (`windows_consumer.source_store`): the earlier name
-    when that folder is in the installation, else the name that setup gives
-    a new installation. The other name is not this installation's entry. It
-    stays, like everything that Amplifier did not make.
-
-    A removal decides this once, from the listing that passed the check of
-    the names, and writes it into its journal before it deletes anything.
-    Its last step takes the name from that journal. `record` is the journal
-    of a removal that did not finish: by then the earlier store can be
-    deleted, and the listing alone would take a folder with the other name
-    for the store. The record only ever keeps that folder: it never makes
-    uninstall delete a folder that the listing alone would keep.
-    """
-    if STORES[0] in names or (record is not None and record.get("store") == STORES[0]):
-        return STORES[0]
-    return STORES[1]
-
-
-def sort(names, store=None):
+def sort(names, short=False):
     """Sort a folder's own listing into what each step deletes.
 
     Names are compared exactly, with their case. `foreign` is everything that
-    this installation did not create. The journal is in no group. `store` is
-    the removal's one decision about the source store; without it the names
-    themselves decide.
+    this installation did not create. The journal is in no group. `short`:
+    setup made this installation's source store under the name "s"
+    (`short_store`). Without it a folder "s" is foreign.
     """
-    store = store or store_name(names)
     groups = {"setup": [], "data": [], "program": [], "last": [], "running": [], "foreign": []}
     for name in names:
         if name == JOURNAL:
             continue
         group = ("setup" if name in (STARTED, COMPLETE) else "data" if name in DATA
                  else "running" if name in RUNNING or name == PARK else "last" if name in LAST
-                 else "program" if name == store or name in CACHES or name in FILES
+                 else "program" if name in CACHES or name in FILES or (short and name == STORE)
                  or _form(name, _FOLDER_FORMS + _FILE_FORMS)
                  else "foreign")
         groups[group].append(name)
@@ -116,16 +96,17 @@ def sort(names, store=None):
     return groups
 
 
-def altered(names):
+def altered(names, short=False):
     """Names that differ from one of this installation's exact names only by case.
 
     Windows opens such an entry under this installation's name, but it is not
     the entry that this installation made, and nothing shows what it holds.
     It is never deleted. Uninstall then deletes nothing at all: it could not
-    truthfully say that the person's data is gone.
+    truthfully say that the person's data is gone. `short` as in `sort`: only
+    then is "s" one of this installation's names.
     """
     from .windows_removal import same_name
-    known = {same_name(name): name for name in _EXACT}
+    known = {same_name(name): name for name in _EXACT | ({STORE} if short else set())}
     return [name for name in names if known.get(same_name(name), name) != name]
 
 
@@ -153,14 +134,11 @@ def pending(root):
 
     It is read through the private-file boundary. On a second uninstall it
     takes the place of setup's completion record as the proof of the folder.
-    A record that does not name the source store is not this program's: the
-    store would then be decided from a folder that is already partly deleted.
     """
     value = _private_json(root, JOURNAL)
     if (value is not None and type(value.get("schema")) is int and value["schema"] == 1
             and isinstance(value.get("choice"), str) and isinstance(value.get("token"), str)
-            and re.fullmatch("[0-9a-f]{32}", value["token"])
-            and isinstance(value.get("store"), str) and value["store"] in STORES):
+            and re.fullmatch("[0-9a-f]{32}", value["token"])):
         return value
     return None
 
@@ -169,6 +147,24 @@ def completed(root):
     """Whether setup completed this folder as an installation: its own private record."""
     value = _private_json(root, COMPLETE)
     return value is not None and type(value.get("schema")) is int and value["schema"] == 1
+
+
+def short_store(root):
+    """Whether setup made this installation's source store under the name "s".
+
+    Read from setup's own private completion record: `version` there is the
+    release of the setup file. Setup writes that record once, and uninstall
+    keeps it until the step after exit. A record that is missing, or that
+    does not name a release from `STORE_SINCE`, answers no: a folder "s" is
+    then not Amplifier's.
+    """
+    value = _private_json(root, COMPLETE)
+    if value is None or type(value.get("schema")) is not int or value["schema"] != 1:
+        return False
+    version = value.get("version")
+    if not isinstance(version, str) or not re.fullmatch(r"\d{1,6}\.\d{1,6}\.\d{1,6}", version, re.ASCII):
+        return False
+    return tuple(int(part) for part in version.split(".")) >= STORE_SINCE
 
 
 class Busy(RuntimeError):
@@ -304,13 +300,12 @@ class Held(OSError):
         self.names = list(names)
 
 
-def _clear(owned, names, deadline, wait, store=None):
+def _clear(owned, names, deadline, wait, short=False):
     """Delete these entries in their order. Returns those that still hold something.
 
     Every deletion of this module goes through here. Until `deadline` a
-    closing program gets time to release its files. `store` is the removal's
-    one decision about the source store: the other store name is foreign
-    here, as everywhere.
+    closing program gets time to release its files. `short` as in `sort`:
+    without it this refuses a folder "s", like every foreign name.
 
     An entry whose name now differs from a wanted name only by case is the
     same entry to Windows and to setup. A program renamed it after the check.
@@ -319,7 +314,7 @@ def _clear(owned, names, deadline, wait, store=None):
     completion record is never deleted past such an entry, and the data is
     never reported as deleted.
     """
-    names, groups = list(names), sort(names, store)
+    names, groups = list(names), sort(names, short)
     # Never the journal, never a foreign name, never the running program.
     if JOURNAL in names or groups["foreign"] or groups["running"]:
         raise ValueError("Not an entry that uninstall deletes in this step.")
@@ -363,7 +358,7 @@ def remove_data(owned, *, wait=time.sleep):
         raise Held(held)
 
 
-def remove_program(owned, *, last=False, wait=time.sleep, store=None):
+def remove_program(owned, *, last=False, wait=time.sleep, short=False):
     """Delete caches and program files. With `last`: what the launcher's own check needs.
 
     Uninstall removes the Windows entries between the two calls: until then a
@@ -372,26 +367,25 @@ def remove_program(owned, *, last=False, wait=time.sleep, store=None):
     stayed. Nothing here holds the person's data, so nothing here stops.
     """
     from . import windows_consumer_shell as shell
-    names = sort(owned.names(), store)["last" if last else "program"]
-    return _clear(owned, names, time.monotonic() + shell.SETTLE_SECONDS, wait, store)
+    names = sort(owned.names(), short)["last" if last else "program"]
+    return _clear(owned, names, time.monotonic() + shell.SETTLE_SECONDS, wait, short)
 
 
-def last_names(owned=None, store=None):
+def last_names(owned=None, short=False):
     """The folders that the step after exit is asked about, by exact name.
 
-    Every exact folder name of this installation, with the one name of its
-    source store, and every folder in it now
+    Every exact folder name of this installation, and every folder in it now
     that has one of its name forms. That step removes a named folder only
     while it is empty. So an emptied folder that Windows still keeps for a
     program goes when that program has ended, and no file is deleted. The
     held folder is not in this list. A file of this installation that is
     still there (a program uses it) stays, and then the folder stays.
     """
-    names = [] if owned is None else owned.names()
-    store = store or store_name(names)
-    groups = sort(names, store)
+    groups = sort([] if owned is None else owned.names(), short)
     own = groups["program"] + groups["last"]
-    folders = list(DATA + RUNNING + (store,) + CACHES + LAST[:2]) + [name for name in own if _folder(name)]
+    # The folder "s" only where it is the installation's own (`short_store`).
+    store = (STORE,) if short else ()
+    folders = list(DATA + RUNNING + CACHES + store + LAST[:2]) + [name for name in own if _folder(name)]
     return list(dict.fromkeys(folders))
 
 
@@ -405,8 +399,7 @@ def remove(root, *, stop, certificate, progress, choice="delete", data=remove_da
     2. Check and pin the Windows entries. `stop()` stops the app and removes
        its sign-in task. `certificate()` lets Windows ask once.
        Up to here nothing in the folder has changed.
-    3. The journal, with the name of the source store (`store_name`).
-       Nothing in the folder is deleted before it exists. From
+    3. The journal. Nothing in the folder is deleted before it exists. From
        here Amplifier does not start from this folder.
     4. Setup's mark of unfinished work, then `data`: the person's data. If
        any of it stays, this stops. The Windows entries and the launcher are
@@ -416,8 +409,9 @@ def remove(root, *, stop, certificate, progress, choice="delete", data=remove_da
        launcher's own check needs.
 
     `progress(name)` names the step that is about to run. Returns the
-    journal's token, the certificate outcome and the entries that are not
-    Amplifier's (None when the folder could not be listed at the end). The
+    journal's token, the certificate outcome, the entries that are not
+    Amplifier's (None when the folder could not be listed at the end) and
+    `short`, this removal's one answer of `short_store`, for `finish`. The
     journal and the running program's two folders stay; `finish` is their step.
     """
     from . import windows_consumer_shell as shell, windows_removal
@@ -429,14 +423,9 @@ def remove(root, *, stop, certificate, progress, choice="delete", data=remove_da
             record = pending(root)
             if not completed(root) and (record is None or record["choice"] != choice):
                 raise ValueError("Neither setup's completion record nor this removal's journal proves the folder.")
-            names = owned.names()
-            if altered(names):
+            short = short_store(root)  # From setup's record, which stays until the step after exit.
+            if altered(owned.names(), short):
                 raise ValueError("An entry differs from this installation's own name only by case.")
-            if record is None and JOURNAL in names:
-                # A journal that is not this program's. It does not say which
-                # store an earlier removal chose, so nothing is deleted.
-                raise ValueError("The journal in this folder is not this program's own record.")
-            store = store_name(names, record)  # Once, for every step of this removal.
             progress("entries-check")
             with ExitStack() as entries:
                 finish = (entries.enter_context(shell.removal(root, progress=progress))
@@ -444,25 +433,25 @@ def remove(root, *, stop, certificate, progress, choice="delete", data=remove_da
                 stop()
                 trust = certificate()
                 progress("journal")
-                token = begin(root, choice, wait=wait, **{**fields, "store": store})
+                token = begin(root, choice, wait=wait, **fields)
                 progress("setup-record")
                 forget_setup(owned, wait=wait)
                 progress("data")
                 data(owned, wait=wait)
                 progress("program")
-                remove_program(owned, wait=wait, store=store)
+                remove_program(owned, wait=wait, short=short)
                 if finish is not None:
                     finish()  # The Apps-list entry, the shortcuts, their receipt.
             progress("program-last")
             try:
-                remove_program(owned, last=True, wait=wait)
-                foreign = sort(owned.names(), store)["foreign"]
+                remove_program(owned, last=True, wait=wait, short=short)
+                foreign = sort(owned.names(), short)["foreign"]
             except (OSError, ValueError, RuntimeError):
                 foreign = None  # Every entry is gone already; only the last listing failed.
-    return {"token": token, "certificate": trust, "foreign": foreign}
+    return {"token": token, "certificate": trust, "foreign": foreign, "short": short}
 
 
-def finish(root, token, *, choice="delete", wait=time.sleep):
+def finish(root, token, *, short=False, choice="delete", wait=time.sleep):
     """The last step of a removal: the two folders that this running program runs from.
 
     A running program cannot delete the files that it runs from. It can move
@@ -484,7 +473,9 @@ def finish(root, token, *, choice="delete", wait=time.sleep):
     the emptied folders, the journal, setup's completion record and the
     installation folder. It walks no tree. Returns what the walk reports for
     the two folders. After this the process imports nothing more, writes
-    nothing into the installation, and ends.
+    nothing into the installation, and ends. `short` is what `remove`
+    returned: this step does not decide again whether "s" is the
+    installation's own.
     """
     from . import windows_consumer_shell as shell, windows_removal
     with single(root):
@@ -492,14 +483,14 @@ def finish(root, token, *, choice="delete", wait=time.sleep):
             record = pending(root)
             if record is None or record["choice"] != choice or record["token"] != token:
                 raise ValueError("Another removal of this folder began.")
-            if altered(owned.names()):
+            if altered(owned.names(), short):
                 raise ValueError("An entry differs from this installation's own name only by case.")
             # What an earlier last step left: its flat folder, and a kept file
             # after a power loss. They are this installation's own; new ones
             # are made, or the name refuses.
             earlier = [name for name in owned.names() if re.fullmatch(r"[0-9a-f]{32}\.hold", name, re.ASCII)]
             owned.remove([PARK, *earlier], settle=shell.SETTLE_SECONDS, wait=wait)
-            folders = last_names(owned, record["store"])  # This removal's own decision.
+            folders = last_names(owned, short)
             with owned.aside(PARK, token) as park:
                 windows_removal.finish_after_exit(
                     root, token, park=PARK, keep=park.keep, folders=folders,

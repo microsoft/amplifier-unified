@@ -981,8 +981,7 @@ does.
    ask Windows once about the certificate. A failure up to here leaves the
    installation whole, with the messages of an uninstall that keeps the folder.
 5. Write the journal `unified-uninstall.json` (`schema` 1, `choice`, a random
-   `token`, and `store`: the name of the source store, see "Only exact
-   names") with the private atomic writer. Nothing is deleted before it
+   `token`) with the private atomic writer. Nothing is deleted before it
    exists.
 6. Delete setup's mark of unfinished work. Setup can leave that mark in a
    finished installation; with the mark and without the completion record, a
@@ -1022,51 +1021,54 @@ and then the folder stays. A test reads setup's source and fails when setup
 creates a top-level name that this list does not know. The journal is in no
 delete list.
 
-The source store has one of two names: `s`, which setup creates in a new
-installation, and `source-store`, which an earlier installation keeps (see
-the path budget above). Uninstall deletes only the store that the launcher
-uses, by the launcher's rule: `source-store` when that folder is in the
-installation, else `s` (`windows_uninstall.store_name`). "Delete everything"
-removes that store with the caches, and "keep" leaves it. It is not named as
-something that is not Amplifier's.
+The source store has one of two names (see the path budget above). An
+earlier setup file named it `source-store`. From release 0.98.5 setup names
+it `s`.
 
-A folder with the other name is never deleted, because nothing shows who made
-it. It stays with everything in it, the message names it with the entries
-that are not Amplifier's, and then the folder stays. That is a folder `s`
-that something added to an earlier installation. It is also the folder `s`
-of a new installation to which something added `source-store`: the launcher
-then uses `source-store`, and the `s` that setup made stays, with the module
-source that setup and the app put there. Setup creates the folder `s` only
-when it makes a new installation, and the launcher creates neither folder
-(read in their source).
+- `source-store` is a program folder by its name in every installation, as
+  before. The launcher uses a folder of that name as its store whenever one
+  exists.
+- `s` is a program folder only in an installation that setup made with that
+  name. Uninstall reads this from setup's own private completion record:
+  `version` there is the release of the setup file
+  (`windows_uninstall.short_store`). A release from 0.98.5 answers yes. Every
+  other answer is no: an earlier release, a record without a release in the
+  form of three numbers, a record that cannot be read.
 
-The rule looks only at what is in the folder. An installation that has no
-`source-store` folder, and no journal that names it, has the store `s`. That
-is also true for an earlier installation whose `source-store` something else
-removed: the launcher then uses `s`, and so does uninstall.
+"Delete everything" removes the installation's store with the caches, and
+"keep" leaves it. In an installation that an earlier setup file made, a
+folder `s` is not Amplifier's. It stays with everything in it, the message
+names it, and then the folder stays. That holds also when something removed
+that installation's `source-store`, and for a second uninstall after an
+interruption: only setup writes its completion record, an update and the
+launcher refresh do not change it (read in their source), and uninstall
+keeps it until the step after exit.
 
-A removal decides the store once, from the listing that passed the check of
-the names, and writes its name into the journal before it deletes anything.
-Every step of that removal uses that decision; its last step takes it from
-the removal's own journal. So a `source-store` that appears after the
-decision is not the store of that removal: it stays.
+A removal reads the record once, under the lock and with the folder pinned,
+before it deletes anything, and its last step gets that answer handed on. So
+a record that changes during a removal does not change what that removal
+deletes.
 
-A second uninstall after an interruption decides again by the same rule,
-with one addition: the store is also `source-store` when the journal names
-it. By then the store can be deleted, and the listing alone would take a
-folder `s` for the store. The journal's entry can only keep a folder `s`: it
-never makes uninstall delete a folder that the listing alone would keep. A
-`source-store` that something added between the two uninstalls is the store
-for the second one, as it is for the launcher.
+Another spelling of an own name refuses, as for `App`: `Source-Store` in
+every installation, and `S` in an installation whose store is `s`. In an
+earlier installation `S` is only one more entry that is not Amplifier's.
 
-A journal that does not name one of the two stores is not this program's
-record (L4 below): uninstall then offers only to keep the folder. A removal
-that finds such a journal after the person's answers stops before it changes
-anything. This does not stop a program of this account that writes a
-complete journal with the name `s` after the earlier store is deleted: the
-listing then decides, and a folder `s` goes with the program files. Such a
-program can delete that folder itself. Another spelling of either name (`S`,
-`Source-Store`) refuses: uninstall then deletes nothing, as for `App`.
+What this rule does not cover, stated:
+
+- A program of this account can rewrite setup's completion record (a private
+  file of this person) so that it names a release from 0.98.5. After the two
+  Yes answers, a folder `s` in that earlier installation then goes with the
+  program files. Such a program can delete that folder itself.
+- A `source-store` folder that something added to a new installation is
+  deleted by its name, as before this change. The launcher uses such a
+  folder as the store from its next start.
+- A setup file that was built from this source with a release number below
+  0.98.5 makes a folder `s` that uninstall treats as not Amplifier's: it
+  stays, and the folder stays. No public setup file is like that: the
+  release names the setup file's release from the app release that it
+  installs (read in `scripts/windows_consumer_release.py` and setup's
+  check of its plan), and release 0.98.5 is the first whose setup source
+  names the store `s` (read at the tags `v0.98.4` and `v0.98.5`).
 
 **While the journal exists** the folder can be partly deleted. Open, Stop and
 Status refuse with one message that tells the person to select Uninstall
@@ -1199,8 +1201,7 @@ limit as not blocking.
   settings are in the folder or are kept. That is not true for this
   leftover. Nothing in the product removes it: the person deletes the folder
   by hand.
-- **L4.** A journal that this code did not write (damaged, with another
-  choice, or without the name of one of the two source stores) proves
+- **L4.** A journal that is damaged, or that records another choice, proves
   nothing. Uninstall then deletes nothing and offers only to keep the
   folder. Afterwards Amplifier does not open from that folder.
 - **L5.** After a program renamed an entry only by case during the removal,
@@ -1288,10 +1289,11 @@ turn the flat folder or the installation folder into a link in place (error
 145); the same call
 works on an empty folder that nobody holds. A folder with an open file in it,
 and the folder above it, can be neither turned into a link nor renamed. The
-delete choice runs once on an installation with the store `s` and once on one
-with the store `source-store`, and the keep choice leaves either store with
-every other entry. An earlier installation that also holds a folder `s` keeps
-that folder with its file, and then the installation folder stays. A
+delete choice runs once on an installation that a setup file of release
+0.98.5 made (store `s`) and once on one that an earlier setup file made
+(store `source-store`), and the keep choice leaves either store with every
+other entry. An earlier installation that also holds a folder `s` keeps that
+folder with its file, and then the installation folder stays. A
 link under the kept file's name is refused and nothing is created at its
 target (the same create by a path does create the target). After the
 uninstall program let go, the two kept files stay with the process that

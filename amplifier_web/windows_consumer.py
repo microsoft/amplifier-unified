@@ -593,7 +593,7 @@ async def _delete(root, certificate, *, resumed):
     # Last: the two folders that this running program runs from. After this
     # step the process imports nothing more and ends: its own files are gone.
     try:
-        last = await asyncio.to_thread(windows_uninstall.finish, root, done["token"])
+        last = await asyncio.to_thread(windows_uninstall.finish, root, done["token"], short=done["short"])
         started = True
     except (OSError, ValueError, RuntimeError):
         last, started = None, False
