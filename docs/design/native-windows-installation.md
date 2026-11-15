@@ -429,7 +429,9 @@ a generation takes over ends with exit status 0 for its caller, whatever it
 did: `os.execv` starts a new process there and ends the calling one. The
 launcher allows the command 90 seconds. Without the confirmation line it shows
 one message: Amplifier is running, but it did not open in your browser; open it
-from the Start menu: Amplifier Unified. The launcher is the code that setup
+from the Start menu: Amplifier Unified. When the Start-menu entry does not
+exist, the message names the setup file instead, by the same two facts as the
+launcher's failure message. The launcher is the code that setup
 installed and an in-app update does not change it, so the line's text is fixed.
 For the same reason the wait is in `open`: a launcher from an earlier setup file
 gets it from the new generation. Such a launcher allows the command 30 seconds

@@ -348,12 +348,13 @@ def test_pending_certificate_review_does_not_issue_browser_grant(tmp_path, monke
     assert result["health"]["ok"] and reviews == [(tmp_path, ["private-target"], "private-pin")]
 
 
-def opening_launch(tmp_path, monkeypatch, outcome):
+def opening_launch(tmp_path, monkeypatch, outcome, *, listed=True):
     """Launch with trust established, up to the one `open` command; record every effect."""
-    from amplifier_web import windows_installation, deployment, browser_entry, updates
+    from amplifier_web import windows_installation, windows_consumer_shell, deployment, browser_entry, updates
     monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {"private": "environment"})
-    async def prepared(*args, identity):
+    monkeypatch.setattr(windows_consumer_shell, "listed", lambda root: listed)
+    async def prepared(*args, identity, progress):
         return {"background": True, "created": False, "health": {"ok": True}}
     monkeypatch.setattr(windows_installation, "prepare_background", prepared)
     monkeypatch.setattr(deployment, "load_server_config", lambda home: {})
@@ -408,6 +409,17 @@ def test_browser_that_did_not_open_gives_one_plain_message_and_no_second_attempt
     assert message == ("Amplifier is running, but it did not open in your browser.\n\n"
                        "Open it from the Start menu: Amplifier Unified. "
                        "If this message appears again, restart this PC.")
+
+
+def test_browser_message_names_setup_when_the_start_menu_entry_does_not_exist(tmp_path, monkeypatch):
+    # After an uninstall the folder can run without its Start-menu entry. The
+    # next step must exist: the setup file adds the entry again.
+    from amplifier_web.update_diagnostics import CommandOutput
+    result, events = opening_launch(tmp_path, monkeypatch, CommandOutput(""), listed=False)
+    assert result["browser"] == {"opened": False, "reason": "not-confirmed"}
+    assert [event[0] for event in events] == ["trust", "command", "notice"]
+    assert events[2][1] == ("Amplifier is running, but it did not open in your browser.\n\n"
+                            "Run the Amplifier setup file again. It keeps your chats and settings.")
 
 
 @pytest.mark.parametrize("first_setup", [True, False])

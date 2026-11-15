@@ -233,9 +233,13 @@ async def launch(root, *, open_browser=True, progress=None):
         # behavior. Do not print or expose its transient grant in this process.
         if not await browser_opened((launcher, "--data-dir", root / "app",
                                      "--workspace", root / "workspace"), env):
-            owner_notice("Amplifier is running, but it did not open in your browser.\n\n"
-                         "Open it from the Start menu: Amplifier Unified. "
-                         "If this message appears again, restart this PC.")
+            # The same next step as a failed start: the Start menu only when
+            # its entry exists (after an uninstall, setup adds it again).
+            from .windows_consumer_shell import listed
+            owner_notice("Amplifier is running, but it did not open in your browser.\n\n" + (
+                "Open it from the Start menu: Amplifier Unified. "
+                "If this message appears again, restart this PC." if listed(root) else
+                "Run the Amplifier setup file again. It keeps your chats and settings."))
             return {**result, "browser": {"opened": False, "reason": "not-confirmed"}}
         return {**result, "browser": {"opened": True}}
     return result
