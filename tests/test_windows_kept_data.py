@@ -784,6 +784,36 @@ def test_second_start_step_or_move_out_is_refused_while_one_runs(tmp_path, monke
     assert kept.first_start(root, VERSION, ask=True) is None and not folder.exists()
 
 
+@pytest.mark.parametrize("ending", ["normal", "killed"])
+def test_lock_holds_between_two_programs_and_is_free_when_the_other_program_ends(
+        tmp_path, monkeypatch, notices, ending):
+    root, folder, expected = kept_then_installed(tmp_path)
+    monkeypatch.setattr(kept, "BUSY", 0.2)
+    snapshot = tree(root), tree(folder)
+    other = subprocess.Popen(
+        [sys.executable, "-c", "import sys\nfrom filelock import FileLock\nwith FileLock(sys.argv[1]):\n"
+         "    print('held', flush=True)\n    sys.stdin.read()\n", str(root.with_name(root.name + "-kept.lock"))],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    try:
+        assert other.stdout.readline().strip() == b"held"
+        assert kept.first_start(root, VERSION, ask=False)["reason"] == "busy"
+        with pytest.raises(kept.Refused) as refused:
+            kept.move_out(root, version=VERSION, transfer=T2, remove=shutil.rmtree, wait=0)
+        assert refused.value.kind == "busy" and (tree(root), tree(folder)) == snapshot
+        if ending == "killed":  # The other launcher ends without a release, as at a sign-out.
+            other.kill()
+        else:
+            other.stdin.close()
+        other.wait(20)
+    finally:
+        if other.poll() is None:
+            other.kill()
+            other.wait(20)
+        other.stdout.close()
+    notices.answers.append(True)
+    assert kept.first_start(root, VERSION, ask=True) is None and person(data(root)) == expected
+
+
 @pytest.mark.parametrize("answer", [True, False])
 def test_second_launcher_cannot_start_or_answer_while_the_first_one_asks(tmp_path, monkeypatch, answer):
     """A double click. Without this, Yes in one launcher and a fresh start in the other mix two installations."""
