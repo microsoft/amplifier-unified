@@ -45,6 +45,7 @@ on:
       - amplifier_web/CPYTHON-LICENSE.txt
       - amplifier_web/voice_diagnostics.py
       - amplifier_web/update_checks.py
+      - amplifier_web/update_health.py
       - amplifier_web/app_component_graph.py
       - amplifier_web/windows_jobs.py
       - amplifier_web/windows_launch_guard.py
@@ -90,6 +91,7 @@ on:
       - tests/test_deployment.py
       - tests/test_update_checks.py
       - tests/test_update_registry_trust.py
+      - tests/test_update_health_setup_record.py
       - tests/test_windows_tls.py
       - tests/test_windows_trust.py
       - tests/test_session_sign_out.py
@@ -265,6 +267,14 @@ jobs:
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_update_registry_trust.py
           if ($LASTEXITCODE -ne 0) { throw 'Registry lookup trust checks failed.' }
+      # Update health of a new installation: the real reader of setup's record
+      # on native Windows (private files, the installed-package reader and its
+      # Git child policy) with this runner's Git. No task, no app, no network.
+      - name: Check update health of a new installation against setup's record
+        shell: pwsh
+        run: |
+          .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_update_health_setup_record.py
+          if ($LASTEXITCODE -ne 0) { throw 'Setup-record update health checks failed.' }
       - name: Check sign-out of all browsers on the real private store
         shell: pwsh
         run: |

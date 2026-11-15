@@ -204,6 +204,11 @@ store lacks many public roots (seen in Windows Sandbox: the package registry's
 root entered only after a Windows program asked for that site). An outbound request
 that must work there verifies against the system store plus the bundled roots,
 built per request (`update_checks.registry_trust`). Never turn verification off.
+A new installation has no component generation until its first component
+update; update health then verifies setup's record (`update_health.setup_evidence`),
+which is weaker than a qualified generation and never authorizes preparation.
+The installed-package reader runs Git for a package from a local checkout, so
+a caller without the installation's Git folder on PATH reads "not prepared".
 
 ## Keep agent context and coordination useful
 
