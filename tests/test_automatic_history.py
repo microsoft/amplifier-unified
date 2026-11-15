@@ -244,6 +244,18 @@ async def test_history_refresh_copies_only_reader_inputs_and_keeps_paging(tmp_pa
     row = app._session('bounded-reader', hydrate=False)
     original = automatic_history.read_transcript
     seen = []
+    phases = ('history.merge', 'history.activity.apply', 'history.publish')
+    phase_calls = []
+    original_measure = automatic_history.measure
+    previous_counts = app.performance_diagnostics.snapshot()['operations']
+
+    def observe_phase(service, name, **kwargs):
+        if name in phases:
+            phase_calls.append((name, kwargs))
+        return original_measure(service, name, **kwargs)
+
+    monkeypatch.setattr(automatic_history, 'measure', observe_phase)
+
     def read(source, **kwargs):
         assert not {'execution', 'workers', 'configuration', 'historyActivity'} & source.keys()
         if kwargs['before'] is None:
@@ -264,6 +276,9 @@ async def test_history_refresh_copies_only_reader_inputs_and_keeps_paging(tmp_pa
     assert not row.get('historyError')
     assert not app.runtime.started and not app.runtime.sent
     assert seen == [{'before': None, 'limit': 100}, {'before': 100, 'limit': 100}]
+    assert phase_calls == [(name, {'synchronous': True, 'session_id': row['id']}) for name in phases * 2]
+    operations = app.performance_diagnostics.snapshot()['operations']
+    assert all(operations[name]['count'] == previous_counts.get(name, {}).get('count', 0) + 2 for name in phases)
 
 
 async def test_workspace_availability_tracks_real_folders_without_removing_history(tmp_path, app_factory):
