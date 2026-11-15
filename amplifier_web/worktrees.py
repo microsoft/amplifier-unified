@@ -1014,7 +1014,10 @@ class Worktrees:
                     record['detail'] = 'Host shutdown paused a retained handoff boundary. No input was replayed.'
                 elif ((record.get('step') == 'preflight' and not record.get('boundaryAttempted'))
                         or isinstance(exc, (HandoffNotStartedError, HandoffSuperseded))):
-                    cleanup_required = bool(record.get('boundaryAttempted'))
+                    # Agent-side admission may already have installed its
+                    # provisional drain marker before host preflight. A current
+                    # rejection must retire that hook too, not just RPC polls.
+                    cleanup_required = True
                     record.update(phase='rejected', revision=record['revision']+1,
                         detail=('Handoff was superseded; the source execution folder is unchanged. '
                                 if isinstance(exc, HandoffSuperseded) else
@@ -1040,6 +1043,9 @@ class Worktrees:
             boundary = getattr(self.app.runtime, 'handoff_boundary', None)
             if record['phase'] == 'rejected' and callable(boundary) and cleanup_required:
                 try:
+                    self.check_host(record)
+                    self.check_host(self.app._session(record['sessionId']))
+                    record['boundaryAttempted'] = True
                     record['boundaryCleanup'] = {'status': 'issued'}
                     self.save(record)
                     result = await boundary(record['sessionId'], record['id'], cancel=True)

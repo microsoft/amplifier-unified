@@ -372,3 +372,20 @@ async def test_timeout_exposes_exact_rpc_without_repeating_or_discarding_issuanc
         assert row['inflight'] == {'exact-rpc'}
     finally:
         await manager.retention.close()
+
+
+async def test_preflight_refusal_retires_provisional_native_hook(tmp_path, monkeypatch):
+    app, runtime, _, sid = await fixture(tmp_path, monkeypatch)
+    runtime.handoff_boundary = AsyncMock(return_value={'cancelled': True})
+    try:
+        target = await checkout(app, sid)
+        def refuse(*args):
+            raise ValueError('controlled preflight refusal after provisional drain admission')
+        monkeypatch.setattr(app.worktrees, 'preflight', refuse)
+        saved = await move(app, sid, target)
+        assert saved['phase'] == 'rejected' and saved['boundaryCleanup']['cancelled']
+        runtime.handoff_boundary.assert_awaited_once_with(sid, saved['id'], cancel=True)
+        runtime.quiesce_for_handoff.assert_not_awaited()
+        assert not app.worktrees.execution_state(sid)['fenced']
+    finally:
+        await app.close()
