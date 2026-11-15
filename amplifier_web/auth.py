@@ -266,7 +266,11 @@ def session_epoch(data_dir: Path) -> int:
 
 
 class SignOutUncertain(OSError):
-    """Saved, but too slowly to cover a sign-in at the same moment."""
+    """A sign-out time was saved, but the sign-out was not finished.
+
+    A later save was too slow or failed. A sign-in at the same moment may
+    have a session that this sign-out does not end.
+    """
 
 
 def sign_out_all(data_dir: Path) -> int:
@@ -281,41 +285,60 @@ def sign_out_all(data_dir: Path) -> int:
     was saved. A session that the host made before the record was there
     carries that second or an earlier one, so the host refuses it (see
     `sign_in`). A write that ends in a later second than its value is
-    therefore made again with the later second, after a short pause: the
-    host tells a new record from the file time, and two saves in one tick
-    of that time would look like one.
+    therefore made again with the later second, after a short pause.
+
+    The host tells a new record from the file's time, size and identity,
+    not from its content. So each save is checked: a save that the host
+    could not tell from the record before it is made again as well.
     """
     try:
         saved = _read_epoch(data_dir)
     except (OSError, ValueError):
         saved = 0
+    published = False
     for _ in range(3):
+        before = _epoch_hint(data_dir)
         value = max(int(time.time()), saved)
-        _write_epoch(data_dir, value)
-        if _read_epoch(data_dir) != value:
-            raise OSError("The sign-out time was not saved.")
-        if int(time.time()) <= value:
+        try:
+            _write_epoch(data_dir, value)
+            if _read_epoch(data_dir) != value:
+                raise OSError("The sign-out time was not saved.")
+        except (OSError, ValueError):
+            if published:
+                # An earlier save of this run is on disk: something did change.
+                raise SignOutUncertain("A sign-out time was saved, but a later save failed.") from None
+            raise
+        published = True
+        # Done when the host can see this save, and no later second began before it was there.
+        if _epoch_hint(data_dir) != before and int(time.time()) <= value:
             return value
         saved = value
         time.sleep(0.05)
-    raise SignOutUncertain("The sign-out time was saved, but not within one second.")
+    raise SignOutUncertain("A sign-out time was saved, but not within one second or not visibly to the host.")
 
 
 def _epoch_hint(data_dir: Path):
-    """A cheap change hint for the saved record; never its value."""
+    """A cheap change hint for the saved record; never its value.
+
+    Every save puts a new file in place, so the file identity changes with
+    each save, also when two saves have the same file time and size.
+    """
     try:
         info = os.stat(_epoch_path(data_dir))
-        return info.st_mtime_ns, info.st_size
+        return info.st_mtime_ns, info.st_size, info.st_ino
     except OSError:
         return None
 
 
 def refresh_sessions(app, streams=()) -> bool:
-    """Apply a newer saved sign-out to the running host; True when applied.
+    """Apply a changed saved sign-out to the running host; True for a newer time.
 
-    Pending sign-in tickets and codes are dropped, and open state streams are
-    ended so that a signed-out browser cannot keep watching. A stream that
-    reconnects must pass the session check again.
+    Pending sign-in tickets and codes are dropped for every changed record,
+    also when its second is the one already applied: a second sign-out in the
+    same second must still drop a ticket or code that was made in between.
+    For a newer time, open state streams are ended as well, so that a
+    signed-out browser cannot keep watching. A stream that reconnects must
+    pass the session check again.
     """
     data_dir, state = app["service"].data_dir, app["sessions"]
     hint = _epoch_hint(data_dir)
@@ -325,12 +348,14 @@ def refresh_sessions(app, streams=()) -> bool:
     # Kept only now: a record that could not be read is read again next time,
     # and until then no ticket or code opens a session (see sign_in).
     state.hint = hint
-    if value <= state.epoch:
-        return False
-    state.epoch = value
     for store in (app.get("browser_entry"), app.get("browser_codes")):
         if store is not None:
             store.clear()
+    if value <= state.epoch:
+        # No session is older than before: one that is valid now was made
+        # after the second of this record, so no stream needs to end.
+        return False
+    state.epoch = value
     for task in list(streams):
         task.cancel()
     return True
@@ -350,7 +375,8 @@ async def watch_sessions(app, streams, *, interval=2.0):
                 # host cannot apply must not fail in silence.
                 reported = True
                 try:
-                    print("Sign-out of all browsers could not be checked: " + type(error).__name__, flush=True)
+                    print("Sign-out of all browsers could not be checked: " + type(error).__name__
+                          + ". Until it can be checked, no browser can sign in with a ticket or a code.", flush=True)
                 except (OSError, ValueError):
                     pass
 

@@ -413,9 +413,11 @@ network request: the ability to write that private folder is the authority.
 A running host applies the change within a few seconds. It then refuses every
 session from before that time, drops pending sign-in tickets and codes, and ends open
 live-update connections so that a signed-out browser cannot keep watching.
-During those few seconds a sign-in ticket or code opens no session, so that one
-from before the sign-out cannot outlast it. If the browser shows the sign-in
-page again, sign in once more.
+A sign-in ticket or code that is made or used during those few seconds opens
+no session, so that one from before the sign-out cannot outlast it. Wait a few
+seconds after the command. Then open Amplifier again on the PC, or make a new
+code for another device.
+If the command says that the sign-out is not complete, run it again.
 Sign in again in the usual way for your platform.
 
 Limits: this signs out **all** browsers; there is no sign-out for one device.

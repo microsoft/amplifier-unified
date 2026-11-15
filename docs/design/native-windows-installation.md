@@ -1833,22 +1833,41 @@ with no lock between the two processes:
 
 1. The command saves a second that is not earlier than the second in which its
    record was saved. When a write ends in a later second, it pauses for a
-   moment and saves again with that later second (`auth.sign_out_all`). After
-   three such writes it stops and tells the owner to run the command again.
+   moment and saves again with that later second (`auth.sign_out_all`).
 2. For a ticket or code, the host reads the new session's second first and
    looks at the saved record after that. When the record has changed and the
    host has not applied it yet, the ticket or code is used up and opens no
    session (`auth.sign_in`). The host keeps the mark of a record only when it
    has read that record.
+3. The host drops pending tickets and codes for every changed record, also
+   when its second is the one already applied. A second sign-out in the same
+   second therefore still drops a ticket or code that was made in between
+   (`auth.refresh_sessions`). Open streams end only for a later second: a
+   session that is valid at that point was made after the record's second.
 
 A session that the host returns was therefore made before any record that is
 saved later, so it carries no later second than that record, and the host
 refuses it when it applies that sign-out. A session in the same second as a
-sign-out is refused. The owner signs in again one second later.
+sign-out is refused. The owner signs in again one second later, with a new
+ticket or code.
 
-This holds while the PC clock does not go backward, and while the file time
-of the record changes between two saves that are 50 milliseconds apart. The
-host tells a new record from its file time and size, not from its content.
+The host tells a new record from the file's time, size and identity, not from
+its content. Every save puts a new file in place while the record before it
+still exists, so two saves in a row never have the same identity. The command
+checks this for each save: a save that the host could not tell from the record
+before it is made again. After three saves that were too slow or not visible,
+and after a save that fails when an earlier one of the same run is on disk,
+the command says that the sign-out is not complete and asks the owner to run
+it again. It never says then that nothing changed.
+
+This holds while the PC clock does not go backward. One case is left open: the
+host looks every two seconds, and it misses a change when two or more saves
+between two looks end in a file with the same time, size and identity as the
+file that the host saw last. That needs a file time that does not change
+between saves and a reused identity. It is not measured on any file system.
+
+A ticket or code that is made after a sign-out and before the host has applied
+it is dropped as well. The owner waits a few seconds after the command.
 
 #### Remote browser sign-in on a Windows host
 

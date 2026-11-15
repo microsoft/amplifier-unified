@@ -243,6 +243,87 @@ def test_sign_out_that_is_never_saved_within_one_second_is_reported_as_uncertain
     assert capsys.readouterr().out == ""
 
 
+def test_save_that_fails_after_an_earlier_save_of_the_same_run_is_not_reported_as_no_change(home, monkeypatch, capsys):
+    clock = [1_900_000_100]
+    monkeypatch.setattr(auth.time, "time", lambda: clock[0])
+    write, saves = auth._write_epoch, []
+
+    def slow_then_denied(data_dir, value):
+        if saves:
+            raise PermissionError("denied")
+        write(data_dir, value)
+        saves.append(value)
+        clock[0] += 1                                       # The first save ends one second late.
+    monkeypatch.setattr(auth, "_write_epoch", slow_then_denied)
+    with pytest.raises(auth.SignOutUncertain):
+        auth.sign_out_all(home)
+    assert auth._read_epoch(home) == 1_900_000_100          # The first save is on disk.
+    saves.clear()
+    with pytest.raises(SystemExit) as stopped:
+        run_command(home, monkeypatch)
+    assert "not complete" in str(stopped.value) and "Run the command again" in str(stopped.value)
+    assert "Nothing was changed" not in str(stopped.value) and capsys.readouterr().out == ""
+
+
+def test_second_sign_out_in_the_same_second_still_drops_a_ticket_and_a_code_made_in_between(home, monkeypatch):
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_100)
+    tickets, codes = browser_entry.GrantStore(), browser_entry.CodeStore()
+    cancelled = []
+    streams = [SimpleNamespace(cancel=lambda: cancelled.append("stream"))]
+    app = application(home, browser_entry=tickets, browser_codes=codes, sessions=auth.Sessions.load(home))
+    auth.sign_out_all(home)
+    assert auth.refresh_sessions(app, streams) is True and cancelled == ["stream"]
+    binding = browser_entry.Binding("i", "d", "https://pc.example:1", "S-1-5-21-1-2-3-1001")
+    ticket, code = tickets.issue(binding), codes.issue(binding)    # Made after the first sign-out.
+    assert auth.sign_out_all(home) == 1_900_000_100         # The owner signs out again in the same second.
+    assert auth.sign_in(app) is None                        # The host has not looked yet.
+    assert auth.refresh_sessions(app, streams) is False     # No newer time ...
+    assert not tickets._grants and not codes._codes         # ... and both are dropped all the same.
+    assert tickets.consume(ticket, binding) is None and codes.consume(code, binding) is False
+    assert app["sessions"].epoch == 1_900_000_100 and cancelled == ["stream"]
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_102)
+    assert auth.valid_session(app, auth.sign_in(app))       # A sign-in after both works.
+
+
+def test_host_tells_two_saves_apart_by_the_file_itself_not_only_by_its_time(home):
+    auth.sign_out_all(home)
+    first = auth._epoch_hint(home)
+    auth._write_epoch(home, auth._read_epoch(home))         # The same content, saved again.
+    second = auth._epoch_hint(home)
+    assert len(first) == 3 and first[2] and second[2] and first[2] != second[2]
+    assert first[1] == second[1]                            # The size says nothing here.
+
+
+def test_save_that_the_host_could_not_tell_from_the_record_before_it_is_not_a_finished_sign_out(home, monkeypatch):
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_100)
+    monkeypatch.setattr(auth.time, "sleep", lambda seconds: None)
+    look, looks = auth._epoch_hint, []
+    # The first save looks like the record before it; the second one does not.
+    monkeypatch.setattr(auth, "_epoch_hint", lambda data_dir: (
+        looks.append(1) or ("the same" if len(looks) <= 2 else look(data_dir))))
+    assert auth.sign_out_all(home) == 1_900_000_100 and len(looks) == 4     # Saved twice.
+    monkeypatch.setattr(auth, "_epoch_hint", lambda data_dir: "the same")
+    with pytest.raises(auth.SignOutUncertain):
+        auth.sign_out_all(home)
+
+
+def test_record_that_cannot_be_read_signs_everyone_out_once_and_drops_tickets_and_codes(home, monkeypatch):
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_100)
+    codes = browser_entry.CodeStore()
+    app = application(home, browser_codes=codes, sessions=auth.Sessions.load(home))
+    codes.issue(browser_entry.Binding("i", "d", "https://pc.example:1", "S-1-5-21-1-2-3-1001"))
+    auth.sign_out_all(home)
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_500)
+    monkeypatch.setattr(auth, "_read_epoch", lambda data_dir: (_ for _ in ()).throw(PermissionError("in use")))
+    monkeypatch.setattr(auth, "_write_epoch", lambda *a: (_ for _ in ()).throw(PermissionError("in use")))
+    # Not readable and not repairable: the present moment is the sign-out time.
+    assert auth.refresh_sessions(app) is True and app["sessions"].epoch == 1_900_000_500
+    assert not codes._codes and not auth.valid_session(app, session(1_900_000_400))
+    assert auth.refresh_sessions(app) is False              # Once: the record did not change again.
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_501)
+    assert auth.valid_session(app, auth.sign_in(app))       # Sign-in is not closed for good.
+
+
 def test_watcher_keeps_running_after_a_fault_and_stops_when_cancelled(home, monkeypatch, capsys):
     calls = []
     def refresh(app, streams):
@@ -259,7 +340,9 @@ def test_watcher_keeps_running_after_a_fault_and_stops_when_cancelled(home, monk
         return task.cancelled()
     assert asyncio.run(run()) is True and len(calls) >= 3
     # Said once in the host log, not once per attempt and never in silence.
-    assert capsys.readouterr().out == "Sign-out of all browsers could not be checked: RuntimeError\n"
+    assert capsys.readouterr().out == (
+        "Sign-out of all browsers could not be checked: RuntimeError. "
+        "Until it can be checked, no browser can sign in with a ticket or a code.\n")
 
 
 def test_real_middleware_refuses_a_signed_out_cookie(home, monkeypatch):

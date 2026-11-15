@@ -521,6 +521,21 @@ def test_real_https_sign_in_at_the_remote_address_with_the_product_certificate(h
                 async with at_remote("POST", entry.CODE_REDEEM_PATH, headers=form,
                                      data=urlencode({"csrf": csrf, "code": code})) as again:
                     assert again.status == 303 and again.headers["Location"] == "/login?error=1"
+                # The owner makes one more code and then signs out all browsers at the PC.
+                # The host has not looked at the saved sign-out yet: that code opens nothing.
+                async with client.post(base + entry.CODE_PATH, ssl=trusting, json=issue_body(host), headers={
+                        **BEARER, "Host": LOCAL.split("://", 1)[1], "Origin": LOCAL}) as issued:
+                    earlier = (await issued.json())["code"]
+                auth.sign_out_all(host["service"].data_dir)
+                async with at_remote("POST", entry.CODE_REDEEM_PATH, headers=form,
+                                     data=urlencode({"csrf": csrf, "code": earlier})) as waiting:
+                    assert waiting.status == 303 and waiting.headers["Location"] == "/login?error=1"
+                    assert auth.SESSION_COOKIE not in waiting.cookies
+                # The host applies it: the browser that signed in above is signed out.
+                assert auth.refresh_sessions(served) is True and not host["browser_codes"]._codes
+                async with at_remote("GET", "/api/protected", headers={
+                        "Cookie": f"{auth.SESSION_COOKIE}={cookie.value}"}) as signed_out:
+                    assert signed_out.status == 401
         finally:
             await runner.cleanup()
     asyncio.run(run())
