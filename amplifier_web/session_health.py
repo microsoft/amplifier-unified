@@ -243,16 +243,32 @@ def exception_details(error):
 
 
 def terminal_exception_failure(session, value):
-    """Enrich only an exact retained terminal; never replace or redate a cause."""
+    """Bind certified terminal frames, not an earlier same-type request's cause."""
     from .support_diagnostics import terminal_exception_capture, terminal_request_refusal, terminal_function_call_truncation
     capture = terminal_exception_capture(value)
     existing = session.get('failure')
-    if (not capture or not isinstance(existing, dict) or existing.get('exceptionChain')
+    request_cause = isinstance(existing, dict) and existing.get('requestCallId')
+    if (not capture or not isinstance(existing, dict)
+            or existing.get('exceptionChain') and not request_cause
             or session.get('status') in {'stopped', 'stopping'}):
         return None
-    latest = next((event for event in reversed(session.get('generations', []))
-                   if event.get('sessionId', session['id']) == session['id']
-                   and event.get('rootSessionId', session['id']) == session['id']), {})
+    if request_cause:
+        # A provider call can provisionally explain a generic manager exit.
+        # This exact native terminal has stronger provenance, even when its
+        # class/category matches that earlier, possibly handled call. The call
+        # remains untouched in execution history. Never downgrade a safety halt.
+        terminal = generation_failure(latest)
+        if (not terminal or existing.get('category') in {'content_filter', 'computer_capture_stop'}):
+            return None
+        existing = {**terminal, 'generationId': capture['generationId'],
+                    'inputIds': capture['inputIds'], 'recordedAt': latest['at']}
+    latest = latest_root_event(session)
+    active = session.get('collaborationGeneration') or {}
+    if active.get('id') and (
+            not active.get('terminal') or active.get('completed')
+            or active['id'] != capture['generationId']
+            or set(active.get('inputIds') or []) != set(capture['inputIds'])):
+        return None
     if (latest.get('event') != 'generation.failed'
             or latest.get('generation_id') != capture['generationId']
             or existing.get('generationId') != capture['generationId']
@@ -312,6 +328,7 @@ def request_call_failure(session, inputs, generation=None, error_type=None):
                 and failure.get('category') not in {'content_filter', 'computer_capture_stop'}):
             continue  # A handled earlier error is not this terminal's cause.
         return {**failure, 'exceptionChain': public_exception_chain(failure.get('exceptionChain')),
+                'requestCallId': row['id'],
                 'inputId': row.get('admissionInputId') or row.get('turnId'),
                 'recordedAt': row.get('endedAt')}
     return None

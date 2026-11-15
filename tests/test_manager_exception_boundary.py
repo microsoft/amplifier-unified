@@ -335,7 +335,8 @@ async def test_cleanup_context_capture_cannot_cross_current_execution(monkeypatc
 
 
 @pytest.mark.parametrize("change", ["stop", "new-generation", "wrong-generation", "wrong-input",
-                                   "wrong-type", "child", "old-failure", "already-captured"])
+                                   "wrong-type", "child", "old-failure", "already-captured",
+                                   "active-input", "active-generation"])
 def test_supplement_cannot_replace_or_cross_failure_identity(change):
     from amplifier_web.session_health import generation_failure, terminal_exception_failure
     event = {"sessionId": "root", "rootSessionId": "root", "event": "generation.failed", "generation_id": "g",
@@ -361,6 +362,11 @@ def test_supplement_cannot_replace_or_cross_failure_identity(change):
         event["sessionId"] = "child"
     elif change == "old-failure":
         failure["generationId"] = "old"
+    elif change in {"active-input", "active-generation"}:
+        session['collaborationGeneration'] = {
+            'id': 'g' if change == 'active-input' else 'new',
+            'inputIds': ['other'] if change == 'active-input' else ['i'],
+            'terminal': True, 'completed': False}
     else:
         failure["exceptionChain"] = [{"errorType": "ValueError", "frames": [{"file": "original.py"}]}]
     before = copy.deepcopy(session)

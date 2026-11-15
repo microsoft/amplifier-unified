@@ -3540,7 +3540,10 @@ class AppService:
                             (session['preparation'].get('detail') or 'Preparing this chat…') if preparing else "Your message is queued for Amplifier.",
                             reset=session["status"] not in {"working", "starting"})
                         session["status"] = "working"
-                        session.pop("error", None)
+                        # Retained failure and its attention fingerprint have one
+                        # lifetime. Preparation is not new-generation admission.
+                        if not session.get('failure'):
+                            session.pop("error", None)
                     if session.get('externalAgent'):
                         if not shared_room:
                             ensure_turn(session,input_id,text)
@@ -3580,7 +3583,8 @@ class AppService:
                     self._delivery(session, args['inputId'], 'sending')
                     self._activity(session, 'queued', 'Sending your saved message again.', reset=True)
                     session['status'] = 'working'
-                    session.pop('error', None)
+                    if not session.get('failure'):
+                        session.pop('error', None)
                     tree = ensure_turn(session, args['inputId'], message['text'])
                     turn = next(t for t in tree['turns'] if t['id'] == args['inputId'])
                     turn['phase'] = 'running'
@@ -5161,7 +5165,12 @@ class AppService:
                 if payload.get('event') == 'persistence.failed':
                     session['error'] = projected['summary'] + ' ' + projected['guidance']
                 session['failure'] = {**projected, 'recordedAt': session['errorAt']}
-                if capture and not session['failure'].get('exceptionChain'):
+                if (capture and not session['failure'].get('exceptionChain')
+                        and (not session['failure'].get('generationId') or (
+                            capture.get('generationId') == session['failure']['generationId']
+                            and set(capture.get('inputIds') or []) == set(session['failure'].get('inputIds') or [])
+                            and session['failure'].get('errorType') in
+                                {row['errorType'] for row in capture['exceptionChain']}))):
                     session['failure']['exceptionChain'] = capture['exceptionChain']
                 from .input_status import record_failure
                 record_failure(session, session['failure'])
@@ -5194,7 +5203,9 @@ class AppService:
                                                     payload.get('generation_id'), payload.get('error_type'))
                     safety_categories = {'content_filter', 'computer_capture_stop'}
                     explicit_change = (failure and failure.get('category') != 'unknown'
-                        and isinstance(existing, dict) and failure['category'] != existing.get('category'))
+                        and isinstance(existing, dict) and (
+                            failure['category'] != existing.get('category')
+                            or failure.get('stage') != existing.get('stage', 'provider_request')))
                     # A terminal's explicit cause supersedes an earlier transient
                     # provider error. Never turn a terminal safety stop into a
                     # resumable rate-limit failure by binding the earlier cause.
