@@ -193,6 +193,12 @@ While a conversation worker is alive, Windows refuses a new or replaced file
 directly in a consumer installation folder (error 32); `app\config\services`
 still accepts writes. Launcher maintenance stops the app before such a write
 and removes the person's Start-menu and Apps-list entries last.
+Uninstall deletes the installation folder only on the person's choice, made
+twice, and only exact top-level names (`windows_uninstall`). It writes
+`unified-uninstall.json` before the first deletion. While that file exists the
+launcher does not start the app, and setup must never install into a folder
+that holds it. Add a new top-level name to `windows_uninstall` together with
+the code that creates it.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.

@@ -5,14 +5,19 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
+import sys
+import sysconfig
 import time
+import uuid
 
 import pytest
 
 from amplifier_web import windows_removal as removal, windows_uninstall as plan
 
-from test_windows_consumer_shell import model, shell, uninstaller  # noqa: F401  (model and uninstaller are fixtures)
-from test_windows_removal import file, folder, link, opened  # noqa: F401  (opened is a fixture)
+from test_windows_consumer_shell import _seed_native_entries, model, shell, uninstaller  # noqa: F401  (two fixtures)
+from test_windows_removal import _finish_report, file, folder, link, opened  # noqa: F401  (opened is a fixture)
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 
@@ -534,13 +539,17 @@ def test_data_removal_gives_a_closing_program_time_and_then_stops(deleter):
         waits.append(seconds)
         if len(waits) == 2:
             state["held"].discard("shared/keys.env")
-    # Until the deadline every pass tries again what still holds something, in the same order.
-    assert plan._clear(owned, plan.DATA, time.monotonic() + 0.4, lambda seconds: (wait(seconds), time.sleep(0.15))) == ["app"]
-    assert waits and set(waits) == {0.5} and not (root / "shared").exists()
-    assert deletes(state)[:7] == list(plan.DATA) and set(deletes(state)[7:]) <= {"shared", "app"}
-    # After the deadline there is exactly one pass.
+        if len(waits) == 3:
+            state["held"].clear()
+    # Before the deadline every pass tries again only what still holds something, in the same order.
+    assert plan._clear(owned, plan.DATA, time.monotonic() + 3600, wait) == [] and waits == [0.5, 0.5, 0.5]
+    assert deletes(state) == [*plan.DATA, "shared", "app", "shared", "app", "app"]
+    # After the deadline there is exactly one pass and no wait.
     state["calls"].clear()
-    assert plan._clear(owned, plan.DATA, 0, None) == ["app"] and deletes(state) == ["app"]
+    (root / "app").mkdir()
+    (root / "app" / "busy.db").write_text("in use")
+    state["held"] = {"app/busy.db"}
+    assert plan._clear(owned, ["app"], 0, None) == ["app"] and deletes(state) == ["app"]
 
 
 def launch(deleter, monkeypatch):
@@ -636,3 +645,250 @@ def test_launcher_and_launcher_refresh_names_are_known_and_exact():
     assert plan.sort(foreign)["foreign"] == foreign
     assert plan.sort(list(plan.DATA))["data"] == list(plan.DATA) == ["shared", "app", "capture", "ownership", "import",
                                                                     "workspace", "export"]
+
+
+# One Open, Status, Stop or Uninstall as the launcher runs it: a new process
+# behind the launcher's start program, with the installation's workspace as its
+# current folder. Stand-ins: the check of the installed release (the throwaway
+# folder holds no release), Task Scheduler, and the dialogs with their answers.
+# Everything that deletes is real.
+NATIVE_COMMAND = r"""
+import asyncio, json, os, sys
+from pathlib import Path
+repository, packages, folder, evidence, report, operation, answers, settle = sys.argv[1:9]
+sys.path[:0] = [repository, packages]
+from amplifier_web import installation_health, windows_consumer as consumer, windows_consumer_shell as shell
+from amplifier_web import windows_files, windows_installation, windows_removal, windows_service
+from amplifier_web import windows_uninstall as plan
+root, answers, events = windows_files.address(folder), json.loads(answers), []
+consumer.installation = lambda value: (windows_files.address(value), {})
+consumer.environment = lambda *values: {}
+async def working(home):
+    return None
+installation_health.windows_working = working
+def uninstall(home, *, progress):
+    for step in ("task-read", "stop", "task-remove"):
+        progress(step)
+    events.append("stop")
+windows_service.uninstall = uninstall
+async def prepare(*values, **options):
+    raise AssertionError("Amplifier must not start from this folder.")
+windows_installation.prepare_background = prepare
+def question(text, *, cancel=False):
+    events.append("question")
+    return answers.pop(0)
+plan.question = question
+windows_installation.owner_notice = lambda text, confirm=False: True
+shell.SETTLE_SECONDS = int(settle)
+lock = plan.single
+plan.single = lambda folder, wait=1.0: lock(folder, wait=1.0)
+start = windows_removal.finish_after_exit
+def finish(*values, **options):
+    events.append("after-exit")
+    return start(*values, report=report, **options)
+windows_removal.finish_after_exit = finish
+outcome = {"folder": os.getcwd(), "process": os.getpid(), "parent": os.getppid()}
+try:
+    if operation == "open":
+        outcome["result"] = asyncio.run(consumer.launch(root, open_browser=False))
+    else:
+        outcome["result"] = asyncio.run(consumer.maintenance(root, operation))
+except consumer.Unfinished as stopped:
+    outcome.update(step=stopped.step, refused=isinstance(stopped, consumer.Refused),
+                   error=type(stopped.error).__name__, notice=stopped.notice)
+outcome.update(events=events, folderAfter=os.getcwd(), left=sorted(os.listdir(root)))
+Path(evidence).write_text(json.dumps(outcome))
+"""
+
+
+@pytest.fixture
+def native_installation(tmp_path):
+    """A used installation in a private throwaway folder, with its real Windows entries.
+
+    Real: the private folder and its records, the Start-menu shortcuts
+    (ShellLink COM), the Apps-list entry (HKCU), the launcher's start chain (a
+    venv start program in `tools`, whose child is the real Python), junctions,
+    a long path. The outside folder stands for the rest of the person's disk.
+    """
+    import _winapi
+    import winreg
+    from amplifier_web import windows_files
+    from amplifier_web.deployment import write_private
+    tag = uuid.uuid4().hex[:10]
+    root = windows_files.address(Path.home() / ("au-delete-test-" + tag))
+    outside = Path.home() / ("au-delete-outside-" + tag)
+    with windows_files.directory(root, owned_root=root, create=True):
+        pass
+    entries = shell.programs() / ("Amplifier Unified - " + shell.identity(root))
+    links = []
+    try:
+        registration = _seed_native_entries(root, entries)
+        made = subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(root / "tools" / "amplifier-unified")],
+                              capture_output=True, text=True, timeout=120)
+        assert made.returncode == 0, made.stderr[-1500:]
+        (outside / "deep").mkdir(parents=True)
+        (outside / "keep.txt").write_text("keep outside")
+        (outside / "deep" / "also.txt").write_text("keep deep outside")
+        tree = {"shared/keys.env": "KEY=not-a-real-key", "shared/settings.yaml": "a: 1",
+                "app/chats/one/message.txt": "hello", "app/app.sqlite3": "data", "capture/c.jsonl": "{}",
+                "ownership/o.json": "{}", "import/i.txt": "i", "workspace/project/notes.txt": "the person's own file",
+                "export/local-ca.cer": "certificate", "cache/wheels/x.whl": "x", "source-store/objects/s": "s",
+                "temp/t.tmp": "t", "python-bin/python.exe": "MZ", "tool-bin/amplifier-unified.exe": "MZ",
+                "components.txt": "c", "install.log": "l", "uv.zip": "z", "private-git.json": "{}",
+                "private-git.py": "#", "amplifier_unified-1.0.0-py3-none-any.whl": "w", "Launch Unified.lnk": "l",
+                "launcher-1.0.0-0a1b2c3d/Scripts/pythonw.exe": "MZ", "git/cmd/git.exe": "MZ", "uv/uv.exe": "MZ",
+                "consumer-install.json": "{}", "consumer-qualified.json": "{}",
+                "python/cpython-3.13.17-windows-x86_64-none/python.exe": "MZ, never started",
+                "python/cpython-3.13.17-windows-x86_64-none/Lib/os.py": "#"}
+        for name, text in tree.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(text)
+        # A path far beyond 260 characters in a cache.
+        deep = "\\\\?\\" + str(root / "cache" / "long")
+        for index in range(7):
+            deep += "\\" + (f"segment-{index:02d}-" + "x" * 40)
+            os.makedirs(deep)
+        with open(deep + "\\leaf.txt", "w") as stream:
+            stream.write("deep")
+        assert len(deep) > 400
+        # Links that lead out of the folder, and the link that uv makes inside `python`.
+        for link_path, target in ((root / "app" / "junction", outside), (root / "tools" / "junction", outside),
+                                  (root / "python" / "cpython-3.13-windows-x86_64-none",
+                                   root / "python" / "cpython-3.13.17-windows-x86_64-none")):
+            _winapi.CreateJunction(str(target), str(link_path))
+            links.append(link_path)
+        assert (root / "app" / "junction" / "keep.txt").read_text() == "keep outside"
+        # Setup's completion record, private to this person, as setup writes it.
+        write_private(root / plan.COMPLETE, json.dumps({"schema": 1, "version": "1.0.0"}), owned_root=root)
+        packages = sysconfig.get_paths()["purelib"]
+
+        def run(operation, answers=(), *, settle=15):
+            """Returns what the process observed. Its exit is awaited; the step after exit is not."""
+            evidence = tmp_path / f"evidence-{uuid.uuid4().hex[:8]}.json"
+            environment = os.environ.copy()
+            environment.update(TEMP=str(root / "temp"), TMP=str(root / "temp"))
+            process = subprocess.run(
+                [str(root / "tools" / "amplifier-unified" / "Scripts" / "python.exe"), "-I", "-c", NATIVE_COMMAND,
+                 str(REPOSITORY), packages, str(root), str(evidence), str(tmp_path / "after-exit.json"),
+                 operation, json.dumps(list(answers)), str(settle)],
+                cwd=root / "workspace", env=environment, capture_output=True, timeout=180)
+            assert process.returncode == 0, process.stderr.decode("utf-8", errors="replace")[-3000:]
+            return json.loads(evidence.read_text())
+
+        yield dict(root=root, outside=outside, entries=entries, registration=registration, run=run,
+                   report=tmp_path / "after-exit.json")
+    finally:
+        for path in links:  # A link that a failed run left: the link itself, never its target.
+            if os.path.lexists(path):
+                os.rmdir(path)
+        try:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, shell.REGISTRY + shell.identity(root))
+        except OSError:
+            pass
+        shutil.rmtree(entries, ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(outside, ignore_errors=True)
+
+
+def _outside_unchanged(outside):
+    assert sorted(str(path.relative_to(outside)) for path in outside.rglob("*")) == [
+        "deep", str(Path("deep") / "also.txt"), "keep.txt"]
+    assert (outside / "keep.txt").read_text() == "keep outside"
+    assert (outside / "deep" / "also.txt").read_text() == "keep deep outside"
+
+
+def _tree(root):
+    return sorted(str(Path(folder, name).relative_to(root)) for folder, folders, files in os.walk(root)
+                  for name in folders + files)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real folder, Windows entries, start chain and step after exit")
+def test_native_delete_choice_removes_the_folder_and_nothing_outside_it(native_installation):
+    """Yes, Yes on a whole installation: afterwards the folder does not exist."""
+    native, root = native_installation, native_installation["root"]
+    done = native["run"]("uninstall", ["yes", "yes"])
+    print("UNINSTALL_CHAIN " + json.dumps({key: done[key] for key in (
+        "result", "events", "folder", "folderAfter", "left", "process", "parent")}, separators=(",", ":")))
+    assert done["result"] == {"ok": True, "operation": "uninstall", "userDataRetained": False,
+                              "installationFilesRetained": False, "certificate": "none", "kept": [], "afterExit": True}
+    assert done["events"] == ["question", "question", "stop", "after-exit"]
+    # The process started in the installation's workspace, behind the start program, and left the folder.
+    assert Path(done["folder"]) == root / "workspace" and not Path(done["folderAfter"]).is_relative_to(root)
+    assert done["process"] != done["parent"]
+    # When the process ended, only the running program, the journal and at most the emptied workspace were left.
+    assert {"tools", plan.JOURNAL} <= set(done["left"]) <= {"python", "tools", plan.JOURNAL, "workspace"}
+    # The Windows entries are gone.
+    assert shell.registry(root) is None and not native["entries"].exists()
+    # The step after exit removes the running program's files, then the journal, then the empty folder.
+    report = _finish_report(native["report"], timeout=200)
+    print("UNINSTALL_AFTER_EXIT " + json.dumps(report, separators=(",", ":")))
+    assert report["reason"] == "" and report["folderRemoved"] and not report["left"], report
+    assert not os.path.lexists(root)
+    _outside_unchanged(native["outside"])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real folder, Windows entries, start chain and step after exit")
+def test_native_interrupted_removal_refuses_to_start_and_a_second_uninstall_finishes(native_installation):
+    """A data file in use stops the removal; Open, Status and Stop refuse; a second uninstall finishes.
+
+    A file that is not Amplifier's is in the folder: it stays, and so the folder stays.
+    """
+    from amplifier_web import windows_consumer as consumer, windows_files
+    native, root = native_installation, native_installation["root"]
+    (root / "mine.txt").write_text("not Amplifier's")
+    busy = open(root / "app" / "busy.db", "w")  # Another program: a handle without delete sharing.
+    try:
+        first = native["run"]("uninstall", ["yes", "yes"], settle=2)
+        assert (first["step"], first["error"], first["refused"]) == ("data", "Held", False), first
+        assert "could not be deleted" in first["notice"] and first["events"] == ["question", "question", "stop"]
+        journal = plan.pending(root)
+        assert journal is not None and journal["choice"] == "delete" and plan.unfinished(root)
+        # The stored keys went first; the file in use is there; setup's completion record is gone.
+        assert not (root / "shared").exists() and (root / "app" / "busy.db").exists()
+        assert not (root / plan.COMPLETE).exists() and not plan.completed(root)
+        # The Windows entries and the launcher are whole, so the person can uninstall again.
+        assert shell.registry(root) == native["registration"]
+        assert {path.name for path in native["entries"].iterdir()} == set(shell.LINKS)
+        for name in ("tools", "python", "git", "uv", "consumer-install.json", shell.FILE, "cache", "mine.txt"):
+            assert (root / name).exists(), name
+        # The private note of the failure is in the folder itself, never in the app's folder.
+        with windows_files.directory(root, owned_root=root) as owned:
+            assert json.loads(owned.read_private(consumer.RECORD, limit=65536))["step"] == "data"
+        assert not (root / "app" / "config").exists() and not native["report"].exists()
+        # Open, Status and Stop refuse and change nothing.
+        before = _tree(root)
+        for operation in ("open", "status", "stop"):
+            refused = native["run"](operation)
+            assert (refused["step"], refused["refused"]) == ("removing", True), refused
+            assert "select Uninstall Amplifier" in refused["notice"] and not refused["events"]
+        # No to the second uninstall changes nothing.
+        declined = native["run"]("uninstall", ["no"])
+        assert declined["result"] == {"ok": True, "cancelled": True} and declined["events"] == ["question"]
+        assert _tree(root) == before and plan.pending(root) == journal
+        # While another Amplifier window holds the installation's lock, Open and Uninstall refuse.
+        with plan.single(root):
+            with pytest.raises(plan.Busy):
+                with plan.single(root, wait=0.2):
+                    pass
+            for operation, answers in (("open", []), ("uninstall", ["yes"])):
+                waiting = native["run"](operation, answers)
+                assert (waiting["step"], waiting["refused"], waiting["error"]) == ("busy", True, "Busy"), waiting
+        assert _tree(root) == before and plan.pending(root) == journal
+    finally:
+        busy.close()
+    # The file is free: Yes finishes the removal, with the stop again and a new token.
+    done = native["run"]("uninstall", ["yes"])
+    print("UNINSTALL_RESUME " + json.dumps({key: done[key] for key in ("result", "events", "left")},
+                                           separators=(",", ":")))
+    assert done["result"]["afterExit"] and done["result"]["kept"] == ["mine.txt"], done
+    assert done["events"] == ["question", "stop", "after-exit"]
+    assert shell.registry(root) is None and not native["entries"].exists()
+    report = _finish_report(native["report"], timeout=200)
+    print("UNINSTALL_AFTER_EXIT " + json.dumps(report, separators=(",", ":")))
+    assert report["reason"] == "" and not report["folderRemoved"], report
+    # Only the person's own file and the journal are left. Amplifier never starts from this folder again.
+    assert sorted(os.listdir(root)) == ["mine.txt", plan.JOURNAL]
+    assert (root / "mine.txt").read_text() == "not Amplifier's"
+    resumed = plan.pending(root)
+    assert resumed["choice"] == "delete" and resumed["token"] != journal["token"]
+    _outside_unchanged(native["outside"])
