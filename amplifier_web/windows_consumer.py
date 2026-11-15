@@ -173,7 +173,7 @@ def environment(root, value):
     return env
 
 
-async def launch(root, *, open_browser=True):
+async def launch(root, *, open_browser=True, progress=None):
     from .windows_installation import (AddressUnavailable, address_message, change_address,
                                        prepare_background, owner_notice, review_browser_trust)
     root, value = installation(root)
@@ -190,7 +190,7 @@ async def launch(root, *, open_browser=True):
         from .deployment import load_server_config
         created.append(windows_tls.create_identity(root / "app", load_server_config(root / "app")))
     try:
-        result = await prepare_background(root, launcher, env, identity=identity)
+        result = await prepare_background(root, launcher, env, identity=identity, progress=progress)
     except AddressUnavailable as problem:
         # Another owner holds the saved address. Never adopt or stop it; only
         # the person's own Yes moves this installation to a new address.
@@ -199,7 +199,7 @@ async def launch(root, *, open_browser=True):
         if not owner_notice(address_message(problem), confirm=True):
             return {"background": False, "address": {"available": False, "reason": problem.kind}}
         await change_address(root, launcher, env)
-        result = await prepare_background(root, launcher, env, identity=identity)
+        result = await prepare_background(root, launcher, env, identity=identity, progress=progress)
     if open_browser:
         # Never silently import a CA or tell a user to bypass a browser warning.
         from . import browser_entry
@@ -453,18 +453,17 @@ def integrate(root):
     return install(root, value["version"])
 
 
-def start_failure(root):
+def start_failure(root, step=None):
     """One plain cause and next step when the shortcut could not start the app."""
-    from .windows_service import managed
-    # No start-at-sign-in task yet: this was the first start, which prepares
-    # the app's remaining parts from the internet before it registers the task.
-    if not managed(Path(root) / "app"):
-        return ("Amplifier could not finish its first start. On the first start it downloads "
-                "the remaining parts of the app from the internet.\n\n"
-                "Check that this PC is connected to the internet. Then open Amplifier from the "
-                "Start menu: Amplifier Unified. You do not need to install it again.")
-    return ("Amplifier could not start.\n\n"
-            "Restart Windows. Then open Amplifier from the Start menu: Amplifier Unified.")
+    from .windows_consumer_shell import listed
+    has_entries = listed(root)
+    next_step = ("open Amplifier from the Start menu: Amplifier Unified" if has_entries else
+                 "run the Amplifier setup file again. It keeps your chats and settings")
+    if step == "prepare":
+        return ("Amplifier could not prepare the remaining parts of the app. It downloads them from the internet.\n\n"
+                "Check that this PC is connected to the internet. Then " + next_step + "." +
+                (" You do not need to install it again." if has_entries else ""))
+    return "Amplifier could not start.\n\nRestart Windows. Then " + next_step + "."
 
 
 def main(argv=None):
@@ -478,11 +477,13 @@ def main(argv=None):
     operations.add_argument("--uninstall", action="store_true")
     parser.add_argument("--no-open", action="store_true")
     args = parser.parse_args(argv)
+    steps = []
     try:
         operation = next((name for name in ("status", "stop", "uninstall") if getattr(args, name)), None)
         result = (audit(args.root) if args.audit else integrate(args.root) if args.integrate
                   else asyncio.run(maintenance(args.root, operation))
-                  if operation else asyncio.run(launch(args.root, open_browser=not args.no_open)))
+                  if operation else asyncio.run(launch(args.root, open_browser=not args.no_open,
+                                                      progress=steps.append)))
         if sys.stdout is not None:
             print(json.dumps(result))
     except Unfinished as stopped:
@@ -498,7 +499,7 @@ def main(argv=None):
         message = None
         if starting:
             try:
-                message = start_failure(args.root)
+                message = start_failure(args.root, steps[-1] if steps else None)
             except (OSError, ValueError, RuntimeError):
                 pass
         if sys.stdout is None:

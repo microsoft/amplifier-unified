@@ -217,13 +217,34 @@ def registry(root, values=None, *, remove=False):
         return None
 
 
+def _receipt(root):
+    from .windows_files import directory
+    with directory(root, owned_root=root) as owned:
+        return json.loads(owned.read_private(FILE, limit=65536))
+
+
+def listed(root) -> bool:
+    from .windows_files import address
+    try:
+        row = _receipt(address(root))
+        return isinstance(row, dict) and row.get("status") == "installed"
+    except (OSError, ValueError):
+        return False
+
+
 def install(root, version):
     from .windows_files import address, directory
     from .deployment import write_private
     root = address(root)
     manifest = root / FILE
     if manifest.exists():
-        raise ValueError("Windows shell integration already has a receipt; inspect it before retrying.")
+        try:
+            row = _receipt(root)
+            removed = isinstance(row, dict) and row.get("status") == "removed"
+        except (OSError, ValueError):
+            removed = False
+        if not removed:
+            raise ValueError("Windows shell integration already has a receipt; inspect it before retrying.")
     folder = programs() / ("Amplifier Unified - " + identity(root))
     if folder.exists() or registry(root) is not None:
         raise ValueError("The Windows app entries already exist; nothing was overwritten.")
@@ -236,7 +257,7 @@ def install(root, version):
         for name, args in links.items():
             path = folder / name
             # The private directory is pinned, no pre-existing file is adopted.
-            with path.open("xb"): pass
+            owned.publish_private(name, b"")
             with shell_link() as link:
                 link.create(path, python, args, root / "workspace")
                 if link.read(path) != (str(python), args):
@@ -279,7 +300,7 @@ def removal(root, *, progress=None):
         raise ValueError("The Windows app entry receipt is incomplete; inspect before removal.")
     result = {"shortcutsRemoved": True, "installedAppEntryRemoved": True, "userDataRetained": True}
     if row["status"] == "removed":
-        # A completed earlier removal. Setup never recreates entries under this receipt.
+        # A completed earlier removal. A second removal changes nothing.
         yield lambda: dict(result)
         return
     with ExitStack() as stack:

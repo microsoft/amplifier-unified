@@ -705,7 +705,8 @@ namespace UnifiedBootstrap {
                     UseShellExecute=true,WorkingDirectory=Path.Combine(root,"workspace")};
         }
         static int OpenInstalled(string root) {
-            // A second setup run never installs again or changes the installation.
+            // A second setup run restores missing app entries and starts the app.
+            // It never installs again and never removes anything.
             if(!File.Exists(AppStart(root).FileName)) {
                 Say("Amplifier is already installed in "+root+", but setup cannot open it: a program file is missing.\n\n"+
                     "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.",
@@ -721,17 +722,63 @@ namespace UnifiedBootstrap {
                 ? "Amplifier is already installed on this PC.\n\nSelect Yes to open it now.\n\n"+
                   "You can also open it from the Start menu: Amplifier Unified."
                 : "Amplifier is already installed on this PC, but it is not in the Start menu and does not start when you sign in.\n\n"+
-                  "Select Yes to start it again now. Your chats and settings are kept.\n\n"+
-                  "To open it later, run this setup file again.",
+                  "Select Yes to add it to the Start menu again and start it now. Your chats and settings are kept.",
                 MessageBoxButtons.YesNo,MessageBoxIcon.Information)!=DialogResult.Yes) return 0;
-            try {
-                var start=AppStart(root);
-                using(PinInstalled(root,start.FileName)) Process.Start(start);
-                return 0;
-            } catch(Exception) {
-                Say("Setup could not start Amplifier. Open it from the Start menu: Amplifier Unified.",
-                    MessageBoxButtons.OK,MessageBoxIcon.Warning);
-                return 1;
+            Stage=listed?"Starting Amplifier (this can take a few minutes)":"Adding Amplifier to the Start menu";
+            using(var form=new Form {Text="Amplifier Unified Setup",ClientSize=new Size(540,140),
+                FormBorderStyle=FormBorderStyle.FixedDialog,MaximizeBox=false,MinimizeBox=false}) {
+                var label=new Label {Left=20,Top=20,Width=500,Height=55,Text=Stage+"\n\nKeep this window open."};
+                var bar=new ProgressBar {Left=20,Top=85,Width=500,Style=ProgressBarStyle.Marquee};
+                form.Controls.Add(label);form.Controls.Add(bar);
+                var timer=new System.Windows.Forms.Timer {Interval=250};
+                timer.Tick+=(sender,e)=>{label.Text=Stage+"\n\nKeep this window open.";};
+                int result=1;bool settled=false;
+                form.FormClosing+=(sender,e)=>{if(!settled)e.Cancel=true;};
+                form.Shown+=async(sender,e)=>{
+                    timer.Start();
+                    try {
+                        result=await Task.Run(()=>{
+                            if(!listed) {
+                                Stage="Adding Amplifier to the Start menu";
+                                try {
+                                    var python=Path.Combine(root,"tools","amplifier-unified","Scripts","python.exe");
+                                    var integrate=new ProcessStartInfo(python,
+                                        "-I -B -m amplifier_web.windows_consumer --root "+Quote(root)+" --integrate") {
+                                        UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Path.Combine(root,"workspace")};
+                                    Process entries;
+                                    using(PinInstalled(root,python)) entries=Process.Start(integrate);
+                                    // Release the pin before the child writes its app entries.
+                                    using(entries) {
+                                        entries.WaitForExit();
+                                        if(entries.ExitCode!=0) throw new InvalidOperationException();
+                                    }
+                                    listed=true;
+                                } catch(Exception) {
+                                    Say("Setup could not add Amplifier to the Start menu.\n\n"+
+                                        "Restart Windows. Then run this setup file again. Your chats and settings are kept in "+root+".",
+                                        MessageBoxButtons.OK,MessageBoxIcon.Warning);
+                                    return 1;
+                                }
+                            }
+                            Stage="Starting Amplifier (this can take a few minutes)";
+                            try {
+                                var start=AppStart(root);
+                                Process app;
+                                using(PinInstalled(root,start.FileName)) app=Process.Start(start);
+                                using(app) {
+                                    app.WaitForExit();
+                                    return app.ExitCode==0?0:1;
+                                }
+                            } catch(Exception) {
+                                Say("Setup could not start Amplifier. "+
+                                    "Open it from the Start menu: Amplifier Unified.",
+                                    MessageBoxButtons.OK,MessageBoxIcon.Warning);
+                                return 1;
+                            }
+                        });
+                    } finally {settled=true;timer.Stop();form.Close();}
+                };
+                Application.Run(form);timer.Dispose();return result;
             }
         }
         static int ConsumerWindow() {

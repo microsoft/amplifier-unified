@@ -299,7 +299,7 @@ def _review_manually(root, urls, pin):
     return False
 
 
-async def prepare_background(root, launcher, environment, *, port=None, identity=None):
+async def prepare_background(root, launcher, environment, *, port=None, identity=None, progress=None):
     """Prepare/start one owned logon host, or inspect/restart that exact host.
 
     A recorded task is never reconfigured or resynced by a shortcut click.
@@ -326,7 +326,9 @@ async def prepare_background(root, launcher, environment, *, port=None, identity
     async def command(*args, timeout=90):
         return await process(*scope, *args, env=environment, cwd=root, timeout=timeout)
 
+    step = progress or (lambda name: None)
     preparation = None
+    step("address")
     if spec is not None:
         if (Path(spec.python).parent != launcher.parent
                 or Path(spec.workspace) != root / "workspace"):
@@ -339,6 +341,7 @@ async def prepare_background(root, launcher, environment, *, port=None, identity
                 raise AddressUnavailable(kind, saved)
             if kind != "free":
                 raise RuntimeError("The existing task is not in a safe start/reopen state.")
+            step("task")
             await command("service", "start")
         elif task.get("instances") != 1 or task.get("state") != 4:
             raise RuntimeError("The existing task is not in a safe start/reopen state.")
@@ -352,20 +355,33 @@ async def prepare_background(root, launcher, environment, *, port=None, identity
                 raise AddressUnavailable(kind, known)
         if saved is None:
             await command("config", "set", "bind", "[127.0.0.1]")
+        step("tls")
         if identity is not None:
             await asyncio.to_thread(identity)
         await command("setup-tls")
-        preparation = json.loads(await command("runtime", "prepare", "--json", timeout=1800))
-        if preparation.get("ok") is not True or preparation.get("prepared") is not True:
-            raise RuntimeError("Runtime dependency preparation did not complete; no task was registered.")
+        # A prepared runtime starts like a start at sign-in. Without this check,
+        # a start after uninstall with an AI account ran a complete first install:
+        # minutes without a window, with a new folder on each attempt.
+        try:
+            preparation = json.loads(await command("runtime", "status", "--json"))
+        except (OSError, ValueError, RuntimeError, TimeoutError):
+            preparation = None
+        if not (isinstance(preparation, dict) and preparation.get("ok") is True
+                and preparation.get("prepared") is True):
+            step("prepare")
+            preparation = json.loads(await command("runtime", "prepare", "--json", timeout=1800))
+            if preparation.get("ok") is not True or preparation.get("prepared") is not True:
+                raise RuntimeError("Runtime dependency preparation did not complete; no task was registered.")
         if saved is None:
             # Select last: the host's own listener claims the port seconds later.
             if port is None:
                 port = await asyncio.to_thread(windows_ports.select)
             await command("config", "set", "port", str(port),
                           "public_origins", f"[https://127.0.0.1:{port}]")
+        step("task")
         await command("service", "install")
 
+    step("ready")
     health = json.loads(await command("service", "status", "--wait", "60", "--json"))
     if not (health.get("ok") is True and health.get("processVerified") is True
             and health.get("responding") is True):

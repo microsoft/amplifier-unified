@@ -128,13 +128,46 @@ def test_unfinished_attempts_are_removed_and_installations_never_are():
     opened = between("static int OpenInstalled(", "static int ConsumerWindow()")
     assert "RemoveUnfinished" not in opened and "RemoveContents" not in opened
     # The installation is checked again, and held, while Windows starts it.
-    assert "using(PinInstalled(root,start.FileName)) Process.Start(start);" in opened
+    assert "using(PinInstalled(root,start.FileName)) app=Process.Start(start);" in opened
     pin = between("internal static IDisposable PinInstalled(", "internal static string SignInTask(")
     assert pin.index('Need(Marked(root)=="installed"') < pin.index("storage.TrustExecutable(program)")
     saved = between("internal static string SaveDiagnostics(", "static string Shortcut(")
     # A new private folder, created exclusively; never a predictable or adopted one.
     assert "new InstallStorage(parent,name)" in saved and "storage.CreateFile(" in saved
     assert "Directory.CreateDirectory" not in saved and "File.Copy" not in saved
+
+
+def test_second_setup_restores_entries_before_start_and_waits_without_pins():
+    opened = between("static int OpenInstalled(", "static int ConsumerWindow()")
+    assert ("Amplifier is already installed on this PC, but it is not in the Start menu "
+            "and does not start when you sign in.\\n\\n") in opened
+    assert ("Select Yes to add it to the Start menu again and start it now. "
+            "Your chats and settings are kept.") in opened
+    assert "Select Yes to open it now." in opened
+    assert "To open it later, run this setup file again." not in opened
+    order = [opened.index(text) for text in (
+        "if(!listed) {", '" --integrate"', "entries=Process.Start(integrate);",
+        "entries.WaitForExit();", "if(entries.ExitCode!=0)", "listed=true;",
+        "var start=AppStart(root);", "app=Process.Start(start);", "app.WaitForExit();",
+        "return app.ExitCode==0?0:1;")]
+    assert order == sorted(order)
+    assert '"-I -B -m amplifier_web.windows_consumer --root "+Quote(root)' in opened
+    assert 'Path.Combine(root,"tools","amplifier-unified","Scripts","python.exe")' in opened
+    assert 'UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Path.Combine(root,"workspace")' in opened
+    # Each pin covers one statement. Both waits run after that statement ends.
+    assert "using(PinInstalled(root,python)) entries=Process.Start(integrate);" in opened
+    assert "using(PinInstalled(root,start.FileName)) app=Process.Start(start);" in opened
+    assert not re.search(r"using\(PinInstalled\([^\n]*\)\s*\{", opened)
+    failure = between('Say("Setup could not add Amplifier', "return 1;", opened)
+    assert "run this setup file again" in failure and "Your chats and settings are kept in " in failure
+    assert "Open it from the Start menu" not in failure
+    assert 'MessageBoxButtons.OK,MessageBoxIcon.Warning' in failure
+    assert "new Form" in opened and 'Text="Amplifier Unified Setup"' in opened
+    assert "ProgressBarStyle.Marquee" in opened and "new System.Windows.Forms.Timer" in opened
+    assert 'label.Text=Stage+"\\n\\nKeep this window open."' in opened
+    assert "if(!settled)e.Cancel=true;" in opened and "await Task.Run" in opened
+    assert "settled=true;timer.Stop();form.Close();" in opened
+    assert "runtime status" in DESIGN and "clean-room run" in DESIGN
 
 
 def test_sign_in_task_states_do_not_guess():
