@@ -881,38 +881,58 @@ identity and a state.
 | `moving` | A move-out did not finish. | Only the uninstall that holds the same transfer identity in its own journal. Never offered. |
 | `complete` | Every data folder is moved and no program state is left. | Offered at a first start. The uninstall with the same transfer identity goes on with it (a repeated call changes nothing). Any other uninstall with "keep" renames it whole to `<root>-kept-earlier-N` (N from 1 to 9) and never changes it. |
 | `adopting` | A take-back did not finish. | The next start finishes it before the app starts, without a second question. An uninstall finishes it before its own move-out. |
+| `returned` | A take-back finished; only tidying is left. | Any start or uninstall removes the record, the empty kept folder and the note. Never offered. |
 
-The record also holds `declined` after the person answered No, and `entries`
-while one folder is filled entry by entry (below).
+The record also holds `declined` after the person answered No. An `adopting`
+record holds three more things, each saved before the move that it
+describes: `into`, the identity of the installation folder that takes the
+set back (the folder's file number on the disk; a rename on one disk keeps
+it, and no other file or folder has it); `back`, the identity of each kept
+data folder; and `filled`, for each folder that is filled entry by entry,
+the name and identity of each entry.
 
 `<root>\amplifier-kept-return.json`: the installation's own note of a
-take-back. It is written before the kept record becomes `adopting`.
+take-back. It is written before the kept record becomes `adopting`. It tells
+that a take-back began also when the kept record is lost.
 
-- Without `done`, the installation can hold a part of the kept data. The app
-  starts only after the take-back finished, and an uninstall does not begin
-  (`unfinished_take_back`).
-- If the kept record is lost or cannot be read, or the kept folder itself is
-  gone, nothing says how to go on. Then the launcher asks one question. It
-  says what to try first (restart the PC, or put the folder back). Only the
-  person's Yes starts the app: with the part that is back, or fresh when
-  nothing is back. The answer is saved in the note (`left`): this
-  installation then continues no take-back by itself, also when the record
-  comes back. The kept folder stays as it is. There is no state that no step
-  can end.
-- With `done`, the take-back finished and only tidying is left: the record,
-  the empty kept folder, then the note. Such a note never blocks a start or
-  an uninstall, also while Windows refuses to remove it. It stays while its
-  record cannot be read. The app can be running then, so its database is
-  not opened.
+When a take-back goes on. By itself only when the record says `adopting`
+into this installation folder and the note names the same transfer (or the
+record still says `complete` and the note names its transfer: the take-back
+stopped between the two writes). Then the app starts only after the
+take-back finished, and an uninstall does not begin (`unfinished_take_back`).
 
-Which installation continues a take-back. An `adopting` record names the
-identity of the installation folder that takes the set back (the folder's
-file number on the disk). The take-back goes on in exactly that folder, also
-when the note was deleted or cannot be read: the app never starts on a part
-of the data only because the note is gone. Another installation at the same
-path (the person moved the first folder away and installed again) has
-another identity: there the set is never continued and never offered; it is
-named once, and a later uninstall with "keep" does not add to it.
+When the person is asked. In three states nothing says for certain how to go
+on, and the launcher asks one question. Without a person the app does not
+start in these states.
+
+- The record names this installation folder and the note is gone or cannot
+  be read: "Finish now?" Yes moves the rest back. No starts the app with the
+  part that is back.
+- The note is there and the record is lost, unreadable or of another
+  transfer: the text says to restart the PC first; Yes starts the app
+  without the rest.
+- The note is there and the kept folder is gone: the text says to put the
+  folder back; Yes starts the app without the rest.
+
+"Start without the rest" is saved before anything else: in the note (`left`)
+and, when the kept record can be read, in that record (it then names no
+installation folder, so no installation continues it). Then the part that is
+back is prepared for this version. If that fails, this start stops, the next
+start tries again, and an uninstall with "keep" can begin. With `left` an
+installation continues no take-back by itself, also when the record comes
+back. The kept folder stays as it is. There is no state that no step can end.
+
+Another installation at the same path (the person moved the first folder
+away and installed again) has another identity: there the set is never
+continued and never offered; it is named once, and a later uninstall with
+"keep" does not add to it.
+
+When a take-back finished. The record says `returned`, then the note says
+`done`; then the record, the empty kept folder and the note are removed.
+Each of these steps can fail and is done again later; the proof that the
+take-back finished stays until then. A note stays while a record cannot be
+read. Such a state never blocks a start or an uninstall. The app can be
+running then, so its database is not opened.
 
 "No kept folder is left" alone never means "finished"; only `done` does.
 
@@ -948,21 +968,24 @@ and takes no lock. Else, under the lock:
    the app does not start while a usable or unreadable set waits.
 
 The take-back. Before its first change, also when it continues, it runs every
-check of step 3 again and checks every folder that it will fill. A folder
-that holds anything stops it: nothing is merged and nothing is deleted. For
-each kept folder it removes the installation's empty folder and renames the
-kept folder into its place. Windows refuses to remove `workspace` at a first
-start, because it is the current folder of the launcher and of the program
-that started it. Then the kept entries move into that empty folder one by
-one. Before the first entry moves, the record names that folder and, for
-each entry, its name and its identity (the file number on the disk; a rename
-on one disk keeps it, and no other file or folder has it). The folder may
-hold nothing but those entries: this is checked before the first move, again
-when a fill continues, and once more after the last entry. An entry that
-another program or the person put there stops the take-back and is named in
-the message, also when it has the name of an entry that moved. So is an
-entry that came into the kept folder later. An entry that was removed since
-then is not in the way.
+check of step 3 again. One rule holds for the whole take-back: every data
+folder of the installation is empty, or it is the folder that this take-back
+moved there (the saved identity), or it is a folder that this take-back
+fills (only entries with a saved identity, and none whose name still waits
+in the kept folder). And every kept data folder is the one that the
+take-back saw at its start. Anything else stops the take-back before the
+next change and is named in the message: an entry that another program or
+the person put there, another folder in the place of one that came back,
+another file with the name of an entry that moved, a folder that came into
+the kept set later. Nothing is merged and nothing is deleted. An entry that
+was removed since then is not in the way.
+
+For each kept folder the take-back removes the installation's empty folder
+and renames the kept folder into its place. Windows refuses to remove
+`workspace` at a first start, because it is the current folder of the
+launcher and of the program that started it. Then the kept entries move into
+that empty folder one by one, and the folder is checked once more after the
+last entry.
 
 Folders are held in place while they are used. The installation folder, the
 kept folder and both folders of an entry-by-entry move are opened for the
@@ -996,9 +1019,12 @@ file. Nothing else.
 Messages. Every refusal and every stop is one message with what happened, that
 nothing was deleted, the next step and a short reference (the cause, the
 error type and the Windows error code, never the error text). A stop that a
-restart can cure says so. Every other stop names its cause and its own next
-step: the entry that is in the way (move it outside the two folders), a file
-that exists two times after a program closed late, a link, a newer version.
+restart can cure says so. Every other stop names its cause, its path and its
+own next step: the entry that is in the way (move it outside the two
+folders), a file that exists two times after a program closed late, a link,
+a folder with a changed name, program state that someone put into the kept
+set, a newer version. A top-level data folder that could not move is never
+to be moved away by the person; that text says to restart.
 A refusal before any change says that nothing was changed. While an
 installation holds a part of the kept data, the message says that an
 uninstall can delete that part. After a take-back that worked, a failure of
