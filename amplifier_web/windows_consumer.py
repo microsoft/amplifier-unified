@@ -173,6 +173,24 @@ def environment(root, value):
     return env
 
 
+async def browser_opened(command, env, *, limit=90):
+    """Run the owner's `open` command once; True only when it confirmed the browser.
+
+    The confirmation is a line of its output, never its exit status. On
+    Windows a command that an app generation takes over ends with status 0 for
+    this caller, whatever it did; a first start that updates the app is such a
+    case. `open` itself waits up to a minute for a host that is restarting, so
+    the limit here is longer. The command is never run a second time.
+    """
+    from . import browser_entry
+    from .updates import process
+    try:
+        output = await process(*command, "open", env=env, timeout=limit)
+    except (OSError, ValueError, RuntimeError, TimeoutError):
+        return False
+    return browser_entry.OPENED in str(output).splitlines()
+
+
 async def launch(root, *, open_browser=True, progress=None):
     from .windows_installation import (AddressUnavailable, address_message, change_address,
                                        prepare_background, owner_notice, review_browser_trust)
@@ -213,14 +231,12 @@ async def launch(root, *, open_browser=True, progress=None):
             return {**result, "browser": {"opened": False, "reason": "certificate-review-pending"}}
         # The normal owner entry controls browser authentication and trust
         # behavior. Do not print or expose its transient grant in this process.
-        from .updates import process
-        try:
-            await process(str(launcher), "--data-dir", str(root / "app"),
-                          "--workspace", str(root / "workspace"), "open", env=env, timeout=30)
-        except (OSError, ValueError, RuntimeError, TimeoutError):
-            owner_notice("Amplifier is running in the background, but browser entry did not finish. "
-                         "Use the installation's retained status information to inspect the result. "
-                         "No certificate trust or security policy was changed.")
+        if not await browser_opened((launcher, "--data-dir", root / "app",
+                                     "--workspace", root / "workspace"), env):
+            owner_notice("Amplifier is running, but it did not open in your browser.\n\n"
+                         "Open it from the Start menu: Amplifier Unified.")
+            return {**result, "browser": {"opened": False, "reason": "not-confirmed"}}
+        return {**result, "browser": {"opened": True}}
     return result
 
 
