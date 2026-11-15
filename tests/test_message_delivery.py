@@ -970,6 +970,30 @@ def recovery_args(app):
     return {'sessionId': app._session()['id'], 'inputId': 'original'}
 
 
+async def test_reviewed_failure_stays_reviewed_during_explicit_retry_preparation(recovery):
+    app, runtime, _ = recovery
+    session = app._session()
+    failure = copy.deepcopy(session['failure'])
+    item = next(row for row in app.browser_state()['attention']['items']
+                if row['id'] == 'session:' + session['id'])
+    await app.dispatch('attention.read', {'ids': [item['id']],
+        'fingerprints': {item['id']: item['fingerprint']}})
+    async def retry(target, text, input_id, emit):
+        assert input_id == 'original' and text == 'Original request'
+        for status in ('starting', 'ready'):
+            await emit('runtime.status', {'sessionId': session['id'], 'status': status})
+            current = next(row for row in app.browser_state()['attention']['items']
+                           if row['id'] == item['id'])
+            assert current['fingerprint'] == item['fingerprint'] and current['read']
+            assert session['failure'] == failure
+        return {'accepted': True}
+    runtime.retry = retry
+    await app.dispatch('conversation.retry', {**recovery_args(app), 'confirmUncertain': True},
+                       command_id='explicit-reviewed-retry')
+    assert session['failure'] == failure
+    assert len([row for row in session['messages'] if row.get('inputId') == 'original']) == 1
+
+
 async def test_check_is_passive_and_explains_uncertainty(recovery):
     app, runtime, _ = recovery
     for _ in range(2):

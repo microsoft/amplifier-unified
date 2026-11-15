@@ -12,19 +12,21 @@ import './composer-test-helpers.mjs';
 const moduleFailure=process.argv.includes('--module-failure');
 const contextLimit=process.argv.includes('--context-limit');
 const activeWorker=process.argv.includes('--active-worker');
-const lifecycleMode=process.argv.includes('--request-failure')?'request-failure':process.argv.includes('--completed-runtime-fault')?'completed-runtime-fault':null;
+const lifecycleMode=process.argv.includes('--retry-preparation')?'retry-preparation':process.argv.includes('--request-failure')?'request-failure':process.argv.includes('--completed-runtime-fault')?'completed-runtime-fault':null;
 const output=process.env.AMPLIFIER_TEST_ARTIFACTS?resolve(process.env.AMPLIFIER_TEST_ARTIFACTS)+sep:fileURLToPath(new URL('../../output/conversation-details-proof/',import.meta.url));
 await mkdir(output,{recursive:true});
 if(process.env.AMPLIFIER_TEST_ARTIFACTS)assert.deepEqual(await readdir(output),[],'AMPLIFIER_TEST_ARTIFACTS must be a new or empty directory; existing evidence must not be overwritten');
 const pythonArgs=process.env.AMPLIFIER_TEST_INSTALLED_PACKAGE?['-I','-B','-u']:[];
 const fixture=spawn(fixturePython(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url))),[...pythonArgs,fileURLToPath(new URL('../../tests/fixtures/session_health_ui_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit'],env:{...process.env,...(moduleFailure?{MODULE_FAILURE_FIXTURE:'1'}:{}),...(contextLimit?{CONTEXT_LIMIT_FIXTURE:'1'}:{}),...(activeWorker?{ACTIVE_WORKER_FIXTURE:'1'}:{}),...(lifecycleMode?{LIFECYCLE_FIXTURE:lifecycleMode}:{})}});
 const stop=ownFixture(fixture,{label:'Session health fixture'});
-let browser,originalError;
+let browser,page,originalError;
 try{
  const ready=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),15000);fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}});fixture.once('exit',code=>reject(Error('Fixture exit '+code)))});
  browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1280,height:900},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
- const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));await page.goto(ready.url);await showFixtureConversation(page);
- if(lifecycleMode){
+ page=await context.newPage();const errors=[];page.on('pageerror',error=>errors.push(error.message));await page.goto(ready.url);await showFixtureConversation(page);
+ if(lifecycleMode==='retry-preparation'){
+  await retryPreparationCheck(page,ready,output);
+ }else if(lifecycleMode){
   await lifecycleCheck(page,ready,output);
  }else{
  if(contextLimit){
@@ -137,8 +139,57 @@ try{
  console.log('Session health browser passed: compact error, inline copy, Auto naming, one regeneration, manual name precedence, mobile bounds, recovery and original transcript preservation.');
  }
  assert.deepEqual(errors,[]);
-}catch(error){originalError=error;throw error;}
+}catch(error){
+ originalError=error;
+ await writeFile(output+'failure.json',JSON.stringify({error:String(error.stack||error)},null,2)+'\n');
+ await page?.screenshot({path:output+'failure.png'}).catch(()=>{});
+ throw error;
+}
 finally{await finishFixture({label:'Session health browser',close:[['browser',()=>browser?.close()]],stop,originalError});}
+
+async function retryPreparationCheck(page,ready,output){
+ const facts=()=>page.request.get(ready.url+'/fixture/check').then(r=>r.json());
+ const phase=async phase=>assert.equal((await page.request.post(ready.url+'/fixture/preparation-phase',{data:{phase}})).status(),200);
+ const banner=page.locator('[data-part=conversation-trouble]');
+ const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
+ const notice=state=>state.attention.items.find(row=>row.id==='session:'+ready.sessionId);
+ await expect(banner).toContainText('The conversation summary reached its output limit.');
+ const before=await facts(),original=notice(before);
+ await banner.getByRole('button',{name:'Dismiss conversation error',exact:true}).click();
+ await expect(banner).toHaveCount(0);
+ await composer.fill('Try again?');await composer.press('Enter');
+ await expect.poll(async()=>(await facts()).calls.filter(row=>row.operation==='send').length).toBe(1);
+ const checkpoints=[];
+ for(const step of ['preparing','warm','ready']){
+  if(step!=='preparing')await phase(step);
+  const current=await facts();
+  assert.deepEqual(current.failure,before.failure);
+  assert.equal(notice(current)?.fingerprint,original.fingerprint);
+  assert.equal(notice(current)?.read,true);
+  await expect(banner).toHaveCount(0);
+  await page.screenshot({path:output+`retry-${step}.png`});
+  checkpoints.push({step,failure:current.failure,notice:notice(current)});
+ }
+ await phase('startup-error');
+ await expect(banner).toContainText('The conversation worker could not start.');
+ await expect(banner.getByRole('button',{name:'Dismiss conversation error',exact:true})).toBeVisible();
+ const startup=await facts();
+ assert.equal(notice(startup).read,false);assert.notEqual(notice(startup).fingerprint,original.fingerprint);
+ await page.screenshot({path:output+'retry-new-startup-error.png'});
+ await banner.getByRole('button',{name:'Dismiss conversation error',exact:true}).click();
+ await expect(banner).toHaveCount(0);
+ await composer.fill('Explicit second attempt');await composer.press('Enter');
+ await expect.poll(async()=>(await facts()).calls.filter(row=>row.operation==='send').length).toBe(2);
+ await phase('admitted');
+ await expect(page.getByText('A fresh explicit message worked.',{exact:true})).toBeVisible();
+ await expect(banner).toHaveCount(0);
+ const after=await facts();
+ assert.equal(after.failure,null);
+ assert.equal(after.messages.find(row=>row.inputId==='failed-input').inputStatus.failure.code,'summary_output_limit');
+ assert.equal(after.originalUnchanged,true);assert.equal(after.sessions,1);
+ await writeFile(output+'retry-preparation.json',JSON.stringify({scope:'Real host and packaged browser; synthetic transport, no provider or recovery calls',checkpoints,startup,after},null,2)+'\n');
+ console.log('PASS: dismissed prior failure stays hidden through fresh send, preparation, warmth and ready; new startup failure is visible/dismissible; exact admission clears current failure, not historical input.');
+}
 
 async function lifecycleCheck(page,ready,output){
  const actions=[];
