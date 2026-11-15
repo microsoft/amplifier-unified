@@ -1108,7 +1108,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     # a stale or corrupt checkpoint cannot prevent opening valid native history.
     native_guard = NativeTranscriptGuard(store.directory(runtime.session_id) / "transcript.jsonl")
     with startup_timing.phase('manager.history.load'):
-        saved = store.load(runtime.session_id) if resume else None
+        saved = store.load(runtime.session_id, prepare_index=True) if resume else None
         history_source = "native" if saved is not None else "new"
         if resume and saved is None:
             if shared_snapshot is None and shared_handle is not None:
@@ -1126,7 +1126,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 # Migration intentionally writes once; take its stamp before the
                 # read so a concurrent older CLI write cannot become our baseline.
                 native_guard.saved()
-                saved = store.load(runtime.session_id)
+                saved = store.load(runtime.session_id, prepare_index=True)
                 if saved is None and shared_handle is None:
                     saved = store.import_cli(runtime.session_id, workspace=config.workspace)
                 if saved is not None:
