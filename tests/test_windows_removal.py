@@ -368,8 +368,9 @@ def test_finish_static_program_and_stdin_only_payload(finish_start):
     assert removal.FINISH_SCRIPT.count("[Environment]::CurrentDirectory") == 2
     # One call removes a folder; the others close the two files that the step keeps open.
     assert re.findall(r"\$\w+\.\w+\s*\([^)]*\)", removal.FINISH_SCRIPT) == [
-        "$entry.Delete()", "$anchor.Close()", "$lock.Close()", "$lock.Close()"]
-    assert removal.FINISH_SCRIPT.count("New-Object ") == 2
+        "$entry.Delete()", "$anchor.Close()"]
+    # The step opens exactly one file, a new one of its own. It opens no existing file.
+    assert removal.FINISH_SCRIPT.count("New-Object ") == 1 and "'Open'" not in removal.FINISH_SCRIPT
     assert removal.FINISH_SCRIPT.count("[System.IO.FileOptions]") == 2
     assert removal.FINISH_SCRIPT.count("[System.IO.FileMode]") == 2
     assert removal.FINISH_SCRIPT.count("[System.IO.FileAccess]") == 2
@@ -553,13 +554,13 @@ def test_finish_refuses_a_drives_top_folder(finish_start, root):
     assert not calls
 
 
-def test_step_after_exit_keeps_a_file_open_in_every_folder_that_its_paths_lead_through():
+def test_step_after_exit_keeps_its_own_file_open_until_every_file_is_deleted():
     script = removal.FINISH_SCRIPT
     start = script.split("Write-Host 'ready'")[0]
     # The step refuses to answer when its own folder or the flat folder is a link.
     assert "-not (Real-Folder (Get-Item -LiteralPath $hold -Force))" in start
     assert "-not (Real-Folder (Get-Item -LiteralPath $park -Force))) { throw 'Held folder refused' }" in start
-    # Before it answers, it creates one new file in the flat folder and keeps it open: no sharing at all,
+    # Before it answers, it creates one NEW file in the flat folder and keeps it open: no sharing at all,
     # and Windows deletes the file when the handle closes. The flat folder is then never empty.
     assert ("$anchor = New-Object System.IO.FileStream -ArgumentList (Join-Path $park $own[1]),\n"
             "            ([System.IO.FileMode]'CreateNew'), ([System.IO.FileAccess]'Write'),\n"
@@ -570,31 +571,29 @@ def test_step_after_exit_keeps_a_file_open_in_every_folder_that_its_paths_lead_t
     assert "if ($idle -or (Get-Date) -ge $until) { break }" in script
     tail, order = script.split("} while ((Get-Date) -lt $until)")[1], [0]
     for part in (
-            # Both records are checked. Then the journal is kept open: nobody else can delete it, so the
-            # installation folder cannot be emptied. Only when nothing else is left does that handle
-            # delete the journal when it closes.
-            "$last = ($done -and (Only (@($p.park) + $both)))",
-            "$journal = Get-Record $both[0]", "$complete = Get-Record $both[1]",
-            "if ($last) { $option = 'DeleteOnClose' }",
-            "$lock = New-Object System.IO.FileStream -ArgumentList $journal.FullName,",
-            "([System.IO.FileMode]'Open'), ([System.IO.FileAccess]'Read'),",
-            "([System.IO.FileShare]'Read'), 1, ([System.IO.FileOptions]$option)",
+            # Both records are checked before anything of the end happens.
+            "if (-not (Authorized))", "$journal = Get-Record $both[0]", "$complete = Get-Record $both[1]",
             # The inner folder goes while the open file keeps the flat folder.
             "[Environment]::CurrentDirectory = $p.parent", "$folder = Get-Item -LiteralPath $hold",
-            # The flat folder goes while the journal handle keeps the installation folder.
+            # The records go only when nothing but the step's own file and the two records is left.
+            "$mine = @($p.park) + $both",
+            "$last = ($done -and (Only $park @($own[1])) -and (Only $p.root $mine))",
+            "if ($last) {",
+            # The journal first. Setup's completion record only if nothing appeared meanwhile.
+            "Remove-Item -LiteralPath $journal.FullName",
+            "$last = (Only $p.root @($p.park, $both[1]))",
+            "if ($last -and $null -ne $complete) { Remove-Item -LiteralPath $complete.FullName }",
+            # Every file is deleted. Only now does the step close its file; then two empty folders go.
             "$anchor.Close()", "$folder = Get-Item -LiteralPath $park",
-            # Setup's record, the journal through its handle, the folder; each after a fresh listing.
-            "if ($last -and (Only $both)) {", "Remove-Item -LiteralPath $complete.FullName",
-            "if (Only @($both[0])) {", "$lock.Close()", "$folder = Get-Item -LiteralPath $p.root",
-            "$lock.Close()"):
+            "if ($last) {", "$folder = Get-Item -LiteralPath $p.root"):
         order.append(tail.index(part, order[-1] + 1))  # Each part follows the one before; a missing part fails.
+    # No file is deleted after the step closed its own file.
+    assert "Remove-Item" not in tail.split("$anchor.Close()")[1]
     # The step leaves its inner folder once, for the folder above the installation, and stays there.
     assert re.findall(r"\[Environment\]::CurrentDirectory = (\S+)", script) == ["$p.parent"]
-    # Two commands delete a file by its path: a parked file and setup's completion record. Never with -Force.
+    # Three commands delete a file by its path: a parked file, the journal, setup's record. Never with -Force.
     deleting = [line.strip() for line in script.splitlines() if "Remove-Item " in line and not line.strip().startswith("#")]
-    assert len(deleting) == 2 and not any("-Force" in line or "-Recurse" in line for line in deleting)
-    # The journal is never deleted by its path.
-    assert "Remove-Item -LiteralPath $journal" not in script
+    assert len(deleting) == 3 and not any("-Force" in line or "-Recurse" in line for line in deleting)
 
 
 LINKS_REQUIRED = os.environ.get("AMPLIFIER_REQUIRE_LINK_CHECKS") == "1"

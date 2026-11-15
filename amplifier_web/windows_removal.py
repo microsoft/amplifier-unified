@@ -64,26 +64,27 @@ def same_name(name):
 
 
 # All variable data travels on stdin, never in this program. This last step
-# works with paths, so every path that it uses leads through folders that
-# cannot be replaced at that moment. It walks no tree.
+# works with paths, so it deletes a file only while its path cannot lead
+# anywhere else. It walks no tree.
 #
 # A folder cannot be replaced while it holds a file that a program keeps open
 # without delete sharing: nobody can delete or move that file, so the folder is
 # never empty, Windows turns only an empty folder into a link, and Windows
-# refuses to rename a folder with an open file below it.
+# refuses to rename a folder with an open file below it. The same holds for
+# every folder above.
 #
 # - Hand-over: the uninstall program holds the flat folder and one inner folder
 #   in it, and starts this step with the inner folder as its current folder.
-# - The step then creates one file in the flat folder and keeps it open. That
-#   keeps the flat folder, the installation folder and the folders above.
-# - At the end it opens the journal and keeps it open; that keeps the
-#   installation folder when the flat folder goes. Windows deletes each of the
-#   two files itself, through its handle, when the step closes it.
-#
-# The step deletes files only directly in the flat folder, and setup's
-# completion record directly in the installation folder. Everything else it
-# removes is a folder (RemoveDirectory: an empty folder goes, a link goes as a
-# link, a folder with entries refuses).
+# - Before it answers, the step creates one new file in the flat folder and
+#   keeps it open until every file is deleted. Windows deletes that file itself
+#   when the step closes it or ends.
+# - While it is open, the step deletes the parked files directly in the flat
+#   folder and, at the end, the journal and setup's completion record directly
+#   in the installation folder. It opens no existing file for deletion.
+# - Everything else it removes is a folder (RemoveDirectory: an empty folder
+#   goes, a link goes as a link, a folder with entries refuses). After the file
+#   is closed it removes two empty folders: the flat folder and the
+#   installation folder.
 FINISH_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
 $p = $null
@@ -146,9 +147,9 @@ function Get-Record($name) {
         "$($file.Attributes)" -match 'ReparsePoint|ReadOnly|Hidden|System')) { throw 'Record refused' }
     return $file
 }
-function Only($names) {
-    # The installation folder holds these names and nothing else.
-    return -not @(Get-ChildItem -LiteralPath $p.root -Force | Where-Object { $names -cnotcontains $_.Name }).Count
+function Only($path, $names) {
+    # That folder holds these names and nothing else.
+    return -not @(Get-ChildItem -LiteralPath $path -Force | Where-Object { $names -cnotcontains $_.Name }).Count
 }
 try {
     # Enumerate the entire stdin pipeline before parsing or touching the tree.
@@ -224,36 +225,34 @@ try {
             Start-Sleep -Seconds 1
         } while ((Get-Date) -lt $until)
         if (-not (Authorized)) { throw 'Root or token refused' }
-        # 2. Keep the journal open; delete on close only when nothing else is left.
+        # 2. Both records are checked before anything of the end happens.
         $both = @('unified-uninstall.json', 'unified-setup-complete.json')
-        $last = ($done -and (Only (@($p.park) + $both)))
         $journal = Get-Record $both[0]
         $complete = Get-Record $both[1]
-        $option = 'None'
-        if ($last) { $option = 'DeleteOnClose' }
-        $lock = New-Object System.IO.FileStream -ArgumentList $journal.FullName,
-            ([System.IO.FileMode]'Open'), ([System.IO.FileAccess]'Read'),
-            ([System.IO.FileShare]'Read'), 1, ([System.IO.FileOptions]$option)
-        # 3. The inner folder goes while the open file keeps the flat folder;
-        #    the flat folder while the journal handle keeps the installation.
+        # 3. The open file still keeps the flat folder, the installation folder
+        #    and the folders above. The inner folder goes.
         [Environment]::CurrentDirectory = $p.parent
         $folder = Get-Item -LiteralPath $hold -Force -ErrorAction SilentlyContinue
         if ($null -ne $folder) { Clear-Folder $folder }
+        $mine = @($p.park) + $both
+        $last = ($done -and (Only $park @($own[1])) -and (Only $p.root $mine))
+        if ($last) {
+            # 4. Nothing but this step's own file and the two records is left.
+            #    The journal goes first. Setup's completion record goes only if
+            #    nothing appeared meanwhile: with it, setup changes nothing here.
+            Remove-Item -LiteralPath $journal.FullName
+            $last = (Only $p.root @($p.park, $both[1]))
+            if ($last -and $null -ne $complete) { Remove-Item -LiteralPath $complete.FullName }
+        }
+        # 5. Only empty folders from here: the flat folder, then the installation.
         $anchor.Close()
         $folder = Get-Item -LiteralPath $park -Force -ErrorAction SilentlyContinue
         if ($null -ne $folder) { Clear-Folder $folder }
-        if ($last -and (Only $both)) {
-            # 4. Setup's record, the journal (by its handle), the folder; each
-            #    only if nothing appeared meanwhile.
-            if ($null -ne $complete) { Remove-Item -LiteralPath $complete.FullName }
-            if (Only @($both[0])) {
-                $lock.Close()
-                $folder = Get-Item -LiteralPath $p.root -Force -ErrorAction SilentlyContinue
-                if ($null -ne $folder) { Clear-Folder $folder }
-                $removed = -not (Test-Path -LiteralPath $p.root)
-            }
+        if ($last) {
+            $folder = Get-Item -LiteralPath $p.root -Force -ErrorAction SilentlyContinue
+            if ($null -ne $folder) { Clear-Folder $folder }
+            $removed = -not (Test-Path -LiteralPath $p.root)
         }
-        $lock.Close()
     } | Out-Null
 } catch { $reason = $_.Exception.Message }
 finally {
@@ -276,17 +275,16 @@ def finish_after_exit(root, token, *, park, folders, wait_for=(), seconds=60, re
     it; the caller holds both open, as `Folder.aside` does. The step starts
     with that inner folder as its current folder, creates one file in `park`
     and keeps it open, and only then says that it runs; this call returns
-    after that. From then on no program can empty, rename or replace the flat
-    folder, the installation folder or a folder above, also when the caller
-    has ended.
+    after that. Until the step has deleted its last file, no program can
+    empty, rename or replace the flat folder, the installation folder or a
+    folder above, also when the caller has ended.
 
     The step deletes plain files directly in `park` (never with -Force), and
-    removes the `folders` only when they are empty. At the end it keeps the
-    journal open and removes the inner folder and the flat folder. When
-    nothing but the two records is left, it deletes setup's completion
-    record, lets Windows delete the journal through the open handle, and
-    removes `root`. Folders go by RemoveDirectory: a link goes as a link, a
-    folder with entries refuses.
+    removes the `folders` only when they are empty. At the end it removes
+    the inner folder. When nothing but its own file and the two records is
+    left, it deletes the journal and then setup's completion record. Then it
+    closes its file and removes the flat folder and `root`. Folders go by
+    RemoveDirectory: a link goes as a link, a folder with entries refuses.
 
     A return does not mean that anything was removed. A step that does not
     answer within `ready` seconds raises OSError. If Windows refuses Job
