@@ -198,7 +198,10 @@ twice, and only exact top-level names (`windows_uninstall`). It writes
 `unified-uninstall.json` before the first deletion. While that file exists the
 launcher does not start the app, and setup must never install into a folder
 that holds it. Add a new top-level name to `windows_uninstall` together with
-the code that creates it.
+the code that creates it. A running program cannot delete the files that it
+runs from: uninstall moves them through their handles into the held folder
+`unified-uninstall-last`, and the step after exit deletes only there. Do not
+give that step a tree walk; it works with paths and cannot hold a handle.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.

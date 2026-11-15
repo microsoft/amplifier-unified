@@ -887,7 +887,11 @@ does.
 9. One message. It says only what was observed: the data is deleted; the last
    program files go when the message is closed; anything that is not
    Amplifier's is named and stays.
-10. Start the step after exit and end.
+10. The last step (`windows_uninstall.finish`), under the lock and with the
+    folder proven and pinned again: create and hold the flat folder
+    `unified-uninstall-last`; start the step after exit in it; delete `python`
+    and `tools` through handles, and move the few files that this running
+    program has mapped into the held folder. Then the process ends.
 
 **Only exact names.** Uninstall deletes a top-level entry only when its name
 is, with its exact case, one that setup, the launcher or the launcher refresh
@@ -921,25 +925,44 @@ completion record past it, and never says that the data is deleted. Until the
 entry has its own name again, a second uninstall refuses at its first check;
 data that was deleted before the renamed entry stays deleted.
 
-**The step after exit.** A running program cannot delete its own files. The
-process hands the two folders of the running program (`python`, `tools`) to
-one static Windows PowerShell 5.1 script, found in the system folder, with the
-folder path and the token as JSON on standard input, outside the launcher's
-Job, with a working folder and temporary folder outside the installation. The
-script deletes inside those two folders only. It reads the whole journal
-record before every top-level entry and stops when the record is missing or
-different. It lists one level at a time, never uses `-Recurse`, removes a link
-as a link, and never deletes an entry that was created after it started. It
-looks at every folder again immediately before it lists it, and keeps a folder
-that has become a link. Other
-leftover folders of this installation are named to it, and it removes one only
-while it is empty. It deletes the journal last and the folder only when the
-folder is empty. It works with paths, not handles, so it cannot hold a pin: a
-program of the same account that swaps a folder for a link between that look
-and the listing (two consecutive commands) could make it delete in another
-folder. Such a program can delete the person's files without us. A file that
-is moved into `python` or `tools` while the step runs is deleted with them; it
-is inside the folder that the person chose to delete.
+**The step after exit.** A running program cannot delete the files that it
+runs from (its `.exe`, a loaded `.dll` or `.pyd`). It can move them. So the
+uninstall program deletes `python` and `tools` itself, through handles, and
+moves those few files, through their handles, into one flat folder that it
+created and holds. Only they are left for a step after exit: one static
+Windows PowerShell 5.1 script, found in the system folder, with the folder
+path and the token as JSON on standard input, outside the launcher's Job,
+with a temporary folder outside the installation.
+
+The step walks no tree. It starts with the flat folder as its current folder
+while the uninstall program still holds that folder, and the uninstall
+program goes on only when the step has answered. Windows keeps a program's
+current folder open without delete sharing. So no program can rename or
+replace the flat folder, the installation folder or a folder above it, also
+after the uninstall program has ended (measured: error 32 for the flat
+folder, error 5 for the installation folder). The step then:
+
+1. deletes the plain files directly in the flat folder; a folder or a link
+   there stays and is never entered;
+2. makes the installation folder its current folder, which releases the flat
+   folder; removes the flat folder and the other named folders only when they
+   are empty, never with `-Recurse`; deletes named plain files directly in the
+   installation folder; removes a link as a link;
+3. deletes the journal last, releases the installation folder, and removes it
+   only when it is empty.
+
+It reads the whole journal record before every named entry and stops when the
+record is missing or different. An entry that was created after the step
+started stays. A file that a program moves into the flat folder while the
+step runs is deleted with it; that folder is the installation's own.
+
+An earlier form of this step walked `python` and `tools` by path. A program
+of the same account could swap a folder for a link between its look and its
+delete, and the step then deleted in another folder. That is why it walks no
+tree now. What no program can defend against stays: a program that can
+control another program of the same person (close its handles, change its
+memory). Under PowerShell constrained language mode the step stops at its
+first check and changes nothing; the parked files and the journal stay.
 
 **Rule for setup.** An installation must never be made in a folder that holds
 `unified-uninstall.json`. Today's setup keeps this rule without a change. It
@@ -965,12 +988,19 @@ launcher refresh.
 **Proven on a Windows runner** (`windows-local-connection` job; a skipped case
 fails that lane): the whole order on a throwaway installation folder with its
 real shortcuts and Apps-list entry, each command as a new process behind a
-real start program with the workspace as its current folder; the folder is
-gone afterwards and an outside folder behind junctions is unchanged; a data
-file in use stops the removal with the entries and the journal in place; Open,
-Status and Stop refuse; a second window refuses while the lock is held; a
-second uninstall finishes; a file that is not Amplifier's stays. Stand-ins:
-Task Scheduler, the check of an installed release, and the dialogs.
+real start program with the workspace as its current folder. The running
+start program and a loaded DLL cannot be deleted and are moved into the flat
+folder (same bytes there); when the process ends, the folder holds only the
+flat folder, the journal and the emptied workspace; the step after exit
+removes them and the folder is gone; an outside folder behind junctions is
+unchanged. While the step waits, a rename of the installation folder and of
+the flat folder is refused. In the flat folder a junction, a folder, a file
+link, a file in use, a hard link to an outside read-only file and a later
+entry all stay. A data file in use stops the removal with the entries and the
+journal in place; Open, Status and Stop refuse; a second window refuses while
+the lock is held; a second uninstall finishes; a file that is not Amplifier's
+stays. Stand-ins: Task Scheduler, the check of an installed release, and the
+dialogs.
 
 **Not proven:** the dialogs on screen; a real stop with live conversation
 workers followed by the deletion; uv's own start program (the check uses a
