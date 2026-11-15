@@ -1011,9 +1011,9 @@ that are not Amplifier's, and then the folder stays. That is a folder `s`
 that something added to an earlier installation. It is also the folder `s`
 of a new installation to which something added `source-store`: the launcher
 then uses `source-store`, and the `s` that setup made stays, with the module
-source that setup and the app put there. A second setup run on a finished
-installation and the launcher refresh create no folder in the installation
-(read in their source), so they do not add the second name.
+source that setup and the app put there. Setup creates the folder `s` only
+when it makes a new installation, and the launcher creates neither folder
+(read in their source).
 
 The rule looks only at what is in the folder. An installation that has no
 `source-store` folder, and no journal that names it, has the store `s`. That
@@ -1169,10 +1169,11 @@ limit as not blocking.
 - **L3.** After a power loss in the last seconds, or when the step after exit
   cannot run, program files and both records stay (see Leftovers below). They
   hold none of the person's data, Amplifier cannot start from that folder,
-  and setup changes nothing in it. But setup's message there says that
-  Amplifier is already installed and that the folder holds the person's chats
-  and settings and must be kept. That is not true for this leftover. Nothing
-  in the product removes it: the person deletes the folder by hand.
+  and setup installs and deletes nothing in it. But setup's messages there
+  say that Amplifier is already installed, and that the person's chats and
+  settings are in the folder or are kept. That is not true for this
+  leftover. Nothing in the product removes it: the person deletes the folder
+  by hand.
 - **L4.** A journal that this code did not write (damaged, with another
   choice, or without the name of one of the two source stores) proves
   nothing. Uninstall then deletes nothing and offers only to keep the
@@ -1205,7 +1206,10 @@ and changes nothing; the parked files and both records stay.
 `unified-uninstall.json`. Today's setup keeps this rule without a change:
 while anything is left in the folder, setup's completion record is there too,
 and with that record setup installs and removes nothing. The step after exit
-deletes the journal and then the record, when nothing else is left.
+deletes the journal and then the record, when nothing else is left. A second
+setup run can add the Start-menu and Apps-list entries again and start the
+launcher (see Leftovers). The launcher does not open Amplifier while the
+journal exists.
 
 **Leftovers.** If the step after exit cannot run, the parked program files
 and both records stay; they hold none of the person's data, and the message
@@ -1213,11 +1217,20 @@ says that the folder can be deleted. The same leftover stays when the PC
 loses power in the last seconds, after the Windows entries are gone and
 before the step after exit has run; then no message was shown and no entry
 exists to uninstall again. If something that is not Amplifier's is in the
-folder, that entry and both records stay. A later setup run finds its
-completion record in such a folder and changes nothing; it tries to open
-Amplifier, and the launcher refuses because of the journal, or setup says
-that a program file is missing. In none of these states can Amplifier start,
-and in none of them does setup delete anything.
+folder, that entry and both records stay.
+
+A later setup run finds its completion record in such a folder. It installs
+nothing and deletes nothing. When the launcher's start program is gone, setup
+says that a program file is missing. When it is still there (a removal that
+stopped before its last step), setup asks, and on Yes it lets the
+installation's own program add the Start-menu and Apps-list entries again,
+and then it starts the launcher. That program adds the entries only when the
+installation's own records are whole, and it does not look for the journal.
+The launcher does: it refuses to open Amplifier, and its message tells the
+person to select Uninstall Amplifier. With the entries back, the person can
+do that, and the second uninstall finishes the removal. This is read from the
+source of both programs; the combination was not run. In none of these states
+can Amplifier start, and in none of them does setup delete anything.
 
 **Which installations get it.** This is launcher code: a new installation from
 a setup file of a release that has it, and an earlier installation after a
@@ -1260,7 +1273,8 @@ dialogs.
 **Not proven:** the dialogs on screen; a real stop with live conversation
 workers followed by the deletion; uv's own start program (the check uses a
 venv start program); PowerShell constrained language mode; the lock between
-two sign-in sessions of one person; a complete
+two sign-in sessions of one person; a second setup run on a folder whose
+removal did not finish; a complete
 uninstall of an installed build. These remain clean-room acceptance. Not
 built: "keep my chats, remove the program". The launcher refresh command does
 not look at the journal.
