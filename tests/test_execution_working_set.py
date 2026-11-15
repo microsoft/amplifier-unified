@@ -179,3 +179,27 @@ def test_duplicate_legacy_ids_keep_complete_mutable_save_semantics(saved):
     tree, _ = ExecutionPreparation().stored(db, legacy, legacy['execution'], {})
     assert tree == stored_execution(legacy['execution'])
     assert tree['nodes'][-1]['detail']['values'] == ['second occurrence', 'late edit']
+
+
+def test_model_rollup_does_not_promote_disposable_historical_aggregates(saved):
+    db, _, _ = saved
+    from amplifier_web.session_projection import stored_execution
+    tree = {'currentTurnId': 'new-turn', 'nodes': [], 'retiredUsageNodes': [], 'turns': [
+        {'id': 'old-turn', 'phase': 'completed', 'anchorMessageId': None},
+        {'id': 'new-turn', 'phase': 'running', 'anchorMessageId': None}]}
+    for i in range(500):
+        tree['nodes'].append({'id': str(i), 'kind': 'llm', 'liveObservation': True, 'producerId': 'producer',
+                              'sessionId': 'chat', 'rootSessionId': 'chat', 'turnId': 'old-turn',
+                              'phase': 'completed', 'endedAt': 10, 'revision': 1, 'usage': {'totalTokens': 1}})
+    execution.refresh_usage(tree)
+    reference = records.import_tree(db, ('chat',), stored_execution(tree))
+    db.commit()
+    session = ColdRecord({'id': 'chat', 'messages': [], MARKER: {'execution': reference}}, db)
+    execution.ingest(session, {'id': 'new-call', 'kind': 'llm', 'turnId': 'new-turn', 'liveObservation': True,
+                               'producerId': 'producer', 'sessionId': 'chat', 'rootSessionId': 'chat',
+                               'phase': 'completed', 'endedAt': 11, 'usage': {'totalTokens': 3}})
+    assert len(current(session)['nodes']) == 1
+    assert current(session)['aggregateUsage']['totalTokens'] == 503
+    actual = records.materialize(db, save(db, session))
+    assert len(actual['nodes']) == 501 and len(actual['retiredUsageNodes']) == 501
+    assert actual['aggregateUsage']['totalTokens'] == 503

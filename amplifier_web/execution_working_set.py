@@ -224,6 +224,13 @@ def refresh_usage(session):
         resident = {records.key(kind, row) for row in owner.current[kind]}
         for row in value[kind]:
             identity = records.key(kind, row)
-            if identity not in resident and before[kind][identity] != (row.get('turnId'), row.get('aggregateUsage')):
+            prior_turn, prior_usage = before[kind][identity]
+            # Canonical host placements intentionally do not persist display
+            # aggregates. Rebuilding that disposable field must not promote all
+            # completed placements into the mutable working set.
+            usage_owned = kind == 'turns' or not any(row.get(flag) for flag in (
+                'liveObservation', 'canonicalHistory', 'nativeHistory'))
+            changed = prior_turn != row.get('turnId') or usage_owned and prior_usage != row.get('aggregateUsage')
+            if identity not in resident and changed:
                 owner.current[kind].append(row)
                 owner.admitted[kind].add(identity)
