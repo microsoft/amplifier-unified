@@ -669,3 +669,11 @@ Include actual Work-wrapped Full/incomplete-assurance children sharing the enclo
 checkpoint, and verify that their assurance eligibility remains unchanged.
 This reduces nested completion work without eliminating the remaining enclosing
 transcript persistence cost or adding a stronger crash-recovery guarantee.
+
+Next-message preparation uses a private startup projection before its detached
+copy, while Send retains its original complete frozen snapshot. Ordinary startup
+does not copy execution or message history again; forks retain their full captured
+messages. Qualify selected-field aliases, pending choices, authority, Stop and
+owned preparation failures without changing direct `prepare()` return semantics.
+Measure the first capture and second preparation copy separately: reducing the
+second copy does not establish a native startup or history-lock latency improvement.
