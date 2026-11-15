@@ -872,18 +872,23 @@ async def test_provider_count_diagnostics_reach_real_context_intelligence_captur
         (200, 'req_count_valid'),
     ]
     calls = []
+    transport_violations = []
 
     def transport(request):
-        # Record before assertions: count failures are deliberately caught by
-        # the provider, so an unexpected endpoint must remain visible outside it.
+        # SDK/provider catches transport assertions as count-unavailable. Keep
+        # independent evidence so a fixture error cannot masquerade as an outage.
         calls.append((request.method, request.url.path))
-        assert request.url.host == 'count-fixture.invalid'
-        assert calls[-1] == ('POST', '/v1/messages/count_tokens')
-        assert request.headers['x-api-key'] == private['api_key']
-        body = json.loads(request.content)
-        assert body['model'] == MODEL
-        assert private['content'] in json.dumps(body)
-        status, request_id = outcomes[len(calls) - 1]
+        try:
+            assert request.url.host == 'count-fixture.invalid'
+            assert calls[-1] == ('POST', '/v1/messages/count_tokens')
+            assert request.headers['x-api-key'] == private['api_key']
+            body = json.loads(request.content)
+            assert body['model'] == MODEL
+            assert private['content'] in json.dumps(body)
+            status, request_id = outcomes[len(calls) - 1]
+        except Exception as error:
+            transport_violations.append((type(error).__name__, calls[-1]))
+            raise
         if status == 200:
             return http.Response(200, json={'input_tokens': 123})
         return http.Response(status,
@@ -942,7 +947,7 @@ async def test_provider_count_diagnostics_reach_real_context_intelligence_captur
         http_client = http.AsyncClient(
             transport=http.MockTransport(transport), trust_env=False)
         provider._client = module.AsyncAnthropic(
-            api_key=private['api_key'], base_url='https://count-fixture.invalid/v1/',
+            api_key=private['api_key'], base_url='https://count-fixture.invalid/',
             max_retries=0, http_client=http_client)
         request = ChatRequest(
             messages=[Message(role='user', content=private['content'])],
@@ -950,6 +955,7 @@ async def test_provider_count_diagnostics_reach_real_context_intelligence_captur
         before = request.model_dump()
         decisions = [await provider.request_budget(request, context_estimate=200_000)
                      for _ in outcomes]
+        assert transport_violations == [], transport_violations
         assert decisions[:3] == [None, None, None]
         assert decisions[3] == {
             'estimated_input_tokens': 123 + 4096,
