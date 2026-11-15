@@ -2,10 +2,12 @@
 
 The foreground owner launcher reads existing private credentials only.
 Listener authentication and grant exchange remain separate from that local read.
+A browser on another device signs in with a one-use code that the owner makes
+on this computer and types on that device.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import hmac
 import ipaddress
@@ -19,7 +21,18 @@ from urllib.parse import urlsplit
 
 ISSUE_PATH = "/api/browser-entry/issue"
 REDEEM_PATH = "/api/browser-entry/redeem"
+CODE_PATH = "/api/browser-entry/code"
+CODE_REDEEM_PATH = "/api/browser-entry/code/redeem"
+CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"  # 32 symbols: no 0, 1, I or O.
+CODE_LENGTH = 10
+_CODE = re.compile(f"[{CODE_ALPHABET}]{{{CODE_LENGTH}}}")
 REOPEN = "Open from the owner launcher again: amplifier-unified open."
+NEW_CODE = "Make sure that Amplifier is running on this PC. Then run this again: amplifier-unified browsers code."
+RELOAD = "Could not sign in. Open the sign-in page again and type the code."
+GUIDE = ("https://github.com/microsoft/amplifier-unified/blob/main/docs/DEPLOYMENT.md"
+         "#windows-host-reach-unified-from-another-device")
+NOT_IN_USE = ("The running Amplifier does not use this address yet. Stop Amplifier and start it again. "
+              "Then run this again: amplifier-unified browsers code.")
 
 
 class BrowserEntryUnavailable(RuntimeError):
@@ -179,6 +192,66 @@ class GrantStore:
             return record[2]
 
 
+class CodeStore:
+    """Typed one-use codes for a browser on another device; hash-only, bounded.
+
+    Fifty bits, at most eight codes and two minutes carry the guess resistance.
+    So there is no lockout and no delay: a wrong code is counted and never
+    removes a real one, and nobody can keep the owner out by guessing.
+    """
+
+    def __init__(self, *, ttl=120, capacity=8, clock=time.monotonic):
+        if not 0 < ttl <= 120 or not 1 <= capacity <= 8:
+            raise ValueError("Choose a TTL up to 120 seconds and capacity up to 8.")
+        self.ttl, self.capacity, self.clock = ttl, capacity, clock
+        self.failures = 0
+        self._codes = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def display(code: str) -> str:
+        return code[:5] + "-" + code[5:]
+
+    def issue(self, binding: Binding) -> str:
+        with self._lock:
+            now = self.clock()
+            self._codes = {key: record for key, record in self._codes.items() if record[0] > now}
+            if len(self._codes) >= self.capacity:
+                raise BrowserEntryUnavailable("Too many codes are waiting. Wait two minutes, then make a new code.")
+            code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
+            self._codes[hashlib.sha256(code.encode("ascii")).digest()] = (now + self.ttl, binding)
+            return code
+
+    def clear(self) -> None:
+        """Drop every pending code: a sign-out must not be followed by an old one."""
+        with self._lock:
+            self._codes.clear()
+
+    def consume(self, text: str, binding) -> bool:
+        """Accept case, spaces and hyphens only; never map a look-alike symbol.
+
+        `binding` may be a function that returns the current binding. It runs
+        only for a live code, so a wrong code costs no private-file read.
+        """
+        code = (text.upper().replace(" ", "").replace("-", "")
+                if isinstance(text, str) and text.isascii() else "")
+        key = hashlib.sha256(code.encode("ascii")).digest() if _CODE.fullmatch(code) else None
+        with self._lock:
+            record = self._codes.get(key)
+            if record is not None and record[0] <= self.clock():
+                del self._codes[key]
+                record = None
+            try:
+                current = None if record is None else binding() if callable(binding) else binding
+            except BrowserEntryUnavailable:
+                current = None  # The host identity cannot be confirmed now; the code stays.
+            if record is None or record[1] != current:
+                self.failures += 1
+                return False
+            del self._codes[key]
+            return True
+
+
 def loopback_host(host: str | None) -> bool:
     try:
         return ipaddress.ip_address(host or "").is_loopback
@@ -206,8 +279,35 @@ def local_origin(request) -> str | None:
         return None
 
 
+def _remote_address(app, origin) -> bool:
+    """An exact configured HTTPS address of this host, not this computer itself."""
+    if not isinstance(origin, str) or origin not in app["server_config"].get("public_origins", ()):
+        return False
+    parsed = urlsplit(origin)
+    return parsed.scheme == "https" and not loopback_host(parsed.hostname)
+
+
+def remote_origin(request) -> str | None:
+    """Require HTTPS and the explicit exact Origin of one configured remote address.
+
+    The peer address is deliberately not read. A Tailscale TCP forward connects
+    from 127.0.0.1, so the socket does not say where the browser is. The typed
+    one-use code is the proof; this check only fixes the address it is for.
+    """
+    from .deployment import validate_origin
+    if not request.secure:
+        return None
+    try:
+        origin = validate_origin(request.headers.get("Origin", ""))
+    except ValueError:
+        return None
+    if origin != f"{request.scheme}://{request.host}" or not _remote_address(request.app, origin):
+        return None
+    return origin
+
+
 def initialize(app) -> None:
-    app["browser_entry"] = None
+    app["browser_entry"] = app["browser_codes"] = None
     if not is_windows():
         return
     try:
@@ -216,7 +316,7 @@ def initialize(app) -> None:
             return
     except BrowserEntryUnavailable:
         return
-    app["browser_entry"] = GrantStore()
+    app["browser_entry"], app["browser_codes"] = GrantStore(), CodeStore()
 
 
 def _binding(request, origin):
@@ -232,7 +332,8 @@ def _binding(request, origin):
     return Binding(service.update_manager.running_identity["instanceId"], identity, origin, sid)
 
 
-async def issue(request):
+async def _owner_issue(request, name, extra, mint, again=REOPEN):
+    """The one owner-only local check that a ticket and a typed code share."""
     from aiohttp import web
     authorization = request.headers.get("Authorization", "")
     if not (authorization.startswith("Bearer ") and
@@ -241,9 +342,9 @@ async def issue(request):
     origin = local_origin(request)
     if not origin:
         return web.json_response({"error": "Use the exact HTTPS local owner origin."}, status=403)
-    store = request.app["browser_entry"]
+    store = request.app[name]
     if not is_windows() or store is None:
-        return web.json_response({"error": "Windows owner browser entry is not available. " + REOPEN}, status=503)
+        return web.json_response({"error": "Windows owner browser entry is not available. " + again}, status=503)
     try:
         if request.content_type != "application/json":
             return web.json_response({"error": "Use a JSON owner entry request."}, status=400)
@@ -256,28 +357,42 @@ async def issue(request):
         package = _package_identity(identity)
         if package is None:
             raise BrowserEntryUnavailable("Cannot verify the running package identity for browser entry.")
-        if (not isinstance(body, dict) or set(body) - {"instanceId", "dataIdentity", "version", "revision", "ownerSid", "next"}
+        if (not isinstance(body, dict) or set(body) - {"instanceId", "dataIdentity", "version", "revision", "ownerSid", extra}
                 or _package_identity(body) != package
                 or any(body.get(key) != value for key, value in {
                     "instanceId": binding.instance_id, "dataIdentity": binding.data_identity,
                     "ownerSid": binding.owner_sid}.items())):
-            return web.json_response({"error": "The owner host identity changed. " + REOPEN}, status=409)
-        ticket = store.issue(binding, body.get("next"))
+            return web.json_response({"error": "The owner host identity changed. " + again}, status=409)
+        result = mint(store, binding, body.get(extra))
     except BrowserEntryUnavailable as exc:
         return web.json_response({"error": str(exc)}, status=503)
     except (ValueError, TypeError):
-        return web.json_response({"error": "Invalid owner entry request. " + REOPEN}, status=400)
-    return web.json_response({"ticket": ticket, "expiresIn": store.ttl},
+        return web.json_response({"error": "Invalid owner entry request. " + again}, status=400)
+    return web.json_response({**result, "expiresIn": store.ttl},
                              headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
 
-async def redeem(request):
-    from aiohttp import web
-    from .auth import CSRF_COOKIE, SESSION_COOKIE, _verified, new_session
-    origin = local_origin(request)
-    store = request.app["browser_entry"]
-    if not origin or not is_windows() or store is None or request.content_type != "application/x-www-form-urlencoded":
-        return web.Response(text=REOPEN, status=403)
+async def issue(request):
+    return await _owner_issue(request, "browser_entry", "next",
+                              lambda store, binding, target: {"ticket": store.issue(binding, target)})
+
+
+async def code_issue(request):
+    """Owner only and this computer only, exactly as for a ticket.
+
+    The code is bound to the one address the owner named: an exact configured
+    HTTPS address of this host that is not this computer itself.
+    """
+    def mint(store, binding, origin):
+        if not _remote_address(request.app, origin):
+            raise ValueError("Not a configured remote address")
+        return {"code": store.issue(replace(binding, origin=origin))}
+    return await _owner_issue(request, "browser_codes", "origin", mint, NEW_CODE)
+
+
+async def _signed_form(request, field):
+    """Return the one named form value, or None unless the signed CSRF pair matches."""
+    from .auth import CSRF_COOKIE, _verified
     form = await request.clone(client_max_size=4096).post()
     csrf = request.cookies.get(CSRF_COOKIE)
     try:
@@ -285,21 +400,121 @@ async def redeem(request):
                       and _verified(request.app["session_secret"], csrf, 900, "csrf"))
     except (TypeError, ValueError):
         valid_csrf = False
-    if (not valid_csrf or set(form) != {"csrf", "ticket"}
+    if (not valid_csrf or set(form) != {"csrf", field}
             or any(len(form.getall(key)) != 1 for key in form)):
+        return None
+    return form.get(field)
+
+
+async def redeem(request):
+    from aiohttp import web
+    from .auth import CSRF_COOKIE, SESSION_COOKIE, sign_in
+    origin = local_origin(request)
+    store = request.app["browser_entry"]
+    if not origin or not is_windows() or store is None or request.content_type != "application/x-www-form-urlencoded":
+        return web.Response(text=REOPEN, status=403)
+    ticket = await _signed_form(request, "ticket")
+    if ticket is None:
         return web.Response(text=REOPEN, status=403)
     try:
-        target = store.consume(form.get("ticket"), _binding(request, origin))
+        target = store.consume(ticket, _binding(request, origin))
     except BrowserEntryUnavailable:
         target = None
-    if target is None:
+    # A ticket from before a sign-out that this host has not applied yet opens nothing.
+    session = None if target is None else sign_in(request.app)
+    if session is None:
         return web.Response(text=REOPEN, status=403)
     response = web.HTTPSeeOther(target)
-    response.set_cookie(SESSION_COOKIE, new_session(request.app["session_secret"]),
+    response.set_cookie(SESSION_COOKIE, session,
                         max_age=request.app["server_config"]["session_ttl_seconds"],
                         httponly=True, samesite="Strict", secure=True, path="/")
     response.del_cookie(CSRF_COOKIE, path="/")
     raise response
+
+
+_PRIVATE = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
+
+
+async def code_redeem(request):
+    """Public: the typed code is the proof. No lockout and no delay (see CodeStore).
+
+    Only the address the browser used is checked here, never the peer address
+    (see remote_origin). A session from a code is marked remote.
+    """
+    from aiohttp import web
+    from .auth import CSRF_COOKIE, SESSION_COOKIE, sign_in
+    origin = remote_origin(request)
+    store = request.app["browser_codes"]
+    if not origin or not is_windows() or store is None or request.content_type != "application/x-www-form-urlencoded":
+        return web.Response(text=RELOAD, status=403)
+    code = await _signed_form(request, "code")
+    if code is None:
+        return web.Response(text=RELOAD, status=403)
+    # The current host identity is read only for a live code: any device that
+    # reaches this address can send wrong codes, and each must stay cheap.
+    if not store.consume(code, lambda: _binding(request, origin)):
+        if store.failures == 1 or store.failures % 100 == 0:
+            try:  # The count only; never the typed text. A log fault changes nothing.
+                print(f"Remote sign-in: {store.failures} wrong codes since start.", flush=True)
+            except (OSError, ValueError):
+                pass
+        raise web.HTTPSeeOther("/login?error=1", headers=_PRIVATE)
+    session = sign_in(request.app, remote=True)
+    if session is None:
+        # The code is from before a sign-out that this host has not applied yet.
+        # It is used up and opens nothing; this is not counted as a wrong code.
+        raise web.HTTPSeeOther("/login?error=1", headers=_PRIVATE)
+    response = web.HTTPSeeOther("/", headers=_PRIVATE)
+    response.set_cookie(SESSION_COOKIE, session,
+                        max_age=request.app["server_config"]["session_ttl_seconds"],
+                        httponly=True, samesite="Strict", secure=True, path="/")
+    response.del_cookie(CSRF_COOKIE, path="/")
+    raise response
+
+
+_CODE_PAGE = f"""<!doctype html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in to Amplifier</title>
+<link rel="stylesheet" href="/app-pages.css">
+</head><body><main>
+<h1>Sign in to Amplifier</h1>
+<p class="error" role="alert">__ERROR__</p>
+<p>1. On the Windows PC that runs Amplifier, run: <code>amplifier-unified browsers code</code></p>
+<p>If Windows does not find that command, use the full command from the
+<a href="{GUIDE}" target="_blank" rel="noopener noreferrer">Windows steps of the deployment guide</a>.</p>
+<p>2. Type the code here within two minutes.</p>
+<form method="post" action="{CODE_REDEEM_PATH}">
+<input type="hidden" name="csrf" value="__CSRF__">
+<label for="code">Code</label>
+<input id="code" name="code" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" autofocus required>
+<button type="submit">Sign in</button>
+</form>
+</main></body></html>
+"""
+
+
+def remote_login_page(request):
+    """Code form for a browser on another device: no script, nothing reflected.
+
+    Referrer-Policy is same-origin, not no-referrer: from a no-referrer page a
+    browser sends "Origin: null" with the form, and the redeem check refuses it.
+    """
+    from aiohttp import web
+    from .auth import CSRF_COOKIE, _verified, new_csrf
+    secret = request.app["session_secret"]
+    csrf = request.cookies.get(CSRF_COOKIE)
+    # Preserve valid issuance for favicon redirects and concurrent login forms.
+    if not _verified(secret, csrf, 900, "csrf"):
+        csrf = new_csrf(secret)
+    error = ("That code did not work. Check it and type it again. A code works for two minutes "
+             "and only once. After that, make a new code on the PC.") if request.query.get("error") else ""
+    response = web.Response(text=_CODE_PAGE.replace("__ERROR__", error).replace("__CSRF__", csrf),
+                            content_type="text/html",
+                            headers={"Cache-Control": "no-store", "Referrer-Policy": "same-origin"})
+    response.set_cookie(CSRF_COOKIE, csrf, httponly=True, samesite="Strict", secure=request.secure, path="/")
+    return response
 
 
 async def owner_browser_url(data_dir: Path, config: dict) -> str:
@@ -307,6 +522,29 @@ async def owner_browser_url(data_dir: Path, config: dict) -> str:
 
     The returned URL contains a single-use grant, never the control bearer.
     Callers must not print it or include browser backend exceptions in output.
+    """
+    origin, ticket = await _owner_post(data_dir, config, ISSUE_PATH, {}, "ticket", r"[A-Za-z0-9_-]{43}")
+    return origin + "/login#ticket=" + ticket
+
+
+async def owner_browser_code(data_dir: Path, config: dict, origin: str) -> str:
+    """The same pinned owner request, for a code to type at one remote address.
+
+    Only the caller shows the code, and only to the owner; never log it.
+    """
+    _, code = await _owner_post(data_dir, config, CODE_PATH, {"origin": origin}, "code", _CODE.pattern, NEW_CODE,
+                                invalid=NOT_IN_USE)
+    return code
+
+
+async def _owner_post(data_dir: Path, config: dict, path: str, extra: dict, field: str, pattern: str, again=REOPEN,
+                      *, invalid=None):
+    """Pin the privately read leaf before reading or sending the control bearer.
+
+    Returns the local origin and the one named reply value. No redirect, no
+    proxy, no HTTP fallback, and an unconfirmed POST is never sent again.
+    `invalid` is the text for the host's reply that the request itself is not
+    acceptable (400): for a code, the running host does not have the address.
     """
     import aiohttp
     from .auth import data_identity
@@ -342,17 +580,20 @@ async def owner_browser_url(data_dir: Path, config: dict) -> str:
             except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
                 continue
             try:
-                async with client.post(origin + ISSUE_PATH, ssl=pin, allow_redirects=False,
+                async with client.post(origin + path, ssl=pin, allow_redirects=False,
                                        headers={**headers, "Origin": origin}, json={
                                            "instanceId": health["instanceId"], "dataIdentity": health["dataIdentity"],
-                                           "version": version, "revision": revision, "ownerSid": sid}) as response:
+                                           "version": version, "revision": revision, "ownerSid": sid,
+                                           **extra}) as response:
                     if response.status != 200:
-                        raise BrowserEntryUnavailable("The owner host refused browser entry. " + REOPEN)
+                        raise BrowserEntryUnavailable(
+                            invalid if invalid and response.status == 400
+                            else "The owner host refused browser entry. " + again)
                     result = await response.json()
-                ticket = result.get("ticket") if isinstance(result, dict) else None
-                if not isinstance(ticket, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", ticket):
-                    raise ValueError("Invalid ticket")
+                value = result.get(field) if isinstance(result, dict) else None
+                if not isinstance(value, str) or not re.fullmatch(pattern, value):
+                    raise ValueError("Invalid reply")
             except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
-                raise BrowserEntryUnavailable("Browser entry response was not confirmed; no retry was made. " + REOPEN) from None
-            return origin + "/login#ticket=" + ticket
-    raise BrowserEntryUnavailable("The owned local host is not reachable or its identity does not match. " + REOPEN)
+                raise BrowserEntryUnavailable("Browser entry response was not confirmed; no retry was made. " + again) from None
+            return origin, value
+    raise BrowserEntryUnavailable("The owned local host is not reachable or its identity does not match. " + again)

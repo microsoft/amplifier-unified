@@ -41,6 +41,28 @@ class WindowsServiceError(RuntimeError):
     pass
 
 
+class TaskNotConfirmed(WindowsServiceError):
+    """This account's Amplifier task exists, and the ownership check did not confirm it.
+
+    The check compares the whole definition and cannot say why it differs: a
+    changed setting, another installation's task and a renamed Windows account
+    all end here. `entry` is the task's name in Task Scheduler. `retry` is True
+    when Windows gave no answer for an account name: nothing is known about the
+    task then, and a later check can pass.
+
+    The sentence states only that the task was not confirmed. It does not say
+    that nothing was changed: `install` checks a task after it registered it.
+    """
+
+    def __init__(self, entry, *, retry=False):
+        super().__init__(
+            "Windows could not check the account of Amplifier's start-at-sign-in task, so "
+            "Amplifier could not confirm that the task belongs to this installation." if retry else
+            "Amplifier could not confirm that its start-at-sign-in task in Windows belongs "
+            "to this installation.")
+        self.entry, self.retry = entry, retry
+
+
 def _sid(value: str) -> str:
     if (not isinstance(value, str) or not re.fullmatch(r"S-1-(?:\d+-)+\d+", value)
             or value in {"S-1-5-18", "S-1-5-19", "S-1-5-20"}):
@@ -197,28 +219,96 @@ def _tree(node):
             tuple(sorted((_tree(child) for child in node), key=repr)))
 
 
-def _account_sid(name):
-    """Resolve scheduler-normalized account text through the native SID API."""
-    if sys.platform != "win32" or not isinstance(name, str) or len(name) > 1024:
-        raise WindowsServiceError("Cannot resolve the task trigger's owner identity.")
+class _LookupFailed(Exception):
+    """Windows gave no answer for an account name. This is not the answer "no such name"."""
+
+
+def _lookup(name):
+    """Ask Windows what an account or authority name maps to.
+
+    Returns (SID text, SID_NAME_USE type) for a name that Windows maps; type 1
+    is a user account. Returns None only for Windows' own answer that the name
+    maps to nothing (ERROR_NONE_MAPPED from the sizing call). Every other
+    outcome raises _LookupFailed, so a failed lookup is never read as "no such
+    name" and never as a task that differs.
+    """
+    if sys.platform != "win32":
+        raise _LookupFailed("Account names resolve only on native Windows.")
+    try:
+        return _native_lookup(name)
+    except _LookupFailed:
+        raise
+    except Exception as error:  # A native call or conversion that did not work.
+        raise _LookupFailed("The Windows account lookup did not work.") from error
+
+
+def _native_lookup(name):
     import ctypes as C
     from ctypes import wintypes as W
     api = C.WinDLL("advapi32", use_last_error=True)
     api.LookupAccountNameW.argtypes = [W.LPCWSTR, W.LPCWSTR, C.c_void_p,
                                       C.POINTER(W.DWORD), W.LPWSTR,
                                       C.POINTER(W.DWORD), C.POINTER(W.DWORD)]
+    api.LookupAccountNameW.restype = W.BOOL
     size, domain_size, use = W.DWORD(), W.DWORD(), W.DWORD()
-    api.LookupAccountNameW(None, name, None, C.byref(size), None,
-                           C.byref(domain_size), C.byref(use))
-    if C.get_last_error() != 122 or not 0 < size.value <= 65536 or domain_size.value > 32768:
-        raise WindowsServiceError("Cannot resolve the task trigger's owner identity.")
+    C.set_last_error(0)
+    sized = api.LookupAccountNameW(None, name, None, C.byref(size), None,
+                                   C.byref(domain_size), C.byref(use))
+    error = C.get_last_error()
+    if not sized and error == 1332:  # ERROR_NONE_MAPPED
+        return None
+    # Without buffers the call can only fail, with ERROR_INSUFFICIENT_BUFFER.
+    if sized or error != 122 or not 0 < size.value <= 65536 or domain_size.value > 32768:
+        raise _LookupFailed(f"Windows account lookup failed (error {error}).")
     sid = C.create_string_buffer(size.value)
     domain = C.create_unicode_buffer(max(1, domain_size.value))
     if not api.LookupAccountNameW(None, name, sid, C.byref(size), domain,
-                                  C.byref(domain_size), C.byref(use)) or use.value != 1:
-        raise WindowsServiceError("Task trigger does not resolve to a user account.")
+                                  C.byref(domain_size), C.byref(use)):
+        # ERROR_NONE_MAPPED too: Windows mapped this name a moment ago.
+        raise _LookupFailed(f"Windows account lookup failed (error {C.get_last_error()}).")
     from .windows_files import _API
-    return _sid(_API().sid_text(C.cast(sid, C.c_void_p)))
+    return _API().sid_text(C.cast(sid, C.c_void_p)), use.value
+
+
+def _same_account(text, sid):
+    """Raise unless the sign-in trigger's user text names the user account `sid`.
+
+    Task Scheduler stores that user as a name, `COMPUTER\\user`, even when the
+    task was registered with the SID. It never rewrites the name. After the
+    computer's name changes, Windows still starts the task, but the stored name
+    maps to nothing. Rule 3 accepts that one state.
+
+    This is an equivalence rule for the trigger's text, not proof of who made
+    the task: it also accepts a trigger that was set to another account of the
+    same name whose authority no longer exists. The account that the task runs
+    as is the principal. That stays an exact SID comparison in the definition,
+    like the action, the program path and every other field.
+    """
+    if not isinstance(text, str) or not text or len(text) > 1024:
+        raise ValueError("Task trigger names no account.")
+    if text.startswith("S-1-"):
+        # 1. SID text. Text equality is identity here.
+        if _sid(text) != sid:
+            raise ValueError("Task trigger belongs to another user.")
+        return
+    found = _lookup(text)
+    if found is not None:
+        # 2. Windows maps the stored name: it must be this user account.
+        if found != (sid, 1):
+            raise ValueError("Task trigger belongs to another user.")
+        return
+    # 3. Windows maps the stored name to nothing. Accept `authority\account`
+    # only when the authority alone also maps to nothing (a computer name that
+    # is gone; a deleted account of an authority that still exists is refused)
+    # and the account part alone is this user account.
+    authority, separator, account = text.partition("\\")
+    if (not separator or not authority or not account
+            or any(mark in part for part in (authority, account) for mark in "\\/@")):
+        raise ValueError("Task trigger account does not exist.")
+    if _lookup(authority) is not None:
+        raise ValueError("Task trigger account does not exist in its authority.")
+    if _lookup(account) != (sid, 1):
+        raise ValueError("Task trigger belongs to another user.")
 
 
 def _scheduler_defaults(root, sid):
@@ -227,12 +317,7 @@ def _scheduler_defaults(root, sid):
     # even when registration used a SID. Resolve it; text equality isn't identity.
     for node in root.findall(f"{_q('Triggers')}/{_q('LogonTrigger')}/{_q('UserId')}"):
         if node.text != sid:
-            try:
-                actual = _sid(node.text) if isinstance(node.text, str) and node.text.startswith("S-1-") else _account_sid(node.text)
-            except WindowsServiceError as error:
-                raise ValueError("Task trigger identity could not be resolved.") from error
-            if actual != sid:
-                raise ValueError("Task trigger belongs to another user.")
+            _same_account(node.text, sid)
             node.text = sid
     defaults = {
         "Triggers/LogonTrigger": {"Enabled": "true"},
@@ -257,7 +342,12 @@ def owned_spec(xml: str, sid: str, data_dir=None) -> TaskSpec:
     Scheduler-added registration dates carry no authority. Everything else must
     match our generated definition, including ALL actions, triggers and settings.
     A customized/foreign definition is never overwritten, even with --replace.
+    The one identity equivalence is the trigger's user text: see _same_account.
     """
+    try:
+        entry = task_name(sid)
+    except ValueError as error:
+        raise WindowsServiceError("An owner user SID is required.") from error
     try:
         if not isinstance(xml, str) or len(xml.encode("utf-8")) > LIMIT or "<!" in xml:
             raise ValueError("Invalid task XML.")
@@ -276,8 +366,10 @@ def owned_spec(xml: str, sid: str, data_dir=None) -> TaskSpec:
         if _tree(root) != _tree(ET.fromstring(task_xml(spec))):
             raise ValueError("Task definition does not match its ownership metadata.")
         return spec
+    except _LookupFailed as error:
+        raise TaskNotConfirmed(entry, retry=True) from error
     except (ValueError, TypeError, ET.ParseError, KeyError) as error:
-        raise WindowsServiceError("Refusing unmanaged or changed Windows task definition.") from error
+        raise TaskNotConfirmed(entry) from error
 
 
 # Static source only. JSON is data on stdin, never substituted into PowerShell.

@@ -32,7 +32,8 @@ FAILURE = "task-failure.json"
 # Error classes whose text is a FIXED sentence that this product wrote for the
 # owner. Do not add a class whose text can hold a path, an address or another
 # value: the CLI's SystemExit text, for example, names the data folder.
-_OWNER_SENTENCES = {"WindowsServiceError", "HiddenConsoleError", "MissingHostDependency"}
+_OWNER_SENTENCES = {"WindowsServiceError", "TaskNotConfirmed", "HiddenConsoleError",
+                    "MissingHostDependency"}
 # The one start failure that a person can cause and repair. A fixed sentence:
 # the address and the port themselves are not saved.
 _ADDRESS_IN_USE = "Another program is using the address or port that Amplifier saved for this app."
