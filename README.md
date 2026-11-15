@@ -4,6 +4,8 @@ Amplifier Unified is a local workspace for working with AI. Chat or talk with an
 assistant, give it tasks, and follow its work across conversations, tools, and
 shared visual surfaces. It uses your configured Amplifier bundles and model accounts.
 
+Explore the [Amplifier Unified website](https://unified.amplifier.ms/) for examples and getting started.
+
 ## Install
 
 The installer supports **macOS and Linux**, including **Windows through WSL with
@@ -71,7 +73,7 @@ Roles: Experience, Conversation. Supports: Agent Instance, Tool, Connection.
 
 ![Ecosystem roles and component relationships](docs/ecosystem-map.svg)
 
-[Open the map](docs/ecosystem-map.svg) · [Product overview](https://microsoft.github.io/amplifier-constellation/projects/amplifier-unified/) · [Map guide](https://github.com/microsoft/amplifier-constellation/blob/main/docs/ecosystem-maps.md)
+[Product website](https://unified.amplifier.ms/) · [Ecosystem map](https://microsoft.github.io/amplifier-constellation/projects/amplifier-unified/) · [Open the map](docs/ecosystem-map.svg) · [Map guide](https://github.com/microsoft/amplifier-constellation/blob/main/docs/ecosystem-maps.md)
 
 <details>
 <summary>The five shared building blocks</summary>
