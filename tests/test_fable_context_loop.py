@@ -1,5 +1,6 @@
 """Offline exact provider/host/native-loop fitting, never live vendor evidence."""
 import hashlib
+import inspect
 import json
 import re
 from pathlib import Path
@@ -341,6 +342,7 @@ class OpaqueHistoryWire:
                 self.initial_pressure = dict(self.context.last_budget)
             if len(self.foreground) == 1 or (
                     self.control == 'second-overflow' and len(self.foreground) == 2):
+                self.timeline.append({'kind': 'overflow_response', 'status': 400, **record})
                 return self.http.Response(400,
                     headers={'request-id': f'synthetic-opaque-overflow-{len(self.foreground)}'},
                     json={'type': 'error', 'error': {'type': 'invalid_request_error',
@@ -416,9 +418,15 @@ async def test_opaque_history_overflow_requires_one_different_counted_retry(cont
     async def instructions():
         return 'Preserve ORBIT and every completed receipt. Never replay operations.'
 
+    async def observe_compaction(event, data):
+        wire.timeline.append({'kind': 'hook', 'event': event, 'data': dict(data)})
+        return HookResult()
+
     for name in ('record', 'app_control'):
         await coordinator.mount('tools', NoReplay(name), name=name)
     await context.set_system_prompt_factory(instructions)
+    for event in ('context:compaction_started', 'context:compaction_finished'):
+        coordinator.hooks.register(event, observe_compaction, name='opaque-compaction-witness')
     seed = [{'role': 'user', 'content': 'Accepted ORBIT task. Preserve the original evidence.'}]
     for index in (1, 2):
         seed.extend([
@@ -440,6 +448,12 @@ async def test_opaque_history_overflow_requires_one_different_counted_retry(cont
         {'role': 'assistant', 'content': 'Latest correction acknowledged.'}])
     prompt = 'CURRENT_INPUT_ONLY: finish ORBIT without repeating completed operations.'
     try:
+        assert context.config['token_meter'] == 'actual'
+        assert context.config['summarize_trigger'] == .7
+        measured_view = coordinator.get_capability('context.measured_request_view')
+        assert callable(measured_view) and measured_view.__self__ is context
+        reason = inspect.signature(measured_view).parameters.get('reason')
+        assert reason is not None and reason.kind == inspect.Parameter.KEYWORD_ONLY
         await context.set_messages(seed)
         wire.seed_hashes = [digest(row) for row in await context.get_messages()]
         tool_hashes = {row['tool_call_id']: hashlib.sha256(row['content'].encode()).hexdigest()
@@ -478,6 +492,19 @@ async def test_opaque_history_overflow_requires_one_different_counted_retry(cont
         assert wire.summaries, 'A provider overflow must force the eligible public prefix'
         first_summary = next(index for index, entry in enumerate(wire.timeline)
                              if entry['kind'] == 'send' and entry['summary'])
+        rejected = next(index for index, entry in enumerate(wire.timeline)
+                        if entry['kind'] == 'overflow_response' and entry['key'] == first['key'])
+        started = [index for index, entry in enumerate(wire.timeline)
+                   if entry['kind'] == 'hook' and entry['event'] == 'context:compaction_started']
+        finished = [index for index, entry in enumerate(wire.timeline)
+                    if entry['kind'] == 'hook' and entry['event'] == 'context:compaction_finished']
+        assert len(started) == len(finished) == 1
+        assert first_send < rejected < started[0] < first_summary < finished[0]
+        assert wire.timeline[rejected]['status'] == 400
+        assert wire.timeline[finished[0]]['data']['outcome'] == 'completed'
+        forced_pressure = wire.timeline[started[0]]['data']
+        assert forced_pressure['semantic_measurement_kind'] == 'public_estimate'
+        assert forced_pressure['semantic_input_tokens'] < forced_pressure['semantic_trigger']
         assert not any(entry['kind'] == 'count' and entry['available'] and not entry['summary']
                        for entry in wire.timeline[:first_summary])
         assert context.summary is not None
@@ -519,6 +546,7 @@ async def test_opaque_history_overflow_requires_one_different_counted_retry(cont
             assert len(wire.foreground) == 2  # The refused original plus ONE retry.
             assert len(wire.summaries) == 1
             retry = [entry for entry in sends if not entry['summary']][1]
+            assert finished[0] < wire.timeline.index(retry)
             assert retry['key'] != first['key']
             assert retry['tokens'] < first['tokens'] and retry['tokens'] + 4096 <= LIMIT
             assert wire.summary_marker in json.dumps(wire.foreground[1])
