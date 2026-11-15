@@ -267,6 +267,44 @@ def install_preparation_timing(coordinator):
                                name='unified-preparation-end')
 
 
+def _serialization_shape(full, owners, identities):
+    """Count resident containers only, without resolving cold or custom values."""
+    fields = (
+        ('messages', 'messageOwners', 'messageColdOwners', 'messageUnavailableOwners'),
+        ('nodes', 'nodeOwners', 'nodeColdOwners', 'nodeUnavailableOwners'),
+        ('retiredReceipts', 'receiptOwners', 'receiptColdOwners', 'receiptUnavailableOwners'),
+        ('workers', 'workerOwners', 'workerColdOwners', 'workerUnavailableOwners'),
+    )
+    facts = {'scope': 'full' if full else 'explicit', 'owners': len(identities),
+             **{key: 0 for keys in fields for key in keys}}
+    missing = object()
+    for identity in identities:
+        row = dict.get(owners, identity)
+        # ColdRecord.get/__getitem__ may load a body. Bypass mapping overrides;
+        # execution dictionaries and counted lists must be exact builtins.
+        if isinstance(row, dict):
+            tree = dict.get(row, 'execution', missing)
+            cold = dict.get(row, '_coldFields')
+            values = (dict.get(row, 'messages', missing),
+                      dict.get(tree, 'nodes', missing) if type(tree) is dict else missing,
+                      dict.get(tree, 'retiredUsageNodes', missing) if type(tree) is dict else missing,
+                      dict.get(row, 'workers', missing))
+        else:
+            tree = missing
+            cold = None
+            values = (missing,) * 4
+        frozen = tuple(type(cold) is dict and key in cold
+                       and (key != 'execution' or tree is missing)
+                       for key in ('messages', 'execution', 'execution', 'workers'))
+        for keys, value, is_cold in zip(fields, values, frozen):
+            if type(value) is list:
+                facts[keys[0]] += len(value)
+                facts[keys[1]] += 1
+            else:
+                facts[keys[2 if value is missing and is_cold else 3]] += 1
+    return facts
+
+
 class PerformanceDiagnostics:
     def __init__(self):
         self.operations = {}
@@ -284,14 +322,17 @@ class PerformanceDiagnostics:
         self.started = time.time()
 
     @contextmanager
-    def measure(self, name, *, synchronous=False, session_id=None):
+    def measure(self, name, *, synchronous=False, session_id=None, serialization=None):
         started, wall = time.monotonic(), time.time()
         cpu = time.thread_time() if synchronous else None
+        shape = (_serialization_shape(*serialization)
+                 if name == 'state.serialize' and serialization is not None else {})
+        del serialization  # Only detached fixed scalars survive the measured call.
         try:
             yield
         finally:
             elapsed = (time.monotonic() - started) * 1000
-            row = {'operation': name, 'at': wall, 'elapsedMs': round(elapsed, 2)}
+            row = {'operation': name, 'at': wall, 'elapsedMs': round(elapsed, 2), **shape}
             if cpu is not None:
                 row['threadCpuMs'] = round((time.thread_time() - cpu) * 1000, 2)
             if isinstance(session_id, str):

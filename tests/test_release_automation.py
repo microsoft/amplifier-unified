@@ -652,10 +652,11 @@ def test_real_sdist_build_excludes_untracked_ci_checkouts(repository):
     for name in ('scripts/scheduling_build_hook.py', 'scripts/scheduling_delivery.py',
                  'components/scheduling.source.json', 'components/worktrees.source.json',
                  'components/portability.source.json', 'components/operations.source.json',
-                 'components/workspace-metadata.source.json', 'components/kernels.source.json'):
+                 'components/workspace-metadata.source.json', 'components/kernels.source.json',
+                 'components/outputs.source.json'):
         target = repository / name; target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(project / name, target)
-    for component in ('scheduling', 'worktrees', 'portability', 'workspace-metadata'):
+    for component in ('scheduling', 'worktrees', 'portability', 'workspace-metadata', 'outputs'):
         shutil.copytree(project / f'components/{component}-delivery',
                         repository / f'components/{component}-delivery')
     shutil.copytree(project / 'amplifier_operations', repository / 'amplifier_operations')
