@@ -575,6 +575,15 @@ checks retain global positions, negative indices, private-state filtering and
 stale-revision refusal. Their SQL budgets measure query work, not constant-time
 global ordering or a guaranteed live-host latency.
 
+`tests/test_coordination_current_cost.py` grows unrelated, incoming and outgoing
+command history while holding the current 32-request page fixed. Select bounded
+candidate IDs through the existing sender/target indexes before fetching bodies;
+the final page keeps insertion order and deduplicates requests involving both
+sides. Reads stay on the caller's transaction and observe uncommitted receipt
+changes and rollback. Cancellation remains a projection of the saved receipt,
+not a rewritten outcome. The measured query bound does not cover initial index
+creation, grants, pending proposals or other coordination operations.
+
 The additive Extended browser registration belongs to the nightly/manual lane. The separate
 `Client performance smoke` workflow selects affected PR paths and supports manual
 runs; it is not a required status or a publication dependency. Run it locally in

@@ -557,9 +557,19 @@ class Collaboration:
             WHERE json_extract(receipt,'$.commandAction')='coordination.grant'
             AND EXISTS (SELECT 1 FROM json_each(json_extract(receipt,'$.result.participants')) WHERE value=?)
             ORDER BY rowid DESC LIMIT 32""", (sid,)).fetchall()]
+        # Each indexed side contributes at most 32 candidates. An older row
+        # cannot enter the combined newest 32; UNION deduplicates self-sends.
         requests = [json.loads(row[0]) for row in self.service.db.execute("""SELECT receipt FROM commands
-            WHERE json_extract(receipt,'$.commandAction')='coordination.send'
-            AND (json_extract(receipt,'$.senderSessionId')=? OR json_extract(receipt,'$.target.sessionId')=?)
+            WHERE rowid IN (
+                SELECT rowid FROM (SELECT rowid FROM commands
+                    WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+                    AND json_extract(receipt,'$.senderSessionId')=?
+                    ORDER BY rowid DESC LIMIT 32)
+                UNION
+                SELECT rowid FROM (SELECT rowid FROM commands
+                    WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+                    AND json_extract(receipt,'$.target.sessionId')=?
+                    ORDER BY rowid DESC LIMIT 32))
             ORDER BY rowid DESC LIMIT 32""", (sid, sid)).fetchall()]
         from .request_cancellation import status as cancellation_status
         for request in requests:
