@@ -95,7 +95,8 @@ def test_actual_historical_mutable_admission_rebuilds_but_missing_lookup_does_no
     equivalent(session, monkeypatch, full_reads=1)
 
 
-def test_prefix_llm_ancestor_direct_borrowed_correction_rebuilds(owner_factory, monkeypatch):
+@pytest.mark.parametrize('corrected', [8, 1])
+def test_prefix_llm_ancestor_direct_borrowed_correction_rebuilds(owner_factory, monkeypatch, corrected):
     def nested(tree):
         tree['nodes'][-1]['parentId'] = 'old-2'
         tree['nodes'][2]['turnId'] = 'active-turn'
@@ -105,7 +106,7 @@ def test_prefix_llm_ancestor_direct_borrowed_correction_rebuilds(owner_factory, 
     equivalent(session, monkeypatch, full_reads=0)
     # Derived aggregate admission exposes this full old row through current().
     ancestor = next(row for row in ws.current(session)['nodes'] if row['id'] == 'old-2')
-    ancestor['usage']['inputTokens'] = 8
+    ancestor['usage']['inputTokens'] = corrected
     equivalent(session, monkeypatch, full_reads=1)
     assert ws.exact(session, 'nodes', {'id': 'old-2'}) is ancestor
     assert ancestor['payload'] == {'keep': 2}

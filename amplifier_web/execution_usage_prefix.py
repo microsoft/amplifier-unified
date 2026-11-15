@@ -50,6 +50,14 @@ def _settled(row):
     return not (row.get('phase', row.get('status')) in LIVE_PHASES and not row.get('endedAt'))
 
 
+def _same_fold(left, right):
+    # Python numeric equality alone conflates int/float inputs whose later
+    # additions need not round alike. Fold witnesses preserve scalar types.
+    return left.keys() == right.keys() and all(type(value) is type(right[key]) and (
+        _same_fold(value, right[key]) if type(value) is dict else value == right[key])
+        for key, value in left.items())
+
+
 def preserves_contribution(before, after):
     """Projection may omit irrelevant status, but cannot change a retired fold."""
     from .execution import USAGE_KEYS
@@ -162,7 +170,7 @@ class UsagePrefix:
             if identity in self.shapes:
                 if shape != self.shapes[identity]:
                     raise Rebuild()
-                if identity in self.closed_folds and _fold(row) != self.closed_folds[identity]:
+                if identity in self.closed_folds and not _same_fold(_fold(row), self.closed_folds[identity]):
                     # An ancestor's own earlier call can be borrowed after its
                     # derived aggregate was admitted. Its contribution is not
                     # mutable suffix work, so any late edit rebuilds exactly.
@@ -235,7 +243,7 @@ class UsagePrefix:
             raise Rebuild()
         for identity, row in resident.items():
             if _shape(row) != self.shapes[identity] or (
-                    identity in self.closed_folds and _fold(row) != self.closed_folds[identity]):
+                    identity in self.closed_folds and not _same_fold(_fold(row), self.closed_folds[identity])):
                 raise Rebuild()
         retained = {row['id'] for row in current['nodes'] if records.is_active(row)}
         for identity in self.suffix:
