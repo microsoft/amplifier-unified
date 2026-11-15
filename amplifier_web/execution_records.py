@@ -22,7 +22,7 @@ def key(kind, row):
     identity = row.get('id')
     if not isinstance(identity, str) or not identity:
         raise ValueError('An execution record needs its exact identity.')
-    return json.dumps([identity] if kind == 'turns' else [row.get('sessionId'), identity],
+    return json.dumps([row.get('sessionId'), identity] if kind == 'retiredUsageNodes' else [identity],
                       ensure_ascii=False, separators=(',', ':'))
 
 
@@ -39,9 +39,9 @@ def _facts(kind, rows):
     from .execution import LIVE_PHASES
     if kind == 'turns':
         return [False, any(row.get('phase') in LIVE_PHASES for row in rows),
-                any(row.get('lifecycle') == 'voice' and row.get('phase') in LIVE_PHASES for row in rows)]
+                any(row.get('lifecycle') == 'voice' and row.get('phase') in LIVE_PHASES for row in rows), False]
     observation, voice = pending_execution_nodes(rows)
-    return [observation, False, voice]
+    return [observation, False, voice, kind == 'nodes' and any(not row.get('turnId') for row in rows)]
 
 
 def _page(db, kind, records, depth=0):
@@ -59,7 +59,7 @@ def _page(db, kind, records, depth=0):
 
 
 def _branch(db, children):
-    facts = [False, False, False]
+    facts = [False, False, False, False]
     for reference in children.values():
         facts = [old or value for old, value in zip(facts, reference['executionFacts'], strict=True)]
     return {**resource_files.put(db, {'children': children, 'facts': facts}), 'executionFacts': facts}
@@ -111,12 +111,12 @@ def _root(db, reference, owner=None):
 
 
 def _store(db, root):
-    facts = [False, False, False]
+    facts = [False, False, False, False]
     for collection in root['collections'].values():
         facts = [old or value for old, value in zip(facts, collection['root']['executionFacts'], strict=True)]
     reference = resource_files.put(db, root)
     return {**reference, 'executionProjection': 2, 'pendingObservation': facts[0],
-            'pendingWork': facts[1], 'pendingVoice': facts[2]}
+            'pendingWork': facts[1], 'pendingVoice': facts[2], 'unassignedNodes': facts[3]}
 
 
 def import_tree(db, owner, tree):
@@ -125,7 +125,7 @@ def import_tree(db, owner, tree):
     Callers retain their old mutable object until their ownership boundary says
     it is safe to replace. Resource writes here never acknowledge that transfer.
     """
-    collections = {}
+    collections, active = {}, {}
     for kind in COLLECTIONS:
         records = {}
         for ordinal, row in enumerate(tree.get(kind, [])):
@@ -134,9 +134,10 @@ def import_tree(db, owner, tree):
                 raise ValueError('Duplicate execution identities require the legacy projection.')
             records[identity] = {'ordinal': ordinal, 'value': row}
         collections[kind] = {'root': _page(db, kind, records), 'next': len(records)}
+        active[kind] = [identity for identity, row in records.items() if is_active(row['value'])]
     fields = {name: value for name, value in tree.items() if name not in COLLECTIONS}
     return _store(db, {'format': FORMAT, 'owner': list(owner),
-                       'fields': fields, 'collections': collections})
+                       'fields': fields, 'collections': collections, 'active': active})
 
 
 def read_record(db, reference, kind, identity, *, owner=None):
@@ -175,6 +176,12 @@ def replace_records(db, reference, changes, *, fields=None, owner=None):
                 collection['next'] += 1
             entry = {'ordinal': ordinal, 'value': value} if value is not None else None
             collection['root'] = _replace(db, kind, collection['root'], identity, entry)
+            active = root.setdefault('active', {}).setdefault(kind, [])
+            if value is not None and is_active(value):
+                if identity not in active:
+                    active.append(identity)
+            elif identity in active:
+                active.remove(identity)
     return _store(db, root)
 
 
@@ -185,4 +192,22 @@ def materialize(db, reference, *, owner=None):
     for kind, collection in root['collections'].items():
         result[kind] = [row['value'] for row in sorted(
             _entries(db, collection['root']), key=lambda row: row['ordinal'])]
+    return result
+
+
+def is_active(row):
+    from .execution import LIVE_PHASES
+    return row.get('phase') in LIVE_PHASES
+
+
+def read_active(db, reference, *, owner=None):
+    """Only pending records are automatically admitted into the working set."""
+    root = _root(db, reference, owner)
+    result = root['fields']
+    for kind in COLLECTIONS:
+        rows = [_find(db, root['collections'][kind]['root'], identity)
+                for identity in root.get('active', {}).get(kind, [])]
+        if any(row is None for row in rows):
+            raise ValueError('A pending execution record is unavailable.')
+        result[kind] = [row['value'] for row in sorted(rows, key=lambda row: row['ordinal'])]
     return result

@@ -164,7 +164,7 @@ class ExecutionPreparation:
 
     def _reserved(self, pending):
         entries = {id(entry): entry for entry in self.references.values()}
-        entries.update((id(entry), entry) for entry in pending.values() if entry is not None)
+        entries.update((id(entry), entry) for entry in pending.values() if isinstance(entry, ReferenceEntry))
         return sum(entry.charge for entry in entries.values())
 
     def retired(self, owner, rows, reserved=None):
@@ -512,6 +512,7 @@ class ExecutionPreparation:
     def committed(self, pending, owners, deleted=()):
         """Failed transactions never promote or replace reference evidence."""
         from .cold_display import MARKER
+        from .execution_working_set import PendingExecution
         def current(identity, entry):
             owner = owners.get(identity)
             if identity in deleted or owner is None or owner.get('historyManaged'):
@@ -525,7 +526,11 @@ class ExecutionPreparation:
                 self.references.pop(identity)
         for identity, entry in pending.items():
             self.references.pop(identity, None)
-            if entry is not None and current(identity, entry):
+            if isinstance(entry, PendingExecution):
+                owner = owners.get(identity)
+                if identity not in deleted and owner is not None:
+                    entry.committed(owner)
+            elif entry is not None and current(identity, entry):
                 self.references[identity] = entry
 
     def retain(self, owners):

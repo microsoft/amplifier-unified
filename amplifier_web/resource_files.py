@@ -442,6 +442,11 @@ def references(value, *, budget=None):
         if isinstance(current, dict):
             if type(current) is dict or isinstance(current, ColdRecord):
                 reference, children = dict.get(current, '$resource'), dict.values(current)
+                owner = getattr(current, '_working_execution', None)
+                if owner is not None:
+                    # The committed immutable root remains in _coldFields.
+                    # Only newly admitted/current values add live reachability.
+                    pending.append(owner.current)
             else:
                 reference, children = current.get('$resource'), current.values()
         elif isinstance(current, list):
