@@ -1,7 +1,7 @@
 {
   "recipe": "unified-openai-static-sol-local-capture-v1",
   "revisions": {
-    "foundation": "fd32d2f6ab41d153790b398ea3ee4c513972f968",
+    "foundation": "b0d65b72862399ce2507a3f16db8fe4fb88186c4",
     "loop-live": "89cbf70209a112ec7d3044b75a2b4b4c7b93967c",
     "loop-streaming": "e3871401c44f20ee24c65ddb26aefbea215cb8a9",
     "openai": "ac9268e12a462d974fa7106178174e05cc3313ed",
@@ -14,10 +14,10 @@
     "amplifier_foundation/session/media_projection.py": "33dd103a41b8bc6b6d8c853470755bbf505a24b35a3a21f98f316f78d4b097e7",
     "amplifier_foundation/session/media.py": "547709c016406fc351ae8300e0860c31620d37557b92799d64ddbbd8f39253bd",
     "amplifier_foundation/session/checkpoint.py": "7046cc803f303f6dc19a56fb54229f3eb041b5b6e5ce531dea0d6854702b8247",
-    "amplifier_foundation/session/transcript_lifetime.py": "8c33b952d2d658edc22a220ff24d796f2283ba7da4f701bcd598afc666b6c10e",
-    "amplifier_foundation/session/versioned_checkpoint.py": "7a7decb024d4c6ddf34daa5bb27713e3e5d6d839bc3e554b747130ea55db48ef",
+    "amplifier_foundation/session/transcript_lifetime.py": "f5c7695c88d5cda2f5dda0f0a6b7c41790ac360fd41774ac884759d742407264",
+    "amplifier_foundation/session/versioned_checkpoint.py": "d2b05fec2e02d6b25a0da4539ec727e424abcef17d017781320875477be216ac",
     "amplifier_foundation/session/transcript_source.py": "4f54f5ceffc8b6d273ab067bdccf3943351d26c5d806b30abe216088205bb7d0",
-    "amplifier_foundation/session/transcript_writer.py": "ec5528b6a697c5633f4f4566d01e440c1b79c7dc26b028fc32e510b2e1c810c0",
+    "amplifier_foundation/session/transcript_writer.py": "5aa81f0d6b19ad7696aea9ac435087df29403be196d3a469a6aea601a57c3b33",
     "amplifier_foundation/bundle/_observability.py": "c4407e32971dbf2aa6891fdff23de67e2599c7d2c158b3f774d2b4152912d35b",
     "amplifier_foundation/bundle/_prepared.py": "9afa5854720e0bc0293aed8982aac16bdcd9609b6ec688402d409c0c296823f6",
     "amplifier_core/loader.py": "e6b273ff22f99926e12a4d835f305d3d07cdd562b333158e243f743eb70b0252",

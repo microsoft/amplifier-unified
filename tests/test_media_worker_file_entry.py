@@ -176,6 +176,12 @@ def test_actual_media_file_entry_json_pipes_count_send_idle_retire_ack_and_resum
         assert sum(row["phase"] == "count" for row in child["records"]) >= turns
         assert child["source"]["catalog"]["recipe"] == "unified-openai-static-sol-local-capture-v1"
         assert not child["source"]["catalog"]["mismatches"]
+        assert len(child["typed_receipts"]) == len(child["records"])
+        for typed in child["typed_receipts"]:
+            assert typed["receipt_type"] == "VersionedCheckpointReceipt"
+            assert typed["result_type"] == "CommitAck" and typed["refs"]
+            assert typed["prefix"]["session_id"] == "normal-media-file-entry"
+        assert evidence["cas_scope"].startswith("successful exact-prefix path")
         assert receipt["reply_before_eof"] and receipt["exit_code"] == 0
         assert receipt["retirement_reply_index"] < receipt["stdout_eof_index"]
         assert "context.prepare" in receipt["bridge_operations"]

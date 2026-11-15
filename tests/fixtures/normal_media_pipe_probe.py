@@ -39,6 +39,36 @@ def save_json(path, value):
     path.chmod(0o600)
 
 
+def typed_checkpoint_facts(owner):
+    """Observe actual live receipt/result and cold bytes; JSON facts grant nothing."""
+    from dataclasses import asdict
+    from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+    from amplifier_foundation.session.transcript_writer import CommitAck
+    from amplifier_foundation.session.versioned_checkpoint import VersionedCheckpointReceipt
+    from amplifier_foundation.session.transcript_source import open_committed_source
+    binding = owner.canonical_binding
+    assert type(binding) is VersionedSessionBinding
+    binding.check()
+    result, receipt = binding.last_result, binding.last_receipt
+    assert type(result) is CommitAck and type(receipt) is VersionedCheckpointReceipt
+    assert result.commit == binding.expected
+    expected = asdict(binding.expected)
+    verified = receipt.verify()
+    assert {key: verified[key] for key in expected} == expected
+    with open_committed_source(binding.directory, expected=binding.expected) as source:
+        assert source.commit == result.commit
+        assert asdict(source.commit) == expected
+        rows = source.window(0, 100).messages
+    refs = list(receipt.iter_refs())
+    actual_refs = [ref for row in rows
+                   for ref in ((row.get("metadata") or {}).get(helpers().MEDIA) or {}).get("refs", [])]
+    assert refs and refs == actual_refs
+    binding.check()
+    return {"prefix": expected, "receipt_type": type(receipt).__name__,
+            "result_type": type(result).__name__, "kind": verified["kind"],
+            "refs": refs}
+
+
 def deny_socket_connections(stack, report):
     """Deny and record both socket connection entry points, before SDK imports."""
     import socket
@@ -111,6 +141,7 @@ def bootstrap():
         def __init__(self, pixels):
             super().__init__(pixels)
             self.owners, self.snapshots = [], []
+            self.typed_receipts = []
             self.expected_handles = {}
 
         async def receive(self, request):
@@ -130,6 +161,9 @@ def bootstrap():
                 assert owner.canonical_resume is (label == "second")
                 assert not owner.controls.capacity.policy["enabled"]
                 self.check_installed_boundary(owner)
+                # The real issuer object is verified before each SDK count/send
+                # response, not inferred from hydration or lease contention.
+                self.typed_receipts.append(typed_checkpoint_facts(owner))
                 if not self.owners:
                     self.owners.append(owner)
                 else:
@@ -158,6 +192,7 @@ def bootstrap():
             save_json(report, {
                 "final": final, "pid": os.getpid(), "records": self.records,
                 "snapshots": self.snapshots, "socket_denials": denied,
+                "typed_receipts": self.typed_receipts,
                 "failures": [type(item).__name__ + ": " + str(item) for item in self.failures],
             })
 
@@ -495,6 +530,7 @@ async def main():
                     "actual_vendor_provider_and_sdk": True, "offline_transport_not_inference": True,
                     "two_turn_idle_custody": True, "fresh_process_resume_without_replay": True,
                     "canonical_t2_ack": True, "canonical_and_protocol_no_pixels": True,
+                    "cas_scope": "successful exact-prefix path; idle contention is lease refusal, not independent stale-CAS rejection",
                     "receipts": receipts, "children": reports}
         fixture.no_pixels(evidence, pixels)
         print(json.dumps(evidence))
