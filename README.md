@@ -61,6 +61,27 @@ requires Node.js and npm. Browser client source is maintained in
 For integrations, see [Amplifier Unified as an ACP backend](docs/architecture/unified-acp-backend.md)
 and the [architecture guide](docs/architecture/README.md).
 
+
+<!-- ecosystem-map:start -->
+## Where this fits
+
+A complete AI workspace with its own web host, selected browser client, and configurable Amplifier execution.
+
+Roles: Experience, Conversation. Supports: Agent Instance, Tool, Connection.
+
+![Ecosystem roles and component relationships](docs/ecosystem-map.svg)
+
+[Open the map](docs/ecosystem-map.svg) · [Product overview](https://microsoft.github.io/amplifier-constellation/projects/amplifier-unified/) · [Map guide](https://github.com/microsoft/amplifier-constellation/blob/main/docs/ecosystem-maps.md)
+
+<details>
+<summary>The five shared building blocks</summary>
+
+[![Experience, Conversation, Agent Instance, Connection and Tool](https://raw.githubusercontent.com/microsoft/amplifier-constellation/main/site/assets/art/building-blocks.png)](https://microsoft.github.io/amplifier-constellation/)
+
+</details>
+
+<!-- ecosystem-map:end -->
+
 ## Contributing
 
 > [!NOTE]
