@@ -21,6 +21,8 @@ dependencies = [
     "tzdata; sys_platform == 'win32'",
     "pyyaml>=6.0.3,<7",
     "filelock>=4.2.1,<5",
+    # Host-side Optimize conversion decodes media without worker/dev extras.
+    "Pillow>=13,<14",
     "qrcode>=8.2,<9",
     "watchfiles>=1.1,<2",
     "mcp>=2.2,<3",

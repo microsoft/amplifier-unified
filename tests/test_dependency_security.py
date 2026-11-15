@@ -36,9 +36,8 @@ def test_host_worker_and_retained_locks_exclude_vulnerable_versions():
     worker = tomllib.loads(environments.manifest_path().read_text())
     host_requirements = requirements(host["project"]["dependencies"] + host["dependency-groups"]["artifacts"])
     worker_requirements = requirements(worker["project"]["dependencies"])
-    # Artifact authoring belongs in the worker. The two host support extras
-    # whose packages consume Pillow need wheel Requires-Dist floors too, without
-    # making Pillow a new mandatory host dependency.
+    # Host Optimize media conversion and worker media projection both decode
+    # images. Optional support extras retain the same security floor.
     for extra in ("native-desktop", "decisions-openai"):
         assert requirements(host["project"]["optional-dependencies"][extra])["pillow"].specifier == worker_requirements["pillow"].specifier
     for name, (old, fixed, next_major) in FLOORS.items():
@@ -52,6 +51,18 @@ def test_host_worker_and_retained_locks_exclude_vulnerable_versions():
             locked = next(row for row in tomllib.loads(path.read_text())["package"] if row["name"] == name)
             assert Version(locked["version"]) >= Version(fixed)
             assert locked["version"] in host_requirements[name].specifier
+
+
+def test_host_media_decoder_does_not_depend_on_development_or_desktop_extras():
+    host = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    worker = tomllib.loads(environments.manifest_path().read_text())
+    ordinary = requirements(host["project"]["dependencies"])
+    runtime = requirements(worker["project"]["dependencies"])
+    assert "pillow" in ordinary, "Ordinary host media conversion needs its own image decoder"
+    assert ordinary["pillow"].specifier == runtime["pillow"].specifier
+    locked_host = next(row for row in tomllib.loads((ROOT / "uv.lock").read_text())["package"]
+                       if row["name"] == "amplifier-unified")
+    assert {"name": "pillow"} in locked_host["dependencies"]
 
 
 ARTIFACT_SMOKE = r'''
