@@ -166,6 +166,13 @@ def test_generic_custom_dictionary_preparation_does_not_add_a_get_hook():
     assert not prepared.execution_root
     assert json.loads(prepared.encoded) == {'format': records.FORMAT, 'custom': True}
 
+    class Format(str):
+        def __eq__(self, other):
+            raise AssertionError('Generic format values must not invoke custom equality')
+    prepared = resource_files.prepare({'format': Format(records.FORMAT)})
+    assert not prepared.execution_root
+    assert json.loads(prepared.encoded) == {'format': records.FORMAT}
+
 
 def test_unsupported_root_index_refuses_reads_and_collection_without_rewriting(db):
     reference = records.import_tree(db, OWNER, value())

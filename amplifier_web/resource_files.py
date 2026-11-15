@@ -40,8 +40,9 @@ def prepare(value):
     """Pure canonical preparation, safe to run without a database in a worker."""
     text = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     encoded = text.encode()
+    format_name = value.get('format') if type(value) is dict else None
     return Prepared(encoded, hashlib.sha256(encoded).hexdigest(), len(encoded),
-                    type(value) is dict and value.get('format') == EXECUTION_ROOT_FORMAT)
+                    type(format_name) is str and format_name == EXECUTION_ROOT_FORMAT)
 
 
 def write_prepared(directory, prepared):
