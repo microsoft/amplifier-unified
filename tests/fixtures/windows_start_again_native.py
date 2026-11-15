@@ -200,6 +200,23 @@ def releases(root):
     return sum(child.is_dir() for child in path.iterdir()) if path.exists() else 0
 
 
+def preparation_facts(root):
+    """What a complete first installation left: its saved phase records, bounded."""
+    path = root / "app/updates/releases"
+    folders = sorted((child for child in path.iterdir() if child.is_dir()),
+                     key=lambda child: child.stat().st_mtime) if path.exists() else []
+    facts = {"releaseCount": len(folders)}
+    if folders:
+        for name in ("install-failure.json", "install-progress.json"):
+            record = folders[-1] / name
+            if record.exists():
+                value = json.loads(record.read_text(encoding="utf-8"))
+                if name == "install-progress.json":
+                    value = [f'{event["phase"]}: {event["status"]}' for event in value["events"][-12:]]
+                facts[name] = value
+    return facts
+
+
 async def listener_answers(home):
     """Check the pinned HTTPS listener even when no task is registered."""
     import aiohttp
@@ -343,6 +360,9 @@ def run():
             assert not (home / "updates/active.json").exists()
             second = launcher(root, "--no-open")
             report["secondStart"] = second
+            if second["exitCode"]:
+                # A start that prepared again leaves its records. Keep them.
+                report["secondStartPreparation"] = preparation_facts(root)
             assert second["exitCode"] == 0 and second["json"]["background"] is True, second
             passed(7, launcher=second)
 
