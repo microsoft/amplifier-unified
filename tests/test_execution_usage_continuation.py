@@ -230,3 +230,18 @@ def test_supported_observation_projection_keeps_ordered_prefix(owner_factory, mo
     assert owner.usage_prefix is not None
     assert 'live' not in owner.usage_prefix.suffix
     equivalent(session, monkeypatch, full_reads=0, canonical=True)
+
+
+def test_flag_only_ancestor_ownership_change_survives_retirement(owner_factory, monkeypatch):
+    def observed(tree):
+        tree['nodes'][-2].update(liveObservation=True, producerId='source',
+                                 sessionId='native', rootSessionId='native')
+    db, session, owner = owner_factory(observed)
+    ws.exact(session, 'nodes', {'id': 'worker'}).update(liveObservation=False, phase='completed', endedAt=1)
+    ws.refresh_usage(session)
+    save(db, session)
+    assert not any(row['id'] == 'worker' for row in owner.current['nodes'])
+    assert owner.usage_prefix.usage_owned['worker'] is True
+    ws.exact(session, 'nodes', {'id': 'live'})['usage']['inputTokens'] = 7
+    equivalent(session, monkeypatch, full_reads=0)
+    assert ws.exact(session, 'nodes', {'id': 'worker'})['aggregateUsage']['inputTokens'] == 7

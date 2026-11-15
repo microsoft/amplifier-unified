@@ -50,6 +50,10 @@ def _settled(row):
     return not (row.get('phase', row.get('status')) in LIVE_PHASES and not row.get('endedAt'))
 
 
+def _usage_owned(row):
+    return not any(row.get(flag) for flag in ('liveObservation', 'canonicalHistory', 'nativeHistory'))
+
+
 def _same_fold(left, right):
     # Python numeric equality alone conflates int/float inputs whose later
     # additions need not round alike. Fold witnesses preserve scalar types.
@@ -102,8 +106,7 @@ class UsagePrefix:
                     raise Rebuild()
                 seen.add(identity)
                 self.shapes[identity] = _shape(cursor)
-                self.usage_owned[identity] = not any(cursor.get(flag) for flag in (
-                    'liveObservation', 'canonicalHistory', 'nativeHistory'))
+                self.usage_owned[identity] = _usage_owned(cursor)
                 cursor = lookup.get(cursor.get('parentId'))
         turns = {row['id'] for row in tree['turns']}
         self.missing_parents = {row['parentId'] for row in tree['nodes']
@@ -167,6 +170,7 @@ class UsagePrefix:
             self.turns[identity] = rollup([])
         for identity, row in nodes.items():
             shape = _shape(row)
+            self.usage_owned[identity] = _usage_owned(row)
             if identity in self.shapes:
                 if shape != self.shapes[identity]:
                     raise Rebuild()
@@ -189,8 +193,6 @@ class UsagePrefix:
             if row.get('turnId') not in self.turns:
                 raise Rebuild()
             self.shapes[identity] = shape
-            self.usage_owned[identity] = not any(row.get(flag) for flag in (
-                'liveObservation', 'canonicalHistory', 'nativeHistory'))
             self.nodes[identity] = rollup([])
             list(self._chain(identity))  # Cycles retain the complete seen-set path.
             if row.get('kind') == 'llm':
@@ -245,6 +247,7 @@ class UsagePrefix:
             if _shape(row) != self.shapes[identity] or (
                     identity in self.closed_folds and not _same_fold(_fold(row), self.closed_folds[identity])):
                 raise Rebuild()
+            self.usage_owned[identity] = _usage_owned(row)
         retained = {row['id'] for row in current['nodes'] if records.is_active(row)}
         for identity in self.suffix:
             if identity in resident:
