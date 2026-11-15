@@ -425,7 +425,10 @@ def test_finish_static_program_and_stdin_only_payload(finish_start):
     assert not re.search(r"Remove-Item[^\n]*-Force", code, re.I)
     assert "]::" not in code and "CurrentDirectory" not in code and "'CreateNew'" not in code
     assert re.findall(r"\$\w+(?:\[\d+\])?\.\w+\s*\([^)]*\)", code) == [
-        "$entry.Delete()", "$kept[1].Close()", "$kept[0].Close()"]
+        "$entry.Delete()", "$kept[1].Close()", "$kept[0].Close()", "$file.Close()"]
+    # At its end, in every case, the step lets both kept files go before it writes its report.
+    end = code.split("finally {")[1]
+    assert end.index("foreach ($file in $kept) { $file.Close() }") < end.index("if ($p.report) {")
     assert code.count("New-Object ") == 2
     assert token not in removal.FINISH_SCRIPT
     assert options["cwd"] == r"C:\Windows\System32"

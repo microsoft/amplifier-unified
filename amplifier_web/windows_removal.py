@@ -177,8 +177,7 @@ try {
         $own = $p.token + '.hold'
         if (-not (Authorized)) { throw 'Root or token refused' }
         # The two kept files, open since before this program existed: [0] in
-        # the installation folder, [1] in the flat folder. Taking over a handle
-        # that is not an open file fails here.
+        # the installation folder, [1] in the flat folder.
         $kept = @($p.keep | ForEach-Object {
             $handle = New-Object Microsoft.Win32.SafeHandles.SafeFileHandle -ArgumentList ([IntPtr][long]$_), $true
             New-Object System.IO.FileStream -ArgumentList $handle, ([System.IO.FileAccess]'Write')
@@ -258,6 +257,8 @@ try {
     } | Out-Null
 } catch { $reason = $_.Exception.Message }
 finally {
+    # Let both kept files go; Windows deletes each one then.
+    foreach ($file in $kept) { $file.Close() }
     if ($p.report) {
         @{ passes = $passes; left = @($script:left); leftCount = $script:leftCount
            elapsed = [double]('{0:F1}' -f ((Get-Date) - $started).TotalSeconds)
