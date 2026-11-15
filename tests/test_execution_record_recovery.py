@@ -45,11 +45,14 @@ def collect(db):
     return removed
 
 
-def first_detail(db, reference):
-    page = records._read(db, records._root(db, reference)['collections']['nodes']['order'])
+def first_body_page(db, reference):
+    selected = records._root(db, reference)['collections']['nodes']['order']
+    page = records._read(db, selected)
     while 'children' in page:
-        page = records._read(db, page['children'][min(page['children'], key=int)])
-    return page['details']['$resource']
+        selected = page['children'][min(page['children'], key=int)]
+        page = records._read(db, selected)
+    assert page['order'][0][1]['value']['detail'] == {'text': 'saved tool result 0'}
+    return selected['$resource']
 
 
 @pytest.mark.parametrize('carrier', [
@@ -57,13 +60,13 @@ def first_detail(db, reference):
 def test_actual_collector_keeps_old_view_until_its_durable_owner_releases_it(db, carrier):
     original = value()
     first = records.import_tree(db, OWNER, original)
-    old_detail = first_detail(db, first)
+    old_body = first_body_page(db, first)
     save(db, first)
     db.commit()
 
     changed = {**original['nodes'][73], 'revision': 2, 'detail': {'text': 'late correction'}}
     second = records.replace_records(db, first, {'nodes': {records.key('nodes', changed): changed}})
-    assert first_detail(db, second) != old_detail
+    assert first_body_page(db, second) != old_body
     garbage = resource_files.put(db, {'unowned': True})
     if carrier == 'state':
         save(db, second, retained=first)
@@ -76,7 +79,7 @@ def test_actual_collector_keeps_old_view_until_its_durable_owner_releases_it(db,
     removed = collect(db)
     assert garbage['$resource'] in removed
     assert first['$resource'] not in removed and second['$resource'] not in removed
-    assert old_detail not in removed
+    assert old_body not in removed
     assert records.materialize(db, first, owner=OWNER) == original
     assert records.read_record(db, second, 'nodes', records.key('nodes', changed), owner=OWNER) == changed
 
@@ -87,7 +90,7 @@ def test_actual_collector_keeps_old_view_until_its_durable_owner_releases_it(db,
     db.commit()
     removed = collect(db)
     assert first['$resource'] in removed
-    assert old_detail in removed
+    assert old_body in removed
     with pytest.raises(ValueError, match='unavailable'):
         records.materialize(db, first)
     assert records.read_record(db, second, 'nodes', records.key('nodes', changed)) == changed
