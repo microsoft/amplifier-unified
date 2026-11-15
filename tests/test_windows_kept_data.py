@@ -663,7 +663,7 @@ def test_take_back_waits_for_a_held_folder_and_else_stops_until_the_next_start(
         return
     assert result["taken"] is False and result["reason"] == "take-back"
     assert "Reference: kept-data, take-back, PermissionError" in notices.shown[-1][1]
-    assert str(folder) in notices.shown[-1][1]
+    assert "Amplifier could not use this file or folder:\n" + str(folder / "app") in notices.shown[-1][1]
     assert kept.read(folder)[0] == "adopting"
     here, there = files(person(data(root))), files(person(data(folder)))
     assert not set(here) & set(there) and {**here, **there} == files(expected)
@@ -783,13 +783,16 @@ def test_continued_take_back_runs_every_check_again(tmp_path, monkeypatch, notic
     result = kept.first_start(root, "0.96.0" if change == "newer" else VERSION, ask=False)
     assert result["taken"] is False and result["reason"] == kind and tree(tmp_path) == snapshot
     cause = {"link": str(folder / "linked") + "\nRemove the link.",
-             "newer": "Install that version of Amplifier, or a newer one.",
+             "newer": "Uninstall Amplifier and choose to keep your chats and settings. Then install that version",
              "program-state": str(folder / "app" / "runtime") + "\nMove it to a place outside"}[change]
-    assert cause in result["message"] and "Do not uninstall Amplifier" in result["message"]  # Cause and repair.
+    assert cause in result["message"] and "choose to keep your chats and settings" in result["message"]  # Cause and repair.
     assert "Amplifier's folder:\n" + str(root) in result["message"] and "Kept folder:\n" + str(folder) in result[
         "message"]
+    if change == "newer":  # The way out that the message names: the data can still leave, unchanged.
+        kept.check(root, "0.96.0")
+        return
     with pytest.raises(kept.Refused):  # An uninstall cannot begin either.
-        kept.check(root, "0.96.0" if change == "newer" else VERSION)
+        kept.check(root, VERSION)
 
 
 # One step at a time, repeated calls, and the installation's own note
@@ -917,7 +920,7 @@ def test_continued_fill_accepts_nothing_that_it_did_not_move(tmp_path, monkeypat
     assert result["reason"] == "take-back-not-empty" and tree(tmp_path) == snapshot
     assert str(root / "workspace" / "new.txt") in result["message"] and "in the way" in result["message"]
     assert "Move it to a place outside these two folders." in result["message"]  # Named, with the next step.
-    assert "do not uninstall Amplifier" in result["message"]  # A part is back.
+    assert "choose to keep your chats and settings" in result["message"]  # A part is back.
     os.remove(root / "workspace" / "new.txt")
     os.remove(root / "workspace" / "notes.txt")  # An entry that the person removed in between is not in the way.
     expected = {key: value for key, value in expected.items() if key != "workspace/notes.txt"}
@@ -1003,7 +1006,8 @@ def test_link_that_takes_a_folders_place_at_the_last_moment_is_never_used(tmp_pa
         result = kept.first_start(root, VERSION, ask=True)
         assert result["taken"] is False and result["reason"] == "take-back-link"
         assert str(root / "ownership") in notices.shown[-1][1] and kept.read(folder)[0] == "adopting"
-        assert "do not uninstall Amplifier" in notices.shown[-1][1] and kept._kind(root / "ownership") == "link"
+        assert "this is a link" in notices.shown[-1][1] and "Remove the link." in notices.shown[-1][1]
+        assert "choose to keep your chats and settings" in notices.shown[-1][1] and kept._kind(root / "ownership") == "link"
         monkeypatch.setattr(os, "rename", real)
         again = kept.first_start(root, VERSION, ask=False)  # The link is never passed over.
         assert again["reason"] == "take-back-not-empty" and str(root / "ownership") in again["message"]
@@ -1300,7 +1304,7 @@ def test_changed_folder_name_during_a_take_back_is_named_with_its_repair(tmp_pat
     os.rename(root / "shared", root / "Shared")
     result = kept.first_start(root, VERSION, ask=False)
     assert result["reason"] == "take-back-not-empty" and str(root / "Shared") in result["message"]
-    assert "Rename it to shared." in result["message"] and "do not uninstall Amplifier" in result["message"]
+    assert "Rename it to shared." in result["message"] and "choose to keep your chats and settings" in result["message"]
     os.rename(root / "Shared", root / "shared")
     assert kept.first_start(root, VERSION, ask=False) is None and person(data(root)) == expected
 
@@ -2021,12 +2025,14 @@ def test_last_step_never_stops_its_own_second_try_in_a_folder_that_was_filled(tm
     assert kept.first_start(root, VERSION, ask=True)["reason"] == "take-back-prepare"
     assert sorted(kept.read(folder)[1]["filled"]) == ["app"] and (root / "app" / "reset-backups").is_dir()
     assert kept.first_start(root, VERSION, ask=False)["reason"] == "take-back-prepare"  # Again, and not "in the way".
-    # Something else in that folder is not this take-back's own.
-    (root / "app" / "reset-backups" / "other").mkdir()
+    saved = kept.read(folder)[1]  # What the step made is the take-back's own by its identity, not by its name.
+    assert "settling" not in saved and {"reset-backups", "app.sqlite3-journal"} <= set(saved["filled"]["app"])
+    # A side file of another database that a restore program puts there between two runs is not.
+    (root / "app" / "app.sqlite3-wal").write_bytes(b"of another saved database")
     blocked = kept.first_start(root, VERSION, ask=False)
     assert blocked["reason"] == "take-back-not-empty"
-    assert str(root / "app" / "reset-backups") + "\n" in blocked["message"]
-    os.rmdir(root / "app" / "reset-backups" / "other")
+    assert str(root / "app" / "app.sqlite3-wal") + "\n" in blocked["message"]
+    os.remove(root / "app" / "app.sqlite3-wal")
     monkeypatch.setattr(reset, "reset_update_state", real)
     assert kept.first_start(root, VERSION, ask=False) is None and "updates" not in saved_state(root / "app")[0]
     assert person(data(root)) == expected and not folder.exists()
@@ -2046,12 +2052,16 @@ def test_file_in_the_place_of_a_kept_data_folder_is_named_with_its_repair(tmp_pa
     assert kept.first_start(root, VERSION, ask=False) is None and person(data(root)) == expected
 
 
+@pytest.mark.parametrize("note", ["deleted", "malformed"])
 @pytest.mark.parametrize("answer", [True, False])
 def test_take_back_that_moved_nothing_and_lost_its_note_is_an_ordinary_first_offer(
-        tmp_path, monkeypatch, notices, answer):
+        tmp_path, monkeypatch, notices, answer, note):
     root, folder, expected = interrupted(tmp_path, monkeypatch, notices, renames=0)  # Note and record; no move.
     assert kept.read(folder)[0] == "adopting"
-    os.remove(root / kept.MARKER)
+    if note == "deleted":
+        os.remove(root / kept.MARKER)
+    else:
+        (root / kept.MARKER).write_text("{")
     assert kept.first_start(root, VERSION, ask=False)["reason"] == "question"
     notices.answers.append(answer)
     assert kept.first_start(root, VERSION, ask=True) is None
@@ -2062,7 +2072,8 @@ def test_take_back_that_moved_nothing_and_lost_its_note_is_an_ordinary_first_off
     state, saved = kept.read(folder)  # No: saved with the whole set, as after every first offer.
     assert state == "complete" and saved["declined"] is True and not {"into", "back", "filled"} & set(saved)
     # The take-back had removed the installation's empty `shared` before it stopped at its first move.
-    assert data(root) == {name: "folder" for name in SETUP if name != "shared"}
+    # The launcher needs that folder: it is there again, empty. The old note is gone.
+    assert data(root) == {name: "folder" for name in SETUP} and not (root / kept.MARKER).exists()
     assert kept.first_start(root, VERSION, ask=True) is None and "You chose not to use them." in notices.shown[-1][1]
 
 
@@ -2140,6 +2151,144 @@ def test_empty_installation_is_offered_a_set_also_after_the_tidying_of_an_older_
     assert kept.first_start(root, VERSION, ask=True) is None
     assert notices.shown[0][0] and "Use them?" in notices.shown[0][1]
     assert (root / "shared" / "keys.env").read_text() == "KEY=secret\n" and not (root / kept.MARKER).exists()
+
+
+# Round 6 of the review: files that are restored between two runs, and ways out that must work
+
+
+def test_program_that_ends_inside_the_last_step_knows_that_steps_own_files_at_the_next_run(
+        tmp_path, monkeypatch, notices):
+    from amplifier_web import reset
+    root, folder, expected = kept_then_installed(tmp_path)
+    refuse(monkeypatch, "rmdir", root / "app")  # A program's current folder: `app` is filled entry by entry.
+    real = reset.reset_update_state
+
+    def ending(home, backup):  # It saved the database and began to change it. Then the power fails.
+        (backup / "app.sqlite3").write_bytes((home / "app.sqlite3").read_bytes())
+        (home / "app.sqlite3-journal").write_bytes(b"")
+        raise Crash()
+    monkeypatch.setattr(reset, "reset_update_state", ending)
+    notices.answers.append(True)
+    with pytest.raises(Crash):
+        kept.first_start(root, VERSION, ask=True)
+    assert kept.read(folder)[1]["settling"] is True
+    # Something else in the folder of the saved databases is not that step's own.
+    (root / "app" / "reset-backups" / "other").mkdir()
+    blocked = kept.first_start(root, VERSION, ask=False)
+    assert blocked["reason"] == "take-back-not-empty"
+    assert str(root / "app" / "reset-backups") + "\n" in blocked["message"]
+    os.rmdir(root / "app" / "reset-backups" / "other")
+    # The database's own repair file is never "in the way": moving it away would damage the database.
+    monkeypatch.setattr(reset, "reset_update_state", real)
+    assert kept.first_start(root, VERSION, ask=False) is None
+    assert "updates" not in saved_state(root / "app")[0] and person(data(root)) == expected and not folder.exists()
+
+
+@pytest.mark.parametrize("flag", ["done", "left"])
+def test_note_of_another_take_back_never_ends_or_drops_an_unfinished_one(tmp_path, monkeypatch, notices, flag):
+    """A restore program puts an older note into the installation folder."""
+    root, folder, expected = interrupted(tmp_path, monkeypatch, notices)
+    good = (root / kept.MARKER).read_text()
+    (root / kept.MARKER).write_text(json.dumps({"schema": 1, "transfer": T2, "kept": str(folder), flag: True}))
+    snapshot = tree(tmp_path)
+    result = kept.first_start(root, VERSION, ask=False)  # Never a start by itself on a part of the data.
+    assert result["taken"] is False and result["reason"] == "take-back-record" and tree(tmp_path) == snapshot
+    assert kept.unfinished_take_back(root)
+    (root / kept.MARKER).write_text(good)
+    assert kept.first_start(root, VERSION, ask=False) is None and person(data(root)) == expected
+
+
+def test_start_never_passes_a_take_back_that_another_launcher_began_a_moment_before(tmp_path, monkeypatch, notices):
+    root, folder, expected = kept_then_installed(tmp_path)
+    real, calls = kept._returning, []
+
+    def returning(*args):
+        state = real(*args)
+        calls.append(state)
+        if len(calls) == 1:  # Just after this read, the other launcher gets Yes and moves its first folder.
+            restore = crash_after(monkeypatch, "rename", 1)
+            with pytest.raises(Crash):
+                kept.take_back(root, VERSION)
+            restore()
+        return state
+    monkeypatch.setattr(kept, "_returning", returning)
+    assert kept.first_start(root, VERSION, ask=False) is None
+    assert calls[0] is None and person(data(root)) == expected and not folder.exists()  # Never on a part of it.
+
+
+@pytest.mark.parametrize("answer", [True, False])
+def test_answer_is_never_used_for_another_set_that_took_the_kept_folders_place(tmp_path, monkeypatch, answer):
+    from amplifier_web import windows_installation
+    root, folder, _ = kept_then_installed(tmp_path)
+    shown = []
+
+    def owner_notice(text, *, confirm=False):
+        shown.append(confirm)
+        if confirm:  # While the question is open, the person puts another kept set there.
+            os.rename(folder, tmp_path / "the-first-set")
+            record(folder, transfer=T2, keptAt="2026-01-01T00:00:00Z")
+            (folder / "shared").mkdir()
+        return answer
+    monkeypatch.setattr(windows_installation, "owner_notice", owner_notice)
+    result = kept.first_start(root, VERSION, ask=True)
+    assert result["taken"] is False and result["reason"] == "answer" and shown == [True, False]
+    assert "changed while this message was open" in result["message"]
+    saved = kept.read(folder)[1]
+    assert saved["transfer"] == T2 and saved["state"] == "complete" and "declined" not in saved
+    assert data(root) == {name: "folder" for name in SETUP} and (folder / "shared").is_dir()
+
+
+def test_uninstall_with_keep_finishes_a_take_back_that_a_newer_version_began(tmp_path, monkeypatch, notices):
+    root, folder, expected = interrupted(tmp_path, monkeypatch, notices)
+    path = folder / kept.RECORD
+    path.write_text(json.dumps({**json.loads(path.read_text()), "version": "9.0.0"}))
+    result = kept.first_start(root, VERSION, ask=False)
+    assert result["reason"] == "take-back-newer"
+    assert "Uninstall Amplifier and choose to keep your chats and settings." in result["message"]
+    kept.check(root, VERSION)
+    out = kept.move_out(root, version=VERSION, transfer=T2, remove=shutil.rmtree, wait=0)
+    assert out["state"] == "complete" and person(data(folder)) == expected and data(root) == {}
+    assert kept.read(folder)[1]["version"] == "9.0.0"  # The newest version that used this data.
+
+
+def test_yes_to_finish_a_take_back_that_cannot_go_on_names_the_cause_and_is_not_asked_again(
+        tmp_path, monkeypatch, notices):
+    root, folder, expected = interrupted(tmp_path, monkeypatch, notices)
+    os.remove(root / kept.MARKER)
+    (tmp_path / "elsewhere").mkdir()
+    link(tmp_path / "elsewhere", folder / "linked")
+    notices.answers.append(True)
+    result = kept.first_start(root, VERSION, ask=True)
+    assert result["reason"] == "take-back-link" and [confirm for confirm, _ in notices.shown] == [True, False]
+    assert str(folder / "linked") in notices.shown[1][1] and "Remove the link." in notices.shown[1][1]
+    again = kept.first_start(root, VERSION, ask=True)  # The cause at once; the question does not come back.
+    assert again["reason"] == "take-back-link" and [confirm for confirm, _ in notices.shown] == [True, False, False]
+    (os.rmdir if os.name == "nt" else os.remove)(folder / "linked")
+    assert kept.first_start(root, VERSION, ask=False) is None and person(data(root)) == expected
+
+
+def test_what_was_put_into_the_kept_folder_after_a_take_back_finished_is_named_and_never_used(tmp_path, notices):
+    root = fresh(tmp_path / "Amplifier")
+    folder = kept.kept_folder(root)
+    record(folder, state="returned")
+    (folder / "app").mkdir()
+    (folder / "app" / "chat.txt").write_text("someone put this here")
+    before = tree(folder)
+    assert kept.first_start(root, VERSION, ask=True) is None
+    (confirm, text), = notices.shown
+    assert not confirm and str(folder) in text and "put there later" in text and tree(folder) == before
+    assert data(root) == {name: "folder" for name in SETUP}
+
+
+def test_file_with_the_kept_folders_name_is_not_kept_data(tmp_path, notices):
+    root = fresh(tmp_path / "Amplifier")
+    kept.kept_folder(root).write_text("the person's own file")
+    assert kept.first_start(root, VERSION, ask=True) is None and notices.shown == []
+    assert kept.kept_folder(root).read_text() == "the person's own file"
+    used(root)
+    with pytest.raises(kept.Refused) as refused:  # An uninstall never writes over it or into it.
+        kept.check(root, VERSION)
+    assert refused.value.kind == "kept-folder" and kept.kept_folder(root).read_text() == "the person's own file"
 
 
 # The reason for the rule, the launcher's step, and what the rule rests on
