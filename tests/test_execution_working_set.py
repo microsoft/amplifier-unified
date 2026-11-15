@@ -311,12 +311,14 @@ async def test_ordinary_web_send_claims_legacy_cold_execution_without_full_hydra
     await seed.dispatch('session.create', {'title': 'Legacy retained execution'})
     session = seed._session()
     sid = session['id']
-    tree = {'nodes': [call(str(i), sid, rootSessionId=sid, turnId='old', liveObservation=True)
+    tree = {'nodes': [call(str(i), sid, rootSessionId=sid, turnId='old', liveObservation=True,
+                           producerId='synthetic-producer')
                       for i in range(160)],
             'turns': [{'id': 'old', 'phase': 'completed', 'anchorMessageId': None}],
             'retiredUsageNodes': [], 'currentTurnId': None}
     execution.refresh_usage(tree)
     expected = stored_execution(tree)
+    assert len(expected['nodes']) == 160, 'The fixture needs valid owned placements, not unbound live rows'
     session['execution'] = tree
     seed._publish_changes(sessions={sid})
     await seed.close()
