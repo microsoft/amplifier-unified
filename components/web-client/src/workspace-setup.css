@@ -42,11 +42,16 @@
 #amp-one .a-starter-repository{border-top:1px solid var(--a-line);margin:12px 0;padding:8px 0}
 #amp-one .a-starter-editor fieldset{border:0;padding:0;min-width:0;margin:0}
 #amp-one .a-starter-editor h4{margin:0;font-size:18px}
-#amp-one .a-starter-editor label{display:flex;align-items:center;gap:8px;margin:16px 0 8px}
+#amp-one .a-starter-editor label{display:block;margin:16px 0 8px}
 #amp-one .a-starter-editor input:not([type=checkbox]),#amp-one .a-starter-editor select,#amp-one .a-starter-editor textarea{width:100%;box-sizing:border-box;min-width:0;font:inherit;padding:11px;border-radius:10px;border:1px solid var(--a-line);background:var(--a-surface);color:var(--a-ink)}
 #amp-one .a-starter-editor input:disabled,#amp-one .a-starter-editor select:disabled,#amp-one .a-starter-editor textarea:disabled{opacity:.85}
-#amp-one .a-starter-search{display:flex;gap:8px;align-items:center}
-#amp-one .a-starter-search input{width:100%;min-width:0}
+#amp-one .a-starter-search{display:flex;gap:8px;align-items:center;min-width:0}
+/* The compound field, not both its border and its input, owns focus. Inset
+   paint survives the edge-to-edge collection's clipped and scrolling bounds. */
+#amp-one .a-starter-search{border:1px solid var(--a-line);border-radius:var(--a-control-radius);background:var(--a-soft)}
+#amp-one .a-starter-search:focus-within{outline:2px solid var(--a-accent);outline-offset:-3px}
+#amp-one .a-starter-search input{flex:1;width:100%;min-width:0;border:0;background:transparent;box-shadow:none}
+#amp-one :is(.a-starter-search,.a-picker-search) input:focus-visible{outline:none;box-shadow:none}
 #amp-one .a-starter-search svg,#amp-one .a-workspace-starters button svg{width:16px;height:16px;flex:none}
 #amp-one .a-starter-options{border-top:1px solid var(--a-line);padding:16px 0;margin:4px 0}
 #amp-one .a-starter-options summary{cursor:pointer;font-weight:550;color:var(--a-ink)}

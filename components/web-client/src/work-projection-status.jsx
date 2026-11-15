@@ -11,8 +11,8 @@ export function WorkProjectionStatus({session,messages=session?.messages}){
  // receipt still reports noncurrent Work; errors remain independently visible.
  const retained=!!session.id&&progress.receipt?.sessionId===session.id;
  if(progress.status==='loading'&&(messages?.length||session.streaming||retained))return null;
- return <p role="status" className="a-session-history" data-part="work-projection-status">
+ return <p role="status" className="a-history-status" data-part="work-projection-status">
   {!unavailable&&<LoaderCircle className="a-progress-spinner" aria-hidden="true"/>}
-  {unavailable?'Work details exceed the current loading limit. Your conversation is still available.':retrying?'Work details could not finish loading. Retrying shortly. You can keep reading this chat.':'Loading work details…'}
+  <span>{unavailable?'Work details exceed the current loading limit. Your conversation is still available.':retrying?'Work details could not finish loading. Retrying shortly. You can keep reading this chat.':'Loading work details…'}</span>
  </p>;
 }

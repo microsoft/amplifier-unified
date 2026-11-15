@@ -85,6 +85,15 @@ An object identity, list length or file size alone does not prove unchanged nest
 content. Count cache-validation work too. Moving a full scan to another process
 changes responsiveness, but does not by itself reduce total work or memory.
 
+Execution reuse still requires a fresh witness of the relevant borrowed builtin
+content. Within that synchronous invocation, placement encoding can reuse fresh raw-node digests
+while witnessing receipt and turn dependencies after projection. Bound this
+temporary metadata and conservatively fall back to the complete fragment witness
+near serialization limits; retain no borrowed graph between saves. Canonical JSON,
+commit authority and existing memory budgets remain unchanged. Measure changed
+and unchanged saves separately: this removes repeated work, not the full history
+scan or the broader causes of multi-second UI latency.
+
 Exercise interleaved owners whose combined history exceeds a cache's capacity,
 not only warm inputs that fit. A scan must not evict every reusable fragment
 before its next use. Count re-encoding as well as retained bytes, and pair reuse

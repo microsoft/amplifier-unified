@@ -618,6 +618,26 @@ async function renderPreferencePage(options={}){
 const fieldRow=(renderer,field)=>renderer.root.findByProps({'data-appearance-preference':field});
 const buttonEvent={currentTarget:{getAttribute:()=>null}};
 
+test('saved appearances expose one named action group per entry without applying or deleting on render',async()=>{
+ const calls=[],dispatch=async(action,args)=>{
+  calls.push({action,args});
+  assert.equal(action,'theme.list');
+  return {accepted:true,result:{items:[entryA,entryB],errors:[]}};
+ };
+ let renderer;
+ try{
+  renderer=await renderPreferencePage({dispatch});
+  for(const entry of [entryA,entryB]){
+   const group=renderer.root.findByProps({role:'group','aria-label':'Actions for '+entry.name});
+   assert.deepEqual(group.findAllByType('button').map(node=>node.props['aria-label']),[
+    'Use '+entry.name,'Edit '+entry.name,'Export ZIP for '+entry.name,'Delete '+entry.name,
+   ]);
+   assert.equal(group.props.className,'a-appearance-saved-actions');
+  }
+  assert.deepEqual(calls.map(call=>call.action),['theme.list']);
+ }finally{await act(async()=>renderer?.unmount())}
+});
+
 test('accent picker resolves computed light-dark color without persisting the derived value',async()=>{
  const previousDocument=globalThis.document,previousWindow=globalThis.window,listeners=new Map(),computedTargets=[];
  const appRoot={children:[],appendChild(node){this.children.push(node);node.parentNode=this;return node},removeChild(node){this.children.splice(this.children.indexOf(node),1);node.parentNode=null;return node}};

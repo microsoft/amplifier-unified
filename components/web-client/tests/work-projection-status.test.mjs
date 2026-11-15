@@ -14,6 +14,8 @@ test('cold loading and retry remain visible, then disappear after recovery witho
  assert.match(JSON.stringify(root.toJSON()),/Loading work details/);
  assert.equal(root.root.findAllByProps({role:'status'}).length,1);
  assert.equal(root.root.findAllByProps({'className':'a-progress-spinner'}).length,1);
+ assert.equal(root.root.findByProps({role:'status'}).props.className,'a-history-status');
+ assert.equal(root.root.findByProps({role:'status'}).findByType('span').children.join(''),'Loading work details…');
  await act(async()=>root.update(render({status:'retrying',reason:'memory_limit'})));
  assert.match(JSON.stringify(root.toJSON()),/Retrying shortly/);
  assert.equal(root.root.findByProps({id:'saved'}).children.join(''),'Saved conversation');

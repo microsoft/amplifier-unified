@@ -72,6 +72,34 @@ test('context-limit recovery shares active-work guard and cannot bypass a workin
  await renderAct(async()=>root.unmount());
 });
 
+test('context banner groups text/actions beside a distinct dismiss target and never repeats pending recovery',async()=>{
+ const calls=[],item={id:'session:chat',fingerprint:'original-failure',read:false};
+ let root,release,pending;
+ const state={attention:{items:[item]}},failure={category:'context_limit',summary:'Context limit',guidance:'Your messages are retained.'};
+ const session={id:'chat',status:'error',failure};
+ const act=(name,args)=>{calls.push({name,args});return new Promise(resolve=>{release=resolve})};
+ try{
+  await renderAct(async()=>{root=create(React.createElement(ConversationError,{session,state,act}))});
+  const banner=root.root.findByProps({'data-part':'conversation-trouble'});
+  const content=banner.findByProps({className:'a-conversation-trouble-content'});
+  const actions=content.findByProps({className:'a-conversation-trouble-actions'});
+  const dismiss=banner.findByProps({'aria-label':'Dismiss conversation error'});
+  assert.equal(dismiss.parent,banner,'dismiss has reserved space, not a text/action sibling in a flex line');
+  assert.equal(actions.findByType('details').findByType('summary').children.join(''),'Details & reporting');
+  assert.deepEqual(calls,[],'rendering/disclosure markup is passive');
+  const recover=actions.findByProps({'data-action':'session.recover'});
+  await renderAct(async()=>{pending=recover.props.onClick()});
+  assert.equal(root.root.findByProps({'data-action':'session.recover'}).props.disabled,true);
+  assert.match(JSON.stringify(root.toJSON()),/Creating recovery copy/);
+  await renderAct(async()=>root.root.findByProps({'data-action':'session.recover'}).props.onClick());
+  assert.deepEqual(calls,[{name:'session.recover',args:{id:'chat'}}]);
+  await renderAct(async()=>{release({accepted:false});await pending});
+  assert.match(JSON.stringify(root.toJSON()),/Could not create the recovery copy/);
+  assert.equal(root.root.findByProps({'data-action':'session.recover'}).props.disabled,false);
+  assert.equal(session.failure,failure,'layout does not replace the failure or replay the original request');
+ }finally{await renderAct(async()=>root?.unmount())}
+});
+
 test('structured failure remains visible without inventing an empty runtime message',async()=>{
  const failure={category:'invalid_image',errorType:'ValueError',summary:'The provider rejected an image.',guidance:'Inspect the retained evidence.'};
  const session={id:'chat',status:'stopped',failure},act=async()=>({accepted:true,result:{status:'stopped',failure}});

@@ -56,6 +56,14 @@ Unified retains admission, authority, Stop and execution. The top-level
 Never edit that snapshot by hand or coinstall the standalone distribution with
 Unified. Independent author edits/publication do not refresh the app selection.
 
+`kernels/` is the temporary authoring project for `amplifier_kernels`, including
+its Python and Node runners and real-process mechanism tests. Unified consumes
+the generated top-level `amplifier_kernels/` snapshot selected by
+`kernels.source.json`, preserving editable and isolated-worker import origins.
+Never edit that snapshot by hand or coinstall the standalone distribution with
+Unified. Author edits and publication do not refresh the app selection; the host
+retains process approval, execution, observation and recovery authority.
+
 ## Web client delivery
 
 `web-client/` is a verbatim snapshot of the separate client repository selected
