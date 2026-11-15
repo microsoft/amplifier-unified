@@ -38,7 +38,10 @@ import uuid
 
 import pytest
 
-pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows directory sharing needs native Windows")
+# The CI step sets this. A skipped case would hide the answer; there it runs and fails instead.
+REQUIRED = os.environ.get("AMPLIFIER_REQUIRE_LIVE_WORKER_FOLDERS") == "1"
+pytestmark = pytest.mark.skipif(os.name != "nt" and not REQUIRED,
+                                reason="Windows directory sharing needs native Windows")
 
 # The folders that consumer setup creates in a new installation folder
 # (scripts/windows_bootstrap_native.cs). The source store's name comes from the app.
@@ -116,8 +119,8 @@ def test_native_live_session_leaves_the_installation_folder_usable_and_keeps_its
             #     Before Foundation e37a946b each of these was refused with error 32.
             for status in ("installed", "removed"):
                 write_private(root / shell.FILE, json.dumps({"status": status}), owned_root=root)
-            with windows_files.directory(root, owned_root=root) as pinned:
-                assert json.loads(pinned.read_private(shell.FILE, limit=4096)) == {"status": "removed"}
+                with windows_files.directory(root, owned_root=root) as pinned:
+                    assert json.loads(pinned.read_private(shell.FILE, limit=4096)) == {"status": status}
             for folder in (root, parent):
                 ordinary_changes(folder, outside)
                 source = "import sys\n" + inspect.getsource(ordinary_changes) + "\nordinary_changes(*sys.argv[1:])\n"
@@ -149,6 +152,10 @@ def test_native_live_session_leaves_the_installation_folder_usable_and_keeps_its
         os.rename(outside / "stray.txt", state / "stray.txt")
         os.rename(root, root.with_name("Amplifier-moved"))
         assert (root.with_name("Amplifier-moved") / "ownership" / "stray.txt").read_bytes() == b"stray"
+        # The folder above the installation folder is released too.
+        moved = parent.with_name(parent.name + "-moved")
+        os.rename(parent, moved)
+        parent = moved
     finally:
         # Only this test's own throwaway folder, by its exact name.
         shutil.rmtree(parent, ignore_errors=True)

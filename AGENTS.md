@@ -196,10 +196,12 @@ A live conversation worker holds Foundation's session ownership below
 `e37a946b` makes Windows refuse a rename, a move or a replacement of an entry
 directly in the installation folder (error 32); the private writer publishes
 by a rename, so it fails there too. From `e37a946b` those changes work. Windows
-still refuses a rename of a pinned folder itself, and a rename or a move into
+still refuses a rename of a pinned folder itself (the installation folder,
+each folder above it, and Foundation's own), and a rename or a move into
 `ownership` or a pinned folder below it
 (`tests/test_windows_live_worker_folders.py`). A running worker keeps the
-Foundation that it started with, so expect the refusal; `app\config\services`
+Foundation that it started with. Maintenance code must still expect the
+refusal from a worker that started before an update; `app\config\services`
 still accepts writes. Launcher maintenance stops the app before such a write
 and removes the person's Start-menu and Apps-list entries last.
 Task Scheduler expands percent-bearing executable/working-directory paths.

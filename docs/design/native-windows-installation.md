@@ -798,7 +798,8 @@ installation folder when that folder cannot be written.
 Why the app stops first. The earlier order removed the entries, rewrote
 setup's entry record `consumer-shell.json` in the installation folder, and
 only then stopped the app. While a conversation worker was alive, Windows
-refused a new or replaced file directly in the installation folder (sharing
+refused the private write of a new or replaced file directly in the
+installation folder (sharing
 violation, error 32); a worker stays alive after its chat turn ends. So after
 any chat the rewrite failed, the app was never asked to stop, and it kept
 running and starting at sign-in with no entry left. Two clean-room runs showed
@@ -815,7 +816,8 @@ installation folder: `AppData\Local`, `AppData` and the profile folder
 (measured). An ordinary new file was not refused. The app's private writer
 publishes a file by a rename, so it failed. From `e37a946b` a pin on a folder
 above `ownership` shares read and write, and other programs can rename,
-replace and move entries there. These refusals remain while a worker lives,
+replace and move entries there (measured in the clean room with three live
+workers at `e37a946b`). These refusals remain while a worker lives,
 by intent: a pinned folder itself cannot be renamed, moved or deleted, and
 nothing can be renamed or moved into `ownership` or a pinned folder below it.
 Foundation's history operations hold the folder that they work in (below

@@ -75,6 +75,9 @@ jobs:
       # the ownership with the worker's own call, in setup's folder layout.
       - name: Hold a real Foundation session ownership and change the folders around it
         shell: pwsh
+        env:
+          # A skipped case would hide the answer; with this it runs and fails instead.
+          AMPLIFIER_REQUIRE_LIVE_WORKER_FOLDERS: '1'
         run: |
           .\.venv\Scripts\python.exe -I -c "import importlib.metadata as m, json; print('Installed Foundation revision:', json.loads(m.distribution('amplifier-foundation').read_text('direct_url.json'))['vcs_info']['commit_id'])"
           if ($LASTEXITCODE -ne 0) { throw 'The installed Foundation revision could not be read.' }

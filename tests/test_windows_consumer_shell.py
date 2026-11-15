@@ -565,8 +565,8 @@ def test_app_left_running_without_entries_by_the_earlier_order_can_be_uninstalle
 
 def test_folder_that_refuses_writes_while_the_app_runs_no_longer_strands_it(uninstaller):
     # Clean-room run 3 (worker Foundation before e37a946b): while a conversation
-    # worker lived, Windows refused a new or replaced file directly in the
-    # installation folder. The earlier order
+    # worker lived, Windows refused the private write of a new or replaced file
+    # directly in the installation folder. The earlier order
     # met that refusal after it had removed every entry. Workers end with the app.
     state, root = uninstaller.state, uninstaller.root
     state["refuse_write"] = lambda path: path.parent == root and state["task"] == "running"
