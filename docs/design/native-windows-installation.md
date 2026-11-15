@@ -873,7 +873,9 @@ take-back began. It is written before the kept record becomes `adopting` and
 removed last. With this note the installation knows that it can hold a part
 of the kept data also when the kept record is lost or cannot be read. Then
 the app does not start, and an uninstall does not begin: both say that the
-data is in two folders and that both must be kept.
+data is in two folders and that both must be kept. A note that is left when
+no kept data is left is only removed; the app can be running then, so its
+database is not touched.
 
 A record that exists and cannot be read is not "no kept data". Neither is a
 kept folder that holds a data folder and no record. The person is told that
@@ -911,10 +913,11 @@ each kept folder it removes the installation's empty folder and renames the
 kept folder into its place. Windows refuses to remove `workspace` at a first
 start, because it is the current folder of the launcher and of the program
 that started it. Then the kept entries move into that empty folder one by
-one. Before the first entry moves, the record names that folder and a digest
-of the entry names. A continued fill accepts the folder only when the names
-in it and the names still in the kept folder together give that digest: an
-entry that another program put there stops it.
+one. Before the first entry moves, the record names that folder and its
+entries (a digest of the names when they are too many for the record). A
+continued fill accepts the folder only when it holds nothing but those
+entries: an entry that another program put there stops it and is named in
+the message. An entry that was removed since then is not in the way.
 
 Folders are held in place while they are used. The installation folder, the
 kept folder and both folders of an entry-by-entry move are opened for the
