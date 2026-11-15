@@ -207,6 +207,12 @@ and removes the person's Start-menu and Apps-list entries last.
 Task Scheduler expands percent-bearing executable/working-directory paths.
 Reject those paths rather than recording a literal identity that launches a
 different program. Task registration/state is not authenticated host health.
+Python on Windows accepts only root certificates that the Windows store holds
+at that moment, and aiohttp builds its default list once at import. A new PC's
+store lacks many public roots (seen in Windows Sandbox: the package registry's
+root entered only after a Windows program asked for that site). An outbound request
+that must work there verifies against the system store plus the bundled roots,
+built per request (`update_checks.registry_trust`). Never turn verification off.
 
 ## Keep agent context and coordination useful
 
