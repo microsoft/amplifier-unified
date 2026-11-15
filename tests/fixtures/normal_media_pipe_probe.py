@@ -1,9 +1,12 @@
-"""Offline source proof of the real runtime_worker.py file and JSON-lines pipes.
+"""Offline qualification of the real runtime_worker.py file and JSON-lines pipes.
 
 The fresh child's explicit sitecustomize installs only a finite source resolver,
 the source-only loop locator and bottom HTTPX/HTTPX2 transports. It never creates
 a Worker or changes a provider, SDK resource, witness, graph, binding or publisher.
-This is not installed-package, DTU, live-account or real-inference evidence.
+Source mode is the default. Explicit installed mode requires an outside-checkout
+qualification venv and the manager's fixed file/distribution profile; it never
+repairs package discovery or provisions an environment. Both modes use synthetic
+bottom HTTP transport, not live-account or real-inference evidence.
 """
 from __future__ import annotations
 
@@ -32,6 +35,19 @@ def private_parent(root):
     assert root.is_dir() and not root.is_symlink()
     assert stat.S_IMODE(root.stat().st_mode) == 0o700, "Probe parent must already be private (0700)"
     assert not any(root.iterdir()), "Use a fresh empty root; never replay an earlier probe"
+
+
+def qualification_root(value, target=None):
+    root = Path(value).absolute()
+    private_parent(root)
+    if target is not None:
+        # The final component may be ordinary while an ancestor aliases a
+        # checkout/installation. Refuse that before any fixture writes.
+        resolved = root.resolve(strict=True)
+        if (resolved != root or resolved.is_relative_to(ROOT.resolve())
+                or resolved.is_relative_to(target.environment)):
+            raise ValueError("Installed qualification root must be outside source and installation without aliases")
+    return root
 
 
 def save_json(path, value):
@@ -85,7 +101,7 @@ def deny_socket_connections(stack, report):
     return denied
 
 
-def finite_sources(paths, modules):
+def finite_sources(paths, modules, *, installed=False):
     """Same finite source policy as warm_worker_probe, without its app import.
 
     Delay only the explicit source-only loop locator until ordinary bundle
@@ -105,7 +121,7 @@ def finite_sources(paths, modules):
         path = admitted.get(uri)
         if path is None:
             raise SourceResolutionDenied("Pipe fixture source is not explicitly local: " + uri)
-        if not located:
+        if not located and not installed:
             host = sys.modules.get("amplifier_web.host.session")
             assert host is not None, "Ordinary app bootstrap must precede source resolution"
             host.installed_loop_source = lambda: str(selected)
@@ -113,6 +129,44 @@ def finite_sources(paths, modules):
         return ResolvedSource(active_path=path, source_root=path if path.is_dir() else path.parent)
 
     return source_resolution_policy(resolve)
+
+
+def installed_target(profile, worker, *, bootstrap_app=False):
+    """Explicit mode selector; absent/partial inputs never downgrade to source."""
+    fixture = helpers()
+    if profile is None and worker is None:
+        return None
+    if not profile or not worker:
+        raise ValueError("Installed worker and profile must be supplied together")
+    target = fixture.InstalledTarget(profile)
+    if Path(worker).absolute() != target.worker:
+        raise ValueError("Worker does not match installed profile")
+    target.check_runtime()
+    if bootstrap_app:
+        target.bootstrap_app()
+    fixture.INSTALLED_TARGET = target
+    return target
+
+
+def child_environment(bootstrap_dir, modules, root, target=None):
+    """Installed mode discards overlays rather than trusting inherited PYTHONPATH."""
+    env = dict(os.environ)
+    env["NORMAL_MEDIA_PIPE_ROOT"] = str(root)
+    fixture_paths = [str(bootstrap_dir), str(Path(__file__).parent)]
+    if target is None:
+        dependencies = [entry for entry in env.get("PYTHONPATH", "").split(os.pathsep)
+                        if entry and Path(entry).resolve() != ROOT]
+        env.update(WARM_LOOP_SOURCE=modules["loop-live"],
+                   PYTHONPATH=os.pathsep.join([*fixture_paths, *dependencies]))
+        env.pop("NORMAL_MEDIA_INSTALLED_PROFILE", None)
+        env.pop("NORMAL_MEDIA_INSTALLED_WORKER", None)
+    else:
+        for key in ("WARM_LOOP_SOURCE", "PYTHONHOME", "PYTHONUSERBASE"):
+            env.pop(key, None)
+        env.update(PYTHONPATH=os.pathsep.join(fixture_paths), PYTHONNOUSERSITE="1",
+                   NORMAL_MEDIA_INSTALLED_PROFILE=str(target.profile),
+                   NORMAL_MEDIA_INSTALLED_WORKER=str(target.worker))
+    return env
 
 
 def bootstrap():
@@ -132,6 +186,8 @@ def bootstrap():
     denied = deny_socket_connections(stack, root / (label + "-socket-denials.json"))
     # No imports capable of starting an SDK precede those two guards.
     fixture = helpers()
+    target = installed_target(os.environ.get("NORMAL_MEDIA_INSTALLED_PROFILE"),
+                              os.environ.get("NORMAL_MEDIA_INSTALLED_WORKER"))
     import importlib
     import importlib.util
     import gc
@@ -156,6 +212,8 @@ def bootstrap():
                 assert module._PROTOCOL is not None
                 assert str(ROOT) not in sys.path, "Outer app/source root leaked into the child dependency path"
                 assert fixture.catalog_status() == catalog
+                if target:
+                    target.check_origins()
                 assert owner.media_graph_selection is not None
                 assert owner.canonical_binding is not None
                 assert owner.canonical_resume is (label == "second")
@@ -221,7 +279,7 @@ def bootstrap():
              declaration["session"]["context"]["source"],
              *[row["source"] for row in declaration["providers"]],
              *[row["source"] for row in declaration["hooks"]]]
-    stack.enter_context(finite_sources(paths, modules))
+    stack.enter_context(finite_sources(paths, modules, installed=target is not None))
     catalog = json.loads((root / "catalog-observed.json").read_text())
     assert not catalog["mismatches"], {"boundary": "unchanged packaged catalog", **catalog}
     assert "amplifier_web.runtime_worker" not in sys.modules, "Fixture must not preload the Worker"
@@ -373,7 +431,7 @@ class Pipe:
                 "bridge_operations": sorted({row["operation"] for row in self.events if row.get("op") == "bridge"})}
 
 
-def manager_command(python, root):
+def manager_command(python, root, target=None):
     """Read the real manager's final file path, without preparation/provisioning.
 
     Only its finite launcher setup lookups are substituted. We run the selected
@@ -387,7 +445,9 @@ def manager_command(python, root):
             patch("amplifier_web.runtime_environment.receipt_directory", return_value=project):
         selected = RuntimeManager()._command(release=None, home=root / "home")
     script = Path(selected[-1]).resolve(strict=True)
-    assert script == ROOT / "amplifier_web/runtime_worker.py"
+    assert script == (target.worker if target else ROOT / "amplifier_web/runtime_worker.py")
+    if target:
+        target.verify_file(script)
     return [str(python), str(script)], selected
 
 
@@ -424,9 +484,18 @@ def custody(snapshot, commit, held):
 
 
 async def main():
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("root")
+    parser.add_argument("--installed-worker")
+    parser.add_argument("--installed-profile")
+    args = parser.parse_args()
     fixture = helpers()
-    root = Path(sys.argv[1]).absolute()
-    private_parent(root)  # never repair/chmod an existing nonprivate parent
+    # This happens before application imports, fixture settings, or worker spawn.
+    target = installed_target(args.installed_profile, args.installed_worker, bootstrap_app=True)
+    if target:
+        target.check_origins()
+    root = qualification_root(args.root, target)
     os.environ.update(HOME=str(root / "os-home"), AMPLIFIER_HOME=str(root / "amplifier-home"),
         AMPLIFIER_WEB_HOME=str(root / "home"), AMPLIFIER_UNIFIED_IMPORT_HOME=str(root / "legacy"),
         AMPLIFIER_SESSION_STATE_HOME=str(root / "shared"),
@@ -463,14 +532,9 @@ async def main():
     # Explicit child PYTHONPATH, not a production test hook or sys.modules alias.
     (bootstrap_dir / "sitecustomize.py").write_text(
         "from normal_media_pipe_probe import bootstrap\nbootstrap()\n")
-    python = Path(sys.executable).absolute()
-    command, selected = manager_command(python, root)
-    dependencies = [entry for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep)
-                    if entry and Path(entry).resolve() != ROOT]
-    env = {**os.environ, "NORMAL_MEDIA_PIPE_ROOT": str(root),
-           "WARM_LOOP_SOURCE": modules["loop-live"],
-           "PYTHONPATH": os.pathsep.join([str(bootstrap_dir), str(Path(__file__).parent),
-                                         *dependencies])}
+    python = target.python if target else Path(sys.executable).absolute()
+    command, selected = manager_command(python, root, target)
+    env = child_environment(bootstrap_dir, modules, root, target)
     config = {"id": SESSION, "workspace": str(workspace), "bundle": str(bundle)}
     children, receipts, reports = [], [], []
     saved = ref = None
@@ -525,7 +589,15 @@ async def main():
         for report in reports:
             snapshots = report["snapshots"]
             assert all(row == snapshots[0] for row in snapshots)
-        evidence = {"mode": "source-only", "installed_package_parity": False,
+        # Installed status is reported only after the real lifecycle and both
+        # child loaded-origin/file-manifest checks succeeded, never from a flag.
+        if target:
+            target.check_origins()
+            assert all(report["source"]["mode"] == "installed-offline-transport"
+                       and report["source"]["installed_package_parity"] for report in reports)
+        evidence = {"mode": "installed-offline-transport" if target else "source-only",
+                    "installed_package_parity": target is not None,
+                    "manager_preparation_executed": False,
                     "real_file_entry": command, "manager_selected_command_not_executed": selected,
                     "actual_vendor_provider_and_sdk": True, "offline_transport_not_inference": True,
                     "two_turn_idle_custody": True, "fresh_process_resume_without_replay": True,

@@ -27,6 +27,151 @@ PACKAGES = ("amplifier_core", "amplifier_foundation", "amplifier_module_loop_liv
             "amplifier_module_loop_streaming", "amplifier_module_context_simple",
             "amplifier_module_provider_openai", "amplifier_module_hook_context_intelligence",
             "context_intelligence")
+INSTALLED_PACKAGES = (*PACKAGES, "amplifier_web", "openai", "httpx", "httpx2", "PIL")
+INSTALLED_TARGET = None
+
+
+class InstalledTarget:
+    """Explicit qualification inputs, never a replacement production catalog.
+
+    Profile v1 contains environment_root, python, app_root, packages (each with
+    root/distribution/version), and files (environment-relative paths -> SHA256).
+    The manager supplies these from its selected artifact/RECORD manifest.
+    Nothing in a probe generates expected hashes or repairs a missing package.
+    """
+    def __init__(self, profile):
+        self.profile = Path(profile).absolute()
+        self.raw = self.profile.read_bytes()
+        def unique(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError("Duplicate installed profile member")
+                value[key] = item
+            return value
+        self.data = json.loads(self.raw, object_pairs_hook=unique)
+        if (type(self.data) is not dict or set(self.data) !=
+                {"v", "environment_root", "python", "app_root", "packages", "files"}
+                or type(self.data["v"]) is not int or self.data["v"] != 1):
+            raise ValueError("Invalid installed qualification profile")
+        self.environment = self._absolute(self.data["environment_root"])
+        if (self.environment.is_relative_to(ROOT) or ROOT.is_relative_to(self.environment)
+                or not (self.environment / "pyvenv.cfg").is_file()):
+            raise ValueError("Installed target must be an outside-checkout qualification venv")
+        self.python = self._absolute(self.data["python"], resolve=False)
+        if (not self.python.is_relative_to(self.environment) or not self.python.is_file()
+                or not os.access(self.python, os.X_OK)):
+            raise ValueError("Select the qualification venv interpreter")
+        self.app = self._absolute(self.data["app_root"])
+        if self.app.name != "amplifier_web" or not self.app.is_relative_to(self.environment):
+            raise ValueError("Installed app must be inside the qualification venv")
+        self.packages = self.data["packages"]
+        self.files = self.data["files"]
+        if (type(self.packages) is not dict or set(self.packages) != set(INSTALLED_PACKAGES)
+                or type(self.files) is not dict or not self.files):
+            raise ValueError("Explicit installed package and file identities required")
+        for package, item in self.packages.items():
+            if (type(item) is not dict or set(item) != {"root", "distribution", "version"}
+                    or not all(type(item[key]) is str and item[key] for key in item)):
+                raise ValueError("Invalid installed package identity")
+            directory = self._absolute(item["root"])
+            if not directory.is_dir() or not directory.is_relative_to(self.environment):
+                raise ValueError("Installed package escaped qualification venv")
+            if package == "amplifier_web" and directory != self.app:
+                raise ValueError("Installed app identity differs")
+        for relative, digest in self.files.items():
+            if (type(relative) is not str or Path(relative).is_absolute()
+                    or ".." in Path(relative).parts or type(digest) is not str
+                    or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest)):
+                raise ValueError("Invalid installed file identity")
+        # These files must be pinned independently of the catalog we will read.
+        self.worker = self.app / "runtime_worker.py"
+        self.catalog = self.app / "host/media_sources.json"
+        for path in (self.worker, self.catalog, self.app / "runtime_bootstrap.py"):
+            self.verify_file(path)
+
+    @staticmethod
+    def _absolute(value, *, resolve=True):
+        if type(value) is not str or not Path(value).is_absolute() or ".." in Path(value).parts:
+            raise ValueError("Installed paths must be explicit absolute paths")
+        path = Path(value)
+        selected = path.resolve(strict=True)
+        # Interpreter symlinks to the base CPython are normal; package symlinks
+        # and traversal are not installed artifact identity.
+        if resolve and selected != path:
+            raise ValueError("Installed package paths must not use symlinks")
+        return selected if resolve else path
+
+    def verify_file(self, path):
+        if self.profile.read_bytes() != self.raw:
+            raise ValueError("Installed profile changed")
+        path = Path(path)
+        selected = path.resolve(strict=True)
+        if selected != path or not selected.is_relative_to(self.environment) or not selected.is_file():
+            raise ValueError("Installed file escaped qualification venv")
+        expected = self.files.get(str(selected.relative_to(self.environment)))
+        actual = hashlib.sha256(selected.read_bytes()).hexdigest()
+        if expected is None or actual != expected:
+            raise ValueError("Installed artifact hash differs or is unlisted: " + str(selected))
+        return {"path": str(selected), "sha256": actual}
+
+    def check_runtime(self):
+        if (Path(sys.executable).absolute() != self.python
+                or Path(sys.prefix).resolve() != self.environment
+                or str(ROOT) in sys.path):
+            raise ValueError("Installed qualification must use its interpreter without checkout imports")
+
+    def bootstrap_app(self):
+        """Use the installed production bootstrap, never expose outer site-packages."""
+        self.check_runtime()
+        existing = sys.modules.get("amplifier_web")
+        if existing is not None and Path(existing.__file__).resolve() != self.app / "__init__.py":
+            raise ValueError("Checkout app was already imported")
+        path = self.app / "runtime_bootstrap.py"
+        self.verify_file(path)
+        spec = importlib.util.spec_from_file_location("_installed_probe_bootstrap", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.bootstrap_app_package()
+
+    def check_origins(self):
+        """Reject editable imports; join loaded app/SDK/dependency bytes to input files."""
+        import importlib.metadata
+        self.check_runtime()
+        imports, loaded, versions = {}, {}, {}
+        for package, item in self.packages.items():
+            path = origin(package)
+            if path.parent != Path(item["root"]):
+                raise ValueError("Installed package origin differs: " + package)
+            distribution = importlib.metadata.distribution(item["distribution"])
+            direct = json.loads(distribution.read_text("direct_url.json") or "{}")
+            if (distribution.version != item["version"]
+                    or direct.get("dir_info", {}).get("editable")):
+                raise ValueError("Installed distribution version/editable identity differs")
+            members = distribution.files
+            if members is None or not any(
+                    Path(distribution.locate_file(row)).resolve() == path for row in members):
+                raise ValueError("Installed module lacks distribution file membership")
+            imports[package] = self.verify_file(path)
+            versions[item["distribution"]] = distribution.version
+        for name, module in tuple(sys.modules.items()):
+            package = name.split(".")[0]
+            if package not in self.packages:
+                continue
+            filename = getattr(module, "__file__", None)
+            if filename is None:
+                raise ValueError("Selected installed module has no file")
+            path = Path(filename).absolute()
+            if path.suffix == ".pyc":
+                path = Path(importlib.util.source_from_cache(str(path)))
+            if not path.is_relative_to(Path(self.packages[package]["root"])):
+                raise ValueError("Loaded module escaped selected package: " + name)
+            loaded[name] = self.verify_file(path)
+        return {"mode": "installed-offline-transport", "installed_package_parity": True,
+                "profile": {"path": str(self.profile),
+                            "sha256": hashlib.sha256(self.raw).hexdigest()},
+                "worker": self.verify_file(self.worker), "imports": imports,
+                "loaded_modules": loaded, "versions": versions}
 
 
 def origin(package):
@@ -37,12 +182,17 @@ def origin(package):
 
 def catalog_status():
     """Read-only diagnosis; current bytes NEVER become expected source hashes."""
-    path = ROOT / "amplifier_web/host/media_sources.json"
+    target = INSTALLED_TARGET
+    path = target.catalog if target else ROOT / "amplifier_web/host/media_sources.json"
+    if target:
+        target.verify_file(path)
     catalog = json.loads(path.read_text())
     mismatches = []
     for logical, expected in catalog["sources"].items():
         package, relative = logical.split("/", 1)
         source = origin(package).parent / relative
+        if target:
+            target.verify_file(source)
         actual = hashlib.sha256(source.read_bytes()).hexdigest()
         if actual != expected:
             mismatches.append({"path": str(source), "expected": expected, "actual": actual})
@@ -312,6 +462,8 @@ def idle_custody(worker):
 
 
 def source_evidence():
+    if INSTALLED_TARGET is not None:
+        return INSTALLED_TARGET.check_origins() | {"catalog": catalog_status()}
     import importlib.metadata
     imports = {package: {"path": str(origin(package)),
                          "sha256": hashlib.sha256(origin(package).read_bytes()).hexdigest()}
