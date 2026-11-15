@@ -455,10 +455,11 @@ class _Native(_ReadAPI):
         unicode = _Unicode(size, size + 2, C.cast(text, C.c_wchar_p))
         attributes = _Attributes(C.sizeof(_Attributes), parent, C.pointer(unicode), 0, None, None)
         handle, status = HANDLE(), _Status()
-        # SYNCHRONIZE | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY; shares read
-        # and write, never delete. FILE_CREATE: an existing entry of that name
-        # refuses. A folder; synchronous; never through a link.
-        result = self.create(C.byref(handle), 0x100081, C.byref(attributes), C.byref(status),
+        # DELETE | SYNCHRONIZE | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY;
+        # shares read and write, never delete. FILE_CREATE: an existing entry
+        # of that name refuses. A folder; synchronous; never through a link.
+        # DELETE lets the creator take back its own empty folder.
+        result = self.create(C.byref(handle), 0x110081, C.byref(attributes), C.byref(status),
                              None, 0, 3, 2, 0x200021, None, 0)
         if result < 0:
             raise C.WinError(self.dos_error(result))
@@ -479,9 +480,12 @@ class _Native(_ReadAPI):
         handle, status = HANDLE(), _Status()
         # DELETE | SYNCHRONIZE | FILE_READ_ATTRIBUTES | FILE_WRITE_DATA; an
         # ordinary file; no sharing at all; FILE_CREATE: an existing entry
-        # refuses. A file; synchronous; FILE_DELETE_ON_CLOSE.
+        # refuses. A file; synchronous; FILE_DELETE_ON_CLOSE; and
+        # FILE_OPEN_REPARSE_POINT: a link of that name is an existing entry.
+        # Without it Windows follows a dangling file link and creates the file
+        # at the link's target.
         result = self.create(C.byref(handle), 0x110082, C.byref(attributes), C.byref(status),
-                             None, 0x80, 0, 2, 0x1060, None, 0)
+                             None, 0x80, 0, 2, 0x201060, None, 0)
         if result < 0:
             raise C.WinError(self.dos_error(result))
         return handle.value
