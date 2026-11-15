@@ -547,6 +547,25 @@ def test_finish_refuses_a_drives_top_folder(finish_start, root):
     assert not calls
 
 
+def test_step_after_exit_deletes_the_records_and_lets_folders_go_only_in_this_order():
+    script = removal.FINISH_SCRIPT
+    # The wait ends when waiting cannot help: no program left, no parked file, no named folder.
+    assert "$idle = (-not $alive.Count -and -not $inside.Count -and -not $named.Count)" in script
+    assert "if ($idle -or (Get-Date) -ge $until) { break }" in script
+    tail = script.split("} while ((Get-Date) -lt $until)")[1]
+    order = [tail.index(part) for part in (
+        "if ($done) {", "Clear-Record 'unified-setup-complete.json'", "Clear-Record 'unified-uninstall.json'",
+        "[Environment]::CurrentDirectory = $p.root", "foreach ($path in @($hold, $park))",
+        "[Environment]::CurrentDirectory = $p.parent", "$folder = Get-Item -LiteralPath $p.root")]
+    assert order == sorted(order)
+    # Setup's record and the journal go only when nothing else is left; so does the installation folder.
+    assert tail.count("if ($done) {") == 2 and tail.count("Clear-Record ") == 2
+    # The step holds the installation folder for the two inner folders, then the folder above it
+    # for the installation folder itself. It never lets go to a folder outside before that.
+    assert re.findall(r"\[Environment\]::CurrentDirectory = (\S+)", script) == ["$p.root", "$p.parent"]
+    assert "$p.outside" not in tail
+
+
 LINKS_REQUIRED = os.environ.get("AMPLIFIER_REQUIRE_LINK_CHECKS") == "1"
 
 

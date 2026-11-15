@@ -839,9 +839,10 @@ completion record `unified-setup-complete.json` is in the folder.
 only the private note of the failure, as an uninstall that keeps the folder
 does.
 
-1. One start or removal at a time for one installation: a named semaphore
-   whose name comes from the folder path, in the name space that all sign-in
-   sessions of this PC share. It is created as this person's own, with no
+1. One start or removal at a time for one installation: a named mutex whose
+   name comes from the folder path, in the name space that all sign-in
+   sessions of this PC share. A mutex has no count, and only the thread that
+   took it can release it. It is created as this person's own, with no
    access for another account, and one that another account made is refused.
    So another account that is signed in at the same time can make Amplifier
    refuse to open or uninstall while its program runs, and can never hold or
@@ -870,10 +871,13 @@ does.
 5. Write the journal `unified-uninstall.json` (`schema` 1, `choice`, a random
    `token`) with the private atomic writer. Nothing is deleted before it
    exists.
-6. Delete setup's mark of unfinished work, then setup's completion record.
-   The mark goes first: with the mark and without the record, a later setup
-   run would treat the folder as its own unfinished work and empty it.
-   Uninstall never writes either file.
+6. Delete setup's mark of unfinished work. Setup can leave that mark in a
+   finished installation; with the mark and without the completion record, a
+   later setup run would treat a folder without data as its own unfinished
+   work and empty it. Setup's completion record stays for as long as anything
+   is left in the folder: with it, setup installs and removes nothing there.
+   Only the step after exit deletes the record, immediately before the
+   journal. Uninstall never writes either file.
 7. Delete the person's data: `shared` (stored keys) first, then `app`,
    `capture`, `ownership`, `import`, `workspace`, `export`. A closing program
    gets up to 15 seconds. An emptied folder that Windows still keeps (the
@@ -888,10 +892,11 @@ does.
    program files go when the message is closed; anything that is not
    Amplifier's is named and stays.
 10. The last step (`windows_uninstall.finish`), under the lock and with the
-    folder proven and pinned again: create and hold the flat folder
-    `unified-uninstall-last`; start the step after exit in it; delete `python`
-    and `tools` through handles, and move the few files that this running
-    program has mapped into the held folder. Then the process ends.
+    folder proven and pinned again: create the flat folder
+    `unified-uninstall-last` and one folder inside it, and hold both; start
+    the step after exit in that inner folder; delete `python` and `tools`
+    through handles, and move the few files that this running program has
+    mapped into the flat folder. Then the process ends.
 
 **Only exact names.** Uninstall deletes a top-level entry only when its name
 is, with its exact case, one that setup, the launcher or the launcher refresh
@@ -934,52 +939,70 @@ Windows PowerShell 5.1 script, found in the system folder, with the folder
 path and the token as JSON on standard input, outside the launcher's Job,
 with a temporary folder outside the installation.
 
-The step walks no tree. It starts with the flat folder as its current folder
-while the uninstall program still holds that folder, and the uninstall
-program goes on only when the step has answered. Windows keeps a program's
-current folder open without delete sharing. So no program can rename or
-replace the flat folder, the installation folder or a folder above it, also
-after the uninstall program has ended (measured: error 32 for the flat
-folder, error 5 for the installation folder). The step then:
+The step works with paths, so it deletes a file only where the path cannot
+lead anywhere else. It walks no tree:
 
-1. deletes the plain files directly in the flat folder; a folder or a link
-   there stays and is never entered;
-2. makes the installation folder its current folder, which releases the flat
-   folder; removes the flat folder and the other named folders only when they
-   are empty, never with `-Recurse`; deletes named plain files directly in the
-   installation folder; removes a link as a link;
-3. deletes the journal last, releases the installation folder, and removes it
-   only when it is empty.
+- The uninstall program creates one folder inside the flat folder (its name
+  is the token) and holds both. The step starts with that inner folder as its
+  current folder, and the uninstall program goes on only when the step has
+  answered. Windows keeps a program's current folder open without delete
+  sharing. So the inner folder cannot be removed or renamed, and neither can
+  the flat folder, the installation folder or a folder above it, also after
+  the uninstall program has ended.
+- The flat folder is therefore never empty, and Windows turns only an empty
+  folder into a link. The installation folder holds the flat folder, so the
+  same is true for it. A file directly in the flat folder is exactly that
+  file.
+- The step deletes the plain files directly in the flat folder. It never
+  uses `-Force`: a read-only, hidden or system file stays, and no attribute
+  of any file is changed. A folder or a link there stays.
+- Every folder goes by RemoveDirectory only: an empty folder goes, a link
+  goes as a link, a folder with entries refuses. The step removes the named
+  folders of the installation that are empty by then.
+- When nothing but this removal's own entries is left, and still with the
+  inner folder held, it deletes setup's completion record and then the
+  journal. A record that is a link, a folder or a read-only file is refused.
+- Then it holds the installation folder (its current folder) and removes the
+  inner folder and the flat folder; then it holds the folder above and
+  removes the installation folder.
+- It reads the whole journal record before every pass and every named folder,
+  and stops when the record is missing or different. An entry that was
+  created after the step started stays. A file that a program moves into the
+  flat folder while the step runs is deleted with it; that folder is the
+  installation's own.
 
-It reads the whole journal record before every named entry and stops when the
-record is missing or different. An entry that was created after the step
-started stays. A file that a program moves into the flat folder while the
-step runs is deleted with it; that folder is the installation's own.
+The step no longer deletes other files in the installation folder. A file of
+the installation that is still there at the end (a program uses it) stays,
+and then the folder stays with both records.
 
-An earlier form of this step walked `python` and `tools` by path. A program
-of the same account could swap a folder for a link between its look and its
-delete, and the step then deleted in another folder. That is why it walks no
-tree now. What no program can defend against stays: a program that can
-control another program of the same person (close its handles, change its
-memory). Under PowerShell constrained language mode the step stops at its
-first check and changes nothing; the parked files and the journal stay.
+Two earlier forms of this step were given up after review. The first walked
+`python` and `tools` by path: a program of the same account could swap a
+folder for a link between the look and the delete. The second deleted in a
+flat folder that could be empty: Windows lets a program turn an empty folder
+into a link in place, without a rename. What no program can defend against
+stays: a program that can control another program of the same person (close
+its handles, change its memory). Under PowerShell constrained language mode
+the step stops at its first check and changes nothing; the parked files and
+both records stay.
 
 **Rule for setup.** An installation must never be made in a folder that holds
-`unified-uninstall.json`. Today's setup keeps this rule without a change. It
-installs into an absent or empty folder, or into a folder with its own mark of
-unfinished work and no data. A folder with the journal has either setup's
-completion record (setup then installs nothing) or neither record (setup
-stops and says to move or rename the folder), because uninstall deletes the
-mark of unfinished work before the completion record.
+`unified-uninstall.json`. Today's setup keeps this rule without a change:
+while anything is left in the folder, setup's completion record is there too,
+and with that record setup installs and removes nothing. The step after exit
+deletes the record and the journal one after the other, when nothing else is
+left.
 
-**Leftovers.** If the step after exit cannot run, program files and the
-journal stay; they hold none of the person's data, and the message says that
-the folder can be deleted. The same leftover stays when the PC loses power in
-the last seconds, after the Windows entries are gone and before the step
-after exit has run; then no message was shown and no entry exists to uninstall
-again. If something that is not Amplifier's is in the folder, that entry and
-the journal stay. A later setup run stops at such a folder and says to move or
-rename it. In none of these states can Amplifier start.
+**Leftovers.** If the step after exit cannot run, the parked program files
+and both records stay; they hold none of the person's data, and the message
+says that the folder can be deleted. The same leftover stays when the PC
+loses power in the last seconds, after the Windows entries are gone and
+before the step after exit has run; then no message was shown and no entry
+exists to uninstall again. If something that is not Amplifier's is in the
+folder, that entry and both records stay. A later setup run finds its
+completion record in such a folder and changes nothing; it tries to open
+Amplifier, and the launcher refuses because of the journal, or setup says
+that a program file is missing. In none of these states can Amplifier start,
+and in none of them does setup delete anything.
 
 **Which installations get it.** This is launcher code: a new installation from
 a setup file of a release that has it, and an earlier installation after a
@@ -993,10 +1016,15 @@ start program and a loaded DLL cannot be deleted and are moved into the flat
 folder (same bytes there); when the process ends, the folder holds only the
 flat folder, the journal and the emptied workspace; the step after exit
 removes them and the folder is gone; an outside folder behind junctions is
-unchanged. While the step waits, a rename of the installation folder and of
-the flat folder is refused. In the flat folder a junction, a folder, a file
-link, a file in use, a hard link to an outside read-only file and a later
-entry all stay. A data file in use stops the removal with the entries and the
+unchanged. One case deletes the Python that it runs from (interpreter,
+standard library and the installed package inside the folder) and still ends
+cleanly. While the step waits, a rename of the installation folder, of the
+folder above it, of the flat folder and of the inner folder is refused.
+Windows refuses to turn the flat folder into a link in place (error 145),
+before and after it allowed that for the empty inner folder; the same call
+works on an empty folder that nobody holds. In the flat folder a junction, a
+folder, a file link, a file in use, a read-only file, a hard link to an
+outside read-only file and a later entry all stay. A data file in use stops the removal with the entries and the
 journal in place; Open, Status and Stop refuse; a second window refuses while
 the lock is held; a second uninstall finishes; a file that is not Amplifier's
 stays. Stand-ins: Task Scheduler, the check of an installed release, and the
