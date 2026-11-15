@@ -226,7 +226,7 @@ async def test_new_send_interruption_does_not_inherit_dismissed_prior_failure(ap
     async def closing(*args, **kwargs):
         if status:
             await app.on_runtime_event('runtime.status', {'sessionId': target['id'], 'status': status})
-        raise RuntimeHostClosingError('Synthetic host is closing')
+        raise RuntimeHostClosingError()
     app.runtime.send = closing
     with pytest.raises(RuntimeHostClosingError):
         await app.dispatch('conversation.send', {'sessionId': target['id'], 'text': 'Fresh attempt'},
@@ -261,7 +261,7 @@ async def test_send_interruption_preserves_stop_newer_failure_and_safety(app, bo
             await app.on_runtime_event('runtime.error', {'sessionId': target['id'],
                 'errorType': 'RuntimeStartupError', 'error': 'A genuinely newer startup failure'})
         expected.update(copy.deepcopy(target['failure']))
-        raise RuntimeHostClosingError('Synthetic host is closing')
+        raise RuntimeHostClosingError()
     app.runtime.send = closing
     with pytest.raises(RuntimeHostClosingError):
         await app.dispatch('conversation.send', {'sessionId': target['id'], 'text': 'Fresh attempt'},

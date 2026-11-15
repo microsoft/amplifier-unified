@@ -302,6 +302,8 @@ def test_existing_scenario_commands_environments_and_distinct_modes_are_preserve
     lifecycle_additions = [
         {'id': 'session-health-request-failure',
          'command': ['node', 'tests/session-health-browser.mjs', '--request-failure']},
+        {'id': 'session-health-retry-preparation',
+         'command': ['node', 'tests/session-health-browser.mjs', '--retry-preparation']},
         {'id': 'session-health-completed-runtime-fault',
          'command': ['node', 'tests/session-health-browser.mjs', '--completed-runtime-fault']},
     ]
@@ -3887,6 +3889,8 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     lifecycle_additions = [
         {'id': 'session-health-request-failure',
          'command': ['node', 'tests/web/session-health-browser.mjs', '--request-failure']},
+        {'id': 'session-health-retry-preparation',
+         'command': ['node', 'tests/web/session-health-browser.mjs', '--retry-preparation']},
         {'id': 'session-health-completed-runtime-fault',
          'command': ['node', 'tests/web/session-health-browser.mjs', '--completed-runtime-fault']},
     ]
@@ -4182,7 +4186,12 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_o
         voice-work-message external-multiparty shared-room
     '''.split()
     assert len(preceding_order) == len(set(preceding_order)) == 165
-    assert [name for name in host['scenarioOrder'] if name not in new_ids] == preceding_order
+    retry = {'session-health-retry-preparation'}
+    assert [row for row in plan['scenarios'] if row['id'] in retry] == [{
+        'id': 'session-health-retry-preparation',
+        'command': ['node', 'tests/web/session-health-browser.mjs', '--retry-preparation']}]
+    assert host['scenarioOrder'].count('session-health-retry-preparation') == 1
+    assert [name for name in host['scenarioOrder'] if name not in new_ids | retry] == preceding_order
     # Preserve the prior spacing/hierarchy placements independently of where the
     # newly validated draft-focus journey is inserted into the host order.
     before_focus = [name for name in host['scenarioOrder'] if name != 'settings-draft-focus']
@@ -4190,7 +4199,7 @@ def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_o
                         before_focus.index('delivery-warning')] == ['settings-action-spacing']
     assert before_focus[-2:] == ['shared-room', 'work-hierarchy']
     assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
-    assert len(plan['scenarios']) == len(host['scenarioOrder']) == 165 + len(new_ids) == 168
+    assert len(plan['scenarios']) == len(host['scenarioOrder']) == 165 + len(new_ids) + len(retry) == 169
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
     assert not identities & {row['id'] for row in coverage_plan()['scenarios']}
