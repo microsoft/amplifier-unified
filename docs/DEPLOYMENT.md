@@ -306,6 +306,97 @@ References: [Ubuntu trust-store guide](https://ubuntu.com/server/docs/how-to/sec
 and [Edge root-store policy history](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/microsoftrootstoreenabled).
 The obsolete Edge root-store policy is not a workaround.
 
+## Windows host: reach Unified from another device
+
+A Windows host has no password sign-in. On the PC, the launcher opens the
+browser. A browser on another device signs in with a one-use code that you make
+at the PC. These steps use Tailscale. Unified stays bound to `127.0.0.1`.
+
+Replace `<pc>.<tailnet>.ts.net` with the Tailscale name of the PC, and `<port>`
+with the port that Unified uses (`amplifier-unified config get port`). Pass the
+same `--data-dir` value to every command if Unified uses a non-default data
+directory.
+
+On a PC that was set up with the Windows setup file, `amplifier-unified` is not
+on the PATH. Use the full program path and the data folder of that installation
+in every command below:
+
+```
+"%LOCALAPPDATA%\Amplifier\tools\amplifier-unified\Scripts\amplifier-unified.exe" --data-dir "%LOCALAPPDATA%\Amplifier\app" <command>
+```
+
+Stop and start Amplifier there with **Stop Amplifier** and **Amplifier Unified**
+in the Start menu.
+
+1. Add the Tailscale address **after** the local address. The first address in
+   the list is the main one: sign-in callbacks for connected services use it.
+
+   ```
+   amplifier-unified config set public_origins "[https://127.0.0.1:<port>, https://<pc>.<tailnet>.ts.net:<port>]"
+   ```
+
+2. Stop Amplifier.
+3. Make a certificate that includes the new address.
+
+   ```
+   amplifier-unified setup-tls force
+   ```
+
+4. Start Amplifier and open it on the PC. Windows asks one question about the
+   new certificate. Select **Yes**.
+5. Forward the Tailscale address to Unified.
+
+   ```
+   tailscale serve --bg --tcp=<port> tcp://127.0.0.1:<port>
+   ```
+
+6. Export the certificate. Move the file to the other device and trust it there
+   (see [Trust the CA on each client](#trust-the-ca-on-each-client)).
+
+   ```
+   cmd /c "amplifier-unified setup-tls export > amplifier-unified-ca.crt"
+   ```
+
+   `cmd /c` keeps the file as plain text. Windows PowerShell 5.1 saves
+   redirected output as UTF-16, and another device may not accept that file.
+
+7. On the PC, make a code.
+
+   ```
+   amplifier-unified browsers code
+   ```
+
+8. On the other device, open `https://<pc>.<tailnet>.ts.net:<port>` and type the
+   code within two minutes. The code works once.
+
+If more than one address for other devices is configured, name the one that the
+other device opens: `amplifier-unified browsers code --origin https://<address>`.
+`amplifier-unified browsers sign-out` signs out every browser, on the PC and on
+other devices, and drops every code that is not used yet.
+`tailscale serve --tcp=<port> off` turns the forward off.
+
+Measured on Windows 11 with Tailscale 1.104.5 from an ordinary account: the
+forward in step 5 needs no administrator and no firewall rule, and the other
+device receives Unified's own certificate. Not measured: these steps from start
+to end on a PC that was set up with the Windows setup file, a real phone, and a
+Windows restart with the forward in place.
+
+Limits, stated plainly:
+
+- Never use Tailscale Funnel. It puts the address on the public internet.
+- `tailscale cert` is not used. It publishes the name of the PC in a public
+  certificate log for good.
+- A LAN address without Tailscale needs two more things. The first is the LAN
+  address of the PC in `bind`, next to `127.0.0.1` (see
+  [Configure the host](#configure-the-host)). The second is a Windows Firewall
+  rule for the port. An administrator must add that rule; Unified does not add
+  it. This path is not measured on a Windows host.
+- Each code is for one address, lasts two minutes and works once. Wrong codes
+  do not lock anyone out; see the
+  [design](design/native-windows-installation.md#remote-browser-sign-in-on-a-windows-host).
+- Linux, macOS and WSL hosts do not use codes. Sign in there with the host
+  account password on the sign-in page.
+
 ## Sign out all browsers
 
 To end every browser session on every device at once, for example after a
@@ -320,8 +411,13 @@ The command saves a time in the owner's private configuration
 (`config/auth/session-epoch`). It needs no running host, no password and no
 network request: the ability to write that private folder is the authority.
 A running host applies the change within a few seconds. It then refuses every
-session from before that time, drops pending sign-in tickets, and ends open
+session from before that time, drops pending sign-in tickets and codes, and ends open
 live-update connections so that a signed-out browser cannot keep watching.
+A sign-in ticket or code that is made or used during those few seconds opens
+no session, so that one from before the sign-out cannot outlast it. Wait a few
+seconds after the command. Then open Amplifier again on the PC, or make a new
+code for another device.
+If the command says that it could not confirm the sign-out, run it again.
 Sign in again in the usual way for your platform.
 
 Limits: this signs out **all** browsers; there is no sign-out for one device.
