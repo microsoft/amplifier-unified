@@ -145,12 +145,26 @@ async def test_prepared_and_async_root_readoption_keep_the_format_guard(db):
     assert await resource_files.put_async(db, root) == resource_files.put(db, root)
     assert resource_files.detach(db, prepared.identity).indexed == source.indexed
 
+    equivalent = json.dumps(json.loads(source.indexed), indent=2)
+    db.execute('UPDATE state_resources SET value=? WHERE id=?', (equivalent, prepared.identity))
+    resource_files.put_prepared(db, prepared)
+    assert resource_files.detach(db, prepared.identity).indexed == equivalent
+
     # An existing unknown or untagged index is not overwritten by re-adoption.
     conflicting = json.dumps({'$blob': prepared.identity})
     db.execute('UPDATE state_resources SET value=? WHERE id=?', (conflicting, prepared.identity))
     with pytest.raises(ValueError, match='required format'):
         resource_files.put_prepared(db, prepared)
     assert resource_files.detach(db, prepared.identity).indexed == conflicting
+
+
+def test_generic_custom_dictionary_preparation_does_not_add_a_get_hook():
+    class Custom(dict):
+        def get(self, *args):
+            raise AssertionError('Preparing a generic artifact must not call an extra custom hook')
+    prepared = resource_files.prepare(Custom(format=records.FORMAT, custom=True))
+    assert not prepared.execution_root
+    assert json.loads(prepared.encoded) == {'format': records.FORMAT, 'custom': True}
 
 
 def test_unsupported_root_index_refuses_reads_and_collection_without_rewriting(db):

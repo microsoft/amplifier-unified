@@ -41,7 +41,7 @@ def prepare(value):
     text = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     encoded = text.encode()
     return Prepared(encoded, hashlib.sha256(encoded).hexdigest(), len(encoded),
-                    isinstance(value, dict) and value.get('format') == EXECUTION_ROOT_FORMAT)
+                    type(value) is dict and value.get('format') == EXECUTION_ROOT_FORMAT)
 
 
 def write_prepared(directory, prepared):
@@ -79,9 +79,9 @@ def _rollback_put(db, owns_transaction):
 
 def _index_prepared(db, prepared, indexed):
     db.execute('INSERT OR IGNORE INTO state_resources VALUES (?, ?)', (prepared.identity, indexed))
-    if prepared.execution_root:
+    if prepared.execution_root and root(db) is not None:
         existing = db.execute('SELECT value FROM state_resources WHERE id=?', (prepared.identity,)).fetchone()[0]
-        if existing != indexed:
+        if json.loads(existing) != {'$blob': _EXECUTION_ROOT_INDEX + prepared.identity}:
             raise ValueError('Execution root index conflicts with its required format; original preserved.')
 
 
