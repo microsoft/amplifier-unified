@@ -1,7 +1,11 @@
 name: Windows start again
-# Runs the installed launcher, keep-folder uninstall and another start.
-# Not a setup file run or a clean account. No sign-out and sign-in, chat or
-# model request. The first attempt uses the real Scheduled Task.
+# The product's own launcher on a Windows runner: entries, first start, an AI
+# account configured without a key, the public keep-folder uninstall, entries
+# again, second start. Task Scheduler, the host that the task starts and the
+# runtime preparation are real. Required: the second start succeeds on the same
+# port with the same data and without a new preparation.
+# Not a setup file run or a clean ordinary account. No certificate question,
+# browser, chat, model request, sign-out or sign-in.
 on:
   workflow_dispatch:
   pull_request:

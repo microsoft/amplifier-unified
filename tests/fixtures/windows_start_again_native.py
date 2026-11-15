@@ -1,7 +1,15 @@
 """Start the installed Windows launcher again after a keep-folder uninstall.
 
-This uses no key and sends no model request. It is not setup or clean-account
-acceptance, and does not test browser entry, chat, sign-out or sign-in.
+Real on a Windows runner: the candidate installed with uv in setup's private
+layout, the product's own entry and launcher commands in setup's order
+(entries, then start), runtime preparation from the network, Task Scheduler,
+the host that the task starts, the public uninstall, and the second start.
+
+Not shown: the setup file and its window, a clean ordinary account (the
+runner's account is elevated), the certificate question and the browser (the
+launcher runs with --no-open and a console Python, so that no message box can
+appear), a chat, a sign-out and sign-in. The AI account is a configured
+provider row without a key; no model request is sent.
 """
 from __future__ import annotations
 
@@ -13,6 +21,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -22,16 +31,24 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = "https://github.com/microsoft/amplifier-unified"
 CHECKS = (
-    "1. First start",
-    "2. Task, host, port, marker and entries",
+    "1. Windows entries, then the first start",
+    "2. Task, host, port and marker",
     "3. AI account configured without a key",
     "4. Runtime status with the account configured",
     "5. Keep-folder uninstall",
-    "6. Second start",
-    "7. Same port, data and prepared runtime",
-    "8. Windows entries again",
+    "6. Windows entries again",
+    "7. Second start",
+    "8. Same port, same data, no new preparation",
     "9. Final uninstall and folder cleanup",
 )
+
+
+def remove_tree(path):
+    """Remove this case's own folder. Git marks its object files read-only."""
+    def writable(function, target, error):
+        os.chmod(target, stat.S_IWRITE)
+        function(target)
+    shutil.rmtree("\\\\?\\" + str(path), onexc=writable)
 
 
 def load(name, path):
@@ -144,8 +161,9 @@ def cli(root, *args, timeout=120):
 
 
 def launcher(root, *args, timeout=1800):
+    # Setup's own commands and working folder, with the console Python.
     return execute([sys.executable, "-I", "-B", "-m", "amplifier_web.windows_consumer",
-                    "--root", root, *args], cwd=root, timeout=timeout)
+                    "--root", root, *args], cwd=root / "workspace", timeout=timeout)
 
 
 def healthy(result):
@@ -242,6 +260,9 @@ def run():
             assert report["audit"]["ok"]
             assert not windows_service._read()[0]["exists"], "A pre-existing task must not be changed"
             begin(1)
+            # Setup's order: the entries first, then the start.
+            entries = launcher(root, "--integrate")
+            assert entries["exitCode"] == 0 and shell.listed(root), entries
             first = launcher(root, "--no-open")
             report["firstStart"] = first
             state, status = task_facts(home), cli(root, "service", "status", "--json")
@@ -267,7 +288,7 @@ def run():
                 windows_service.uninstall(home)
                 raise AssertionError("The real task attempt failed; inspect task-attempt.json")
             assert first["json"]["background"] is True
-            passed(1, launcher=first)
+            passed(1, entries=entries, launcher=first)
 
             begin(2)
             port = windows_installation.saved_port(home)
@@ -275,9 +296,7 @@ def run():
             marker = home / "start-again-marker.txt"
             write_private(marker, b"start again: retained data\n", owned_root=root)
             digest = hashlib.sha256(marker.read_bytes()).hexdigest()
-            entries = launcher(root, "--integrate")
-            assert entries["exitCode"] == 0 and shell.listed(root), entries
-            passed(2, task=state, serviceStatus=status, port=port, markerSha256=digest, entries=entries)
+            passed(2, task=state, serviceStatus=status, port=port, markerSha256=digest)
 
             begin(3)
             settings = {"config": {"providers": [{"module": "provider-openai", "config": {
@@ -310,29 +329,38 @@ def run():
                    releaseCount=count, folderPresent=True, markerUnchanged=True, listenerAnswers=False)
 
             begin(6)
-            second = launcher(root, "--no-open")
-            report["secondStart"] = second
-            assert second["exitCode"] == 0 and second["json"]["background"] is True, second
-            passed(6, launcher=second)
-
-            begin(7)
-            state, status = task_facts(home), cli(root, "service", "status", "--json")
-            after_port, after_count = windows_installation.saved_port(home), releases(root)
-            assert state["managed"] and healthy(status), (state, status)
-            assert after_port == port and after_count == count
-            assert hashlib.sha256(marker.read_bytes()).hexdigest() == digest
-            assert installation_runtime._needs_connection(home) is False
-            assert second["json"]["runtime"]["prepared"] is True
-            passed(7, task=state, serviceStatus=status, port=after_port, releaseCount=after_count,
-                   markerUnchanged=True, needsConnection=False, runtime=second["json"]["runtime"],
-                   runtimePrepare="No new complete installation: release count unchanged")
-
-            begin(8)
+            # As setup's second run: the entries come back before the start.
             entries = launcher(root, "--integrate")
             assert entries["exitCode"] == 0 and shell.listed(root), entries
             folder = Path(json.loads((root / shell.FILE).read_text())["folder"])
             assert {child.name for child in folder.iterdir()} == set(shell.LINKS)
-            passed(8, entries=entries, shortcuts=4, listed=True)
+            passed(6, entries=entries, shortcuts=4, listed=True)
+
+            begin(7)
+            # The state in which the earlier launcher prepared again: an
+            # account is configured and no generation is active.
+            assert installation_runtime._needs_connection(home) is False
+            assert not (home / "updates/active.json").exists()
+            second = launcher(root, "--no-open")
+            report["secondStart"] = second
+            assert second["exitCode"] == 0 and second["json"]["background"] is True, second
+            passed(7, launcher=second)
+
+            begin(8)
+            state, status = task_facts(home), cli(root, "service", "status", "--json")
+            after_port, after_count = windows_installation.saved_port(home), releases(root)
+            assert state["managed"] and healthy(status), (state, status)
+            assert status["json"]["pid"] != first["json"]["health"]["pid"]  # A new host process.
+            assert after_port == port and after_count == count
+            assert hashlib.sha256(marker.read_bytes()).hexdigest() == digest
+            assert installation_runtime._needs_connection(home) is False
+            assert second["json"]["runtime"]["prepared"] is True
+            passed(8, task=state, serviceStatus=status, port=after_port, releaseCount=after_count,
+                   markerUnchanged=True, needsConnection=False, runtime=second["json"]["runtime"],
+                   firstStartSeconds=first["seconds"], secondStartSeconds=second["seconds"],
+                   runtimePrepare="Did not run. With an account configured and no active generation, "
+                                  "runtime prepare first creates a folder in app\\updates\\releases. "
+                                  "The count did not change.")
 
             begin(9)
             notices = []
@@ -375,7 +403,7 @@ def cleanup():
         save("cleanup.json", result)
         if result["exitCode"]:
             return False
-    shutil.rmtree("\\\\?\\" + str(root))
+    remove_tree(root)
     assert not root.exists()
     save("cleanup.json", {"removed": True, "root": str(root)})
     if (evidence() / "result.json").exists():

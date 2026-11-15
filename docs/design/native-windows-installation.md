@@ -844,18 +844,31 @@ are added again only when all of them are gone. A partly damaged set (a person
 deleted one shortcut) is refused and nothing is overwritten; setup then says
 that it could not add the entries, and starts the app.
 
-Not proven here, and the condition for all of the above: that
-`runtime status` reports a prepared runtime on a real installation after
-chats. Read from source and not run: the running host makes the same checks
-of the recorded runtime before each chat, which supports it and does not prove
-it. When the status is
-negative or cannot be read, the start prepares as before. The real Scheduled
-Task and the real host start also need a clean-room run. The native check on
-a runner runs setup's second-run window and its two steps with a stand-in
-program in place of the installation's Python (exact arguments, the wait, the
-exit codes, a window that closes by itself, and a window that is closed on
-request while the launcher still runs). It does not show the question before
-the window, a message, or the real launcher.
+`.github/workflows/windows-start-again.yml` runs this path on a Windows
+runner with the product's own commands in setup's order: entries, first
+start, an AI account configured without a key, the public uninstall, entries
+again, second start. Task Scheduler, the host that the task starts and the
+runtime preparation are real there. It requires that `runtime status` reports
+a prepared runtime with the account configured, and that the second start
+succeeds on the same port with the same data and without a new folder under
+`app\updates\releases`. That case does not use the setup file or a clean
+ordinary account (the runner's account is elevated). The launcher runs there
+with a console Python and `--no-open`, so the certificate question and the
+browser are not part of it. It has no chat, and no sign-out and sign-in: the
+task starts because it was registered, not because a person signed in.
+
+Not proven on a runner, and still the condition for a real PC: that
+`runtime status` reports a prepared runtime after chats. A chat installs
+further parts into the same runtime. Read from source and not run: the
+running host makes the same checks of the recorded runtime before each chat,
+which supports it and does not prove it. When the status is negative or
+cannot be read, the start prepares as before. This, the setup file's second
+run on a clean account, and a start at sign-in need a clean-room run. A
+second native check runs setup's second-run window and its two steps with a
+stand-in program in place of the installation's Python (exact arguments, the
+wait, the exit codes, a window that closes by itself, and a window that is
+closed on request while the launcher still runs). It does not show the
+question before the window, a message, or the real launcher.
 
 Not changed, each stated as a limit:
 
