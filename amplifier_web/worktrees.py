@@ -239,12 +239,28 @@ class Worktrees:
     def operation_shape(row):
         return {'id': 'worktree:' + row['id'], 'sessionId': row['sessionId'], 'source': 'worktree', 'kind': 'checkout-handoff', 'state': {'pending': 'running', 'applied': 'completed', 'reconciled': 'completed', 'rejected': 'failed', 'unknown': 'outcome_unknown'}[row['phase']], 'revision': row['revision'], 'createdAt': row['createdAt'], 'updatedAt': row.get('updatedAt', row['createdAt']), 'controlAvailable': False, 'evidence': copy.deepcopy(row)}
 
-    @staticmethod
-    def display(record):
-        return {**record, 'displayState': {
-            'applied': 'moved', 'reconciled': 'moved', 'rejected': 'not_moved',
-            'unknown': 'needs_recovery',
-        }.get(record['phase'], 'moving' if record.get('step') in {'releasing', 'released'} else 'waiting'),
+    def display(self, record):
+        state = {'applied': 'moved', 'reconciled': 'needs_recovery',
+                 'rejected': 'not_moved', 'unknown': 'needs_recovery'}.get(
+                     record['phase'], 'moving' if record.get('step') in {'releasing', 'released'} else 'waiting')
+        detail = record.get('detail', '')
+        if record['phase'] == 'reconciled' and record.get('reconciliation'):
+            # Original target and uncertain effect evidence stay intact. A
+            # confirmed source reconciliation did not reach that old target.
+            path = self.receipt_dir / (record['reconciliation'] + '.json')
+            try:
+                settled = json.loads(path.read_text())
+                if (settled.get('phase') == 'applied' and settled.get('sessionId') == record['sessionId']
+                        and settled.get('reconciles') == record['id']):
+                    if settled['target'] == record['source']:
+                        state = 'not_moved'
+                        detail = 'Recovery kept the original source folder. The earlier target move is not claimed as completed.'
+                    elif settled['target'] == record['target']:
+                        state = 'moved'
+                        detail = 'Recovery confirmed placement in the originally requested target folder.'
+            except (OSError, ValueError, KeyError):
+                pass
+        return {**record, 'displayState': state, 'detail': detail,
             'waitingFor': record.get('waitingFor', []) if record['phase'] == 'pending' else []}
 
     def receipts(self, sid):
@@ -955,6 +971,9 @@ class Worktrees:
                         detail='Execution placement was not confirmed in its saved owner. Inspect and reconcile; no input was replayed. ' + str(exc)[:1000])
                 elif isinstance(exc, asyncio.CancelledError) and record.get('step') == 'released':
                     record['detail'] = 'Host shutdown paused a retained handoff boundary. No input was replayed.'
+                elif isinstance(exc, asyncio.CancelledError) and record.get('step') in {'preflight', 'waiting', 'cancelling'}:
+                    record.update(phase='unknown', step='boundary-unconfirmed', revision=record['revision']+1,
+                        detail='Host shutdown interrupted the original waiting marker cleanup before writer release. Check the move after the original worker ends; no input was replayed.')
                 elif record.get('step') != 'boundary-unconfirmed' and (
                         record.get('step') in {'preflight', 'waiting', 'cancelling'} or
                         isinstance(exc, (HandoffNotStartedError, HandoffSuperseded))):

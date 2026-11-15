@@ -1351,6 +1351,7 @@
     "connectors",
     "test-environments",
     "assignment-adoption",
+    "worktree-move",
     "access-mode",
     "storage-cleanup-settings",
     "model-capacity-settings",

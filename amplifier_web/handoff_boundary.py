@@ -15,6 +15,11 @@ async def inspect(worker, request_id, cancel=False, *, update=False, configurati
             worker._handoff_boundary = None
         return {'cancelled': True}
     if not arm_only and worker.command_lock.locked():
+        # Enrolment acknowledges the original marker, not readiness. Update
+        # callers subsequently use observeOnly and must not see an acknowledged
+        # intent whose hook was never installed.
+        await inspect(worker, request_id, update=update, configuration=configuration,
+                      expected=expected, arm_only=True)
         return {'ready': False, 'waitingFor': ['command']}
     async with AsyncExitStack() as stack:
         if not arm_only:

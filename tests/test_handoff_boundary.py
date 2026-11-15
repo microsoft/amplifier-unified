@@ -122,6 +122,85 @@ async def test_boundary_timeout_retains_one_original_reply_and_ordered_removal(e
         await manager.retention.close()
 
 
+@pytest.mark.parametrize('ending', ['late-reply', 'disconnect', 'partial-write'])
+async def test_boundary_real_pipe_keeps_original_admission_through_deadline(ending, tmp_path):
+    import json
+    import sys
+    from amplifier_web.runtime import RuntimeManager
+    calls = tmp_path / 'received.json'
+    script = r"""
+import json,os,sys,time
+for line in sys.stdin:
+    data=json.loads(line)
+    if data['op']=='start':
+        print(json.dumps({'type':'runtime.ready','report':{}}),flush=True)
+    elif data['op']=='handoff.boundary':
+        with open(sys.argv[1],'a') as out: out.write(json.dumps(data)+'\n')
+        time.sleep(.15)
+        if sys.argv[2]=='disconnect': os._exit(0)
+        print(json.dumps({'op':'reply','id':data['id'],'result':{'ready':True,'waitingFor':[]}}),flush=True)
+    elif data['op']=='stop': break
+"""
+    manager = RuntimeManager(command=[sys.executable, '-c', script, str(calls), ending])
+    manager.boundary_reply_timeout = .01
+    manager.retention.wake = lambda: None
+    try:
+        await manager.start({'id': 'pipe-owner', 'workspace': str(tmp_path)}, AsyncMock())
+        row = manager.workers['pipe-owner']
+        write = manager._write
+        if ending == 'partial-write':
+            async def uncertain_write(owner, data):
+                await write(owner, data)
+                if data['op'] == 'handoff.boundary':
+                    raise BrokenPipeError('test lost transport confirmation after writing')
+            manager._write = uncertain_write
+        first = await manager.handoff_boundary('pipe-owner', 'same-move')
+        assert first['requestPending'] and len(row['inflight']) == len(row['pending']) == 1
+        original = next(iter(row['pending'].values()))
+        assert not original.cancelled()
+        manager.boundary_reply_timeout = 2
+        if ending == 'disconnect':
+            with pytest.raises(RuntimeError):
+                await manager.handoff_boundary('pipe-owner', 'same-move')
+        else:
+            assert (await manager.handoff_boundary('pipe-owner', 'same-move'))['ready']
+            assert not row['pending'] and not row['inflight'] and not original.cancelled()
+        received = [json.loads(line) for line in calls.read_text().splitlines()]
+        assert len(received) == 1 and received[0]['request_id'] == 'same-move'
+    finally:
+        await manager.close()
+
+
+async def test_shutdown_during_pending_boundary_keeps_uncertainty_until_absence_check(tmp_path, monkeypatch):
+    from amplifier_web.runtime import RuntimeManager
+    app, adapter, root, sid = await fixture(tmp_path, monkeypatch)
+    entered = asyncio.Event()
+    async def pending(*args, **kwargs):
+        entered.set()
+        await asyncio.Future()
+    adapter.handoff_boundary = pending
+    target = await checkout(app, sid)
+    receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid, 'id': target['id'],
+        'expectedExecutionRevision': 0}, command_id='shutdown-wait'))['result']
+    await asyncio.wait_for(entered.wait(), 5)
+    await app.worktrees.close()
+    saved = app.worktrees.read(sid, receipt['id'])
+    assert saved['phase'] == 'unknown' and saved['step'] == 'boundary-unconfirmed'
+    assert app._session(sid)['configurationBusy']
+    adapter.quiesce_for_handoff.assert_not_awaited()
+    await app.close()
+    runtime = RuntimeManager()
+    app = AppService(tmp_path / 'app', runtime, workspace=root)
+    try:
+        assert app.worktrees.read(sid, receipt['id'])['phase'] == 'unknown'
+        checked = (await app.dispatch('worktree.check', {'sessionId': sid, 'id': receipt['id']}))['result']
+        assert checked['displayState'] == 'not_moved' and checked['phase'] == 'rejected'
+        assert app._session(sid).get('workingDirectory', str(root)) == str(root)
+        assert not app._session(sid)['messages'] and not app.worktrees.jobs
+    finally:
+        await app.close()
+
+
 async def test_check_move_is_machine_observation_not_a_second_move(tmp_path, monkeypatch):
     app, runtime, root, sid = await fixture(tmp_path, monkeypatch)
     try:

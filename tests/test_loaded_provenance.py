@@ -1,6 +1,7 @@
 """Optional file provenance cannot become a worker readiness dependency."""
 import asyncio
 import json
+import os
 import sys
 import threading
 from types import ModuleType, SimpleNamespace
@@ -81,7 +82,9 @@ async def test_worker_ready_does_not_wait_for_slow_provenance_hashing(tmp_path, 
     # Exercise the production timeout path without spending six seconds in a test.
     monkeypatch.setattr(loaded_provenance, 'MAX_SECONDS', .05)
     worker = runtime_worker.Worker()
-    worker.shared_store = worker.shared_handle = SimpleNamespace()
+    worker.shared_store = worker.shared_handle = SimpleNamespace(owner={
+        'hostname': 'fixture-host', 'app': 'amplifier-unified', 'pid': os.getpid(),
+        'acquisition_id': 'fixture-acquisition'})
     worker.shared_store_stamp = lambda *args: ()
     worker.activation_gate = ActivationGate()
     worker.preparation_progress = AsyncMock()
