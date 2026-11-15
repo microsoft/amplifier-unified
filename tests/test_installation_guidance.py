@@ -16,9 +16,12 @@ class InstallationGuidanceTests(unittest.TestCase):
         self.assertIsNotNone(selected)
         python = selected.group(1)
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        guide_path = "docs/DEPLOYMENT.md"
+        self.assertIn(f"{guide_path}#manual-installation", readme)
+        guide = (ROOT / guide_path).read_text(encoding="utf-8")
         commands = [
             shlex.split(line)
-            for line in readme.splitlines()
+            for line in (readme + "\n" + guide).splitlines()
             if line.startswith("uv tool install ")
         ]
         self.assertGreaterEqual(len(commands), 4)

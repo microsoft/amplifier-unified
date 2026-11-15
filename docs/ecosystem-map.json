@@ -1,0 +1,128 @@
+{
+  "citations": [
+    {
+      "git_blob": "236c41edc9d6499c583f758813e125a33e4d5057",
+      "path": "README.md",
+      "ref": "6225ca5c0d3a50cf6c96c4674dedd2514125cdfa",
+      "sha256": "96005ecb7028fffbce9e7c5a43bef0c3b92899b970326cb017f3791c18dcfb7c",
+      "url": "https://github.com/microsoft/amplifier-unified/blob/6225ca5c0d3a50cf6c96c4674dedd2514125cdfa/README.md"
+    },
+    {
+      "git_blob": "d428226bc9264b481c1c5e3630309c74d6b10419",
+      "path": "components/README.md",
+      "ref": "6225ca5c0d3a50cf6c96c4674dedd2514125cdfa",
+      "sha256": "5992cc00619417d7ae06b00135c669a442b9253ee699cb4cb525e696d2a9f159",
+      "url": "https://github.com/microsoft/amplifier-unified/blob/6225ca5c0d3a50cf6c96c4674dedd2514125cdfa/components/README.md"
+    },
+    {
+      "git_blob": "c6047268da78c4be9fec56d2168cda8d7d03ba5f",
+      "path": "docs/architecture/README.md",
+      "ref": "6225ca5c0d3a50cf6c96c4674dedd2514125cdfa",
+      "sha256": "46afa28ad7501801d6ad5266f92098f1b75160a14ef6a57a9e46d601b1a1c78c",
+      "url": "https://github.com/microsoft/amplifier-unified/blob/6225ca5c0d3a50cf6c96c4674dedd2514125cdfa/docs/architecture/README.md"
+    },
+    {
+      "git_blob": "3b4138ff6383863c2e89e1bba5713fe62fe892a2",
+      "path": "pyproject.toml",
+      "ref": "6225ca5c0d3a50cf6c96c4674dedd2514125cdfa",
+      "sha256": "bd1ebadfdea7ae1341457bd8a280b72a436609d17cf8f0a35d515faa56f20c19",
+      "url": "https://github.com/microsoft/amplifier-unified/blob/6225ca5c0d3a50cf6c96c4674dedd2514125cdfa/pyproject.toml"
+    }
+  ],
+  "consumer_cta": {
+    "basis": "Existing approved README route; target release assets/availability not freshly audited in this plan.",
+    "label": "Install Amplifier Unified",
+    "url": "https://github.com/microsoft/amplifier-unified#install"
+  },
+  "display_name": "Amplifier Unified",
+  "edges": [
+    {
+      "from": "self",
+      "relation": "contains",
+      "to": "host"
+    },
+    {
+      "from": "self",
+      "relation": "integrates",
+      "to": "web"
+    },
+    {
+      "from": "self",
+      "relation": "uses",
+      "to": "foundation"
+    },
+    {
+      "from": "self",
+      "relation": "uses",
+      "to": "core"
+    },
+    {
+      "from": "self",
+      "relation": "uses",
+      "to": "bundles"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "self",
+      "kind": "self",
+      "label": "Amplifier Unified",
+      "repository": "microsoft/amplifier-unified"
+    },
+    {
+      "id": "host",
+      "kind": "internal",
+      "label": "Web host & conversation state"
+    },
+    {
+      "id": "web",
+      "kind": "external",
+      "label": "Amplifier Web Client",
+      "link": false,
+      "repository": "microsoft/amplifier-client-web"
+    },
+    {
+      "id": "foundation",
+      "kind": "external",
+      "label": "Amplifier Foundation",
+      "repository": "microsoft/amplifier-foundation"
+    },
+    {
+      "id": "core",
+      "kind": "external",
+      "label": "Amplifier Core",
+      "repository": "microsoft/amplifier-core"
+    },
+    {
+      "id": "bundles",
+      "kind": "external",
+      "label": "Configured bundles & tools"
+    }
+  ],
+  "notes": [
+    "Current app uses Core AmplifierSession through Foundation prepared bundles.",
+    "Do not depict amplifier-unified-host, amplifier-unified-client-web or AHP as already replacing current app architecture; the architecture packet explicitly keeps that adoption a secondary track.",
+    "amplifier-client-web is the authoring owner; Unified selects a copied delivery and ships built assets. Source merge is not automatic app delivery.",
+    "Role mapping describes responsibility, not a claim that every Constellation family contract has been qualified."
+  ],
+  "purpose": "Work with AI across conversations, tools and shared visual surfaces using your configured accounts.",
+  "ref": "6225ca5c0d3a50cf6c96c4674dedd2514125cdfa",
+  "repository": "microsoft/amplifier-unified",
+  "roles": [
+    "Experience",
+    "Conversation"
+  ],
+  "scope": "assembled application",
+  "start_cta": {
+    "basis": "Existing approved README route; target release assets/availability not freshly audited in this plan.",
+    "label": "Install Amplifier Unified",
+    "url": "https://github.com/microsoft/amplifier-unified#install"
+  },
+  "summary": "A complete AI workspace with its own web host, selected browser client, and configurable Amplifier execution.",
+  "supports_roles": [
+    "Agent Instance",
+    "Tool",
+    "Connection"
+  ],
+  "visibility": "public"
+}
