@@ -737,3 +737,132 @@ async def test_committed_ordinary_preview_inventories_but_does_not_create_admiss
     resumed = VersionedSessionBinding.resume(path.parent,
         session_id=row['sessionId'], expected=expected)
     resumed.close()
+
+
+@pytest.fixture
+async def committed_host(host, monkeypatch, request):
+    """Real writer/store candidate, with explicitly synthetic original admission."""
+    from amplifier_foundation.session import media_conversion as conversion
+    from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+    from amplifier_web.host.storage import SessionStore
+    app, row, operation, path = host
+    path.unlink()
+    path.with_name('transcript.jsonl.backup').unlink()
+    path.parent.rmdir()
+    path.parent.parent.chmod(0o700)
+    binding = VersionedSessionBinding.create_new(path.parent,
+        session_id=row['sessionId'], operation_id='initial', admit=lambda: None)
+    store = SessionStore(path.parent.parent).media(row['sessionId'])
+    try:
+        rows = [inline_message()]
+        if getattr(request, 'param', None) == 'mixed':
+            rows.append({**inline_message(), 'tool_call_id': 'unknown-original'})
+        binding.append(rows, expected=binding.expected,
+            operation_id='fixture-observation', admit=lambda: None)
+        expected = binding.expected
+        plan = conversion.preview_committed(path.parent, expected=expected,
+            owner=app.source['id'], fence=lambda _: binding.publication())
+        directory = canonical._operation_dir(path, operation)
+        directory.parent.mkdir(mode=0o700)
+        await conversion.build_candidate(plan, directory, capability=store,
+            fence=lambda _: binding.publication(), eligible_record=lambda row: row == 0,
+            origin_for=lambda row, block: {
+                'kind': 'tool', 'session_id': store.session_id, 'id': 'call-original',
+                'created_at': '2025-01-01T00:00:00+00:00',
+                'expires_at': '2035-01-01T00:00:00+00:00'},
+            asset_reader=lambda ref: store.resolve_ref(ref, committed=False))
+    finally:
+        store.close()
+        binding.close()
+    row.pop('_stamp')
+    row.update(_canonicalFormat='committed', _sessionDir=str(path.parent),
+        _action='canonical-activation', _canonicalPlan=asdict(plan),
+        _sourceId=app.source['id'], _sourceBinding=canonical._binding(app.source),
+        _sourceSha256=expected.sha256, bytes=expected.committed_bytes)
+    registry = ModuleType('amplifier_web.storage_optimize')
+    registry.owner = lambda _: SimpleNamespace(_get=lambda *_: operation)
+    monkeypatch.setitem(sys.modules, registry.__name__, registry)
+    app.invalidated = []
+    app.history = SimpleNamespace(index=SimpleNamespace(
+        _lock=threading.RLock(), _pending_invalidations=set()),
+        windows=SimpleNamespace(invalidate=lambda ids: app.invalidated.append((ids, app.leases))))
+
+    async def refresh(**_):
+        assert app.leases == 1 and not app.lock.locked()
+        return True
+
+    app.history.refresh_catalog = refresh
+    return app, row, operation, path
+
+
+@pytest.mark.asyncio
+async def test_ordinary_committed_apply_uses_actual_source_store_and_result(committed_host):
+    from amplifier_foundation.session.transcript_source import open_committed_source
+    from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+    from amplifier_web.host.storage import SessionStore
+    app, row, operation, path = committed_host
+    before = (path.parent / 'transcript.v2' / row['_canonicalPlan']['committed_prefix']['body']).read_bytes()
+    result = await canonical.apply(app, row, operation)
+    assert result['status'] == 'completed' and result['viewJoin'] == 'completed'
+    assert result['canonicalCheckpoint']['durability'] == 'versioned-checkpoint-backed-v1'
+    assert result['_accounting']['inlineRemoved'] > 0
+    assert result['_accounting']['unlinked'] == 0
+    with open_committed_source(path.parent) as source:
+        actual = source.window(0, 1).messages[0]
+        assert result['canonicalCheckpoint']['sha256'] == source.commit.sha256
+        expected = source.commit
+    media = SessionStore(path.parent.parent).media(row['sessionId'])
+    resumed = VersionedSessionBinding.resume(path.parent,
+        session_id=row['sessionId'], expected=expected)
+    try:
+        resumed.checkpoint(expected=expected, media_store=media)
+        with media.resolve_ref(actual['metadata']['experimental.media.v1']['refs'][0]) as stream:
+            assert stream.read() == pixel()
+    finally:
+        media.close()
+        resumed.close()
+    assert (path.parent / 'transcript.v2' / row['_canonicalPlan']['committed_prefix']['body']).read_bytes() == before
+    assert app.leases == 0 and app.invalidated == [({'public-root'}, 1)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('committed_host', ['mixed'], indirect=True)
+async def test_ordinary_committed_mixed_result_reports_preserved_unknown_rows(committed_host):
+    from amplifier_foundation.session.transcript_source import open_committed_source
+    app, row, operation, path = committed_host
+    result = await canonical.apply(app, row, operation)
+    assert result['status'] == 'held' and result['canonicalHeldRecords'] == 1
+    assert result['_accounting']['inlineRemoved'] > 0
+    assert result['canonicalCheckpoint']['durability'] == 'versioned-checkpoint-backed-v1'
+    with open_committed_source(path.parent) as source:
+        actual = source.window(0, 2).messages
+    assert actual[1] == {**inline_message(), 'tool_call_id': 'unknown-original'}
+    assert actual[0]['metadata']['experimental.media.v1']['refs']
+    assert app.leases == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('effect_happened', [False, True])
+async def test_ordinary_committed_resume_reconciles_original_intent(committed_host, monkeypatch, effect_happened):
+    from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+    from amplifier_foundation.session.transcript_source import open_committed_source
+    app, row, operation, path = committed_host
+    rewrite = VersionedSessionBinding.rewrite_serialized
+    calls = []
+
+    def uncertain(self, *args, **kwargs):
+        calls.append(1)
+        if effect_happened:
+            rewrite(self, *args, **kwargs)
+        raise OSError('fixture lost actual operation outcome')
+
+    monkeypatch.setattr(VersionedSessionBinding, 'rewrite_serialized', uncertain)
+    first = await canonical.apply(app, row, operation)
+    assert first['status'] == 'attempting' and app.leases == 0
+    with open_committed_source(path.parent) as source:
+        installed = source.commit
+    result = await canonical.apply(app, first, operation, resume=True)
+    assert result['status'] == ('completed' if effect_happened else 'attempting')
+    assert calls == [1] and app.leases == 0
+    with open_committed_source(path.parent) as source:
+        assert source.commit == installed

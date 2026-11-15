@@ -290,11 +290,36 @@ async def apply(app, row, operation, *, resume=False):
             raw = row['_canonicalPlan']
             plan = ConversionPlan(**{**raw, 'source': SourceIdentity(**raw['source']),
                                     'backups': tuple(SourceIdentity(**item) for item in raw['backups'])})
-            if (plan.source.path != str(path) or plan.source.sha256 != row['_sourceSha256']
-                    or plan.owner != source['id'] or plan.session_id != row['sessionId']):
+            committed = plan.committed_prefix is not None
+            selected_path = (str(path.parent / 'transcript.v2' / plan.committed_prefix['body'])
+                             if committed else str(path))
+            if (plan.source.path != selected_path or plan.source.sha256 != row['_sourceSha256']
+                    or plan.owner != source['id'] or plan.session_id != row['sessionId']
+                    or (committed and (row.get('_canonicalFormat') != 'committed'
+                        or row.get('_sessionDir') != str(path.parent)
+                        or plan.committed_session_dir != str(path.parent)))):
                 raise CanonicalHeld('Canonical preview scope changed')
             store = SessionStore(path.parent.parent).media(row['sessionId'])
             try:
+                if committed:
+                    from amplifier_foundation.session.transcript_source import open_committed_source
+                    from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+                    from amplifier_foundation.session.transcript_v2 import CommittedPrefix
+                    predecessor = CommittedPrefix(**plan.committed_prefix)
+                    # A lost reply may have advanced the actual source. Reacquire
+                    # its present enrolled cursor, but keep the reviewed original
+                    # predecessor for reconciliation of this operation only.
+                    if resume:
+                        with open_committed_source(path.parent) as current:
+                            expected = current.commit
+                    else:
+                        expected = predecessor
+                    with closing(VersionedSessionBinding.resume(path.parent,
+                            session_id=row['sessionId'], expected=expected)) as enrolled:
+                        return activate_candidate(plan, directory, media_store=store,
+                            binding=enrolled, operation_id=operation['operationId'],
+                            admit=lambda: asyncio.run_coroutine_threadsafe(admission(), loop).result(),
+                            cancelled=cancel.is_set, resume=resume)
                 return activate_candidate(plan, directory, media_store=store,
                     guard=NativeTranscriptGuard(path),
                     admit=lambda *_: asyncio.run_coroutine_threadsafe(admission(), loop).result(),
@@ -308,11 +333,19 @@ async def apply(app, row, operation, *, resume=False):
             _invalidate(app, source, row)
             invalidated = True
         joined = await _join(app)
-        return {**row, 'status': 'completed', 'reason': 'Exact canonical checkpoint verified; original recovery bytes remain',
+        committed = row['_canonicalPlan'].get('committed_prefix') is not None
+        checkpoint = ({**asdict(result.commit), 'durability': 'versioned-checkpoint-backed-v1'}
+                      if committed else {'sha256': result.sha256, 'bytes': result.bytes,
+                          'records': result.records, 'durability': 'legacy-checkpoint-backed'})
+        held_records = result.held_records if committed else 0
+        return {**row, 'status': 'held' if held_records else 'completed',
+                'reason': ('Eligible images converted; rows without original admission remain preserved'
+                           if held_records else 'Exact canonical checkpoint verified; original recovery bytes remain'),
+                'canonicalHeldRecords': held_records,
                 'viewJoin': 'completed' if joined else 'pending',
-                'canonicalCheckpoint': {'sha256': result.sha256, 'bytes': result.bytes,
-                    'records': result.records, 'durability': 'legacy-checkpoint-backed'},
-                '_accounting': {'inlineRemoved': None, 'assetsAdded': None,
+                'canonicalCheckpoint': checkpoint,
+                '_accounting': {'inlineRemoved': result.inline_removed_bytes if committed else None,
+                    'assetsAdded': None,
                     'refsAndJournalAdded': None, 'recoveryRetained': sum(
                         item['size'] for item in (row['_canonicalPlan']['source'], *row['_canonicalPlan']['backups'])),
                     'unlinked': 0, 'filesystemDelta': None}}

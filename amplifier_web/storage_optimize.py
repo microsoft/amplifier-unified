@@ -278,7 +278,10 @@ class SavedStorageOptimize:
                 prior = row['status']
                 self._file(identity, after, {**row, 'status': 'attempting'})
                 try:
-                    result = await adapter.apply(row, value, resume=phase == 'resume' or prior == 'attempting')
+                    # Global Resume can reach files never attempted before the
+                    # interruption. Only a durable per-file intent requires
+                    # reconciliation; an untouched eligible file starts once.
+                    result = await adapter.apply(row, value, resume=prior == 'attempting')
                 except asyncio.CancelledError:
                     raise
                 except Exception:

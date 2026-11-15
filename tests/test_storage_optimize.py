@@ -170,6 +170,38 @@ async def test_unconfirmed_owner_result_remains_resumable_without_replay(owner, 
     assert confirmed['cutoffs'] == value['cutoffs']
 
 
+@pytest.mark.parametrize('restart', [False, True])
+async def test_global_resume_reconciles_attempted_file_but_starts_untouched_file(owner, restart):
+    owner.adapter.count = 2
+    value = await preview(owner)
+    identity = value['operationId']
+    adapter = owner.adapter
+
+    async def apply(row, operation, *, resume=False):
+        adapter.effects.append((row['sessionId'], resume))
+        if len(adapter.effects) == 1:
+            raise OSError('fixture: first physical owner reply unknown')
+        assert resume is (row['sessionId'] == '0'), 'Untouched source has no intent to reconcile'
+        return {**row, 'status': 'completed'}
+
+    adapter.apply = apply
+    await command(owner, 'apply', {'operationId': identity,
+        'expectedRevision': value['revision'], 'confirmExpiry': False}, 'apply')
+    await asyncio.gather(*owner.tasks.values())
+    current = owner.read('user', identity)
+    assert current['status'] == 'interrupted'
+    assert [row['status'] for row in current['rows']] == ['attempting', 'eligible']
+    if restart:
+        owner = SavedStorageOptimize(owner.app, adapter=adapter)
+        current = owner.read('user', identity)
+    await command(owner, 'resume', {'operationId': identity,
+        'expectedRevision': current['revision']}, 'resume')
+    await asyncio.gather(*owner.tasks.values())
+    assert adapter.effects == [('0', False), ('0', True), ('1', False)]
+    assert owner.read('user', identity)['status'] == 'completed'
+    assert owner.read('user', identity)['cutoffs'] == value['cutoffs']
+
+
 @pytest.mark.parametrize('hours', [True, 0, -1, 1.5, '12', 2**53])
 def test_invalid_expiry_is_not_coerced(hours):
     with pytest.raises(AppError):
