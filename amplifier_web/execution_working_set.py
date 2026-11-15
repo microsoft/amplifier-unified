@@ -85,6 +85,14 @@ class WorkingExecution:
         """Full detached read, without handing historical mutation to a caller."""
         return copy.deepcopy(self._complete())
 
+    def detached(self):
+        """Freeze the current overlay while leaving its immutable history cold."""
+        value = copy.copy(self)
+        value.reference = copy.deepcopy(self.reference)
+        value.current = copy.deepcopy(self.current)
+        value.admitted = {kind: set(identities) for kind, identities in self.admitted.items()}
+        return value
+
     def expose(self):
         """Transfer to the ordinary complete mutable contract without losing aliases."""
         return self._complete()

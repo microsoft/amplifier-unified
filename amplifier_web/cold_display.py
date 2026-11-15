@@ -39,10 +39,10 @@ def detached(row):
         value = raw(row)
         value[MARKER] = copy.deepcopy(value.get(MARKER, {}))
         owner = getattr(row, '_working_execution', None)
+        result = ColdRecord(value, row.db)
         if owner is not None:
-            value['execution'] = owner.snapshot()
-            value[MARKER].pop('execution', None)
-        return ColdRecord(value, row.db)
+            result._working_execution = owner.detached()
+        return result
     return dict(row)
 
 

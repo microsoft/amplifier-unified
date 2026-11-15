@@ -49,6 +49,26 @@ def test_current_save_and_detached_history_read_do_not_admit_completed_rows(save
     assert current(session)['nodes'] == []
 
 
+def test_metadata_only_detached_owner_keeps_history_cold_and_overlay_frozen(saved, monkeypatch):
+    db, session, _ = saved
+    from amplifier_web.cold_display import detached
+    row = exact(session, 'nodes', {'id': '7'})
+    row['detail']['values'].append('at capture')
+    original = records.materialize
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Metadata-only reads must not materialize execution history')
+    monkeypatch.setattr(records, 'materialize', forbidden)
+    selected = detached(session)
+    assert selected['id'] == 'chat'
+    assert selected.get('messages') == []
+    assert not dict.__contains__(selected, 'execution')
+    row['detail']['values'].append('after capture')
+    monkeypatch.setattr(records, 'materialize', original)
+    assert selected['execution']['nodes'][7]['detail']['values'] == [7, 'at capture']
+    assert snapshot(session)['nodes'][7]['detail']['values'] == [7, 'at capture', 'after capture']
+    assert not dict.__contains__(session, 'execution')
+
+
 def test_borrowed_nested_and_cross_record_aliases_remain_live_across_saves(saved):
     db, session, _ = saved
     first = exact(session, 'nodes', {'id': '7'})
