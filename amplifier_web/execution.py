@@ -2,6 +2,7 @@
 import math
 import time
 from .token_usage import with_gross_tokens
+from .execution_working_set import current as current_execution, exact as execution_record, refresh_usage as refresh_session_usage, turns_for_inputs
 
 LIVE_PHASES={'running','working','starting','queued','pending','retrying','idle'}
 
@@ -38,7 +39,7 @@ def restore_voice_usage(session):
     # Legacy summaries need one exact-owner read; new metadata avoids it.
     if not dict.__contains__(session, 'execution') and reference.get('pendingVoice') is False:
         return False
-    tree = session.get('execution', {})
+    tree = current_execution(session)
     turns = voice_usage_turns(tree)
     changed = False
     ended = time.time()
@@ -54,7 +55,7 @@ def restore_voice_usage(session):
             turn.update(lifecycle='voice', phase='incomplete', endedAt=ended)
             changed = True
     if changed:
-        refresh_usage(tree)
+        refresh_session_usage(session)
     return changed
 
 
@@ -88,7 +89,7 @@ def bind_runtime_turn(session, payload):
             or entry.get('_generationStartedAt') != at
             or payload.get('interruptionRevision', 0) != session.get('interruptionRevision', 0)):
         return  # The canonical reducer rejected a stale, duplicate or pre-Stop start.
-    for turn in session.get('execution', {}).get('turns', []):
+    for turn in turns_for_inputs(session, {exact}):
         if (turn.get('inputId', turn['id']) == exact
                 and at >= turn.get('retriedAt', turn.get('startedAt', 0))):
             turn['runtimeOwnerId'] = owner
@@ -103,7 +104,9 @@ def interrupt_runtime_execution(session, runtime_owner):
     """
     if not runtime_owner:
         return False
-    tree = session.get('execution', {})
+    tree = current_execution(session)
+    if tree.get('currentTurnId'):
+        execution_record(session, 'turns', {'id': tree['currentTurnId']})
     independent = voice_usage_turns(tree)
     owned = [turn for turn in tree.get('turns', [])
              if turn.get('runtimeOwnerId') == runtime_owner and turn['id'] not in independent]
@@ -129,7 +132,7 @@ def interrupt_runtime_execution(session, runtime_owner):
             node.update(phase='interrupted', endedAt=ended)
             changed = True
     if changed:
-        refresh_usage(tree)
+        refresh_session_usage(session)
     if current_lost:
         session['status'] = 'interrupted'
         if not session.get('error'):
@@ -154,7 +157,7 @@ def interrupt_unfinished(session):
                  and session.get('status') not in {'working', 'starting', 'ready', 'stopping'})
             and session.get('status') != 'working'):
         return status_changed
-    tree = session.get('execution', {})
+    tree = current_execution(session)
     independent = voice_usage_turns(tree)
     live = any(turn.get('phase') in LIVE_PHASES and turn['id'] not in independent
                for turn in tree.get('turns', []))
@@ -177,11 +180,16 @@ def interrupt_unfinished(session):
 USAGE_KEYS=('inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens','totalTokens','grossInputTokens','grossTotalTokens','reasoningTokens')
 
 def ensure_turn(session,identity,label=''):
-    tree=session.setdefault('execution',{'nodes':[],'turns':[],'currentTurnId':None})
+    from .execution_working_set import working
+    owner = working(session)
+    tree = owner.current if owner is not None else session.setdefault('execution', {'nodes': [], 'turns': [], 'currentTurnId': None})
+    if identity and owner is not None:
+        execution_record(session, 'turns', {'id': identity})
     if identity and not any(t['id']==identity for t in tree['turns']):
         from .duration_hints import shape, estimate
         request_shape = shape(session, identity, label)
-        hint = estimate(tree['turns'], request_shape)
+        from .execution_working_set import recent_turns
+        hint = estimate(recent_turns(session), request_shape) if request_shape is not None else None
         started = time.time()
         tree['turns'].append({'id':identity,'inputId':identity,'label':label[:100],'startedAt':started,'phase':'running','aggregateUsage':rollup([]),
                              **({'durationShape': request_shape} if request_shape else {})})
@@ -197,10 +205,11 @@ def anchor_turns(session):
     A null anchor means before the first message. Never move a saved anchor when
     a later transcript, response, completion, or worker update arrives.
     """
+    unanchored = [turn for turn in current_execution(session).get('turns', []) if 'anchorMessageId' not in turn]
+    if not unanchored:
+        return
     messages=[m for m in session.get('messages',[]) if m.get('id')]
-    for turn in session.get('execution',{}).get('turns',[]):
-        if 'anchorMessageId' in turn:
-            continue
+    for turn in unanchored:
         exact=next((m for m in messages if m.get('role')=='user' and (
             m['id'] in {turn.get('messageId'),turn.get('userMessageId')} or
             any(m.get(key) and m[key] in {turn.get('inputId'),turn.get('id')}
@@ -213,12 +222,24 @@ def anchor_turns(session):
 
 
 def rollup(calls):
-    result={key:0 for key in USAGE_KEYS}
-    result['metricKnownCalls']={key:0 for key in USAGE_KEYS}
-    result.update(calls=len(calls),costUsd=0.0,pricedCalls=0,estimatedCalls=0,unknownCalls=0,tokenUnknownCalls=0,tokenPendingCalls=0,costPendingCalls=0)
+    return _append_rollup(None, calls)
+
+
+def _append_rollup(prefix, calls):
+    """Continue the same per-call fold, never add separately rounded totals."""
+    if prefix is None:
+        result={key:0 for key in USAGE_KEYS}
+        result['metricKnownCalls']={key:0 for key in USAGE_KEYS}
+        result.update(calls=0,costUsd=0.0,pricedCalls=0,estimatedCalls=0,unknownCalls=0,tokenUnknownCalls=0,tokenPendingCalls=0,costPendingCalls=0)
+    else:
+        import copy
+        result=copy.deepcopy(prefix)
+    result['calls']+=len(calls)
     voice_calls=[node for node in calls if any(key in (node.get('usage') or {}) for key in ('voiceSeconds','usageFinalized'))]
     if voice_calls:
-        result.update(voiceSessionCalls=len(voice_calls),voiceKnownCalls=0,voicePendingCalls=0,voiceIncompleteCalls=0)
+        if 'voiceSessionCalls' not in result:
+            result.update(voiceSessionCalls=0,voiceKnownCalls=0,voicePendingCalls=0,voiceIncompleteCalls=0)
+        result['voiceSessionCalls']+=len(voice_calls)
     for node in calls:
         usage=with_gross_tokens(node.get('usage') or {})
         for key in USAGE_KEYS:
@@ -244,7 +265,7 @@ def rollup(calls):
             result['unknownCalls']+=1
             result['costPendingCalls']+=int(pending)
     result['costType']='unavailable' if not result['pricedCalls'] else 'partial' if result['unknownCalls'] else 'estimated' if result['estimatedCalls'] else 'reported'
-    reasons=sorted({node['usage']['costUnavailableReason'] for node in calls
+    reasons=sorted(set(result.get('costUnavailableReasons', [])) | {node['usage']['costUnavailableReason'] for node in calls
         if isinstance((node.get('usage') or {}).get('costUnavailableReason'),str)})
     if reasons:result['costUnavailableReasons']=reasons
     return result
@@ -271,7 +292,7 @@ def ingest(session,event):
         safe['routing'] = public_routing(safe['routing'])
     if safe.get('kind') != 'tool':
         for key in ('input','output','error'):safe.pop(key,None)
-    node=next((n for n in tree['nodes'] if n['id']==identity),None)
+    node=execution_record(session, 'nodes', {'id': identity})
     prior_topology = tuple(node.get(key) for key in ('kind', 'parentId', 'turnId')) if node else None
     if node:
         if safe.get('revision', 0) < node.get('revision', 0): return
@@ -298,19 +319,27 @@ def ingest(session,event):
     # aggregates when neither call membership nor ownership/turn mapping changed.
     # A late parent or an unassigned turn still requires the complete rebuild.
     if node.get('kind') in {'tool', 'worker'} and tree.get('aggregateUsage') is not None:
+        from .execution_working_set import working
+        owner = working(session)
         topology = tuple(node.get(key) for key in ('kind', 'parentId', 'turnId'))
         if (prior_topology == topology and node.get('aggregateUsage') is not None
+                and (owner is None or owner.reference.get('unassignedNodes') is False)
                 and all(row.get('turnId') for row in tree['nodes'])):
             return
-        if (prior_topology is None and node.get('turnId')
+        if (owner is None and prior_topology is None and node.get('turnId')
                 and all(row.get('turnId') and row.get('parentId') != identity
                         for row in tree['nodes'])):
             node['aggregateUsage'] = rollup([])
             return
-    refresh_usage(tree)
+    refresh_session_usage(session)
 
 
 def refresh_usage(tree):
+    _reduce_usage(tree)
+
+
+def _reduce_usage(tree):
+    """Canonical full reduction; private groups may seed an ordered continuation."""
     lookup={n['id']:n for n in tree['nodes']}
     for candidate in tree['nodes']:
         if not candidate.get('turnId'):
@@ -331,6 +360,7 @@ def refresh_usage(tree):
     # A live event must not rescan every historical call for every old turn.
     for turn in tree['turns']:turn['aggregateUsage']=rollup(by_turn.get(turn['id'],[]))
     tree['aggregateUsage']=rollup(calls)
+    return calls, descendants, by_turn, lookup
 
 
 def generation_turns(session):
@@ -366,8 +396,9 @@ def generation_turns(session):
                     previous[1].get('event') == 'generation.failed' or kind == 'generation.started')):
                 continue
             outcomes[identity] = (rank, event)
+    from .execution_working_set import readonly
     turns = []
-    for turn in session.get('execution', {}).get('turns', []):
+    for turn in readonly(session).get('turns', []):
         receipt = outcomes.get(turn.get('inputId', turn.get('id')))
         event = receipt[1] if receipt else {}
         if event.get('event') == 'generation.failed':
@@ -388,10 +419,9 @@ def generation_turns(session):
 def fail_generation(session, input_ids):
     """A manager failure supersedes an earlier idle receipt for its own inputs."""
     identities = {value for value in input_ids if isinstance(value, str)}
-    for turn in session.get('execution', {}).get('turns', []):
-        if turn.get('inputId', turn.get('id')) in identities:
-            turn['phase'] = 'error'
-            turn.setdefault('endedAt', time.time())
+    for turn in turns_for_inputs(session, identities):
+        turn['phase'] = 'error'
+        turn.setdefault('endedAt', time.time())
 
 
 def finish(session,status='completed'):
@@ -399,7 +429,7 @@ def finish(session,status='completed'):
     # Legacy call-only evidence has no terminal generation correlation. Idle
     # cannot turn it into Done or leave an unconfirmed timer running forever.
     interrupt(session, unbound_only=status == 'completed')
-    tree=session.get('execution',{})
+    tree=current_execution(session)
     ended=time.time()
     independent = voice_usage_turns(tree)
     for turn in tree.get('turns',[]):
@@ -410,13 +440,13 @@ def finish(session,status='completed'):
         # lifecycle, or after the host confirms their worker process exited.
         if node.get('kind') != 'worker' and node.get('sessionId') == node.get('rootSessionId') and node.get('phase') in LIVE_PHASES and not node.get('endedAt') and node.get('lifecycle')!='background' and not voice_usage_node(node):
             node.update(phase='interrupted' if status=='completed' else status,endedAt=ended)
-    if 'nodes' in tree:refresh_usage(tree)
+    if 'nodes' in tree:refresh_session_usage(session)
 
 
 def finish_background(session,identities,status='interrupted'):
     """Settle only calls observed in the process whose exit was confirmed."""
-    tree=session.get('execution',{});targets=set(identities);changed=False;ended=time.time()
+    tree=current_execution(session);targets=set(identities);changed=False;ended=time.time()
     for node in tree.get('nodes',[]):
         if node['id'] in targets and node.get('lifecycle')=='background' and node.get('phase') in LIVE_PHASES and not node.get('endedAt'):
             node.update(phase=status,endedAt=ended);changed=True
-    if changed:refresh_usage(tree)
+    if changed:refresh_session_usage(session)

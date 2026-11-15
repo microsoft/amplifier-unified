@@ -1119,7 +1119,9 @@ class Worker:
                 publish({"type": "runtime.ready", "report": public,
                          "configurationInputs": list(self.config_inputs),
                          "configurationStamp": self.configuration_stamp(),
-                         "workerIdentity": {"pid": os.getpid(), "sessionId": self.session.session_id}})
+                         "workerIdentity": {"pid": os.getpid(), "sessionId": self.session.session_id,
+                            "owner": {key: self.shared_handle.owner[key] for key in
+                                      ('hostname', 'app', 'pid', 'acquisition_id')}}})
             outcome = "completed"
         except asyncio.CancelledError:
             outcome = "cancelled"
@@ -1169,23 +1171,32 @@ class Worker:
                 if startup_timing and report_directory is not None:
                     startup_timing.save(report_directory, outcome)
 
-    def idle(self):
-        """Candidate only: the native writer remains held until worker exit."""
+    def waiting_for(self):
+        """Canonical settlement blockers, not a saved-history or release proof."""
         if not self.session or not self.runtime or self.shared_handle is None:
-            return False
+            return ['runtime']
         loop = self.session.coordinator.get("orchestrator")
         children = self.session.coordinator.get_capability("live.children")
         kernels = getattr(self.controls, "kernels", None)
-        return bool(not self.ownership.yielding and not self.shutdown.is_set()
-            and not self.approvals and not self.bridges and not self.operation_ids
-            and not self.operation_controls and not self.runtime.queued_inputs
-            and self.runtime.inbox.empty() and not self.runtime.generation
-            and not (self.naming and self.naming.pending and not self.naming.pending.done())
-            and not (loop and (loop.pending or loop._active_jobs()))
-            and not (children and any(row.get("status") in {"starting", "running", "working", "idle"}
-                                     for row in children.rows.values()))
-            and not (kernels and kernels.records)
-            and self.computer_episodes.receipt()["settled"])
+        waiting = []
+        if self.runtime.generation: waiting.append('generation')
+        if self.bridges: waiting.append('tool-replies')
+        if self.approvals: waiting.append('approval')
+        if self.operation_ids or self.operation_controls: waiting.append('operations')
+        if self.runtime.queued_inputs or not self.runtime.inbox.empty(): waiting.append('inputs')
+        if (loop and (loop.pending or loop._active_jobs()) or
+                children and any(row.get("status") in {"starting", "running", "working", "idle"}
+                                 for row in children.rows.values())):
+            waiting.append('children')
+        if self.naming and self.naming.pending and not self.naming.pending.done(): waiting.append('naming')
+        if self.ownership.yielding or self.shutdown.is_set(): waiting.append('ownership')
+        if kernels and kernels.records: waiting.append('kernels')
+        if not self.computer_episodes.receipt()["settled"]: waiting.append('computer')
+        return waiting
+
+    def idle(self):
+        """Candidate only: the native writer remains held until worker exit."""
+        return not self.waiting_for()
 
     def configuration_stamp(self):
         """External mount inputs only; never inspect or reload native history."""

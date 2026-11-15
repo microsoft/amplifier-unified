@@ -38,29 +38,34 @@ try{
   evidence.installedServedAssets=served;
  }
  const presentation=async patch=>{
-  const revision=await page.evaluate(async patch=>{
+  const receipt=await page.evaluate(async patch=>{
    const shell=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;
    const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:shell.revision,composition:{...shell.effectiveComposition,presentation:{...shell.effectiveComposition.presentation,...patch}}});
    assertAccepted(prepared);
    const applied=await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:shell.revision,changeId:prepared.result.id});
-   assertAccepted(applied);return applied.result.revision;
+   assertAccepted(applied);
+   if(applied.result?.status!=='awaiting-storage'||!applied.result.commandId)throw Error('Expected browser preference storage receipt');
+   return {commandId:applied.result.commandId,baseRevision:prepared.result.baseRevision};
    function assertAccepted(r){if(!r.accepted)throw Error(r.error||'Presentation refused');}
   },patch);
   // An accepted mutation precedes the SSE/rendered shell. The next change
   // must use the acknowledged revision, even when the scheme stayed equal.
-  await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState()?.revision)).toBe(revision);
+  await expect.poll(()=>page.evaluate(({commandId,baseRevision})=>{
+   const shell=window.amplifier.getShellState();
+   return shell?.preferenceCommand?.id===commandId&&shell.preferenceCommand.status==='stored'&&shell.revision===baseRevision+1;
+  },receipt)).toBe(true);
   await expect.poll(()=>page.evaluate(patch=>{
    const actual=window.amplifier.getShellState()?.effectiveComposition?.presentation;
    return Object.fromEntries(Object.keys(patch).map(key=>[key,actual?.[key]]));
   },patch)).toEqual(patch);
  };
- const measure=()=>surface.evaluate(el=>{const rect=node=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height}};const input=el.querySelector('[role=textbox]'),style=getComputedStyle(el),form=el.closest('form');return {surface:rect(el),input:rect(input),options:rect(form.querySelector('.a-model-trigger')),form:rect(form),border:style.borderTopWidth,borderStyle:style.borderTopStyle,background:style.backgroundColor,overflow:el.scrollWidth>el.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth+1,buttons:[...el.querySelectorAll('button')].filter(b=>b.getClientRects().length).map(rect)};});
- const checkIdle=m=>{assert.ok(m.surface.height<=72,`Idle field is not compact: ${m.surface.height}`);assert.ok(m.surface.height>=44);assert.ok(m.options.y>=m.surface.y+m.surface.height-1,'Model control belongs below the writing field');assert.equal(m.border,'1px');assert.equal(m.borderStyle,'solid');assert.equal(m.overflow,false);assert.equal(m.pageOverflow,false);for(const box of m.buttons){assert.ok(box.width>=44&&box.height>=44,'Frequent actions retain touch hit areas');assert.ok(box.x>=m.surface.x&&box.x+box.width<=m.surface.x+m.surface.width+1);}};
+ const measure=()=>surface.evaluate(el=>{const rect=node=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height}};const input=el.querySelector('[role=textbox]'),style=getComputedStyle(el),form=el.closest('form'),help=document.getElementById(input.getAttribute('aria-describedby'));return {surface:rect(el),input:rect(input),help:help?{...rect(help),text:help.textContent,inside:el.contains(help),visible:help.checkVisibility(),position:getComputedStyle(help).position,clip:getComputedStyle(help).clip,clipPath:getComputedStyle(help).clipPath,hidden:!!help.closest('[hidden],[aria-hidden=true]')}:null,options:rect(form.querySelector('.a-model-trigger')),configuration:rect(form.querySelector('.a-compose-configuration')),form:rect(form),border:style.borderTopWidth,borderStyle:style.borderTopStyle,background:style.backgroundColor,overflow:el.scrollWidth>el.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth+1,buttons:[...el.querySelectorAll('button')].filter(b=>b.getClientRects().length).map(rect)};});
+ const checkIdle=m=>{assert.ok(m.surface.height<=72,`Idle field is not compact: ${m.surface.height}`);assert.ok(m.surface.height>=44);assert.ok(m.help?.text.trim(),'Effective Return description remains associated');assert.equal(m.help.hidden,false);assert.equal(m.help.inside,false);assert.equal(m.help.position,'absolute');assert.equal(m.help.clip,'rect(0px, 0px, 0px, 0px)');assert.equal(m.help.clipPath,'inset(50%)');assert.ok(m.help.width<=1&&m.help.height<=1,'User-requested visible hint is absent');assert.ok(Math.abs(m.configuration.y-m.surface.y-m.surface.height)<=1,'No blank hint spacer');assert.equal(m.border,'1px');assert.equal(m.borderStyle,'solid');assert.equal(m.overflow,false);assert.equal(m.pageOverflow,false);for(const box of m.buttons){assert.ok(box.width>=44&&box.height>=44,'Frequent actions retain touch hit areas');assert.ok(Math.abs(box.y+box.height/2-m.input.y-m.input.height/2)<=.5,'Editor and actions stay center aligned');assert.ok(box.x>=m.surface.x&&box.x+box.width<=m.surface.x+m.surface.width+1);}};
  for(const width of [900,520,390,320]){
   await page.setViewportSize({width,height:900});await clearComposer(input);
   for(const scheme of ['light','dark'])for(const interfaceDetail of ['minimal','standard','detailed']){
    await presentation({scheme,interfaceDetail,executionDetail:interfaceDetail});await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',scheme);await expect(surface).toBeVisible();
-   const m=await measure();checkIdle(m);evidence.geometry.push({width,scheme,interfaceDetail,...m});
+   const m=await measure();evidence.geometry.push({width,scheme,interfaceDetail,...m});checkIdle(m);
   }
   await input.fill('Ready');await expect(primary).toHaveAccessibleName('Send message');await expect(input).toHaveDraft('Ready');await clearComposer(input);
   await page.screenshot({path:`${output}/compact-empty-${width}.png`});

@@ -36,10 +36,12 @@ export function ModelCapacitySettings({act,navigate=()=>{}}){
    <button type="button" className="a-soft" onClick={()=>{setDraft({...draft,maxWaitingCalls:0,waitTimeoutSeconds:0});setNotice('Unlimited waiting selected. Save to apply to all workspaces.')}}>Use unlimited waiting</button>
   </fieldset>
   <p>Spending limits and Stop still apply. These settings do not raise an assignment’s concurrent-call limit or repeat completed work. A timed-out wait has not sent a model request.</p>
-  <button type="button" className="a-primary" disabled={busy||!report||(!pending&&(!dirty||!valid||draft.revision!==report.revision))} onClick={save}>{pending?'Check the same save':'Save model-capacity settings'}</button>
-  <button type="button" className="a-soft" disabled={busy||!!pending} onClick={load}>Reload saved settings</button>
+  <div className="a-dialog-actions a-control-actions">
+   <button type="button" className="a-primary" disabled={busy||!report||(!pending&&(!dirty||!valid||draft.revision!==report.revision))} onClick={save}>{pending?'Check the same save':'Save model-capacity settings'}</button>
+   <button type="button" className="a-soft" disabled={busy||!!pending} onClick={load}>Reload saved settings</button>
+   {dirty&&!pending&&<button type="button" className="a-link" disabled={busy} onClick={()=>setDraft({...report})}>Discard edits and use saved settings</button>}
+  </div>
   {draft&&report&&draft.revision!==report.revision&&<p role="alert">Settings changed elsewhere. Your edits are kept. Use the saved settings before editing again.</p>}
-  {dirty&&!pending&&<button type="button" className="a-link" disabled={busy} onClick={()=>setDraft({...report})}>Discard edits and use saved settings</button>}
   {pending&&<p role="status">The save is not confirmed. Check the same save to learn its outcome.</p>}
   {notice&&<p role="status">{notice}</p>}{error&&<p role="alert">{error}</p>}
  </section>;

@@ -39,7 +39,8 @@ def test_cleanup_preflight_failure_never_starts_helper(tmp_path, monkeypatch, ac
     elif boundary == 'dependencies':
         row.update(preparedDependencies={'status': 'ready'}, snapshot={}, profileId='browser-test')
         monkeypatch.setattr(owner.dependencies, 'validate_receipt', refuse)
-    result = REAL_INVOKE(config, home, row, action, {'requestId': 'cleanup-preflight'})
+    result = REAL_INVOKE(config, home, row, action, {'requestId': 'cleanup-preflight'},
+        _cleanup_gate=object(), _cleanup_permit=lambda *a: None)
     assert result['effectAdmitted'] is False and result['status'] == 'stopped'
     assert (result['phase'], result['code']) == ('preparing', 'cleanup_helper_not_started')
     assert calls == (['Popen'] if boundary == 'executable' else [])
@@ -51,12 +52,13 @@ def test_cleanup_preflight_failure_never_starts_helper(tmp_path, monkeypatch, ac
     "print('invalid-json')",
     "import os,signal; os.kill(os.getpid(),signal.SIGTERM)",
 ])
-def test_started_cleanup_helper_failure_remains_uncertain(tmp_path, monkeypatch, source):
+def test_unqualified_cleanup_never_starts_path_selected_helper(tmp_path, monkeypatch, source):
     home, row = allocated(tmp_path)
     monkeypatch.setattr(owner, '__file__', str(tmp_path / 'owner.py'))
     (tmp_path / 'test_environment_worker.py').write_text(source)
-    with pytest.raises(ValueError):
-        REAL_INVOKE({'python': sys.executable}, home, row, 'remove', {'requestId': 'started-cleanup'})
+    monkeypatch.setattr(owner.subprocess, 'Popen', lambda *a, **k: pytest.fail('unqualified helper launched'))
+    result = REAL_INVOKE({'python': sys.executable}, home, row, 'remove', {'requestId': 'unqualified-cleanup'})
+    assert result['effectAdmitted'] is False and result['code'] == 'cleanup_helper_not_started'
 
 
 @pytest.mark.parametrize('action', ['prepare', 'start', 'execute', 'stop', 'exportArtifacts', 'job_cancel'])

@@ -74,6 +74,16 @@ try{
  assert.equal(facts.installedStatic,installedStatic);
  const article=id=>page.locator(`article[data-message-id="${id}"]`);
  const caption='Sent by Amplifier from another chat';
+ // Prove the complete saved-set precondition through actual serialized state,
+ // not a fabricated caption or a larger production message window.
+ const initial=await page.evaluate(id=>{
+  const state=window.amplifier.getState(),row=state.sessions.find(row=>row.id===state.selectedSessionId);
+  return {count:row.messages.length,mode:row.messageWindow.mode,before:row.messageWindow.before,hasEarlier:row.messageWindow.hasEarlier,
+   gaps:row.messageWindow.unavailableRanges,caption:row.messages.find(row=>row.id===id)?.attribution?.caption};
+ },facts.agent);
+ assert.equal(facts.messageCount,19);
+ assert.deepEqual(initial,{count:19,mode:'cursor',before:null,hasEarlier:false,gaps:[],caption});
+ console.log('PEER_INITIAL_WINDOW '+JSON.stringify(initial));
  assert.equal(facts.peerCopies,1,'Canonical steering metadata repairs only the exact old native display copy');
  await expect(article(facts.nativePeer)).toHaveCount(0);
  await expect(article(facts.lookalike)).toHaveClass(/a-user/);
@@ -238,12 +248,30 @@ try{
  await expect(summary).toHaveAttribute('aria-expanded','false');
  const state=await page.evaluate(()=>window.amplifier.getState());
  const receiving=state.sessions.find(row=>row.id===state.selectedSessionId);
+ assert.equal((await readFacts()).messageCount,109);
+ assert.equal(receiving.messages.length,20);
+ assert.equal(receiving.messageWindow.mode,'cursor');
  assert.equal(receiving.messageWindow.hasEarlier,true);
+ assert.equal(typeof receiving.messageWindow.before,'string');
+ assert.ok(receiving.messageWindow.before.length>0);
+ assert.deepEqual(receiving.messageWindow.unavailableRanges,[]);
+ for(const id of [facts.agent,facts.notification]){
+  const row=receiving.messages.find(row=>row.id===id);assert.ok(row);
+  assert.equal(row.attribution,undefined,'A partial recent window cannot prove global input uniqueness');
+ }
  const headers={'X-Amplifier-Client':state.client.id};
- const older=await (await page.request.get(new URL(`/api/conversation/detail?sessionId=receiving&part=messages&before=${encodeURIComponent(receiving.messageWindow.before)}`,page.url()).href,{headers})).json();
+ const olderResponse=await page.request.get(new URL(`/api/conversation/detail?sessionId=receiving&part=messages&before=${encodeURIComponent(receiving.messageWindow.before)}`,page.url()).href,{headers});
+ assert.ok(olderResponse.ok());
+ const older=await olderResponse.json();
  assert.ok(Array.isArray(older.items),JSON.stringify({window:receiving.messageWindow,response:older}));
+ assert.equal(older.items.length,89,'One bounded older lookup must reach the oldest peer');
+ assert.equal(older.before,null);assert.equal(older.hasEarlier,false);
+ assert.deepEqual(older.unavailableRanges,[]);
+ assert.equal(new Set([...older.items,...receiving.messages].map(row=>row.id)).size,109);
  assert.ok(older.items.some(row=>row.id===facts.older));
  assert.equal(older.items.find(row=>row.id===facts.older).attribution,undefined,'A partial page cannot prove global input uniqueness');
+ console.log('PEER_EXTENDED_WINDOW '+JSON.stringify({savedCount:109,recentCount:receiving.messages.length,
+  olderCount:older.items.length,olderHasEarlier:older.hasEarlier,gaps:older.unavailableRanges}));
  // The focused rail is another receiving boundary, not a compact-text lookup.
  const focused=await (await page.request.get(new URL(`/api/conversation/navigation?sessionId=receiving&messageId=${encodeURIComponent(facts.agent)}&window=true`,page.url()).href,{headers})).json();
  assert.equal(focused.messages.find(row=>row.id===facts.agent).attribution?.caption,caption);

@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "source": {
+    "schema": 1,
+    "repository": "microsoft/amplifier-unified",
+    "revision": "b6c58bb24cb92c495ded1c42683dc8496c92a6ea",
+    "subdirectory": "amplifier_operations",
+    "tree": "f0cb016cf0fe83408b11d16c7475f7a39f64a917",
+    "version": "0.1.0",
+    "tag": "operations-v0.1.0",
+    "sourceFiles": {
+      ".gitignore": "4a0c796331e18ff216fbcf3e2d1c02f58c08e4a7dce2ab41d36c65509ef92989",
+      "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "MANIFEST.in": "ca4d086a2960c7e0254208f08bf99f5db67adb33599085574b1155e859c7fb0a",
+      "README.md": "d88a82555ef89dd1d4bfe40c2dbe45ef4fa639ebff17ec97c882587f183ff23f",
+      "__init__.py": "e88653a95152ffb42aec84c73b92966035c224a186c1e499342cddd4f29f5757",
+      "coordination.py": "06a33dfe3e12abda9b2f3a417077af38ec7d860eb19d350bb1fe4853174551f3",
+      "journal.py": "8e6fa1b1b2945c4ce5ab3b77ffe3ec5d8fe740e5ad0ab6a5fe8d98e3097d70ce",
+      "pyproject.toml": "ec7dcaa6cdefa1032dc48b0693ed45ceb72a7af5122c3e83eb213774f90f698a",
+      "tests/operation_observations.py": "d54ba9f511561aed6be283b7a69ad58b1f76b6e40410bc7e7a63397462749479",
+      "tests/test_operations_coordination.py": "e981e08bcadb34380dd3fb308764b03a12c06ea07139ceccca829a839edd8c8c",
+      "tests/test_operations_journal.py": "0557fbc58d4d1f0f9a510c6952f63b79b6cc9be8522f0c9b2ad06416e402a850",
+      "tests/test_operations_retention.py": "bbd8fd4e10d0d3714b8cabfddc96cfd2501f78b619c5380fe7bb36981115d630"
+    },
+    "artifacts": {
+      "amplifier_operations-0.1.0-py3-none-any.whl": {
+        "sha256": "05675519079bbfb75be9ce0bc6fcba8c4a4ba6fd06dc8105ca706aec5ac43a1a",
+        "bytes": 12749
+      },
+      "amplifier_operations-0.1.0.tar.gz": {
+        "sha256": "a6191c7aa82cf43461cec55544c1175f9c74db8f4ef8b12ba14c7947613e5b3b",
+        "bytes": 15295
+      }
+    }
+  },
+  "artifact": {
+    "url": "https://github.com/microsoft/amplifier-unified/releases/download/operations-v0.1.0/amplifier_operations-0.1.0-py3-none-any.whl",
+    "sha256": "05675519079bbfb75be9ce0bc6fcba8c4a4ba6fd06dc8105ca706aec5ac43a1a",
+    "bytes": 12749
+  },
+  "sourceReceiptSha256": "1e03ad557a4d463198857deb7f98dce9df7029b9f653b4f910239c18b8cf61a4",
+  "runtimeRequirements": [],
+  "files": {
+    "__init__.py": "e88653a95152ffb42aec84c73b92966035c224a186c1e499342cddd4f29f5757",
+    "coordination.py": "06a33dfe3e12abda9b2f3a417077af38ec7d860eb19d350bb1fe4853174551f3",
+    "journal.py": "8e6fa1b1b2945c4ce5ab3b77ffe3ec5d8fe740e5ad0ab6a5fe8d98e3097d70ce",
+    "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  }
+}

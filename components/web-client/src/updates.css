@@ -87,9 +87,12 @@
 #amp-one .a-updates .a-update-simple-options input{flex:0 0 auto}
 #amp-one .a-updates .a-update-simple-options p{margin:5px 0 0 26px}
 #amp-one .a-updates .a-dialog-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
-#amp-one .a-updates .a-dialog-actions>button,#amp-one .a-updates button[data-action="updates.rollback"]{display:inline-flex;align-items:center;justify-content:center;gap:7px;flex:0 0 auto;max-width:100%;white-space:nowrap}
+#amp-one .a-updates .a-dialog-actions>button,#amp-one .a-updates button[data-action="updates.rollback"]{display:inline-flex;align-items:center;justify-content:center;gap:7px;flex:0 1 auto;min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere}
 #amp-one .a-updates .a-dialog-actions>button svg,#amp-one .a-updates button[data-action="updates.rollback"] svg{display:block;width:16px;height:16px;flex:0 0 16px}
-#amp-one .a-updates [data-part="update-support"] .a-dialog-actions>button{background:transparent;border-color:transparent;color:var(--a-accent);padding-left:0;padding-right:0}
+/* These are soft buttons, not flush text links. Keep structural padding even
+   when an appearance paints their fill/border; paint cannot provide clearance. */
+#amp-one .a-updates [data-part="update-support"] .a-dialog-actions>button{padding:8px 12px}
+#amp-one .a-updates .a-dialog-actions>button>span{min-width:0;overflow-wrap:anywhere}
 #amp-one .a-updates [data-part="update-completed-batches"],#amp-one .a-updates [data-part="update-batch"]{overflow-wrap:anywhere}
 #amp-one .a-update-work{margin:0 0 18px}
 #amp-one .a-update-work>summary{color:var(--a-accent);cursor:pointer;padding:8px 0;min-height:40px}

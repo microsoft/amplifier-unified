@@ -1,0 +1,18 @@
+/* Managed-resource kinds are siblings inside one boundary. Rows and retained
+   observations get smaller gaps, not another inset card at every depth. */
+#amp-one .a-managed-resources>section{margin:24px 0 0;padding:20px 0 0;border:0;border-top:1px solid var(--a-line);border-radius:0;min-width:0}
+#amp-one .a-managed-resources>section>h4{margin:0 0 12px}
+#amp-one .a-managed-resources>section>ul{list-style:none;padding:0;margin:12px 0}
+#amp-one .a-managed-resources>section>ul>li{padding:16px 0;min-width:0}
+#amp-one .a-managed-resources>section>ul>li+li{border-top:1px solid var(--a-line)}
+#amp-one .a-managed-resources :is([data-managed-resource],[data-managed-operation],[data-test-environment]) p{margin:6px 0;line-height:1.5}
+#amp-one .a-environment-status{display:grid;gap:6px}
+#amp-one .a-managed-resources .a-environment-status>p{margin:0}
+#amp-one .a-environment-evidence:not(:empty){margin-top:14px}
+#amp-one .a-managed-resources [data-test-environment]>:is(details,form,section,[role=group]){margin-top:18px}
+#amp-one .a-managed-resources .a-dialog-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:14px 0}
+#amp-one .a-resource-observation{border-top:1px solid var(--a-line);margin-top:20px;padding-top:16px;min-width:0}
+#amp-one .a-resource-observation>h4{margin:0 0 16px;overflow-wrap:anywhere}
+#amp-one .a-resource-observation>label{display:grid;gap:6px;align-items:stretch}
+#amp-one .a-resource-observation .a-dialog-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-top:16px}
+@media(max-width:600px){#amp-one .a-workspace-setup:has(>.a-managed-resources){padding:14px}#amp-one .a-managed-resources>section{margin-top:20px;padding-top:16px}}

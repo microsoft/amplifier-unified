@@ -13,6 +13,9 @@ from .session_navigation import is_top_level
 def _connection_context(data_dir: Path, config: dict) -> ssl.SSLContext | None:
     if config["tls"]["method"] == "none":
         return None
+    if (config["tls"].get("cert"), config["tls"].get("key")) != (
+            "config/tls/leaf.crt", "config/tls/leaf.key"):
+        return ssl.create_default_context()
     ca = data_dir / "config" / "tls" / "ca.crt"
     if not ca.is_file():
         raise ValueError("Configured HTTPS requires the app-owned local CA.")
@@ -29,12 +32,17 @@ def _connection_origins(args, config: dict) -> list[str]:
 async def _existing_host(client: aiohttp.ClientSession, origins: list[str], data_identity: str) -> str | None:
     """Find a configured host with the app's identity, never trusting port ownership."""
     invalid_host = False
+    verification_error = None
     for base in origins:
         try:
             async with client.get(base + "/api/health", timeout=aiohttp.ClientTimeout(total=2)) as response:
                 if response.status != 200:
                     continue
                 connected = await response.json()
+        except aiohttp.ClientConnectorCertificateError as exc:
+            if verification_error is None:
+                verification_error = exc
+            continue
         except (aiohttp.ClientError, TimeoutError, ValueError):
             continue
         if connected.get("app") == "amplifier-unified" and connected.get("dataIdentity") == data_identity:
@@ -42,6 +50,8 @@ async def _existing_host(client: aiohttp.ClientSession, origins: list[str], data
         invalid_host = True
     if invalid_host:
         raise ValueError("A configured origin belongs to a different or older host. Choose its matching data directory, update it, or select another port.")
+    if verification_error is not None:
+        raise verification_error
     return None
 
 

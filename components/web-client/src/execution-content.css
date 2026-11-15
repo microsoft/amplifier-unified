@@ -139,3 +139,43 @@
  #amp-one .a-execution-content .a-execution-action-line .a-execution-label>span{white-space:normal}
  #amp-one .a-execution-content .a-execution-action-line .a-execution-label code{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;margin-top:3px;overflow-wrap:anywhere}
 }
+
+/* A turn's details belong below its summary, not beside it as peer rows.
+   Embedded turns already sit inside their group's branch: indent exactly once. */
+#amp-one .a-execution-turn{container-type:inline-size;container-name:work-detail}
+#amp-one .a-execution-content>.a-execution-turn-body{min-width:0}
+#amp-one .a-execution-content[data-embedded=false]>.a-execution-turn-body,
+#amp-one .a-execution-content>.a-work-group-body{display:block;min-width:0;margin-block:0 12px;margin-inline:10px 0;padding-block:4px 8px;padding-inline:14px 0;border-inline-start:1px solid var(--a-line)}
+#amp-one .a-execution-content>.a-work-group-body>.a-execution-turn+.a-execution-turn{margin-top:16px}
+#amp-one .a-execution-content>.a-work-group-body>.a-execution-turn{margin-bottom:0}
+#amp-one .a-execution-turn-body>.a-execution-earlier{margin-block:8px 12px;margin-inline:16px 0}
+#amp-one .a-execution-turn-body>:is(p,.a-usage-details){margin-block:8px 12px}
+#amp-one .a-execution-content .a-execution-body{padding-block-start:8px}
+#amp-one .a-execution-content .a-related-saved-records{margin-block:12px;padding-inline-start:12px;border-inline-start:1px solid var(--a-line);min-width:0}
+#amp-one .a-execution-content .a-related-saved-records>.a-caption{margin:0 0 8px}
+#amp-one .a-execution-content .a-model-payload{margin-block:16px;min-width:0}
+#amp-one .a-execution-content .a-model-payload>small{display:block;margin:6px 0}
+#amp-one .a-execution-content .a-execution-chevron-space{width:15px;flex:0 0 15px}
+#amp-one .a-execution-content .a-execution-model-facts{grid-template-columns:minmax(0,1fr) minmax(0,2fr)}
+#amp-one .a-execution-content .a-execution-model-facts>dt{overflow-wrap:anywhere}
+
+/* Work can occupy a narrow Canvas/chat pane on a wide screen. Key off its own
+   width, retain each sibling's text column, and move metadata below the label. */
+@container work-detail (max-width:600px){
+ #amp-one .a-execution-content[data-embedded=false]>.a-execution-turn-body,
+ #amp-one .a-execution-content>.a-work-group-body{margin-inline-start:4px;padding-inline-start:8px}
+ #amp-one .a-execution-turn-body>.a-execution-earlier{margin-inline-start:24px}
+ #amp-one .a-execution-content .a-execution-node>.a-execution-action-line{display:grid;grid-template-columns:15px 15px minmax(0,1fr) 16px;gap:4px 8px;padding-inline:6px;align-items:start}
+ #amp-one .a-execution-content .a-execution-node>.a-execution-action-line>.a-execution-label{grid-column:3;grid-row:1;max-width:100%;white-space:normal;overflow:visible}
+ #amp-one .a-execution-content .a-execution-node>.a-execution-action-line>.a-execution-label>span{white-space:normal;overflow:visible}
+ #amp-one .a-execution-content .a-execution-node>.a-execution-action-line>.a-execution-label code{display:inline;-webkit-line-clamp:unset;white-space:normal;overflow-wrap:anywhere}
+ #amp-one .a-execution-content .a-execution-node>.a-execution-action-line>:last-child{grid-column:4;grid-row:1}
+ #amp-one .a-execution-content .a-execution-node>.a-execution-action-line>.a-work-actor{grid-column:3/5;grid-row:2;max-width:100%;margin:0}
+ #amp-one .a-execution-content .a-execution-node>.a-execution-action-line>.a-execution-accounting{grid-column:3/5;grid-row:2;width:100%;max-width:100%;flex-wrap:wrap;margin:0;gap:4px 12px}
+ #amp-one .a-execution-content .a-execution-node>.a-execution-action-line:has(>.a-work-actor)>.a-execution-accounting{grid-row:3}
+ #amp-one .a-execution-content .a-execution-node>.a-execution-action-line .a-execution-phase{white-space:normal;margin:0}
+ #amp-one .a-execution-content .a-execution-node>.a-execution-action-line .a-execution-usage{max-width:100%;white-space:normal;text-align:start}
+ #amp-one .a-execution-content .a-execution-body{padding-inline:12px 0}
+ #amp-one .a-execution-content .a-execution-children .a-execution-body{padding-inline-start:8px}
+ #amp-one .a-execution-content .a-execution-model-facts{gap:6px 12px}
+}

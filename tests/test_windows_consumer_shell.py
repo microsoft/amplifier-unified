@@ -102,7 +102,18 @@ def uninstaller(model, monkeypatch):
     root, programs, state = model
     shell.install(root, "1.0.0")
     folder = programs / ("Amplifier Unified - " + shell.identity(root))
-    state.update(notices=[], answers=[], working=None, task="running", task_failure=None)
+    state.update(notices=[], answers=[], working=None, task="running", task_failure=None,
+                 certificate=None, windows_answer="removed")
+    from amplifier_web import windows_trust
+    monkeypatch.setattr(consumer, "_trusted_root", lambda value: state["certificate"])
+    def remove_root(der):
+        # Windows asks last: the app has stopped and every entry is gone.
+        assert der == state["certificate"] and state["task"] == "absent" and state["registry"] is None
+        state["calls"].append(("certificate",))
+        if isinstance(state["windows_answer"], Exception):
+            raise state["windows_answer"]
+        return state["windows_answer"]
+    monkeypatch.setattr(windows_trust, "remove_root", remove_root)
     monkeypatch.setattr(consumer, "installation", lambda value: (value, {}))
     monkeypatch.setattr(consumer, "environment", lambda *a: {})
     def notice(text, confirm=False):
@@ -278,6 +289,61 @@ def test_receipt_write_does_not_wait_for_a_failure_that_waiting_cannot_cure(mode
     assert isinstance(shell.remove(root)["receiptError"], ValueError) and not waits
 
 
+@pytest.mark.parametrize("answer,kept", [
+    ("removed", False), ("absent", False), ("declined", True), ("blocked", True), (OSError("store"), True)])
+def test_uninstall_asks_windows_once_to_delete_its_certificate_and_every_answer_finishes(
+        uninstaller, monkeypatch, answer, kept):
+    from amplifier_web.windows_trust import ROOT_NAME
+    state, consumer = uninstaller.state, uninstaller.consumer
+    state["certificate"], state["windows_answer"] = b"this installation's root", answer
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    result = uninstaller.run()
+    assert result["ok"] and result["certificate"] == ("blocked" if isinstance(answer, Exception) else answer)
+    # One attempt, after the stop, the task and every entry.
+    assert state["calls"].count(("certificate",)) == 1 and state["calls"][-1] == ("certificate",)
+    (question, _), (confirmation, _) = state["notices"]
+    assert f'delete the certificate "{ROOT_NAME}"' in question and "Select Yes there to remove it" in question
+    assert "Amplifier is uninstalled" in confirmation
+    # A certificate that stays is said plainly, and it is not an error.
+    assert (f'Windows kept the certificate "{ROOT_NAME}"' in confirmation) is kept
+    assert "could not" not in confirmation and "Reference:" not in confirmation
+
+
+def test_installation_without_a_trusted_certificate_gets_no_certificate_text_or_question(uninstaller, monkeypatch):
+    state, consumer = uninstaller.state, uninstaller.consumer
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    assert uninstaller.run()["certificate"] == "none"
+    assert ("certificate",) not in state["calls"]
+    assert not any("certificate" in text for text, _ in state["notices"])
+
+
+@pytest.mark.parametrize("failure", ["stop", "task-remove", "commit"])
+def test_unfinished_uninstall_keeps_the_certificate_that_the_app_still_needs(uninstaller, failure):
+    state, consumer = uninstaller.state, uninstaller.consumer
+    state["certificate"] = b"this installation's root"
+    state["commit_conflict"], state["task_failure"] = failure == "commit", None if failure == "commit" else failure
+    with pytest.raises(consumer.Unfinished):
+        uninstaller.run()
+    assert ("certificate",) not in state["calls"]
+
+
+def test_only_a_keyless_identity_that_windows_trusts_counts_as_this_installations_certificate(tmp_path, monkeypatch):
+    from amplifier_web import windows_consumer as consumer, windows_tls, windows_trust
+    state = {"identity": (b"root", b"leaf"), "trusted": True}
+    monkeypatch.setattr(windows_tls, "keyless_identity", lambda home: state["identity"])
+    def contains(der):
+        assert der == b"root"
+        if isinstance(state["trusted"], Exception):
+            raise state["trusted"]
+        return state["trusted"]
+    monkeypatch.setattr(windows_trust, "contains", contains)
+    assert consumer._trusted_root(tmp_path) == b"root"
+    for change in ({"trusted": False}, {"trusted": OSError("store unavailable")}, {"identity": None}):
+        state.update({"identity": (b"root", b"leaf"), "trusted": True, **change})
+        assert consumer._trusted_root(tmp_path) is None  # Never asked, never removed.
+    assert consumer._forget_root(None) == "none"
+
+
 def saved_record(root):
     from amplifier_web import windows_consumer as consumer
     return root / "app/config/services" / consumer.RECORD
@@ -287,7 +353,7 @@ def test_public_uninstall_stops_the_app_before_it_removes_any_entry(uninstaller)
     state = uninstaller.state
     result = uninstaller.run()
     assert result == {"ok": True, "operation": "uninstall", "userDataRetained": True,
-                      "installationFilesRetained": True}
+                      "installationFilesRetained": True, "certificate": "none"}
     assert state["calls"][:3] == [("stop",), ("task-remove",), ("registry-remove",)]
     assert {call[1] for call in state["calls"][3:]} == set(shell.LINKS) and len(state["calls"]) == 7
     assert state["task"] == "absent" and state["registry"] is None and not uninstaller.folder.exists()
@@ -645,6 +711,9 @@ def test_native_uninstall_order_failure_and_second_uninstall(monkeypatch):
         failure.clear()
         result = asyncio.run(consumer.maintenance(root, "uninstall"))
         assert result["ok"] and events == ["task"] and not held
+        # This throwaway folder has no certificate: the real read finds none and
+        # Windows is never asked. No trust store is changed by this test.
+        assert result["certificate"] == "none"
         assert shell.registry(root) is None and not folder.exists()
         with windows_files.directory(root, owned_root=root) as owned:
             assert json.loads(owned.read_private(shell.FILE, limit=65536))["status"] == "removed"

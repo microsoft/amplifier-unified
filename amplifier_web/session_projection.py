@@ -311,6 +311,12 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
         from .cold_display import saved as saved_cold, MARKER
         value = {key: item for key, item in saved_cold(session).items()
                  if key not in {'historyActivity', 'questions', 'workProjection'}}
+        from .execution_working_set import PendingExecution
+        owner = getattr(session, '_working_execution', None)
+        if owner is not None and 'execution' not in value and db is not None and pending_execution is not None:
+            reference = owner.stage()
+            value[MARKER] = {**value.get(MARKER, {}), 'execution': reference}
+            pending_execution[session['id']] = PendingExecution(owner, reference)
         if 'execution' in value:
             raw_tree = value['execution']
             if execution_preparation is not None and db is not None and pending_execution is not None:

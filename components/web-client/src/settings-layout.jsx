@@ -44,7 +44,7 @@ export function useSettingsViewport(root,compact){
 }
 
 export function useSettingsHistory({compact,trail,view,act,close,body,navigationRef,confirmClose=()=>Promise.resolve(true),hasUnsaved=()=>false}){
- const latest=useRef(null),session=useRef(null),scrolls=useRef(new Map()),lastKey=useRef(null),scrollRestore=useRef(false);
+ const latest=useRef(null),session=useRef(null),scrolls=useRef(new Map()),lastKey=useRef(null),scrollRestore=useRef(false),pendingRestore=useRef(null);
  const [confirming,setConfirming]=useState(false),closePending=useRef(false);
  latest.current={trail,view,act,close,confirmClose};
  const route=trail.at(-1),key=route.key,visit=useRef(view.settingsRootVisit);
@@ -52,9 +52,22 @@ export function useSettingsHistory({compact,trail,view,act,close,body,navigation
  useEffect(()=>{
   const reset=visit.current!==view.settingsRootVisit;visit.current=view.settingsRootVisit;
   lastKey.current=key;scrollRestore.current=true;
-  const frame=requestAnimationFrame(()=>{if(body.current)body.current.scrollTop=reset?0:scrolls.current.get(key)||0;scrollRestore.current=false;});
-  return()=>cancelAnimationFrame(frame);
+  const restore={key,reviewTarget:null};pendingRestore.current=restore;
+  const frame=requestAnimationFrame(()=>{
+   const target=restore.reviewTarget;
+   // Explicit Review already scrolled its chosen editor into view. Only this
+   // pending navigation restore yields, while that exact target still has focus.
+   const review=target?.isConnected&&target.ownerDocument.activeElement===target;
+   if(body.current){
+    if(review)scrolls.current.set(key,body.current.scrollTop);
+    else body.current.scrollTop=reset?0:scrolls.current.get(key)||0;
+   }
+   if(pendingRestore.current===restore)pendingRestore.current=null;
+   scrollRestore.current=false;
+  });
+  return()=>{cancelAnimationFrame(frame);if(pendingRestore.current===restore)pendingRestore.current=null};
  },[key,view.settingsRootVisit]);
+ const preserveReviewScroll=target=>{if(pendingRestore.current?.key===key)pendingRestore.current.reviewTarget=target};
  const rememberScroll=()=>{if(body.current&&!scrollRestore.current)scrolls.current.set(lastKey.current,body.current.scrollTop);};
  useLayoutEffect(()=>{
   if(!compact||typeof window==='undefined')return;
@@ -125,5 +138,5 @@ export function useSettingsHistory({compact,trail,view,act,close,body,navigation
   closePending.current=false;setConfirming(false);
  };
  useEffect(()=>{if(navigationRef)navigationRef.current={close:dismiss,confirmClose,hasUnsaved};return()=>{if(navigationRef)navigationRef.current=null;};});
- return {back,dismiss,rememberScroll};
+ return {back,dismiss,rememberScroll,preserveReviewScroll};
 }

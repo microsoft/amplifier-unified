@@ -70,7 +70,7 @@ def unreadable_managed_executor(path):
         return True
 
 
-def local_executor_quiescent(directory, identities=(), *, proc=Path('/proc')):
+def local_executor_quiescent(directory, identities=(), *, proc=Path('/proc'), waiting_executor=None):
     """Inspect same-account processes while the environment lock is held.
 
     Managed local helpers run with this exact cwd; their synchronous Docker
@@ -96,6 +96,12 @@ def local_executor_quiescent(directory, identities=(), *, proc=Path('/proc')):
                     if state[0] == 'Z':
                         continue
                     identity = (path.name, state[19])  # PID reuse is a new executor.
+                    if identity == waiting_executor:
+                        # Internal same-process gate only; never request input.
+                        # Re-read start identity before excluding the live waiter.
+                        if (path / 'stat').read_text().rsplit(')', 1)[1].split()[19] != identity[1]:
+                            return False
+                        continue
                     try:
                         cwd = os.readlink(path / 'cwd')
                     except PermissionError:
@@ -126,7 +132,7 @@ def local_executor_quiescent(directory, identities=(), *, proc=Path('/proc')):
     return False
 
 
-def qualify(app, row, original, config, args):
+def qualify(app, row, original, config, args, *, waiting_executor=None):
     """Current host observations qualify a NEW action, not the old outcome."""
     from . import task_environments as host
     proof = binding(row, original)
@@ -140,7 +146,7 @@ def qualify(app, row, original, config, args):
         return None
     directory = host.storage.directory(app.data_dir, row)
     identities = (row['universeId'], row['launchOperationId'])
-    if not local_executor_quiescent(directory, identities):
+    if not local_executor_quiescent(directory, identities, **({'waiting_executor': waiting_executor} if waiting_executor else {})):
         raise ValueError('The previous local cleanup process may still be active. Keep its original receipt and inspect again after it finishes.')
     result = host.invoke(config, app.data_dir, row, 'reconcile', {**args, 'effectAction': KIND})
     if (result.get('ok') is not True or not host.recovery.verify(row, result)
@@ -152,6 +158,6 @@ def qualify(app, row, original, config, args):
             or any(not isinstance(value, str) or not re.fullmatch(r'[a-f0-9]{12,64}', value) for value in containers)):
         raise ValueError('The fresh cleanup container identities are unavailable. No removal was started.')
     identities += tuple(containers)
-    if not local_executor_quiescent(directory, identities):
+    if not local_executor_quiescent(directory, identities, **({'waiting_executor': waiting_executor} if waiting_executor else {})):
         raise ValueError('The local cleanup executor changed during inspection. No removal was started.')
     return proof

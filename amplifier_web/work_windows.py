@@ -339,7 +339,13 @@ class WorkWindows:
         # authoritative ColdRecord or accept arbitrary event rows as placement.
         from .cold_display import raw
         saved_reference = deepcopy(raw(owner).get('_coldFields', {}).get('execution'))
-        if saved_reference and 'execution' not in raw(owner):
+        if saved_reference and 'execution' not in raw(owner) and saved_reference.get('executionProjection') == 2:
+            # Host placement has its own bounded ordered reader. A native page
+            # does not import that entire ledger into its disposable payload.
+            from .execution_windows import selection
+            selection(owner)
+            page = {**page, 'savedExecutionReference': saved_reference, 'savedExecutionFence': fence}
+        elif saved_reference and 'execution' not in raw(owner):
             _attempt['stage'] = 'cold_resource'
             from .resource_files import detach, read_detached
             from .session_projection import stored_execution
@@ -435,6 +441,10 @@ class WorkWindows:
     def resident_tree(self, session, *, touch=False):
         """Current resident metadata or the requested, still-owned saved view."""
         from .cold_display import raw
+        from .execution_windows import selection
+        indexed = selection(session)
+        if indexed is not None:
+            return indexed.tree()
         resident = raw(session)
         if 'execution' in resident:
             return resident['execution']
@@ -448,11 +458,23 @@ class WorkWindows:
             return page.get('savedExecution', {})
         return {}
 
-    def live_view(self, session, *, include_nodes=True):
+    def admitted_node(self, session, entry, identity, *, indexed=None):
+        """Reconcile one admitted ID/ordinal, independent of current residency."""
+        from .execution_windows import selection
+        indexed = indexed if indexed is not None else selection(session)
+        if indexed is not None and 'ordinals' in entry:
+            selected = indexed.exact(entry.get('recordIds', {}).get(identity, identity))
+            return (selected['value'] if selected is not None
+                    and selected['ordinal'] == entry['ordinals'].get(identity) else None)
+        position = entry['positions'].get(identity)
+        nodes = self.resident_tree(session).get('nodes', [])
+        return nodes[position] if type(position) is int and 0 <= position < len(nodes) else None
+
+    def live_view(self, session, *, include_nodes=True, tree=None):
         """Bounded current host evidence; never scan historical native nodes."""
         from .cold_display import raw
         resident = raw(session)
-        tree = self.resident_tree(session)
+        tree = self.resident_tree(session) if tree is None else tree
         source = {key: value for key, value in resident.items() if not key.startswith('_cold')}
         source.update(messages=resident.get('messages', [])[-100:],
             generations=resident.get('generations', [])[-20:])

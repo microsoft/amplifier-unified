@@ -81,12 +81,13 @@ export function WorkspaceReview({dispatch,sessionId,workspace,requests=[],onOpen
     <p className="a-caption">These are past observations. Current files, external PR status and test results were not rechecked.</p>
     <button type="button" className="a-link" onClick={()=>onShowSection?.('integration')}>Review source checks</button>
    </section>
-   <details><summary>App update and worker details</summary>
+   <details className="a-workspace-review-disclosure"><summary>App update and worker details</summary><div className="a-workspace-review-body">
     <p>Serving app: {value.installedApp.serverVersion}. Its version does not establish which code existing workers loaded.</p>
     <p>Worker adoption has not been verified. Inspecting observes an already running worker; it does not start or refresh one.</p>
     <button type="button" className="a-link" data-action="runtime.provenance" disabled={inspecting} onClick={inspectWorker}>{inspecting?'Inspecting loaded sources…':'Inspect this chat’s loaded sources'}</button>
-    {worker&&<><p role="status">Loaded-source observation: {worker.status} · {time(worker.reviewedAt)}{worker.reason?' · '+worker.reason:''}</p><p>Current file hashes do not prove the exact bytes imported earlier. This observation is not an automatic release-adoption check.</p><details><summary>Exact worker observation</summary><pre className="a-state-view">{JSON.stringify(worker,null,2)}</pre></details></>}
-    <details><summary>Serving frontend identity</summary><code>{value.installedApp.frontend.id}</code><p>{value.installedApp.frontend.version}</p></details>
+    {worker&&<><p role="status">Loaded-source observation: {worker.status} · {time(worker.reviewedAt)}{worker.reason?' · '+worker.reason:''}</p><p>Current file hashes do not prove the exact bytes imported earlier. This observation is not an automatic release-adoption check.</p><details className="a-workspace-review-disclosure"><summary>Exact worker observation</summary><div className="a-workspace-review-body"><pre className="a-state-view">{JSON.stringify(worker,null,2)}</pre></div></details></>}
+    <details className="a-workspace-review-disclosure"><summary>Serving frontend identity</summary><div className="a-workspace-review-body"><code>{value.installedApp.frontend.id}</code><p>{value.installedApp.frontend.version}</p></div></details>
+   </div>
    </details>
   </>}
  </section>;

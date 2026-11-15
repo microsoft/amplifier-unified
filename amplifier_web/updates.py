@@ -1177,13 +1177,9 @@ class UpdateManager:
                 for name in ('config','routing'):
                     if (self.home/name).exists(): await candidate_copy(proof,shutil.copytree,self.home/name,stage/name)
                 from .session_files import amplifier_home
-                shared_home=amplifier_home()
+                from .update_storage import snapshot_shared_config
                 shared_stage=stage/'shared-config'
-                shared_stage.mkdir(mode=0o700)
-                for name in ('settings.yaml','keys.env','routing'):
-                    original=shared_home/name
-                    if original.is_dir():await candidate_copy(proof,shutil.copytree,original,shared_stage/name)
-                    elif original.is_file():await candidate_copy(proof,shutil.copy2,original,shared_stage/name)
+                await snapshot_shared_config(proof,amplifier_home(),shared_stage)
                 # Beyond plain snapshots, preparation can invoke shared source
                 # stores, installers and native hooks. Do not infer their effects
                 # or settlement from a CancelledError.

@@ -404,6 +404,23 @@ async def waiting(tmp_path, monkeypatch, request):
         await harness.close()
 
 
+async def test_busy_command_enrollment_installs_original_marker_before_observe_only(waiting):
+    h = waiting
+    worker = h.runtime.native[h.sid]
+    async with worker.command_lock:
+        response = await asyncio.wait_for(h.wait(), 2)
+        assert response['accepted'] and h.row['waitingFor'] == ['command']
+        marker = worker._handoff_boundary
+        assert marker['id'] == h.row['boundaryId']
+        await drain.observe_waiters(h.manager)
+        assert h.row.get('unknown') is not True and worker._handoff_boundary is marker
+    await h.yield_turn()
+    assert await drain.prepare(h.manager, h.release)
+    assert h.row['ready'] and worker._handoff_boundary is marker
+    assert h.row['yieldedGoal']['turns_used'] == 3
+    assert not h.runtime.admitted
+
+
 async def test_owner_wait_yields_restores_and_continues_exactly_once_without_resuming_paused_predecessor(waiting):
     h = waiting
     paused = await h.new_task('Previously paused objective', paused=True)

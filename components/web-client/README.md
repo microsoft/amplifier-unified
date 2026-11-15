@@ -170,6 +170,20 @@ embedded in this record.
 
 ## Shared interaction surface
 
+In the chat composer, Automatic Return behavior keeps writing on mobile, tablets,
+touch-capable and ambiguous clients. Clearly desktop-only clients retain Enter
+to send and Shift/Ctrl+Enter to continue writing. Code, fences and structured
+Markdown retain their editing commands, including Alt+Enter to exit code.
+Bare browser paragraph/line-break editing events never send. The explicit Send
+button uses the same guarded message/outbox path on every device.
+
+Settings → Appearance → Writing offers **Return key: Automatic / Always insert a
+new line**, immediately applied and saved only in this browser, independently of
+host and appearance profiles. Composer help describes the effective behavior.
+Automatic is a conservative platform default, not reliable detection of every
+physical or on-screen keyboard; choose Always insert a new line if desktop
+on-screen or assistive input must never send through Enter keydown.
+
 App actions use `POST /api/actions`; `window.amplifier.getActions()` and
 `window.amplifier.dispatch(name, args)` expose the same action surface. The
 [live-session contract](https://github.com/microsoft/amplifier-unified/blob/816c7a67dbafc20bfb28723dd317c71d3bd2bb28/docs/clients/live-sessions.md) owns attachment,

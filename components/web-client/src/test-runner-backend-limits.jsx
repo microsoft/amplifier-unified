@@ -34,15 +34,17 @@ export function TestRunnerBackendLimits({act,navigate,id,name}){
    if(!confirmed)setError(e.message+' Your edits are kept; refresh to review the current limits.');
   }finally{pending.current=false;setBusy(false)}
  }
- return <section aria-label={(name||'Testing machine')+' environment limits'}>
+ return <section className="a-testing-section" aria-label={(name||'Testing machine')+' environment limits'}>
   <h5>Test environment limits</h5><p>These limits control how many environments this testing machine can accept. CPU and memory budgets are set separately.</p>
   {error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
   {data&&<><p className="a-caption">{data.scope}</p><p>{data.behavior}</p>
    <details><summary>Advanced environment limits</summary><p>Leave a field empty to use this connection’s configured default. Set 0 to disable that limit. Lowering limits does not stop running checks.</p>
     <fieldset disabled={busy}><legend>Limits on {name||'this machine'}</legend>{fields.map(([key,label])=><label className="a-field" key={key}>{label}<input aria-label={(name||'Testing machine')+': '+label} type="number" min="0" step={key==='minFreeBytes'?'any':'1'} value={draft[key]} placeholder={String(key==='minFreeBytes'?data.defaults[key]/GiB:data.defaults[key])} onChange={e=>setDraft(value=>({...value,[key]:e.target.value}))}/><small>Effective: {data.effective[key]===0?'No limit':key==='minFreeBytes'?data.effective[key]/GiB+' GiB':data.effective[key]}</small></label>)}</fieldset>
    </details>
-   <button className="a-primary" type="button" disabled={busy||!dirty} onClick={save}>Save environment limits</button>
   </>}
+  <div className="a-dialog-actions">
+  {data&&<button className="a-primary" type="button" disabled={busy||!dirty} onClick={save}>Save environment limits</button>}
   <button className="a-soft" type="button" disabled={busy} onClick={refresh}>{data?'Discard environment edits and refresh':'Reload environment limits'}</button>
+  </div>
  </section>;
 }

@@ -285,7 +285,7 @@ class Assignments:
         calls, missing = [], []
         for sid in value['members']:
             try:
-                session = self.service._session(sid)
+                session = self.service._session(sid, hydrate=False)
             except Exception:
                 if value['members'][sid]['status'] not in {'not_created', 'reserved'}:
                     missing.append(sid)

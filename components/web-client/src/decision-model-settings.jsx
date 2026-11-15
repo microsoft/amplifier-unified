@@ -58,7 +58,7 @@ export function DecisionModelSettings({state,act,navigate,onConnect,labels}){
   <UIUseSetup state={state} act={act} kind="decisions" onConnect={onConnect} connectionDisabled={busy||!!draft}/>
   {(!data||loadingChoices||choicesError)&&<p role={choicesError?'alert':'status'}>{choicesError?`Could not load decision model choices. ${choicesError}`:loadingChoices?'Updating decision model choices…':'Loading decision model choices…'} <button type="button" className="a-link" disabled={loadingChoices} onClick={refreshChoices}>Refresh choices</button></p>}
   {data&&<>
-   {!catalog.length&&!loadingChoices&&!choicesError&&<div data-part="decision-connect"><p>Connect a provider to choose a decision model. Installing support does not connect an account.</p>{onConnect&&(data.services?.length?data.services.map(service=><button key={service.module} type="button" className="a-soft" disabled={busy||!!draft} onClick={()=>onConnect(service.module)}>Connect {service.name}</button>):<button type="button" className="a-link" disabled={busy||!!draft} onClick={()=>onConnect()}>Add an AI connection</button>)}</div>}
+   {!catalog.length&&!loadingChoices&&!choicesError&&<div data-part="decision-connect"><p>Connect a provider to choose a decision model. Installing support does not connect an account.</p><div className="a-control-actions">{onConnect&&(data.services?.length?data.services.map(service=><button key={service.module} type="button" className="a-soft" disabled={busy||!!draft} onClick={()=>onConnect(service.module)}>Connect {service.name}</button>):<button type="button" className="a-link" disabled={busy||!!draft} onClick={()=>onConnect()}>Add an AI connection</button>)}</div></div>}
    <dl data-part="decision-current" aria-label="Saved choices for new chats"><dt>Browser use</dt><dd>{summary(browser)}</dd><dt>Computer use</dt><dd>{summary(computer)}</dd></dl>
    <label htmlFor={id('decision-purpose')}>Use for</label><select id={id('decision-purpose')} value={purpose} disabled={busy||!!draft} onChange={e=>{const next=e.target.value;setPurpose(next);if(next==='both'&&!same)setDraft({...value,allowExternalState:false});setNotice('');setError('')}}><option value="both">Browser and computer</option><option value="browser">Browser only</option><option value="computer">Computer only</option></select>
    <p className="a-caption">Both can use decision models. Save the same choice for both, or configure each separately.{purpose==='both'&&!same?' Saving will replace both existing selections.':''}</p>
@@ -72,8 +72,10 @@ export function DecisionModelSettings({state,act,navigate,onConnect,labels}){
     <label><input type="checkbox" checked={value.allowExternalState===true} disabled={busy} onChange={e=>edit({allowExternalState:e.target.checked})}/>Allow observations from {purpose==='both'?'browser and computer':purpose==='browser'?'the browser':'the computer'} to be sent to this decision service</label>
    </>}
    <ConfigurationScopeSelect id={id('decision-scope')} value={scope} disabled={busy} onChange={scope=>edit({scope})}/>
-   <button type="button" className="a-primary" disabled={busy||!draft||(value.mode==='decision'&&(!definition||!value.backend?.model?.trim()||!value.allowExternalState))} onClick={save}>{busy?'Saving…':'Save selection'}</button>
-   {draft&&!busy&&<button type="button" className="a-link" onClick={()=>setDraft(null)}>Discard changes</button>}
+   <div className="a-dialog-actions a-control-actions">
+    <button type="button" className="a-primary" disabled={busy||!draft||(value.mode==='decision'&&(!definition||!value.backend?.model?.trim()||!value.allowExternalState))} onClick={save}>{busy?'Saving…':'Save selection'}</button>
+    {draft&&!busy&&<button type="button" className="a-link" onClick={()=>setDraft(null)}>Discard changes</button>}
+   </div>
   </>}
   {error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
  </div>

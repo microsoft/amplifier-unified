@@ -23,6 +23,15 @@ plus per-job checks preserves the same recovery result. Trace reads, copies,
 serialization, hashing and comparisons before filtering the final result. A small
 response, unchanged file or quiet UI does not prove that its construction was cheap.
 
+Slow `state.serialize` timings include their full/explicit scope and the number
+of already admitted owners. Fixed scalar counts describe resident messages,
+execution nodes, retired receipts and workers at entry, with separate resident,
+cold and unavailable owner coverage for each count. An absent or custom container
+is unavailable, not an empty history. These facts use raw built-in container
+lengths without loading cold fields or inspecting bodies. They share the existing
+60-entry slow-operation limit and do not identify callers, effects or historical
+completeness. Timings remain inclusive; saves can also occur inside publication.
+
 Resource collection needs an initial live-root mark and a fresh read at pruning.
 Reuse that final capture while retaining its uninterrupted owner lock; scanning
 the same mutable graph again before any yield adds cost without new evidence.
@@ -52,6 +61,14 @@ only the rows it changes. Keep ownership through the call, and verify that later
 in-place nested edits are persisted and the earlier disk checkpoint stays intact.
 Borrowed return values are not detached snapshots or reusable cache entries.
 
+Context preservation hashes the same canonical JSON array one row at a time,
+keeping temporary encodings proportional to a row rather than the full history.
+The complete source is still inspected on every call. Evidence references retain
+their exact size threshold and fresh post-checkpoint content hashes; values
+computed before a checkpoint await cannot attest to mutable rows afterward.
+Keep persistence, restoration, cancellation and failed-save behavior unchanged.
+Compare this encoding cost separately from native writes and model latency.
+
 Startup and automatic root checkpoint hooks discard their transcript result. A
 context may offer `context.history.visit` to lend its current rows to the existing
 synchronous writer and anchor calculation. That borrow ends before notification
@@ -71,6 +88,22 @@ and cancellation cleanup; a manual index refresh is not production qualification
 
 ## Separate current presentation from historical evidence
 
+The native status adapter prepares its live scalar rows once per synchronous
+poll, sharing the existing directory read frame across its observation reads.
+Each leased query retains its own durable/native fences, and the next poll must
+observe in-place edits even without a publication or revision bump. Compare small
+and paginated catalogs, cold and warm polls, and exact public facts; this reduces
+status polling cost, not the model's response time or all chat-loading work.
+
+The first web chat view contains at most 20 recent messages. Explicit earlier
+history reads keep their existing cursor and up-to-100-message page; canonical
+history and execution input are unchanged. Measure both server delivery and
+browser paint with long formatted messages: a bounded 100-row response can
+still construct tens of thousands of DOM elements before a chat is usable.
+Pair the initial render budget with complete older-page reachability, exact saved
+IDs/attachments, native display-only meaning, and unchanged authority/Stop state.
+This presentation limit is not a model-context or retention policy.
+
 Routine state carries the current fields its consumers need. Historical bodies
 use existing authorized detail/history reads when they are not needed in that
 view. Apply projection before expensive copying or encoding. Review every removed
@@ -84,6 +117,34 @@ dependency/invalidation witness, ownership, growth limit and retirement behavior
 An object identity, list length or file size alone does not prove unchanged nested
 content. Count cache-validation work too. Moving a full scan to another process
 changes responsiveness, but does not by itself reduce total work or memory.
+
+Legacy/full mutable execution reuse still requires a fresh witness of the relevant borrowed builtin
+content. Within that synchronous invocation, placement encoding can reuse fresh raw-node digests
+while witnessing receipt and turn dependencies after projection. Bound this
+temporary metadata and conservatively fall back to the complete fragment witness
+near serialization limits; retain no borrowed graph between saves. Canonical JSON,
+commit authority and existing memory budgets remain unchanged. Measure changed
+and unchanged saves separately: this removes repeated work, not the full history
+scan or the broader causes of multi-second UI latency.
+
+For immutable completed execution records, hold current work fixed while growing
+the same owner's retained messages, nodes, accounting receipts and workers. Count
+actual page bytes and decoded rows for ordinary Work windows and older details,
+including near leaf-split sizes, gaps after deletion, and very large individual
+records. The existing row/byte bounds still apply; a page count alone does not bound
+bytes. Include actual model admission, token/usage changes, new completion, Stop,
+late corrections and borrowed aliases rather than qualifying only tool progress.
+Report full reducer and replay reads separately from serialization and root traversal.
+Pair browser switching measurements with current resident counts and complete saved
+readback; moving old history off the hot tree is not evidence that every path is bounded.
+
+Execution format checks include the actual prior application's attempted read/save
+and collection against a synthetic copy: the typed root index must refuse old readers
+while preserving durable root selection and artifact bytes. Same-format restart,
+failed/cancelled preparation, failed commit, missing-index recovery and collection of
+retained client/operation roots must preserve exact records. Qualify startup and
+conversion separately from subsequent ordinary saves; an initial legacy conversion
+does not establish a steady-state saving.
 
 Exercise interleaved owners whose combined history exceeds a cache's capacity,
 not only warm inputs that fit. A scan must not evict every reusable fragment
@@ -195,6 +256,12 @@ It records context view/factory, surface preparation, provider budget/refit and
 checkpoint read/save boundaries. Native provider-hook start/end observations are
 separate: correlate only a proven single request window with matching session,
 generation and iteration; a short-circuit need not reach the end observer.
+Context-view observations prefer the registered async retention/measured callbacks
+actually called by the loop. With no observable capability, the existing Python
+object-method fallback remains. When a capability is observed, the fallback is
+left unwrapped so delegation through it does not create a duplicate view span.
+Custom contexts that mix an observable capability with direct legacy calls can
+still have unobserved legacy requests; absent marks alone do not prove no work.
 Worker phase marks and host receipt marks separate execution from event delivery
 only when their `clockDomain` and `hostClockDomain` match. Never subtract wall
 clocks or add nested spans. This observes existing behavior, does not change
@@ -574,6 +641,15 @@ without assigning a window rank to every owner. The existing directory-state
 checks retain global positions, negative indices, private-state filtering and
 stale-revision refusal. Their SQL budgets measure query work, not constant-time
 global ordering or a guaranteed live-host latency.
+
+`tests/test_coordination_current_cost.py` grows unrelated, incoming and outgoing
+command history while holding the current 32-request page fixed. Select bounded
+candidate IDs through the existing sender/target indexes before fetching bodies;
+the final page keeps insertion order and deduplicates requests involving both
+sides. Reads stay on the caller's transaction and observe uncommitted receipt
+changes and rollback. Cancellation remains a projection of the saved receipt,
+not a rewritten outcome. The measured query bound does not cover initial index
+creation, grants, pending proposals or other coordination operations.
 
 The additive Extended browser registration belongs to the nightly/manual lane. The separate
 `Client performance smoke` workflow selects affected PR paths and supports manual

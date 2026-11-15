@@ -19,22 +19,30 @@ import tarfile
 from contextlib import contextmanager, ExitStack
 from pathlib import Path
 
-_retention_spec = importlib.util.spec_from_file_location('_environment_retention', Path(__file__).with_name('environment_retention.py'))
-retention = importlib.util.module_from_spec(_retention_spec)
-_retention_spec.loader.exec_module(retention)
+if '_captured_retention' in globals():
+    # The fixed cleanup launcher has already compiled/executed its exact buffer.
+    # Keep the original object; a sys.modules lookup would not find this loader.
+    retention = _captured_retention
+else:
+    _retention_spec = importlib.util.spec_from_file_location('_environment_retention', Path(__file__).with_name('environment_retention.py'))
+    retention = importlib.util.module_from_spec(_retention_spec)
+    _retention_spec.loader.exec_module(retention)
 
-_jobs_spec = importlib.util.spec_from_file_location('_environment_jobs', Path(__file__).with_name('test_job_transport.py'))
-jobs = importlib.util.module_from_spec(_jobs_spec)
-_jobs_spec.loader.exec_module(jobs)
+def load_support():
+    global jobs, host_resources, source_transfer
+    _jobs_spec = importlib.util.spec_from_file_location('_environment_jobs', Path(__file__).with_name('test_job_transport.py'))
+    jobs = importlib.util.module_from_spec(_jobs_spec)
+    _jobs_spec.loader.exec_module(jobs)
+    _host_spec = importlib.util.spec_from_file_location('_host_resources', Path(__file__).with_name('test_host_resources.py'))
+    host_resources = importlib.util.module_from_spec(_host_spec)
+    _host_spec.loader.exec_module(host_resources)
+    _transfer_spec = importlib.util.spec_from_file_location('_source_transfer', Path(__file__).with_name('test_source_transfer.py'))
+    source_transfer = importlib.util.module_from_spec(_transfer_spec)
+    _transfer_spec.loader.exec_module(source_transfer)
 
 
-_host_spec = importlib.util.spec_from_file_location('_host_resources', Path(__file__).with_name('test_host_resources.py'))
-host_resources = importlib.util.module_from_spec(_host_spec)
-_host_spec.loader.exec_module(host_resources)
-
-_transfer_spec = importlib.util.spec_from_file_location('_source_transfer', Path(__file__).with_name('test_source_transfer.py'))
-source_transfer = importlib.util.module_from_spec(_transfer_spec)
-_transfer_spec.loader.exec_module(source_transfer)
+if '_captured_retention' not in globals():
+    load_support()  # Preserve the Incus/common and ordinary import behavior.
 
 
 # Both codes are emitted synchronously by DTU's repository exporter, before
@@ -505,11 +513,15 @@ def remove_owned(payload, identity, backend, config, lib, backend_error, binding
         try:
             if selected_only:
                 source_transfer.preflight(Path(payload['root']) / 'source.tar', payload['snapshot'])
-                retained = {**retention.verify_artifacts(archives), 'policy': 'selected-artifacts',
+                retained = {**retention.verify_artifacts(archives, archive_only=archive_only), 'policy': 'selected-artifacts',
                             'sourceSha256': payload['snapshot']['archive_sha256']}
                 retention.publish_record(destination / 'retention.json', retained)
             else:
                 retained = retention.verify_retention(Path(payload['root']), archives, 'archive-only' if archive_only else 'files')
+            if '_captured_retention' in globals():
+                # The captured cleanup input always retains the *original*
+                # source identity, including both-root preservation.
+                source_transfer.preflight(Path(payload['root']) / 'source.tar', payload['snapshot'])
         except (ValueError, retention.tarfile.TarError) as exc:
             # A synchronous validation rejection precedes destroy. Do not turn
             # filesystem/publication errors or helper loss into this receipt.
@@ -652,7 +664,8 @@ def inspect_removal(payload):
             return held
         if mode == 'selected-artifacts':
             source_transfer.preflight(Path(payload['root']) / 'source.tar', payload['snapshot'])
-        checked = ({**retention.verify_artifacts(archives, publish=False), 'policy': mode,
+        checked = ({**retention.verify_artifacts(archives, publish=False,
+                    archive_only=accounting.get('archiveOnly') is True), 'policy': mode,
                     'sourceSha256': payload['snapshot']['archive_sha256']} if mode == 'selected-artifacts'
                    else retention.verify_retention(Path(payload['root']), archives, mode, publish=False))
         if checked != accounting:
@@ -862,6 +875,10 @@ def compose_file(root, payload):
 
 
 def execute_call(payload):
+    if '_captured_retention' in globals():
+        # Only the two captured app inputs execute before the private permit.
+        # Other helper/dependency imports are outside that narrow attestation.
+        load_support()
     from digital_twin_universe import lib
     from digital_twin_universe.schemas import BackendConfig, DigitalTwinUniverseError
     root = Path(payload['root'])

@@ -16,9 +16,8 @@ class ToolPayloadWindows:
         from .work_windows import source_identity
         pages = self.windows.live_pages
         entry = pages._entry(owner, group, reconcile=True)
-        position = entry['positions'].get(identity)
-        nodes = self.windows.resident_tree(owner, touch=True).get('nodes', [])
-        node = nodes[position] if type(position) is int and 0 <= position < len(nodes) else None
+        position = entry.get('ordinals', entry['positions']).get(identity)
+        node = self.windows.admitted_node(owner, entry, identity)
         if (node is None or node.get('id') != identity or node.get('kind') != 'tool'
                 or not node.get('toolCallId') or not node.get('sessionId')
                 or node.get('canonicalHistory') or node.get('nativeHistory')):
@@ -26,15 +25,17 @@ class ToolPayloadWindows:
         admitted_range = entry['ids'].get(identity)
         if admitted_range is None:
             raise ValueError('This tool step moved. Reopen its Work steps.')
-        selected, _, _ = pages._rows(pages._source(owner, *admitted_range), group)
+        selected, _, _ = pages._rows(pages.admitted_source(owner, entry, identity), group)
         if not any(row['id'] == identity for row in selected):
             raise ValueError('This tool step moved. Reopen its Work steps.')
         binding = {key: deepcopy(node.get(key)) for key in
             ('id', 'toolCallId', 'toolObservationId', 'sessionId', 'rootSessionId', 'label',
              'tool', 'turnId', 'parentId', 'startedAt', 'endedAt')}
+        placement = ({'owner': owner['id'], 'ordinal': position} if 'ordinals' in entry else
+                     deepcopy(raw(owner).get('_coldFields', {}).get('execution')))
         scope = {'owner': pages._owner_stamp(owner), 'client': pages._client(), 'group': group,
                  'id': identity, 'position': position, 'binding': binding,
-                 'placement': deepcopy(raw(owner).get('_coldFields', {}).get('execution'))}
+                 'placement': placement}
         source = source_identity(owner)
         native = node['sessionId']
         if native == owner['id']:

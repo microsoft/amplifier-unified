@@ -22,6 +22,8 @@ test('global settings need no chat and save an explicit no-deadline preference',
  await edit(root,'model-capacity-max-waiting','500');
  await edit(root,'model-capacity-timeout','');assert.equal(button(root,'Save model-capacity settings').props.disabled,true);
  await edit(root,'model-capacity-timeout','0');
+  const actions=root.root.findByProps({className:'a-dialog-actions a-control-actions'});
+  assert.deepEqual(actions.findAllByType('button').map(node=>node.children.join('')),['Save model-capacity settings','Reload saved settings','Discard edits and use saved settings']);
  await renderAct(async()=>button(root,'Save model-capacity settings').props.onClick());
  assert.deepEqual(calls[1].args,{expectedRevision:0,maxWaitingCalls:500,waitTimeoutSeconds:0});
  assert.match(JSON.stringify(root.toJSON()),/Saved for all chats/);

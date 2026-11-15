@@ -65,7 +65,7 @@ async def begin(worker, command_id):
         return None
     identity = str(uuid.uuid5(uuid.NAMESPACE_URL, 'worktree-handoff:' + command_id))
     from .handoff_boundary import inspect
-    await inspect(worker, identity)
+    await inspect(worker, identity, arm_only=True)
     try:
         return _freeze(worker)
     except BaseException:
@@ -199,7 +199,7 @@ def witness(worker, call):
 def receipt_disposition(record):
     """Only the native boundary fields cross this private acknowledgement."""
     return {key: copy.deepcopy(record[key]) for key in
-            ('id', 'phase', 'finishingTurn', 'managerPlacement', 'reconciles', 'release') if key in record}
+            ('id', 'phase', 'finishingTurn', 'managerPlacement', 'reconciles', 'release', 'boundaryOwner') if key in record}
 
 
 def failed_disposition(service, sid, operation, args):

@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "source": {
+    "schema": 1,
+    "repository": "microsoft/amplifier-unified",
+    "revision": "8ee0401a19c70a944b73507a01f2d0f60b557028",
+    "subdirectory": "components/workspaces",
+    "tree": "3837a691bc388951cdb3cae435327bf633aa27c8",
+    "version": "0.2.0",
+    "tag": "workspace-metadata-v0.2.0",
+    "sourceFiles": {
+      ".gitignore": "91ff24eaa65a89ef74d692e164233422924a556a07666dd471ceefc6a31f331f",
+      "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "README.md": "2d7338b8f1a16296ece564fd366cbfbaa4e84f774acd73a1ff5e8890e45d27ad",
+      "amplifier_workspace_metadata/__init__.py": "5aca3f7a894ba8fdc4e90178965cda2085dfd7b38d2c2e4b2a8fee6b5afbc918",
+      "amplifier_workspace_metadata/locations.py": "ee0c8d859106fdfcc31d0fba38182b1814686336b8e73572a55c56106bab87eb",
+      "amplifier_workspace_metadata/registrations.py": "06624bd964a087d9f84c2b926173f6a04566801069ed44f8b4133137abe24ac4",
+      "pyproject.toml": "e75cff6822f663333dfb18309dad240ad5e54eec5d084b46cc11e96b2578c36c",
+      "tests/test_local_location.py": "6bd0345bff61a1b2f37530b1959f2d35a6600c67cb76ef278bd335862c5b2a8b",
+      "tests/test_registration_metadata.py": "124fbc91ef55063a3c142961883c4fbeaa9c1b6cf997a6c332bd9e24321bc019"
+    },
+    "artifacts": {
+      "amplifier_workspace_metadata-0.2.0-py3-none-any.whl": {
+        "sha256": "d2d3eeff542952bbf0e9c9a49cc773767929e0b56ce74f30aafe8a9a8c2f9bc6",
+        "bytes": 8334
+      },
+      "amplifier_workspace_metadata-0.2.0.tar.gz": {
+        "sha256": "fc787b0ec6f7e9bf5c3f1f3eb13945929ed5895d30abb0d9bfd91425a4e7f338",
+        "bytes": 10023
+      }
+    }
+  },
+  "artifact": {
+    "url": "https://github.com/microsoft/amplifier-unified/releases/download/workspace-metadata-v0.2.0/amplifier_workspace_metadata-0.2.0-py3-none-any.whl",
+    "sha256": "d2d3eeff542952bbf0e9c9a49cc773767929e0b56ce74f30aafe8a9a8c2f9bc6",
+    "bytes": 8334
+  },
+  "sourceReceiptSha256": "52f4a45bd20f365eb99e5d79d8ee3352d3b2984d3a59d7139e6d792be96f3173",
+  "runtimeRequirements": [],
+  "files": {
+    "amplifier_workspace_metadata/__init__.py": "5aca3f7a894ba8fdc4e90178965cda2085dfd7b38d2c2e4b2a8fee6b5afbc918",
+    "amplifier_workspace_metadata/locations.py": "ee0c8d859106fdfcc31d0fba38182b1814686336b8e73572a55c56106bab87eb",
+    "amplifier_workspace_metadata/registrations.py": "06624bd964a087d9f84c2b926173f6a04566801069ed44f8b4133137abe24ac4",
+    "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  }
+}

@@ -1257,6 +1257,8 @@
     "composer-readiness",
     "dormant-controls",
     "composer-primary-action",
+    "composer-return",
+    "composer-return-mounted",
     "surface-context",
     "desktop-readiness",
     "memory-personalization",
@@ -1303,6 +1305,9 @@
     "shared-notices-motion",
     "input-status",
     "action-spacing",
+    "shared-controls",
+    "settings-action-spacing",
+    "settings-draft-focus",
     "delivery-warning",
     "legacy-outbox-notice",
     "delivery-reconciliation",
@@ -1334,6 +1339,7 @@
     "canvas-apps",
     "canvas-drawing",
     "session-health",
+    "conversation-error",
     "session-health-context-limit",
     "session-health-context-limit-active-worker",
     "session-health-request-failure",
@@ -1347,6 +1353,7 @@
     "connectors",
     "test-environments",
     "assignment-adoption",
+    "worktree-move",
     "access-mode",
     "storage-cleanup-settings",
     "model-capacity-settings",
@@ -1362,6 +1369,7 @@
     "history-refresh",
     "voice-work-message",
     "external-multiparty",
-    "shared-room"
+    "shared-room",
+    "work-hierarchy"
   ]
 }

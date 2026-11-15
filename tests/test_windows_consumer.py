@@ -368,7 +368,8 @@ def test_consumer_maintenance_uses_normal_owner_stop_and_preserves_files(tmp_pat
     assert events == [("confirm", True)] + ([(operation, tmp_path / "app")] if confirmed else [])
     assert retained.read_bytes() == b"original"
     assert result == ({"ok": True, "operation": operation, "userDataRetained": True,
-                       "installationFilesRetained": True} if confirmed else {"ok": True, "cancelled": True})
+                       "installationFilesRetained": True, **({"certificate": "none"} if operation == "uninstall" else {})}
+                      if confirmed else {"ok": True, "cancelled": True})
     assert result.get("userDataRetained", result.get("cancelled")) is True
 
 @pytest.mark.parametrize("operation,step,phrase", [

@@ -23,7 +23,8 @@ async def prepared(app, tmp_path):
     await finish(app, target, created['initialInputId'])
     await app.on_runtime_event('runtime.status', {'sessionId': target['id'], 'status': 'idle'})
     app.runtime.quiesce_for_handoff = AsyncMock(return_value={'quiesced': True})
-    app.runtime.handoff_boundary = AsyncMock(return_value={'ready': True})
+    app.runtime.handoff_boundary = AsyncMock(side_effect=lambda *args, **kwargs:
+        {'cancelled': True} if kwargs.get('cancel') else {'ready': True})
     app.runtime.inputs.clear()
     return source, target, independent, root
 
@@ -103,12 +104,16 @@ async def test_manager_scope_does_not_authorize_other_work(app, tmp_path, invali
     app.runtime.quiesce_for_handoff.assert_not_awaited()
 
 
-@pytest.mark.parametrize('change', ['assignment', 'manager_stop', 'target_stop', 'manager_human',
-                                  'target_human', 'manager_task', 'target_task'])
-async def test_manager_authority_is_rechecked_at_native_boundary(app, tmp_path, change):
+async def authority_change_at_boundary(app, tmp_path, change, cancel_reply):
     source, target, independent, root = await prepared(app, tmp_path)
     record = await checkout(app, source, target, root)
+    mutations = []
     async def boundary(*args, **kwargs):
+        # Removing the original marker is distinct from checking readiness:
+        # cancellation must not repeat the Stop, human input or task change.
+        if kwargs.get('cancel'):
+            return cancel_reply
+        mutations.append(change)
         if change == 'assignment':
             value = app.assignments.current(source)
             value['members'][target['id']]['status'] = 'detached'
@@ -122,15 +127,48 @@ async def test_manager_authority_is_rechecked_at_native_boundary(app, tmp_path, 
         else:
             (source if change.startswith('manager') else target)['task'] = {'id': 'new', 'revision': 1}
         return {'ready': True}
-    app.runtime.handoff_boundary = boundary
+    app.runtime.handoff_boundary = AsyncMock(side_effect=boundary)
     pending = await move(app, source, target, record)
     await settle(app)
-    assert app.worktrees.read(target['id'], pending['id'])['phase'] == 'rejected'
+    saved = app.worktrees.read(target['id'], pending['id'])
+    assert mutations == [change]
+    calls = app.runtime.handoff_boundary.await_args_list
+    assert len(calls) == 2
+    assert [call.args for call in calls] == [(target['id'], pending['id'])] * 2
+    assert not calls[0].kwargs.get('cancel')
+    assert calls[1].kwargs == {'cancel': True}
+    assert saved['id'] == pending['id']
+    assert len(app.worktrees.receipts(target['id'])) == 1
+    assert saved['source'] == str(tmp_path) and saved['executionRevision'] == 0
+    assert saved['inputsReplayed'] is False
     assert target.get('workingDirectory', target['workspace']) == str(tmp_path)
+    assert app.worktrees.execution_state(target['id'])['revision'] == 0
     app.runtime.quiesce_for_handoff.assert_not_awaited()
+    assert all(row[0] != target['id'] for row in app.runtime.inputs)
     notice = app.collaboration.receipt('worktree-wait:' + pending['id'])
     assert notice['subscription']['status'] == 'suppressed'
     assert not notice['subscription']['open']
+    return saved, target
+
+
+@pytest.mark.parametrize('change', ['assignment', 'manager_stop', 'target_stop', 'manager_human',
+                                  'target_human', 'manager_task', 'target_task'])
+async def test_manager_authority_is_rechecked_at_native_boundary(app, tmp_path, change):
+    saved, target = await authority_change_at_boundary(app, tmp_path, change, {'cancelled': True})
+    assert saved['phase'] == 'rejected'
+    assert not target['configurationBusy']
+    assert not app.worktrees.execution_state(target['id'])['fenced']
+
+
+@pytest.mark.parametrize('change', ['assignment', 'manager_stop', 'target_stop', 'manager_human',
+                                  'target_human', 'manager_task', 'target_task'])
+async def test_manager_authority_change_with_unconfirmed_cleanup_stays_fenced(app, tmp_path, change):
+    # Readiness alone is deliberately not a cancellation acknowledgement.
+    saved, target = await authority_change_at_boundary(app, tmp_path, change, {'ready': True})
+    assert saved['phase'] == 'unknown' and saved['step'] == 'boundary-unconfirmed'
+    assert saved['displayState'] == 'needs_recovery'
+    assert target['configurationBusy']
+    assert app.worktrees.execution_state(target['id'])['fenced']
 
 
 @pytest.mark.parametrize('action', ['worktree.remove', 'worktree.archive', 'worktree.restore',
@@ -280,6 +318,40 @@ async def test_restart_never_replays_an_unknown_manager_move(app, tmp_path, monk
         assert other._session(target['id']).get('workingDirectory', str(tmp_path)) == str(tmp_path)
         runtime.quiesce_for_handoff.assert_not_awaited()
         assert all(row[0] != target['id'] for row in runtime.inputs)
+    finally:
+        await other.close()
+
+
+async def test_startup_no_move_proof_precedes_manager_notification_snapshot(app, tmp_path, monkeypatch):
+    from amplifier_web.runtime import RuntimeManager
+    source, target, _, root = await prepared(app, tmp_path)
+    record = await checkout(app, source, target, root)
+    monkeypatch.setattr(app.worktrees, 'launch', Mock())
+    pending = await move(app, source, target, record)
+    pending.update(step='waiting')
+    app.worktrees.save(pending)
+    # Force the existing reserved return through its suppression save after
+    # restart; that bookkeeping must retain the newer recovery proof.
+    source['interruptionRevision'] = source.get('interruptionRevision', 0) + 1
+    app._publish_changes(sessions={source['id']})
+    await app.close()
+    runtime = RuntimeManager()
+    runtime.start = AsyncMock(side_effect=AssertionError('No model work in startup recovery'))
+    other = AppService(app.data_dir, runtime, workspace=tmp_path)
+    try:
+        assert other.worktrees.read(target['id'], pending['id'])['phase'] == 'unknown'
+        other.worktrees.start()
+        immediate = other.worktrees.read(target['id'], pending['id'])
+        assert immediate['phase'] == 'rejected' and immediate['boundaryCleanup']['workerAbsent']
+        await settle(other)
+        saved = other.worktrees.read(target['id'], pending['id'])
+        assert saved['revision'] == immediate['revision']
+        assert saved['boundaryCleanup'] == immediate['boundaryCleanup']
+        assert saved['phase'] == 'rejected' and not other.worktrees.execution_state(target['id'])['fenced']
+        assert not other._session(target['id'])['configurationBusy']
+        notice = other.collaboration.receipt('worktree-wait:' + pending['id'])
+        assert notice['subscription']['status'] == 'suppressed'
+        runtime.start.assert_not_awaited()
     finally:
         await other.close()
 

@@ -40,6 +40,10 @@ def backend(monkeypatch):
             value['job'] = {'version': 1, 'id': args['requestId'], 'state': 'passed', 'terminal': True}
         return value
     monkeypatch.setattr(owner, 'invoke', invoke)
+    # These authority tests use a controlled transport. Exact same-process
+    # loaded-input and durable-permit proof has its own installed-helper tests.
+    monkeypatch.setattr(owner, 'invoke_cleanup',
+        lambda app, config, row, action, args, permit: owner.invoke(config, app.data_dir, row, action, args))
     return calls
 
 

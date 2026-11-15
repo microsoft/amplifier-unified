@@ -35,8 +35,11 @@ The placement contract owns the checks that distinguish creating from attaching.
 ### 3. Let names remain human
 
 A workspace's name expresses its purpose. Its identity survives a rename and
-does not depend on a host's path spelling. A location is an explicit association
-with a machine and account. Identical names do not make two folders the same place.
+does not depend on a host's path spelling. An established, resolved workspace
+keeps its existing ID, including an ID originally derived from a path; it needs
+no replacement identity or identity-alias migration. Unresolved discovery
+placeholders retain their separate reconciliation rules. A location is an explicit
+association with a machine and account. Identical names do not make two folders the same place.
 Details expose full paths whenever someone needs to distinguish or inspect them.
 
 ### 4. Keep chosen folders predictable
@@ -133,6 +136,7 @@ holds and obsolete duplicate notes do not become permanent operating rules.
 
 | Date | Change | Evidence |
 |---|---|---|
+| 2026-11-15 | Preserve existing resolved workspace IDs while separating identity from host location; keep unresolved discovery reconciliation distinct. | Accepted identity/location direction; [placement contract](../contracts/placement.v1.md). |
 | 2026-11-03 | One manager coordinates many autonomous workers; current shared context stays separate from history and task state. | User-requested workflow simplification and scratch-context cleanup. |
 | 2026-09-22 | Initial proposed direction. | User's name-first/root-setting request, supplied sidebar examples, inspected Codex task workflows, and current Unified/workspace-tool source. |
 | 2026-09-22 | Preserve folder semantics and native history across clients. | User's attachment critique and explicit shared-session source-of-truth requirement. |

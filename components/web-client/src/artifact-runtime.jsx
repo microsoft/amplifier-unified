@@ -17,8 +17,10 @@ export function ArtifactRuntime({sessionId,act}){
  return <ActivityRegion as="section" name="runtime.dependencies" busy={pending} className="a-settings-section">
   <h3>Document and data tools</h3>
   <p>Check the tools available for documents, spreadsheets, PDFs and plots.</p>
-  <button className="a-soft" data-action="runtime.dependencies" disabled={pending} onClick={()=>inspect()}><RefreshCw/>Inspect document tools</button>
-  <button className="a-soft" data-action="runtime.dependencies" disabled={pending} onClick={()=>inspect(true)}>Check library imports</button>
+  <div className="a-control-actions">
+   <button className="a-soft" data-action="runtime.dependencies" disabled={pending} onClick={()=>inspect()}><RefreshCw/>Inspect document tools</button>
+   <button className="a-soft" data-action="runtime.dependencies" disabled={pending} onClick={()=>inspect(true)}>Check library imports</button>
+  </div>
   {error&&<p role="alert" className="a-danger">{error}</p>}
   {report&&<><p className="a-caption">Availability is separate from a successful render, visual review or formula calculation.</p>
    {Object.entries(report).map(([scope,environment])=><section key={scope} aria-label={scope==='host'?'App environment':'Conversation environment'}>

@@ -30,7 +30,7 @@ async def create(*args, **kwargs):
                    status="working", messages=[
         {"id": f"message-{i}", "role": "user" if i % 2 == 0 else "assistant",
          "createdAt": now + i, "text": f"Saved message {i}\n\n**Stable text**\n\n| Name | Value |\n| --- | --- |\n| sample | {i} |\n"}
-        # Exceed the current 100-message display window so the browser check
+        # Exceed the initial message window so the browser check
         # exercises a real earlier-page read, independently of render probes.
         for i in range(120)])
     session["activity"] = {"phase": "composing", "label": "Synthetic work", "startedAt": now}

@@ -24,17 +24,32 @@ selection. It adds no registry, access decision or persistence owner.
 
 The temporary [`components/workspaces`](../../../components/workspaces/README.md)
 project provides the standalone metadata API and direct tests. Unified packages
-those same sources as their sole installed owner. Independent publication and
-artifact adoption remain separate; this is not the complete workspace domain.
+only its selected published artifact as the sole installed owner. Author changes,
+independent publication and artifact adoption remain separate; this is not the
+complete workspace domain.
 
 Current registration IDs still derive from canonical paths, with native-project
 placeholder IDs for unresolved folders. A registration's `aliases` are display
 names, not a durable identity mapping. A reported path is an observed location,
 not a filesystem permission grant.
 
-The workspace vision's durable logical identity and host/account location
-bindings remain a future design. That design must account for current path-based
-configuration and Personalization scopes, native project aliases, saved pins,
-session and Canvas references, and recovery before changing any identity. This
-internal boundary neither implements that migration nor promises a portable
-workspace registry.
+The identity/location direction retains each resolved workspace's existing ID
+as its stable identity, without allocating a replacement or treating display
+aliases as identity aliases. Unresolved native-project placeholders remain an
+explicit exception: the existing reconciliation reports their ordered remaps.
+Host ID derivation and those remaps are unchanged by the metadata interpretation.
+
+`local_location(registration)` interprets the legacy row as one local location.
+Its immutable `LocalLocation` contains the unchanged workspace ID, exact path,
+and recorded availability. Missing, `None` or empty paths yield no known
+location; an unavailable path remains known. The observation is scoped to the
+caller's existing installation/account, not a new host or location identity.
+The top-level `path` remains the only writable source. The derived snapshot does
+not create a persistent `locations` field or interpret custom fields by that name.
+
+This is a pure metadata API, not a location-binding migration. Future explicit
+associations must preserve current path-based configuration and Personalization
+scopes, native history locators, saved pins, session and Canvas references,
+authority and recovery. Metadata relinking alone must not move history, change
+live execution directories or grant access. Multi-location and cross-host
+journeys remain separate work; no portable workspace registry is introduced.

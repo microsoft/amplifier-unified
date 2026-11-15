@@ -148,7 +148,8 @@ async function run(){
   await expect(status()).toBeEmpty();
   const row={width,idle:await geometry()};proof.widths.push(row);
   const before=sendCount();
-  if(width===1280)await composer().press('Enter');else await primary().tap();
+  // This fixture is touch-capable at both widths: Return continues writing.
+  if(width===1280){await primary().focus();await primary().press('Enter');}else await primary().tap();
   const item=await nextSend();assert.equal(item.body.args.text,text);assert.equal(sendCount()-before,1);
   row.announcement=await accessibleSending();row.sending=await geometry();aligned(row.idle,row.sending,'sending '+width);
   await expect(page.locator('.a-user').filter({hasText:text}).getByRole('status')).toContainText('Sending…');
@@ -181,7 +182,7 @@ async function run(){
   await bubble.getByRole('button',{name:'Discard unsent message',exact:true}).click();await expect(bubble).toHaveCount(0);
   // Unknown local submission retains Check delivery and the original-identity
   // retry action; merely checking must never resend or invent a new command.
-  const uncertainText='Unknown send '+width;await composer().fill(uncertainText);await composer().press('Enter');
+  const uncertainText='Unknown send '+width;await composer().fill(uncertainText);await page.getByRole('button',{name:'Send message',exact:true}).click();
   const unknown=await nextSend();await composer().fill(nextDraft);
   await unknown.route.fulfill({status:504,json:{error:'Fixture delivery uncertain',code:'runtime_pending'}});
   const uncertain=page.locator('.a-user').filter({hasText:uncertainText});

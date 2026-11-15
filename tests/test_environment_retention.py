@@ -329,9 +329,94 @@ def test_artifacts_only_ignores_oversized_workspace_without_qualifying_removal(t
     result = retention.verify_artifacts(archives)
     assert result['selection'] == ['/artifacts'] and result['verified']
     assert result['logicalBytes'] == 4 and not (tmp_path / 'workspace.tar').exists()
+    assert 'archiveOnly' not in result
     assert not (tmp_path / 'retention.json').exists()
     with pytest.raises(ValueError, match='Both distinct'):
         retention.verify_retention(tmp_path, archives)
+
+
+def test_selected_artifacts_archive_custody_is_explicit_and_read_only(tmp_path, monkeypatch):
+    guard_fifo_io(monkeypatch)
+    monkeypatch.setattr(retention, 'SELECTED_LIMIT', 1)
+    entries = [('artifacts', tarfile.DIRTYPE, ''),
+               ('artifacts/python', tarfile.SYMTYPE, '/usr/local/bin/python3.13'),
+               ('artifacts/pipe', tarfile.FIFOTYPE, ''),
+               ('artifacts/result', tarfile.REGTYPE, b'evidence')]
+    archives = retention.filter_incus_stream(backup(entries), tmp_path, 'owned',
+        selections=('artifacts',), archive_only=True)
+    with pytest.raises(retention.ValidationFailure) as strict:
+        retention.verify_artifacts(archives)
+    assert strict.value.diagnostic['reasonCode'] == 'symbolic_target'
+    assert not (tmp_path / 'artifacts-retention.json').exists()
+    result = retention.verify_artifacts(archives, archive_only=True)
+    assert result['archiveOnly'] is True and result['selection'] == ['/artifacts']
+    assert result['logicalBytes'] == 8
+    original = copy.deepcopy(archives)
+    before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in tmp_path.iterdir()}
+    assert retention.verify_artifacts(archives, archive_only=True, publish=False) == result
+    assert archives == original
+    assert before == {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in tmp_path.iterdir()}
+    with pytest.raises(FileExistsError):
+        retention.verify_artifacts(archives, archive_only=True)
+    assert before == {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in tmp_path.iterdir()}
+    assert not (tmp_path / 'artifacts').exists()
+
+
+@pytest.mark.parametrize('case,reason', [
+    ('duplicate', 'duplicate_entry'), ('traversal', 'unsafe_path'), ('absolute', 'unsafe_path'),
+    ('parent-first', 'ancestor_traversal'), ('child-first', 'ancestor_replaced'),
+    ('hard-outside', 'hard_target'), ('hard-forward', 'hard_target'), ('hard-symbolic', 'hard_target'),
+    ('sparse', 'sparse_entry'), ('header', 'invalid_header'), ('footer', 'incomplete_footer'),
+    ('trailing', 'trailing_data'), ('members', 'member_limit'), ('size', 'selected_size_limit'),
+    ('input', 'archive_limit'), ('hash', 'receipt_mismatch'), ('root', 'missing_root'),
+])
+def test_selected_artifacts_archive_custody_keeps_validation_guards(tmp_path, monkeypatch, case, reason):
+    guard_fifo_io(monkeypatch)
+    root = raw_header('artifacts')
+    link = tarfile.TarInfo('artifacts/python')
+    link.type, link.linkname = tarfile.SYMTYPE, '/usr/local/bin/python3.13'
+    member = tarfile.TarInfo('artifacts/result')
+    member.size = 4
+    body = member.tobuf() + b'kept'.ljust(512, b'\0')
+    tail = b''
+    if case == 'duplicate':
+        tail = link.tobuf()
+    elif case in {'traversal', 'absolute'}:
+        link.name = 'artifacts/../escape' if case == 'traversal' else '/artifacts/python'
+    elif case == 'parent-first':
+        tail = raw_header('artifacts/python/child')
+    elif case == 'child-first':
+        root += raw_header('artifacts/python/child')
+    elif case.startswith('hard-'):
+        hard = tarfile.TarInfo('artifacts/hard'); hard.type = tarfile.LNKTYPE
+        hard.linkname = {'hard-outside': 'workspace/file', 'hard-forward': 'artifacts/result',
+                         'hard-symbolic': 'artifacts/python'}[case]
+        tail = hard.tobuf()
+    elif case == 'sparse':
+        member.pax_headers['GNU.sparse.map'] = '0,4'
+        body = member.tobuf() + b'kept'.ljust(512, b'\0')
+    elif case == 'header':
+        tail = b'invalid'.ljust(512, b'x')
+    elif case == 'members':
+        monkeypatch.setattr(retention, 'MEMBER_LIMIT', 1)
+    elif case == 'size':
+        monkeypatch.setattr(retention, 'RECOVERY_LIMIT', 3)
+    elif case == 'root':
+        root = b''
+    raw = root + link.tobuf() + tail + body + bytes(512 if case == 'footer' else 1024)
+    if case == 'trailing':
+        raw += b'unverified'.ljust(512, b'x')
+    path = tmp_path / 'artifacts.tar'; path.write_bytes(raw)
+    if case == 'input':
+        monkeypatch.setattr(retention, 'INPUT_LIMIT', len(raw) - 1)
+    archives = [{'source': '/artifacts', 'destination': str(path)}]
+    if case == 'hash':
+        archives[0]['sha256'] = '0' * 64
+    with pytest.raises(retention.ValidationFailure) as caught:
+        retention.verify_artifacts(archives, archive_only=True)
+    assert caught.value.diagnostic['reasonCode'] == reason
+    assert path.read_bytes() == raw
+    assert not (tmp_path / 'artifacts-retention.json').exists()
 
 
 @pytest.mark.parametrize('change', ['missing', 'duplicate', 'wrong-root', 'escape', 'truncated', 'too-large', 'fifo'])

@@ -19,6 +19,7 @@ from jsonschema import validate, ValidationError
 import tinycss2
 from .errors import AppError
 from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background, interrupt_unfinished, restore_voice_usage
+from .execution_working_set import current as current_execution, exact as execution_record, turns_for_inputs
 from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_paused
 from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
@@ -461,7 +462,7 @@ for _access, _actions in {
         "capacity.read", "modelCapacity.read", "question.list", "question.read",
         "context.inspect",
         "schedule.list", "schedule.read", "schedule.overview", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
-        "worktree.inspect", "worktree.list", "worktree.status",
+        "worktree.inspect", "worktree.list", "worktree.status", "worktree.check",
         "coordination.awareness", "coordination.intent.read",
     },
     "domain_authoritative": {
@@ -1117,7 +1118,8 @@ class AppService:
             if getattr(self, 'workspace_work', None):
                 from .workspace_work_coverage import stage_saved_inputs
                 staged_work_inputs = stage_saved_inputs(self.workspace_work, admitted_index, admitted_ids, deleted_ids)
-            with self.performance_diagnostics.measure('state.serialize', synchronous=True):
+            with self.performance_diagnostics.measure('state.serialize', synchronous=True,
+                    serialization=(session_ids is None, admitted_index, admitted_ids)):
                 normalize_state(normalized, self.db, undo=normalization_undo)
                 saved = persist(self.data_dir, self._state, pending_views,
                                 session_ids=admitted_ids, by_id=admitted_index,
@@ -1572,7 +1574,7 @@ class AppService:
                 # Optional legacy compaction cannot commit a caller's in-flight
                 # command. When this admission owns the transaction, its new blob
                 # and exact owner pointer commit together before returning.
-                compacted = bool(reference and reference.get('executionProjection') != 1
+                compacted = bool(reference and reference.get('executionProjection') not in {1, 2}
                                  and not self.db.in_transaction)
                 if compacted:
                     compact_execution_references(context, self.db)
@@ -2455,13 +2457,16 @@ class AppService:
                 implicit_session = not (args.get('sessionId') or (args.get('id') if action in {'session.fork', 'session.recover', 'session.takeover', 'session.naming', 'configuration.inspect', 'configuration.apply'} else None))
                 try:
                     with measure(self, 'input.history', session_id=sid) if action in {'conversation.send', 'conversation.retry'} else nullcontext():
-                        await self.history.ensure_loaded(sid)
+                        if action in {'conversation.send', 'conversation.retry'}:
+                            await self.history.ensure_loaded(sid, hydrate=False)
+                        else:
+                            await self.history.ensure_loaded(sid)
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
                 if action in {'conversation.send','conversation.retry','worker.spawn','call.start','runtime.control','configuration.inspect','configuration.apply','bundle.save','bundle.export','bundle.preview','bundle.switch','bundle.fork'}:
                     with measure(self, 'input.configuration', session_id=sid) if action in {'conversation.send', 'conversation.retry'} else nullcontext():
                         await self.refresh_configuration(sid)
-                    current=self._session(sid)
+                    current=self._session(sid, hydrate=False)
                     if current.get('configurationPending') and current.get('configurationRefresh',{}).get('phase')=='error':
                         raise AppError(current['configurationRefresh']['error'],409)
         fingerprint = command_fingerprint(action, args, origin, client_id, caller_session_id=caller_session_id)
@@ -2713,7 +2718,7 @@ class AppService:
             if checked_session:
                 if implicit_session and self.state.get('selectedSessionId') != checked_session:
                     raise AppError('The selected chat changed. Retry in the intended chat.', 409)
-                checked = self._session(checked_session)
+                checked = self._session(checked_session, hydrate=False)
                 if action not in {'conversation.delivery', 'session.takeover', 'session.fork', 'session.recover', 'session.inspect', 'message.edit', 'bundle.export'} and checked.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
                     raise AppError('This session is read-only here. Choose Continue here to request ownership.', 409, code='session_busy')
                 if checked.get('nativeProject') and action != 'session.inspect':
@@ -3455,7 +3460,7 @@ class AppService:
                 from .next_message_configuration import save
                 diagnostic_result = save(self, args, configuration_authority)
             elif action == "conversation.send":
-                session = self._session(args.get("sessionId"))
+                session = self._session(args.get("sessionId"), hydrate=False)
                 if ('expectedInterruptionRevision' in args
                         and args['expectedInterruptionRevision'] != session.get('interruptionRevision', 0)):
                     raise AppError('This message was prepared before Stop. Nothing was sent. Send a new message to continue.',
@@ -3554,7 +3559,7 @@ class AppService:
                     pending.append((self._send, (dispatch_session, text, input_id, previous_activity, args.get('preserveDraft', False))))
             elif action == "conversation.retry":
                 from .message_delivery import find_message
-                session = self._session(args['sessionId'])
+                session = self._session(args['sessionId'], hydrate=False)
                 message = find_message(session, args['inputId'])
                 if message is None:
                     raise AppError('This message is not saved in this conversation.', 404)
@@ -3575,7 +3580,7 @@ class AppService:
                         raise AppError('This runtime does not support message recovery.', 409)
                     original_status = session['status']
                     known_undelivered = message.get('delivery', {}).get('status') == 'failed'
-                    original_turn = copy.deepcopy(next((t for t in session.get('execution', {}).get('turns', []) if t['id'] == args['inputId']), {}))
+                    original_turn = copy.deepcopy(execution_record(session, 'turns', {'id': args['inputId']}) or {})
                     self._delivery(session, args['inputId'], 'sending')
                     self._activity(session, 'queued', 'Sending your saved message again.', reset=True)
                     session['status'] = 'working'
@@ -3589,7 +3594,7 @@ class AppService:
                     turn.pop('generationId', None)
                     pending.append((self._retry_message, (copy.deepcopy(session), message['text'], args['inputId'], original_status, original_turn, known_undelivered)))
             elif action == "conversation.stop":
-                session = self._session(args.get("sessionId"))
+                session = self._session(args.get("sessionId"), hydrate=False)
                 session["interruptionRevision"] = session.get("interruptionRevision", 0) + 1
                 session["lastInterruption"] = {"commandId": command_id, "at": time.time(), "origin": origin}
                 if session.get('externalAgent', {}).get('status') not in {'unknown', 'error'}:
@@ -3598,7 +3603,7 @@ class AppService:
                 interrupt_input_status(session)
                 pending.append((self._stop, (session["id"],)))
             elif action == "worker.spawn":
-                session = self._session(args.get("sessionId"))
+                session = self._session(args.get("sessionId"), hydrate=False)
                 text = args["instruction"].strip()
                 if not text:
                     raise AppError("Describe the worker's task.")
@@ -3614,7 +3619,7 @@ class AppService:
                 ensure_turn(session,input_id,text)
                 pending.append((self._send, (copy.deepcopy(session), instruction, input_id)))
             elif action in {"worker.stop", "worker.steer", "worker.message"}:
-                session = self._session(args.get("sessionId"))
+                session = self._session(args.get("sessionId"), hydrate=False)
                 if not self.runtime:
                     raise AppError("The execution runtime is unavailable.")
                 worker = next((row for row in session["workers"] if row["id"] == args["id"]), None)
@@ -4486,11 +4491,11 @@ class AppService:
         result = await self._send(session, text, input_id, preserve_draft=True, retry=True, known_undelivered=known_undelivered)
         if isinstance(result, dict) and result.get('duplicate'):
             async with self.lock:
-                current = self._session(session['id'])
-                if current['status'] == 'working' and current.get('execution', {}).get('currentTurnId') == input_id:
+                current = self._session(session['id'], hydrate=False)
+                if current['status'] == 'working' and current_execution(current).get('currentTurnId') == input_id:
                     current['status'] = original_status
                     self._activity(current, original_status, 'Delivery confirmed. Amplifier already received this message.')
-                    turn = next(t for t in current['execution']['turns'] if t['id'] == input_id)
+                    turn = execution_record(current, 'turns', {'id': input_id})
                     for key in ('phase', 'endedAt', 'retriedAt', 'runtimeOwnerId', 'generationId'):
                         if key in original_turn:
                             turn[key] = original_turn[key]
@@ -4591,7 +4596,7 @@ class AppService:
             return await defer_send(self, session['id'], input_id, preserve_draft)
         except RuntimeHostClosingError:
             async with self.lock:
-                current = self._session(session['id'])
+                current = self._session(session['id'], hydrate=False)
                 self._delivery(current, input_id, 'unknown')
                 interrupt_unfinished(current)
                 if current['status'] in {'working', 'starting', 'ready', 'stopping'}:
@@ -4600,7 +4605,7 @@ class AppService:
             raise
         except RuntimeOperationPending:
             async with self.lock:
-                self._delivery(self._session(session['id']), input_id, 'unknown')
+                self._delivery(self._session(session['id'], hydrate=False), input_id, 'unknown')
                 self._publish_changes(sessions={session['id']}, globals={'view'})
             # A missing acknowledgement is not a failed turn. Keep the saved
             # input and live work; the exact late receipt can reconcile delivery.
@@ -4613,7 +4618,7 @@ class AppService:
             message = startup_message + (' Earlier delivery is still uncertain; checking does not resend it.' if delivery == 'unknown' else ' Your message has been saved.')
             receipt = {'delivery': delivery, 'inputId': input_id, 'sessionId': session['id']}
             async with self.lock:
-                current = self._session(session['id'])
+                current = self._session(session['id'], hydrate=False)
                 # The worker may already have published a specific startup
                 # error or the location of its private stderr log. Preserve
                 # that public detail, but never reuse an earlier attempt's
@@ -4644,7 +4649,7 @@ class AppService:
         except SessionInUseError as exc:
             if retry:
                 async with self.lock:
-                    current = self._session(session['id'])
+                    current = self._session(session['id'], hydrate=False)
                     self._delivery(current, input_id, 'unknown')
                     from .session_ownership import blocked
                     from .execution import finish
@@ -4654,7 +4659,7 @@ class AppService:
                     self._publish_changes(sessions={session['id']}, globals={'view'})
                 raise AppError('This conversation is owned elsewhere. Continue here before resending.', 409, code='session_busy') from exc
             async with self.lock:
-                current = self._session(session["id"])
+                current = self._session(session["id"], hydrate=False)
                 rejected = find_message(current, input_id)
                 if (rejected and rejected.get('navigationPost') and
                         rejected.get('delivery', {}).get('status') == 'accepted'):
@@ -4689,7 +4694,7 @@ class AppService:
             raise AppError(str(exc), 409, code="session_busy") from exc
         except Exception:
             async with self.lock:
-                current = self._session(session['id'])
+                current = self._session(session['id'], hydrate=False)
                 self._delivery(current, input_id, 'unknown')
                 needs_error = current['status'] != 'error'
                 self._publish_changes(sessions={session['id']}, globals={'view'})
@@ -4701,7 +4706,7 @@ class AppService:
             raise
         with measure(self, 'input.delivery.publish', session_id=session['id']):
             async with self.lock:
-                current = self._session(session["id"])
+                current = self._session(session["id"], hydrate=False)
                 observed = find_message(current, input_id) or {}
                 if observed.get('steering'):
                     # Inbox admission cannot erase an earlier native
@@ -4753,7 +4758,7 @@ class AppService:
                 await self.set_voice_status({"status": "error", "id": call.id, "error": str(exc)})
 
     async def _stop(self, sid):
-        if self._session(sid).get('externalAgent'):
+        if self._session(sid, hydrate=False).get('externalAgent'):
             return await self.external_conversations.stop(sid)
         # The Stop revision is already durable. Release invalidated inbox slots
         # even while the actual worker interruption is slow or unavailable.
@@ -4765,12 +4770,12 @@ class AppService:
     async def record_voice_usage(self,session_id,call_id,response_id,model,usage,phase='completed', *, transfer_id=None):
         from .voice_usage import normalize_voice_usage
         async with self.lock:
-            try:session=self._session(session_id)
+            try:session=self._session(session_id, hydrate=False)
             except AppError:return
             self._check_voice_owner(session['id'], transfer_id)
             identity='voice:'+call_id+':'+response_id
-            tree=session.get('execution',{})
-            existing=next((n for n in tree.get('nodes',[]) if n['id']==identity),None)
+            tree=current_execution(session)
+            existing=execution_record(session, 'nodes', {'id': identity})
             # Live duration updates replace one session receipt. Completion is
             # authoritative; a delayed running update cannot reopen it.
             if existing and existing.get('phase') == 'completed' and phase != 'completed':
@@ -4798,12 +4803,12 @@ class AppService:
                 touch_independent_activity(session)
             turn_id=('voice:'+call_id) if response_id=='session' else existing.get('turnId') if existing else tree.get('currentTurnId')
             if not turn_id:turn_id='voice:'+call_id
-            if not any(t['id']==turn_id for t in tree.get('turns',[])):
+            if execution_record(session, 'turns', {'id': turn_id}) is None:
                 previous=tree.get('currentTurnId')
                 ensure_turn(session,turn_id,'Voice call · session usage' if response_id=='session' else 'Voice call')
-                session['execution']['currentTurnId']=previous
+                current_execution(session)['currentTurnId']=previous
             if turn_id == 'voice:'+call_id:
-                for turn in session['execution']['turns']:
+                for turn in current_execution(session)['turns']:
                     if turn['id'] == turn_id:
                         turn['lifecycle'] = 'voice'
             ingest_execution(session,{'id':identity,'turnId':turn_id,'sessionId':session_id,'rootSessionId':session_id,
@@ -4815,7 +4820,7 @@ class AppService:
                 from .chat_navigation import settle_activity
                 settle_activity(session)
             if phase in {'completed','incomplete'} and turn_id == 'voice:'+call_id:
-                for turn in session['execution']['turns']:
+                for turn in current_execution(session)['turns']:
                     if turn['id']==turn_id:turn.update(phase=phase,endedAt=time.time())
             self._publish_changes(sessions={session['id']})
 
@@ -4895,7 +4900,7 @@ class AppService:
             raise ValueError('Terminal event batch must belong to one root')
         async with self.lock:
             try:
-                session = self._session(next(iter(roots)))
+                session = self._session(next(iter(roots)), hydrate=False)
             except AppError:
                 return
             changed = {session['id']}
@@ -4932,7 +4937,7 @@ class AppService:
             return
         async with self.lock:
             try:
-                session = self._session(payload.get("rootSessionId") or payload.get("sessionId"))
+                session = self._session(payload.get("rootSessionId") or payload.get("sessionId"), hydrate=False)
             except AppError:
                 return
             from .runtime_event_batches import receipt, terminal
@@ -5139,7 +5144,7 @@ class AppService:
                 if startup and projected['category'] == 'unknown':
                     error_type = 'RuntimeStartupError'
                     projected = failure_details(detail, error_type)
-                current_input = session.get('execution', {}).get('currentTurnId')
+                current_input = current_execution(session).get('currentTurnId')
                 failure_inputs = (existing.get('inputIds') or [existing.get('inputId')]) if isinstance(existing, dict) else []
                 same_input = (current_terminal_failure(session) or not current_input
                     or not any(failure_inputs) or current_input in failure_inputs)
@@ -5214,7 +5219,7 @@ class AppService:
                     record_failure(session, session.get('failure') or {})
                 if root_generation and current_generation and payload.get("event") == "generation.finished":
                     if not payload.get('active_job_ids'):
-                        for turn in session.get('execution', {}).get('turns', []):
+                        for turn in turns_for_inputs(session, set(payload.get('input_ids', []))):
                             if (turn.get('inputId', turn['id']) in payload.get('input_ids', [])
                                     and turn.get('generationId') in {None, payload.get('generation_id')}):
                                 turn.update(phase='completed', endedAt=event['at'])
@@ -5497,11 +5502,11 @@ class AppService:
         # Ordinary requests must keep their existing admission-lock order.
         # An extra no-op lock turn lets later maintenance overtake queued input.
         try:
-            session = self._session(identity)
+            session = self._session(identity, hydrate=False)
             if session.get('externalAgent') or not session.get('configurationPending'):return
         except AppError:return
         async with self.lock:
-            try:session=self._session(identity)
+            try:session=self._session(identity, hydrate=False)
             except AppError:return
             previous=bool(session.get('configurationPending'))
             claimed=self._claim_configuration_refresh(session)

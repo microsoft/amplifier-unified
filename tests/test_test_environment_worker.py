@@ -859,28 +859,37 @@ def test_cleanup_recovery_preserves_all_files_and_verifies_absence(library, tmp_
                       for p in tmp_path.rglob('*') if p.is_file()}
 
 
-def test_unsafe_selected_link_can_be_retained_without_extraction_before_cleanup(library, tmp_path, monkeypatch):
+@pytest.mark.parametrize('preserve_source', [True, False])
+def test_unsafe_selected_link_can_be_retained_without_extraction_before_cleanup(library, tmp_path, monkeypatch, preserve_source):
+    from test_environment_retention import guard_fifo_io
+    guard_fifo_io(monkeypatch)
     lib, calls = library
     monkeypatch.setattr(worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=20 * 1024**3))
-    def no_extract(*a, **k):
-        pytest.fail('Cleanup must never extract retained archives or follow their links')
-    monkeypatch.setattr(tarfile.TarFile, 'extractall', no_extract)
-    monkeypatch.setattr(tarfile.TarFile, 'extract', no_extract)
+    value = {**payload(tmp_path, 'remove'), 'preserveSource': preserve_source}
     original = lib.export_files
+    exported = {}
     def export(identity, source, destination, **kwargs):
         if source != '/artifacts':
             return original(identity, source, destination, **kwargs)
         calls.append(('export', (identity, source, destination), kwargs))
         with tarfile.open(destination, 'w') as archive:
             item = tarfile.TarInfo('artifacts'); item.type = tarfile.DIRTYPE; archive.addfile(item)
-            item = tarfile.TarInfo('artifacts/python'); item.type = tarfile.SYMTYPE
+            item = tarfile.TarInfo('artifacts/before'); item.size = 6; item.mode = 0o751
+            archive.addfile(item, io.BytesIO(b'\x00kept\xff'))
+            item = tarfile.TarInfo('artifacts/qualification/bin'); item.type = tarfile.DIRTYPE; archive.addfile(item)
+            item = tarfile.TarInfo('artifacts/qualification/bin/python'); item.type = tarfile.SYMTYPE
             item.linkname = '/usr/local/bin/python3.13'; archive.addfile(item)
+            item = tarfile.TarInfo('artifacts/after'); item.size = 4; item.mode = 0o640
+            archive.addfile(item, io.BytesIO(b'last'))
+        exported[str(destination)] = destination.read_bytes()
         return Value(id=identity, source=source, destination=str(destination),
                      bytes=destination.stat().st_size, sha256=hashlib.sha256(destination.read_bytes()).hexdigest())
     lib.export_files = export
-    first = removal_main(monkeypatch, payload(tmp_path, 'remove'))
+    first = removal_main(monkeypatch, value)
     assert first['status'] == 'stopped' and first['effectAdmitted'] is False
     assert first['phase'] == 'verifying' and first['code'] == 'archive_verification_failed'
+    assert first['verification'] == {'version': 1, 'reasonCode': 'symbolic_target',
+        'memberType': 'symbolic', 'relativePath': 'artifacts/qualification/bin/python'}
     assert not any(name == 'destroy' for name, *_ in calls)
     retained = next(tmp_path.glob('retained-*'))
     before = {p.name: p.read_bytes() for p in retained.iterdir()}
@@ -888,12 +897,31 @@ def test_unsafe_selected_link_can_be_retained_without_extraction_before_cleanup(
     monkeypatch.setattr(worker, 'docker_reconcile', lambda *a: {
         'status': (state := next(observations)),
         'observation': {'ownership': 'matched', 'absenceConfirmed': state == 'absent'}})
-    retry = {**payload(tmp_path, 'finishCleanup'), 'requestId': 'archive-only-continuation'}
+    retry = {**value, 'action': 'finishCleanup', 'requestId': 'archive-only-continuation'}
     result = removal_main(monkeypatch, retry)
     assert result['ok'] and result['retention']['archiveOnly'] is True
     assert sum(name == 'destroy' for name, *_ in calls) == 1
-    assert sum(name == 'export' for name, *_ in calls) == 4  # Fresh custody, no partial export reuse.
+    assert sum(name == 'export' for name, *_ in calls) == (4 if preserve_source else 2)
     assert before == {p.name: p.read_bytes() for p in retained.iterdir()}
+    directory = worker.removal_directory(retry)
+    raw = (directory / 'artifacts.tar').read_bytes()
+    assert raw == exported[str(directory / 'artifacts.tar')]
+    manifest = worker.read_private_record(directory / 'manifest.json')
+    artifact = next(a for a in manifest if a['source'] == '/artifacts')
+    assert artifact['bytes'] == len(raw) and artifact['sha256'] == hashlib.sha256(raw).hexdigest()
+    assert artifact['verified'] is True and artifact['logicalBytes'] == 10
+    with tarfile.open(directory / 'artifacts.tar') as archive:
+        assert archive.getmember('artifacts/qualification/bin/python').linkname == '/usr/local/bin/python3.13'
+        for name, mode, body in [('before', 0o751, b'\x00kept\xff'), ('after', 0o640, b'last')]:
+            assert archive.getmember('artifacts/' + name).mode == mode
+            assert archive.extractfile('artifacts/' + name).read() == body
+    if not preserve_source:
+        assert result['retention']['policy'] == 'selected-artifacts'
+        assert result['retention']['selection'] == ['/artifacts']
+        assert result['retention']['sourceSha256'] == value['snapshot']['archive_sha256']
+        assert not (directory / 'workspace.tar').exists()
+    assert worker.inspect_removal(retry)['code'] == 'destroy_confirmation_recorded'
+    assert not any(name in {'execute', 'stop', 'launch'} for name, *_ in calls)
 
 
 def test_failed_preservation_reports_known_phase_and_never_destroys(library, tmp_path):
@@ -1138,15 +1166,16 @@ def retain_prepared_archive_contract(value):
             'retention': {'mode': 'archive-only', 'maxBytesPerSelection': worker.retention.RECOVERY_LIMIT}}})
 
 
+@pytest.mark.parametrize('preserve_source', [True, False])
 @pytest.mark.parametrize('action', ['finishCleanup', 'remove'])
 @pytest.mark.parametrize('fault,reason', [
     (None, None), ('nonzero', 'invalid_size'), ('device', 'unsupported_type'), ('header', 'invalid_header'),
 ])
-def test_fifo_archive_custody_precedes_docker_destroy(library, tmp_path, monkeypatch, action, fault, reason):
+def test_fifo_archive_custody_precedes_docker_destroy(library, tmp_path, monkeypatch, action, fault, reason, preserve_source):
     from test_environment_retention import fifo_selection, guard_fifo_io
     guard_fifo_io(monkeypatch)
     lib, calls = library
-    value = payload(tmp_path, action)
+    value = {**payload(tmp_path, action), 'preserveSource': preserve_source}
     if action == 'remove':
         retain_prepared_archive_contract(value)
     monkeypatch.setattr(worker.shutil, 'disk_usage', lambda root: SimpleNamespace(free=20 * 1024**3))
@@ -1163,7 +1192,7 @@ def test_fifo_archive_custody_precedes_docker_destroy(library, tmp_path, monkeyp
         order.append(source)
         return receipt
     def verify_complete():
-        assert set(exported) == {'/workspace', '/artifacts'}
+        assert set(exported) == ({'/workspace', '/artifacts'} if preserve_source else {'/artifacts'})
         retained = json.loads((directory / 'retention.json').read_text())
         assert retained['verified'] and retained['archiveOnly']
         manifest = json.loads((directory / 'manifest.json').read_text())
@@ -1202,14 +1231,36 @@ def test_fifo_archive_custody_precedes_docker_destroy(library, tmp_path, monkeyp
         assert result['removal']['destroyEffect'] == 'not_dispatched'
         assert not (directory / 'retention.json').exists()
         assert not any(name == 'destroy' for name, *_ in calls)
-        assert order == ['stopped', '/workspace', '/artifacts']
+        assert order == ['stopped', *(['/workspace'] if preserve_source else []), '/artifacts']
     else:
         assert result['ok'] and result['status'] == 'removed'
         assert result['retention']['archiveOnly'] and result['removal']['destroyEffect'] == 'confirmed'
-        assert order == ['stopped', '/workspace', '/artifacts', 'rechecked', 'destroy', 'absent']
+        assert order == ['stopped', *(['/workspace'] if preserve_source else []), '/artifacts', 'rechecked', 'destroy', 'absent']
         assert sum(name == 'destroy' for name, *_ in calls) == 1
     assert all((directory / (root.strip('/') + '.tar')).read_bytes() == raw for root, raw in exported.items())
     assert not any(name in {'execute', 'stop', 'launch'} for name, *_ in calls)
+
+
+def test_artifact_export_remains_strict_even_with_prepared_archive_contract(library, tmp_path):
+    lib, calls = library
+    value = payload(tmp_path, 'exportArtifacts')
+    retain_prepared_archive_contract(value)
+    original = lib.export_files
+    def export(identity, source, destination, **kwargs):
+        receipt = original(identity, source, destination, **kwargs)
+        with tarfile.open(destination, 'a') as archive:
+            item = tarfile.TarInfo('artifacts/python')
+            item.type, item.linkname = tarfile.SYMTYPE, '/usr/local/bin/python3.13'
+            archive.addfile(item)
+        receipt.bytes = destination.stat().st_size
+        receipt.sha256 = hashlib.sha256(destination.read_bytes()).hexdigest()
+        return receipt
+    lib.export_files = export
+    with pytest.raises(worker.retention.ValidationFailure) as caught:
+        worker.execute_call(value)
+    assert caught.value.diagnostic['reasonCode'] == 'symbolic_target'
+    assert not any(name in {'destroy', 'execute', 'stop', 'launch'} for name, *_ in calls)
+    assert not list(tmp_path.glob('artifacts-*/artifacts-retention.json'))
 
 
 @pytest.mark.parametrize('profile_id', ['linux-python', 'python-project', 'browser-test'])
@@ -1533,10 +1584,13 @@ def test_retention_storage_refusal_precedes_exports_and_removal(library, tmp_pat
     assert not any(name in {'export', 'destroy'} for name, *_ in calls)
 
 
+@pytest.mark.parametrize('action', ['remove', 'finishCleanup'])
 @pytest.mark.parametrize('damage', ['missing', 'changed'])
-def test_selected_artifact_disposal_requires_retained_original_source(library, tmp_path, monkeypatch, damage):
+def test_selected_artifact_disposal_requires_retained_original_source(library, tmp_path, monkeypatch, damage, action):
     _, calls = library
-    value = {**payload(tmp_path, 'remove'), 'preserveSource': False}
+    value = {**payload(tmp_path, action), 'preserveSource': False}
+    monkeypatch.setattr(worker, 'docker_reconcile', lambda *args: {
+        'status': 'stopped', 'observation': {'ownership': 'matched'}})
     if damage == 'missing':
         (tmp_path / 'source.tar').unlink()
     else:

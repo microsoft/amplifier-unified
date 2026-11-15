@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "source": {
+    "schema": 1,
+    "repository": "microsoft/amplifier-unified",
+    "revision": "c9cce621a1b2a5bf16246d0d61e7d04a0cc3db72",
+    "subdirectory": "components/publishing",
+    "tree": "fefd38f8e8797d3491219a71929a8548791ac251",
+    "version": "0.1.0",
+    "tag": "publishing-v0.1.0",
+    "sourceFiles": {
+      ".gitignore": "91ff24eaa65a89ef74d692e164233422924a556a07666dd471ceefc6a31f331f",
+      "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "MANIFEST.in": "ca4d086a2960c7e0254208f08bf99f5db67adb33599085574b1155e859c7fb0a",
+      "README.md": "44fdb24e1e4b2c53409bbbec0c0233e587ceffbdb74571437657f3ecc31db1e2",
+      "amplifier_publishing/__init__.py": "e2a113bd99e5d025a6ac5ca81769104c24057843d45429e249f1595dc8b15fe7",
+      "amplifier_publishing/publisher.py": "7fe46a906522424096eb850769415a66359a57405d8ded8a3a561c2bbbb38fc2",
+      "amplifier_publishing/remote.py": "4979302d66d3d8296eadb8b6d61ed693bbb6887f882f98c6417e16f62661ee26",
+      "amplifier_publishing/retention.py": "e0dd39fa84724cf9b6d5066da17ef1b4998bb700fb604312ba72d37aaede207d",
+      "amplifier_publishing/retirement.py": "7e48283e71274211cd8873e2c31257f76c22de01bf0e0d51dbfa034ec1aa3a4b",
+      "amplifier_publishing/service.py": "5dfcc0ebd3a40989afb37ca679b98420ec7a684fd8d89844e45e462c42a53c5d",
+      "pyproject.toml": "93da432f08483ef1e37f4f1390d6cd8e661cf0638f22ce2f8234a8f93030ce19",
+      "tests/test_publishing_library.py": "c7d18fb09c335c2a09f0bd5d11b8bd988647ed992239e706055d81cbf31cdd00",
+      "tests/test_publishing_remote.py": "cf839caa5c0738df4f2e03827ef825a5e0bb333f3c5157b85c9e2c760665f2b7",
+      "tests/test_publishing_retention.py": "4ee62d720da373eb7082063425973f24894f4b34a2e473fd68450f591c3c5ca6",
+      "tests/test_publishing_retirement.py": "164f1babcdcf73f768d142f795ae47510f86ca70b96196df646bf3ddc9df9c26"
+    },
+    "artifacts": {
+      "amplifier_publishing-0.1.0-py3-none-any.whl": {
+        "sha256": "a20c8a68f1b244582d9e19d9a1ab6f3b8e3657210d494d85412b7a4abe45ec61",
+        "bytes": 45519
+      },
+      "amplifier_publishing-0.1.0.tar.gz": {
+        "sha256": "e17fc19e924394c8916d6958c22211433021de82f5470bdde93bc37341265448",
+        "bytes": 73946
+      }
+    }
+  },
+  "artifact": {
+    "url": "https://github.com/microsoft/amplifier-unified/releases/download/publishing-v0.1.0/amplifier_publishing-0.1.0-py3-none-any.whl",
+    "sha256": "a20c8a68f1b244582d9e19d9a1ab6f3b8e3657210d494d85412b7a4abe45ec61",
+    "bytes": 45519
+  },
+  "sourceReceiptSha256": "6b5e492aca6fe06f99db9d6cc6d8442d956c9e733f1f6cee2a89d756608d89e8",
+  "runtimeRequirements": [],
+  "files": {
+    "amplifier_publishing/__init__.py": "e2a113bd99e5d025a6ac5ca81769104c24057843d45429e249f1595dc8b15fe7",
+    "amplifier_publishing/publisher.py": "7fe46a906522424096eb850769415a66359a57405d8ded8a3a561c2bbbb38fc2",
+    "amplifier_publishing/remote.py": "4979302d66d3d8296eadb8b6d61ed693bbb6887f882f98c6417e16f62661ee26",
+    "amplifier_publishing/retention.py": "e0dd39fa84724cf9b6d5066da17ef1b4998bb700fb604312ba72d37aaede207d",
+    "amplifier_publishing/retirement.py": "7e48283e71274211cd8873e2c31257f76c22de01bf0e0d51dbfa034ec1aa3a4b",
+    "amplifier_publishing/service.py": "5dfcc0ebd3a40989afb37ca679b98420ec7a684fd8d89844e45e462c42a53c5d",
+    "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  }
+}

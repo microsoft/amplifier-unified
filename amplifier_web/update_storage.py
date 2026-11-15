@@ -10,6 +10,19 @@ import sys
 from pathlib import Path
 
 
+async def snapshot_shared_config(proof, source, target):
+    """Copy only shared qualification inputs under the caller's copy owner."""
+    from .update_health import candidate_copy
+
+    target.mkdir(mode=0o700)
+    for name in ("settings.yaml", "keys.env", "routing"):
+        original = source / name
+        if original.is_dir():
+            await candidate_copy(proof, shutil.copytree, original, target / name)
+        elif original.is_file():
+            await candidate_copy(proof, shutil.copy2, original, target / name)
+
+
 def clone_file(source, target):
     source, target = Path(source), Path(target)
     try:

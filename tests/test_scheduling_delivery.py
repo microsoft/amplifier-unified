@@ -3,11 +3,13 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 import zipfile
 
 import pytest
 
-from test_scheduling_release import candidate, release  # Existing real Git/artifact fixture.
+from test_scheduling_release import candidate, release, make_candidate  # Existing real Git/artifact fixture.
 
 SPEC = importlib.util.spec_from_file_location("scheduling_delivery", Path(__file__).parents[1] / "scripts/scheduling_delivery.py")
 delivery = importlib.util.module_from_spec(SPEC)
@@ -148,3 +150,209 @@ def test_interrupted_swap_restores_original_selection(selected, monkeypatch):
         delivery.select(root, dist, revision, checksum)
     assert delivery.inventory(destination) == before
     assert (root / delivery.RECORD).read_bytes() == record
+
+
+@pytest.fixture
+def worktrees_selection(tmp_path):
+    root, revision, dist, _ = make_candidate(tmp_path, "worktrees")
+    wheel = next(dist.glob("*.whl"))
+    with zipfile.ZipFile(wheel) as archive:
+        members = {name: archive.read(name) for name in archive.namelist()}
+    info = "amplifier_worktrees-0.1.0.dist-info/"
+    members[info + "licenses/LICENSE"] = b"MIT\n"
+    members[info + "METADATA"] += b"Requires-Dist: filelock<5,>=4.2.1\n"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, raw in members.items():
+            archive.writestr(name, raw)
+    (dist / "worktrees-source.json").unlink(); (dist / "SHA256SUMS").unlink()
+    release.seal(root, revision, dist, component="worktrees")
+    (root / "pyproject.toml").write_text(
+        '[project]\nname="amplifier-unified"\nversion="1.0.0"\n'
+        'dependencies=["filelock>=4.2.1,<5"]\n'
+        '[tool.hatch.build.targets.wheel]\n'
+        'packages=["components/worktrees-delivery/amplifier_worktrees"]\n')
+    checksum = delivery.sha((dist / "worktrees-source.json").read_bytes())
+    delivery.select(root, dist, revision, checksum, component="worktrees")
+    return root, revision, dist, checksum
+
+
+def test_worktrees_artifact_remains_selected_without_author_or_git(worktrees_selection, tmp_path):
+    root, revision, dist, checksum = worktrees_selection
+    before = delivery.verify(root, component="worktrees")
+    (root / "components/worktrees/amplifier_worktrees/__init__.py").write_text("future = True\n")
+    assert delivery.verify(root, component="worktrees") == before
+    plain = tmp_path / "consumer"; (plain / "components").mkdir(parents=True)
+    shutil.copy2(root / "pyproject.toml", plain / "pyproject.toml")
+    delivery.select(plain, dist, revision, checksum, component="worktrees")
+    assert delivery.verify(plain, component="worktrees") == before
+    assert not (plain / "components/worktrees").exists() and not (plain / ".git").exists()
+    assert before["runtimeRequirements"] == ["filelock<5,>=4.2.1"]
+    (plain / "pyproject.toml").write_text((plain / "pyproject.toml").read_text().replace(
+        '"filelock>=4.2.1,<5"', '"filelock>=4.2.1,<6"'))
+    with pytest.raises(ValueError, match="runtime requirement"):
+        delivery.verify(plain, component="worktrees")
+
+
+@pytest.fixture
+def selected_pair(tmp_path):
+    """The app-selected records suffice; future authoring trees are not inputs."""
+    project = Path(__file__).parents[1]
+    root = tmp_path / "consumer"; (root / "components").mkdir(parents=True)
+    shutil.copy2(project / "pyproject.toml", root / "pyproject.toml")
+    for component in ("worktrees", "portability"):
+        shutil.copy2(project / f"components/{component}.source.json", root / "components")
+        shutil.copytree(project / f"components/{component}-delivery", root / f"components/{component}-delivery")
+    return root
+
+
+def test_portability_selection_is_independent_of_author_dependency_selection(selected_pair):
+    root = selected_pair
+    before = delivery.verify(root, component="portability")
+    author = root / "components/portability"; author.mkdir()
+    (author / "worktrees-source.json").write_text('{"future": "unpublished dependency"}')
+    runtime = author / "amplifier_portability"; runtime.mkdir()
+    (runtime / "__init__.py").write_text('future = "not the app default"\n')
+    assert delivery.verify(root, component="portability") == before
+    assert before["dependencySources"]["worktrees"] == delivery.verify(root, component="worktrees")["source"]
+    assert not (root / ".git").exists()
+
+
+@pytest.mark.parametrize("change", ["artifact", "runtime", "revision"])
+def test_portability_refuses_other_worktrees_bytes_at_same_version(selected_pair, change):
+    root = selected_pair
+    path = root / "components/worktrees.source.json"
+    record = json.loads(path.read_bytes())
+    original_version = record["source"]["version"]
+    wheel = f"amplifier_worktrees-{original_version}-py3-none-any.whl"
+    if change == "artifact":
+        record["artifact"]["sha256"] = "a" * 64
+        record["source"]["artifacts"][wheel]["sha256"] = "a" * 64
+    elif change == "runtime":
+        name = "amplifier_worktrees/__init__.py"
+        raw = b'future = "different implementation"\n'
+        (root / "components/worktrees-delivery" / name).write_bytes(raw)
+        record["files"][name] = record["source"]["sourceFiles"][name] = delivery.sha(raw)
+    else:
+        record["source"]["revision"] = "a" * 40
+    record["sourceReceiptSha256"] = delivery.sha((json.dumps(record["source"], indent=2) + "\n").encode())
+    path.write_text(json.dumps(record, indent=2) + "\n")
+    # A coherent different worktrees selection cannot silently satisfy portability.
+    assert delivery.verify(root, component="worktrees")["source"]["version"] == original_version
+    with pytest.raises(ValueError, match="exact selected worktrees artifact"):
+        delivery.verify(root, component="portability")
+
+
+def test_portability_dependency_receipt_is_bound_to_published_source(selected_pair):
+    root = selected_pair
+    path = root / "components/portability.source.json"
+    record = json.loads(path.read_bytes())
+    record["dependencySources"]["worktrees"]["tree"] = "a" * 40
+    path.write_text(json.dumps(record, indent=2) + "\n")
+    with pytest.raises(ValueError, match="exact selected worktrees artifact"):
+        delivery.verify(root, component="portability")
+
+
+@pytest.fixture(params=["operations", "kernels"])
+def flat_selection(tmp_path, request):
+    component = request.param
+    root, revision, dist, _ = make_candidate(tmp_path, component)
+    with zipfile.ZipFile(next(dist.glob("*.whl")), "a") as archive:
+        archive.writestr(f"amplifier_{component}-0.1.0.dist-info/licenses/LICENSE", "MIT\n")
+    (dist / f"{component}-source.json").unlink(); (dist / "SHA256SUMS").unlink()
+    release.seal(root, revision, dist, component=component)
+    # Selection consumes the published historical project without cloning it.
+    plain = tmp_path / "consumer"; (plain / "components").mkdir(parents=True)
+    (plain / "pyproject.toml").write_text(
+        '[project]\nname="amplifier-unified"\nversion="1.0.0"\ndependencies=[]\n'
+        f'[tool.hatch.build.targets.wheel]\npackages=["amplifier_{component}"]\n')
+    checksum = delivery.sha((dist / f"{component}-source.json").read_bytes())
+    delivery.select(plain, dist, revision, checksum, component=component)
+    return plain, revision, dist, checksum, component
+
+
+def test_flat_selection_does_not_shadow_independent_author(flat_selection):
+    root, _, _, _, component = flat_selection
+    before = delivery.verify(root, component=component)
+    author = root / f"components/{component}"; author.mkdir()
+    (author / "__init__.py").write_text('raise RuntimeError("unpublished author change")\n')
+    assert delivery.verify(root, component=component) == before
+    assert before["source"]["subdirectory"] == f"amplifier_{component}"
+    assert set(before["files"]) == {"__init__.py", "LICENSE"} | ({"node_runner.cjs"} if component == "kernels" else set())
+    if component == "kernels":
+        assert (root / "amplifier_kernels/node_runner.cjs").read_bytes() == b"const selected = true;\n"
+    assert not (root / ".git").exists()
+    # This is the ordinary cwd import used by source/editable development.
+    result = subprocess.check_output([sys.executable, "-c",
+        f'import amplifier_{component} as p; print(p.value); print(p.__file__)'], cwd=root, text=True)
+    assert result.splitlines() == ["selected", str(root / f"amplifier_{component}/__init__.py")]
+
+
+def test_flat_selection_refuses_author_packaging(flat_selection):
+    root, _, _, _, component = flat_selection
+    project = root / "pyproject.toml"
+    project.write_text(project.read_text().replace('packages=[', f'packages=["components/{component}",'))
+    with pytest.raises(ValueError, match="only the selected"):
+        delivery.verify(root, component=component)
+
+
+@pytest.mark.parametrize("recorded", [True, False])
+def test_flat_selection_preserves_modified_root_snapshot(flat_selection, recorded):
+    root, revision, dist, checksum, component = flat_selection
+    path = root / f"amplifier_{component}/__init__.py"
+    path.write_text("local_work = True\n")
+    record_path = root / f"components/{component}.source.json"
+    record = record_path.read_bytes()
+    if not recorded:
+        record_path.unlink()  # An unmoved author tree is never a replaceable selection.
+    with pytest.raises(ValueError, match="locally modified"):
+        delivery.select(root, dist, revision, checksum, component=component)
+    assert path.read_text() == "local_work = True\n"
+    if recorded:
+        assert record_path.read_bytes() == record
+    else:
+        assert not record_path.exists()
+
+
+@pytest.fixture(params=[
+    ("workspace-metadata", "workspaces", "amplifier_workspace_metadata"),
+    ("outputs", "outputs", "amplifier_outputs"),
+    ("publishing", "publishing", "amplifier_publishing"),
+])
+def nested_selection(tmp_path, request):
+    component, author_directory, package = request.param
+    root, revision, dist, _ = make_candidate(tmp_path, component)
+    with zipfile.ZipFile(next(dist.glob("*.whl")), "a") as archive:
+        archive.writestr(f"{package}-0.1.0.dist-info/licenses/LICENSE", "MIT\n")
+    (dist / f"{component}-source.json").unlink(); (dist / "SHA256SUMS").unlink()
+    release.seal(root, revision, dist, component=component)
+    plain = tmp_path / "consumer"; (plain / "components").mkdir(parents=True)
+    (plain / "pyproject.toml").write_text(
+        '[project]\nname="amplifier-unified"\nversion="1.0.0"\ndependencies=[]\n'
+        '[tool.hatch.build.targets.wheel]\n'
+        f'packages=["components/{component}-delivery/{package}"]\n')
+    checksum = delivery.sha((dist / f"{component}-source.json").read_bytes())
+    delivery.select(plain, dist, revision, checksum, component=component)
+    return plain, component, author_directory, package
+
+
+def test_nested_selection_preserves_published_names_without_author_or_git(nested_selection):
+    root, component, author_directory, package = nested_selection
+    before = delivery.verify(root, component=component)
+    assert before["source"]["subdirectory"] == f"components/{author_directory}"
+    assert before["source"]["tag"] == f"{component}-v0.1.0"
+    assert before["artifact"]["url"].endswith(f"/{package}-0.1.0-py3-none-any.whl")
+    assert set(before["files"]) == {"LICENSE", f"{package}/__init__.py"}
+    assert before["runtimeRequirements"] == []
+    assert not (root / ".git").exists() and not (root / "components" / author_directory).exists()
+    author = root / "components" / author_directory / package; author.mkdir(parents=True)
+    (author / "__init__.py").write_text('raise RuntimeError("unselected author")\n')
+    assert delivery.verify(root, component=component) == before
+
+
+def test_nested_selection_refuses_two_installed_owners(nested_selection):
+    root, component, author_directory, package = nested_selection
+    project = root / "pyproject.toml"
+    project.write_text(project.read_text().replace(
+        'packages=[', f'packages=["components/{author_directory}/{package}",'))
+    with pytest.raises(ValueError, match="only the selected"):
+        delivery.verify(root, component=component)

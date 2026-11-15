@@ -1,0 +1,140 @@
+"""Manual edits and discovery reconciliation of caller-owned registrations."""
+from __future__ import annotations
+
+import copy
+from typing import NamedTuple
+import uuid
+
+
+class RegistrationReconciliation(NamedTuple):
+    by_id: dict
+    hidden_ids: set
+    registrations_changed: bool
+    hidden_changed: bool
+    remaps: list[tuple[str, str, str | None]]
+
+
+def reconcile(registrations, known, observed, *, hidden_ids, managed_paths):
+    """Update registration rows in place and report ordered reference remaps.
+
+    The caller owns both mutable lists, applies each remap in order, and persists
+    the affected state under its existing lock. New rows retain the existing
+    shallow-copy semantics for observed fields.
+    A remap carries the observed destination path at that point in the scan.
+    """
+    hidden_workspaces = set(hidden_ids)
+    registrations_changed = hidden_changed = False
+    remaps = []
+    workspaces = {row['id']: row for row in registrations}
+    # Most refreshes contain no unresolved folders. Index the
+    # exceptions once instead of rescanning every registration
+    # for every discovered workspace while holding the app lock.
+    unresolved_by_project = {}
+    for item in registrations:
+        if not item.get('path'):
+            unresolved_by_project.setdefault(item.get('nativeProject'), {})[item['id']] = item
+    for row in known:
+        previous = workspaces.get(row['id'])
+        if previous and previous.get('path') == row.get('path') and previous.get('available') != row['available']:
+            previous['available'] = row['available']
+            registrations_changed = True
+    for row in observed:
+        if row.get('path') in managed_paths:
+            continue
+        unresolved_id = (uuid.uuid5(uuid.NAMESPACE_URL, f"amplifier-project:{row['nativeProject']}").hex
+                         if hidden_workspaces and row.get('path') else None)
+        if unresolved_id is not None and unresolved_id in hidden_workspaces and row['id'] not in hidden_workspaces:
+            hidden_workspaces.add(row['id'])
+            hidden_ids.append(row['id'])
+            hidden_changed = True
+        if row['id'] in hidden_workspaces:
+            continue
+        previous = workspaces.get(row['id'])
+        previous_project = previous.get('nativeProject') if previous else None
+        unresolved = [item for identity, item in unresolved_by_project.get(row['nativeProject'], {}).items()
+                      if identity != row['id']]
+        if previous is None:
+            registrations.append(dict(row)); workspaces[row['id']] = registrations[-1]
+            previous = workspaces[row['id']]
+            registrations_changed = True
+        else:
+            for key in ('nativeProject', 'available', 'sessionCount', 'workerSessionCount'):
+                if key in row and previous.get(key) != row[key]:
+                    previous[key] = row[key]; registrations_changed = True
+        if not previous.get('path'):
+            # Later rows in this same scan must see additions
+            # and identity changes, just as a fresh list scan did.
+            project = previous.get('nativeProject')
+            if previous_project != project:
+                unresolved_by_project.get(previous_project, {}).pop(previous['id'], None)
+            unresolved_by_project.setdefault(project, {})[previous['id']] = previous
+        for old in unresolved:
+            # Migrate the generated placeholder, preserving any
+            # user customization and every reference to it.
+            if old.get('name') != old.get('nativeProject'):
+                if previous.get('name') == row.get('name'):
+                    previous['name'] = old['name']
+                elif old.get('name') != previous.get('name'):
+                    aliases = previous.setdefault('aliases', [])
+                    if old['name'] not in aliases:
+                        aliases.append(old['name'])
+            for key, value in old.items():
+                if key not in {'id', 'name', 'nativeProject', 'path', 'available', 'sessionCount', 'workerSessionCount'}:
+                    previous.setdefault(key, copy.deepcopy(value))
+            remaps.append((old['id'], row['id'], row.get('path')))
+            registrations.remove(old)
+            workspaces.pop(old['id'], None)
+            unresolved_by_project.get(old.get('nativeProject'), {}).pop(old['id'], None)
+            registrations_changed = True
+    return RegistrationReconciliation(
+        workspaces, hidden_workspaces, registrations_changed, hidden_changed, remaps)
+
+
+def register(registrations, candidate, *, name):
+    """Apply an already resolved folder registration, preserving existing rows.
+
+    The host validates the folder and trims the explicit display name first.
+    An omitted name does not replace a prior name with the folder's basename.
+    """
+    existing = next((row for row in registrations if row["id"] == candidate["id"]), None)
+    if not existing:
+        registrations.append(candidate)
+    else:
+        existing["available"] = True
+        if name:
+            existing["name"] = name
+
+
+def edit(registrations, action, args):
+    """Edit one existing row; the host owns selection and reference effects."""
+    row = next((row for row in registrations if row["id"] == args["id"]), None)
+    if not row:
+        raise ValueError("This workspace is no longer registered.")
+    if action in {"workspace.archive", "workspace.restore"}:
+        row["archived"] = action == "workspace.archive"
+    elif action == "workspace.rename":
+        name = args["name"].strip()
+        if not name:
+            raise ValueError("Enter a workspace name.")
+        row["name"] = name
+    elif action == "workspace.remove":
+        if len(registrations) == 1:
+            raise ValueError("Keep at least one workspace registered.")
+        registrations.remove(row)
+    return row
+
+
+def listing(registrations, args):
+    query = args.get('query', '').strip().casefold()
+    rows = [dict(row) for row in registrations if row.get('available') and row.get('path') and not row.get('archived')
+            and (not query or query in (row['name'] + ' ' + row['path']).casefold())]
+    names = {}
+    for row in rows:
+        names[row['name']] = names.get(row['name'], 0) + 1
+    for row in rows:
+        row['label'] = row['name'] + (' · ' + row['path'] if names[row['name']] > 1 else '')
+    rows.sort(key=lambda row: (row['name'].casefold(), row['path']))
+    offset = args.get('offset', 0)
+    limit = args.get('limit', 100)
+    return {'items': rows[offset:offset + limit], 'nextOffset': offset + limit if len(rows) > offset + limit else None,
+            'total': len(rows)}
