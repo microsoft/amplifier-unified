@@ -721,17 +721,11 @@ namespace UnifiedBootstrap {
                 using(entries) { entries.StandardOutput.ReadToEnd(); entries.WaitForExit(); return entries.ExitCode==0; }
             } catch(Exception) { return false; }
         }
-        internal static int StartAndWait(string root) {
-            // 0: the launcher finished, or Windows gave no process to wait for.
-            // 1: the launcher failed and said so in its own message.
-            // 2: Windows could not start it.
-            try {
-                var start=AppStart(root);
-                Process app;
-                using(PinInstalled(root,start.FileName)) app=Process.Start(start);
-                if(app==null) return 0;
-                using(app) { app.WaitForExit(); return app.ExitCode==0?0:1; }
-            } catch(Exception) { return 2; }
+        internal static Process StartApp(string root) {
+            // The launcher, started. Null when Windows gave no process to wait
+            // for. The pin covers only the start.
+            var start=AppStart(root);
+            using(PinInstalled(root,start.FileName)) return Process.Start(start);
         }
         static int OpenInstalled(string root) {
             // A second setup run adds missing Start-menu and Apps-list entries
@@ -770,13 +764,24 @@ namespace UnifiedBootstrap {
                 var bar=new ProgressBar {Left=20,Top=85,Width=500,Style=ProgressBarStyle.Marquee};
                 form.Controls.Add(label);form.Controls.Add(bar);
                 var timer=new System.Windows.Forms.Timer {Interval=250};
-                timer.Tick+=(sender,e)=>{label.Text=Stage+"...\n\nKeep this window open.";};
-                // The launcher does not need setup. While setup only waits for
-                // it, the person can close this window; Amplifier goes on.
-                int result=1;bool settled=false,waiting=false;
+                // The result is 0 only when the entries exist and setup saw the
+                // launcher finish. The launcher does not need setup: once it
+                // runs, the person can close this window and Amplifier goes on.
+                // Setup did not see the outcome then, and its result stays 1.
+                // The timer sees the launcher's end, so that nothing still waits
+                // when the window is closed.
+                int result=1;bool settled=false,waiting=false;Process app=null;
+                timer.Tick+=(sender,e)=>{
+                    label.Text=Stage+"...\n\n"+(waiting?"You can close this window. Amplifier goes on.":"Keep this window open.");
+                    if(waiting && !settled && app.HasExited) {
+                        result=app.ExitCode==0 && listed?0:1;
+                        settled=true;timer.Stop();form.Close();
+                    }
+                };
                 form.FormClosing+=(sender,e)=>{if(!settled && !waiting)e.Cancel=true;};
                 form.Shown+=async(sender,e)=>{
                     timer.Start();
+                    bool started=false;
                     try {
                         if(!listed) {
                             listed=await Task.Run(()=>AddEntries(root));
@@ -787,17 +792,17 @@ namespace UnifiedBootstrap {
                                 MessageBoxButtons.OK,MessageBoxIcon.Warning);
                         }
                         Stage="Starting Amplifier (this can take a few minutes)";
-                        result=listed?0:1;waiting=true;
-                        int started=await Task.Run(()=>StartAndWait(root));
-                        // The launcher shows its own messages. Setup adds one
-                        // only when Windows could not start the launcher.
-                        if(started==2) Say("Setup could not start Amplifier.\n\n"+(listed
-                            ? "Open it from the Start menu: Amplifier Unified."
-                            : "Restart Windows. Then run this setup file again."),
-                            MessageBoxButtons.OK,MessageBoxIcon.Warning);
-                        result=started==0 && listed?0:1;
-                    } catch(Exception) {
-                    } finally {settled=true;timer.Stop();form.Close();}
+                        app=await Task.Run(()=>StartApp(root));
+                        started=true;
+                    } catch(Exception) {}
+                    // The launcher runs. It shows its own messages.
+                    if(started && app!=null) { waiting=true; return; }
+                    if(!started) Say("Setup could not start Amplifier.\n\n"+(listed
+                        ? "Open it from the Start menu: Amplifier Unified."
+                        : "Restart Windows. Then run this setup file again."),
+                        MessageBoxButtons.OK,MessageBoxIcon.Warning);
+                    else result=listed?0:1;  // Windows gave no process to wait for.
+                    settled=true;timer.Stop();form.Close();
                 };
                 Application.Run(form);timer.Dispose();return result;
             }

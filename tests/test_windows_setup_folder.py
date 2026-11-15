@@ -128,8 +128,8 @@ def test_unfinished_attempts_are_removed_and_installations_never_are():
     opened = between("static int OpenInstalled(", "static int ConsumerWindow()")
     assert "RemoveUnfinished" not in opened and "RemoveContents" not in opened
     # The installation is checked again, and held, while Windows starts it.
-    assert "using(PinInstalled(root,start.FileName)) app=Process.Start(start);" in between(
-        "static int StartAndWait(", "static int OpenInstalled(")
+    assert "using(PinInstalled(root,start.FileName)) return Process.Start(start);" in between(
+        "static Process StartApp(", "static int OpenInstalled(")
     pin = between("internal static IDisposable PinInstalled(", "internal static string SignInTask(")
     assert pin.index('Need(Marked(root)=="installed"') < pin.index("storage.TrustExecutable(program)")
     saved = between("internal static string SaveDiagnostics(", "static string Shortcut(")
@@ -149,8 +149,8 @@ def test_second_setup_restores_entries_before_start_and_waits_without_pins():
     order = [opened.index(text) for text in (
         "if(!listed) {", "listed=await Task.Run(()=>AddEntries(root));",
         'Say("Setup could not add Amplifier to the Start menu. Amplifier starts now.',
-        "result=listed?0:1;waiting=true;",
-        "int started=await Task.Run(()=>StartAndWait(root));", "result=started==0 && listed?0:1;")]
+        "app=await Task.Run(()=>StartApp(root));", "started=true;",
+        "if(started && app!=null) { waiting=true; return; }", 'if(!started) Say("Setup could not start Amplifier.')]
     assert order == sorted(order)
     # "Listed" needs the entry record AND the Start-menu entry itself: a removal
     # whose last record write was refused leaves the record with no entry.
@@ -161,20 +161,29 @@ def test_second_setup_restores_entries_before_start_and_waits_without_pins():
     failure = between('Say("Setup could not add Amplifier', "MessageBoxIcon.Warning", opened)
     assert "To open it later, run this setup file again. Your chats and settings are kept." in failure
     assert "Open it from the Start menu" not in failure and "return" not in failure
-    unstarted = between('if(started==2) Say(', "MessageBoxIcon.Warning", opened)
+    unstarted = between('if(!started) Say(', "MessageBoxIcon.Warning", opened)
     assert unstarted.index("(listed") < unstarted.index("Open it from the Start menu: Amplifier Unified.") \
         < unstarted.index("Restart Windows. Then run this setup file again.")
     # The person sees a window with the stage for the whole time.
     assert "new Form" in opened and 'Text="Amplifier Unified Setup"' in opened
     assert "ProgressBarStyle.Marquee" in opened and "new System.Windows.Forms.Timer" in opened
-    assert 'label.Text=Stage+"...\\n\\nKeep this window open."' in opened
     assert 'Stage="Starting Amplifier (this can take a few minutes)";' in opened
-    # The window stays while setup works. While setup only waits for the
-    # launcher, the person can close it: the launcher does not need setup.
-    assert "if(!settled && !waiting)e.Cancel=true;" in opened and "settled=true;timer.Stop();form.Close();" in opened
-    assert opened.index("listed=await Task.Run(()=>AddEntries(root));") < opened.index("waiting=true;")
+    # The window stays while setup adds the entries and starts the launcher.
+    # Once the launcher runs, the person can close it: the launcher does not
+    # need setup, and the window says so.
+    assert "if(!settled && !waiting)e.Cancel=true;" in opened
+    assert ('label.Text=Stage+"...\\n\\n"+(waiting?"You can close this window. Amplifier goes on.":'
+            '"Keep this window open.");') in opened
+    # The result is 0 only when the entries exist and setup saw the launcher
+    # finish. A window that the person closed earlier leaves it at 1.
+    assert "int result=1;bool settled=false,waiting=false;Process app=null;" in opened
+    assert opened.index("if(waiting && !settled && app.HasExited) {") < opened.index(
+        "result=app.ExitCode==0 && listed?0:1;")
+    # Setup waits for the launcher's end with its timer, not with a pending
+    # wait: nothing is left to continue after the window is closed.
+    assert opened.count("await ") == 2 and "WaitForExit" not in opened
 
-    entries = between("static bool AddEntries(", "static int StartAndWait(")
+    entries = between("static bool AddEntries(", "static Process StartApp(")
     assert 'Path.Combine(root,"tools","amplifier-unified","Scripts","python.exe")' in entries
     assert '"-I -B -m amplifier_web.windows_consumer --root "+Quote(root)+" --integrate"' in entries
     # No console window, and the program's output is read: with a valid output
@@ -183,13 +192,11 @@ def test_second_setup_restores_entries_before_start_and_waits_without_pins():
     assert entries.index("entries.StandardOutput.ReadToEnd();") < entries.index("entries.WaitForExit();") \
         < entries.index("return entries.ExitCode==0;")
     assert "catch(Exception) { return false; }" in entries
-    started = between("static int StartAndWait(", "static int OpenInstalled(")
-    assert started.index("app.WaitForExit();") < started.index("return app.ExitCode==0?0:1;")
-    assert "if(app==null) return 0;" in started and "catch(Exception) { return 2; }" in started
-    # Each pin covers one statement, the start. Both waits come after it: setup
-    # does not hold the folder and the folders above it while a program runs.
+    started = between("static Process StartApp(", "static int OpenInstalled(")
+    # Each pin covers one statement, the start. Setup does not hold the folder
+    # and the folders above it while a program runs.
     assert "using(PinInstalled(root,python)) entries=Process.Start(integrate);" in entries
-    assert "using(PinInstalled(root,start.FileName)) app=Process.Start(start);" in started
+    assert "using(PinInstalled(root,start.FileName)) return Process.Start(start);" in started
     for body in (entries, started, opened):
         assert not re.search(r"using\(PinInstalled\([^\n]*\)\s*\{", body)
     # The question and the work are separate, so that the native check can run
@@ -197,8 +204,9 @@ def test_second_setup_restores_entries_before_start_and_waits_without_pins():
     assert opened.index("return SecondRun(root,listed);") < opened.index(
         "internal static int SecondRun(string root, bool listed) {") < opened.index("using(var form=new Form")
     harness = (ROOT / "tests/windows/native_setup.Tests.cs").read_text(encoding="utf-8")
-    for call in ("NativeInstaller.AddEntries(second)", "NativeInstaller.StartAndWait(second)",
-                 "NativeInstaller.SecondRun(root,listed)", "Window(second,true)", "Window(second,false)"):
+    for call in ("NativeInstaller.AddEntries(second)", "NativeInstaller.StartApp(empty)",
+                 "NativeInstaller.SecondRun(root,listed)", "Window(second,true)", "Window(second,false)",
+                 "ClosedEarly(second)"):
         assert call in harness
     assert "runtime status" in DESIGN and "clean-room run" in DESIGN
 

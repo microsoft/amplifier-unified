@@ -822,30 +822,40 @@ that), then starts the launcher and waits for it. Setup's window with the
 current step stays open during both steps. Chats and settings stay in place.
 If the entries cannot be added, setup says so and still starts the app, as it
 did before this step existed; the next step it names is to run the setup file
-again. While setup only waits for the launcher, the person can close setup's
-window; the launcher goes on. The launcher skips preparation when
+again. While setup adds the entries and starts the launcher, its window does
+not close, as during a first installation. Once the launcher runs, the window
+says that the person can close it; the launcher goes on. Setup's result is 0
+only when the entries exist and setup saw the launcher finish; a window that
+the person closed earlier leaves it at 1. The launcher skips preparation when
 `runtime status` reports a prepared runtime, just as a start at sign-in uses
 that runtime. Without this check, a connected AI account made the start run a
 complete first installation: minutes without a window, a new folder on each
 attempt, and in the observed case a failure. The launcher's failure message
-names the step that failed: the preparation, or the start. It names the Start
-menu as the next step only when the entry record says `installed` and the
-entry that opens Amplifier exists; otherwise the next step is to run the setup
-file again. The record alone is not enough: the last write of an uninstall can
-be refused after every entry is gone. For the same reason the entries can be
-added again over a record that still says `installed`, when neither the
-Start-menu folder nor the Apps-list entry exists.
+has two forms: the preparation of the remaining parts failed, or the start
+failed (every other step). It names the Start menu as the next step only when
+the entry record says `installed` and the entry that opens Amplifier exists in
+the folder that the record names; setup's second run decides by the same two
+facts. Otherwise the next step is to run the setup file again. The record
+alone is not enough: the last write of an uninstall can be refused after every
+entry is gone. For the same reason the entries can be added again over a
+record that still says `installed`, when the folder that the record names,
+today's Start-menu folder and the Apps-list entry are all absent. The entries
+are added again only when all of them are gone. A partly damaged set (a person
+deleted one shortcut) is refused and nothing is overwritten; setup then says
+that it could not add the entries, and starts the app.
 
 Not proven here, and the condition for all of the above: that
 `runtime status` reports a prepared runtime on a real installation after
-chats. The running host makes the same checks of the recorded runtime before
-each chat, which supports it and does not prove it. When the status is
+chats. Read from source and not run: the running host makes the same checks
+of the recorded runtime before each chat, which supports it and does not prove
+it. When the status is
 negative or cannot be read, the start prepares as before. The real Scheduled
 Task and the real host start also need a clean-room run. The native check on
 a runner runs setup's second-run window and its two steps with a stand-in
 program in place of the installation's Python (exact arguments, the wait, the
-exit codes, a window that closes by itself). It does not show the question
-before the window, a message, or the real launcher.
+exit codes, a window that closes by itself, and a window that is closed on
+request while the launcher still runs). It does not show the question before
+the window, a message, or the real launcher.
 
 Not changed, each stated as a limit:
 
@@ -857,15 +867,18 @@ Not changed, each stated as a limit:
   `runtime status` reports a prepared runtime.
 - The limits of a preparation stay as they were: 1800 seconds for the whole
   preparation and 900 seconds for each of its steps. No shorter limit exists.
-  The failure that was observed was not a time limit: one of four parallel
-  checks failed after about four minutes of other work, and the saved record
-  names only the cancellation of the other three.
+  The failure that was observed was not a time limit. Read from its saved
+  progress record: after about four minutes of other work, four parallel
+  checks started and all four ended as failed within the same second. The
+  saved failure record names a cancellation, which is what the other three
+  record when one of them fails.
 - A start from the Start menu has no window while it prepares. Only a start
   from the setup file shows setup's window.
 - An installation that an earlier setup file made keeps that setup file's
   launcher. A second run of a newer setup file starts that launcher and asks
-  it to add the entries; it does not replace it. Such an installation gets
-  this change only from a new installation.
+  it to add the entries; it does not replace it. That launcher refuses to add
+  the entries again and prepares as before. Such an installation gets this
+  change only from a new installation.
 
 The Start-menu commands Stop and Status use the same form of message: what
 did not happen, the next action and the reference. They no longer show the

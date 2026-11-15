@@ -231,12 +231,12 @@ def listed(root) -> bool:
     """
     from .windows_files import address
     try:
-        root = address(root)
-        row = _receipt(root)
-        if not isinstance(row, dict) or row.get("status") != "installed":
+        row = _receipt(address(root))
+        # The folder that the record names: setup's second run reads the same one.
+        if (not isinstance(row, dict) or row.get("status") != "installed"
+                or not isinstance(row.get("folder"), str)):
             return False
-        folder = programs() / ("Amplifier Unified - " + identity(root))
-        return (folder / next(iter(LINKS))).is_file()
+        return (Path(row["folder"]) / next(iter(LINKS))).is_file()
     except (OSError, ValueError):
         return False
 
@@ -250,12 +250,17 @@ def install(root, version):
         # The entries can be added again over the record of a finished
         # removal. A record that still says `installed` counts the same when
         # the entries are gone: the last write of an uninstall can be refused
-        # after every entry is removed. The check below refuses when the
-        # Start-menu folder or the Apps-list entry exists, so nothing is ever
-        # overwritten. Every other record is refused.
+        # after every entry is removed. "Gone" means the folder that this
+        # record names, so that a record of entries in another place is never
+        # replaced. The check below also refuses when today's Start-menu
+        # folder or the Apps-list entry exists, so nothing is ever overwritten.
+        # Every other record is refused.
         try:
             row = _receipt(root)
-            again = isinstance(row, dict) and row.get("status") in {"removed", "installed"}
+            status = row.get("status") if isinstance(row, dict) else None
+            again = status == "removed" or (
+                status == "installed" and isinstance(row.get("folder"), str)
+                and not Path(row["folder"]).exists())
         except (OSError, ValueError):
             again = False
         if not again:

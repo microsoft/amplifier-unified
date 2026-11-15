@@ -196,7 +196,7 @@ def test_a_record_that_still_says_installed_with_every_entry_gone_does_not_block
     assert shell.install(root, "1.0.0")["shortcuts"] == 4 and shell.listed(root)
     # With the entries present the same record refuses, and nothing is overwritten.
     before = dict(state["links"])
-    with pytest.raises(ValueError, match="entries already exist; nothing was overwritten"):
+    with pytest.raises(ValueError, match="already has a receipt"):
         shell.install(root, "1.0.0")
     assert state["links"] == before and shell.listed(root)
     # A person deleted only the entry that opens Amplifier: not listed.
@@ -204,7 +204,23 @@ def test_a_record_that_still_says_installed_with_every_entry_gone_does_not_block
     assert shell.listed(root) is False
 
 
+def test_a_record_of_entries_in_another_place_is_never_replaced(model, tmp_path):
+    """The Start-menu location changed after setup: the recorded entries are still there."""
+    root, _, state = model
+    elsewhere = tmp_path / "Earlier Programs" / "Amplifier Unified - earlier"
+    elsewhere.mkdir(parents=True)
+    (elsewhere / "Amplifier Unified.lnk").write_bytes(b"shortcut")
+    record = json.dumps({"status": "installed", "folder": str(elsewhere)})
+    (root / shell.FILE).write_text(record)
+    # Setup and the launcher read the same folder: the one that the record names.
+    assert shell.listed(root) is True
+    with pytest.raises(ValueError, match="already has a receipt"):
+        shell.install(root, "1.0.0")
+    assert (root / shell.FILE).read_text() == record and state["registry"] is None and not state["links"]
+
+
 @pytest.mark.parametrize("raw", [
+    '{"status":"installed"}', '{"status":"installed","folder":7}',
     '{"status":"preparing"}', '{"status":"other"}', '{}', '[]', 'null', 'not json'])
 def test_only_a_removed_receipt_allows_installing_entries_again(model, raw):
     root, _, state = model
@@ -226,16 +242,20 @@ def test_unreadable_receipt_refuses_install_and_is_not_listed(model, monkeypatch
     assert shell.listed(root) is False
 
 
-@pytest.mark.parametrize("raw,shortcut,expected", [
-    (None, True, False), ('{"status":"removed"}', True, False), ('{"status":"installed"}', True, True),
-    ('{"status":"installed"}', False, False), ('{"status":"preparing"}', True, False),
-    ('[]', True, False), ('not json', True, False)])
-def test_listed_needs_the_installed_record_and_the_entry_that_opens_amplifier(model, raw, shortcut, expected):
+@pytest.mark.parametrize("status,named,shortcut,expected", [
+    (None, True, True, False), ("removed", True, True, False), ("installed", True, True, True),
+    ("installed", True, False, False), ("installed", False, True, False), ("preparing", True, True, False),
+    ("[]", True, True, False), ("not json", True, True, False)])
+def test_listed_needs_the_installed_record_and_the_entry_that_opens_amplifier(
+        model, status, named, shortcut, expected):
     root, programs, _ = model
-    if raw is not None:
-        (root / shell.FILE).write_text(raw)
+    folder = programs / ("Amplifier Unified - " + shell.identity(root))
+    if status in ("[]", "not json"):
+        (root / shell.FILE).write_text(status)
+    elif status is not None:
+        (root / shell.FILE).write_text(json.dumps(
+            {"status": status, **({"folder": str(folder)} if named else {})}))
     if shortcut:
-        folder = programs / ("Amplifier Unified - " + shell.identity(root))
         folder.mkdir()
         (folder / "Amplifier Unified.lnk").write_bytes(b"shortcut")
     assert shell.listed(root) is expected
@@ -295,7 +315,7 @@ def test_existing_or_partial_registration_does_not_replay(model):
     shell.install(root, "1.0.0")
     before = dict(state["links"]), state["registry"], (root / shell.FILE).read_text()
     # A second install over existing entries refuses, and nothing is replayed or overwritten.
-    with pytest.raises(ValueError, match="entries already exist; nothing was overwritten"):
+    with pytest.raises(ValueError, match="already has a receipt"):
         shell.install(root, "1.0.0")
     assert not state["calls"]
     assert (dict(state["links"]), state["registry"], (root / shell.FILE).read_text()) == before

@@ -74,8 +74,28 @@ namespace UnifiedBootstrap {
             thread.IsBackground=true; thread.SetApartmentState(ApartmentState.STA); thread.Start();
             return thread.Join(45000)?result:-2;
         }
+        static int ClosedEarly(string root) {
+            // The person closes setup's window while setup only waits for the
+            // launcher. A request that comes before that is refused; ask again.
+            int result=-1;
+            var thread=new Thread(()=>{ result=NativeInstaller.SecondRun(root,true); });
+            thread.IsBackground=true; thread.SetApartmentState(ApartmentState.STA); thread.Start();
+            Thread.Sleep(1500);
+            for(int attempt=0;attempt<12 && !thread.Join(500);attempt++) {
+                try {
+                    if(System.Windows.Forms.Application.OpenForms.Count>0) {
+                        var form=System.Windows.Forms.Application.OpenForms[0];
+                        form.BeginInvoke(new Action(form.Close));
+                    }
+                } catch(Exception) {}
+            }
+            return thread.Join(1000)?result:-2;
+        }
         static int Main(string[] args) {
-            if(Array.IndexOf(args,"amplifier_web.windows_consumer")>=0) return StandIn(args);
+            // Only a stand-in inherits this value: the checks below set it, and
+            // nothing sets it for the checks themselves. Any other arguments end
+            // the stand-in with 9; they never run the checks a second time.
+            if(Environment.GetEnvironmentVariable("AMPLIFIER_SETUP_TEST_ROOT")!=null) return StandIn(args);
             string local=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             string work=Path.Combine(local,"Temp","amplifier-setup-test-"+Guid.NewGuid().ToString("N").Substring(0,8));
             Directory.CreateDirectory(work);
@@ -221,27 +241,33 @@ namespace UnifiedBootstrap {
                 Need(NativeInstaller.AddEntries(second),"entries step: the program got setup's exact arguments and ended with 0");
                 Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_WAIT_MS","1500");
                 var clock=Stopwatch.StartNew();
-                int waited=NativeInstaller.StartAndWait(second);
-                Need(waited==0 && clock.ElapsedMilliseconds>=1400,"start step: setup waits for the launcher (result "+waited+")");
-                Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_WAIT_MS",null);
                 int shown=Window(second,true);
-                Need(shown==0,"second run with entries: the window closes when the launcher finished (result "+shown+")");
+                Need(shown==0 && clock.ElapsedMilliseconds>=1400,"second run with entries: setup waits for the launcher, then the window closes (result "+shown+")");
+                Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_WAIT_MS",null);
                 shown=Window(second,false);
                 Need(shown==0,"second run without entries: added, started, closed (result "+shown+")");
                 Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_EXIT","1");
                 Need(!NativeInstaller.AddEntries(second),"entries step: a program that fails is a failure");
-                Need(NativeInstaller.StartAndWait(second)==1,"start step: the launcher's own failure");
                 shown=Window(second,true);
                 Need(shown==1,"second run: the launcher's failure is setup's result, with no second message (result "+shown+")");
                 Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_EXIT","0");
-                // A finished installation whose programs are missing: no exception, no start.
+                // The window is closed while the launcher still runs (10 seconds
+                // here). Setup did not see the outcome: 1, although the launcher
+                // will end with 0. Then wait for the stand-in to end.
+                Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_WAIT_MS","10000");
+                clock=Stopwatch.StartNew();
+                shown=ClosedEarly(second);
+                Need(shown==1 && clock.ElapsedMilliseconds<9000,"second run: the window closes on request while the launcher runs (result "+shown+")");
+                Environment.SetEnvironmentVariable("AMPLIFIER_SETUP_TEST_WAIT_MS",null);
+                while(clock.ElapsedMilliseconds<11500) Thread.Sleep(250);
+                // A finished installation whose programs are missing: no start.
                 using(var storage=new InstallStorage(work,"Empty")) {
                     empty=storage.Root;
                     storage.EnsureDirectory(Path.Combine(empty,"workspace"));
                     using(var stream=storage.CreateFile(Path.Combine(empty,NativeInstaller.Complete))) stream.WriteByte(123);
                 }
                 Need(!NativeInstaller.AddEntries(empty),"entries step: a missing program is a failure");
-                Need(NativeInstaller.StartAndWait(empty)==2,"start step: Windows could not start a missing launcher");
+                Need(Refused(()=>NativeInstaller.StartApp(empty)),"start step: a missing launcher is refused");
 
                 // A folder above the target that other accounts can change is named.
                 string open=Path.Combine(work,"open"); Directory.CreateDirectory(Path.Combine(open,"inner"));
