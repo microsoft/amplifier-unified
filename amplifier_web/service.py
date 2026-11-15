@@ -4598,8 +4598,20 @@ class AppService:
             async with self.lock:
                 current = self._session(session['id'])
                 self._delivery(current, input_id, 'unknown')
-                interrupt_unfinished(current)
-                if current['status'] in {'working', 'starting', 'ready', 'stopping'}:
+                pending_input = (current.get('status') in {'working', 'starting', 'ready'}
+                        and current.get('interruptionRevision', 0) == session.get('interruptionRevision', 0)
+                        and current.get('errorAt') == previous_error_at
+                        and current.get('failure') == session.get('failure')
+                        and current.get('failure', {}).get('category') not in
+                            {'content_filter', 'computer_capture_stop'})
+                if pending_input:
+                    # This is a new lost send, not continued preparation of the
+                    # old failure. Let interruption publish its own occurrence;
+                    # the previous input's recorded failure stays in history.
+                    current.pop('error', None)
+                if current.get('status') not in {'stopped', 'stopping'}:
+                    interrupt_unfinished(current, pending_input=pending_input)
+                if current['status'] in {'working', 'starting', 'ready'}:
                     current['status'] = 'interrupted'
                 self._publish_changes(sessions={session['id']}, globals={'view'})
             raise

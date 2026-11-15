@@ -252,16 +252,6 @@ def terminal_exception_failure(session, value):
             or existing.get('exceptionChain') and not request_cause
             or session.get('status') in {'stopped', 'stopping'}):
         return None
-    if request_cause:
-        # A provider call can provisionally explain a generic manager exit.
-        # This exact native terminal has stronger provenance, even when its
-        # class/category matches that earlier, possibly handled call. The call
-        # remains untouched in execution history. Never downgrade a safety halt.
-        terminal = generation_failure(latest)
-        if (not terminal or existing.get('category') in {'content_filter', 'computer_capture_stop'}):
-            return None
-        existing = {**terminal, 'generationId': capture['generationId'],
-                    'inputIds': capture['inputIds'], 'recordedAt': latest['at']}
     latest = latest_root_event(session)
     active = session.get('collaborationGeneration') or {}
     if active.get('id') and (
@@ -277,6 +267,16 @@ def terminal_exception_failure(session, value):
             or set(latest.get('input_ids') or []) != set(capture['inputIds'])
             or set(existing.get('inputIds') or []) != set(capture['inputIds'])):
         return None
+    if request_cause:
+        # A provider call can provisionally explain a generic manager exit.
+        # This exact native terminal has stronger provenance, even when its
+        # class/category matches that earlier, possibly handled call. The call
+        # remains untouched in execution history. Never downgrade a safety halt.
+        terminal = generation_failure(latest)
+        if (not terminal or existing.get('category') in {'content_filter', 'computer_capture_stop'}):
+            return None
+        existing = {**terminal, 'generationId': capture['generationId'],
+                    'inputIds': capture['inputIds'], 'recordedAt': latest['at']}
     refusal = terminal_request_refusal(capture['exceptionChain'])
     detail = {}
     if (existing.get('category') == 'unknown' and capture['errorType'] == 'LLMError'

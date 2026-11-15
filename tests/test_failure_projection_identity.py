@@ -212,6 +212,69 @@ async def test_new_preparation_failure_is_unread_and_dismissible_after_prior_dis
                 if row['id'] == current['id'])['read']
 
 
+@pytest.mark.parametrize('status', [None, 'starting', 'ready'])
+async def test_new_send_interruption_does_not_inherit_dismissed_prior_failure(app, status):
+    from amplifier_web.runtime import RuntimeHostClosingError
+    from amplifier_web.input_status import annotate
+    target = app.state['sessions'][1]
+    await terminal(app, target, inputs=['old-input'])
+    failure = copy.deepcopy(target['failure'])
+    original = next(row for row in app.browser_state()['attention']['items']
+                    if row['id'] == 'session:' + target['id'])
+    await app.dispatch('attention.read', {'ids': [original['id']],
+        'fingerprints': {original['id']: original['fingerprint']}})
+    async def closing(*args, **kwargs):
+        if status:
+            await app.on_runtime_event('runtime.status', {'sessionId': target['id'], 'status': status})
+        raise RuntimeHostClosingError('Synthetic host is closing')
+    app.runtime.send = closing
+    with pytest.raises(RuntimeHostClosingError):
+        await app.dispatch('conversation.send', {'sessionId': target['id'], 'text': 'Fresh attempt'},
+                           command_id='interrupted-new-input')
+    current = next(row for row in app.browser_state()['attention']['items']
+                   if row['id'] == original['id'])
+    assert not current['read'] and current['fingerprint'] != original['fingerprint']
+    assert target['failure']['category'] == 'execution_interrupted'
+    assert annotate(target, {'role': 'user', 'inputId': 'old-input'})['inputStatus']['failure'] == failure
+    assert target['messages'][-1]['delivery']['status'] == 'unknown'
+    assert not app.runtime.inputs
+
+
+@pytest.mark.parametrize('boundary', ['stopped', 'stopping', 'stop-revision',
+                                     'new-error', 'content_filter', 'computer_capture_stop'])
+async def test_send_interruption_preserves_stop_newer_failure_and_safety(app, boundary):
+    from amplifier_web.runtime import RuntimeHostClosingError
+    target = app.state['sessions'][1]
+    await terminal(app, target)
+    if boundary in {'content_filter', 'computer_capture_stop'}:
+        target['failure']['category'] = boundary
+    original = next(row for row in app.browser_state()['attention']['items']
+                    if row['id'] == 'session:' + target['id'])
+    await app.dispatch('attention.read', {'ids': [original['id']],
+        'fingerprints': {original['id']: original['fingerprint']}})
+    expected = {}
+    async def closing(*args, **kwargs):
+        if boundary in {'stopped', 'stopping', 'stop-revision'}:
+            target['interruptionRevision'] = target.get('interruptionRevision', 0) + 1
+            target['status'] = boundary if boundary != 'stop-revision' else 'starting'
+        elif boundary == 'new-error':
+            await app.on_runtime_event('runtime.error', {'sessionId': target['id'],
+                'errorType': 'RuntimeStartupError', 'error': 'A genuinely newer startup failure'})
+        expected.update(copy.deepcopy(target['failure']))
+        raise RuntimeHostClosingError('Synthetic host is closing')
+    app.runtime.send = closing
+    with pytest.raises(RuntimeHostClosingError):
+        await app.dispatch('conversation.send', {'sessionId': target['id'], 'text': 'Fresh attempt'},
+                           command_id='guarded-interrupted-input')
+    assert target['failure'] == expected
+    if boundary in {'stopped', 'stopping'}:
+        assert target['status'] == boundary
+    current = next(row for row in app.browser_state()['attention']['items']
+                   if row['id'] == original['id'])
+    assert current['read'] is (boundary != 'new-error')
+    assert not app.runtime.inputs
+
+
 async def test_ready_still_clears_an_actual_startup_failure(app):
     target = app.state['sessions'][1]
     await terminal(app, target)
@@ -339,8 +402,10 @@ async def test_original_known_terminal_frames_enrich_exact_request_without_recla
     assert annotate(target, {'role': 'user', 'inputId': 'saved-input'})['inputStatus']['failure'] == target['failure']
 
 
-@pytest.mark.parametrize('stage', ['context_preparation', 'provider_request'])
-async def test_exact_terminal_chain_supersedes_earlier_same_class_provider_call(app, stage):
+@pytest.mark.parametrize('stage,category', [
+    ('context_preparation', 'context_limit'), ('provider_request', 'context_limit'),
+    ('manager_turn', 'unknown')])
+async def test_exact_terminal_chain_supersedes_earlier_same_class_provider_call(app, stage, category):
     from amplifier_web.input_status import annotate
     target = app.state['sessions'][1]
     await observed(app, target, 'started')
@@ -356,7 +421,7 @@ async def test_exact_terminal_chain_supersedes_earlier_same_class_provider_call(
     original_node = copy.deepcopy(next(row for row in target['execution']['nodes']
                                        if row['id'] == 'initial-overflow'))
     await observed(app, target, 'failed', error_type='ContextLengthError',
-                   error_category='context_limit', error_stage=stage)
+                   error_category=category, error_stage=stage)
     terminal_at = target['generations'][-1]['at']
     terminal_chain = [
         {'errorType': 'ManagerTurnError', 'frames': [{'file': 'loop.py', 'function': 'execute', 'line': 800}]},
@@ -368,12 +433,17 @@ async def test_exact_terminal_chain_supersedes_earlier_same_class_provider_call(
     failure = copy.deepcopy(target['failure'])
     assert failure['recordedAt'] == terminal_at and failure['recordedAt'] != 123
     assert failure['stage'] == stage
+    assert failure['category'] == category and 'requestCallId' not in failure
     assert failure['exceptionChain'] == terminal_chain
     assert failure['generationId'] == 'saved-generation' and failure['inputIds'] == ['saved-input']
     assert annotate(target, {'role': 'user', 'inputId': 'saved-input'})['inputStatus']['failure'] == failure
     assert next(row for row in target['execution']['nodes'] if row['id'] == 'initial-overflow') == original_node
     report = (await app.dispatch('session.inspect', {'id': target['id']}))['result']
     assert report['failure'] == failure
+    await app.on_runtime_event('runtime.error', {'sessionId': target['id'], 'terminalFailure': {
+        'generationId': 'saved-generation', 'inputIds': ['saved-input'],
+        'errorType': 'ContextLengthError', 'exceptionChain': provider_chain}})
+    assert target['failure'] == failure, 'A second capture cannot replace the bound terminal'
     await app.on_runtime_event('runtime.error', {'sessionId': target['id'],
         'errorType': 'RuntimeError', 'error': 'Manager turn failed'})
     assert target['failure'] == failure and target['errorAt'] == terminal_at

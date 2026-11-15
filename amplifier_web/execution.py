@@ -143,12 +143,12 @@ def interrupt_runtime_execution(session, runtime_owner):
     return current is not None
 
 
-def interrupt_unfinished(session):
+def interrupt_unfinished(session, *, pending_input=False):
     """Settle lost execution without interpreting a later warm worker as success."""
     from .input_status import interrupt
     status_changed = interrupt(session)
     reference = dict.get(session, '_coldFields', {}).get('execution', {})
-    if (not dict.__contains__(session, 'execution')
+    if (not pending_input and not dict.__contains__(session, 'execution')
             and (reference.get('pendingWork') is False or
                  'pendingWork' not in reference and reference.get('pendingObservation') is False
                  and session.get('status') not in {'working', 'starting', 'ready', 'stopping'})
@@ -158,7 +158,7 @@ def interrupt_unfinished(session):
     independent = voice_usage_turns(tree)
     live = any(turn.get('phase') in LIVE_PHASES and turn['id'] not in independent
                for turn in tree.get('turns', []))
-    if not live and session.get('status') != 'working':
+    if not pending_input and not live and session.get('status') != 'working':
         return status_changed
     finish(session, 'interrupted')
     session['status'] = 'interrupted'
