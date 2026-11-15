@@ -1,12 +1,14 @@
 from argparse import Namespace
 import asyncio
 import json
+import ssl
+from types import SimpleNamespace
 import aiohttp
 from aiohttp import web
 import pytest
 from amplifier_web.auth import data_identity
 from amplifier_web.server import create_app
-from amplifier_web.headless import _existing_host, run
+from amplifier_web.headless import _connection_context, _existing_host, run
 from test_service import Runtime
 
 async def test_access_command_saves_without_chat_or_work_and_respects_overrides(aiohttp_server, tmp_path, capsys):
@@ -98,6 +100,132 @@ async def test_headless_uses_verified_configured_https_origin_without_creating_r
     assert await run(args, config=config) == 0
     assert json.loads(capsys.readouterr().out)["response"] == "Test transport result"
     assert runtime.sent
+
+
+def _supplied_tls(tmp_path, monkeypatch, *, wrong_hostname=False):
+    from amplifier_web.deployment import load_server_config
+    from amplifier_web.tls import setup_local_ca
+
+    issuer, home = tmp_path / 'issuer', tmp_path / 'host'
+    with monkeypatch.context() as patch:
+        if wrong_hostname:
+            patch.setattr('amplifier_web.tls._names', lambda config: (['wrong.example'], []))
+        setup_local_ca(issuer, load_server_config(issuer))
+    config = load_server_config(home)
+    config['tls'] = {'method': 'ca', 'cert': str(issuer / 'config/tls/leaf.crt'),
+                     'key': str(issuer / 'config/tls/leaf.key')}
+    monkeypatch.setenv('SSL_CERT_FILE', str(issuer / 'config/tls/ca.crt'))
+    return home, config
+
+
+@pytest.mark.parametrize('stale_ca', [False, True])
+async def test_supplied_tls_uses_normal_trust_without_app_ca(aiohttp_server, tmp_path, capsys, monkeypatch, stale_ca):
+    from amplifier_web.deployment import load_server_config
+    from amplifier_web.tls import setup_local_ca, ssl_context
+
+    home, config = _supplied_tls(tmp_path, monkeypatch)
+    if stale_ca:
+        setup_local_ca(home, load_server_config(home))
+    runtime = Runtime()
+    app = await create_app(home, preload_providers=False, workspace=home, runtime=runtime, voice=False,
+                           background_updates=False, server_config=config)
+    server = await aiohttp_server(app, ssl=ssl_context(home, config))
+    config['public_origins'] = [f'https://127.0.0.1:{server.port}']
+    args = Namespace(port=server.port, data_dir=str(home), workspace=str(home),
+                     command='access', mode='full', scope='app', session=None, json=True)
+    before = [row['id'] for row in app['service'].state['sessions']]
+    monkeypatch.setattr('amplifier_web.headless.web.AppRunner',
+                        lambda *args, **kwargs: pytest.fail('Verified host must not create AppRunner'))
+    assert await run(args, config=config) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['mode'] == 'full' and result['source'] == 'app'
+    assert [row['id'] for row in app['service'].state['sessions']] == before
+    assert not runtime.sent
+
+
+@pytest.mark.parametrize('failure', ['issuer', 'hostname'])
+async def test_supplied_tls_verification_failure_never_starts_local_host(aiohttp_server, tmp_path, monkeypatch, failure):
+    from amplifier_web.deployment import load_server_config
+    from amplifier_web.tls import setup_local_ca, ssl_context
+
+    home, config = _supplied_tls(tmp_path, monkeypatch, wrong_hostname=failure == 'hostname')
+    if failure == 'issuer':
+        other = tmp_path / 'other-issuer'
+        setup_local_ca(other, load_server_config(other))
+        monkeypatch.setenv('SSL_CERT_FILE', str(other / 'config/tls/ca.crt'))
+    requests = []
+    app = web.Application()
+    async def health(request):
+        requests.append(request.path)
+        return web.json_response({'app': 'amplifier-unified', 'dataIdentity': data_identity(home)})
+    app.router.add_get('/api/health', health)
+    server = await aiohttp_server(app, ssl=ssl_context(home, config))
+    config['public_origins'] = [f'https://127.0.0.1:{server.port}']
+    args = Namespace(port=server.port, data_dir=str(home), workspace=str(home),
+                     command='access', mode='full', scope='app', session=None, json=True)
+    monkeypatch.setattr('amplifier_web.headless.web.AppRunner',
+                        lambda *args, **kwargs: pytest.fail('Certificate failure must not create AppRunner'))
+    with pytest.raises(aiohttp.ClientConnectorCertificateError):
+        await run(args, config=config)
+    assert requests == []
+
+
+def test_app_owned_tls_still_requires_its_ca(tmp_path):
+    config = {'tls': {'method': 'ca', 'cert': 'config/tls/leaf.crt', 'key': 'config/tls/leaf.key'}}
+    with pytest.raises(ValueError, match='app-owned local CA'):
+        _connection_context(tmp_path, config)
+
+
+@pytest.mark.parametrize('later', ['matching', 'wrong_identity', 'absent', 'cancelled'])
+async def test_certificate_error_keeps_later_origin_and_cancellation_semantics(later):
+    error = aiohttp.ClientConnectorCertificateError(
+        SimpleNamespace(host='untrusted.example', port=443, is_ssl=True), ssl.CertificateError('Test issuer'))
+    cancelled = asyncio.CancelledError()
+    calls = []
+    class Reply:
+        status = 200
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        async def json(self):
+            return {'app': 'amplifier-unified', 'dataIdentity': 'wanted' if later == 'matching' else 'other'}
+    class Client:
+        def get(self, url, **kwargs):
+            calls.append(url)
+            if url.startswith('https://untrusted.example'):
+                raise error
+            if later == 'absent':
+                raise aiohttp.ClientConnectionError('Unavailable')
+            if later == 'cancelled':
+                raise cancelled
+            return Reply()
+    origins = ['https://untrusted.example', 'https://later.example']
+    if later == 'matching':
+        assert await _existing_host(Client(), origins, 'wanted') == origins[1]
+    elif later == 'wrong_identity':
+        with pytest.raises(ValueError, match='different or older host'):
+            await _existing_host(Client(), origins, 'wanted')
+    else:
+        with pytest.raises(type(cancelled if later == 'cancelled' else error)) as caught:
+            await _existing_host(Client(), origins, 'wanted')
+        assert caught.value is (cancelled if later == 'cancelled' else error)
+    assert calls == [base + '/api/health' for base in origins]
+
+
+async def test_unreachable_host_keeps_passive_local_access_fallback(tmp_path, unused_tcp_port, capsys, monkeypatch):
+    runtime, created = Runtime(), []
+    async def local_app(*args, **kwargs):
+        assert kwargs['background_work'] is kwargs['preload_providers'] is kwargs['voice'] is False
+        app = await create_app(*args, runtime=runtime, **kwargs)
+        created.append(app)
+        return app
+    monkeypatch.setattr('amplifier_web.server.create_app', local_app)
+    args = Namespace(port=unused_tcp_port, data_dir=str(tmp_path), workspace=str(tmp_path),
+                     command='access', mode='full', scope='app', session=None, json=True)
+    assert await run(args) == 0
+    assert json.loads(capsys.readouterr().out)['mode'] == 'full'
+    assert len(created) == 1 and not runtime.sent
 
 
 async def test_explicit_target_not_changed_by_selected_conversation(tmp_path):
