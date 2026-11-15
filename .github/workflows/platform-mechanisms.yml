@@ -274,6 +274,8 @@ jobs:
       # and file links, a hard link to an outside file, a read-only file, a path
       # of more than 400 characters and a file in use. Nothing outside the
       # throwaway folder may change. A lane that cannot make links fails.
+      # Mapped program files move through handles into one held flat folder;
+      # the step after exit deletes there and removes only empty named folders.
       - name: Check that folder removal never follows a link or leaves its folder
         shell: pwsh
         env:
@@ -289,6 +291,8 @@ jobs:
       # through handles, junctions that lead out of the folder, a long path, a
       # data file in use, and the step after exit. Stand-ins: Task Scheduler,
       # the check of an installed release, and the dialogs with their answers.
+      # One case deletes its own base Python, standard library and installed
+      # package, moves mapped images aside, and must still return and exit cleanly.
       # A skipped case would hide the answer; on this lane it fails.
       - name: Check that the delete choice removes only its own folder, survives an interruption and finishes after exit
         shell: pwsh

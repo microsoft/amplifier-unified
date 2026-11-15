@@ -1263,6 +1263,132 @@ def test_native_delete_choice_removes_the_folder_and_nothing_outside_it(native_i
     print("UNINSTALL_CHAIN " + json.dumps({"process": done, "afterExit": report}, separators=(",", ":")))
 
 
+@pytest.mark.skipif(os.name != "nt", reason="The running Python and installed package are deleted on native Windows")
+def test_native_uninstall_deletes_the_python_it_runs_from_and_still_ends_cleanly(tmp_path):
+    """No repository or outside standard library can hide an import after deletion."""
+    import winreg
+    from amplifier_web import windows_files
+    from amplifier_web.deployment import write_private
+
+    started = time.monotonic()
+    tag = uuid.uuid4().hex[:10]
+    root = windows_files.address(Path.home() / ("au-self-test-" + tag))
+    outside = Path.home() / ("au-self-outside-" + tag)
+    entries = shell.programs() / ("Amplifier Unified - " + shell.identity(root))
+    with windows_files.directory(root, owned_root=root, create=True):
+        pass
+    try:
+        _seed_native_entries(root, entries)
+        base, venv = root / "python/cpython-self", root / "tools/amplifier-unified"
+        shutil.copytree(sys.base_prefix, base, ignore=shutil.ignore_patterns(
+            "test", "site-packages", "idlelib", "tkinter", "ensurepip", "tcl", "Doc",
+            "include", "libs", "Tools", "__pycache__", "*.pdb"))
+        made = subprocess.run([str(base / "python.exe"), "-I", "-m", "venv", "--without-pip", str(venv)],
+                              capture_output=True, timeout=30)
+        assert made.returncode == 0, made.stderr.decode("utf-8", errors="replace")[-1500:]
+        shutil.copytree(REPOSITORY / "amplifier_web", venv / "Lib/site-packages/amplifier_web",
+                        ignore=shutil.ignore_patterns("static", "__pycache__"))
+        for name, text in DATA.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(text)
+        write_private(root / plan.COMPLETE, json.dumps({"schema": 1, "version": "1.0.0"}), owned_root=root)
+        (outside / "deep").mkdir(parents=True)
+        (outside / "keep.txt").write_text("keep outside")
+        (outside / "deep/also.txt").write_text("keep deep outside")
+        outside_before = {str(path.relative_to(outside)): path.stat().st_file_attributes
+                          for path in outside.rglob("*")}
+        evidence, report = tmp_path / "self.json", tmp_path / "self-after-exit.json"
+        command = r"""
+import asyncio, json, os, sys
+from pathlib import Path
+packages, folder, evidence, report = sys.argv[1:5]
+# Only third-party packages come from outside; the installed package wins.
+sys.path.append(packages)
+import amplifier_web
+from amplifier_web import installation_health, windows_consumer as consumer
+from amplifier_web import windows_consumer_shell as shell, windows_files, windows_installation
+from amplifier_web import windows_removal as removal, windows_service, windows_uninstall as plan
+root = windows_files.address(folder)
+paths = dict(package=amplifier_web.__file__, base=sys.base_prefix,
+             stdlib=os.__file__, executable=sys.executable)
+assert all(Path(path).is_relative_to(root) for path in paths.values()), paths
+consumer.installation = lambda value: (windows_files.address(value), {})
+consumer.environment = lambda *values: {}
+async def working(home):
+    return None
+installation_health.windows_working = working
+def uninstall(home, *, progress):
+    for step in ("task-read", "stop", "task-remove"):
+        progress(step)
+windows_service.uninstall = uninstall
+answers = iter(("yes", "yes"))
+plan.question = lambda text, cancel=False: next(answers)
+windows_installation.owner_notice = lambda text, confirm=False: True
+shell.SETTLE_SECONDS = 2
+start = removal.finish_after_exit
+def after_exit(*values, **options):
+    return start(*values, report=report, **options)
+removal.finish_after_exit = after_exit
+# Observe the walk's own count without listing or importing after deletion.
+remove, parked = removal.Folder.remove, []
+def counted(self, *values, **options):
+    result = remove(self, *values, **options)
+    if "parked" in result:
+        parked.append(result["parked"])
+    return result
+removal.Folder.remove = counted
+result = asyncio.run(consumer.maintenance(root, "uninstall"))
+# This file is written only after the public call and asyncio shutdown returned.
+with open(evidence, "w", encoding="utf-8") as stream:
+    json.dump(dict(paths=paths, result=result, parked=sum(parked),
+                   left=sorted(os.listdir(root))), stream)
+"""
+        environment = os.environ.copy()
+        environment.update(TEMP=str(root / "workspace"), TMP=str(root / "workspace"),
+                           PYTHONDONTWRITEBYTECODE="1")
+        process = subprocess.run(
+            [str(venv / "Scripts/python.exe"), "-I", "-c", command, sysconfig.get_paths()["purelib"],
+             str(root), str(evidence), str(report)],
+            cwd=root / "workspace", env=environment, capture_output=True, timeout=45)
+        stderr = process.stderr.decode("utf-8", errors="replace")
+        assert process.returncode == 0 and not stderr, f"exit={process.returncode}\n{stderr[-1500:]}"
+        done = json.loads(evidence.read_text(encoding="utf-8"))
+        assert set(done["paths"]) == {"package", "base", "stdlib", "executable"}
+        assert all(Path(path).is_relative_to(root) for path in done["paths"].values())
+        assert Path(done["paths"]["base"]) == base
+        assert Path(done["paths"]["package"]) == venv / "Lib/site-packages/amplifier_web/__init__.py"
+        assert done["result"] == {"ok": True, "operation": "uninstall", "userDataRetained": False,
+                                  "certificate": "none", "kept": [], "afterExit": True, "programLeft": []}
+        assert done["parked"] >= 4, done
+        assert {plan.PARK, plan.JOURNAL} <= set(done["left"]) <= {plan.PARK, plan.JOURNAL, "workspace"}
+        assert not (root / "python").exists() and not (root / "tools").exists()
+        # The helper can already have finished. It may only remove these entries.
+        try:
+            after = set(os.listdir(root))
+        except FileNotFoundError:
+            after = set()
+        assert after <= {plan.PARK, plan.JOURNAL, "workspace"}
+        finished = _finish_report(report, timeout=30)
+        assert finished["folderRemoved"] and finished["reason"] == "", finished
+        assert finished["left"] == [] and finished["leftCount"] == 0, finished
+        assert not os.path.lexists(root) and shell.registry(root) is None and not entries.exists()
+        _outside_unchanged(outside)
+        assert {str(path.relative_to(outside)): path.stat().st_file_attributes
+                for path in outside.rglob("*")} == outside_before
+        elapsed = round(time.monotonic() - started, 2)
+        print("UNINSTALL_SELF " + json.dumps({**done, "report": finished, "elapsed": elapsed},
+                                            separators=(",", ":")))
+        assert elapsed < 90, f"The self-contained uninstall took {elapsed} seconds."
+    finally:
+        try:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, shell.REGISTRY + shell.identity(root))
+        except OSError:
+            pass
+        shutil.rmtree(entries, ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(outside, ignore_errors=True)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Real folder, Windows entries, start chain and step after exit")
 def test_native_interrupted_removal_refuses_to_start_and_a_second_uninstall_finishes(native_installation):
     """A data file in use stops the removal; Open, Status and Stop refuse; a second uninstall finishes.
