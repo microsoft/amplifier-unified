@@ -1090,18 +1090,14 @@ def _take_back(root, kept, version, settle, confirmed):
                         if _kind(target / entry) is not None:  # An entry never replaces an entry.
                             raise stop(target / entry)
                         os.rename(source / entry, target / entry)
-                    # Once more after the last entry: only what this take-back moved is in that folder.
-                    late = next((entry for entry in _names(target)
-                                 if planned.get(entry) != _identity(target / entry)), None)
-                    if late is not None:
-                        raise stop(target / late)
                     rest = _names(source)
                     if rest:  # It came into the kept folder during the moves.
                         raise stop(source / rest[0])
                 if _kind(source) == "folder":
                     os.rmdir(source)
             taken.append(name)
-        # Every folder that is back is held in place from here to the end. Each is this take-back's own:
+        # Every folder that is back is held in place from here to the end. Each is this take-back's own,
+        # also a folder that was filled: only what this take-back moved is in it.
         own()
         settled = _settle(root, record["transfer"]) if settle else "skipped"
         if settled == "unchanged":
