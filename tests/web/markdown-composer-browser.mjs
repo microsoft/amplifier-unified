@@ -37,7 +37,7 @@ try{
    const rect=node=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height}};
    const current={select:rect(el),popup:rect(popup)};
    const paint={background:style.backgroundColor,ink:style.color,radius:style.borderRadius,boxSizing:style.boxSizing,appearance:style.appearance,padding:style.paddingTop,
-    paddingInlineEnd:style.paddingInlineEnd,indicator:style.backgroundImage,
+    paddingInlineEnd:style.paddingInlineEnd,indicator:style.backgroundImage,fontSize:parseFloat(style.fontSize),lineHeight:style.lineHeight,font:style.font,
     borders:['Top','Right','Bottom','Left'].map(side=>({width:style['border'+side+'Width'],style:style['border'+side+'Style'],color:style['border'+side+'Color']})),
     outline:{width:style.outlineWidth,style:style.outlineStyle,color:style.outlineColor,offset:style.outlineOffset},focusVisible:el.matches(':focus-visible')};
    // Resolve theme tokens in the same inheritance scope as the portal.
@@ -66,7 +66,11 @@ try{
   assert.equal(evidence.paint.background,evidence.palette.soft);assert.notEqual(evidence.paint.background,evidence.palette.surface,'Selector tint differs from the toolbar surface');
   assert.equal(evidence.paint.ink,evidence.palette.ink);assert.ok(evidence.textContrast>=4.5,'Selector text remains readable against the tint');
   const box=evidence.current.select;assert.ok(box.width>0&&box.height>=36);
-  for(const button of evidence.buttons)assert.ok(Math.abs(box.height-button.height)<=.5,'Selector retains the neighboring control height');
+  if(label.startsWith('390px'))assert.ok(evidence.paint.fontSize>=16,'Narrow native select retains non-zooming readable text');
+  for(const button of evidence.buttons){
+   assert.ok(Math.abs(box.height-button.height)<=4,'Control heights stay visually coherent '+JSON.stringify({label,box,button,paint:evidence.paint}));
+   assert.ok(Math.abs(box.y+box.height/2-button.y-button.height/2)<=.5,'Select and formatting buttons share a centerline');
+  }
   for(const control of [box,...evidence.buttons])assert.ok(control.x>=evidence.row.x-.5&&control.x+control.width<=evidence.row.x+evidence.row.width+.5,'All controls fit the toolbar row');
   assert.equal(evidence.popupOverflow,false,'The selector does not overflow its toolbar');
   if(focused){await expect(select).toBeFocused();assert.equal(evidence.paint.focusVisible,true);assert.deepEqual(evidence.paint.outline,{width:'2px',style:'solid',color:evidence.palette.accent,offset:'1px'})}

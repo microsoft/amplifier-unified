@@ -65,7 +65,7 @@ try{
   await page.setViewportSize({width,height:900});await clearComposer(input);
   for(const scheme of ['light','dark'])for(const interfaceDetail of ['minimal','standard','detailed']){
    await presentation({scheme,interfaceDetail,executionDetail:interfaceDetail});await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',scheme);await expect(surface).toBeVisible();
-   const m=await measure();checkIdle(m);evidence.geometry.push({width,scheme,interfaceDetail,...m});
+   const m=await measure();evidence.geometry.push({width,scheme,interfaceDetail,...m});checkIdle(m);
   }
   await input.fill('Ready');await expect(primary).toHaveAccessibleName('Send message');await expect(input).toHaveDraft('Ready');await clearComposer(input);
   await page.screenshot({path:`${output}/compact-empty-${width}.png`});

@@ -483,8 +483,14 @@ async def serve(home, *, pre_import=None):
             service = app['service']
             session = service._session(data['sessionId'])
             session['messages'] = []
-            session['historyError'] = (None if data['status'] == 'ready' else
-                'Synthetic history read is unavailable. Original files are unchanged.')
+            # TranscriptWindows owns the published history-error field. Seed its
+            # synthetic unavailable entry rather than a session field that its
+            # normal saved-history projection would overwrite.
+            session['historyManaged'] = data['status'] == 'retrying'
+            service.history.windows.initial[session['id']] = ({
+                'status': 'unavailable',
+                'error': 'Synthetic history read is unavailable. Original files are unchanged.',
+            } if data['status'] == 'retrying' else {})
             service.event_log_view.windows.status[session['id']] = {
                 'status': data['status'], 'current': data['status'] == 'ready'}
             session['workProjection'] = dict(service.event_log_view.windows.status[session['id']])

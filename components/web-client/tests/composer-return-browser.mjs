@@ -19,7 +19,57 @@ const cases=[
  {name:'ipad-desktop',viewport:{width:1280,height:900},hybrid:true,userAgent:'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15',safe:true,deferred:true,safari:true},
  {name:'unknown-touch-capability',viewport:{width:1280,height:900},unknown:true,safe:true},
 ];
-const results=[];let browser,vite,activeScenario,activePage;
+const results=[],compactGeometry=[];let browser,vite,activeScenario,activePage;
+async function compactHelpLayout(page,composer,expectedHelp,scenario){
+ const help=page.locator('[data-part="composer-return-help"]'),surface=page.locator('[data-part="composer-surface"]');
+ await expect(help).toHaveCount(1);await expect(help).toBeVisible();await expect(help).toHaveText(expectedHelp);
+ await expect(composer).toHaveAccessibleDescription(expectedHelp);
+ assert.equal(await composer.getAttribute('aria-describedby'),await help.getAttribute('id'),'Actual editor describes the visible outside field help');
+ await expect(surface.locator('[data-part="composer-return-help"]')).toHaveCount(0);
+ const measure=()=>surface.evaluate(el=>{
+  const rect=node=>{const {x,y,width,height}=node.getBoundingClientRect();return {x,y,width,height};};
+  const field=el.querySelector('[role="textbox"]'),form=el.closest('form'),help=form.querySelector('[data-part="composer-return-help"]');
+  return {surface:rect(el),editor:rect(field),help:rect(help),configuration:rect(form.querySelector('.a-compose-configuration')),
+   helpStyle:{position:getComputedStyle(help).position,visibility:getComputedStyle(help).visibility,whiteSpace:getComputedStyle(help).whiteSpace},
+   overflow:el.scrollWidth>el.clientWidth+1,helpOverflow:help.scrollWidth>help.clientWidth+1,pageOverflow:document.documentElement.scrollWidth>innerWidth+1,
+   buttons:[...el.querySelectorAll('button')].filter(button=>button.getClientRects().length).map(rect)};
+ });
+ const check=geometry=>{
+  assert.ok(geometry.surface.height<=72,`Idle field remains compact, not a relaxed cap: ${geometry.surface.height}`);
+  assert.ok(geometry.editor.height>=44);
+  assert.equal(geometry.overflow,false);assert.equal(geometry.helpOverflow,false);assert.equal(geometry.pageOverflow,false);
+  assert.ok(geometry.help.y>=geometry.surface.y+geometry.surface.height,'Visible Return help belongs below the border');
+  assert.ok(geometry.configuration.y>=geometry.help.y+geometry.help.height-1,'Wrapping help does not overlap model/configuration controls');
+  assert.ok(geometry.help.x>=geometry.surface.x&&geometry.help.x+geometry.help.width<=geometry.surface.x+geometry.surface.width+1);
+  assert.equal(geometry.helpStyle.position,'static');assert.equal(geometry.helpStyle.visibility,'visible');assert.equal(geometry.helpStyle.whiteSpace,'normal');
+  assert.ok(geometry.buttons.length>=2,'Frequent add/primary actions remain present');
+  for(const box of geometry.buttons){
+   assert.ok(box.width>=44&&box.height>=44,'Frequent actions retain 44px touch targets');
+   assert.ok(Math.abs(box.y+box.height/2-(geometry.editor.y+geometry.editor.height/2))<=1,'Action and empty editor centers stay aligned');
+   assert.ok(box.x>=geometry.surface.x&&box.x+box.width<=geometry.surface.x+geometry.surface.width+1);
+  }
+ };
+ const originalViewport=page.viewportSize();
+ for(const width of [900,390,320]){
+  await page.setViewportSize({width,height:900});
+  await expect(surface).toHaveAttribute('data-expanded','false');
+  const geometry=await measure();compactGeometry.push({scenario,width,...geometry});
+  check(geometry);
+ }
+ // The same assertions must reject the original cause, not only a generic tall
+ // input. Temporarily move the actual help back into the writing grid column.
+ await help.evaluate(node=>{window.returnHelpPlacement={parent:node.parentNode,next:node.nextSibling};document.querySelector('.a-compose-writing').append(node);});
+ let broken;
+ try{
+  broken=await measure();
+  assert.ok(broken.surface.height>72||broken.buttons.some(box=>Math.abs(box.y+box.height/2-(broken.editor.y+broken.editor.height/2))>1),'Restoring inside-border help reproduces compact height/alignment regression');
+  assert.throws(()=>check(broken),'Inside-border help must fail the same compact/help placement oracle');
+ }
+ finally{await help.evaluate(node=>{const {parent,next}=window.returnHelpPlacement;parent.insertBefore(node,next);delete window.returnHelpPlacement;});}
+ compactGeometry.push({scenario,negativeControl:'help returned inside writing column',rejected:true,...broken});
+ check(await measure());
+ await page.setViewportSize(originalViewport);
+}
 await mkdir(artifact,{recursive:true});
 try{
  vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
@@ -54,6 +104,7 @@ try{
    await expect(composer).toBeVisible();
    await expect(composer).toHaveAttribute('enterkeyhint','enter');
    await expect(composer).toHaveAccessibleDescription(scenario.safe?'Return adds a new line. Use Send to send.':'Enter to send. Shift+Enter or Ctrl+Enter adds a new line.');
+   if(['desktop','phone'].includes(scenario.name))await compactHelpLayout(page,composer,scenario.safe?'Return adds a new line. Use Send to send.':'Enter to send. Shift+Enter or Ctrl+Enter adds a new line.',scenario.name);
    const retained=async text=>{
     await expect(composer).toHaveDraft(text);
     await expect.poll(()=>state.view.draft).toBe(text);
@@ -186,10 +237,10 @@ try{
    const live=activePage&&!activePage.isClosed()?await activePage.evaluate(()=>({
     events:window.returnEvents,draft:window.amplifier?.getState?.().view?.draft,
    })).catch(()=>null):null;
-   await writeFile(artifact+'/failure.json',JSON.stringify({scope:'synthetic client Chromium',scenario:activeScenario,results,live,failure:error.stack||String(error)},null,2)+'\n');
+   await writeFile(artifact+'/failure.json',JSON.stringify({scope:'synthetic client Chromium',scenario:activeScenario,results,compactGeometry,live,failure:error.stack||String(error)},null,2)+'\n');
    throw error;
   }finally{await context.close();activePage=null;}
  }
- await writeFile(artifact+'/result.json',JSON.stringify({scope:'synthetic client Chromium',results},null,2)+'\n');
- console.log(JSON.stringify({scope:'synthetic client Chromium',results}));
+ await writeFile(artifact+'/result.json',JSON.stringify({scope:'synthetic client Chromium',results,compactGeometry},null,2)+'\n');
+ console.log(JSON.stringify({scope:'synthetic client Chromium',results,compactGeometry}));
 }finally{await browser?.close();await vite?.close();}

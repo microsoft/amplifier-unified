@@ -4,8 +4,8 @@ import {Link,Bold,Italic,Code,Strikethrough} from 'lucide-react';
 import 'prosemirror-view/style/prosemirror.css';
 import {EditorView} from 'prosemirror-view';
 import {composerState,composerMarkdown,composerDocument,composerSendDocument,insertQuote,pasteMarkdown,composerClipboard,composerFormat,formatComposerBlock,setComposerLink,moveComposerBoundary,composerSelectionEditable,toggleComposerMark} from './markdown-composer.js';
-import {composerReturnEvents,composingReturn,returnKeyHelp} from './composer-return.js';
-import {useComposerReturn} from './composer-return-preference.jsx';
+import {composerReturnEvents,composingReturn} from './composer-return.js';
+import {ComposerReturnHelp,useComposerReturn} from './composer-return-preference.jsx';
 import {quoteNodeView,refreshQuoteControls} from './composer-quote-view.js';
 import {clipboardPaste} from './clipboard-paste';
 import {resizeComposer,observeComposerLayout} from './composer';
@@ -13,11 +13,11 @@ import './composer-formatting.css';
 
 const quoteCount=doc=>{let count=0;doc.forEach(node=>{if(node.type.name==='reference')count++;});return count;};
 
-export function MarkdownComposer({value,document:documentValue,onChange,onSend,onFiles,onReveal,onQuoteRemoved,quoteApi,disabled=false,readOnly=false,pasteDisabled=false,editorRef}){
+export function MarkdownComposer({value,document:documentValue,onChange,onSend,onFiles,onReveal,onQuoteRemoved,quoteApi,disabled=false,readOnly=false,pasteDisabled=false,editorRef,returnHelpId:providedReturnHelpId}){
  const host=useRef(null),editor=useRef(null),latest=useRef(null),published=useRef(value),publishedDocument=useRef(documentValue);
  const toolbar=useRef(null),refresh=useRef(()=>{}),dismissed=useRef(null);
  const insertionMode=useRef('caret');
- const {mode:returnMode}=useComposerReturn(),returnHelpId=useId();
+ const {mode:returnMode}=useComposerReturn(),ownReturnHelpId=useId(),returnHelpId=providedReturnHelpId??ownReturnHelpId;
  const [selection,setSelection]=useState(null),[linkOpen,setLinkOpen]=useState(false),[link,setLink]=useState(''),[linkError,setLinkError]=useState('');
  const openLink=()=>{
   const view=editor.current;if(!view||view.state.selection.empty||!composerSelectionEditable(view.state)||view.state.selection.$from.parent.type.spec.code)return;
@@ -125,7 +125,7 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
  },[]);
  useLayoutEffect(()=>{
   const view=editor.current;if(!view)return;
-  view.setProps({editable:()=>!disabled&&!readOnly});
+  view.setProps({editable:()=>!disabled&&!readOnly,attributes:{...view.props.attributes,'aria-describedby':returnHelpId}});
   view.dom.setAttribute('aria-disabled',String(disabled));view.dom.setAttribute('aria-readonly',String(readOnly));view.dom.setAttribute('aria-busy',String(readOnly));
   // Do not rebuild selection or undo history for our own autosave echoes.
   if((value!==published.current||JSON.stringify(documentValue??null)!==JSON.stringify(publishedDocument.current??null))&&!view.composing){
@@ -133,10 +133,10 @@ export function MarkdownComposer({value,document:documentValue,onChange,onSend,o
    view.dom.dataset.empty=String(!value);resizeComposer(view.dom);
   }
   refresh.current();
- },[value,documentValue,disabled,readOnly]);
+ },[value,documentValue,disabled,readOnly,returnHelpId]);
  const dismiss=()=>{const view=editor.current;dismissed.current=view.state.selection.from+':'+view.state.selection.to;setSelection(null);setLinkOpen(false);view.focus();};
  const mark=name=>toggleComposerMark(editor.current,name);
- return <><div className="a-markdown-composer-host" ref={host}/><small className="a-caption" id={returnHelpId}>{returnKeyHelp(returnMode)}</small>{documentValue?.segments?.some(part=>part.type==='quote')&&<label className="a-caption">Add quotes <select aria-label="Quote insertion" defaultValue="caret" onChange={event=>{insertionMode.current=event.target.value;}}><option value="caret">At remembered caret</option><option value="append">At end</option></select></label>}{selection&&!disabled&&!readOnly&&createPortal(
+ return <><div className="a-markdown-composer-host" ref={host}/>{providedReturnHelpId==null&&<ComposerReturnHelp id={returnHelpId}/>}{documentValue?.segments?.some(part=>part.type==='quote')&&<label className="a-caption">Add quotes <select aria-label="Quote insertion" defaultValue="caret" onChange={event=>{insertionMode.current=event.target.value;}}><option value="caret">At remembered caret</option><option value="append">At end</option></select></label>}{selection&&!disabled&&!readOnly&&createPortal(
   <div className="a-composer-format" ref={toolbar} style={{left:selection.left,top:selection.top}} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();dismiss();}}}>
    <div role="toolbar" aria-label="Format selected text" className="a-composer-format-row">
     <button type="button" aria-label="Link" disabled={selection.literal} title="Link (Ctrl/⌘ K)" aria-pressed={selection.link} onMouseDown={e=>e.preventDefault()} onClick={openLink}><Link size={18}/></button>

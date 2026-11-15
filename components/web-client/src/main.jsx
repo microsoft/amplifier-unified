@@ -16,7 +16,7 @@ import {workProjectionReceipt} from './work-projection-receipt.js';
 import {hasEarlierWindow,conversationHistoryPending} from './history-window.js';
 import {ChatPages,chatPageTitles} from './chat-pages';
 import {MarkdownComposer} from './markdown-composer.jsx';
-import {ComposerReturnSettings} from './composer-return-preference.jsx';
+import {ComposerReturnHelp,ComposerReturnSettings} from './composer-return-preference.jsx';
 import {ComposerAdd} from './composer-add.jsx';
 import {ButtonTooltips} from './tooltips';
 import {ConversationRail} from './conversation-rail.jsx';
@@ -74,7 +74,7 @@ import {draftExternalAgentIds,externalParticipants,externalAgentLabel,isSharedEx
 import {CoordinationPanel,selectWorkspaceChat} from './coordination';
 import {ActivityPanel,useReadCompletion} from './attention';
 import {ChatDelete} from './chat-delete';
-import React,{useState,useEffect,useLayoutEffect,useRef,useCallback,useMemo} from 'react';
+import React,{useId,useState,useEffect,useLayoutEffect,useRef,useCallback,useMemo} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Phone,MessageCircle,Bell,ArrowUp,X,GitBranch,Download,ChevronRight,AudioLines} from 'lucide-react';
 import {request,download,visibleView} from './api';
@@ -120,6 +120,7 @@ const icons={call:Phone,text:Bell,chat:MessageCircle};
 const pretty=v=>JSON.stringify(v,null,2);
 const nowLabel=value=>{try{return new Date(typeof value==='number'&&value<1e12?value*1000:value).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}catch{return ''}};
 function App(){
+ const composerReturnHelpId=useId();
  const archiveRevision=useRef(0),archiveAction=useRef(null),[archiveFeedback,setArchiveFeedback]=useState({notice:null,pending:[]});
  const canvasInputRevision=useRef(0),permissionHistoryFocus=useRef(null);
  const capabilityCardQueue=useRef(Promise.resolve());
@@ -1116,7 +1117,7 @@ function App(){
     <div className="a-compose-writing">
     <AttachmentStrip privateDraft sessionId={session?.id??null} items={availableAttachments} remove={id=>act('attachment.remove',{sessionId:session?.id??null,id})}/>{uploading&&<p role="status" className="a-upload-status">Uploading attachments…</p>}
     <ReplyPreview quote={state.view?.messageReply} sessionId={session?.id} dispatch={dispatch}/>
-    <MarkdownComposer key={session?.id??'new-chat'} editorRef={composerRef} quoteApi={quoteApi} value={draft} document={state.view?.draftDocument} onChange={editDraft} onSend={send} onQuoteRemoved={left=>setQuoteNotice(notice=>quoteNoticeAfterRemoval(notice,session?.id,left))} onReveal={async(quote,button)=>{
+    <MarkdownComposer key={session?.id??'new-chat'} returnHelpId={composerReturnHelpId} editorRef={composerRef} quoteApi={quoteApi} value={draft} document={state.view?.draftDocument} onChange={editDraft} onSend={send} onQuoteRemoved={left=>setQuoteNotice(notice=>quoteNoticeAfterRemoval(notice,session?.id,left))} onReveal={async(quote,button)=>{
      const sid=session?.id,owner=quoteApi.current;
      if(quote.sessionId!==sid)throw Error('This source is from another chat. Cross-chat quotation is not available.');
      const top=messagesPane.current?.scrollTop;
@@ -1138,6 +1139,7 @@ function App(){
     {!externalConversation&&<ComposerAdd sessionId={session?.id} panel={settingsRoute||null} disabled={uploading||executionUnavailable||historyPending} accessDisabled={browsing} onFiles={kind=>{fileInput.current.accept=kind==='image'?'image/*':'';fileInput.current.click()}} onAccess={()=>open('chat-write-files')}><input ref={fileInput} type="file" multiple className="a-file-input" aria-label="Attach files" data-action="attachment.add" onChange={e=>{addFiles([...e.target.files]);e.target.value=''}}/></ComposerAdd>}
     <div className="a-compose-end"><DictationButton key={session?.id??'dictation-new'} draft={draft} onChange={value=>{if((latest.current?.selectedSessionId??null)===(session?.id??null))editDraft(value)}} controlRef={dictationControl} disabled={executionUnavailable||historyPending||referencingDraft||sendingHere||browsing||callActive}/><button type={primaryAction.action==='conversation.send'?'submit':'button'} className="a-send" data-part="composer-primary-action" data-action={primaryAction.action} aria-label={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice':primaryAction.label} title={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice in Settings':primaryAction.label} disabled={primaryAction.disabled||(referencingDraft&&primaryAction.action==='conversation.send')} onClick={primaryAction.action==='call.start'?startCall:primaryAction.action==='call.end'?()=>act('call.end'):primaryAction.action==='conversation.stop'?()=>act('conversation.stop',{sessionId:session.id}):undefined}>{primaryAction.icon==='voice'?<AudioLines/>:primaryAction.icon==='cancel'?<X/>:<ArrowUp/>}</button></div>
     </div>
+    <ComposerReturnHelp id={composerReturnHelpId}/>
     <div className="a-compose-configuration">
      {session&&responseActive&&!callActive&&primaryAction.action!=='conversation.stop'&&<button type="button" className="a-compose-stop" aria-label="Stop response" data-action="conversation.stop" disabled={session.status==='stopping'||executionUnavailable} onClick={()=>act('conversation.stop',{sessionId:session.id})}>{session.status==='stopping'?'Stopping…':'Stop'}</button>}
      <ShellSlot name="composer.actions"><ComposerOptions state={state} session={session} act={act} working={working} detail={presentation.interfaceDetail||presentation.executionDetail} recipientAgentId={recipientAgentId} onRecipientChange={id=>setRecipientChoices(current=>({...current,[recipientKey]:id}))}/></ShellSlot>

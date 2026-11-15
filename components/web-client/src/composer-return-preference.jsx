@@ -9,6 +9,13 @@ export function useComposerReturn(){
  return {...saved,mode:returnKeyMode(saved.value,capturedAutomatic),automatic:capturedAutomatic,set:preference.set};
 }
 
+// A separate field-help slot lets compact composers keep guidance visible below
+// the bordered editor/action row without changing its editor or Return policy.
+export function ComposerReturnHelp({id}){
+ const {mode}=useComposerReturn();
+ return <small className="a-caption a-composer-return-help" data-part="composer-return-help" id={id}>{returnKeyHelp(mode)}</small>;
+}
+
 export function ComposerReturnSettings(){
  const {value,error,mode,automatic,set}=useComposerReturn(),id=useId();
  return <section className="a-appearance-settings a-appearance-preference-group" aria-labelledby={id}>
