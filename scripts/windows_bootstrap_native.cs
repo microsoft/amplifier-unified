@@ -704,9 +704,38 @@ namespace UnifiedBootstrap {
                 "-I -m amplifier_web.windows_consumer --root "+Quote(root)) {
                     UseShellExecute=true,WorkingDirectory=Path.Combine(root,"workspace")};
         }
+        static bool AddEntries(string root) {
+            // The Start-menu and Apps-list entries, added again by the
+            // installation's own program. The pin covers only the start, as for
+            // the app below: setup must not hold the folder and the folders above
+            // it while that program runs. With its output read here, a failure is
+            // an exit code and not a second message from that program.
+            try {
+                string python=Path.Combine(root,"tools","amplifier-unified","Scripts","python.exe");
+                var integrate=new ProcessStartInfo(python,
+                    "-I -B -m amplifier_web.windows_consumer --root "+Quote(root)+" --integrate") {
+                    UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,
+                    WorkingDirectory=Path.Combine(root,"workspace")};
+                Process entries;
+                using(PinInstalled(root,python)) entries=Process.Start(integrate);
+                using(entries) { entries.StandardOutput.ReadToEnd(); entries.WaitForExit(); return entries.ExitCode==0; }
+            } catch(Exception) { return false; }
+        }
+        static int StartAndWait(string root) {
+            // 0: the launcher finished. 1: it failed and said so in its own
+            // message. 2: Windows could not start it.
+            try {
+                var start=AppStart(root);
+                Process app;
+                using(PinInstalled(root,start.FileName)) app=Process.Start(start);
+                if(app==null) return 0;
+                using(app) { app.WaitForExit(); return app.ExitCode==0?0:1; }
+            } catch(Exception) { return 2; }
+        }
         static int OpenInstalled(string root) {
-            // A second setup run restores missing app entries and starts the app.
-            // It never installs again and never removes anything.
+            // A second setup run adds missing Start-menu and Apps-list entries
+            // again and starts the app. It never installs again and never removes
+            // anything.
             if(!File.Exists(AppStart(root).FileName)) {
                 Say("Amplifier is already installed in "+root+", but setup cannot open it: a program file is missing.\n\n"+
                     "Keep that folder. It holds your chats and settings. This version of setup cannot repair it.",
@@ -724,58 +753,39 @@ namespace UnifiedBootstrap {
                 : "Amplifier is already installed on this PC, but it is not in the Start menu and does not start when you sign in.\n\n"+
                   "Select Yes to add it to the Start menu again and start it now. Your chats and settings are kept.",
                 MessageBoxButtons.YesNo,MessageBoxIcon.Information)!=DialogResult.Yes) return 0;
+            // The person sees that setup works: a start can take minutes, and
+            // the launcher has no window of its own.
             Stage=listed?"Starting Amplifier (this can take a few minutes)":"Adding Amplifier to the Start menu";
             using(var form=new Form {Text="Amplifier Unified Setup",ClientSize=new Size(540,140),
                 FormBorderStyle=FormBorderStyle.FixedDialog,MaximizeBox=false,MinimizeBox=false}) {
-                var label=new Label {Left=20,Top=20,Width=500,Height=55,Text=Stage+"\n\nKeep this window open."};
+                var label=new Label {Left=20,Top=20,Width=500,Height=55,Text=Stage+"...\n\nKeep this window open."};
                 var bar=new ProgressBar {Left=20,Top=85,Width=500,Style=ProgressBarStyle.Marquee};
                 form.Controls.Add(label);form.Controls.Add(bar);
                 var timer=new System.Windows.Forms.Timer {Interval=250};
-                timer.Tick+=(sender,e)=>{label.Text=Stage+"\n\nKeep this window open.";};
+                timer.Tick+=(sender,e)=>{label.Text=Stage+"...\n\nKeep this window open.";};
                 int result=1;bool settled=false;
                 form.FormClosing+=(sender,e)=>{if(!settled)e.Cancel=true;};
                 form.Shown+=async(sender,e)=>{
                     timer.Start();
                     try {
-                        result=await Task.Run(()=>{
-                            if(!listed) {
-                                Stage="Adding Amplifier to the Start menu";
-                                try {
-                                    var python=Path.Combine(root,"tools","amplifier-unified","Scripts","python.exe");
-                                    var integrate=new ProcessStartInfo(python,
-                                        "-I -B -m amplifier_web.windows_consumer --root "+Quote(root)+" --integrate") {
-                                        UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Path.Combine(root,"workspace")};
-                                    Process entries;
-                                    using(PinInstalled(root,python)) entries=Process.Start(integrate);
-                                    // Release the pin before the child writes its app entries.
-                                    using(entries) {
-                                        entries.WaitForExit();
-                                        if(entries.ExitCode!=0) throw new InvalidOperationException();
-                                    }
-                                    listed=true;
-                                } catch(Exception) {
-                                    Say("Setup could not add Amplifier to the Start menu.\n\n"+
-                                        "Restart Windows. Then run this setup file again. Your chats and settings are kept in "+root+".",
-                                        MessageBoxButtons.OK,MessageBoxIcon.Warning);
-                                    return 1;
-                                }
-                            }
-                            Stage="Starting Amplifier (this can take a few minutes)";
-                            try {
-                                var start=AppStart(root);
-                                Process app;
-                                using(PinInstalled(root,start.FileName)) app=Process.Start(start);
-                                using(app) {
-                                    app.WaitForExit();
-                                    return app.ExitCode==0?0:1;
-                                }
-                            } catch(Exception) {
-                                Say("Setup could not start Amplifier. "+
-                                    "Open it from the Start menu: Amplifier Unified.",
-                                    MessageBoxButtons.OK,MessageBoxIcon.Warning);
-                                return 1;
-                            }
-                        });
+                        if(!listed) {
+                            listed=await Task.Run(()=>AddEntries(root));
+                            // Not a reason to keep the person from the app: it
+                            // starts, as it did before this step existed.
+                            if(!listed) Say("Setup could not add Amplifier to the Start menu. Amplifier starts now.\n\n"+
+                                "To open it later, run this setup file again. Your chats and settings are kept.",
+                                MessageBoxButtons.OK,MessageBoxIcon.Warning);
+                        }
+                        Stage="Starting Amplifier (this can take a few minutes)";
+                        int started=await Task.Run(()=>StartAndWait(root));
+                        // The launcher shows its own messages. Setup adds one
+                        // only when Windows could not start the launcher.
+                        if(started==2) Say("Setup could not start Amplifier.\n\n"+(listed
+                            ? "Open it from the Start menu: Amplifier Unified."
+                            : "Restart Windows. Then run this setup file again."),
+                            MessageBoxButtons.OK,MessageBoxIcon.Warning);
+                        result=started==0?0:1;
+                    } catch(Exception) {
                     } finally {settled=true;timer.Stop();form.Close();}
                 };
                 Application.Run(form);timer.Dispose();return result;

@@ -128,7 +128,8 @@ def test_unfinished_attempts_are_removed_and_installations_never_are():
     opened = between("static int OpenInstalled(", "static int ConsumerWindow()")
     assert "RemoveUnfinished" not in opened and "RemoveContents" not in opened
     # The installation is checked again, and held, while Windows starts it.
-    assert "using(PinInstalled(root,start.FileName)) app=Process.Start(start);" in opened
+    assert "using(PinInstalled(root,start.FileName)) app=Process.Start(start);" in between(
+        "static int StartAndWait(", "static int OpenInstalled(")
     pin = between("internal static IDisposable PinInstalled(", "internal static string SignInTask(")
     assert pin.index('Need(Marked(root)=="installed"') < pin.index("storage.TrustExecutable(program)")
     saved = between("internal static string SaveDiagnostics(", "static string Shortcut(")
@@ -144,29 +145,45 @@ def test_second_setup_restores_entries_before_start_and_waits_without_pins():
     assert ("Select Yes to add it to the Start menu again and start it now. "
             "Your chats and settings are kept.") in opened
     assert "Select Yes to open it now." in opened
-    assert "To open it later, run this setup file again." not in opened
+    # The entries come first, then the app. Both steps run off the window thread.
     order = [opened.index(text) for text in (
-        "if(!listed) {", '" --integrate"', "entries=Process.Start(integrate);",
-        "entries.WaitForExit();", "if(entries.ExitCode!=0)", "listed=true;",
-        "var start=AppStart(root);", "app=Process.Start(start);", "app.WaitForExit();",
-        "return app.ExitCode==0?0:1;")]
+        "if(!listed) {", "listed=await Task.Run(()=>AddEntries(root));",
+        'Say("Setup could not add Amplifier to the Start menu. Amplifier starts now.',
+        "int started=await Task.Run(()=>StartAndWait(root));", "result=started==0?0:1;")]
     assert order == sorted(order)
-    assert '"-I -B -m amplifier_web.windows_consumer --root "+Quote(root)' in opened
-    assert 'Path.Combine(root,"tools","amplifier-unified","Scripts","python.exe")' in opened
-    assert 'UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Path.Combine(root,"workspace")' in opened
-    # Each pin covers one statement. Both waits run after that statement ends.
-    assert "using(PinInstalled(root,python)) entries=Process.Start(integrate);" in opened
-    assert "using(PinInstalled(root,start.FileName)) app=Process.Start(start);" in opened
-    assert not re.search(r"using\(PinInstalled\([^\n]*\)\s*\{", opened)
-    failure = between('Say("Setup could not add Amplifier', "return 1;", opened)
-    assert "run this setup file again" in failure and "Your chats and settings are kept in " in failure
-    assert "Open it from the Start menu" not in failure
-    assert 'MessageBoxButtons.OK,MessageBoxIcon.Warning' in failure
+    # A failed entries step does not keep the person from the app, and its
+    # message never sends the person to a Start-menu entry that is not there.
+    failure = between('Say("Setup could not add Amplifier', "MessageBoxIcon.Warning", opened)
+    assert "To open it later, run this setup file again. Your chats and settings are kept." in failure
+    assert "Open it from the Start menu" not in failure and "return" not in failure
+    unstarted = between('if(started==2) Say(', "MessageBoxIcon.Warning", opened)
+    assert unstarted.index("(listed") < unstarted.index("Open it from the Start menu: Amplifier Unified.") \
+        < unstarted.index("Restart Windows. Then run this setup file again.")
+    # The person sees a window with the stage for the whole time.
     assert "new Form" in opened and 'Text="Amplifier Unified Setup"' in opened
     assert "ProgressBarStyle.Marquee" in opened and "new System.Windows.Forms.Timer" in opened
-    assert 'label.Text=Stage+"\\n\\nKeep this window open."' in opened
-    assert "if(!settled)e.Cancel=true;" in opened and "await Task.Run" in opened
-    assert "settled=true;timer.Stop();form.Close();" in opened
+    assert 'label.Text=Stage+"...\\n\\nKeep this window open."' in opened
+    assert 'Stage="Starting Amplifier (this can take a few minutes)";' in opened
+    assert "if(!settled)e.Cancel=true;" in opened and "settled=true;timer.Stop();form.Close();" in opened
+
+    entries = between("static bool AddEntries(", "static int StartAndWait(")
+    assert 'Path.Combine(root,"tools","amplifier-unified","Scripts","python.exe")' in entries
+    assert '"-I -B -m amplifier_web.windows_consumer --root "+Quote(root)+" --integrate"' in entries
+    # No console window, and the program's output is read: with a valid output
+    # the program reports a failure by its exit code and shows no message itself.
+    assert "UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true," in entries
+    assert entries.index("entries.StandardOutput.ReadToEnd();") < entries.index("entries.WaitForExit();") \
+        < entries.index("return entries.ExitCode==0;")
+    assert "catch(Exception) { return false; }" in entries
+    started = between("static int StartAndWait(", "static int OpenInstalled(")
+    assert started.index("app.WaitForExit();") < started.index("return app.ExitCode==0?0:1;")
+    assert "if(app==null) return 0;" in started and "catch(Exception) { return 2; }" in started
+    # Each pin covers one statement, the start. Both waits come after it: setup
+    # does not hold the folder and the folders above it while a program runs.
+    assert "using(PinInstalled(root,python)) entries=Process.Start(integrate);" in entries
+    assert "using(PinInstalled(root,start.FileName)) app=Process.Start(start);" in started
+    for body in (entries, started, opened):
+        assert not re.search(r"using\(PinInstalled\([^\n]*\)\s*\{", body)
     assert "runtime status" in DESIGN and "clean-room run" in DESIGN
 
 

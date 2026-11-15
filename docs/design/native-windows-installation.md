@@ -817,14 +817,26 @@ uninstall, because every entry is already gone; it is saved as a failed
 `receipt` step.
 
 After an uninstall, a second setup run adds the Start-menu and Apps-list
-entries again, then waits for the launcher. A progress window stays open
-during both steps. Chats and settings stay in place. The launcher skips
-preparation when `runtime status` reports a prepared runtime, just as a start
-at sign-in uses that runtime. Without this check, a connected AI account made
-the start run a complete first installation: minutes without a window and
-a new folder on each attempt. The real Scheduled Task, the real host start,
-and `runtime status` on a real installation after chats still need a
-clean-room run.
+entries again (the entry record with the status `removed` permits exactly
+that), then starts the launcher and waits for it. Setup's window with the
+current step stays open during both steps. Chats and settings stay in place.
+If the entries cannot be added, setup says so and still starts the app, as it
+did before this step existed; the next step it names is to run the setup file
+again. The launcher skips preparation when `runtime status` reports a prepared
+runtime, just as a start at sign-in uses that runtime. Without this check, a
+connected AI account made the start run a complete first installation: minutes
+without a window, a new folder on each attempt, and in the observed case a
+failure. The launcher's failure message names the step that failed. It names
+the Start menu as the next step only when the entry record says `installed`;
+otherwise the next step is to run the setup file again. The real Scheduled
+Task, the real host start, and `runtime status` on a real installation after
+chats still need a clean-room run.
+
+Not changed: when the runtime is not prepared and an AI account is connected,
+a start without a task still runs the complete first installation, and a
+failed attempt leaves its folder under `app\updates\releases` (failed
+candidates are retained by design). After an uninstall this no longer
+happens, because the prepared runtime is used.
 
 The Start-menu commands Stop and Status use the same form of message: what
 did not happen, the next action and the reference. They no longer show the
