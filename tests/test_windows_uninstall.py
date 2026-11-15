@@ -544,7 +544,12 @@ def test_open_stop_and_status_refuse_while_any_journal_exists(deleter, monkeypat
 def test_a_journal_that_does_not_prove_a_delete_choice_never_deletes(deleter):
     # A record that this version did not write, or a damaged one: only an uninstall that keeps the folder.
     state, root = deleter.state, deleter.root
-    for text in ('{"schema": 1, "choice": "keep", "token": "' + "b" * 32 + '"}', "{", '{"schema": 2}'):
+    delete = '{"schema": 1, "choice": "delete", "token": "' + "c" * 32 + '"'
+    for text in ('{"schema": 1, "choice": "keep", "token": "' + "b" * 32 + '"}', "{",
+                 # A delete record that does not name the source store, or names it in another way.
+                 delete + "}", delete + ', "store": "S"}', delete + ', "store": ["s"]}',
+                 delete + ', "store": "cache"}', delete + ', "store": null}', '{"schema": 2}'):
+        assert plan.pending(root) is None or text.startswith('{"schema": 1, "choice": "keep"')
         (root / plan.JOURNAL).write_text(text)
         state["answers"] = [False]
         assert deleter.run() == {"ok": True, "cancelled": True}
@@ -735,11 +740,11 @@ def test_mapped_data_is_never_moved(deleter):
 @pytest.mark.parametrize("change", ["another-token", "gone", "another-choice"])
 def test_finish_refuses_a_journal_that_is_no_longer_its_own(deleter, change):
     state, root = deleter.state, deleter.root
-    token = plan.begin(root)
+    token = plan.begin(root, store="source-store")
     if change == "gone":
         (root / plan.JOURNAL).unlink()
     else:
-        plan.begin(root, "keep" if change == "another-choice" else "delete")
+        plan.begin(root, "keep" if change == "another-choice" else "delete", store="source-store")
     before = snapshot(root)
     state["calls"].clear()
     with pytest.raises(ValueError, match="Another removal"):
@@ -756,7 +761,7 @@ def test_public_uninstall_reports_when_its_journal_changed_before_finish(deleter
         if change == "gone":
             (root / plan.JOURNAL).unlink()
         else:
-            plan.begin(root)
+            plan.begin(root, store="source-store")
         return finish(folder, token)
     monkeypatch.setattr(plan, "finish", changed)
     monkeypatch.setattr(deleter.consumer.sys, "stdout", None)
@@ -769,7 +774,7 @@ def test_public_uninstall_reports_when_its_journal_changed_before_finish(deleter
 
 def test_finish_removes_an_earlier_flat_folder_before_making_a_new_one(deleter):
     state, root = deleter.state, deleter.root
-    token = plan.begin(root)
+    token = plan.begin(root, store="source-store")
     (root / plan.PARK).mkdir()
     (root / plan.PARK / "old").write_text("old program file")
     plan.finish(root, token)
@@ -779,7 +784,7 @@ def test_finish_removes_an_earlier_flat_folder_before_making_a_new_one(deleter):
 
 def test_finish_stops_when_the_earlier_flat_folder_cannot_go(deleter):
     state, root = deleter.state, deleter.root
-    token = plan.begin(root)
+    token = plan.begin(root, store="source-store")
     (root / plan.PARK).mkdir()
     state["kept"].add(plan.PARK)
     before = snapshot(root)
@@ -791,7 +796,7 @@ def test_finish_stops_when_the_earlier_flat_folder_cannot_go(deleter):
 
 def test_finish_refuses_an_altered_name_before_it_deletes_anything(deleter):
     state, root = deleter.state, deleter.root
-    token = plan.begin(root)
+    token = plan.begin(root, store="source-store")
     state["also_listed"] = ["Tools"]
     before = snapshot(root)
     with pytest.raises(ValueError, match="differs"):
@@ -801,7 +806,7 @@ def test_finish_refuses_an_altered_name_before_it_deletes_anything(deleter):
 
 def test_finish_removes_earlier_kept_files_but_not_a_foreign_hold_name(deleter):
     state, root = deleter.state, deleter.root
-    token = plan.begin(root)
+    token = plan.begin(root, store="source-store")
     earlier = "b" * 32 + ".hold"
     (root / earlier).write_text("earlier")
     (root / "X.hold").write_text("foreign")
@@ -897,6 +902,78 @@ def test_second_uninstall_keeps_the_other_folder_when_the_store_is_already_delet
     second = deleter.journal()
     assert second["token"] != first["token"] and second["store"] == "source-store"
     assert {path.name for path in root.iterdir()} == {"s"} | kept_names(deleter)
+
+
+def _stopped_after_the_store_was_deleted(deleter):
+    """An earlier installation with a folder `s` of someone else, whose removal stopped after its store was deleted."""
+    state, root = deleter.state, deleter.root
+    mine = _both_stores(root)
+    state.update(choices=["yes", "yes"], commit_conflict=True)
+    with pytest.raises(deleter.consumer.Unfinished):
+        deleter.run()
+    assert not os.path.lexists(root / "source-store") and deleter.journal()["store"] == "source-store"
+    state.update(commit_conflict=False, questions=[])
+    state["calls"].clear()
+    return mine
+
+
+@pytest.mark.parametrize("change", ["no-store", "another-spelling", "a-list"])
+def test_journal_that_lost_its_store_offers_only_to_keep_the_folder(deleter, change):
+    """Without the name, the listing alone would now take the other folder `s` for the store."""
+    state, root = deleter.state, deleter.root
+    mine = _stopped_after_the_store_was_deleted(deleter)
+    record = deleter.journal()
+    record.pop("store")
+    if change != "no-store":
+        record["store"] = "Source-Store" if change == "another-spelling" else ["source-store"]
+    (root / plan.JOURNAL).write_text(json.dumps(record))
+    # Schema, choice and token are still this program's. It is not a record of a removal any more.
+    assert plan.pending(root) is None and plan.unfinished(root)
+    before = snapshot(root)
+    state["answers"] = [True]
+    assert deleter.run()["installationFilesRetained"] is True
+    # No question offers to delete, and nothing in the folder is deleted.
+    assert not state["questions"] and not deletes(state) and state["after"] is None
+    after = snapshot(root)
+    after.pop(shell.FILE, None)
+    before.pop(shell.FILE, None)
+    assert after == before and mine.read_text() == "not Amplifier's"
+
+
+def test_journal_that_loses_its_store_after_the_questions_deletes_nothing(deleter):
+    """A program rewrites the journal between the person's two answers and the lock."""
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    mine = _stopped_after_the_store_was_deleted(deleter)
+    record = deleter.journal()
+    record.pop("store")
+    state.update(choices=["yes", "yes"], on_lock=lambda: (root / plan.JOURNAL).write_text(json.dumps(record)))
+    before = snapshot(root)
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    # Not a new removal that decides from the listing: it stops before it changes anything.
+    assert stopped.value.step == "folder" and isinstance(stopped.value.error, ValueError)
+    assert len(state["questions"]) == 2 and not deletes(state) and state["after"] is None
+    after = snapshot(root)
+    assert after.pop(plan.JOURNAL) == json.dumps(record).encode() and before.pop(plan.JOURNAL)
+    # The private note of the step that failed is the one file that this refusal writes.
+    assert json.loads(after.pop(consumer.RECORD))["step"] == "folder" and before.pop(consumer.RECORD)
+    assert after == before and mine.read_text() == "not Amplifier's"
+
+
+def test_last_step_uses_the_removals_own_store_when_the_other_name_appears(deleter, monkeypatch):
+    """A new installation. A program adds an empty `source-store` after the removal decided."""
+    state, root = deleter.state, deleter.root
+    _only_store(root, "s")
+    state.update(choices=["yes", "yes"], on_journal=lambda: (root / "source-store").mkdir())
+    monkeypatch.setattr(deleter.consumer.sys, "stdout", None)
+    result = deleter.run()
+    # The store went with the program files. The later folder is named to the person as something that stays.
+    assert "s" in deletes(state) and "source-store" not in deletes(state)
+    assert result["kept"] == ["source-store"] and "The folder itself stays" in state["notices"][-1][0]
+    # The step after exit is asked about the removal's store, not about the folder that the message said stays.
+    assert deleter.journal()["store"] == "s"
+    assert "s" in state["after"]["folders"] and "source-store" not in state["after"]["folders"]
+    assert (root / "source-store").is_dir()
 
 
 @pytest.mark.parametrize("store", STORES)
@@ -1001,7 +1078,7 @@ def test_keeping_uninstall_refuses_when_another_window_began_to_delete_after_the
     state, root, consumer = deleter.state, deleter.root, deleter.consumer
     state["choices"], registration = ["no"], state["registry"].copy()
     state["on_lock"] = lambda: (root / plan.JOURNAL).write_text(
-        json.dumps({"schema": 1, "choice": "delete", "token": "c" * 32}))
+        json.dumps({"schema": 1, "choice": "delete", "token": "c" * 32, "store": "source-store"}))
     with pytest.raises(consumer.Refused) as refused:
         deleter.run()
     assert refused.value.step == "removing" and state["calls"] == [("lock",), ("unlock",)]
@@ -1015,7 +1092,8 @@ def test_keeping_uninstall_refuses_when_another_window_began_to_delete_after_the
 def test_journal_that_a_program_wrote_never_replaces_one_of_the_two_choices(deleter):
     # The journal is a private file, but a program of this account can write it. It is not the person's choice.
     state, root = deleter.state, deleter.root
-    (root / plan.JOURNAL).write_text(json.dumps({"schema": 1, "choice": "delete", "token": "e" * 32}))
+    (root / plan.JOURNAL).write_text(json.dumps({"schema": 1, "choice": "delete", "token": "e" * 32,
+                                                 "store": "source-store"}))
     before, registration = snapshot(root), state["registry"].copy()
     for choices in (["no"], ["yes", "no"]):
         state["choices"] = list(choices)

@@ -941,23 +941,43 @@ installation, else `s` (`windows_uninstall.store_name`). "Delete everything"
 removes that store with the caches, and "keep" leaves it. It is not named as
 something that is not Amplifier's.
 
-A folder with the other name is not this installation's entry. It stays with
-everything in it, the message names it, and then the folder stays. That is a
-folder `s` that something added to an earlier installation. It is also the
-folder `s` of a new installation to which something added `source-store`:
-the launcher then uses `source-store`, and nothing shows any more who made
-`s`. That `s` holds module source and none of the person's data; the person
-can delete the folder by hand. Setup, the app, an update and the launcher
-refresh never create the second name in an installation.
+A folder with the other name is never deleted, because nothing shows who made
+it. It stays with everything in it, the message names it with the entries
+that are not Amplifier's, and then the folder stays. That is a folder `s`
+that something added to an earlier installation. It is also the folder `s`
+of a new installation to which something added `source-store`: the launcher
+then uses `source-store`, and the `s` that setup made stays, with the module
+source that setup and the app put there. A second setup run on a finished
+installation and the launcher refresh create no folder in the installation
+(read in their source), so they do not add the second name.
+
+The rule looks only at what is in the folder. An installation that has no
+`source-store` folder, and no journal that names it, has the store `s`. That
+is also true for an earlier installation whose `source-store` something else
+removed: the launcher then uses `s`, and so does uninstall.
 
 A removal decides the store once, from the listing that passed the check of
 the names, and writes its name into the journal before it deletes anything.
-Every later step of that removal uses that one decision. A second uninstall
-after an interruption takes it from the journal: by then the store can be
-deleted, and the listing alone would take a folder `s` for the store. The
-journal's entry can only keep a folder `s`: it never makes uninstall delete a
-folder that the listing alone would keep. Another spelling of either name
-(`S`, `Source-Store`) refuses: uninstall then deletes nothing, as for `App`.
+Every step of that removal uses that decision; its last step takes it from
+the removal's own journal. So a `source-store` that appears after the
+decision is not the store of that removal: it stays.
+
+A second uninstall after an interruption decides again by the same rule,
+with one addition: the store is also `source-store` when the journal names
+it. By then the store can be deleted, and the listing alone would take a
+folder `s` for the store. The journal's entry can only keep a folder `s`: it
+never makes uninstall delete a folder that the listing alone would keep. A
+`source-store` that something added between the two uninstalls is the store
+for the second one, as it is for the launcher.
+
+A journal that does not name one of the two stores is not this program's
+record (L4 below): uninstall then offers only to keep the folder. A removal
+that finds such a journal after the person's answers stops before it changes
+anything. This does not stop a program of this account that writes a
+complete journal with the name `s` after the earlier store is deleted: the
+listing then decides, and a folder `s` goes with the program files. Such a
+program can delete that folder itself. Another spelling of either name (`S`,
+`Source-Store`) refuses: uninstall then deletes nothing, as for `App`.
 
 **While the journal exists** the folder can be partly deleted. Open, Stop and
 Status refuse with one message that tells the person to select Uninstall
@@ -1089,9 +1109,10 @@ limit as not blocking.
   Amplifier is already installed and that the folder holds the person's chats
   and settings and must be kept. That is not true for this leftover. Nothing
   in the product removes it: the person deletes the folder by hand.
-- **L4.** A journal that this code did not write (damaged, or with another
-  choice) proves nothing. Uninstall then deletes nothing and offers only to
-  keep the folder. Afterwards Amplifier does not open from that folder.
+- **L4.** A journal that this code did not write (damaged, with another
+  choice, or without the name of one of the two source stores) proves
+  nothing. Uninstall then deletes nothing and offers only to keep the
+  folder. Afterwards Amplifier does not open from that folder.
 - **L5.** After a program renamed an entry only by case during the removal,
   uninstall stops with the journal in place. A second uninstall refuses at
   its first check until the entry has its own name again.

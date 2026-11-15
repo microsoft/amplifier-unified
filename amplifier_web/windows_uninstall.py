@@ -81,10 +81,11 @@ def store_name(names, record=None):
 
     A removal decides this once, from the listing that passed the check of
     the names, and writes it into its journal before it deletes anything.
-    `record` is the journal of a removal that did not finish: by then the
-    earlier store can be deleted, and the listing alone would take a folder
-    with the other name for the store. The record only ever keeps that
-    folder; a store that is in the listing needs no record.
+    Its last step takes the name from that journal. `record` is the journal
+    of a removal that did not finish: by then the earlier store can be
+    deleted, and the listing alone would take a folder with the other name
+    for the store. The record only ever keeps that folder: it never makes
+    uninstall delete a folder that the listing alone would keep.
     """
     if STORES[0] in names or (record is not None and record.get("store") == STORES[0]):
         return STORES[0]
@@ -152,11 +153,14 @@ def pending(root):
 
     It is read through the private-file boundary. On a second uninstall it
     takes the place of setup's completion record as the proof of the folder.
+    A record that does not name the source store is not this program's: the
+    store would then be decided from a folder that is already partly deleted.
     """
     value = _private_json(root, JOURNAL)
     if (value is not None and type(value.get("schema")) is int and value["schema"] == 1
             and isinstance(value.get("choice"), str) and isinstance(value.get("token"), str)
-            and re.fullmatch("[0-9a-f]{32}", value["token"])):
+            and re.fullmatch("[0-9a-f]{32}", value["token"])
+            and isinstance(value.get("store"), str) and value["store"] in STORES):
         return value
     return None
 
@@ -426,6 +430,10 @@ def remove(root, *, stop, certificate, progress, choice="delete", data=remove_da
             names = owned.names()
             if altered(names):
                 raise ValueError("An entry differs from this installation's own name only by case.")
+            if record is None and JOURNAL in names:
+                # A journal that is not this program's. It does not say which
+                # store an earlier removal chose, so nothing is deleted.
+                raise ValueError("The journal in this folder is not this program's own record.")
             store = store_name(names, record)  # Once, for every step of this removal.
             progress("entries-check")
             with ExitStack() as entries:
@@ -489,7 +497,7 @@ def finish(root, token, *, choice="delete", wait=time.sleep):
             # are made, or the name refuses.
             earlier = [name for name in owned.names() if re.fullmatch(r"[0-9a-f]{32}\.hold", name, re.ASCII)]
             owned.remove([PARK, *earlier], settle=shell.SETTLE_SECONDS, wait=wait)
-            folders = last_names(owned, store_name(owned.names(), record))
+            folders = last_names(owned, record["store"])  # This removal's own decision.
             with owned.aside(PARK, token) as park:
                 windows_removal.finish_after_exit(
                     root, token, park=PARK, keep=park.keep, folders=folders,
