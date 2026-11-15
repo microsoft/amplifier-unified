@@ -895,16 +895,25 @@ def test_continued_fill_accepts_nothing_that_it_did_not_move(tmp_path, monkeypat
     assert kept.first_start(root, VERSION, ask=False) is None and person(data(root)) == expected
 
 
-@pytest.mark.parametrize("where", ["target", "kept"])
+@pytest.mark.parametrize("where", ["target", "kept", "replaced"])
 def test_entry_that_comes_in_while_a_folder_is_filled_stops_the_take_back(tmp_path, monkeypatch, notices, where):
-    """Every name passed its check. Then another program writes a file with a new name, during the moves."""
+    """Every entry passed its check. Then another program writes a file, during the moves.
+
+    `target`, `kept`: a file with a new name. `replaced`: another file takes
+    the name and the place of an entry that already moved.
+    """
     root, folder, expected = kept_then_installed(tmp_path)
     refuse(monkeypatch, "rmdir", root / "workspace")
-    real, late = os.rename, (root if where == "target" else folder) / "workspace" / "zz-late.txt"
+    real = os.rename
+    late = {"target": root / "workspace" / "zz-late.txt", "kept": folder / "workspace" / "zz-late.txt",
+            "replaced": root / "workspace" / "notes.txt"}[where]
+    (tmp_path / "other").write_text("written during the fill")  # Another file: made before the fill begins.
 
     def rename(old, new):
-        if Path(old) == folder / "workspace" / "notes.txt":
-            late.write_text("written during the fill")
+        if Path(old) == folder / "workspace" / ("project" if where == "replaced" else "notes.txt"):
+            if where == "replaced":
+                os.remove(late)
+            real(tmp_path / "other", late)
         return real(old, new)
     monkeypatch.setattr(os, "rename", rename)
     notices.answers.append(True)
@@ -917,6 +926,8 @@ def test_entry_that_comes_in_while_a_folder_is_filled_stops_the_take_back(tmp_pa
     assert again["reason"] == "take-back-not-empty" and str(late) in again["message"]
     assert late.read_text() == "written during the fill" and kept.read(folder)[0] == "adopting"
     os.remove(late)
+    if where == "replaced":
+        expected = {key: value for key, value in expected.items() if key != "workspace/notes.txt"}
     assert kept.first_start(root, VERSION, ask=False) is None and person(data(root)) == expected
 
 
@@ -1102,12 +1113,14 @@ def test_take_back_that_began_in_another_installation_is_never_continued(tmp_pat
 def test_replacement_with_the_same_name_is_not_the_entry_that_moved(tmp_path, monkeypatch, notices):
     """An interrupted fill. The person takes a kept entry away and puts another one of that name into Amplifier."""
     root, folder, _ = kept_then_installed(tmp_path)
+    (folder / "workspace" / "zz.txt").write_text("the last entry\n")
     refuse(monkeypatch, "rmdir", root / "workspace")
     notices.answers.append(True)
     restore = crash_after(monkeypatch, "rename", 6)  # Five folders, then `notes.txt` of the filled folder.
     with pytest.raises(Crash):
         kept.first_start(root, VERSION, ask=True)
     restore()
+    assert os.listdir(root / "workspace") == ["notes.txt"]  # `project` and `zz.txt` still wait.
     os.rename(folder / "workspace" / "project", tmp_path / "taken-away")
     (root / "workspace" / "project").mkdir()
     (root / "workspace" / "project" / "other.md").write_text("another project\n")
@@ -1121,8 +1134,10 @@ def test_replacement_with_the_same_name_is_not_the_entry_that_moved(tmp_path, mo
     (tmp_path / "replacement").write_text("another file with that name\n")  # Made while the first one exists.
     os.remove(root / "workspace" / "notes.txt")
     os.rename(tmp_path / "replacement", root / "workspace" / "notes.txt")
+    snapshot = tree(tmp_path)
     again = kept.first_start(root, VERSION, ask=False)
     assert again["reason"] == "take-back-not-empty" and str(root / "workspace" / "notes.txt") in again["message"]
+    assert tree(tmp_path) == snapshot and (folder / "workspace" / "zz.txt").exists()  # Nothing joined it.
 
 
 def test_rename_keeps_the_identity_of_an_entry_and_another_entry_has_another(tmp_path):
