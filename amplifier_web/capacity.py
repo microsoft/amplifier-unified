@@ -290,7 +290,7 @@ def restore_observation(session):
 
 
 def saved_policy(service, sid):
-    identity = service._session(sid).get('runtimeSessionId') or sid
+    identity = service._session(sid, hydrate=False).get('runtimeSessionId') or sid
     path = service.data_dir / 'sessions' / identity / 'control-state.json'
     if not path.exists():
         return {'revision': 0, 'enabled': False}
@@ -311,7 +311,7 @@ async def dispatch(service, operation, args, origin, command_id, include_state):
     import uuid
     sid = args['sessionId']
     await service.history.ensure_loaded(sid)
-    session = service._session(sid)
+    session = service._session(sid, hydrate=False)
     if operation != 'capacity.read':
         if not service.runtime or not service.management:
             raise AppError('The Amplifier runtime is unavailable')
@@ -372,7 +372,7 @@ async def admission(service, session_id, args, *, guard=None, queue_turn=None, o
     """Private worker-to-host gate; model actions cannot supply accounting data."""
     from .errors import AppError
     async with service.lock:
-        session = service._session(session_id)
+        session = service._session(session_id, hydrate=False)
         row = copy.deepcopy(args.get('call', {}))
         if guard and (reason := guard(session)):
             return {'allowed': False, 'state': 'cancelled', 'reasons': [reason]}
@@ -466,7 +466,7 @@ async def abandoned(service, session_id, args):
     from .collaboration import PRINCIPAL
     from .execution import LIVE_PHASES
     async with service.lock:
-        session = service._session(session_id)
+        session = service._session(session_id, hydrate=False)
         row = args.get('call') or {}
         native = session.get('runtimeSessionId') or session_id
         if PRINCIPAL.get() != native or row.get('rootSessionId') != native:

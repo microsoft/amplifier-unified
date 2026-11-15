@@ -31,7 +31,7 @@ async def admit(service, sid, args):
     if not args.get('waitForCapacity') or row.get('lifecycle') == 'background':
         return await admission(service, sid, args, guard=child_guard)
     async with service.lock:
-        session = service._session(sid)
+        session = service._session(sid, hydrate=False)
         assignment = service.assignments.current(session)
         if assignment is None:
             direct = True
@@ -80,7 +80,8 @@ async def admit(service, sid, args):
                 or native['process'].returncode is not None):
             return 'The originating worker is no longer available; no provider request was sent.'
         if row.get('sessionId') not in {sid, current.get('runtimeSessionId')}:
-            children = current.get('execution', {}).get('nodes', [])
+            from .execution_working_set import readonly
+            children = readonly(current).get('nodes', [])
             child = next((n for n in reversed(children) if n.get('kind') == 'worker'
                           and n.get('sessionId') == row.get('sessionId')), None)
             if (child and (not child_scope or child.get('runId') == child_scope['runId'])
@@ -126,7 +127,7 @@ async def admit(service, sid, args):
                         'reasons': ['Waiting for model capacity timed out. No provider request was sent; saved results and budgets are unchanged.']}
             if not visible:
                 async with service.lock:
-                    current = service._session(sid)
+                    current = service._session(sid, hydrate=False)
                     if reason := guard(current):
                         return {'allowed': False, 'state': 'cancelled', 'reasons': [reason]}
                     prior = next((item for item in queue if item['sid'] == sid and item['visible']), None)
@@ -144,7 +145,7 @@ async def admit(service, sid, args):
         async with service.lock:
             if ticket in queue:
                 queue.remove(ticket)
-            current = service._session(sid)
+            current = service._session(sid, hydrate=False)
             other_visible = any(item['sid'] == sid and item['visible'] for item in queue)
             if (visible and not other_visible and guard(current) is None
                     and (current.get('activity') or {}).get('phase') == 'capacity'):

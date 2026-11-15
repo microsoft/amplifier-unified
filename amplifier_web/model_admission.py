@@ -41,7 +41,7 @@ def binding(session, args):
 async def admit(service, session_id, args):
     from .capacity_wait import admit as wait
     async with service.lock:
-        session = service._session(session_id)
+        session = service._session(session_id, hydrate=False)
         before = binding(session, args)
         previous = session.get('modelAdmission')
     result = await wait(service, session_id, args)
@@ -51,7 +51,7 @@ async def admit(service, session_id, args):
         if not previous:
             return result
         async with service.lock:
-            session = service._session(session_id)
+            session = service._session(session_id, hydrate=False)
             observed = session.get('modelAdmission') or {}
             if (before == binding(session, args) and observed == previous
                     and observed.get('generationId') == before['generationId']):
@@ -61,7 +61,7 @@ async def admit(service, session_id, args):
     if result.get('state') not in ERROR_TYPES:
         return result
     async with service.lock:
-        session = service._session(session_id)
+        session = service._session(session_id, hydrate=False)
         if before != binding(session, args):
             return result  # A late observation cannot attach across Stop/input changes.
         row = args['call']

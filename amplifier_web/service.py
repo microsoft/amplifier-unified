@@ -19,6 +19,7 @@ from jsonschema import validate, ValidationError
 import tinycss2
 from .errors import AppError
 from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background, interrupt_unfinished, restore_voice_usage
+from .execution_working_set import current as current_execution, exact as execution_record
 from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_paused
 from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
@@ -4896,7 +4897,7 @@ class AppService:
             raise ValueError('Terminal event batch must belong to one root')
         async with self.lock:
             try:
-                session = self._session(next(iter(roots)))
+                session = self._session(next(iter(roots)), hydrate=False)
             except AppError:
                 return
             changed = {session['id']}
@@ -4933,7 +4934,7 @@ class AppService:
             return
         async with self.lock:
             try:
-                session = self._session(payload.get("rootSessionId") or payload.get("sessionId"))
+                session = self._session(payload.get("rootSessionId") or payload.get("sessionId"), hydrate=False)
             except AppError:
                 return
             from .runtime_event_batches import receipt, terminal
@@ -5140,7 +5141,7 @@ class AppService:
                 if startup and projected['category'] == 'unknown':
                     error_type = 'RuntimeStartupError'
                     projected = failure_details(detail, error_type)
-                current_input = session.get('execution', {}).get('currentTurnId')
+                current_input = current_execution(session).get('currentTurnId')
                 failure_inputs = (existing.get('inputIds') or [existing.get('inputId')]) if isinstance(existing, dict) else []
                 same_input = (current_terminal_failure(session) or not current_input
                     or not any(failure_inputs) or current_input in failure_inputs)
@@ -5215,7 +5216,9 @@ class AppService:
                     record_failure(session, session.get('failure') or {})
                 if root_generation and current_generation and payload.get("event") == "generation.finished":
                     if not payload.get('active_job_ids'):
-                        for turn in session.get('execution', {}).get('turns', []):
+                        for identity in payload.get('input_ids', []):
+                            execution_record(session, 'turns', {'id': identity})
+                        for turn in current_execution(session).get('turns', []):
                             if (turn.get('inputId', turn['id']) in payload.get('input_ids', [])
                                     and turn.get('generationId') in {None, payload.get('generation_id')}):
                                 turn.update(phase='completed', endedAt=event['at'])
