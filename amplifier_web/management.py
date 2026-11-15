@@ -431,7 +431,7 @@ class Management:
             self.service._publish_changes(globals={'managementResults'})
 
     def session(self,args):
-        return copy.deepcopy(self.service._session(args.get('sessionId')))
+        return copy.deepcopy(self.service._session(args.get('sessionId'), hydrate=False))
 
     def configuration_session(self, args):
         from .configuration_target import resolve
@@ -814,10 +814,10 @@ class Management:
                         self.background(self.service.collaboration.drain(identity))
 
     async def ensure_runtime(self,session,*,selection_override=None,bundle_replacement=None,restart_guard=None,preserve_configuration=False,saved_configuration_operation=None):
-        if self.unresolved_configuration(self.service._session(session['id'])):
+        if self.unresolved_configuration(self.service._session(session['id'], hydrate=False)):
             if saved_configuration_operation is None or restart_guard is None:
                 raise ValueError('The original configuration application is unresolved. Runtime preparation cannot reconcile or repeat it.')
-            current = self.service._session(session['id'])
+            current = self.service._session(session['id'], hydrate=False)
             record = self.configuration_record(session['id'], saved_configuration_operation)
             from .configuration_recovery import check_saved
             check_saved(self, current, record)
@@ -835,12 +835,17 @@ class Management:
         if work_paused(self.service.state):raise ValueError('An update is activating; retry shortly')
         # Explicitly using runtime controls makes this a web-owned presentation.
         if session.get('historyManaged') and not session.get('historyLoaded'):
-            await self.service.history.ensure_loaded(session['id'])
+            await self.service.history.ensure_loaded(session['id'], hydrate=False)
         async with self.service.lock:
             if restart_guard is not None: restart_guard()
-            current = self.service._session(session['id'])
+            current = self.service._session(session['id'], hydrate=False)
             current['historyManaged'] = False
-            session.update(copy.deepcopy(current))
+            detached = copy.deepcopy(current)
+            if session is current:
+                # The worker request is complete; its host owner stays cold.
+                session = detached
+            else:
+                session.update(detached)
         if selection_override is not None:
             # Only an explicit model-control action may replace a saved pin.
             # This transient startup request is not an input or an automatic retry.
@@ -1282,7 +1287,9 @@ class Management:
                 return await self.perform('configuration.apply',
                     {'id': args['sessionId'], 'config': args.get('args', {}).get('config')},
                     command_id=command_id, authority=authority, source=source)
-            session=self.session(args)
+            session = (self.service._session(args.get('sessionId'), hydrate=False)
+                       if args['operation'] in {'configuration.catalog', 'provider.queueSelection'}
+                       else self.session(args))
             recovery_request = args['operation'] == 'context.recovery.request'
             recovery_binding = (source or {}).get('recovery') if recovery_request else None
             if recovery_request:

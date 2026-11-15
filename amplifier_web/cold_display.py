@@ -20,6 +20,9 @@ SESSION_FIELDS = frozenset({'messages', 'execution', 'historyActivity', 'configu
 CONTROL_FIELDS = frozenset({'modelCatalogs', 'catalog.inspect', 'configuration.inspect'})
 
 def load(db, reference):
+    if reference.get('executionProjection') == 2:
+        from .execution_records import materialize
+        return materialize(db, reference)
     value = resource(db, reference['$resource'])
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     if hashlib.sha256(encoded.encode()).hexdigest() != reference['$resource']:
@@ -35,7 +38,11 @@ def detached(row):
     if isinstance(row, ColdRecord):
         value = raw(row)
         value[MARKER] = copy.deepcopy(value.get(MARKER, {}))
-        return ColdRecord(value, row.db)
+        owner = getattr(row, '_working_execution', None)
+        result = ColdRecord(value, row.db)
+        if owner is not None:
+            result._working_execution = owner.detached()
+        return result
     return dict(row)
 
 
@@ -87,7 +94,8 @@ def materialize(row, db):
     references = value.pop(MARKER, {})
     for key, reference in references.items():
         if key not in value:
-            value[key] = load(db, reference)
+            owner = getattr(row, '_working_execution', None) if key == 'execution' else None
+            value[key] = owner.snapshot() if owner is not None else load(db, reference)
     return value
 
 
@@ -105,7 +113,10 @@ class ColdRecord(dict):
             reference = dict.get(self, MARKER, {}).get(key)
             if reference is not None:
                 # Do not replace newer metadata or hide an unreadable body.
-                value = load(self.db, reference)
+                owner = getattr(self, '_working_execution', None) if key == 'execution' else None
+                value = owner.expose() if owner is not None else load(self.db, reference)
+                if owner is not None:
+                    del self._working_execution
                 dict.__setitem__(self, key, value)
                 # The returned list/dict is mutable. Once handed out it must be
                 # saved from live memory, never from its older frozen reference.
@@ -128,6 +139,8 @@ class ColdRecord(dict):
         return self[key]
 
     def __setitem__(self, key, value):
+        if key == 'execution' and hasattr(self, '_working_execution'):
+            del self._working_execution
         dict.__setitem__(self, key, value)
         if key == 'messages':
             dict.pop(self, '_coldMessageCount', None)
@@ -138,6 +151,8 @@ class ColdRecord(dict):
                 self.touch()
 
     def __delitem__(self, key):
+        if key == 'execution' and hasattr(self, '_working_execution'):
+            del self._working_execution
         references = dict.get(self, MARKER, {})
         present = dict.__contains__(self, key)
         if key not in references and not present:
@@ -183,6 +198,8 @@ class ColdRecord(dict):
         return dict.popitem(self)
 
     def clear(self):
+        if hasattr(self, '_working_execution'):
+            del self._working_execution
         dict.clear(self)
 
     def __iter__(self):
@@ -439,7 +456,7 @@ def compact_execution_references(state, db):
     for row in state.get('sessions', []):
         references = dict.get(row, MARKER, {})
         reference = references.get('execution')
-        if not reference or reference.get('executionProjection') == 1:
+        if not reference or reference.get('executionProjection') in {1, 2}:
             continue
         identity = reference['$resource']
         if identity not in converted:

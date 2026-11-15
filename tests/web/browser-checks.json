@@ -1306,6 +1306,8 @@
     "input-status",
     "action-spacing",
     "shared-controls",
+    "settings-action-spacing",
+    "settings-draft-focus",
     "delivery-warning",
     "legacy-outbox-notice",
     "delivery-reconciliation",
@@ -1351,6 +1353,7 @@
     "connectors",
     "test-environments",
     "assignment-adoption",
+    "worktree-move",
     "access-mode",
     "storage-cleanup-settings",
     "model-capacity-settings",
@@ -1366,6 +1369,7 @@
     "history-refresh",
     "voice-work-message",
     "external-multiparty",
-    "shared-room"
+    "shared-room",
+    "work-hierarchy"
   ]
 }

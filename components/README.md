@@ -30,23 +30,29 @@ coinstall the standalone distribution.
 
 [`portability/`](portability/README.md) is the temporary authoring home for the
 independently buildable signed transfer journal and Git capsule package. Its
-standalone development uses the prepared worktrees artifact; the local dependency
-and installed-test instructions are in its README. Unified builds both source
-owners directly, without a separately installed portability/worktrees dependency.
+standalone development uses the published worktrees artifact; the local dependency
+and installed-test instructions are in its README. Unified consumes the generated
+`portability-delivery/` and `worktrees-delivery/` selections, preserving the exact
+published dependency receipt; author edits do not refresh either app selection.
 
 [`worktrees/`](worktrees/README.md) is the temporary authoring home for the
 independently buildable managed Git worktree package and its real-Git tests.
-Unified consumes the same sources directly. From that directory, `uv build` builds
+Unified consumes its published artifact selected into `worktrees-delivery/`,
+recorded by `worktrees.source.json`. From the author directory, `uv build` builds
 the standalone wheel/source distribution and `uv run --extra test pytest` runs its
 mechanism tests; no Unified or Core installation is needed. Normal Unified builds
 already include the package: do not coinstall its standalone distribution there.
-The future repository and delivery transition remain separate decisions.
+The future repository handoff remains a separate decision.
 
 [`publishing/`](publishing/README.md) is the temporary authoring home for the
 independently buildable static publishing package and its portable tests. Unified
-consumes its nested runtime sources directly; its host publishing adapters and
-authorization remain in Unified. It stays here until a separate repository and
-authoring handoff are ready.
+consumes the public artifact selected into `publishing-delivery/`, recorded by
+`publishing.source.json`; its host publishing adapters, authorization and policy
+remain in Unified. Author edits and publication do not refresh this generated
+copy; Unified remains the sole installed owner. Follow the
+[selection instructions](publishing/README.md#unified-artifact-selection), and do
+not coinstall the standalone distribution. The author project stays here until
+a separate repository and handoff are ready.
 
 [`scheduling/`](scheduling/README.md) is the temporary authoring home for the
 independently buildable scheduling package. It stays here until its separate

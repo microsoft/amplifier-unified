@@ -21,6 +21,7 @@ from pathlib import Path
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import uuid
 
@@ -108,19 +109,19 @@ def long_paths_off(base):
 class Installation:
     """Private folders laid out like a consumer installation, at an exact path length."""
 
-    def __init__(self, base, size, monkeypatch):
+    def __init__(self, base, size, monkeypatch, store=budget.SOURCE_FOLDER, letter='r'):
         from amplifier_web.windows_files import directory
         if size - len(str(base)) < 2:
             unavailable(f'The temporary folder path is too long for an installation folder of {size} characters.')
-        self.root = base / ('r' * (size - len(str(base)) - 1))
+        self.root = base / (letter * (size - len(str(base)) - 1))
         assert len(str(self.root)) == size and not self.root.exists()
-        for folder in ('', 'app', 'shared', 'capture', 'ownership', budget.SOURCE_FOLDER):
+        for folder in ('', 'app', 'shared', 'capture', 'ownership', store):
             with directory(self.root / folder, owned_root=self.root, create=True):
                 pass
         for setting, folder in (('AMPLIFIER_WEB_HOME', 'app'), ('AMPLIFIER_HOME', 'shared'),
                                 ('AMPLIFIER_SESSION_STATE_HOME', 'ownership'),
                                 ('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', 'capture'),
-                                ('AMPLIFIER_SOURCE_STORE', budget.SOURCE_FOLDER)):
+                                ('AMPLIFIER_SOURCE_STORE', store)):
             monkeypatch.setenv(setting, str(self.root / folder))
 
     def chat(self):
@@ -144,8 +145,9 @@ class Installation:
 def installation(base, long_paths_off, monkeypatch):
     created = []
 
-    def create(size=budget.MAX_ROOT):
-        created.append(Installation(base, size, monkeypatch))
+    def create(size=budget.MAX_ROOT, store=budget.SOURCE_FOLDER):
+        # One test may make several installations of the same path length: each gets its own name.
+        created.append(Installation(base, size, monkeypatch, store, 'rqponm'[len(created)]))
         return created[-1]
 
     yield create
@@ -385,21 +387,38 @@ def repository(base, long_paths_off):
         remove_tree(EXTENDED + str(folder))
 
 
+def imports_the_module(folder):
+    """A new Python imports the deepest default module from this folder, as the activator's sys.path entry does."""
+    package, name = Path(MODULE_FILE).parent.name, Path(MODULE_FILE).stem
+    done = subprocess.run(
+        [sys.executable, '-I', '-S', '-B', '-c',
+         f'import sys; sys.path.insert(0, sys.argv[1]); import {package}.{name} as module; print(module.VALUE)',
+         str(folder)], capture_output=True, text=True, timeout=120)
+    return done.returncode == 0 and done.stdout.strip() == 'module source'
+
+
 def test_source_store_stages_a_deep_repository_under_the_longest_supported_installation_folder(
         installation, repository, monkeypatch):
-    """Foundation's real source store below ``<root>\\source-store``, long paths off.
+    """Foundation's real source store below the installation folder, long paths off.
 
-    Windows must refuse or accept each ordinary path exactly as the budget
-    table says. The store itself must reach every file at any depth.
+    A new installation names the store ``s``: every ordinary path fits at the
+    longest folder path that setup accepts, and Python imports the deepest
+    default module. An installation with the earlier name ``source-store``
+    keeps it: there Windows refuses that module at the setup limit and opens it
+    at the stated lower one. Windows must refuse or accept each ordinary path
+    exactly as the budget table says. The store itself must reach every file
+    at any depth.
     """
     from amplifier_foundation.sources import shared
     repo, revision = repository
-    limit = budget.SOURCE_STORE_LONGEST_ROOT[budget.SOURCE_OBJECT]
-    assert limit < budget.MAX_ROOT
-    rows = {name: (kind, relative) for name, kind, relative in budget.source_store()}
-    for size in (budget.MAX_ROOT, limit):
-        install = installation(size)
-        store = shared.SharedSourceStore(install.root / budget.SOURCE_FOLDER)
+    limit = budget.EARLIER_SOURCE_STORE_LONGEST_ROOT[budget.SOURCE_OBJECT]
+    assert limit < budget.MAX_ROOT and budget.SOURCE_STORE_LONGEST_ROOT == {}
+    for size, folder, expected in ((budget.MAX_ROOT, budget.SOURCE_FOLDER, 253),
+                                   (budget.MAX_ROOT, budget.EARLIER_SOURCE_FOLDER, 264),
+                                   (limit, budget.EARLIER_SOURCE_FOLDER, 259)):
+        rows = {name: (kind, relative) for name, kind, relative in budget.source_store(folder=folder)}
+        install = installation(size, folder)
+        store = shared.SharedSourceStore(install.root / folder)
         target = store.checkout(SOURCE_URL, revision)
         assert len(target.parent.name) == budget.SOURCE_NAME and target.name == revision
 
@@ -430,13 +449,15 @@ def test_source_store_stages_a_deep_repository_under_the_longest_supported_insta
         kind, relative = rows[budget.SOURCE_OBJECT]
         module = target / MODULE_FILE
         assert len(install.below(module)) == len(relative)
-        assert len(str(module)) == budget.length(relative, size)
+        assert len(str(module)) == budget.length(relative, size) == expected
         if budget.fits(kind, relative, size):
-            assert len(str(module)) == budget.FILE_LIMIT
+            assert expected <= budget.FILE_LIMIT
             assert module.read_text() == 'VALUE = "module source"'
+            assert imports_the_module(module.parent.parent)
         else:
-            assert size == budget.MAX_ROOT and len(str(module)) == budget.FILE_LIMIT + 5
+            assert (size, folder) == (budget.MAX_ROOT, budget.EARLIER_SOURCE_FOLDER)
             assert refused_for_length(module.read_text)
+            assert not imports_the_module(module.parent.parent)
             assert Path(EXTENDED + str(module)).read_text() == 'VALUE = "module source"'
 
         # The build view: a build backend reads module source here by ordinary paths.
@@ -457,3 +478,41 @@ def test_source_store_stages_a_deep_repository_under_the_longest_supported_insta
         kind, relative = rows[budget.SOURCE_STAGE]
         assert len(install.below(target.parent / ('.source-' + 'r' * 8) / 'checkout' / '.amplifier_cache_meta.json')) \
             == len(relative) and budget.fits(kind, relative, size)
+
+
+def test_each_installation_resolves_the_source_store_folder_it_has(installation):
+    """The launcher's choice through the real private-folder checks: no folder is created or moved."""
+    from amplifier_web import windows_consumer
+    from amplifier_web.windows_files import directory
+    assert (windows_consumer.SOURCE_STORE, windows_consumer.EARLIER_SOURCE_STORE) == (
+        budget.SOURCE_FOLDER, budget.EARLIER_SOURCE_FOLDER)
+
+    def names(install):
+        return sorted(entry.name for entry in os.scandir(install.root))
+
+    # An installation that an earlier setup file made keeps its store.
+    earlier = installation(store=budget.EARLIER_SOURCE_FOLDER)
+    (earlier.root / budget.EARLIER_SOURCE_FOLDER / 'objects').mkdir()
+    before = names(earlier)
+    assert windows_consumer.source_store(earlier.root) == earlier.root / budget.EARLIER_SOURCE_FOLDER
+    assert names(earlier) == before and budget.SOURCE_FOLDER not in before
+    assert (earlier.root / budget.EARLIER_SOURCE_FOLDER / 'objects').is_dir()
+
+    # A new installation has only the short folder.
+    new = installation()
+    before = names(new)
+    assert windows_consumer.source_store(new.root) == new.root / budget.SOURCE_FOLDER
+    assert names(new) == before and budget.EARLIER_SOURCE_FOLDER not in before
+
+    # With both folders the earlier one stays in use: an earlier launcher uses it too.
+    with directory(new.root / budget.EARLIER_SOURCE_FOLDER, owned_root=new.root, create=True):
+        pass
+    assert windows_consumer.source_store(new.root) == new.root / budget.EARLIER_SOURCE_FOLDER
+
+    # With neither folder the installation is damaged and nothing is created.
+    damaged = installation()
+    (damaged.root / budget.SOURCE_FOLDER).rmdir()
+    before = names(damaged)
+    with pytest.raises(FileNotFoundError):
+        windows_consumer.source_store(damaged.root)
+    assert names(damaged) == before

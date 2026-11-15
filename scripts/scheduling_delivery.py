@@ -14,7 +14,7 @@ import tarfile
 import tomllib
 import zipfile
 
-COMPONENTS = ("scheduling", "worktrees", "portability", "operations", "workspace-metadata", "kernels", "outputs")
+COMPONENTS = ("scheduling", "worktrees", "portability", "operations", "workspace-metadata", "kernels", "outputs", "publishing")
 FLAT = {"operations", "kernels"}
 
 DELIVERY = "components/scheduling-delivery"

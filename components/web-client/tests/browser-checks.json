@@ -2,6 +2,29 @@
   "schemaVersion": 1,
   "scenarios": [
     {
+      "id": "work-hierarchy",
+      "command": ["node", "tests/work-hierarchy-browser.mjs"],
+      "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/work-hierarchy"}
+    },
+    {
+      "id": "settings-draft-focus",
+      "command": ["node", "tests/settings-draft-focus-browser.mjs"],
+      "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/settings-draft-focus"}
+    },
+    {
+      "id": "settings-action-spacing",
+      "command": ["node", "tests/settings-action-spacing-browser.mjs"],
+      "env": {
+        "AMPLIFIER_TEST_APPEARANCES": "{root}/tests/fixtures/appearance-cases.json",
+        "AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/settings-action-spacing"
+      }
+    },
+    {
+      "id": "worktree-move",
+      "command": ["node", "tests/worktree-move-browser.mjs"],
+      "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/worktree-move"}
+    },
+    {
       "id": "shared-controls",
       "command": ["node", "tests/shared-controls-browser.mjs"],
       "env": {"AMPLIFIER_TEST_ARTIFACTS": "{root}/output/browser-checks/shared-controls"}

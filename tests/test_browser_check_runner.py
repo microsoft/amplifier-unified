@@ -48,9 +48,10 @@ def coverage_plan():
     shared_room_ids = shared_room_browser_addition(plan['scenarios'])
     repair_ids = installation_repair_browser_addition(plan['scenarios'])
     layout_ids = layout_return_browser_additions(plan['scenarios'])
+    pass2_ids = layout_pass2_browser_additions(plan['scenarios'])
     rows = []
     for row in plan['scenarios']:
-        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids:
+        if row['id'] in retained_ids | appearance_ids | responsive_ids | notices_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids:
             continue
         row = {**row, 'command': [coverage_paths(part) for part in row['command']]}
         row.pop('cwd', None)
@@ -1069,8 +1070,10 @@ def test_shared_room_is_composed_once_from_selected_client_owner():
     assert not any(owns(row) for row in host['scenarios'])
     assert [row for row in client['scenarios'] if owns(row)] == [expected]
     assert host['scenarioOrder'].count(name) == 1
-    assert host['scenarioOrder'][-2:] == ['external-multiparty', name]
     plan, proof = runner.load_plan(ROOT, host_path)
+    pass2_ids = layout_pass2_browser_additions(plan['scenarios'])
+    preceding_order = [identity for identity in host['scenarioOrder'] if identity not in pass2_ids]
+    assert preceding_order[-2:] == ['external-multiparty', name]
     assert shared_room_browser_addition(plan['scenarios']) == {name}
     assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
     assert [row for row in plan['scenarios'] if owns(row)] == [{**expected, 'cwd': '.build/web-client'}]
@@ -1401,6 +1404,7 @@ def test_source_browser_duplicates_have_one_owner_and_package_overlaps_remain():
     external_multiparty_browser_addition(current_plan()['scenarios'], readiness_scripts)
     shared_room_browser_addition(current_plan()['scenarios'], readiness_scripts)
     installation_repair_browser_addition(current_plan()['scenarios'], readiness_scripts)
+    layout_pass2_browser_additions(current_plan()['scenarios'], readiness_scripts)
     plan = coverage_plan()
     navigation_ids = agent_navigation_browser_additions(plan['scenarios'], readiness_scripts)
     sidebar_ids = sidebar_controls_browser_addition(plan['scenarios'], readiness_scripts)
@@ -3879,6 +3883,7 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     shared_room_ids = shared_room_browser_addition(plan['scenarios'])
     repair_ids = installation_repair_browser_addition(plan['scenarios'])
     layout_ids = layout_return_browser_additions(plan['scenarios'])
+    pass2_ids = layout_pass2_browser_additions(plan['scenarios'])
     lifecycle_additions = [
         {'id': 'session-health-request-failure',
          'command': ['node', 'tests/web/session-health-browser.mjs', '--request-failure']},
@@ -3887,12 +3892,12 @@ def test_current_composed_registry_owns_every_executable_and_both_mixed_suites()
     ]
     lifecycle_ids = {row['id'] for row in lifecycle_additions}
     assert [row for row in plan['scenarios'] if row['id'] in lifecycle_ids] == lifecycle_additions
-    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | lifecycle_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids]
+    preceding = [row for row in plan['scenarios'] if row['id'] not in navigation_ids | client_addition_ids | retained_ids | appearance_ids | responsive_ids | notices_ids | lifecycle_ids | multiparty_ids | shared_room_ids | repair_ids | layout_ids | pass2_ids]
     assert len(preceding) == len({row['id'] for row in preceding}) == 147
-    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids)
-    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids)
+    assert len(plan['scenarios']) == len({row['id'] for row in plan['scenarios']}) == 152 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids)
+    assert len(plan['scenarios']) == 147 + len(navigation_ids) + len(client_addition_ids) + len(retained_ids) + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(multiparty_ids) + len(shared_room_ids) + len(lifecycle_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids)
     assert sum(row.get('cwd') == '.build/web-client' for row in preceding) == 14
-    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(shared_room_ids) + len(repair_ids) + len(layout_ids)
+    assert sum(row.get('cwd') == '.build/web-client' for row in plan['scenarios']) == 17 + len(appearance_ids) + len(responsive_ids) + len(notices_ids) + len(shared_room_ids) + len(repair_ids) + len(layout_ids) + len(pass2_ids)
     client_path = source_test('tests/input-status-browser.mjs').with_name('browser-checks.json')
     assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
     assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
@@ -3968,6 +3973,252 @@ def test_layout_return_addition_rejects_missing_or_mutated_owner(name, fault):
     else: readiness.add(owner['command'][1])
     with pytest.raises(AssertionError, match=name):
         layout_return_browser_additions(rows, readiness)
+
+
+LAYOUT_PASS2_BROWSER_IDS = (
+    'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus',
+)
+
+
+def layout_pass2_browser_additions(rows, readiness_scripts=()):
+    """Validate all four exact selected-client owners before historical exclusion."""
+    identities = set()
+    for name in LAYOUT_PASS2_BROWSER_IDS:
+        script = f'tests/{name}-browser.mjs'
+        expected = {
+            'id': name, 'command': ['node', script],
+            'env': {'AMPLIFIER_TEST_ARTIFACTS': f'{{root}}/output/browser-checks/{name}'},
+            'cwd': '.build/web-client',
+        }
+        if name == 'settings-action-spacing':
+            expected['env']['AMPLIFIER_TEST_APPEARANCES'] = '{root}/tests/fixtures/appearance-cases.json'
+        owners = [row for row in rows if row['id'] == name
+                  or any(Path(part).name == Path(script).name for part in row['command'])]
+        assert owners == [expected], f'{name}: expected one exact selected-client owner and environment'
+        assert script not in readiness_scripts, f'{name}: duplicate readiness owner'
+        identities.add(name)
+    return identities
+
+
+def layout_pass2_registry_rows():
+    # Independent literal positive fixtures, not rows generated by the guard.
+    # These describe registry composition only, never executed browser evidence.
+    return [
+        {'id': 'worktree-move', 'command': ['node', 'tests/worktree-move-browser.mjs'],
+         'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/worktree-move'},
+         'cwd': '.build/web-client'},
+        {'id': 'work-hierarchy', 'command': ['node', 'tests/work-hierarchy-browser.mjs'],
+         'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/work-hierarchy'},
+         'cwd': '.build/web-client'},
+        {'id': 'settings-action-spacing', 'command': ['node', 'tests/settings-action-spacing-browser.mjs'],
+         'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/settings-action-spacing',
+                 'AMPLIFIER_TEST_APPEARANCES': '{root}/tests/fixtures/appearance-cases.json'},
+         'cwd': '.build/web-client'},
+        {'id': 'settings-draft-focus', 'command': ['node', 'tests/settings-draft-focus-browser.mjs'],
+         'env': {'AMPLIFIER_TEST_ARTIFACTS': '{root}/output/browser-checks/settings-draft-focus'},
+         'cwd': '.build/web-client'},
+    ]
+
+
+def test_layout_pass2_guard_requires_all_four_independent_fixture_owners():
+    rows = layout_pass2_registry_rows()
+    assert layout_pass2_browser_additions(rows) == {
+        'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
+    for owner in rows:
+        name = owner['id']
+        with pytest.raises(AssertionError, match=name):
+            layout_pass2_browser_additions([row for row in rows if row is not owner])
+        with pytest.raises(AssertionError, match=name):
+            layout_pass2_browser_additions(rows + [owner])
+        with pytest.raises(AssertionError, match=name):
+            layout_pass2_browser_additions(rows, {owner['command'][1]})
+
+
+@pytest.mark.parametrize('name', LAYOUT_PASS2_BROWSER_IDS)
+@pytest.mark.parametrize('fault', [
+    'missing', 'duplicate', 'identical-duplicate', 'renamed', 'command',
+    'extra-argument', 'environment', 'missing-environment', 'wrong-artifacts',
+    'extra-environment', 'unified-root', 'cwd', 'missing-cwd', 'readiness',
+    'host-script-duplicate',
+])
+def test_layout_pass2_addition_rejects_missing_or_mutated_owner_before_exclusion(monkeypatch, name, fault):
+    plan = current_plan()
+    rows = plan['scenarios']
+    assert layout_pass2_browser_additions(rows) == set(LAYOUT_PASS2_BROWSER_IDS)
+    owner = next(row for row in rows if row['id'] == name)
+    readiness = set()
+    if fault == 'missing':
+        rows.remove(owner)
+    elif fault == 'duplicate':
+        rows.append({**owner, 'id': name + '-duplicate'})
+    elif fault == 'identical-duplicate':
+        rows.append(json.loads(json.dumps(owner)))
+    elif fault == 'renamed':
+        owner['id'] += '-renamed'
+    elif fault == 'command':
+        owner['command'][1] = 'tests/home-sidebar-browser.mjs'
+    elif fault == 'extra-argument':
+        owner['command'].append('--skip')
+    elif fault == 'environment':
+        owner['env'] = {}
+    elif fault == 'missing-environment':
+        owner.pop('env')
+    elif fault == 'wrong-artifacts':
+        owner['env']['AMPLIFIER_TEST_ARTIFACTS'] = '{root}/output/browser-checks/other'
+    elif fault == 'extra-environment':
+        owner['env']['UNEXPECTED'] = 'extra'
+    elif fault == 'unified-root':
+        owner['env']['AMPLIFIER_UNIFIED_ROOT'] = '{root}'
+    elif fault == 'cwd':
+        owner['cwd'] = 'tests/web'
+    elif fault == 'missing-cwd':
+        owner.pop('cwd')
+    elif fault == 'readiness':
+        readiness.add(owner['command'][1])
+    else:
+        rows.append({'id': name + '-host-duplicate',
+                     'command': ['node', f'tests/web/{name}-browser.mjs']})
+    with pytest.raises(AssertionError, match=name):
+        layout_pass2_browser_additions(rows, readiness)
+    if fault != 'readiness':
+        # Exercise the historical reader itself: an IDs-only exclusion or an
+        # allow-missing guard must not hide a missing, duplicated or changed row.
+        monkeypatch.setattr(sys.modules[__name__], 'current_plan', lambda: plan)
+        with pytest.raises(AssertionError, match=name):
+            coverage_plan()
+
+
+@pytest.mark.parametrize('fault', ['missing-appearances', 'wrong-appearances'])
+def test_settings_action_spacing_requires_exact_appearance_fixture_before_exclusion(monkeypatch, fault):
+    plan = current_plan()
+    assert layout_pass2_browser_additions(plan['scenarios']) == set(LAYOUT_PASS2_BROWSER_IDS)
+    owner = next(row for row in plan['scenarios'] if row['id'] == 'settings-action-spacing')
+    if fault == 'missing-appearances':
+        owner['env'].pop('AMPLIFIER_TEST_APPEARANCES')
+    else:
+        owner['env']['AMPLIFIER_TEST_APPEARANCES'] = '{root}/components/web-client/tests/appearance-cases.json'
+    with pytest.raises(AssertionError, match='settings-action-spacing'):
+        layout_pass2_browser_additions(plan['scenarios'])
+    monkeypatch.setattr(sys.modules[__name__], 'current_plan', lambda: plan)
+    with pytest.raises(AssertionError, match='settings-action-spacing'):
+        coverage_plan()
+
+
+def test_layout_pass2_assembly_retains_prior_order_and_binds_all_four_selected_owners():
+    host_path = ROOT / 'tests/web/browser-checks.json'
+    host = json.loads(host_path.read_text())
+    plan, proof = runner.load_plan(ROOT, host_path)
+    identities = layout_pass2_browser_additions(plan['scenarios'])
+    assert identities == {
+        'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
+    client_path = source_test('tests/worktree-move-browser.mjs').with_name('browser-checks.json')
+    client = json.loads(client_path.read_text())
+    expected = layout_pass2_registry_rows()
+    for owner in expected:
+        name = owner['id']
+        script = owner['command'][1]
+        def owns(row):
+            return row['id'] == name or any(Path(part).name == Path(script).name for part in row['command'])
+        assert not any(owns(row) for row in host['scenarios'])
+        assert [row for row in client['scenarios'] if owns(row)] == [
+            {key: value for key, value in owner.items() if key != 'cwd'}]
+        assert [row for row in plan['scenarios'] if owns(row)] == [owner]
+        assert host['scenarioOrder'].count(name) == 1
+        assert (client_path.parent / Path(script).name).is_file()
+    assert (ROOT / 'tests/fixtures/appearance-cases.json').is_file()
+    # Keep the 25 preceding canonical registry rows in their original order.
+    preceding_client_ids = [row['id'] for row in client['scenarios'] if row['id'] not in identities]
+    assert preceding_client_ids == [
+        'shared-controls', 'composer-return-mounted', 'composer-return', 'conversation-error',
+        'installation-repair', 'shared-room', 'shared-notices-motion', 'input-status',
+        'action-spacing', 'sidebar-responsive', 'sidebar-controls', 'new-chat-recovery',
+        'review-during-send', 'message-outbox', 'update-message-delivery', 'retained-update-recovery',
+        'delivery-warning', 'legacy-outbox-notice', 'delivery-reconciliation', 'delivery-new-chat',
+        'conversation-navigation', 'activity-feedback', 'chat-scroll-call-boundaries',
+        'history-refresh', 'appearance-lifecycle',
+    ]
+    assert len(preceding_client_ids) == 25
+    assert len(client['scenarios']) == 25 + len(identities)
+    # Accepted f544781 host order includes worktree-move after assignment-adoption.
+    # The other three guarded owners are additive to these exact 165 identities.
+    new_ids = identities - {'worktree-move'}
+    assert new_ids == {'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
+    preceding_order = '''
+        agent-chat-navigation agent-chat-navigation-settings navigation-waiting
+        context-inspector context-inspector-layout adaptive-work home-sidebar shared-landing
+        focus-navigation diagram-navigation chat-shortcuts automation-hub peer-attribution
+        device-pairing standard-ux-keyboard-reflow approval-layout approval-lifecycle
+        standard-ux-connection-controls standard-ux-preferences standard-ux-privacy-effects
+        standard-ux-voice-settings smart-tool-updates update-restart update-effects
+        active-client-performance state-transport state-stream client-traffic demand
+        scoped-navigation navigation-details-context sidebar-reading selected-context
+        registry-validation empty-host appearance-lifecycle empty-host-fail-create
+        empty-host-lost-create new-chat cross-workspace-handoff chat-reference
+        draft-provider-refresh provider-selection provider-native immediate-direction
+        draft-discovery-recovery sidebar-controls sidebar-responsive new-chat-recovery
+        feedback feedback-followup composer-readiness dormant-controls composer-primary-action
+        composer-return composer-return-mounted surface-context desktop-readiness
+        memory-personalization publishing portability testing-settings settings installation-repair
+        configuration-recovery-components configuration-recovery settings-completeness settings-drafts
+        settings-collections settings-mobile workspace-starters theme-definitions appearance-startup
+        appearance-library ready review-during-send question-transcript-fade question-resume
+        execution-observability execution-inspection execution-actions delegate-work-stream
+        tool-details tool-previews canonical-work interim-replies tool-outcomes navigation
+        archive-feedback pin-retention pin-rapid-reorder workspace-shortcuts chat-title message-outbox
+        update-message-delivery retained-update-recovery attachment-consumption attachment-experience
+        message-delivery shared-notices-motion input-status action-spacing shared-controls
+        delivery-warning legacy-outbox-notice delivery-reconciliation delivery-new-chat
+        canvas-media inline-media-transition artifact-one-surface app-toolbar smart-tools
+        mcp-recovery mcp-clients shell-components mobile-navigation cache-usage bundle
+        markdown-composer multi-quote draft-switch draft-reload live-history conversation-navigation
+        destination-history live-clients ownership canvas-dirty canvas-versions canvas-refresh
+        canvas-refresh-catchup canvas-apps canvas-drawing session-health conversation-error
+        session-health-context-limit session-health-context-limit-active-worker
+        session-health-request-failure session-health-completed-runtime-fault session-health-module-failure
+        activity-feedback capacity request-cancellation coordination shared-work connectors
+        test-environments assignment-adoption worktree-move access-mode storage-cleanup-settings model-capacity-settings
+        compact-composer composer-panel-ownership peer-preview peer-preview-header peer-preview-focus
+        canvas-chrome canvas-close chat-scroll-call-boundaries semantic-settings history-refresh
+        voice-work-message external-multiparty shared-room
+    '''.split()
+    assert len(preceding_order) == len(set(preceding_order)) == 165
+    assert [name for name in host['scenarioOrder'] if name not in new_ids] == preceding_order
+    # Preserve the prior spacing/hierarchy placements independently of where the
+    # newly validated draft-focus journey is inserted into the host order.
+    before_focus = [name for name in host['scenarioOrder'] if name != 'settings-draft-focus']
+    assert before_focus[before_focus.index('shared-controls') + 1:
+                        before_focus.index('delivery-warning')] == ['settings-action-spacing']
+    assert before_focus[-2:] == ['shared-room', 'work-hierarchy']
+    assert [row['id'] for row in plan['scenarios']] == host['scenarioOrder']
+    assert len(plan['scenarios']) == len(host['scenarioOrder']) == 165 + len(new_ids) == 168
+    assert proof['registrySha256'] == {'unified': runner.digest(host_path), 'client': runner.digest(client_path)}
+    assert proof['clientSelectionSha256'] == runner.digest(ROOT / 'components/web-client.source.json')
+    assert not identities & {row['id'] for row in coverage_plan()['scenarios']}
+
+
+@pytest.mark.parametrize('name', LAYOUT_PASS2_BROWSER_IDS)
+@pytest.mark.parametrize('fault', ['omitted', 'duplicated'])
+def test_layout_pass2_assembly_order_cannot_drop_or_repeat_new_client_rows(tmp_path, name, fault):
+    host, client, _ = owned_registry_fixture(tmp_path)
+    host_plan = json.loads(host.read_text())
+    client_plan = json.loads(client.read_text())
+    client_plan['scenarios'].extend(
+        {key: value for key, value in row.items() if key != 'cwd'}
+        for row in layout_pass2_registry_rows())
+    host_plan['scenarioOrder'].extend([
+        'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'])
+    host.write_text(json.dumps(host_plan))
+    client.write_text(json.dumps(client_plan))
+    plan, _ = runner.load_plan(tmp_path, host)
+    assert layout_pass2_browser_additions(plan['scenarios']) == {
+        'worktree-move', 'work-hierarchy', 'settings-action-spacing', 'settings-draft-focus'}
+    if fault == 'omitted':
+        host_plan['scenarioOrder'].remove(name)
+    else:
+        host_plan['scenarioOrder'].append(name)
+    host.write_text(json.dumps(host_plan))
+    with pytest.raises(ValueError, match='each owned scenario exactly once'):
+        runner.load_plan(tmp_path, host)
 
 
 def installation_repair_browser_addition(rows, readiness_scripts=()):

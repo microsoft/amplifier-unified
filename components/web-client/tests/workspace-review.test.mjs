@@ -77,6 +77,14 @@ test('worker source observation is explicit, read-only, and does not certify ins
  await act(async()=>{root=create(React.createElement(WorkspaceReview,{dispatch,sessionId:'own'}))});
  assert.equal(calls.length,1);await click(root,'Inspect this chat’s loaded sources');
  assert.deepEqual(calls.at(-1),['runtime.provenance',{sessionId:'own'}]);assert.match(text(root.toJSON()),/Worker is not running/);assert.match(text(root.toJSON()),/not an automatic release-adoption check/);
+ const disclosures=root.root.findAllByProps({className:'a-workspace-review-disclosure'});
+ assert.equal(disclosures.length,3);
+ for(const disclosure of disclosures){
+  const body=disclosure.findAllByProps({className:'a-workspace-review-body'}).find(node=>node.parent===disclosure);
+  assert.ok(body,'each expanded level has one scoped child body');
+  assert.equal(disclosure.props.onToggle,undefined,'local native disclosure never reissues provenance');
+ }
+ assert.equal(calls.length,2);
  await act(async()=>root.unmount());
 });
 

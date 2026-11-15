@@ -26,6 +26,8 @@
 /components/publishing/MANIFEST.in source-context=configuration
 /components/publishing/.gitignore source-context=configuration
 /components/publishing/LICENSE source-context=documentation
+/components/publishing.source.json source-context=configuration
+/components/publishing-delivery/** source-context=generated linguist-vendored=true linguist-generated=true -text
 /components/worktrees/amplifier_worktrees/** source-context=source
 /components/worktrees/tests/** source-context=tests
 /components/worktrees/MANIFEST.in source-context=configuration

@@ -61,6 +61,14 @@ only the rows it changes. Keep ownership through the call, and verify that later
 in-place nested edits are persisted and the earlier disk checkpoint stays intact.
 Borrowed return values are not detached snapshots or reusable cache entries.
 
+Context preservation hashes the same canonical JSON array one row at a time,
+keeping temporary encodings proportional to a row rather than the full history.
+The complete source is still inspected on every call. Evidence references retain
+their exact size threshold and fresh post-checkpoint content hashes; values
+computed before a checkpoint await cannot attest to mutable rows afterward.
+Keep persistence, restoration, cancellation and failed-save behavior unchanged.
+Compare this encoding cost separately from native writes and model latency.
+
 Startup and automatic root checkpoint hooks discard their transcript result. A
 context may offer `context.history.visit` to lend its current rows to the existing
 synchronous writer and anchor calculation. That borrow ends before notification
@@ -110,7 +118,7 @@ An object identity, list length or file size alone does not prove unchanged nest
 content. Count cache-validation work too. Moving a full scan to another process
 changes responsiveness, but does not by itself reduce total work or memory.
 
-Execution reuse still requires a fresh witness of the relevant borrowed builtin
+Legacy/full mutable execution reuse still requires a fresh witness of the relevant borrowed builtin
 content. Within that synchronous invocation, placement encoding can reuse fresh raw-node digests
 while witnessing receipt and turn dependencies after projection. Bound this
 temporary metadata and conservatively fall back to the complete fragment witness
@@ -118,6 +126,25 @@ near serialization limits; retain no borrowed graph between saves. Canonical JSO
 commit authority and existing memory budgets remain unchanged. Measure changed
 and unchanged saves separately: this removes repeated work, not the full history
 scan or the broader causes of multi-second UI latency.
+
+For immutable completed execution records, hold current work fixed while growing
+the same owner's retained messages, nodes, accounting receipts and workers. Count
+actual page bytes and decoded rows for ordinary Work windows and older details,
+including near leaf-split sizes, gaps after deletion, and very large individual
+records. The existing row/byte bounds still apply; a page count alone does not bound
+bytes. Include actual model admission, token/usage changes, new completion, Stop,
+late corrections and borrowed aliases rather than qualifying only tool progress.
+Report full reducer and replay reads separately from serialization and root traversal.
+Pair browser switching measurements with current resident counts and complete saved
+readback; moving old history off the hot tree is not evidence that every path is bounded.
+
+Execution format checks include the actual prior application's attempted read/save
+and collection against a synthetic copy: the typed root index must refuse old readers
+while preserving durable root selection and artifact bytes. Same-format restart,
+failed/cancelled preparation, failed commit, missing-index recovery and collection of
+retained client/operation roots must preserve exact records. Qualify startup and
+conversion separately from subsequent ordinary saves; an initial legacy conversion
+does not establish a steady-state saving.
 
 Exercise interleaved owners whose combined history exceeds a cache's capacity,
 not only warm inputs that fit. A scan must not evict every reusable fragment
@@ -229,6 +256,12 @@ It records context view/factory, surface preparation, provider budget/refit and
 checkpoint read/save boundaries. Native provider-hook start/end observations are
 separate: correlate only a proven single request window with matching session,
 generation and iteration; a short-circuit need not reach the end observer.
+Context-view observations prefer the registered async retention/measured callbacks
+actually called by the loop. With no observable capability, the existing Python
+object-method fallback remains. When a capability is observed, the fallback is
+left unwrapped so delegation through it does not create a duplicate view span.
+Custom contexts that mix an observable capability with direct legacy calls can
+still have unobserved legacy requests; absent marks alone do not prove no work.
 Worker phase marks and host receipt marks separate execution from event delivery
 only when their `clockDomain` and `hostClockDomain` match. Never subtract wall
 clocks or add nested spans. This observes existing behavior, does not change

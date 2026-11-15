@@ -93,17 +93,30 @@ def activity_page(reader, messages, visible, *, service=None):
 
 
 def apply_activity(session, activity, *, append=False):
+    from .execution_working_set import working
+    owner = working(session)
+    if owner is not None:
+        # A changed native revision often contains only activity already shown
+        # by the web owner. The exact merge policy then admits no nodes/turns;
+        # only its final aggregation and diagnostics need to be applied.
+        original = owner._native_activity_input()
+        selected, allowed = _selection(session, original, activity)
+        if not allowed and not any(row.get('nativeHistory') for kind in ('nodes', 'turns') for row in original[kind]):
+            _finish_activity(session, original, selected)
+            owner.current['aggregateUsage'] = original['aggregateUsage']
+            return
+        # Real native display additions or topology repairs retain the existing
+        # complete mutable contract, including current borrowed aliases/order.
+    _apply_activity(session, activity, append=append)
+
+
+def _apply_activity(session, activity, *, append=False):
     from .execution import ingest, rollup
     tree = session.setdefault('execution', {'nodes': [], 'turns': [], 'currentTurnId': None})
     if not append:
         for key in ('nodes', 'turns'):
             tree[key] = [row for row in tree[key] if not row.get('nativeHistory')]
-    # Existing live/web work is richer. Do not show a second activity group for
-    # the same anchored turn, or count the same tool calls twice.
-    actual_ids = {row.get('nativeIndex'): row['id'] for row in session.get('messages', []) if 'nativeIndex' in row}
-    activity = {**activity, 'turns': [{**row, 'anchorMessageId': actual_ids.get(row.get('nativeIndex'), row['anchorMessageId'])} for row in activity['turns']]}
-    web_anchors = {row.get('anchorMessageId') for row in tree['turns'] if not row.get('nativeHistory')}
-    allowed = {row['id'] for row in activity['turns'] if row['anchorMessageId'] not in web_anchors}
+    activity, allowed = _selection(session, tree, activity)
     for turn in activity['turns']:
         if turn['id'] in allowed and not any(row['id'] == turn['id'] for row in tree['turns']):
             tree['turns'].append({**turn, 'aggregateUsage': rollup([])})
@@ -111,5 +124,19 @@ def apply_activity(session, activity, *, append=False):
         if node['turnId'] in allowed:
             ingest(session, node)
             next(row for row in tree['nodes'] if row['id'] == node['id'])['nativeHistory'] = True
+    _finish_activity(session, tree, activity)
+
+
+def _selection(session, tree, activity):
+    # Existing live/web work is richer. One policy handles both owner forms.
+    actual_ids = {row.get('nativeIndex'): row['id'] for row in session.get('messages', []) if 'nativeIndex' in row}
+    activity = {**activity, 'turns': [{**row, 'anchorMessageId': actual_ids.get(row.get('nativeIndex'), row['anchorMessageId'])} for row in activity['turns']]}
+    web_anchors = {row.get('anchorMessageId') for row in tree['turns'] if not row.get('nativeHistory')}
+    allowed = {row['id'] for row in activity['turns'] if row['anchorMessageId'] not in web_anchors}
+    return activity, allowed
+
+
+def _finish_activity(session, tree, activity):
+    from .execution import rollup
     tree['aggregateUsage'] = rollup([row for row in tree['nodes'] if row.get('kind') == 'llm'])
     session['historyActivity'] = {key: value for key, value in activity.items() if key not in {'nodes', 'turns'}}

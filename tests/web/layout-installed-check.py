@@ -24,6 +24,8 @@ def main():
     parser.add_argument('--wheel', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--scenario', action='append', required=True)
+    parser.add_argument('--budget', type=int, default=600)
+    parser.add_argument('--case-timeout', type=int, default=180)
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -60,14 +62,15 @@ print(root)
     (harness / '.venv').symlink_to(python.parent.parent, target_is_directory=True)
     scenarios = []
     for name in args.scenario:
-        assert name in {'compact-composer', 'markdown-composer', 'composer-return-host', 'layout-spacing-host', 'conversation-error-host', 'settings-mobile'}
+        assert name in {'compact-composer', 'markdown-composer', 'composer-return-host', 'layout-spacing-host', 'conversation-error-host', 'settings-mobile',
+                        'layout-pass2-settings', 'layout-pass2-work', 'layout-pass2-priority'}
         target = output / name
         scenarios.append({'id': name, 'command': ['node', f'tests/web/{name}-browser.mjs'], 'env': {
             'AMPLIFIER_TEST_PYTHON': str(python), 'AMPLIFIER_TEST_PACKAGE_ROOT': package,
             'AMPLIFIER_TEST_INSTALLED_PACKAGE': package, 'AMPLIFIER_TEST_WHEEL_IDENTITY': str(identity_path),
             'AMPLIFIER_TEST_ARTIFACTS': str(target), 'AMPLIFIER_TEST_OUTPUT': str(target), 'PYTHONPATH': ''}})
     result = run_scenarios(harness, {'schemaVersion': 1, 'scenarios': scenarios}, output / 'browser',
-                           budget=600, case_timeout=180,
+                           budget=args.budget, case_timeout=args.case_timeout,
                            provenance={'wheel': identity['wheelSha256'], 'sourceHelpers': support, 'contract': contract})
     (output / 'result.json').write_text(json.dumps({'exit': result, 'packageRoot': package,
         'wheelSha256': identity['wheelSha256'], 'sourceHelpers': support,

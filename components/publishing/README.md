@@ -16,8 +16,9 @@ threads. No source or deploy commands run inside this library.
 
 This directory is the temporary authoring home for the independently buildable
 package intended for `amplifier-platform-publishing`. The six runtime files remain
-the sole implementation. Unified consumes them directly in editable installs,
-wheels and source distributions; no separate repository or source fetch is needed.
+the sole authored implementation. Unified consumes the explicitly selected public
+artifact in editable installs, wheels and source distributions; author edits do
+not refresh that selection. No separate repository is required for authoring.
 
 From this directory in an owned Python 3.13 or newer POSIX environment:
 
@@ -55,13 +56,40 @@ Qualification installs the original wheel into an isolated Linux environment and
 runs all four package test files outside the source checkout. This covers the
 local POSIX listener, Unix-socket and recovery mechanisms; SSH remains simulated.
 It makes no Windows runtime claim. Unified adoption is a separate change: this
-workflow does not install the standalone distribution beside Unified or change
-its current authored-source mapping.
+workflow does not install the standalone distribution beside Unified or refresh
+its selected artifact snapshot.
 
 Publication refuses conflicting tags or artifact bytes. Retry a failed publish
 job with the original retained build artifact; an already completed release can
 be verified against those exact bytes. A full rebuild may change archive bytes
 and is not an exact-byte retry.
+
+## Unified artifact selection
+
+From the Unified repository, select the four verified public release assets with
+the published receipt's exact revision and checksum:
+
+```sh
+python scripts/scheduling_delivery.py select --component publishing \
+  --dist /path/to/verified-release-assets \
+  --revision c9cce621a1b2a5bf16246d0d61e7d04a0cc3db72 \
+  --receipt-sha256 6b5e492aca6fe06f99db9d6cc6d8442d956c9e733f1f6cee2a89d756608d89e8
+python scripts/scheduling_delivery.py verify --component publishing
+```
+
+The selection creates `components/publishing-delivery/` and
+`components/publishing.source.json`. Never edit the generated copy by hand. Normal
+wheel, source-distribution and editable builds verify it offline without fetching
+artifacts or consulting this author tree. Unified contains only the selected
+runtime package, provenance and license, not a second publishing distribution.
+The existing `python -m amplifier_publishing.service` entrypoint resolves the same
+selected package. The independent publisher keeps this author's POSIX mechanism
+tests; Unified retains host authorization, target selection and integration tests.
+
+Qualify the installed app before adopting a new selection. Ordinary app replacement
+or rollback changes the selected code without migrating publishing manifests,
+receipts, retained releases or uncertain effects. The host retains its policy and
+authority; selection does not start listeners or replay operations.
 
 ## API
 

@@ -1,7 +1,36 @@
-import React,{useState} from 'react';
+import React,{useRef,useState} from 'react';
 import {IntegrationEvidence} from './integration-evidence';
+
+const moveLabels={waiting:'Waiting to move',moving:'Moving',moved:'Moved',not_moved:'Not moved',needs_recovery:'Needs recovery'};
+const continuationLabels={waiting:'Waiting to continue',backpressured:'Waiting to continue',enqueued:'Continuation queued',suppressed:'Continuation not sent'};
+function WorktreeMoveReceipt({row,sessionId,act}){
+ const inFlight=useRef(false),[checking,setChecking]=useState(false),[notice,setNotice]=useState(null),[error,setError]=useState('');
+ const check=async()=>{
+  if(inFlight.current)return;
+  inFlight.current=true;setChecking(true);setNotice(null);setError('');
+  try{
+   const response=await act('worktree.check',{sessionId,id:row.id},{propagateError:true});
+   if(!response?.accepted||response.result?.id!==row.id)throw Error(response?.error||'No confirmed response. The saved move status is unchanged.');
+   // The host projection owns placement. A check result must not overwrite it.
+   setNotice({revision:response.result.revision,text:response.result.displayState==='needs_recovery'?'Move check: Needs recovery. '+response.result.detail:'Move checked. The saved move status updates here.'});
+  }catch(e){setError(e.message||'Could not check the move. The saved move status is unchanged.')}
+  finally{inFlight.current=false;setChecking(false)}
+ };
+ return <article className="a-selection-card" data-handoff-id={row.id}>
+  <p role="status" data-part="move-status">{row.displayState==='waiting'&&row.waitingFor.includes('generation')?'Waiting for this turn':moveLabels[row.displayState]}</p>
+  <dl><dt>From folder</dt><dd className="a-state-view">{row.source}</dd><dt>To folder</dt><dd className="a-state-view">{row.target}</dd></dl>
+  <p>Local host: {row.executionHost?.label||'Not recorded for this receipt'}</p>
+  <p>{row.detail}</p>
+  {row.continuation&&<p role="status" data-part="move-continuation">{continuationLabels[row.continuation.status]}{row.continuation.detail?' · '+row.continuation.detail:''}</p>}
+  <button className="a-soft" data-action="worktree.check" aria-disabled={checking} onClick={check}>Check move</button>
+  <p className="a-caption">Checks this move without starting another move or sending work.</p>
+  {checking&&<p role="status">Checking move…</p>}
+  {notice&&notice.revision>=row.revision&&<p role="status">{notice.text}</p>}
+  {error&&<p role="alert">{error}</p>}
+ </article>;
+}
 export function WorktreeControls({session,act}){
- const [repositoryPath,setRepositoryPath]=useState(''),[ref,setRef]=useState('HEAD'),[branch,setBranch]=useState(''),[carry,setCarry]=useState(false),[path,setPath]=useState(''),[evidence,setEvidence]=useState(''),[busy,setBusy]=useState(false);
+ const [repositoryPath,setRepositoryPath]=useState(''),[ref,setRef]=useState('HEAD'),[branch,setBranch]=useState(''),[carry,setCarry]=useState(false),[path,setPath]=useState(''),[busy,setBusy]=useState(false);
  const storageKey='amplifier-checkout-change:'+session.id;
  const [pending,setPending]=useState(()=>{try{return JSON.parse(sessionStorage.getItem(storageKey)||'null')}catch{return null}});
  const retain=value=>{setPending(value);try{value?sessionStorage.setItem(storageKey,JSON.stringify(value)):sessionStorage.removeItem(storageKey)}catch{}};
@@ -18,7 +47,7 @@ export function WorktreeControls({session,act}){
  <details><summary>Attach an existing checkout</summary><label htmlFor="worktree-path">Existing worktree path</label><input id="worktree-path" value={path} onChange={e=>setPath(e.target.value)}/><button className="a-soft" disabled={busy||!path.trim()} data-action="worktree.attach" onClick={()=>run('worktree.attach',{path:path.trim(),...(repositoryPath.trim()?{repositoryPath:repositoryPath.trim()}:{})})}>Attach checkout</button><p className="a-caption">The folder must belong to the selected repository (the saved home when no repository is selected). Attaching does not start work or grant cleanup ownership.</p></details>
  {(session.worktrees||[]).map(row=><article className="a-selection-card" key={row.id} data-worktree-id={row.id}><p className="a-state-view">{row.path}</p><p role="status">Checkout {row.status}</p><p className="a-state-view">Source: {row.source}</p><p>Local host: {row.executionHost?.label||'Not recorded for this checkout'}</p>{row.error&&<p role="alert">{row.error}</p>}<p>{row.branch||'Detached commit'} · {row.mode==='carry_dirty'?'Changes copied':row.mode==='attached'?'Existing checkout':'Committed source'}</p>{row.status==='archived'&&<p>All files and Git history remain in the retained checkout. Archiving does not reclaim disk space or freeze external edits.</p>}<div className="a-dialog-actions"><button className="a-soft" disabled={busy} data-action="worktree.status" onClick={()=>run('worktree.status',{id:row.id})}>Inspect checkout and manifest</button>{row.status==='ready'&&<button className="a-primary" disabled={busy||session.configurationBusy||working===row.path} data-action="worktree.handoff" onClick={()=>handoff(row.id)}>Move execution here</button>}{row.owned&&['ready','archived'].includes(row.status)&&<button className="a-soft" disabled={busy||!!pending||working===row.path||session.configurationBusy} data-action={row.status==='archived'?'worktree.restore':'worktree.archive'} onClick={()=>relocate(row.status==='archived'?'worktree.restore':'worktree.archive',{id:row.id,expectedRevision:row.revision})}>{row.status==='archived'?'Restore preserved checkout':'Archive and preserve files'}</button>}{row.owned&&row.status==='ready'&&<button className="a-soft" disabled={busy||working===row.path||session.configurationBusy} data-action="worktree.remove" onClick={()=>run('worktree.remove',{id:row.id,expectedRevision:row.revision})}>Remove clean checkout</button>}</div></article>)}
  {session.worktreeStatus&&<details open><summary>Checkout inspection</summary><pre className="a-state-view">{JSON.stringify(session.worktreeStatus,null,2)}</pre></details>}
- {(session.worktreeHandoffs||[]).map(row=><article className="a-selection-card" key={row.id} data-handoff-id={row.id}><p role="status">Handoff {row.phase}</p><p>Local host: {row.executionHost?.label||'Not recorded for this receipt'}</p><p>{row.detail}</p>{row.phase==='unknown'&&<><label htmlFor={'handoff-evidence-'+row.id}>What did you verify?</label><textarea id={'handoff-evidence-'+row.id} value={evidence} onChange={e=>setEvidence(e.target.value)}/><p className="a-caption">Confirm saved writer release again and choose the execution folder. Neither choice sends a message or replays work.</p><div className="a-dialog-actions">{['source','target'].map(destination=><button className="a-soft" key={destination} disabled={busy||!evidence.trim()} data-action="worktree.reconcile" onClick={()=>run('worktree.reconcile',{id:row.id,expectedRevision:row.revision,destination,evidence:evidence.trim()})}>Use {destination} folder</button>)}</div></>}</article>)}
+ {(session.worktreeHandoffs||[]).map(row=><WorktreeMoveReceipt key={session.id+':'+row.id} row={row} sessionId={session.id} act={act}/>)}
  <IntegrationEvidence key={session.id} session={session} act={act}/>
  </section>
 }

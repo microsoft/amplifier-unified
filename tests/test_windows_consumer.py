@@ -40,12 +40,64 @@ def test_process_local_roots_preserve_accounts_and_user_git_policy(tmp_path, mon
     assert result["AMPLIFIER_HOME"] == str(tmp_path / "shared")
     assert result["AMPLIFIER_SESSION_STATE_HOME"] == str(tmp_path / "ownership")
     assert result["AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH"] == str(tmp_path / "capture")
+    # This installation has the earlier store folder, so it keeps that one.
     assert result["AMPLIFIER_SOURCE_STORE"] == str(tmp_path / "source-store")
     assert "PYTHONPATH" not in result
     assert result["GIT_CONFIG_VALUE_0"] == "owner-helper"
     assert result["OPENAI_API_KEY"] == "synthetic-never-persisted"
     assert dict(consumer.os.environ) == before
     assert len(roots) == 13 and all(kwargs == {"owned_root": tmp_path, "create": False} for _, kwargs in roots)
+
+
+def test_each_installation_resolves_the_source_store_folder_it_has(tmp_path, monkeypatch):
+    """New setup makes "s"; an earlier installation keeps "source-store". Nothing is created or moved."""
+    from amplifier_web import windows_files
+    checked = []
+    @contextmanager
+    def directory(path, **kwargs):
+        # The real owner opens the folder with its checks and never creates it here.
+        assert kwargs == {"owned_root": path.parent, "create": False}
+        checked.append(path.name)
+        if not path.is_dir():
+            raise FileNotFoundError(path)
+        yield
+    monkeypatch.setattr(windows_files, "directory", directory)
+    tools = {"uv": "uv/uv.exe", "git": "git/cmd/git.exe"}
+    folders = ("app", "shared", "ownership", "capture", "import", "tools", "tool-bin", "cache",
+               "python", "python-bin", "temp")
+
+    def installation(name, store):
+        root = tmp_path / name
+        for folder in (*folders, *store):
+            (root / folder).mkdir(parents=True)
+        return root
+
+    assert (consumer.SOURCE_STORE, consumer.EARLIER_SOURCE_STORE) == ("s", "source-store")
+    new = installation("new", ["s"])
+    assert consumer.environment(new, tools)["AMPLIFIER_SOURCE_STORE"] == str(new / "s")
+    assert checked[-2:] == ["source-store", "s"]
+    earlier = installation("earlier", ["source-store"])
+    assert consumer.environment(earlier, tools)["AMPLIFIER_SOURCE_STORE"] == str(earlier / "source-store")
+    assert checked[-1] == "source-store"
+    # Both folders: the one that an earlier launcher already uses stays in use.
+    both = installation("both", ["s", "source-store"])
+    assert consumer.source_store(both) == both / "source-store"
+    # Neither folder: a damaged installation stops, as for every other private folder.
+    damaged = installation("damaged", [])
+    with pytest.raises(FileNotFoundError):
+        consumer.environment(damaged, tools)
+    # A store folder that exists and fails its checks is never replaced by the other name.
+    refused = installation("refused", ["s", "source-store"])
+    @contextmanager
+    def unsafe(path, **kwargs):
+        if path.name == "source-store":
+            raise PermissionError("Windows private directory ACL differs")
+        yield
+    monkeypatch.setattr(windows_files, "directory", unsafe)
+    with pytest.raises(PermissionError):
+        consumer.source_store(refused)
+    assert sorted(path.name for path in new.iterdir()) == sorted([*folders, "s"])
+    assert sorted(path.name for path in earlier.iterdir()) == sorted([*folders, "source-store"])
 
 
 def test_shortcut_and_first_task_put_the_installations_shell_first(tmp_path, monkeypatch):

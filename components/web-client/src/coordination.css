@@ -16,3 +16,7 @@
 .a-workspace-review section{margin-block:1rem}
 .a-workspace-review code{white-space:pre-wrap;overflow-wrap:anywhere}
 .a-workspace-review .a-state-view{max-width:100%;max-height:20rem;overflow:auto}
+.a-workspace-review-disclosure>summary{min-height:44px;padding-block:8px;box-sizing:border-box;align-content:center;cursor:pointer}
+.a-workspace-review-disclosure>.a-workspace-review-body{min-width:0;padding-block:4px 12px;padding-inline:max(24px,2em) 0;border-inline-start:1px solid var(--a-line)}
+.a-workspace-review-body>:first-child{margin-top:0}
+.a-workspace-review-body>:last-child{margin-bottom:0}

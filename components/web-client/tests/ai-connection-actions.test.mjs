@@ -254,6 +254,8 @@ test('typing after a negative automatic check keeps the private choice through h
   await update('ready');await act(async()=>{root=create(render())});
   await act(async()=>password()[0].props.onChange({target:{value:'synthetic-private-token-only'}}));
   const recheck=root.root.findAllByType('button').find(node=>node.children.join('')==='Check host sign-in again');
+  assert.equal(recheck.parent.props.className,'a-control-actions');
+  assert.equal(recheck.parent.findByType('a').children.join(''),'GitHub setup guide','guide and recheck retain separate interactive targets in one wrapping row');
   await act(async()=>recheck.props.onClick());
   await update('working');
   assert.equal(password().length,1,'rechecking cannot hide a typed private token');

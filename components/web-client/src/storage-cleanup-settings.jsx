@@ -51,11 +51,13 @@ export function StorageCleanupSettings({act,navigate=()=>{}}){
   <p className="a-caption">Enables automatic cleanup and seven-day retention for future temporary test workspaces. Keeps your unused-copy duration and size choices. You can adjust the duration or turn it off above.</p>
   <button className="a-soft" disabled={busy||!report||!!pending||dirty||draft?.revision!==report?.policy.revision} onClick={()=>send('storage.cleanup.applyPreset',{expectedRevision:report.policy.revision,preset:'temporary-operation-output'})}>Use 30-day operation output cleanup</button>
   <p className="a-caption">Enables automatic cleanup and 30-day output retention for new operations. Keeps your other retention choices.</p>
-  <button className="a-primary" disabled={busy||!report||(!pending&&(!dirty||!valid||draft.revision!==report.policy.revision))} onClick={()=>send('storage.cleanup.save',{expectedRevision:draft.revision,enabled:draft.enabled,keepDays:draft.keepDays,maxUnusedBytes:draft.maxUnusedBytes,workspaceArchiveKeepDays:draft.workspaceArchiveKeepDays??null,operationOutputKeepDays:draft.operationOutputKeepDays??null})}>{pending?'Check the same request':'Save cleanup settings'}</button>
-  <button className="a-soft" disabled={busy||!!pending} onClick={load}>Reload cleanup settings</button>
+  <div className="a-dialog-actions a-control-actions">
+   <button className="a-primary" disabled={busy||!report||(!pending&&(!dirty||!valid||draft.revision!==report.policy.revision))} onClick={()=>send('storage.cleanup.save',{expectedRevision:draft.revision,enabled:draft.enabled,keepDays:draft.keepDays,maxUnusedBytes:draft.maxUnusedBytes,workspaceArchiveKeepDays:draft.workspaceArchiveKeepDays??null,operationOutputKeepDays:draft.operationOutputKeepDays??null})}>{pending?'Check the same request':'Save cleanup settings'}</button>
+   <button className="a-soft" disabled={busy||!!pending} onClick={load}>Reload cleanup settings</button>
+   {dirty&&!pending&&<button className="a-link" disabled={busy} onClick={()=>setDraft({...report.policy})}>Discard edits and use saved settings</button>}
+   <button className="a-soft" disabled={busy||!!pending} onClick={inspect}>Review unused copies</button>
+  </div>
   {draft&&report&&draft.revision!==report.policy.revision&&<p role="alert">Settings changed elsewhere. Your edits are kept. Use the saved settings before editing again.</p>}
-  {dirty&&!pending&&<button className="a-link" disabled={busy} onClick={()=>setDraft({...report.policy})}>Discard edits and use saved settings</button>}
-  <button className="a-soft" disabled={busy||!!pending} onClick={inspect}>Review unused copies</button>
   {pending&&<p role="status">The last request is not confirmed. Check the same request to learn its outcome.</p>}
   {preview&&<div aria-label="Cleanup preview"><p>This inspection found {bytes(preview.unusedFileBytes)} in proven unused copies; {bytes(preview.selectedFileBytes)} currently selected by your saved policy.</p>
    {preview.observedUnusedFileBytes!==undefined&&<p>Across cleanup batches: {bytes(preview.observedUnusedFileBytes)} in last measured unused copies. {preview.observationNote}</p>}

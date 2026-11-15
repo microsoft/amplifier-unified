@@ -67,7 +67,8 @@ def live_assignment(service, source, *, child_id=None, explain=False):
     # This observation is an additional rejection fence. Its asynchronous
     # publication is not the producer: only the authenticated live worker can
     # attest its exact run before the first lifecycle row reaches the host.
-    children = source.get('execution', {}).get('nodes', [])
+    from .execution_working_set import readonly
+    children = readonly(source).get('nodes', [])
     child = next((row for row in reversed(children) if row.get('kind') == 'worker'
                   and row.get('sessionId') == identity), None)
     if (child and child.get('runId') == origin['runId']

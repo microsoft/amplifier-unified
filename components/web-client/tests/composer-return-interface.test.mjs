@@ -23,12 +23,13 @@ after(async()=>{
  for(const [key,descriptor] of Object.entries(originals)){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}
 });
 const text=node=>node.children.map(child=>typeof child==='string'?child:text(child)).join('');
-test('composer renders one local help by default, or delegates its help slot without duplicating the writing row',()=>{
+test('composer keeps one screen-reader description by default, or delegates it without duplicating a hint',()=>{
  const props={value:'',editorRef:{current:null},onChange(){},onSend(){},onFiles(){}};
  const standalone=renderToStaticMarkup(React.createElement(MarkdownComposer,props));
  assert.equal((standalone.match(/data-part="composer-return-help"/g)||[]).length,1);
+ assert.match(standalone,/<small class="a-sr-only" data-part="composer-return-help"/,'No persistent visible instruction in standalone composer');
  const external=renderToStaticMarkup(React.createElement(MarkdownComposer,{...props,returnHelpId:'outside-field-return-help'}));
- assert.equal((external.match(/data-part="composer-return-help"/g)||[]).length,0,'External help must not leave an extra small in the writing column');
+ assert.equal((external.match(/data-part="composer-return-help"/g)||[]).length,0,'External description must not leave a duplicate in the writing column');
  assert.match(external,/a-markdown-composer-host/);
 });
 test('Writing preference is labeled, immediately shared with a mounted editor and does not replace its draft',async()=>{
@@ -43,6 +44,8 @@ test('Writing preference is labeled, immediately shared with a mounted editor an
   await act(async()=>root=create(render()));
   const select=()=>root.root.findByType('select'),output=()=>root.root.findByType('output'),help=()=>root.root.findByType('small');
   assert.equal(help().props.id,'outside-field-return-help');assert.equal(help().props['data-part'],'composer-return-help');
+  assert.equal(help().props.className,'a-sr-only','Effective description is not a persistent visible hint');
+  assert.equal(help().props.hidden,undefined);assert.equal(help().props['aria-hidden'],undefined,'Screen readers retain the editing description');
   assert.equal(text(help()),'Enter to send. Shift+Enter or Ctrl+Enter adds a new line.');
   assert.equal(output().props['data-mode'],'desktop-send');
   const label=root.root.findByType('label');
@@ -52,7 +55,7 @@ test('Writing preference is labeled, immediately shared with a mounted editor an
   assert.equal(root.root.findAllByType('button').length,0,'No accidental composer-form submit control');
   await act(async()=>select().props.onChange({target:{value:'newline'}}));
   assert.equal(output().props['data-mode'],'newline');assert.equal(text(output()),'Unsent draft');assert.equal(mounts,1);
-  assert.equal(text(help()),'Return adds a new line. Use Send to send.','External field help shares the actual effective preference');
+  assert.equal(text(help()),'Return adds a new line. Use Send to send.','Accessible editing description shares the actual effective preference');
   assert.equal(saved.get('amplifier.composer.returnKey.v1'),'newline');
   await act(async()=>root.update(render()));
   assert.equal(select().props.value,'newline');assert.equal(mounts,1);

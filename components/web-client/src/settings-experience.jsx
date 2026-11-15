@@ -42,11 +42,18 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  useLayoutEffect(()=>{setHeaderTarget(root.current?.closest('.a-dialog')?.querySelector('[data-settings-help]')||null)},[]);
  const compact=useSettingsCompact(root),trail=settingsTrail(state.view,state,sections),route=trail.at(-1),index=compact&&route.key==='index',detail=compact&&trail.length>(settingsParent(page,sections)?3:2);
  useSettingsViewport(root,compact);
- const drafts=useSettingsDrafts();
+ const drafts=useSettingsDrafts({ownerRef:root,scope:JSON.stringify([state.client?.hostInstanceId,session?.id,!!state.view?.settingsCanvas])});
  const navigation=useSettingsHistory({compact,trail,view:state.view||{},act,close,body,navigationRef,confirmClose:drafts.confirmClose,hasUnsaved:drafts.hasUnsaved});
- const navigate=(page,reset=false)=>{navigation.rememberScroll();act('view.update',{patch:{...mergeSettingsNavigation(state.view||{},settingsBaseNavigation(page,sections)),...(reset?{settingsRootVisit:crypto.randomUUID()}:{})}});};
+ const navigate=(page,reset=false)=>{navigation.rememberScroll();return act('view.update',{patch:{...mergeSettingsNavigation(state.view||{},settingsBaseNavigation(page,sections)),...(reset?{settingsRootVisit:crypto.randomUUID()}:{})}});};
  useLayoutEffect(()=>{if(!state.view?.settingsRootVisit)return;if(body.current)body.current.scrollTop=0;for(const item of root.current?.querySelectorAll('.a-settings-page-content:not([hidden]) details[open]')||[])item.open=false;},[state.view?.settingsRootVisit]);
- useEffect(()=>{heading.current?.focus({preventScroll:true});if(!compact&&body.current)body.current.scrollTop=0;},[page,route.key,compact]);
+ useEffect(()=>{
+  // A committed Review can already have focused a visible dirty editor in its
+  // layout effect. Page orientation must not replace that deliberate target.
+  if(!drafts.takeReviewFocus(navigation.preserveReviewScroll)){
+   heading.current?.focus({preventScroll:true});
+   if(!compact&&body.current)body.current.scrollTop=0;
+  }
+ },[page,route.key,compact]);
  const help=(headerTarget||!state.view?.settingsCanvas)&&<AssistedSettingsButton state={state} dispatch={dispatch||act} disabled={!(state.setup?.providers||[]).some(p=>p.enabled!==false&&!p.authenticationRequired&&(p.config?.default_model||p.config?.model))} onBeforeStart={drafts.confirmClose} compact={compact}/>;
  const props={state,session,act,navigate};
  // Keep visited editors mounted while the dialog is open. Private fields stay

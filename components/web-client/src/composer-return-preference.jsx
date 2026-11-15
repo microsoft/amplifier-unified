@@ -9,11 +9,12 @@ export function useComposerReturn(){
  return {...saved,mode:returnKeyMode(saved.value,capturedAutomatic),automatic:capturedAutomatic,set:preference.set};
 }
 
-// A separate field-help slot lets compact composers keep guidance visible below
-// the bordered editor/action row without changing its editor or Return policy.
+// Keep the effective editing behavior available to the editor's accessible
+// description, without a persistent visible hint or layout row. Writing settings
+// still explain the browser-local preference visibly.
 export function ComposerReturnHelp({id}){
  const {mode}=useComposerReturn();
- return <small className="a-caption a-composer-return-help" data-part="composer-return-help" id={id}>{returnKeyHelp(mode)}</small>;
+ return <small className="a-sr-only" data-part="composer-return-help" id={id}>{returnKeyHelp(mode)}</small>;
 }
 
 export function ComposerReturnSettings(){

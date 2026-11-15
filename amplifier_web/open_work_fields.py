@@ -25,9 +25,7 @@ class OpenWorkFields:
         self.resident = resident
 
     def _node(self, session, entry, identity):
-        position = entry['positions'].get(identity)
-        nodes = self.resident.windows.resident_tree(session).get('nodes', [])
-        node = nodes[position] if type(position) is int and 0 <= position < len(nodes) else None
+        node = self.resident.windows.admitted_node(session, entry, identity)
         if node is None or node.get('id') != identity:
             raise ValueError('This saved detail moved. Reopen its Work steps.')
         return node
@@ -42,12 +40,12 @@ class OpenWorkFields:
                 self.resident._entry(session, group, reconcile=True)
                 scope = page['_openScope']
                 node = self._node(session, entry, scope['id'])
-                if binding(node) != scope['binding'] or entry['positions'][scope['id']] != scope['position']:
+                if binding(node) != scope['binding'] or entry.get('ordinals', entry['positions'])[scope['id']] != scope['position']:
                     raise ValueError('This saved detail changed. Reopen its Work steps.')
                 admitted = entry['ids'].get(scope['id'])
                 if admitted is None:
                     raise ValueError('This saved detail expired. Reopen its Work steps.')
-                rows, _, _ = self.resident._rows(self.resident._source(session, *admitted), group)
+                rows, _, _ = self.resident._rows(self.resident.admitted_source(session, entry, scope['id']), group)
                 if not any(row['id'] == scope['id'] for row in rows):
                     raise ValueError('This saved detail moved. Reopen its Work steps.')
                 return page
@@ -85,12 +83,12 @@ class OpenWorkFields:
             return None
         return page, row, attempt
 
-    def retain(self, session, entry, row, item):
+    def retain(self, session, entry, row, item, *, node=None):
         if row.get('kind') not in {'tool', 'llm'} or row['id'] not in entry['positions']:
             return item
         from .work_windows import source_identity
         from .browser_detail import detail_version
-        node = self._node(session, entry, row['id'])
+        node = self._node(session, entry, row['id']) if node is None else node
         current_binding = binding(node)
         retained = entry.setdefault('fields', {})
         own = [(key, retained[key]) for field in FIELDS
@@ -138,7 +136,7 @@ class OpenWorkFields:
                         'ownerSource': source_identity(session), 'items': [saved_field], '_attempt': attempt,
                         '_availability': deepcopy(item.get('contentAvailability')),
                         '_openScope': {'id': row['id'], 'binding': current_binding,
-                                       'position': entry['positions'][row['id']]}}
+                                       'position': entry.get('ordinals', entry['positions'])[row['id']]}}
                     retained[key] = previous
             elif detail is not None:
                 # An existing nonwindow/native field owns its normal reader.

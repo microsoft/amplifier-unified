@@ -105,7 +105,8 @@ async def test_canvas_file_capture_follows_execution_while_files_keep_workspace(
         await app.close()
 
 
-async def test_unknown_restart_and_explicit_reconcile_never_resubmit(tmp_path, monkeypatch):
+@pytest.mark.parametrize('destination', ['source', 'target'])
+async def test_unknown_restart_and_explicit_reconcile_never_resubmit(tmp_path, monkeypatch, destination):
     app, runtime, root, sid = await fixture(tmp_path, monkeypatch)
     runtime.quiesce_for_handoff.side_effect = RuntimeError('lost confirmation')
     inspected = (await app.dispatch('worktree.inspect', {'sessionId': sid}))['result']
@@ -122,11 +123,14 @@ async def test_unknown_restart_and_explicit_reconcile_never_resubmit(tmp_path, m
         with pytest.raises(AppError, match='actual finding'):
             await app.app_bridge('dispatch', {'action': 'worktree.reconcile', 'args': {'id': unknown['id'], 'expectedRevision': unknown['revision'], 'destination': 'source', 'evidence': 'Agent guess'}}, sid)
         runtime.quiesce_for_handoff.side_effect = None
-        await app.dispatch('worktree.reconcile', {'sessionId': sid, 'id': unknown['id'], 'expectedRevision': unknown['revision'], 'destination': 'source', 'evidence': 'Inspected the original workspace; retain it.'}, command_id='reconcile')
+        await app.dispatch('worktree.reconcile', {'sessionId': sid, 'id': unknown['id'], 'expectedRevision': unknown['revision'], 'destination': destination, 'evidence': 'Inspected the saved move and chosen folder.'}, command_id='reconcile')
         await settle(app)
         assert not app._session(sid)['configurationBusy']
-        assert app._session(sid)['workingDirectory'] == str(root)
-        assert app.worktrees.read(sid, receipt['id'])['phase'] == 'reconciled'
+        assert app._session(sid)['workingDirectory'] == (str(root) if destination == 'source' else created['path'])
+        original = app.worktrees.read(sid, receipt['id'])
+        assert original['phase'] == 'reconciled'
+        assert original['source'] == str(root) and original['target'] == created['path']
+        assert original['displayState'] == ('not_moved' if destination == 'source' else 'moved')
     finally: await app.close()
 
 
@@ -142,7 +146,9 @@ async def test_runtime_cooperative_release_is_confirmed_without_replay(tmp_path,
         return ReadyToRelease()
     registration = await register_release_handler(held, prepare_release=release)
     manager = RuntimeManager()
-    manager.workers['s'] = {'process': SimpleNamespace(pid=os.getpid())}
+    manager.workers['s'] = {
+        'process': SimpleNamespace(pid=os.getpid() + 1000000, returncode=None),
+        'native_worker_pid': os.getpid(), 'native_writer': dict(held.owner)}
     manager.stop = AsyncMock()
     try:
         result = await manager.quiesce_for_handoff({'id':'s','workspace':str(tmp_path)}, 'move')

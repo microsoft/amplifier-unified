@@ -125,6 +125,26 @@ def delivery_proof(home):
     return proof
 
 
+# Setup names the source store of a new installation "s". Python imports module
+# source from that folder by ordinary paths, and with the earlier name the
+# deepest default module does not fit a Windows path at the longest
+# installation folder that setup accepts (tests/test_windows_path_budget.py).
+# An installation that has the earlier folder keeps its store there: nothing is
+# moved, renamed or downloaded again.
+SOURCE_STORE, EARLIER_SOURCE_STORE = "s", "source-store"
+
+
+def source_store(root):
+    """This installation's source store folder, checked like its other private folders."""
+    from .windows_files import directory
+    try:
+        with directory(root / EARLIER_SOURCE_STORE, owned_root=root, create=False):
+            return root / EARLIER_SOURCE_STORE
+    except FileNotFoundError:
+        with directory(root / SOURCE_STORE, owned_root=root, create=False):
+            return root / SOURCE_STORE
+
+
 def environment(root, value):
     from .windows_files import directory
     env = dict(os.environ)
@@ -136,8 +156,7 @@ def environment(root, value):
     roots = {"AMPLIFIER_WEB_HOME": "app", "AMPLIFIER_HOME": "shared",
              "AMPLIFIER_SESSION_STATE_HOME": "ownership",
              "AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH": "capture",
-             "AMPLIFIER_UNIFIED_IMPORT_HOME": "import", "AMPLIFIER_SOURCE_STORE": "source-store",
-             "UV_TOOL_DIR": "tools",
+             "AMPLIFIER_UNIFIED_IMPORT_HOME": "import", "UV_TOOL_DIR": "tools",
              "UV_TOOL_BIN_DIR": "tool-bin", "UV_CACHE_DIR": "cache",
              "UV_PYTHON_INSTALL_DIR": "python", "UV_PYTHON_BIN_DIR": "python-bin",
              "TEMP": "temp", "TMP": "temp"}
@@ -145,6 +164,7 @@ def environment(root, value):
         with directory(root / suffix, owned_root=root, create=False):
             pass
         env[name] = str(root / suffix)
+    env["AMPLIFIER_SOURCE_STORE"] = str(source_store(root))
     from .host_dependencies import private_shell
     shell = private_shell(root / "app")
     env["PATH"] = os.pathsep.join([*([shell] if shell else []),

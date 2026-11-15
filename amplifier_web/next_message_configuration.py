@@ -43,11 +43,12 @@ def pending_input(service, session):
     # Voice, question and scheduled input retain their execution-turn evidence.
     # ColdDisplay retains the same pending-work fact with its exact body ref.
     reference = dict.get(session, '_coldFields', {}).get('execution')
-    if not dict.__contains__(session, 'execution') and reference is not None:
+    owner = getattr(session, '_working_execution', None)
+    if owner is None and not dict.__contains__(session, 'execution') and reference is not None:
         if reference.get('pendingWork') is not False:
             return True  # Legacy/unknown is not proof that input has settled.
     else:
-        tree = dict.get(session, 'execution', {})
+        tree = owner.current if owner is not None else dict.get(session, 'execution', {})
         voice_turns = voice_usage_turns(tree)
         # The call owns its duration/response receipts independently of manager
         # work. A spoken input's manager turn still blocks configuration.

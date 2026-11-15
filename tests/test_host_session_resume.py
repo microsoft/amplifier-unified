@@ -180,11 +180,25 @@ async def test_discarded_checkpoint_history_stays_inside_synchronous_visit(mount
     h.context.get_messages.assert_not_awaited()
     assert visits == [2, 2]
     assert json.loads(h.path.read_text().splitlines()[-1])['metadata']['nested'] == ['later edit']
+
+    # Request preservation discards the checkpoint result too, but must still
+    # persist nested edits and publish changed anchors after releasing the borrow.
+    before = h.path.read_bytes()
+    h.context.messages[-1]['metadata']['nested'][0] = 'preserved edit'
+    h.runtime.generation['id'] = 'generation-two'
+    assert h.path.read_bytes() == before
+    references = await h.capabilities['context.preserve_evidence'](copy.deepcopy(h.context.messages))
+    assert references == []  # These ordinary messages need no large-output references.
+    h.context.get_messages.assert_not_awaited()
+    assert visits == [2, 2, 2]
+    assert json.loads(h.path.read_text().splitlines()[-1])['metadata']['nested'] == ['preserved edit']
+    assert h.runtime.emit.call_args.kwargs['generation_id'] == 'generation-two'
+
     returned = await h.capabilities['live.checkpoint']()
     h.context.get_messages.assert_awaited_once()
-    assert visits == [2, 2]  # Ordinary/full-result callers still get detached rows.
+    assert visits == [2, 2, 2]  # Ordinary/full-result callers still get detached rows.
     returned[-1]['metadata']['nested'][0] = 'caller edit'
-    assert h.context.messages[-1]['metadata']['nested'] == ['later edit']
+    assert h.context.messages[-1]['metadata']['nested'] == ['preserved edit']
 
 
 @pytest.mark.parametrize('fault', ['async-visitor', 'async-result', 'no-visit'])

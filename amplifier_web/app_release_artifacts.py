@@ -9,8 +9,10 @@ import asyncio
 from contextlib import asynccontextmanager
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import stat
 from urllib.parse import urljoin, urlsplit
 import zipfile
 
@@ -121,6 +123,80 @@ def verify(descriptor, version, revision):
     value = validate_descriptor(descriptor, version)
     _verify_archive(Path(value['path']), value, version, revision)
     return value
+
+
+def captured_members(descriptor, version, revision, names, *, limit=262144):
+    """Read bounded members from the *same bytes* as the qualified wheel digest.
+
+    The caller must obtain the descriptor from the serving generation's private
+    qualification, not a request, RECORD or source stamp. Record only ZIP reads
+    (directory, headers and selected compressed inputs), then compare every one
+    against the stream authenticated by the original download digest. This keeps
+    a file replacement/in-place edit between ZIP reads and hashing from blessing
+    different bytes, without copying the wheel or reading an installed closure.
+    """
+    value = validate_descriptor(descriptor, version)
+    names = tuple(names)
+    if len(names) != len(set(names)) or not names or len(names) > 16:
+        raise ValueError('Invalid application member selection')
+
+    class Observed:
+        def __init__(self, stream):
+            self.stream, self.reads, self.size = stream, [], 0
+
+        def seek(self, *args):
+            return self.stream.seek(*args)
+
+        def tell(self):
+            return self.stream.tell()
+
+        def seekable(self):
+            return True
+
+        def read(self, count=-1):
+            # Bound ZIP metadata as well as decompressed selected members.
+            if count < 0:
+                count = os.fstat(self.stream.fileno()).st_size - self.tell()
+            if count > 8 * 1024 * 1024:
+                raise ValueError('Application archive metadata exceeds its bound')
+            offset = self.tell()
+            raw = self.stream.read(count)
+            self.size += len(raw)
+            if self.size > 16 * 1024 * 1024:
+                raise ValueError('Application archive reads exceed their bound')
+            self.reads.append((offset, raw))
+            return raw
+
+    try:
+        fd = os.open(value['path'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError('Application artifact is not a regular file')
+            observed = Observed(stream)
+            with zipfile.ZipFile(observed) as archive:
+                all_names = archive.namelist()
+                selected = {}
+                for name in (*names, STAMP):
+                    if all_names.count(name) != 1 or archive.getinfo(name).file_size > (STAMP_LIMIT if name == STAMP else limit):
+                        raise ValueError('Application member is missing, duplicated or too large')
+                    selected[name] = archive.read(name)
+            stream.seek(0)
+            digest, offset = hashlib.sha256(), 0
+            while chunk := stream.read(1024 * 1024):
+                for start, raw in observed.reads:
+                    left, right = max(offset, start), min(offset + len(chunk), start + len(raw))
+                    if left < right and chunk[left-offset:right-offset] != raw[left-start:right-start]:
+                        raise ValueError('Application artifact changed during capture')
+                digest.update(chunk)
+                offset += len(chunk)
+            if any(start + len(raw) > offset for start, raw in observed.reads) or digest.hexdigest() != value['sha256']:
+                raise ValueError('Application release checksum verification failed')
+        stamp = validate_stamp(json.loads(selected.pop(STAMP)), version, revision)
+        if stamp['repository'] != REPOSITORY:
+            raise ValueError('Application release source repository does not match')
+        return selected
+    except (OSError, zipfile.BadZipFile, KeyError, UnicodeError) as error:
+        raise ValueError('Application release members could not be captured') from error
 
 
 def requirement(descriptor, extras=()):

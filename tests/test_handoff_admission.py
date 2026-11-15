@@ -41,10 +41,11 @@ class BarrierRuntime(RuntimeManager):
         self.admitting.set()
         return await super()._start_locked(session, emit, **kwargs)
 
-    async def quiesce_for_handoff(self, session, request_id):
+    async def quiesce_for_handoff(self, session, request_id, *, guard=None):
         # The Foundation release handshake has separate real-store tests. This
         # barrier controls only its timing; start/admit/process paths are real.
         async with self._admission(session['id']):
+            if guard: guard()
             await self.stop(session['id'])
             self.releasing.set()
             await self.release.wait()
