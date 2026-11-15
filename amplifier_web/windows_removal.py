@@ -201,7 +201,11 @@ try {
             })
             foreach ($entry in $rest) { Keep $entry.FullName }
             $done = (-not $alive.Count -and -not $inside.Count -and -not $rest.Count)
-            if ($done -or (Get-Date) -ge $until) { break }
+            # Waiting helps only for a program that still runs, a parked file
+            # that is still there, or a named folder that is not empty yet.
+            $named = @($rest | Where-Object { @($p.folders) -ccontains $_.Name })
+            $idle = (-not $alive.Count -and -not $inside.Count -and -not $named.Count)
+            if ($idle -or (Get-Date) -ge $until) { break }
             Start-Sleep -Seconds 1
         } while ((Get-Date) -lt $until)
         if (-not (Authorized)) { throw 'Root or token refused' }

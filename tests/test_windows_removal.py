@@ -923,6 +923,48 @@ def test_native_finish_holds_the_root_flat_and_inner_folders_while_it_waits(fini
     print("AFTER_EXIT_HOLD " + json.dumps({"refused": errors, "report": result}))
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Real Windows sharing rules for the folders above the held folder")
+def test_native_finish_keeps_the_folders_above_the_installation_in_place(tmp_path):
+    """While the helper holds its folder, a folder two levels above the flat folder cannot be renamed."""
+    from amplifier_web import windows_files
+
+    tag = uuid.uuid4().hex[:10]
+    above = windows_files.address(Path.home() / ("au-above-test-" + tag))
+    root, report = above / "installation", tmp_path / "finish.json"
+    with windows_files.directory(root, owned_root=above, create=True):
+        pass
+    sleeper = subprocess.Popen([sys.executable, "-I", "-S", "-c", "import sys; sys.stdin.buffer.read(1)"],
+                               stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    errors = {}
+    try:
+        (root / "unified-uninstall.json").write_text(json.dumps({"schema": 1, "choice": "delete", "token": TOKEN}))
+        (root / COMPLETE).write_text('{"schema": 1}')
+        # Without the helper the folder above can be renamed: the refusal below comes from the hold.
+        os.rename(above, str(above) + "-free")
+        os.rename(str(above) + "-free", above)
+        try:
+            with removal.folder(root) as owned:
+                with owned.aside(PARK, TOKEN):
+                    removal.finish_after_exit(root, TOKEN, park=PARK, folders=[], seconds=20, report=report,
+                                              wait_for=[sleeper.pid])
+            for name, source in (("above", above), ("root", root)):
+                with pytest.raises(OSError) as refused:
+                    os.rename(source, str(source) + "-moved")
+                errors[name] = refused.value.winerror
+            assert sleeper.poll() is None and not report.exists()
+        finally:
+            sleeper.stdin.close()
+            sleeper.wait(timeout=10)
+        result = _finish_report(report)
+        # The installation folder is gone. The folder above it is not the installation's and stays.
+        assert result["reason"] == "" and result["folderRemoved"] and not root.exists(), result
+        assert above.is_dir() and list(above.iterdir()) == []
+        print("AFTER_EXIT_ABOVE " + json.dumps({"refused": errors, "report": result}))
+    finally:
+        shutil.rmtree(above, ignore_errors=True)
+        shutil.rmtree(str(above) + "-free", ignore_errors=True)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Real PowerShell keeps folders and links in the flat folder")
 @pytest.mark.parametrize("kind", ["junction", "folder", "filelink", "held", "later", "readonly"])
 def test_native_finish_keeps_entries_that_are_not_free_old_plain_files(finish_tree, kind):
@@ -1018,8 +1060,20 @@ def test_native_nonempty_flat_folder_cannot_become_a_junction_in_place(finish_tr
         measured["control"] = _junction_in_place(control, tree["outside"])
         measured["flat"] = _junction_in_place(root / PARK, tree["outside"])
         measured["hold"] = _junction_in_place(root / PARK / TOKEN, tree["outside"])
+        # Whatever Windows allowed for the empty inner folder: it is still the helper's current
+        # folder. So it cannot be removed or renamed, and the flat folder is still not empty.
+        after = {"flat": _junction_in_place(root / PARK, tree["outside"])["error"]}
+        for label, action in (("rmdir", lambda: os.rmdir(root / PARK / TOKEN)),
+                              ("rename", lambda: os.rename(root / PARK / TOKEN, root / PARK / "moved"))):
+            try:
+                action()
+                after[label] = 0
+            except OSError as error:
+                after[label] = error.winerror
+        measured["after"] = after
         if (measured["flat"] != {"ok": False, "error": 145, "stage": "set"}
-                or measured["control"] != {"ok": True, "error": 0, "stage": "set"}):
+                or measured["control"] != {"ok": True, "error": 0, "stage": "set"}
+                or after["flat"] != 145 or not after["rmdir"] or not after["rename"]):
             print("AFTER_EXIT_INPLACE " + json.dumps(measured))
             pytest.exit("The required in-place junction measurement differed. Stop; inspect the numbers.", 1)
         assert sleeper.poll() is None and not tree["report"].exists()
