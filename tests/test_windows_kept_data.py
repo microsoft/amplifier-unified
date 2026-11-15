@@ -756,6 +756,9 @@ def test_continued_take_back_runs_every_check_again(tmp_path, monkeypatch, notic
     snapshot = tree(tmp_path)
     result = kept.first_start(root, "0.96.0" if change == "newer" else VERSION, ask=False)
     assert result["taken"] is False and result["reason"] == kind and tree(tmp_path) == snapshot
+    cause = {"link": "Remove the link from that folder.", "newer": "Install that version of Amplifier, or a newer one.",
+             "program-state": "was changed, and Amplifier cannot use it"}[change]
+    assert cause in result["message"] and "Do not uninstall Amplifier" in result["message"]  # The cause is named.
     with pytest.raises(kept.Refused):  # An uninstall cannot begin either.
         kept.check(root, "0.96.0" if change == "newer" else VERSION)
 

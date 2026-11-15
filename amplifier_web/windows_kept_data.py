@@ -83,6 +83,9 @@ _BLOCKED = ("Amplifier cannot finish moving your kept chats and settings back.\n
 _CAUSE = {
     "link": "The second folder below holds a link, and Amplifier does not follow links. "
             "Remove the link from that folder. Then open Amplifier again.",
+    "newer": "A newer version of Amplifier began this step, and this version cannot finish it. "
+             "Install that version of Amplifier, or a newer one. Then open Amplifier again.",
+    "unreadable": "Amplifier cannot read the second folder below. Restart this PC. Then open Amplifier again.",
     "changed": "The second folder below was changed, and Amplifier cannot use it as it is now. "
                "Restart this PC. Then open Amplifier again.",
 }
