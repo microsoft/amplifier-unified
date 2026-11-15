@@ -832,7 +832,9 @@ that runtime. Without this check, a connected AI account made the start run a
 complete first installation: minutes without a window, a new folder on each
 attempt, and in the observed case a failure. The launcher's failure message
 has two forms: the preparation of the remaining parts failed, or the start
-failed (every other step). It names the Start menu as the next step only when
+failed (every other step). A third text replaces both when the start ended
+because the launcher did not confirm its start-at-sign-in task (see "The task
+after a computer rename" below). It names the Start menu as the next step only when
 the entry record says `installed` and the entry that opens Amplifier exists in
 the folder that the record names; setup's second run decides by the same two
 facts. Otherwise the next step is to run the setup file again. The record
@@ -1976,7 +1978,11 @@ confirm that the entry belongs to this installation, names the entry, and
 gives the steps to delete it; a new start then registers a new entry with the
 saved port and settings. It does not say that the entry was changed, because
 it cannot know that. When Windows gave no answer about the account, it asks
-for a restart and deletes nothing.
+for a restart and deletes nothing. Start, Status, Stop and Uninstall each have
+this text; before, they named the internet connection, an unreachable service
+manager, or a Task Scheduler that could not be read. A start at sign-in shows
+no window: the task ends with an error, and the person sees the text at the
+next start from the Start menu.
 
 Work survives browser/terminal closure while the owner remains signed in.
 This model does **not** promise execution after sign-out or before sign-in.
