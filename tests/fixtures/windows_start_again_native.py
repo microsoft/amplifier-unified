@@ -84,7 +84,8 @@ def prepare():
         assert not git("status", "--porcelain"), "The candidate checkout must be clean"
         revision = git("rev-parse", "HEAD")
         version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
-        root = helpers.canonical_temp() / ("start-again-" + uuid.uuid4().hex[:12])
+        root = helpers.canonical_temp() / ("start-again-" + uuid.uuid4().hex[:8])
+        assert len(str(root)) <= 59, "Use a folder within setup's supported length"
         assert not root.exists()
         save("ownership.json", {"root": str(root)})
         files = load("start_again_files", ROOT / "amplifier_web/windows_files.py")
@@ -113,7 +114,13 @@ def prepare():
                                  "UV_TOOL_BIN_DIR": str(root / "tool-bin")},
                             cwd=root, timeout=900)
             shutil.copyfile(uv, root / "uv/uv.exe")
-            shutil.copyfile(shutil.which("git"), root / "git/cmd/git.exe")
+            # A lone Git wrapper cannot fetch. Real preparation needs its tree.
+            git_tree = Path(git("--exec-path")).parents[2]
+            assert (git_tree / "cmd/git.exe").is_file()
+            shutil.copytree(git_tree, root / "git", dirs_exist_ok=True)
+            git_check = execute([root / "git/cmd/git.exe", "--version"])
+            assert git_check["exitCode"] == 0, git_check
+            report["privateGit"] = git_check
         python = root / "tools/amplifier-unified/Scripts/python.exe"
         assert python.is_file()
         prepared = {"root": str(root), "version": version, "revision": revision,
