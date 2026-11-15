@@ -245,3 +245,17 @@ def test_flag_only_ancestor_ownership_change_survives_retirement(owner_factory, 
     ws.exact(session, 'nodes', {'id': 'live'})['usage']['inputTokens'] = 7
     equivalent(session, monkeypatch, full_reads=0)
     assert ws.exact(session, 'nodes', {'id': 'worker'})['aggregateUsage']['inputTokens'] == 7
+
+
+def test_unmatched_selected_root_clears_prefix_even_with_borrowed_current(owner_factory, monkeypatch):
+    db, session, owner = owner_factory()
+    borrowed = ws.exact(session, 'nodes', {'id': 'live'})['usage']
+    identity = records.key('nodes', {'id': 'old-1'})
+    changed = records.read_record(db, owner.reference, 'nodes', identity)
+    changed['usage']['inputTokens'] = 9
+    selected = records.replace_records(db, owner.reference, {'nodes': {identity: changed}})
+    db.commit()
+    ws.PendingExecution(owner, selected).committed(session)
+    assert owner.usage_prefix is None
+    assert ws.exact(session, 'nodes', {'id': 'live'})['usage'] is borrowed
+    equivalent(session, monkeypatch, full_reads=1)
