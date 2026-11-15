@@ -20,6 +20,11 @@ async def test_changed_native_revision_keeps_only_noop_activity_cold(tmp_path, m
     monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'native'))
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'app'))
     root, capture, native = fixture(tmp_path, monkeypatch)
+    store = SessionStore(root.parent, shared=True)
+    prefix, _ = store.load('native-root')
+    prefix.append({'role': 'user', 'content': 'new inspection'})
+    store.save('native-root', prefix, {'working_dir': native['workspace'], 'bundle': 'anchors'})
+    (capture / 'events.jsonl').write_text('')
     initial = read_transcript(native)
     home = tmp_path / 'app'
     seed = AppService(home, workspace=native['workspace'])
@@ -30,7 +35,7 @@ async def test_changed_native_revision_keeps_only_noop_activity_cold(tmp_path, m
     session.update(runtimeSessionId='native-root', historyManaged=False, historyLoaded=True,
                    nativeRevision=revision(session), status='idle',
                    messages=[{**row, 'id': 'web-' + row['id']} for row in initial['messages']])
-    anchor = session['messages'][0]['id'] if activity_kind != 'unshadowed' else None
+    anchor = session['messages'][-1]['id'] if activity_kind != 'unshadowed' else None
     tree = {'nodes': [{'id': f'old-{i}', 'kind': 'tool', 'turnId': 'old',
                        'phase': 'completed', 'detail': {'values': [i]}} for i in range(160)],
             'turns': [{'id': 'old', 'phase': 'completed', 'anchorMessageId': anchor}],
@@ -51,13 +56,12 @@ async def test_changed_native_revision_keeps_only_noop_activity_cold(tmp_path, m
     # A real saved transcript and CI event change, larger than the accounting
     # prefix limit. No worker, provider or fabricated history-reader result.
     calls = [f'call-{i}' for i in range(130)]
-    rows = [{'role': 'user', 'content': 'inspect fixture'},
-            {'role': 'assistant', 'content': '', 'tool_calls': [
+    rows = [*prefix, {'role': 'assistant', 'content': '', 'tool_calls': [
                 {'id': call, 'type': 'function', 'function': {'name': 'inspect', 'arguments': '{}'}}
                 for call in calls]},
             *[{'role': 'tool', 'tool_call_id': call, 'content': 'synthetic result'} for call in calls],
             {'role': 'assistant', 'content': 'Updated saved answer'}]
-    SessionStore(root.parent, shared=True).save('native-root', rows,
+    store.save('native-root', rows,
         {'working_dir': native['workspace'], 'bundle': 'anchors'})
     (capture / 'events.jsonl').write_text('' if activity_kind == 'empty' else ''.join(
         json.dumps({'event': 'tool:post', 'session_id': 'native-root',
