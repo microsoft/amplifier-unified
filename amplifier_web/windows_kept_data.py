@@ -121,8 +121,8 @@ _GONE = ("Amplifier did not finish moving your kept chats and settings back, and
          "and open Amplifier again.\n\nStart Amplifier without {them}?\n\n"
          "Yes: start {how}.\nNo: do not start Amplifier now.")
 _UNCLEAR = ("Amplifier did not finish moving your kept chats and settings back, and its notes about that "
-            "step are missing or do not match. {they} in this folder:\n{kept}\n\nSelect No first. Restart this PC. Then open "
-            "Amplifier again. If you see this message again, select Yes.\n\nStart Amplifier without {them}?"
+            "step are missing or do not match. {they} in this folder:\n{kept}\n\nSelect No first. Restart this PC. "
+            "Then open Amplifier again. If you see this message again, select Yes.\n\nStart Amplifier without {them}?"
             "\n\nYes: start {how}. That folder stays as it is.\nNo: do not start Amplifier now.")
 _WORDS = {
     ("missing", True): {"them": "the rest", "they": "The rest was", "how": "with the part that is already back"},
@@ -474,7 +474,9 @@ def _obstacle(root, kept, record):
                 return target  # Another folder took the place of the one that came back.
         elif _names(target):
             return target / _names(target)[0]  # Its kept folder still waits: this one must be empty.
-    return None
+    # And every kept data folder is the one that this take-back saw at its start.
+    return next((kept / name for name in FOLDERS
+                 if _kind(kept / name) == "folder" and back.get(name) != _identity(kept / name)), None)
 
 
 def _fault(kept, reason):

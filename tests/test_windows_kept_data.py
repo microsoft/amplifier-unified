@@ -662,7 +662,8 @@ def test_take_back_waits_for_a_held_folder_and_else_stops_until_the_next_start(
         assert result is None and pauses == [0.5, 0.5] and person(data(root)) == expected
         return
     assert result["taken"] is False and result["reason"] == "take-back"
-    assert "Reference: kept-data, take-back, PermissionError" in notices.shown[-1][1] and str(folder) in notices.shown[-1][1]
+    assert "Reference: kept-data, take-back, PermissionError" in notices.shown[-1][1]
+    assert str(folder) in notices.shown[-1][1]
     assert kept.read(folder)[0] == "adopting"
     here, there = files(person(data(root))), files(person(data(folder)))
     assert not set(here) & set(there) and {**here, **there} == files(expected)
@@ -1181,7 +1182,57 @@ def test_folder_that_came_back_is_checked_again_when_a_take_back_continues(tmp_p
     assert kept.read(folder)[0] == "adopting" and kept.unfinished_take_back(root)
     shutil.rmtree(root / "app")
     os.rename(tmp_path / "moved-aside", root / "app")
+    # A file where a folder came back: named too, never listed, never passed over.
+    os.rename(root / "shared", tmp_path / "shared-aside")
+    (root / "shared").write_text("a file\n")
+    result = kept.first_start(root, VERSION, ask=False)
+    assert result["reason"] == "take-back-not-empty" and str(root / "shared") + "\n" in result["message"]
+    os.remove(root / "shared")
+    os.rename(tmp_path / "shared-aside", root / "shared")
     assert kept.first_start(root, VERSION, ask=False) is None and person(data(root)) == expected
+
+
+def test_folder_that_came_into_the_kept_set_later_stops_a_take_back_before_any_change(
+        tmp_path, monkeypatch, notices):
+    root, folder, expected = interrupted(tmp_path, monkeypatch, notices)
+    os.rename(folder / "import", tmp_path / "aside")
+    (folder / "import").mkdir()
+    (folder / "import" / "other.txt").write_text("not what Amplifier kept\n")
+    snapshot = tree(tmp_path)
+    result = kept.first_start(root, VERSION, ask=False)
+    assert result["reason"] == "take-back-not-empty" and str(folder / "import") + "\n" in result["message"]
+    assert "Move it to a place outside these two folders." in result["message"] and tree(tmp_path) == snapshot
+    shutil.rmtree(folder / "import")
+    os.rename(tmp_path / "aside", folder / "import")
+    assert kept.first_start(root, VERSION, ask=False) is None and person(data(root)) == expected
+
+
+def test_note_says_done_before_the_record_goes_also_when_its_first_write_failed(tmp_path, monkeypatch, notices):
+    root, folder, expected = kept_then_installed(tmp_path)
+    real, failed = kept._write, []
+
+    def write(owner, name, value):
+        if name == kept.MARKER and value.get("done") and not failed:
+            failed.append(True)
+            raise PermissionError(13, "The private write was refused", str(owner / name))
+        return real(owner, name, value)
+    monkeypatch.setattr(kept, "_write", write)
+    monkeypatch.setattr(kept, "_drop_marker", lambda root: None)  # And Windows refuses to remove the note.
+    notices.answers.append(True)
+    assert kept.first_start(root, VERSION, ask=True) is None
+    assert not folder.exists() and json.loads((root / kept.MARKER).read_text())["done"] is True
+    assert kept.first_start(root, VERSION, ask=False) is None and len(notices.shown) == 1  # Never a question.
+
+
+def test_record_of_a_finished_take_back_beside_a_data_folder_is_left_alone(tmp_path, notices):
+    root = used(tmp_path / "Amplifier")
+    folder = kept.kept_folder(root)
+    record(folder, state="returned")
+    (folder / "app").mkdir()
+    (folder / "app" / "chat.txt").write_text("someone put this here")
+    snapshot = tree(tmp_path)
+    assert kept.first_start(root, VERSION, ask=True) is None and notices.shown == []
+    assert tree(tmp_path) == snapshot
 
 
 def test_filled_folder_is_checked_again_after_its_kept_folder_is_gone(tmp_path, monkeypatch, notices):
