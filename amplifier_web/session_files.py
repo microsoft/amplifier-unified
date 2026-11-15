@@ -68,7 +68,8 @@ def update_check_project_name(path):
     folder repeats the installation path below the stage, so no session path
     fits under the Windows path limit. The name comes from the stage ID. It
     starts with neither '-' nor 'chat-', so it never equals a CLI name or a
-    chat name.
+    chat name. Each stage has its own shared home, so the session folders of
+    two stages never meet, whatever their names are.
 
     Every other folder keeps its name, also a folder of the same shape: the
     app and a person's own tools never run with a stage as their app home.

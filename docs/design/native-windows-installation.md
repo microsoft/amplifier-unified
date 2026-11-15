@@ -650,7 +650,10 @@ table with `python tests/test_windows_path_budget.py`.
   has the project name `update-<first 12 hex digits of the stage ID>` (19
   characters) on Windows, when the process runs with that stage as its app
   home. At 59 the longest path that a stage and its probe create is 248, with
-  11 characters to spare; the probe's session folder is 202. Two session-store
+  11 characters to spare; the probe's session folder is 202. The probe's
+  capture files go to the installation's capture folder, as before, under the
+  same name (folder 154 at 59). Each stage has its own shared home, so two
+  stages never share a session folder. Two session-store
   shapes do not fit in a stage (the saved view, 261, and a background-job
   record, 286); a probe writes neither, and the native case checks the
   complete list of what the real probe leaves. A first installation without an

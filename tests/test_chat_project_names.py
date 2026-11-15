@@ -432,17 +432,30 @@ def test_update_check_folder_gets_a_short_name_in_every_store(stage, windows_rul
     assert os.listdir(stage / 'shared-config' / 'projects') == [name]
 
 
-def test_two_stages_never_get_the_same_name_from_different_ids(stage, windows_rule, monkeypatch):
-    other = stage.parent / ('8dcd8cf0' + 'a' * 24)
-    (other / 'qualification-workspace').mkdir(parents=True)
-    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(other))
-    assert project_slug(other / 'qualification-workspace') == 'update-8dcd8cf0aaaa'
-    # Each stage also has its own shared home, so the session folders of two stages are never one folder.
-    monkeypatch.setenv('AMPLIFIER_HOME', str(other / 'shared-config'))
-    second = sessions_dir(other / 'qualification-workspace')
-    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(stage))
-    monkeypatch.setenv('AMPLIFIER_HOME', str(stage / 'shared-config'))
-    assert sessions_dir(stage / 'qualification-workspace') != second
+def test_two_stages_never_share_a_session_folder(stage, windows_rule, tmp_path, monkeypatch):
+    def stores(folder):
+        """The session folder and the capture folder of one check session, as that stage's probe computes them."""
+        (folder / 'qualification-workspace').mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(folder))
+        monkeypatch.setenv('AMPLIFIER_HOME', str(folder / 'shared-config'))
+        workspace = folder / 'qualification-workspace'
+        return project_slug(workspace), sessions_dir(workspace), capture_sessions_dir(workspace)
+
+    # The capture folder is the installation's own, shared by every stage.
+    monkeypatch.setenv('AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH', str(tmp_path / 'capture'))
+    first = stores(stage)
+    other = stores(stage.parent / ('8dcd8cf0' + 'a' * 24))
+    assert (first[0], other[0]) == ('update-7260914d5698', 'update-8dcd8cf0aaaa')
+    assert first[1] != other[1] and first[2] != other[2]
+    # The name holds the first 12 digits of the stage ID. Two stages that agree
+    # in those digits (one pair in 2 to the power 48) get the same name. Each
+    # stage has its own shared home, so their session folders still differ.
+    # They then use one project folder below the capture folder; a session
+    # there has its own folder, named by its session ID.
+    twin = stores(stage.parent / (STAGE_ID[:12] + 'f' * 20))
+    assert twin[0] == first[0] and twin[1] != first[1]
+    assert twin[1].is_relative_to(stage.parent / (STAGE_ID[:12] + 'f' * 20) / 'shared-config')
+    assert twin[2] == first[2] == (tmp_path / 'capture' / 'update-7260914d5698' / 'sessions').resolve()
 
 
 def test_only_the_check_folder_of_the_running_stage_gets_the_short_name(stage, windows_rule, tmp_path, monkeypatch):
