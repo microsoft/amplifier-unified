@@ -868,7 +868,8 @@ until that start has written its first file, a second launcher would see
 empty folders and a kept set. Without this, Yes in one launcher and a fresh
 start in the other would put old accounts and new app data side by side. The
 lock is outside the installation folder, so it exists in every state of an
-uninstall. An empty lock file can stay behind.
+uninstall. An empty lock file can stay behind. An installation that has its
+own data and no take-back in progress takes no lock.
 
 Two records, each written as one complete private file.
 
@@ -907,7 +908,8 @@ start in these states.
 
 - The record names this installation folder and the note is gone or cannot
   be read: "Finish now?" Yes moves the rest back. No starts the app with the
-  part that is back.
+  part that is back. When that take-back moved nothing yet, the record
+  becomes `complete` again and the start is an ordinary first offer.
 - The note is there and the record is lost, unreadable or of another
   transfer: the text says to restart the PC first; Yes starts the app
   without the rest.
@@ -928,7 +930,9 @@ continued and never offered; it is named once, and a later uninstall with
 "keep" does not add to it.
 
 When a take-back finished. The record says `returned`, then the note says
-`done`; then the record, the empty kept folder and the note are removed.
+`done`; then the record, the empty kept folder and the note are removed. A
+`returned` record beside a note of another transfer is not "finished": the
+two do not match, and the person is asked.
 Each of these steps can fail and is done again later; the proof that the
 take-back finished stays until then. A note stays while a record cannot be
 read. Such a state never blocks a start or an uninstall. The app can be
@@ -984,8 +988,13 @@ For each kept folder the take-back removes the installation's empty folder
 and renames the kept folder into its place. Windows refuses to remove
 `workspace` at a first start, because it is the current folder of the
 launcher and of the program that started it. Then the kept entries move into
-that empty folder one by one, and the folder is checked once more after the
-last entry.
+that empty folder one by one. Every folder that is back is held in place
+until the take-back finished, and the rule above is checked again for all of
+them before the last step and after it. In an `app` folder that was filled,
+the folder of the databases that the last step saved and the database's own
+side files are the take-back's own, so a last step that failed can be tried
+again. An entry for which Windows gives no file number is an error with the
+restart text, never "another entry".
 
 Folders are held in place while they are used. The installation folder, the
 kept folder and both folders of an entry-by-entry move are opened for the
