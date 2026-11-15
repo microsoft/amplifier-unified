@@ -23,6 +23,7 @@ COMPONENTS = {
     "operations": ("components/operations", ""),
     "workspace-metadata": ("components/workspaces", "amplifier_workspace_metadata/"),
     "kernels": ("components/kernels", ""),
+    "outputs": ("components/outputs", "amplifier_outputs/"),
 }
 
 
@@ -245,7 +246,8 @@ def publish(root, revision, dist, *, component="scheduling"):
                                   "portability": "Standalone signed task transfer mechanism.",
                                   "operations": "Standalone durable operation observations and coordination delivery.",
                                   "workspace-metadata": "Standalone workspace registration metadata over caller-owned records.",
-                                  "kernels": "Standalone persistent computation through caller-owned processes and observations."}[component] + " Source: " + revision +
+                                  "kernels": "Standalone persistent computation through caller-owned processes and observations.",
+                                  "outputs": "Standalone output relationships, saved-body decoding and read-only Git review evidence."}[component] + " Source: " + revision +
                       ". Unified dependency selection is unchanged. Do not co-install with a Unified version that still bundles this package.")
         release = read_release(release, tag)
     if not release["draft"]:

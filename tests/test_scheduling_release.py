@@ -494,29 +494,45 @@ def test_workspace_metadata_preserves_distribution_import_and_source_identity(tm
         release.selection(root, revision, component="workspaces")
 
 
+def test_outputs_preserves_source_and_artifact_identity(tmp_path):
+    root, revision, dist, _ = make_candidate(tmp_path, "outputs")
+    selected = release.verify(root, revision, dist, component="outputs")
+    assert selected["tag"] == "outputs-v0.1.0"
+    assert selected["subdirectory"] == "components/outputs"
+    assert "amplifier_outputs/__init__.py" in selected["sourceFiles"]
+    assert {path.name for path in dist.iterdir()} == {
+        "amplifier_outputs-0.1.0-py3-none-any.whl",
+        "amplifier_outputs-0.1.0.tar.gz", "outputs-source.json", "SHA256SUMS",
+    }
+    with pytest.raises(subprocess.CalledProcessError):
+        release.verify(root, revision, dist)
+
+
+@pytest.mark.parametrize("component", ["workspace-metadata", "outputs"])
 @pytest.mark.parametrize("state", ["new", "partial", "complete"])
-def test_workspace_metadata_uses_existing_exact_publication_recovery(tmp_path, monkeypatch, state):
-    candidate = make_candidate(tmp_path, "workspace-metadata")
+def test_nested_component_uses_existing_exact_publication_recovery(tmp_path, monkeypatch, state, component):
+    candidate = make_candidate(tmp_path, component)
     remote = Remote(candidate, exists=state != "new", draft=state != "complete")
     if state == "partial":
         remote.release["assets"] = remote.release["assets"][:1]
         remote.hide_draft_by_tag = True
     remote.install(monkeypatch)
-    result = release.publish(*candidate[:3], component="workspace-metadata")
-    assert result["tag"] == "workspace-metadata-v0.1.0"
+    result = release.publish(*candidate[:3], component=component)
+    assert result["tag"] == component + "-v0.1.0"
     assert result["status"] == ("already-published-exact-bytes" if state == "complete" else "published")
     assert not remote.release["draft"] and len(remote.release["assets"]) == 4
     if state == "complete":
         assert remote.mutations == []
 
 
-def test_workspace_metadata_changed_asset_remains_an_immutable_conflict(tmp_path, monkeypatch):
-    candidate = make_candidate(tmp_path, "workspace-metadata")
+@pytest.mark.parametrize("component", ["workspace-metadata", "outputs"])
+def test_nested_component_changed_asset_remains_an_immutable_conflict(tmp_path, monkeypatch, component):
+    candidate = make_candidate(tmp_path, component)
     remote = Remote(candidate)
-    remote.bytes[1] = b"changed workspace metadata artifact"
+    remote.bytes[1] = b"changed component artifact"
     remote.install(monkeypatch)
     with pytest.raises(ValueError, match="bytes differ"):
-        release.publish(*candidate[:3], component="workspace-metadata")
+        release.publish(*candidate[:3], component=component)
     assert remote.mutations == []
 
 
