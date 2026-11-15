@@ -910,6 +910,11 @@ keep the folder.
 **No link is followed.** In the process, every entry is opened relative to
 its parent's handle as the entry itself, judged on its own handle and deleted
 through it. A link of any kind is removed as a link. No attribute is changed.
+While the walk holds an entry, the entry does not share delete, so no program
+can move it out of the folder before it is deleted. An entry that a program
+renames only by case after the check counts as still there: uninstall stops,
+never deletes setup's completion record past it, and never says that the data
+is deleted.
 
 **The step after exit.** A running program cannot delete its own files. The
 process hands the two folders of the running program (`python`, `tools`) to

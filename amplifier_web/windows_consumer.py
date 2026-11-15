@@ -247,7 +247,8 @@ _UNFINISHED.update({
             "window. Restart this PC, then uninstall again.",
     "removing": "Amplifier is being removed from this PC, and the removal did not finish. "
                 "Amplifier does not open until it has finished.\n\n"
-                "To finish, select Uninstall Amplifier in the Start menu.",
+                "To finish, select Uninstall Amplifier in the Start menu or in the Windows Apps list. "
+                "If Amplifier is in neither, it is already uninstalled.",
     # The steps that only the delete choice has, in their order.
     "folder": _UNCHANGED + "Amplifier could not check its own folder, so it deleted nothing. "
               "Restart this PC, then uninstall again. If this message returns, select No in the first "
@@ -572,9 +573,11 @@ async def _delete(root, certificate, *, resumed):
             owner_notice("Windows did not let Amplifier remove its last program files. They are in this "
                          "folder, and they hold none of your chats, settings or accounts:\n" + str(root)
                          + ("\n\nYou can delete that folder." if rest["foreign"] == [] else ""))
+    # `handedOver` and `afterExit`: what the step after exit was asked to
+    # remove, and whether it was started. Nobody observed that it finished.
     return {"ok": True, "operation": "uninstall", "userDataRetained": False,
-            "installationFilesRetained": not started, "certificate": done["certificate"],
-            "kept": rest["foreign"] or [], "afterExit": started}
+            "certificate": done["certificate"], "kept": rest["foreign"] or [],
+            "handedOver": rest["contents"] + rest["folders"] + rest["files"], "afterExit": started}
 
 
 async def maintenance(root, operation):

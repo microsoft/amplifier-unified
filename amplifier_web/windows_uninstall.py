@@ -268,6 +268,12 @@ def _clear(owned, names, deadline, wait):
 
     Every deletion of this module goes through here. Until `deadline` a
     closing program gets time to release its files.
+
+    An entry whose name now differs from a wanted name only by case is the
+    same entry to Windows and to setup. A program renamed it after the check.
+    It is not deleted and it counts as still there, so the caller stops:
+    setup's completion record is never deleted past such an entry, and the
+    data is never reported as deleted.
     """
     names, groups = list(names), sort(names)
     # Never the journal, never a foreign name, never the running program.
@@ -278,7 +284,8 @@ def _clear(owned, names, deadline, wait):
         for name in left:
             owned.remove([name])
         held = set(owned.holding(names))
-        left = [name for name in names if name in held]
+        renamed = {name.casefold() for name in altered(owned.names())}
+        left = [name for name in names if name in held or name.casefold() in renamed]
         if not left or time.monotonic() >= deadline:
             return left
         wait(0.5)

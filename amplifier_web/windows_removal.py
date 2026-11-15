@@ -9,7 +9,8 @@ this walk never trusts a path twice:
   and other programs can still create and rename files inside it.
 - Names come from listing an open handle. Each entry is opened relative to its
   parent's handle, as the entry itself, checked on its own handle and deleted
-  through that handle. No path is built or resolved again.
+  through that handle. No path is built or resolved again. While an entry is
+  open it does not share delete, so no program can move it elsewhere first.
 - A link of any kind (junction, symbolic link, mount point, placeholder) is
   removed as a link. Its target is never opened.
 - No attribute is changed. A read-only file is deleted as it is, so a hard
@@ -366,11 +367,14 @@ class _Native(_ReadAPI):
         handle, status = HANDLE(), _Status()
         # SYNCHRONIZE | FILE_READ_ATTRIBUTES, plus DELETE and/or FILE_LIST_DIRECTORY.
         access = 0x100080 | (0x10000 if delete else 0) | (1 if enter else 0)
-        # A folder that the walk enters denies delete sharing: it cannot be
-        # renamed or replaced while its contents go. FILE_OPEN; synchronous;
+        # No entry shares delete while the walk holds it. A folder cannot be
+        # renamed or replaced while its contents go, and a file or a link
+        # cannot be moved out of the folder between this open and its
+        # deletion. An entry that another program holds for renaming or
+        # deletion refuses here and is left. FILE_OPEN; synchronous;
         # FILE_OPEN_REPARSE_POINT opens a link itself.
         result = self.create(C.byref(handle), access, C.byref(attributes), C.byref(status),
-                             None, 0, 3 if enter else 7, 1, 0x200020, None, 0)
+                             None, 0, 3, 1, 0x200020, None, 0)
         if result < 0:
             raise C.WinError(self.dos_error(result))
         return handle.value

@@ -191,6 +191,8 @@ def deleter(uninstaller, monkeypatch):
     def write_private(path, raw, **options):
         inner(path, raw, **options)
         state["calls"].append(("write", Path(path).relative_to(root).as_posix()))
+        if Path(path).name == plan.JOURNAL and state.get("on_journal"):
+            state.pop("on_journal")()
     monkeypatch.setattr(deployment, "write_private", write_private)
 
     def finish_after_exit(folder, token, **options):
@@ -289,8 +291,9 @@ def test_yes_twice_deletes_in_the_one_order_that_keeps_every_interruption_safe(d
     assert state["after"] == {
         "token": journal["token"], "contents": ["python", "tools"], "folders": [], "files": [],
         "wait_for": (os.getpid(), os.getppid()), "seconds": 120, "choice": "delete", "notices": 1}
-    assert result == {"ok": True, "operation": "uninstall", "userDataRetained": False,
-                      "installationFilesRetained": False, "certificate": "removed", "kept": [], "afterExit": True}
+    # The result claims the start of the step after exit, never its end.
+    assert result == {"ok": True, "operation": "uninstall", "userDataRetained": False, "certificate": "removed",
+                      "kept": [], "handedOver": ["python", "tools"], "afterExit": True}
     # One confirmation, before the step after exit starts. It says only what was observed.
     (confirmation, confirm), = state["notices"]
     assert not confirm and "Your chats, settings, saved accounts and stored keys are deleted" in confirmation
@@ -499,6 +502,51 @@ def test_entry_that_differs_from_an_own_name_only_by_case_deletes_nothing(delete
     assert plan.altered(list(plan._EXACT)) == []
 
 
+@pytest.mark.parametrize("name,step", [(plan.STARTED, "setup-record"), (plan.COMPLETE, "setup-record"), ("app", "data")])
+def test_entry_renamed_only_by_case_after_the_check_counts_as_still_there(deleter, name, step):
+    # A program renames the entry after the check. To Windows and to setup it is still the same entry.
+    state, root, consumer = deleter.state, deleter.root, deleter.consumer
+    variant = name[0].upper() + name[1:]
+    state["choices"] = ["yes", "yes"]
+    state["on_journal"] = lambda: (root / name).rename(root / variant)
+    registration = state["registry"].copy()
+    with pytest.raises(consumer.Unfinished) as stopped:
+        deleter.run()
+    assert stopped.value.step == step and isinstance(stopped.value.error, plan.Held)
+    assert stopped.value.error.names == [name] and "uninstall Amplifier again" in stopped.value.notice
+    # The renamed entry is there, with everything in it. Nothing was deleted past it.
+    assert (root / variant).exists() and variant not in deletes(state) and name not in deletes(state)
+    if name == plan.STARTED:
+        # Setup's completion record stays, so a later setup run sees a finished installation and removes nothing.
+        assert deletes(state) == [] and (root / plan.COMPLETE).exists()
+    if step == "setup-record":
+        assert all((root / entry).exists() for entry in DATA)
+    else:
+        assert (root / "App/chats/one/message.txt").read_text() == "hello"
+        assert "could not be deleted" in stopped.value.notice
+    assert state["registry"] == registration and state["after"] is None
+    # A second uninstall refuses at its first check and deletes nothing more.
+    before = snapshot(root)
+    state["choices"] = ["yes"]
+    with pytest.raises(consumer.Unfinished) as again:
+        deleter.run()
+    assert again.value.step == "folder" and "could not finish its removal" in again.value.notice
+    after = snapshot(root)
+    after.pop(consumer.RECORD, None), before.pop(consumer.RECORD, None)
+    assert after == before
+
+
+def test_no_entry_shares_delete_while_the_walk_holds_it():
+    # Otherwise a program could move an opened file out of the folder, and the walk would delete it there.
+    native, calls = object.__new__(removal._Native), []
+    native.create = lambda *arguments: calls.append(arguments) or 0
+    for enter, delete in ((False, True), (True, True), (True, False)):
+        removal._Native.open(native, 1, "entry", enter=enter, delete=delete)
+    # FILE_SHARE_READ | FILE_SHARE_WRITE, never FILE_SHARE_DELETE; always the entry itself, never a link's target.
+    assert [call[6] for call in calls] == [3, 3, 3] and [call[8] for call in calls] == [0x200020] * 3
+    assert [bool(call[1] & 0x10000) for call in calls] == [True, True, False]
+
+
 def test_the_journal_and_the_running_program_are_in_no_delete_list(deleter):
     state, root = deleter.state, deleter.root
     owned = Disk(root, state)
@@ -635,7 +683,7 @@ def test_step_after_exit_that_cannot_start_is_said_plainly(deleter, monkeypatch)
     state["choices"], state["after_failure"] = ["yes", "yes"], OSError("Cannot locate Windows PowerShell.")
     monkeypatch.setattr(deleter.consumer.sys, "stdout", None)
     result = deleter.run()
-    assert result["ok"] and result["afterExit"] is False and result["installationFilesRetained"] is True
+    assert result["ok"] and result["afterExit"] is False and result["handedOver"] == ["python", "tools"]
     confirmation, leftover = (text for text, _ in state["notices"])
     assert "are deleted" in confirmation and "did not let Amplifier remove its last program files" in leftover
     assert "none of your chats, settings or accounts" in leftover and str(deleter.root) in leftover
@@ -995,8 +1043,11 @@ def test_native_delete_choice_removes_the_folder_and_nothing_outside_it(native_i
     done = native["run"]("uninstall", ["yes", "yes"])
     print("UNINSTALL_CHAIN " + json.dumps({key: done[key] for key in (
         "result", "events", "folder", "folderAfter", "left", "process", "parent")}, separators=(",", ":")))
+    handed = done["result"].pop("handedOver")
     assert done["result"] == {"ok": True, "operation": "uninstall", "userDataRetained": False,
-                              "installationFilesRetained": False, "certificate": "none", "kept": [], "afterExit": True}
+                              "certificate": "none", "kept": [], "afterExit": True}
+    # The running program's two folders, and the emptied workspace when Windows still keeps it.
+    assert handed[:2] == ["python", "tools"] and set(handed[2:]) <= {"workspace"}
     assert done["events"] == ["question", "question", "stop", "after-exit"]
     # The process started in the installation's workspace, behind the start program, and left the folder.
     assert Path(done["folder"]) == root / "workspace" and not Path(done["folderAfter"]).is_relative_to(root)
@@ -1150,3 +1201,51 @@ def test_native_lock_refuses_an_object_of_its_name_that_another_owner_made():
     with plan.single(root, wait=0.2):  # The foreign object is gone: the lock works again.
         pass
     print("UNINSTALL_LOCK own lock: owner is the person; an object with another owner: refused")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real NTFS sharing: an entry that the walk holds cannot be moved")
+def test_native_entry_that_the_walk_holds_cannot_be_moved_out_of_the_folder():
+    """Between the walk's open of an entry and its deletion, no program can move that entry elsewhere."""
+    import _winapi
+    from amplifier_web import windows_files
+    tag = uuid.uuid4().hex[:10]
+    root = windows_files.address(Path.home() / ("au-hold-test-" + tag))
+    outside = Path.home() / ("au-hold-outside-" + tag)
+    with windows_files.directory(root, owned_root=root, create=True):
+        pass
+    try:
+        outside.mkdir()
+        (outside / "keep.txt").write_text("keep outside")
+        (root / "app").mkdir()
+        (root / "app" / "chat.txt").write_text("data")
+        _winapi.CreateJunction(str(outside), str(root / "app" / "junction"))
+        with removal.folder(root) as owned:
+            api = owned._api
+            parent = api.open(owned._handle, "app", enter=True)
+            try:
+                for name in ("chat.txt", "junction"):
+                    held = api.open(parent, name, enter=False)
+                    try:
+                        # Another program cannot move the entry out now ...
+                        with pytest.raises(OSError):
+                            os.rename(root / "app" / name, outside / ("moved-" + name))
+                        assert sorted(os.listdir(outside)) == ["keep.txt"]
+                        # ... and the walk deletes it where it is.
+                        api.delete(held)
+                    finally:
+                        api.close(held)
+                    assert not os.path.lexists(root / "app" / name)
+            finally:
+                api.close(parent)
+        assert sorted(os.listdir(outside)) == ["keep.txt"] and (outside / "keep.txt").read_text() == "keep outside"
+        # Without the walk's handle the same move works: the refusal came from the handle.
+        (root / "app" / "free.txt").write_text("x")
+        os.rename(root / "app" / "free.txt", outside / "moved-free.txt")
+        assert (outside / "moved-free.txt").read_text() == "x"
+        print("UNINSTALL_HOLD a held file and a held junction could not be moved out; both were deleted in place")
+    finally:
+        link = root / "app" / "junction"
+        if os.path.lexists(link):
+            os.rmdir(link)
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(outside, ignore_errors=True)
