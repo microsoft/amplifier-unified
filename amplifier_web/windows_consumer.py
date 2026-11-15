@@ -161,7 +161,7 @@ async def launch(root, *, open_browser=True):
     # once, before anything checks or writes a data folder. An unfinished
     # take-back is finished here; the app never starts on half of the data.
     from . import windows_kept_data
-    kept = windows_kept_data.first_start(root, value["version"], ask=open_browser)
+    kept = windows_kept_data.first_start(root, value["version"], ask=open_browser, hold=True)
     if kept is not None:
         return {"background": False, "keptData": kept}
     env = environment(root, value)
