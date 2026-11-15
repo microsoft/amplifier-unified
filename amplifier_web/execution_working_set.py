@@ -8,6 +8,7 @@ record is projected afresh, including nested aliases, on its owner's save.
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import dataclass
 
 from . import execution_records as records
@@ -91,6 +92,30 @@ class WorkingExecution:
         # Durable JSON reads are already detached. Copy only the mutable current
         # overlay, preserving its internal aliases, not the completed ledger.
         return self._complete(detach_current=True)
+
+    def usage_input(self):
+        """Complete ordered accounting inputs, keeping current aliases live."""
+        kinds = ('nodes', 'turns')
+        if self.reference.get('executionProjection') != 2 or any(
+                type(row) is not dict or type(row.get('id')) is not str or not row['id']
+                for kind in kinds for row in self.current[kind]):
+            return self._complete(collections=kinds), False
+        stored = records.read_usage(self.db, self.reference, owner=self.owner)
+        value = {name: item for name, item in self.current.items() if name not in records.COLLECTIONS}
+        for kind in kinds:
+            # Node and turn identities are their validated IDs. Avoid encoding
+            # every immutable ID again on each usage update; receipt identities
+            # remain separately keyed by session and never enter this reader.
+            changes = {row['id']: row for row in self.current[kind]}
+            admitted = {json.loads(identity)[0] for identity in self.admitted[kind]}
+            rows = []
+            for row in stored[kind]:
+                identity = row['id']
+                if identity in changes or identity not in admitted:
+                    rows.append(changes.pop(identity, row))
+            rows.extend(changes.values())
+            value[kind] = rows
+        return value, True
 
     def detached(self):
         """Freeze the current overlay while leaving its immutable history cold."""
@@ -291,24 +316,34 @@ def refresh_usage(session):
     owner = working(session)
     if owner is None:
         return refresh(session.get('execution', {}))
-    # The complete usage reducer consumes placements and turns, never the
-    # separate admission receipt ledger. Keep full public reads unchanged.
-    value = owner._complete(collections=('nodes', 'turns'))
-    before = {kind: {records.key(kind, row): (row.get('turnId'), row.get('aggregateUsage'))
+    value, compact = owner.usage_input()
+    def identity(kind, row):
+        return row['id'] if compact else records.key(kind, row)
+    before = {kind: {identity(kind, row): (row.get('turnId'), row.get('aggregateUsage'))
                      for row in value.get(kind, [])} for kind in ('nodes', 'turns')}
     refresh(value)
     owner.current['aggregateUsage'] = value['aggregateUsage']
     for kind in ('nodes', 'turns'):
-        resident = {records.key(kind, row) for row in owner.current[kind]}
+        resident = {identity(kind, row) for row in owner.current[kind]}
         for row in value[kind]:
-            identity = records.key(kind, row)
-            prior_turn, prior_usage = before[kind][identity]
+            row_id = identity(kind, row)
+            prior_turn, prior_usage = before[kind][row_id]
             # Canonical host placements intentionally do not persist display
             # aggregates. Rebuilding that disposable field must not promote all
             # completed placements into the mutable working set.
             usage_owned = kind == 'turns' or not any(row.get(flag) for flag in (
                 'liveObservation', 'canonicalHistory', 'nativeHistory'))
             changed = prior_turn != row.get('turnId') or usage_owned and prior_usage != row.get('aggregateUsage')
-            if identity not in resident and changed:
-                owner.current[kind].append(row)
-                owner.admitted[kind].add(identity)
+            if row_id not in resident and changed:
+                record_key = records.key(kind, row)
+                if compact:
+                    full = owner.record(kind, record_key)
+                    if full is None:
+                        raise ValueError('A changed historical execution record is unavailable.')
+                    if prior_turn != row.get('turnId'):
+                        full['turnId'] = row['turnId']
+                    if usage_owned and prior_usage != row.get('aggregateUsage'):
+                        full['aggregateUsage'] = row['aggregateUsage']
+                else:
+                    owner.current[kind].append(row)
+                    owner.admitted[kind].add(record_key)

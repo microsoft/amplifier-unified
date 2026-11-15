@@ -281,6 +281,19 @@ neither completion nor an object identity is evidence that borrowed values stopp
 changing. Public full mutable reads transfer to the conservative complete owner,
 and deliberate borrowed aliases can keep admitted records resident.
 
+Within each ordered node page, reducer inputs and topology own their fields in the
+compact page; other fields own their bytes in one matching detail page. The sets
+are disjoint and their union reconstructs the exact original record. Usage reads
+consume the complete ordered reducer inputs and turns without reading tool bodies
+or the separate admission ledger. The reducer and its floating-point order remain
+unchanged. A changed historical aggregate or turn binding first joins the exact
+full record and applies only those derived changes; a compact row cannot replace
+the mutable body. Current records and their issued aliases retain their identity.
+Full reads join the selected detail pages under the existing byte budget. Both
+halves remain descendants of the same immutable root and transaction/GC owner.
+Initial conversion may create one additional detail resource per nonempty node
+page; this cost must remain visible separately from later update measurements.
+
 Ordered web reads select bounded pages without exposing the full mutable execution
 tree. Ordinals preserve insertion order, survive corrections and are never reused
 after deletion. Open details bind exact identity/ordinal pairs, so unrelated appends

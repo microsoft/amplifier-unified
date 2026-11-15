@@ -159,6 +159,63 @@ def test_ordered_window_has_byte_and_row_bounds(db):
         records.read_window(db, first, 'nodes', limit=records.PAGE_ROWS + 1)
 
 
+def test_compact_usage_fields_and_details_have_one_owner_and_full_readers_join(db, monkeypatch):
+    value = tree(3)
+    value['nodes'][0].update(kind='llm', usage={'inputTokens': 3, 'voiceSeconds': 1.25,
+                                              'usageFinalized': False}, output='retained detail ' * 1000)
+    reference = records.import_tree(db, OWNER, value)
+    root = records._root(db, reference)
+    leaf = records._read(db, root['collections']['nodes']['order'])
+    detail_reference = leaf['details']
+    details = {ordinal: rest for ordinal, _, rest in records._read(db, detail_reference)['details']}
+    for ordinal, entry in leaf['order']:
+        assert not entry['value'].keys() & details[ordinal].keys()
+        assert {**entry['value'], **details[ordinal]} == value['nodes'][ordinal]
+    read = records._read
+    def no_details(db, selected):
+        assert selected['$resource'] != detail_reference['$resource']
+        return read(db, selected)
+    with monkeypatch.context() as guard:
+        guard.setattr(records, '_read', no_details)
+        compact = records.read_usage(db, reference, owner=OWNER)
+    assert compact['nodes'] == [{key: item for key, item in row.items() if key in records.USAGE_FIELDS}
+                                for row in value['nodes']]
+    assert compact['turns'] == value['turns']
+    assert records.materialize(db, reference) == value
+    assert records.read_window(db, reference, 'nodes')['rows'] == [
+        {'ordinal': i, 'value': row} for i, row in enumerate(value['nodes'])]
+    changed = copy.deepcopy(value['nodes'][0])
+    changed['usage']['inputTokens'] = 4
+    successor = records.replace_records(db, reference, {'nodes': {records.key('nodes', changed): changed}})
+    changed_leaf = records._read(db, records._root(db, successor)['collections']['nodes']['order'])
+    assert changed_leaf['details'] == detail_reference
+    assert records.read_record(db, successor, 'nodes', records.key('nodes', changed)) == changed
+    # The full window pays for the body inside its existing request budget.
+    assert sum(row['bytes'] for row in (reference, root['collections']['nodes']['root'],
+                                      root['collections']['nodes']['order'])) < 8192
+    with pytest.raises(ValueError, match='byte budget'):
+        records.read_window(db, reference, 'nodes', max_bytes=8192)
+
+
+def test_pre_split_ordered_leaf_remains_readable_and_correctable(db):
+    value = tree(3)
+    reference = records.import_tree(db, OWNER, value)
+    root = records._root(db, reference)
+    collection = root['collections']['nodes']
+    leaf = records._read(db, collection['order'])
+    leaf['order'] = [(i, {'identity': records.key('nodes', row), 'value': row})
+                     for i, row in enumerate(value['nodes'])]
+    leaf.pop('details')
+    collection['order'] = {**collection['order'], **resource_files.put(db, leaf)}
+    legacy = records._store(db, root)
+    assert records.materialize(db, legacy) == value
+    assert records.read_usage(db, legacy)['nodes'] == value['nodes']
+    changed = {**value['nodes'][1], 'revision': 2}
+    successor = records.replace_records(db, legacy, {'nodes': {records.key('nodes', changed): changed}})
+    assert records.read_record(db, successor, 'nodes', records.key('nodes', changed)) == changed
+    assert records.materialize(db, legacy) == value
+
+
 def test_realistic_window_reads_contiguous_bodies_not_hashed_history(db, monkeypatch):
     value = tree(28000)
     for row in value['nodes']:

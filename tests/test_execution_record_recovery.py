@@ -45,16 +45,25 @@ def collect(db):
     return removed
 
 
+def first_detail(db, reference):
+    page = records._read(db, records._root(db, reference)['collections']['nodes']['order'])
+    while 'children' in page:
+        page = records._read(db, page['children'][min(page['children'], key=int)])
+    return page['details']['$resource']
+
+
 @pytest.mark.parametrize('carrier', [
     'state', 'client_views', 'smart_tool_operations', 'conversation_shares', 'output_records'])
 def test_actual_collector_keeps_old_view_until_its_durable_owner_releases_it(db, carrier):
     original = value()
     first = records.import_tree(db, OWNER, original)
+    old_detail = first_detail(db, first)
     save(db, first)
     db.commit()
 
     changed = {**original['nodes'][73], 'revision': 2, 'detail': {'text': 'late correction'}}
     second = records.replace_records(db, first, {'nodes': {records.key('nodes', changed): changed}})
+    assert first_detail(db, second) != old_detail
     garbage = resource_files.put(db, {'unowned': True})
     if carrier == 'state':
         save(db, second, retained=first)
@@ -67,6 +76,7 @@ def test_actual_collector_keeps_old_view_until_its_durable_owner_releases_it(db,
     removed = collect(db)
     assert garbage['$resource'] in removed
     assert first['$resource'] not in removed and second['$resource'] not in removed
+    assert old_detail not in removed
     assert records.materialize(db, first, owner=OWNER) == original
     assert records.read_record(db, second, 'nodes', records.key('nodes', changed), owner=OWNER) == changed
 
@@ -77,6 +87,7 @@ def test_actual_collector_keeps_old_view_until_its_durable_owner_releases_it(db,
     db.commit()
     removed = collect(db)
     assert first['$resource'] in removed
+    assert old_detail in removed
     with pytest.raises(ValueError, match='unavailable'):
         records.materialize(db, first)
     assert records.read_record(db, second, 'nodes', records.key('nodes', changed)) == changed

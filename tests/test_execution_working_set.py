@@ -95,7 +95,7 @@ def test_full_mutable_read_transfers_current_aliases_to_legacy_contract(saved):
 
 
 def test_usage_refresh_matches_complete_reducer_without_reading_retired_receipts(saved, monkeypatch):
-    _, session, _ = saved
+    db, session, _ = saved
     from amplifier_web.execution_working_set import refresh_usage
     known = exact(session, 'nodes', {'id': '7'})
     known.update(kind='llm', usage={'inputTokens': 3, 'outputTokens': 2, 'costUsd': .1,
@@ -106,14 +106,16 @@ def test_usage_refresh_matches_complete_reducer_without_reading_retired_receipts
         'kind': 'llm', 'phase': 'completed', 'usage': {'inputTokens': 999}})
     expected = snapshot(session)
     execution.refresh_usage(expected)
-    read = records.read_collection
+    collections = records._root(db, working(session).reference)['collections']
+    read = records._collection
     families = []
-    def selected(db, reference, kind, **kwargs):
+    def selected(db, collection, **kwargs):
+        kind = next(kind for kind, value in collections.items() if value == collection)
         assert kind != 'retiredUsageNodes', 'Usage does not consume the admission receipt ledger'
         families.append(kind)
-        return read(db, reference, kind, **kwargs)
+        return read(db, collection, **kwargs)
     with monkeypatch.context() as guard:
-        guard.setattr(records, 'read_collection', selected)
+        guard.setattr(records, '_collection', selected)
         guard.setattr(records, 'materialize', lambda *args, **kwargs: pytest.fail('Unused full history read'))
         refresh_usage(session)
     assert families == ['nodes', 'turns']
@@ -147,6 +149,31 @@ def test_usage_refresh_preserves_shared_current_aliases_and_late_edits(saved):
     assert current(session)['aggregateUsage']['inputTokens'] == 18
     assert current(session)['aggregateUsage']['costUnavailableReasons'] == ['Synthetic unpriced call']
     assert first['usage'] is second['usage'] is receipt['usage'] is shared
+
+
+def test_changed_compact_historical_parent_retains_its_complete_body(saved):
+    db, session, original = saved
+    from amplifier_web.execution_working_set import refresh_usage
+    parent = original['nodes'][7]
+    parent.update(output={'text': 'retained tool output'}, source={'identity': 'exact source'},
+                  arbitrary={'nested': ['keep this field']})
+    original['nodes'][9].update(kind='llm', parentId='7', phase=None, status='running',
+                               usage={'inputTokens': 2, 'costUsd': .1})
+    execution.refresh_usage(original)
+    reference = records.import_tree(db, ('chat',), original)
+    db.commit()
+    session[MARKER]['execution'] = reference
+    changed = exact(session, 'nodes', {'id': '9'})
+    changed['usage']['inputTokens'] = 8
+    expected = snapshot(session)
+    execution.refresh_usage(expected)
+    refresh_usage(session)
+    admitted_parent = exact(session, 'nodes', {'id': '7'})
+    assert admitted_parent['aggregateUsage']['inputTokens'] == 8
+    for field in ('detail', 'output', 'source', 'arbitrary'):
+        assert admitted_parent[field] == parent[field]
+    assert snapshot(session) == expected
+    assert records.materialize(db, save(db, session)) == expected
 
 
 def test_failed_save_keeps_original_root_and_current_changes_for_retry(saved):
