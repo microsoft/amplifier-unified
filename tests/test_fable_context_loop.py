@@ -431,8 +431,10 @@ async def test_opaque_history_overflow_requires_one_different_counted_retry(cont
     for index in (1, 2):
         seed.extend([
             {'role': 'assistant', 'content': [
-                {'type': 'thinking', 'thinking': f'{wire.private_marker}-{index}. ' * 70_000,
-                 'signature': f'{wire.signature_marker}-{index}'},
+                # Match the saved failure's shape: empty public thinking text
+                # with most wire bytes in an opaque encrypted signature.
+                {'type': 'thinking', 'thinking': '',
+                 'signature': f'{wire.signature_marker}-{index}. ' * 80_000},
                 {'type': 'text', 'text': f'Public completed evidence {index}.'},
                 {'type': 'tool_call', 'id': f'call-{index}', 'name': 'record',
                  'input': {'index': index}}]},
@@ -483,11 +485,15 @@ async def test_opaque_history_overflow_requires_one_different_counted_retry(cont
         assert pressure['semantic_input_tokens'] < pressure['semantic_trigger']
         assert pressure['semantic_trigger'] == pressure['semantic_policy_budget'] * .7
         assert first['tokens'] > LIMIT
-        opaque_tokens = sum(len(block['thinking'].encode()) // 4
+        opaque_tokens = sum(len(block.get('signature', '').encode()) // 4
                             for row in wire.foreground[0]['messages']
                             for block in row['content'] if isinstance(block, dict)
                             and block.get('type') == 'thinking')
         assert opaque_tokens > first['tokens'] * .31
+        assert all(block.get('thinking') == ''
+                   for row in wire.foreground[0]['messages']
+                   for block in row['content'] if isinstance(block, dict)
+                   and block.get('type') == 'thinking')
         assert all(f'{wire.signature_marker}-{index}' in json.dumps(wire.foreground[0])
                    for index in (1, 2))
         assert wire.summaries, 'A provider overflow must force the eligible public prefix'
