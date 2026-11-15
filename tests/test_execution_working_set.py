@@ -94,6 +94,61 @@ def test_full_mutable_read_transfers_current_aliases_to_legacy_contract(saved):
     assert working(session) is None and not hasattr(session, '_working_execution')
 
 
+def test_usage_refresh_matches_complete_reducer_without_reading_retired_receipts(saved, monkeypatch):
+    _, session, _ = saved
+    from amplifier_web.execution_working_set import refresh_usage
+    known = exact(session, 'nodes', {'id': '7'})
+    known.update(kind='llm', usage={'inputTokens': 3, 'outputTokens': 2, 'costUsd': .1,
+                                  'voiceSeconds': 1.25, 'usageFinalized': False})
+    pending = exact(session, 'nodes', {'id': '9'})
+    pending.update(kind='llm', parentId='7', turnId=None, phase='running', usage={})
+    current(session)['retiredUsageNodes'].append({'id': 'receipt-only', 'sessionId': 'chat',
+        'kind': 'llm', 'phase': 'completed', 'usage': {'inputTokens': 999}})
+    expected = snapshot(session)
+    execution.refresh_usage(expected)
+    read = records.read_collection
+    families = []
+    def selected(db, reference, kind, **kwargs):
+        assert kind != 'retiredUsageNodes', 'Usage does not consume the admission receipt ledger'
+        families.append(kind)
+        return read(db, reference, kind, **kwargs)
+    with monkeypatch.context() as guard:
+        guard.setattr(records, 'read_collection', selected)
+        guard.setattr(records, 'materialize', lambda *args, **kwargs: pytest.fail('Unused full history read'))
+        refresh_usage(session)
+    assert families == ['nodes', 'turns']
+    actual = snapshot(session)
+    assert actual == expected
+    assert actual['aggregateUsage']['calls'] == 2
+    assert actual['aggregateUsage']['tokenPendingCalls'] == 1
+    assert actual['aggregateUsage']['voiceIncompleteCalls'] == 1
+    assert pending['turnId'] == 'old'
+
+
+def test_usage_refresh_preserves_shared_current_aliases_and_late_edits(saved):
+    db, session, _ = saved
+    from amplifier_web.execution_working_set import refresh_usage
+    first = exact(session, 'nodes', {'id': '7'})
+    second = exact(session, 'nodes', {'id': '9'})
+    shared = {'inputTokens': 3, 'costUnavailableReason': 'Synthetic unpriced call'}
+    first.update(kind='llm', usage=shared)
+    second.update(kind='llm', usage=shared)
+    receipt = {'id': 'separate-receipt', 'sessionId': 'chat', 'kind': 'llm',
+               'phase': 'completed', 'usage': shared}
+    current(session)['retiredUsageNodes'].append(receipt)
+    save(db, session)
+    refresh_usage(session)
+    assert first['usage'] is second['usage'] is receipt['usage'] is shared
+    shared['inputTokens'] = 9
+    expected = snapshot(session)
+    execution.refresh_usage(expected)
+    refresh_usage(session)
+    assert snapshot(session) == expected
+    assert current(session)['aggregateUsage']['inputTokens'] == 18
+    assert current(session)['aggregateUsage']['costUnavailableReasons'] == ['Synthetic unpriced call']
+    assert first['usage'] is second['usage'] is receipt['usage'] is shared
+
+
 def test_failed_save_keeps_original_root_and_current_changes_for_retry(saved):
     db, session, original = saved
     owner = working(session)

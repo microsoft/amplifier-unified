@@ -67,11 +67,15 @@ class WorkingExecution:
             self.admitted[kind].add(identity)
         return value
 
-    def _complete(self, *, detach_current=False):
+    def _complete(self, *, detach_current=False, collections=records.COLLECTIONS):
         current = copy.deepcopy(self.current) if detach_current else self.current
         value = {name: item for name, item in current.items() if name not in records.COLLECTIONS}
-        stored = _stored(self.db, self.reference)
-        for kind in records.COLLECTIONS:
+        if self.reference.get('executionProjection') == 2 and collections != records.COLLECTIONS:
+            stored = {kind: records.read_collection(self.db, self.reference, kind, owner=self.owner)
+                      for kind in collections}
+        else:
+            stored = _stored(self.db, self.reference)
+        for kind in collections:
             changes = {records.key(kind, row): row for row in current[kind]}
             rows = []
             for row in stored.get(kind, []):
@@ -287,7 +291,9 @@ def refresh_usage(session):
     owner = working(session)
     if owner is None:
         return refresh(session.get('execution', {}))
-    value = owner.expose()
+    # The complete usage reducer consumes placements and turns, never the
+    # separate admission receipt ledger. Keep full public reads unchanged.
+    value = owner._complete(collections=('nodes', 'turns'))
     before = {kind: {records.key(kind, row): (row.get('turnId'), row.get('aggregateUsage'))
                      for row in value.get(kind, [])} for kind in ('nodes', 'turns')}
     refresh(value)
