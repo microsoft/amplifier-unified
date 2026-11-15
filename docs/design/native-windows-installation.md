@@ -877,8 +877,12 @@ that it could not add the entries, and starts the app.
 `.github/workflows/windows-start-again.yml` runs this path on a Windows
 runner with the product's own commands in setup's order: entries, first
 start, an AI account configured without a key, the product's uninstall
-function (called in the test's process, with its question answered Yes),
-entries again, second start. Task Scheduler, the host that the task starts and the
+function (called in the test's process, with its one question answered No:
+uninstall and keep the folder), entries again, second start. The test's
+folder holds setup's completion record, written where setup writes it, so the
+uninstall asks the question of an installed PC (see "Uninstall can delete the
+installation folder"); the test never answers Yes to it. Task Scheduler, the
+host that the task starts and the
 runtime preparation are real there. It requires that `runtime status` reports
 a prepared runtime with the account configured, and that the second start
 succeeds with a new host process on the same port. It also requires that a
@@ -1298,6 +1302,25 @@ look for the journal. The launcher then does not open Amplifier:
 This is read from the source of both programs; the combination was not run.
 In none of these states can Amplifier start, and in none of them does setup
 delete anything.
+
+**A second setup run after an uninstall.** What the delete choice changes:
+
+- After No (keep the folder): nothing. The folder is whole, with setup's
+  completion record. A second setup run asks, and on Yes it adds the entries
+  again and starts Amplifier with its chats and settings, as described under
+  "Uninstall stops the app before it removes an entry".
+- After Yes and Yes, when the folder is gone: setup finds no folder and makes
+  a new installation. Nothing of the earlier installation is left to bring
+  back.
+- After Yes and Yes, when the folder is still there (it held something that
+  is not Amplifier's, or the step after exit could not run): the leftover
+  above. Setup installs nothing there and deletes nothing, and Amplifier does
+  not start from that folder. A new installation is possible only after the
+  person deleted that folder, or moved what is theirs out of it and deleted
+  it.
+
+The first is shown on a Windows runner (`windows-start-again.yml`, without
+the setup file). The second and the third are clean-room acceptance.
 
 **Which installations get it.** This is launcher code: a new installation from
 a setup file of a release that has it, and an earlier installation after a

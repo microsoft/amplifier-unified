@@ -1,7 +1,8 @@
 name: Windows start again
 # The product's own launcher on a Windows runner: entries, first start, an AI
 # account configured without a key, the product's keep-folder uninstall (its
-# function, with the question answered Yes), entries again, second start.
+# function, with its one question answered No: uninstall and keep the folder),
+# entries again, second start.
 # Task Scheduler, the host that the task starts and the
 # runtime preparation are real. Required: the second start succeeds on the same
 # port with the same data and without a new preparation.
