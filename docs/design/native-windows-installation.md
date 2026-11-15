@@ -1856,9 +1856,10 @@ its content. Every save puts a new file in place while the record before it
 still exists, so two saves in a row never have the same identity. The command
 checks this for each save: a save that the host could not tell from the record
 before it is made again. After three saves that were too slow or not visible,
-and after a save that fails when an earlier one of the same run is on disk,
-the command says that the sign-out is not complete and asks the owner to run
-it again. It never says then that nothing changed.
+and after a save that is not confirmed although the record changed, the
+command says that the sign-out is not complete and asks the owner to run it
+again. It says that nothing was changed only when the record is the same as
+before the command.
 
 This holds while the PC clock does not go backward. One case is left open: the
 host looks every two seconds, and it misses a change when two or more saves

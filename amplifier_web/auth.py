@@ -304,9 +304,10 @@ def sign_out_all(data_dir: Path) -> int:
             if _read_epoch(data_dir) != value:
                 raise OSError("The sign-out time was not saved.")
         except (OSError, ValueError):
-            if published:
-                # An earlier save of this run is on disk: something did change.
-                raise SignOutUncertain("A sign-out time was saved, but a later save failed.") from None
+            if published or _epoch_hint(data_dir) != before:
+                # A save of this run is on disk, or the record changed all the
+                # same: something did change, so this is not "nothing happened".
+                raise SignOutUncertain("The saved sign-out time changed, but the save was not confirmed.") from None
             raise
         published = True
         # Done when the host can see this save, and no later second began before it was there.

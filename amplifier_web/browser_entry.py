@@ -29,6 +29,8 @@ _CODE = re.compile(f"[{CODE_ALPHABET}]{{{CODE_LENGTH}}}")
 REOPEN = "Open from the owner launcher again: amplifier-unified open."
 NEW_CODE = "Make sure that Amplifier is running on this PC. Then run this again: amplifier-unified browsers code."
 RELOAD = "Could not sign in. Open the sign-in page again and type the code."
+GUIDE = ("https://github.com/microsoft/amplifier-unified/blob/main/docs/DEPLOYMENT.md"
+         "#windows-host-reach-unified-from-another-device")
 NOT_IN_USE = ("The running Amplifier does not use this address yet. Stop Amplifier and start it again. "
               "Then run this again: amplifier-unified browsers code.")
 
@@ -480,7 +482,8 @@ _CODE_PAGE = f"""<!doctype html>
 <h1>Sign in to Amplifier</h1>
 <p class="error" role="alert">__ERROR__</p>
 <p>1. On the Windows PC that runs Amplifier, run: <code>amplifier-unified browsers code</code></p>
-<p>If Windows does not find that command, use the full command from the Windows steps of the deployment guide.</p>
+<p>If Windows does not find that command, use the full command from the
+<a href="{GUIDE}" target="_blank" rel="noopener noreferrer">Windows steps of the deployment guide</a>.</p>
 <p>2. Type the code here within two minutes.</p>
 <form method="post" action="{CODE_REDEEM_PATH}">
 <input type="hidden" name="csrf" value="__CSRF__">

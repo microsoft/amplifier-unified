@@ -265,6 +265,25 @@ def test_save_that_fails_after_an_earlier_save_of_the_same_run_is_not_reported_a
     assert "Nothing was changed" not in str(stopped.value) and capsys.readouterr().out == ""
 
 
+def test_first_save_that_is_on_disk_but_not_confirmed_is_not_reported_as_no_change(home, monkeypatch, capsys):
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_100)
+    read, reads = auth._read_epoch, []
+
+    def read_fails_after_the_save(data_dir):
+        reads.append(1)
+        if len(reads) % 2 == 0:                             # The read-back, after the save.
+            raise PermissionError("in use")
+        return read(data_dir)
+    monkeypatch.setattr(auth, "_read_epoch", read_fails_after_the_save)
+    with pytest.raises(auth.SignOutUncertain):
+        auth.sign_out_all(home)
+    assert read(home) == 1_900_000_100                      # The record did change.
+    with pytest.raises(SystemExit) as stopped:
+        run_command(home, monkeypatch)
+    assert "not complete" in str(stopped.value) and "Nothing was changed" not in str(stopped.value)
+    assert capsys.readouterr().out == ""
+
+
 def test_second_sign_out_in_the_same_second_still_drops_a_ticket_and_a_code_made_in_between(home, monkeypatch):
     monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_100)
     tickets, codes = browser_entry.GrantStore(), browser_entry.CodeStore()

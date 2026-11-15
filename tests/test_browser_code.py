@@ -693,8 +693,14 @@ def test_remote_address_gets_the_code_form_and_the_local_page_is_unchanged(host)
                       'spellcheck="false"', " required>", '<button type="submit">Sign in</button>'):
         assert attribute in text
     assert "1. On the Windows PC that runs Amplifier, run: <code>amplifier-unified browsers code</code>" in text
-    assert ("If Windows does not find that command, use the full command from the Windows steps "
-            "of the deployment guide.") in text
+    # A PC from the setup file has no short command: the page links to the guide's full one.
+    assert ("If Windows does not find that command, use the full command from the\n"
+            f'<a href="{entry.GUIDE}" target="_blank" rel="noopener noreferrer">'
+            "Windows steps of the deployment guide</a>.") in text
+    guide = (Path(__file__).resolve().parents[1] / "docs" / "DEPLOYMENT.md").read_text(encoding="utf-8")
+    assert "\n## Windows host: reach Unified from another device\n" in guide     # The link's target exists.
+    assert entry.GUIDE.endswith("/docs/DEPLOYMENT.md#windows-host-reach-unified-from-another-device")
+    assert text.count("<a ") == 1 and text.count("http") == 1                   # No other address on the page.
     assert "2. Type the code here within two minutes." in text and "That code did not work" not in text
     csrf = page.cookies[auth.CSRF_COOKIE]
     assert f'<input type="hidden" name="csrf" value="{csrf.value}">' in text
