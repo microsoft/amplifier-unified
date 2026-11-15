@@ -70,6 +70,14 @@ can be ready even when no app-owned CA exists to export. This check does not
 establish that a client trusts the certificate, or that it covers the public
 hostname.
 
+Headless commands such as `access` use Unified's local CA for the app-owned
+certificate pair, and normal system/environment trust for supplied certificates.
+A supplied private issuer must already be trusted by the account running the
+command. Configured HTTPS origins retain certificate and hostname verification.
+If verification fails and no other configured origin reaches the matching host,
+the command reports that failure instead of starting a temporary local host.
+An unreachable host without a certificate failure keeps the ordinary local fallback.
+
 If Unified uses a non-default data directory, pass the same `--data-dir` value to `setup-tls` and `doctor`.
 
 ## Sign in with the installing host owner's account
