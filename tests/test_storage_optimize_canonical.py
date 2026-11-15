@@ -695,3 +695,45 @@ def test_committed_cold_resume_keeps_original_predecessor_without_rewrite(commit
             with media.resolve_ref(ref) as image:
                 assert image.read() == pixel()
             assert (session_dir / 'transcript.v2' / plan.committed_prefix['body']).read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_committed_ordinary_preview_inventories_but_does_not_create_admission(host):
+    from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+    from amplifier_web.storage_optimize_owners import OwnerAdapters
+    app, row, operation, path = host
+    # Replace only the synthetic legacy fixture with a genuinely enrolled root.
+    path.unlink()
+    path.with_name('transcript.jsonl.backup').unlink()
+    path.parent.rmdir()
+    path.parent.parent.chmod(0o700)
+    binding = VersionedSessionBinding.create_new(path.parent,
+        session_id=row['sessionId'], operation_id='initial', admit=lambda: None)
+    try:
+        binding.append([inline_message()], expected=binding.expected,
+            operation_id='fixture-observation', admit=lambda: None)
+        expected = binding.expected
+    finally:
+        binding.close()
+    row.pop('_stamp')
+    row.update(_canonicalFormat='committed', _sessionDir=str(path.parent), bytes=None)
+    original = (path.parent / 'transcript.v2' / expected.body).read_bytes()
+    recovery = {str(item.relative_to(path.parent)): item.read_bytes()
+        for item in (path.parent / 'recovery').rglob('*') if item.is_file()}
+    result = await OwnerAdapters(app).preview(row, operation)
+    assert result['status'] == 'held' and '_action' not in result
+    assert result['_canonicalPlan']['committed_prefix'] == asdict(expected)
+    assert result['canonicalRecords'] == result['canonicalInlineImages'] == 1
+    assert result['bytes'] == expected.committed_bytes
+    assert result['_sourceSha256'] == expected.sha256
+    assert 'Original image provenance' in result['reason']
+    assert (path.parent / 'transcript.v2' / expected.body).read_bytes() == original
+    assert not (path.parent / 'media').exists()
+    assert {str(item.relative_to(path.parent)): item.read_bytes()
+        for item in (path.parent / 'recovery').rglob('*') if item.is_file()} == recovery
+    assert not (path.parent / 'recovery/storage-optimize').exists()
+    assert app.leases == 0
+    # Preview's actual enrolled lease has physically ended.
+    resumed = VersionedSessionBinding.resume(path.parent,
+        session_id=row['sessionId'], expected=expected)
+    resumed.close()

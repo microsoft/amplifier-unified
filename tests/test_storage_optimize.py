@@ -486,7 +486,10 @@ async def test_discovery_keeps_recognized_committed_namespace_visible_and_held(o
     assert 'owner-bound' in row['reason']
     # The ordinary preview cannot fall through into a legacy parser, enroll
     # this namespace or create a conversion action from mere recognition.
-    assert await adapters.preview(row, operation) == row
+    result = await adapters.preview(row, operation)
+    assert result['status'] == 'held' and result['bytes'] is None
+    assert result['_sessionDir'] == row['_sessionDir'] and result['_path'] == row['_path']
+    assert '_action' not in result and '_canonicalPlan' not in result
     assert not (directory / 'recovery').exists()
 
 

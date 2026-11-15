@@ -9,7 +9,7 @@ reports that hold rather than inventing an origin or renewed expiry.
 from __future__ import annotations
 
 import asyncio
-from contextlib import nullcontext
+from contextlib import closing, nullcontext
 from dataclasses import asdict
 import hashlib
 import json
@@ -115,6 +115,20 @@ async def preview(app, row, operation):
         path = Path(row['_path'])
 
         def inspect():
+            if row.get('_canonicalFormat') == 'committed':
+                from amplifier_foundation.session.transcript_source import open_committed_source
+                from amplifier_foundation.session.transcript_lifetime import VersionedSessionBinding
+                if row.get('_sessionDir') != str(path.parent):
+                    raise CanonicalHeld('Committed source directory differs from discovery')
+                # Physical worker settlement is necessary but not enrollment.
+                # Resume only an already-enrolled root at its checked prefix;
+                # never initialize a historical namespace from Optimize.
+                with open_committed_source(path.parent) as committed:
+                    expected = committed.commit
+                with closing(VersionedSessionBinding.resume(path.parent,
+                        session_id=row['sessionId'], expected=expected)) as enrolled:
+                    return conversion.preview_committed(path.parent, expected=expected,
+                        owner=source['id'], fence=lambda _: enrolled.publication())
             guard = NativeTranscriptGuard(path)
             if _stamp(path) != row['_stamp']:
                 raise CanonicalHeld('Source changed since discovery')
@@ -132,6 +146,7 @@ async def preview(app, row, operation):
                 raise CanonicalHeld('Canonical execution identity changed during preview')
         return {**row, '_sourceId': binding['id'], '_sourceBinding': binding,
                 '_canonicalPlan': asdict(plan),
+                'bytes': plan.source.size,
                 '_sourceSha256': plan.source.sha256, 'status': 'held',
                 'canonicalRecords': plan.records, 'canonicalInlineImages': plan.inline_images,
                 'reason': ('Original image provenance and retention admission are unavailable; legacy pixels were preserved'

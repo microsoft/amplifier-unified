@@ -128,7 +128,9 @@ class OwnerAdapters:
         return source
 
     async def preview(self, row, operation):
-        if '_stamp' not in row:
+        if ('_stamp' not in row and not (
+                row.get('owner') == 'foundation'
+                and row.get('_canonicalFormat') == 'committed')):
             return row
         if not operation['extractImages'] and not any(operation['cutoffs'].values()):
             return {**row, 'status': 'held', 'reason': 'No image extraction or diagnostic expiry was selected'}
