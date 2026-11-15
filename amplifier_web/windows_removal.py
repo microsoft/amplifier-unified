@@ -132,15 +132,17 @@ function Clear-Folder($entry) {
         if ($entry.PSIsContainer) { $entry.Delete() } else { Keep $entry.FullName }
     } catch { Keep $entry.FullName }
 }
-function Clear-Record($name) {
+function Get-Record($name) {
     # One of the two records directly in the held installation folder. A link,
     # a folder, or a file that only -Force could delete is refused.
     $file = Get-Item -LiteralPath (Join-Path $p.root $name) -Force -ErrorAction SilentlyContinue
-    if ($null -eq $file) { return }
-    if ($file.PSIsContainer -or "$($file.Attributes)" -match 'ReparsePoint|ReadOnly|Hidden|System') {
-        throw 'Record refused'
-    }
-    Remove-Item -LiteralPath $file.FullName
+    if ($null -ne $file -and ($file.PSIsContainer -or
+        "$($file.Attributes)" -match 'ReparsePoint|ReadOnly|Hidden|System')) { throw 'Record refused' }
+    return $file
+}
+function Only($names) {
+    # The held installation folder holds these names and nothing else.
+    return -not @(Get-ChildItem -LiteralPath $p.root -Force | Where-Object { $names -cnotcontains $_.Name }).Count
 }
 try {
     # Enumerate the entire stdin pipeline before parsing or touching the tree.
@@ -165,6 +167,8 @@ try {
         if ([Environment]::CurrentDirectory -ne $hold) { throw 'Not started in the held folder' }
         Set-Location -LiteralPath $p.outside
         if (-not (Authorized)) { throw 'Root or token refused' }
+        if (-not (Real-Folder (Get-Item -LiteralPath $hold -Force)) -or
+            -not (Real-Folder (Get-Item -LiteralPath $park -Force))) { throw 'Held folder refused' }
         Write-Host 'ready'
         $until = (Get-Date) + (New-TimeSpan -Seconds $p.seconds)
         $done = $false
@@ -209,25 +213,34 @@ try {
             Start-Sleep -Seconds 1
         } while ((Get-Date) -lt $until)
         if (-not (Authorized)) { throw 'Root or token refused' }
-        if ($done) {
-            # 2. Nothing but this removal's own entries is left. Still with the
-            #    hold folder held: setup's completion record, then the journal.
-            Clear-Record 'unified-setup-complete.json'
-            Clear-Record 'unified-uninstall.json'
-        }
-        # 3. Only folders from here, by RemoveDirectory. Hold the installation
-        #    folder; that gives the hold folder and the flat folder free.
+        # 2. Folders by RemoveDirectory, each as the last part of a path whose
+        #    folder is held. Hold the flat folder: that gives the hold folder
+        #    free. Then hold the installation folder for the flat folder.
+        [Environment]::CurrentDirectory = $park
+        $folder = Get-Item -LiteralPath $hold -Force -ErrorAction SilentlyContinue
+        if ($null -ne $folder) { Clear-Folder $folder }
         [Environment]::CurrentDirectory = $p.root
-        foreach ($path in @($hold, $park)) {
-            $folder = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-            if ($null -ne $folder) { Clear-Folder $folder }
-        }
-        if ($done) {
-            # 4. Hold the folder above; that gives the installation folder free.
-            [Environment]::CurrentDirectory = $p.parent
-            $folder = Get-Item -LiteralPath $p.root -Force -ErrorAction SilentlyContinue
-            if ($null -ne $folder) { Clear-Folder $folder }
-            $removed = -not (Test-Path -LiteralPath $p.root)
+        $folder = Get-Item -LiteralPath $park -Force -ErrorAction SilentlyContinue
+        if ($null -ne $folder) { Clear-Folder $folder }
+        $both = @('unified-uninstall.json', 'unified-setup-complete.json')
+        if ($done -and (Only $both)) {
+            # 3. Nothing but the two records is left, directly in the held
+            #    installation folder. Both are checked before either goes. The
+            #    journal goes first. Setup's completion record goes last, and
+            #    only if nothing appeared meanwhile: while that record is here,
+            #    setup changes nothing in this folder.
+            if (-not (Authorized)) { throw 'Root or token refused' }
+            $journal = Get-Record $both[0]
+            $complete = Get-Record $both[1]
+            Remove-Item -LiteralPath $journal.FullName
+            if (Only @($both[1])) {
+                if ($null -ne $complete) { Remove-Item -LiteralPath $complete.FullName }
+                # 4. Hold the folder above; that gives the installation folder free.
+                [Environment]::CurrentDirectory = $p.parent
+                $folder = Get-Item -LiteralPath $p.root -Force -ErrorAction SilentlyContinue
+                if ($null -ne $folder) { Clear-Folder $folder }
+                $removed = -not (Test-Path -LiteralPath $p.root)
+            }
         }
     } | Out-Null
 } catch { $reason = $_.Exception.Message }
@@ -257,9 +270,10 @@ def finish_after_exit(root, token, *, park, folders, wait_for=(), seconds=60, re
 
     The step deletes plain files directly in `park` (never with -Force), and
     removes the `folders` only when they are empty. When nothing but this
-    removal's own entries is left, it deletes setup's completion record and
-    the journal, then the two held folders, then `root`. Folders go by
-    RemoveDirectory: a link goes as a link, a folder with entries refuses.
+    removal's own entries is left, it removes the two held folders, deletes
+    the journal and setup's completion record, and removes `root`. Folders go
+    by RemoveDirectory, each as the last part of a path whose folder the step
+    holds: a link goes as a link, a folder with entries refuses.
 
     A return does not mean that anything was removed. A step that does not
     answer within `ready` seconds raises OSError. If Windows refuses Job

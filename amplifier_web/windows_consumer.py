@@ -578,7 +578,7 @@ async def _delete(root, certificate, *, resumed):
         last, started = None, False
         if sys.stdout is None:
             # Advice to delete the folder only when nothing in it is someone else's.
-            owner_notice("Windows did not let Amplifier remove its last program files. They are in this "
+            owner_notice("Amplifier could not remove its last program files. They are in this "
                          "folder, and they hold none of your chats, settings or accounts:\n" + str(root)
                          + ("\n\nYou can delete that folder." if foreign == [] else ""))
     # `afterExit`: the step after exit was started; nobody observed that it

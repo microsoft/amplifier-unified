@@ -716,7 +716,7 @@ def test_public_uninstall_reports_when_its_journal_changed_before_finish(deleter
     state["choices"] = ["yes", "yes"]
     result = deleter.run()
     assert not result["afterExit"] and result["programLeft"] is None
-    assert len(state["notices"]) == 2 and "did not let Amplifier" in state["notices"][1][0]
+    assert len(state["notices"]) == 2 and "could not remove its last program files" in state["notices"][1][0]
     assert all((root / name).exists() for name in RUNNING)
 
 
@@ -885,7 +885,8 @@ def test_step_after_exit_that_cannot_start_is_said_plainly(deleter, monkeypatch,
     result = deleter.run()
     assert result["ok"] and result["afterExit"] is False and result["programLeft"] is None
     confirmation, leftover = (text for text, _ in state["notices"])
-    assert "are deleted" in confirmation and "did not let Amplifier remove its last program files" in leftover
+    assert "are deleted" in confirmation and "Amplifier could not remove its last program files" in leftover
+    assert "Windows" not in leftover  # The cause can also be another Amplifier window.
     assert "none of your chats, settings or accounts" in leftover and str(deleter.root) in leftover
     assert leftover.endswith("You can delete that folder.")
     # With something in the folder that is not Amplifier's, there is no advice to delete the folder.
@@ -1019,7 +1020,7 @@ def test_the_lock_is_this_persons_own_and_has_one_name_for_every_sign_in_session
 def test_step_after_exit_removes_only_empty_named_folders():
     # There is no tree walk after exit. A non-empty folder must stay.
     script = removal.FINISH_SCRIPT
-    body = script.split("function Clear-Folder($entry) {")[1].split("function Clear-Record")[0]
+    body = script.split("function Clear-Folder($entry) {")[1].split("function Get-Record")[0]
     assert "if ($entry.PSIsContainer) { $entry.Delete() } else { Keep $entry.FullName }" in body
     assert "Get-ChildItem" not in body and "Remove-Item" not in body
     assert "Clear-File" not in body

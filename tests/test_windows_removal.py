@@ -364,8 +364,8 @@ def test_finish_static_program_and_stdin_only_payload(finish_start):
     code = "\n".join(line.split("#", 1)[0] for line in removal.FINISH_SCRIPT.splitlines())
     assert "-recurse" not in code.lower()
     assert not re.search(r"Remove-Item[^\n]*-Force", code, re.I)
-    assert removal.FINISH_SCRIPT.count("]::") == 3
-    assert removal.FINISH_SCRIPT.count("[Environment]::CurrentDirectory") == 3
+    assert removal.FINISH_SCRIPT.count("]::") == 4
+    assert removal.FINISH_SCRIPT.count("[Environment]::CurrentDirectory") == 4
     assert re.findall(r"\$\w+\.\w+\s*\([^)]*\)", removal.FINISH_SCRIPT) == ["$entry.Delete()"]
     assert re.findall(r"\.\w+\s*\(", removal.FINISH_SCRIPT) == [".Delete("]
     assert token not in removal.FINISH_SCRIPT
@@ -549,21 +549,33 @@ def test_finish_refuses_a_drives_top_folder(finish_start, root):
 
 def test_step_after_exit_deletes_the_records_and_lets_folders_go_only_in_this_order():
     script = removal.FINISH_SCRIPT
+    # The step refuses to answer when its own folder or the flat folder is a link.
+    start = script.split("Write-Host 'ready'")[0]
+    assert "-not (Real-Folder (Get-Item -LiteralPath $hold -Force))" in start
+    assert "-not (Real-Folder (Get-Item -LiteralPath $park -Force))) { throw 'Held folder refused' }" in start
     # The wait ends when waiting cannot help: no program left, no parked file, no named folder.
     assert "$idle = (-not $alive.Count -and -not $inside.Count -and -not $named.Count)" in script
     assert "if ($idle -or (Get-Date) -ge $until) { break }" in script
-    tail = script.split("} while ((Get-Date) -lt $until)")[1]
-    order = [tail.index(part) for part in (
-        "if ($done) {", "Clear-Record 'unified-setup-complete.json'", "Clear-Record 'unified-uninstall.json'",
-        "[Environment]::CurrentDirectory = $p.root", "foreach ($path in @($hold, $park))",
-        "[Environment]::CurrentDirectory = $p.parent", "$folder = Get-Item -LiteralPath $p.root")]
+    tail, order = script.split("} while ((Get-Date) -lt $until)")[1], [0]
+    for part in (
+        # Each folder goes as the last part of a path whose folder is held at that moment.
+        "[Environment]::CurrentDirectory = $park", "$folder = Get-Item -LiteralPath $hold",
+        "[Environment]::CurrentDirectory = $p.root", "$folder = Get-Item -LiteralPath $park",
+        # Then the records, only if nothing else is left; both are checked before either goes.
+        "if ($done -and (Only $both)) {", "if (-not (Authorized))", "$journal = Get-Record $both[0]",
+        "$complete = Get-Record $both[1]",
+        "Remove-Item -LiteralPath $journal.FullName",
+        # Setup's completion record goes last, and only if nothing appeared meanwhile.
+        "if (Only @($both[1])) {", "Remove-Item -LiteralPath $complete.FullName",
+            "[Environment]::CurrentDirectory = $p.parent", "$folder = Get-Item -LiteralPath $p.root"):
+        order.append(tail.index(part, order[-1]))  # Each part follows the one before; a missing part fails here.
     assert order == sorted(order)
-    # Setup's record and the journal go only when nothing else is left; so does the installation folder.
-    assert tail.count("if ($done) {") == 2 and tail.count("Clear-Record ") == 2
-    # The step holds the installation folder for the two inner folders, then the folder above it
-    # for the installation folder itself. It never lets go to a folder outside before that.
-    assert re.findall(r"\[Environment\]::CurrentDirectory = (\S+)", script) == ["$p.root", "$p.parent"]
+    # The step never lets go to a folder outside the path of the installation.
+    assert re.findall(r"\[Environment\]::CurrentDirectory = (\S+)", script) == ["$park", "$p.root", "$p.parent"]
     assert "$p.outside" not in tail
+    # Three commands delete a file: a parked file, the journal, setup's completion record. None with -Force.
+    assert script.count("Remove-Item ") == 3 and "-Force" not in "".join(
+        line for line in script.splitlines() if "Remove-Item " in line)
 
 
 LINKS_REQUIRED = os.environ.get("AMPLIFIER_REQUIRE_LINK_CHECKS") == "1"
