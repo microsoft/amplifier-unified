@@ -2,7 +2,7 @@
 import math
 import time
 from .token_usage import with_gross_tokens
-from .execution_working_set import current as current_execution, exact as execution_record, refresh_usage as refresh_session_usage
+from .execution_working_set import current as current_execution, exact as execution_record, refresh_usage as refresh_session_usage, turns_for_inputs
 
 LIVE_PHASES={'running','working','starting','queued','pending','retrying','idle'}
 
@@ -89,7 +89,7 @@ def bind_runtime_turn(session, payload):
             or entry.get('_generationStartedAt') != at
             or payload.get('interruptionRevision', 0) != session.get('interruptionRevision', 0)):
         return  # The canonical reducer rejected a stale, duplicate or pre-Stop start.
-    for turn in current_execution(session).get('turns', []):
+    for turn in turns_for_inputs(session, {exact}):
         if (turn.get('inputId', turn['id']) == exact
                 and at >= turn.get('retriedAt', turn.get('startedAt', 0))):
             turn['runtimeOwnerId'] = owner
@@ -188,8 +188,8 @@ def ensure_turn(session,identity,label=''):
     if identity and not any(t['id']==identity for t in tree['turns']):
         from .duration_hints import shape, estimate
         request_shape = shape(session, identity, label)
-        hint_turns = owner.snapshot()['turns'] if owner is not None else tree['turns']
-        hint = estimate(hint_turns, request_shape)
+        from .execution_working_set import recent_turns
+        hint = estimate(recent_turns(session), request_shape) if request_shape is not None else None
         started = time.time()
         tree['turns'].append({'id':identity,'inputId':identity,'label':label[:100],'startedAt':started,'phase':'running','aggregateUsage':rollup([]),
                              **({'durationShape': request_shape} if request_shape else {})})
@@ -401,12 +401,9 @@ def generation_turns(session):
 def fail_generation(session, input_ids):
     """A manager failure supersedes an earlier idle receipt for its own inputs."""
     identities = {value for value in input_ids if isinstance(value, str)}
-    for identity in identities:
-        execution_record(session, 'turns', {'id': identity})
-    for turn in current_execution(session).get('turns', []):
-        if turn.get('inputId', turn.get('id')) in identities:
-            turn['phase'] = 'error'
-            turn.setdefault('endedAt', time.time())
+    for turn in turns_for_inputs(session, identities):
+        turn['phase'] = 'error'
+        turn.setdefault('endedAt', time.time())
 
 
 def finish(session,status='completed'):

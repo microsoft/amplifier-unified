@@ -232,6 +232,40 @@ def test_configuration_pending_fact_includes_uncommitted_current_turn(saved):
     assert dict.get(session, MARKER)['execution']['pendingWork'] is False
 
 
+def test_terminal_input_updates_every_saved_display_alias_without_reading_nodes(saved, monkeypatch):
+    db, session, original = saved
+    original['turns'] = [{'id': 'display-one', 'inputId': 'input', 'phase': 'completed'},
+                         {'id': 'display-two', 'inputId': 'input', 'phase': 'completed'},
+                         {'id': 'other', 'inputId': 'other-input', 'phase': 'completed'}]
+    session[MARKER] = {'execution': records.import_tree(db, ('chat',), original)}
+    db.commit()
+    monkeypatch.setattr(records, 'materialize', lambda *args, **kwargs: pytest.fail('Unrelated history read'))
+    execution.fail_generation(session, ['input'])
+    actual = {row['id']: row for row in current(session)['turns']}
+    assert set(actual) == {'display-one', 'display-two'}
+    assert all(row['phase'] == 'error' for row in actual.values())
+    assert current(session)['nodes'] == []
+    save(db, session)
+    assert records.read_record(db, dict.get(session, MARKER)['execution'], 'turns', records.key('turns', {'id': 'other'}))['phase'] == 'completed'
+
+
+@pytest.mark.parametrize('request_shape', [None, {'tools': 1}])
+def test_new_turn_duration_lookup_never_reads_completed_node_history(saved, monkeypatch, request_shape):
+    _, session, _ = saved
+    from amplifier_web import duration_hints
+    monkeypatch.setattr(records, 'materialize', lambda *args, **kwargs: pytest.fail('Unrelated node history read'))
+    monkeypatch.setattr(duration_hints, 'shape', lambda *args: request_shape)
+    seen = []
+    def estimate(turns, shape):
+        seen.extend(turns)
+        assert shape is request_shape and len(turns) <= 80
+        return None
+    monkeypatch.setattr(duration_hints, 'estimate', estimate)
+    execution.ensure_turn(session, 'new input')
+    assert bool(seen) == (request_shape is not None)
+    assert current(session)['nodes'] == []
+
+
 async def test_ordinary_model_admission_preserves_indexed_history_budget_and_replay_refusal(tmp_path, monkeypatch):
     from test_capacity import setup, call
     from amplifier_web.capacity import admission, usage_snapshot

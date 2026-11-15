@@ -202,6 +202,63 @@ def exact(session, kind, value):
                  if records.key(kind, row) == identity), None)
 
 
+def turns_for_inputs(session, identities):
+    """All exact input aliases, including inactive historical display turns.
+
+    This compatibility join reads only turn records. An input ID need not equal
+    a display-turn ID, and one input may have several retained display turns.
+    """
+    if not identities:
+        return []
+    owner = working(session)
+    if owner is None:
+        return [row for row in session.get('execution', {}).get('turns', [])
+                if row.get('inputId', row['id']) in identities]
+    rows = (records.read_collection(owner.db, owner.reference, 'turns', owner=owner.owner)
+            if owner.reference.get('executionProjection') == 2 else _stored(owner.db, owner.reference).get('turns', []))
+    current = {records.key('turns', row): row for row in owner.current['turns']}
+    result, seen = [], set()
+    for stored in rows:
+        identity = records.key('turns', stored)
+        if identity in owner.admitted['turns'] and identity not in current:
+            continue
+        row = current.get(identity, stored)
+        seen.add(identity)
+        if row.get('inputId', row['id']) in identities:
+            if identity not in current:
+                owner.current['turns'].append(row)
+                owner.admitted['turns'].add(identity)
+            result.append(row)
+    result.extend(row for identity, row in current.items() if identity not in seen
+                  and row.get('inputId', row['id']) in identities)
+    return result
+
+
+def recent_turns(session, limit=80):
+    """Bounded ordered input for duration hints, with current replacements."""
+    owner = working(session)
+    if owner is None:
+        return session.get('execution', {}).get('turns', [])[-limit:]
+    if owner.reference.get('executionProjection') != 2:
+        return owner.snapshot().get('turns', [])[-limit:]
+    current = {records.key('turns', row): row for row in owner.current['turns']}
+    deleted = owner.admitted['turns'] - current.keys()
+    metadata = records.selection_metadata(owner.db, owner.reference, 'turns', owner=owner.owner)
+    start = max(0, metadata['count'] - limit - len(deleted))
+    selected = []
+    for position in range(start, metadata['count'], records.PAGE_ROWS):
+        entries = records.read_window(owner.db, owner.reference, 'turns', start=position,
+                                      limit=min(records.PAGE_ROWS, metadata['count'] - position), owner=owner.owner)['rows']
+        for entry in entries:
+            identity = records.key('turns', entry['value'])
+            if identity not in deleted:
+                selected.append(current.get(identity, entry['value']))
+    for identity, row in current.items():
+        if records.read_entry(owner.db, owner.reference, 'turns', identity, owner=owner.owner) is None:
+            selected.append(row)
+    return selected[-limit:]
+
+
 def snapshot(session):
     owner = working(session)
     return owner.snapshot() if owner is not None else copy.deepcopy(session.get('execution', {}))

@@ -19,7 +19,7 @@ from jsonschema import validate, ValidationError
 import tinycss2
 from .errors import AppError
 from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background, interrupt_unfinished, restore_voice_usage
-from .execution_working_set import current as current_execution, exact as execution_record
+from .execution_working_set import current as current_execution, exact as execution_record, turns_for_inputs
 from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_paused
 from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
@@ -5216,9 +5216,7 @@ class AppService:
                     record_failure(session, session.get('failure') or {})
                 if root_generation and current_generation and payload.get("event") == "generation.finished":
                     if not payload.get('active_job_ids'):
-                        for identity in payload.get('input_ids', []):
-                            execution_record(session, 'turns', {'id': identity})
-                        for turn in current_execution(session).get('turns', []):
+                        for turn in turns_for_inputs(session, set(payload.get('input_ids', []))):
                             if (turn.get('inputId', turn['id']) in payload.get('input_ids', [])
                                     and turn.get('generationId') in {None, payload.get('generation_id')}):
                                 turn.update(phase='completed', endedAt=event['at'])

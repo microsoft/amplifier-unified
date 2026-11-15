@@ -349,9 +349,18 @@ def materialize(db, reference, *, owner=None):
     root = _root(db, reference, owner)
     result = root['fields']
     for kind, collection in root['collections'].items():
-        count = collection['order']['count'] if collection['order'] else 0
-        result[kind] = [entry['value'] for _, entry in _order_window(db, collection['order'], 0, count, _read)]
+        result[kind] = _collection(db, collection)
     return result
+
+
+def _collection(db, collection):
+    count = collection['order']['count'] if collection['order'] else 0
+    return [entry['value'] for _, entry in _order_window(db, collection['order'], 0, count, _read)]
+
+
+def read_collection(db, reference, kind, *, owner=None):
+    """An explicitly requested record family, without other historical bodies."""
+    return _collection(db, _root(db, reference, owner)['collections'][kind])
 
 
 def is_active(row):
