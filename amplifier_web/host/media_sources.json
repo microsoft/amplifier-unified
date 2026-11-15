@@ -2,12 +2,14 @@
   "recipe": "unified-openai-static-sol-local-capture-v1",
   "revisions": {
     "foundation": "333394d62826578cf7692637340a30c32fd78748",
-    "loop-live": "89cbf70209a112ec7d3044b75a2b4b4c7b93967c",
+    "foundation_tree": "c6141446d0f3195f130c31926b985d72c63d6909",
+    "tool-delegate": "333394d62826578cf7692637340a30c32fd78748",
+    "loop-live": "9fcd416ee4ca76059b262fe8981c941e47d88f4d",
     "loop-streaming": "e3871401c44f20ee24c65ddb26aefbea215cb8a9",
     "openai": "ac9268e12a462d974fa7106178174e05cc3313ed",
     "openai_archive_sha256": "815c6db2b44e5bfe6a221318e438a4c55e59628f4971936cfa14bc7e2a03fe82",
     "context-intelligence": "1eaac57492937dbae8671ae155201eae4a6ba653",
-    "host": "53053c3461a540f3762d614546abf17c5e64d815"
+    "host": "006313d7b396fe3fef0ff8de5fb0b28c2cccade6"
   },
   "sources": {
     "amplifier_foundation/session/media_hook_bridge.py": "12da0011ee2d908a97e7b2fd8a58b3358b53d3e65b4894b77a170cebd30c3186",
@@ -24,7 +26,7 @@
     "amplifier_core/loader.py": "e6b273ff22f99926e12a4d835f305d3d07cdd562b333158e243f743eb70b0252",
     "amplifier_module_context_simple/__init__.py": "e395a063f4dce33b53bb2dac6fde14bd0f12ea36fec6f363a65d68a731bcad07",
     "amplifier_module_loop_live/__init__.py": "8b2c563c5ec7fa8588e67871f15c09666a544070efa76ae531d6fd2948e07650",
-    "amplifier_module_loop_live/orchestrator.py": "846f0778dc478c5999ad1eb41f82e76b0a3ba5c426777495c6e51e0439735388",
+    "amplifier_module_loop_live/orchestrator.py": "db773ae9f45a97c63aa3d694ed89bb0237bb7a1ae846cbb8ead5f46a53be7d62",
     "amplifier_module_loop_live/runtime.py": "5e27585e97d4e5713e770a28690accfdf4347e9b7359d960e68c4149cded400b",
     "amplifier_module_loop_live/dispatch.py": "bdf2f869b957b14374079e36177670f3c2180a96661fcc171c2b2ced262c2e2f",
     "amplifier_module_loop_live/failures.py": "d3233ff3dcc8f31d8558374d4ad15ad3277b274093dfa0fe8c7102127396303f",
@@ -39,7 +41,7 @@
     "amplifier_web/host/media.py": "25d3518bf345c645fd48c6c4c9f5c85da6b02d9303252896806594f629984939",
     "amplifier_web/host/media_graph.py": "b19d18945b062efba07cdaed92030a7015e5011bb22b6c8616c98e1ce032fd7d",
     "amplifier_web/host/media_assembly.py": "d5df8efd1df97f20e06494cdb5f9a4019b756afe33d2c28d2d4a61ff76777883",
-    "amplifier_web/host/children.py": "e88458194ddf9b7e36322099e32686c43185d379227da4038058468071549195",
+    "amplifier_web/host/children.py": "34c2a02f6bcbd77edd1943c9bd30f90f06dd92ad7c41775fbe7f23aa15327f23",
     "amplifier_web/host/prompt_events.py": "5c14ebc2194a90d3e531d45e0f7911f8cb961e24e4f7d3d6a98ad455a5af8b5f",
     "amplifier_web/host/canonical_bootstrap.py": "2209920df1eb41d31ef73a19ef0e0c5d4a75afb5db0f55b93a9c316b3663fe00",
     "amplifier_web/host/storage.py": "1856c0e03f62f38bdc2e037917d9b554d9b81e9fef728f089ad02f0032615b85",

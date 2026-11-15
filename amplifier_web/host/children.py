@@ -594,6 +594,8 @@ class Children:
         return await self._execute(sub_session_id, instruction, parent_session,
             metadata.get("agent_name", "resumed"), overlay, provider_preferences=provider_preferences or retained_preferences,
             parent_messages=messages, resumed=True, session_metadata=metadata,
+            tool_inheritance=copy.deepcopy(metadata.get("tool_inheritance")),
+            hook_inheritance=copy.deepcopy(metadata.get("hook_inheritance")),
             canonical_binding=canonical_binding)
 
     async def _execute(self, identity, instruction, parent, agent, overlay, **kwargs):
@@ -791,6 +793,8 @@ class Children:
         metadata = {**(session_metadata or {}), "parent_id": parent.session_id, "agent_name": agent,
                     "tool_call_id": call_id,
                     "agent_overlay": copy.deepcopy(overlay), "workspace": str(cwd), "persistent": persistent,
+                    "tool_inheritance": copy.deepcopy(tool_inheritance),
+                    "hook_inheritance": copy.deepcopy(hook_inheritance),
                     "provider_preferences": [p.to_dict() for p in preferences],
                     "preferences_source": preferences_source, "mount_plan": credential_bindings(plan),
                     "automatic_default_routing": bool(

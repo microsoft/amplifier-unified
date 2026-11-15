@@ -162,6 +162,26 @@ def test_authored_delegate_needs_a_shipped_source_join_not_just_package_name(rec
     assert assembly.select_from_declaration(plan, **args) is None
 
 
+def test_literal_delegate_recipe_derives_distinct_root_and_filtered_child_before_prepare(recipe, tmp_path):
+    plan, args, _ = recipe
+    roots, _ = assembly._catalog_sources()
+    if "amplifier_module_tool_delegate" not in roots:
+        pytest.skip("Root-only catalog deliberately has no canonical delegate source selected")
+    plan["tools"] = [{"module": "tool-delegate", "source": str(roots["amplifier_module_tool_delegate"])}]
+    plan["session"]["orchestrator"]["config"] = {"inherit_effective_model": True}
+    original = copy.deepcopy(plan)
+    selected = assembly.select_from_declaration(plan, **args)
+    root = expected_plan(original, tmp_path)
+    child = copy.deepcopy(root)
+    child.update(tools=[], agents={}, _unified_image_policy={}, _unified_desktop_policy={})
+    assert selected.plans == (root, child) and plan == original
+    assert selected.accepts_plan(child)
+    child["tools"] = copy.deepcopy(root["tools"])
+    assert not selected.accepts_plan(child), "Resume cannot restore a formerly excluded delegate"
+    plan["tools"][0]["config"] = {"settings": {"exclude_tools": []}}
+    assert assembly.select_from_declaration(plan, **args) is None
+
+
 def test_prompt_receiver_mutable_progress_does_not_admit_replaced_coordinator(recipe):
     from amplifier_web.host.prompt_events import PromptEvents
     _, _, selected = recipe
