@@ -84,7 +84,7 @@ async def browse(management, session, *, refresh=False, instance=None):
                 or desired_revision != service._session(sid, hydrate=False).get('nextMessageRevision', 0)
                 or interruption_revision != service._session(sid, hydrate=False).get('interruptionRevision', 0)):
             return
-        current = service._session(sid)
+        current = service._session(sid, hydrate=False)
         selection = current.get('selection') if 'selection' in current else result.get('selection')
         result.update(effective=current.get('pendingModelSelection') or selection or reported_selection(service, current) or result.get('effective', {}),
                       pinned=bool(selection), phase='ready', configurationRevision=revision,
@@ -105,7 +105,7 @@ async def select(management, session, requested):
     if not selected:
         raise ValueError('Choose a provider and model')
     async with service.lock:
-        current = service._session(session['id'])
+        current = service._session(session['id'], hydrate=False)
         if not management.configuration_idle(current):
             raise ValueError('Finish active work before changing this conversation model')
         # Validation of mounted capabilities and compaction happens on Send.
@@ -152,7 +152,7 @@ async def request_browse(management, session, *, refresh=False, instance=None):
             while True:
                 observed=requested[sid][0]
                 try:
-                    await browse(management,service._session(sid),refresh=observed[1],instance=observed[3])
+                    await browse(management,service._session(sid, hydrate=False),refresh=observed[1],instance=observed[3])
                 except asyncio.CancelledError:
                     raise
                 except Exception:

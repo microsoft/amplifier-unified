@@ -795,7 +795,7 @@ def observe_task(service, session, observation):
 def publish_task_observation(service, sid, observation):
     """Recover host publication without hiding an already committed receipt."""
     try:
-        session = service._session(sid)
+        session = service._session(sid, hydrate=False)
         changed, revision = observe_task(service, session, observation)
         if changed:
             service._publish_changes(sessions={session["id"]})
@@ -836,8 +836,8 @@ async def dispatch(service, operation, args, origin, command_id, include_state, 
         except (ValueError, KeyError, TypeError) as exc:
             raise AppError(str(exc), 409) from None
         return {"accepted": True, "result": result}
-    await service.history.ensure_loaded(sid)
-    session = service._session(sid)
+    await service.history.ensure_loaded(sid, hydrate=False)
+    session = service._session(sid, hydrate=False)
     if not service.management or not service.runtime:
         raise AppError("The Amplifier runtime is unavailable.")
     for identity in args.get("questionIds", []):
