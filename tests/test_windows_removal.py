@@ -371,10 +371,9 @@ def test_finish_static_program_and_stdin_only_payload(finish_start):
         "$entry.Delete()", "$anchor.Close()"]
     # The step opens exactly one file, a new one of its own. It opens no existing file.
     assert removal.FINISH_SCRIPT.count("New-Object ") == 1 and "'Open'" not in removal.FINISH_SCRIPT
-    assert removal.FINISH_SCRIPT.count("[System.IO.FileOptions]") == 2
-    assert removal.FINISH_SCRIPT.count("[System.IO.FileMode]") == 2
-    assert removal.FINISH_SCRIPT.count("[System.IO.FileAccess]") == 2
-    assert removal.FINISH_SCRIPT.count("[System.IO.FileShare]") == 2
+    # Each option of that one file is typed: Windows PowerShell ignores "delete on close" as plain text.
+    for name in ("FileOptions", "FileMode", "FileAccess", "FileShare"):
+        assert removal.FINISH_SCRIPT.count("[System.IO." + name + "]") == 1
     assert token not in removal.FINISH_SCRIPT
     assert options["cwd"] == r"C:\My [private]\Amplifier" + "\\" + PARK + "\\" + TOKEN
     assert options["creationflags"] == 0x09000200
