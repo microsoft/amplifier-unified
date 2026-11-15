@@ -11,6 +11,9 @@ from .transcript_window import TranscriptWindowReader
 
 MAX_PAGES = 32
 MAX_BYTES = 32 * 1024 * 1024
+# Opening a chat should not render an entire explicit history page. Older rows
+# keep the same cursor/read owner and its independently requested page limit.
+INITIAL_MESSAGES = 20
 
 
 def _digest(value):
@@ -350,7 +353,7 @@ class TranscriptWindows:
                 and (managed or entry.get('savedSource') == saved_source)):
             return
         if not managed:
-            page = await self.read(session_id) if cold is not None else None
+            page = await self.read(session_id, limit=INITIAL_MESSAGES) if cold is not None else None
             self.initial[session_id] = {'status': 'ready', 'stamp': stamp,
                 'source': source, 'savedSource': saved_source,
                 **({'key': (session_id, page['windowKey'])} if page else {}),
@@ -363,7 +366,7 @@ class TranscriptWindows:
         self.initial[session_id] = {'status': 'loading', 'stamp': stamp}
         self._notify(session_id)
         try:
-            page = await self.read(session_id)
+            page = await self.read(session_id, limit=INITIAL_MESSAGES)
             self.initial[session_id] = {'status': 'ready', 'stamp': stamp, 'source': source,
                                         'key': (session_id, page['windowKey'])}
         except asyncio.CancelledError:
@@ -395,7 +398,7 @@ class TranscriptWindows:
                         'historyLoading': not failed, 'historyError': entry.get('error') if failed else None}
                 page = self._wire(retained[0], session['id'])
             else:
-                page = self._wire(self._saved_page(session, None, 100), session['id'])
+                page = self._wire(self._saved_page(session, None, INITIAL_MESSAGES), session['id'])
             return {'messages': page.pop('items'), 'messageWindow': page,
                     'nativeContinuation': entry.get('continuation', {'status': 'unknown'}),
                     'historyLoading': False, 'historyError': None}
