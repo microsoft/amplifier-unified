@@ -5,6 +5,8 @@
 // AMPLIFIER_TEST_ARTIFACTS. WHEEL_IDENTITY is an accepted identity-file alias.
 // Focused recovery: LAYOUT_PASS2_ROUTES=updates,appearance
 //                  LAYOUT_PASS2_WIDTHS=390
+// Final five read-only gaps only: LAYOUT_PASS2_FINAL_GAPS=1 (defaults to the four
+// affected routes at 1440/390; original route/state denominator stays unvisited).
 // Optimization draft scenes default to explicitly synthetic policy/no-operation
 // reads. LAYOUT_PASS2_OPTIMIZATION_READS=host retains the actual host-disabled branch.
 // Omitted routes/states remain explicitly unvisited, never implicitly passing.
@@ -31,6 +33,8 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const csv = text => text ? text.split(',').map(value => value.trim()).filter(Boolean) : null;
 const routeFilter = csv(process.env.LAYOUT_PASS2_ROUTES);
 const widthFilter = csv(process.env.LAYOUT_PASS2_WIDTHS)?.map(Number);
+const finalGapMode = process.env.LAYOUT_PASS2_FINAL_GAPS === '1';
+const finalGapRoutes = new Set(['updates', 'diagnostics', 'desktop', 'testing']);
 const critical = new Set(['updates', 'appearance', 'voice', 'notifications', 'providers',
   'routing', 'smart-tools', 'tool-connections', 'testing', 'workspace-starters',
   'diagnostics', 'permissions', 'external-agents', 'storage']);
@@ -44,7 +48,7 @@ const ledger = {
   schema: 1, kind: 'layout-pass2-settings-interaction-inventory',
   startedAt: new Date().toISOString(), completedAt: null, pixelInspected: false,
   scope: 'One owned fixture; installed host/assets; synthetic accounts and state. Not release/native/provider acceptance.',
-  selection: {routeFilter, widthFilter, pages, overviewAliasExcluded: true,
+  selection: {routeFilter, widthFilter, finalGapMode, pages, overviewAliasExcluded: true,
     declaredPagesIncludingAliases: settingsSections.reduce((sum, section) => sum + section.pages.length, 0)},
   evidenceDirectory: output,
   syntheticCampaign: {
@@ -54,6 +58,7 @@ const ledger = {
     mcp: 'Startup-only package/server/schema data and synthetic schema ACK; no transport or tool invocation.',
     storage: 'Scene-scoped backup inventory/review response; Keep only, never host preview/deletion.',
     reset: 'Startup runtime-selection preview; confirmation text is cleared, Apply never requested.',
+    finalGaps: finalGapMode ? 'Five synthetic read-only gap scenes; not a rerun or green rewrite of baseline evidence.' : 'Not selected.',
   },
   sources: {}, identity: {}, jobs: [], states: [], requests: [], errors: [], cleanup: null,
 };
@@ -133,6 +138,18 @@ async def seeded_main(home):
             'occurrences':2,'latest':{'phase':'ecosystem-runtime-preflight',
             'status':'failed','at':1699999999,'package':'synthetic-fixture-module',
             'reason':'protected-runtime-source'}}}})
+    if os.environ.get('LAYOUT_PASS2_FINAL_GAPS') == '1':
+        # Public presentation data only. This is NOT an installed/completed
+        # operation, a historical conversation import, or an updater request.
+        updates['diagnostics']['completedBatches'] = [{
+            'attemptId':'layout-pass2-synthetic-completed','kind':'ecosystem',
+            'tier':'included','components':['synthetic-layout-component'],
+            'completedAt':1700000000}]
+        updates.setdefault('items', []).append({
+            'id':'layout-pass2-synthetic-history',
+            'label':'synthetic/layout-pass2-older-settings','kind':'history',
+            'status':'historical',
+            'detail':'Synthetic older conversation settings, presentation only; no conversation changed.'})
     # Pure public configuration seed: no API key is created/saved or inspected.
     # All preview/configure/call requests remain fenced before the host.
     from amplifier_web.voice import VoiceService
@@ -189,6 +206,10 @@ async def seeded_main(home):
                 'mcp':{'id':'layout-pass2-mcp','tool':'layout_pass2_lookup',
                     'schemaRevision':'layout-pass2-schema','installedOrConnected':False},
                 'reset':'runtime confirmation preview only; no operation'},
+            'finalGapSeeds':{
+                'enabled':os.environ.get('LAYOUT_PASS2_FINAL_GAPS') == '1',
+                'completedBatch':'layout-pass2-synthetic-completed',
+                'historySource':'layout-pass2-synthetic-history'},
             'serverSha256':hashlib.sha256((package/'server.py').read_bytes()).hexdigest()})
     app.router.add_get('/fixture/layout-pass2-identity', identity)
     return app
@@ -285,6 +306,33 @@ async function installFence(context, job, identity) {
       return route.fulfill({status: 200, contentType: 'application/json',
         body: JSON.stringify({accepted: true, result: {...result, synthetic: true, source: reason}})});
     };
+    if (finalGapMode && ['desktop.readiness', 'testing.capacity.read'].includes(action)) {
+      // Public clientId is envelope bookkeeping, not a native/conversation
+      // target. Any other nonempty targeting argument fails before the host.
+      if (!identity.finalGapSeeds?.enabled || job.route !==
+        (action === 'desktop.readiness' ? 'desktop' : 'testing') ||
+        Object.keys(args).some(key => key !== 'clientId'))
+        return reject(route, action, 'Final-gap read requires its exact global route and absent session/native/runner target.');
+      if (action === 'desktop.readiness')
+        return syntheticRead({
+          sessionId: null, observedAt: 1700000000,
+          host: {host: {label: 'Synthetic layout host'}, platform: 'synthetic-linux',
+            python: {version: '3.13', path: '/synthetic/not-executed/python'},
+            computerUsePackage: {status: 'not-installed', version: null}},
+          nativeObservation: {available: false, code: 'synthetic-layout-only',
+            reason: 'Static seed, not native observation.', nextStep: 'No capture/install in this scene.'},
+          featureSetup: {supported: false, reason: 'Synthetic presentation only.'}, nextActions: [],
+        }, 'Final-gap static null-session Desktop report; no host/native status, permission or capture request.');
+      return syntheticRead({
+        revision: 'layout-pass2-synthetic-overrides',
+        scope: 'Synthetic configured runner presentation; no contact.',
+        runner: {backend: 'docker', description: 'Synthetic layout runner; not contacted.'},
+        runnerId: runnerSeed.id, defaults: {}, runnerOverrides: {},
+        effective: {maxRunning: 2, maxInstances: 6, minFreeBytes: 1024 ** 3},
+        sources: {maxRunning: 'backend-default', maxInstances: 'backend-default', minFreeBytes: 'backend-default'},
+        limitsScope: 'Synthetic environment limits only.',
+      }, 'Final-gap static top-level capacity read with runnerId; no runner registration/contact/save.');
+    }
     if (action === 'testing.runners.read')
       return syntheticRead({revision: 'layout-pass2-runners', runners: [runnerSeed], enrollments: [],
         scope: 'Synthetic read-only runner inventory; no SSH, controller or environment.'},
@@ -520,6 +568,7 @@ async function declareJourney(job) {
       await declare(job.route + '.draft.cancel-and-review');
       if (job.width === 390) await declare(job.route + '.draft.short-height-focus');
     }});
+  await finalGapRecipe({job, step: declare});
   declareState(job, 'route.bottom');
 }
 
@@ -1086,6 +1135,155 @@ const conditionalScenes = {
   ],
 };
 
+async function diagnosticAuthenticationDraft(j, row) {
+  const {content, field, fill, requireControl, snapshot} = j;
+  await expect(j.page.locator('.a-settings-experience')).toHaveAttribute('data-settings-route', 'diagnostics/destination');
+  const original = {name: await field('Name').inputValue(), url: await field('Server URL').inputValue()};
+  const auth = await requireControl(content().getByRole('combobox', {name: /^Authentication/}));
+  const originalMode = await auth.inputValue();
+  row.authenticationLocator = {role: 'combobox', namePrefix: 'Authentication', visibleUnique: true};
+  try {
+    await fill('Name', 'Unsubmitted layout destination');
+    await fill('Server URL', 'not-a-url');
+    row.validity = await field('Server URL').evaluate(node => ({
+      valid: node.checkValidity(), typeMismatch: node.validity.typeMismatch}));
+    assert.equal(row.validity.typeMismatch, true);
+    await expect(field('Send new selected records to this server')).not.toBeChecked();
+    await snapshot(row, '-invalid-url-disabled-destination');
+    await auth.selectOption('entra');
+    const resource = field('Entra resource URI');
+    await expect(resource).toBeVisible();
+    await resource.fill('api://layout-not-contacted');
+    await snapshot(row, '-entra-private-draft');
+    await resource.fill('');
+    await auth.selectOption('static');
+    await expect(field('API key environment variable')).toBeVisible();
+    await snapshot(row, '-static-variable-name-no-check');
+  } finally {
+    if (await auth.isVisible().catch(() => false)) await auth.selectOption(originalMode);
+    await fill('Name', original.name);
+    await fill('Server URL', original.url);
+  }
+  return {saved: false, tested: false, variableChecked: false, forwardingEnabled: false,
+    draftStringsRestored: true};
+}
+
+// Exactly five gap scenes across four routes. Callbacks are also used for
+// declaration without execution; never navigate or seed outside a callback.
+async function finalGapRecipe(j) {
+  const {job} = j;
+  const checkpoint = async (row, since) => {
+    const requests = ledger.requests.slice(since).filter(item => item.job === job.id);
+    row.requestCheckpoint = requests;
+    const unsafe = /^(?:updates\.(?:check|install|rollback|forceRestart|featureInstall)|diagnostics\.(?:configure|test|environment|retry|export)|testing\.(?:capacity\.save|machine\.save|runners\.(?:register|refresh|enable|enrollment\.))|conversation\.|session\.(?:create|select)|smartTools\.(?:call|connect|reconnect|install)|voice\.(?:preview|configure))/;
+    assert.deepEqual(requests.filter(item => unsafe.test(item.action || '')), [],
+      'Final-gap scene must not even attempt an effect-producing control.');
+    assert.equal(requests.filter(item => item.disposition === 'blocked-before-host').length, 0,
+      'Unexpected fenced request is evidence of a bad precondition, not successful gap coverage.');
+    row.noEffectCheckpoint = {unsafeRequestsAttempted: 0, pixelInspected: false};
+    await j.snapshot(row, '-completed-visible-checkpoint');
+  };
+  if (job.route === 'updates') {
+    await j.step('updates.final-gap.installation-history', async row => {
+      const since = ledger.requests.length;
+      row.synthetic = {seed: 'layout-pass2-synthetic-completed', realCompletedOperation: false};
+      const advanced = j.content().locator('[data-part=ecosystem-update-details]');
+      await j.expandDisclosure('Advanced details for synthetic history', advanced.locator(':scope > summary'));
+      const history = advanced.locator('[data-part=update-completed-batches]');
+      await expect(history).toHaveCount(1);
+      await j.expandDisclosure('Installation history', history.locator(':scope > summary'));
+      await expect(history.locator('li')).toContainText('Included components installed at');
+      await expect(history.locator('li')).toContainText('synthetic-layout-component');
+      await history.scrollIntoViewIfNeeded();
+      row.observedText = await history.innerText();
+      await checkpoint(row, since);
+    });
+    await j.step('updates.final-gap.older-conversation-settings', async row => {
+      const since = ledger.requests.length;
+      row.synthetic = {seed: 'layout-pass2-synthetic-history', importedOrChangedConversation: false};
+      const history = j.content().locator('[data-part=historical-source-settings]');
+      await expect(history).toHaveCount(1);
+      await j.expandDisclosure('Older conversation settings', history.locator(':scope > summary'));
+      const list = history.locator('#historical-source-settings-list');
+      await expect(list).toBeVisible();
+      await expect(list).toContainText('layout-pass2-older-settings');
+      await expect(list).toContainText('Synthetic older conversation settings, presentation only; no conversation changed.');
+      await list.scrollIntoViewIfNeeded();
+      row.observedText = await history.innerText();
+      await checkpoint(row, since);
+    });
+  } else if (job.route === 'diagnostics') {
+    await j.step('diagnostics.final-gap.authentication-entra-draft', async row => {
+      const since = ledger.requests.length;
+      row.synthetic = {destination: 'unsaved default-disabled UI draft; not a saved server'};
+      await j.activate('Add unsaved diagnostic destination', j.button('Add server'));
+      try {
+        row.draftCheckpoint = await diagnosticAuthenticationDraft(j, row);
+      } finally {
+        if (await j.page.locator('.a-settings-experience').getAttribute('data-settings-route') === 'diagnostics/destination') {
+          if (job.width < 960)
+            await j.activate('Back to diagnostic overview without Save', j.page.locator('.a-settings-mobile-head')
+              .getByRole('button', {name: 'Back to App diagnostic capture', exact: true}));
+          else await j.activate('All destinations without Save', j.button('All destinations'));
+        }
+      }
+      await expect(j.page.locator('.a-settings-experience')).toHaveAttribute('data-settings-route', 'diagnostics');
+      await checkpoint(row, since);
+    });
+  } else if (job.route === 'desktop') {
+    await j.step('desktop.final-gap.static-technical-environment', async row => {
+      const since = ledger.requests.length;
+      row.synthetic = {nullSessionReport: true, nativeOrHostProbe: false};
+      await j.activate('Read exact synthetic global Desktop report', j.button('Check desktop and browser setup'));
+      const native = j.content().getByRole('region', {name: 'Native screen observation', exact: true});
+      await expect(native).toBeVisible();
+      await expect(native).toContainText('Static seed, not native observation.');
+      await j.expandDisclosure('Technical environment details (static)', native.locator('summary')
+        .filter({hasText: /^Technical environment details$/}));
+      await expect(native).toContainText('Synthetic layout host');
+      await expect(native).toContainText('/synthetic/not-executed/python');
+      await expect(native).toContainText('Python 3.13');
+      row.observedText = await native.innerText();
+      await native.scrollIntoViewIfNeeded();
+      const reads = ledger.requests.slice(since).filter(item => item.action === 'desktop.readiness');
+      assert.equal(reads.length, 1);
+      assert.equal(reads[0].disposition, 'synthetic-route-fulfillment');
+      await checkpoint(row, since);
+    });
+  } else if (job.route === 'testing') {
+    await j.step('testing.final-gap.global-runner-overrides', async row => {
+      const since = ledger.requests.length;
+      row.synthetic = {topLevelCapacityRunnerId: runnerSeed.id, remoteContactOrSave: false};
+      const section = j.content().getByRole('region', {name: 'Testing and resources', exact: true});
+      await expect(section).toContainText('Synthetic layout runner; not contacted.');
+      const advanced = section.locator('details').filter({
+        has: j.page.getByText('Advanced limits', {exact: true})});
+      await expect(advanced).toHaveCount(1);
+      await j.expandDisclosure('Global Advanced limits', advanced.locator(':scope > summary'));
+      const overrides = advanced.locator('details');
+      await expect(overrides).toHaveCount(1);
+      await j.expandDisclosure('Overrides for this runner connection', overrides.locator(':scope > summary'));
+      const group = overrides.getByRole('group', {name: 'Runner overrides', exact: true});
+      await expect(group).toHaveCount(1);
+      const input = group.getByRole('spinbutton', {name: 'Running test environments', exact: true});
+      await expect(input).toHaveValue('');
+      try {
+        await input.fill('3');
+        await expect(input).toHaveValue('3');
+        await expect(j.button('Save testing limits')).toBeEnabled();
+        await input.scrollIntoViewIfNeeded();
+        await j.snapshot(row, '-runner-overrides-draft');
+      } finally {await input.fill('');}
+      await expect(j.button('Save testing limits')).toBeDisabled();
+      row.observedGroup = await group.innerText();
+      row.capacityRead = ledger.requests.filter(item => item.job === job.id && item.action === 'testing.capacity.read');
+      assert.equal(row.capacityRead.length, 1);
+      assert.equal(row.capacityRead[0].disposition, 'synthetic-route-fulfillment');
+      await checkpoint(row, since);
+    });
+  }
+}
+
 async function recipe(j) {
   const {job, page, step, disclose, click, activate, button, field, content, fill, picker, snapshot} = j;
   switch (job.route) {
@@ -1230,13 +1428,7 @@ async function recipe(j) {
       });
       await click('Add server');
       await step('diagnostics.destination.private-draft', async row => {
-        await fill('Name', 'Unsubmitted layout destination');
-        await fill('Server URL', 'not-a-url');
-        row.validity = await field('Server URL').evaluate(node => ({valid: node.checkValidity(), typeMismatch: node.validity.typeMismatch}));
-        await snapshot(row, '-invalid-url');
-        await j.selectDraft('Authentication', 'entra'); await snapshot(row, '-entra');
-        await j.selectDraft('Authentication', 'static');
-        return {saved: false, tested: false, forwardingEnabled: false};
+        return diagnosticAuthenticationDraft(j, row);
       });
       await step('diagnostics.destination.back', async () => {
         if (job.width < 960)
@@ -1619,6 +1811,7 @@ try {
   const env = Object.fromEntries(Object.entries(process.env).filter(([name]) =>
     name.startsWith('AMPLIFIER_TEST_') || !/(?:TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL)/i.test(name)));
   env.SETTINGS_RELEASE_FIXTURE = '1';
+  env.LAYOUT_PASS2_FINAL_GAPS = finalGapMode ? '1' : '0';
   fixture = await startFixture({command: env.AMPLIFIER_TEST_PYTHON,
       args: ['-I', '-B', '-u', '-c', seedProgram, join(root, 'tests/fixtures')],
       env, tag: 'settings-ui', name: 'Layout pass two Settings', timeoutMs: 60000});
@@ -1628,8 +1821,10 @@ try {
     ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? {executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH} : {}),
     args: process.env.DTU_CHROMIUM_SINGLE_PROCESS === '1' ? ['--no-sandbox', '--no-zygote', '--single-process', '--disable-gpu'] : ['--no-sandbox']});
   for (const job of ledger.jobs) {
-    if (routeFilter && !routeFilter.includes(job.route) || widthFilter && !widthFilter.includes(job.width)) {
-      job.reason = 'Excluded by focused recovery route/width selection';
+    const excludedFinalGap = finalGapMode && (!finalGapRoutes.has(job.route) || ![1440, 390].includes(job.width));
+    if (excludedFinalGap || routeFilter && !routeFilter.includes(job.route) || widthFilter && !widthFilter.includes(job.width)) {
+      job.reason = excludedFinalGap ? 'Excluded by bounded final-five-gap mode (four routes, 1440/390 only)' :
+        'Excluded by focused recovery route/width selection';
       for (const state of ledger.states.filter(row => row.job === job.id)) state.reason = job.reason;
       await save(); continue;
     }
@@ -1658,6 +1853,8 @@ try {
       if (!identityResponse.ok()) throw Error('Owned seed identity unavailable; no installed-source fallback is permitted.');
       const identity = {...await identityResponse.json(), base: fixture.base};
       assert.equal(identity.installedPackageVerified, true);
+      if (finalGapMode) assert.equal(identity.finalGapSeeds?.enabled, true,
+        'Final-gap mode requires the owned startup seed; never substitute actual native/runner reads.');
       assert.equal(await realpath(identity.packageRoot), await realpath(env.AMPLIFIER_TEST_PACKAGE_ROOT));
       assert.equal(identity.serverSha256, hash(await readFile(join(env.AMPLIFIER_TEST_PACKAGE_ROOT, 'server.py'))));
       ledger.identity.installed = identity;
@@ -1687,7 +1884,14 @@ try {
         await j.snapshot(row, '-top');
       });
       if (entered) {
-        await recipe(j);
+        for (const state of ledger.states.filter(row => row.job === job.id && !row.startedAt)) {
+          const isFinalGap = state.name.includes('.final-gap.');
+          if (finalGapMode !== isFinalGap && state.name !== 'route.bottom')
+            state.reason = finalGapMode ? 'Original campaign state preserved but not rerun in final-five-gap batch.' :
+              'Opt-in final-five-gap scene not selected; no inferred coverage.';
+        }
+        if (finalGapMode) await finalGapRecipe(j);
+        else await recipe(j);
         await j.step('route.bottom', row => j.bottom(row));
       } else {
         for (const state of ledger.states.filter(row => row.job === job.id && !row.startedAt))
@@ -1719,6 +1923,9 @@ try {
       [status, ledger.states.filter(row => row.status === status).length])),
     browserErrors: ledger.errors.length,
     blockedBeforeHost: ledger.requests.filter(row => row.disposition === 'blocked-before-host').length,
+    finalGapScenes: finalGapMode ? Object.fromEntries(['visited', 'failed', 'unvisited'].map(status =>
+      [status, ledger.states.filter(row => row.name.includes('.final-gap.') &&
+        [1440, 390].some(width => row.job.startsWith(width + '.')) && row.status === status).length])) : null,
     pixelInspected: false, allStatesAccepted: false,
   };
   await save();
