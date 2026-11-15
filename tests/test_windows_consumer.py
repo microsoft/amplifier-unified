@@ -494,7 +494,8 @@ def test_a_shortcut_that_cannot_start_the_app_says_the_cause_and_the_next_step(
     async def failing(root, *, open_browser=True):
         raise RuntimeError("Runtime dependency preparation did not complete; private detail")
     monkeypatch.setattr(consumer, "launch", failing)
-    monkeypatch.setattr(windows_service, "managed", lambda home: registered)
+    monkeypatch.setattr(windows_service, "_read",
+                        lambda home: ({"exists": registered}, object() if registered else None))
     monkeypatch.setattr(windows_installation, "owner_notice", lambda message, **kw: shown.append(message))
     with pytest.raises(SystemExit):
         consumer.main(["--root", str(tmp_path)])
@@ -517,3 +518,128 @@ def test_other_operations_keep_their_own_failure_text(tmp_path, monkeypatch, cap
     with pytest.raises(SystemExit):
         consumer.main(["--root", str(tmp_path), "--stop"])
     assert json.loads(capsys.readouterr().out) == {"ok": False, "errorType": "RuntimeError"}
+
+
+ENTRY = "AmplifierUnified-S-1-5-21-100-200-300-1001"
+
+
+@pytest.mark.parametrize("cause", ["not-confirmed", "not-checked", "unreadable"])
+def test_a_start_that_cannot_use_the_sign_in_entry_names_that_cause_and_not_the_internet(
+        tmp_path, monkeypatch, capsys, cause):
+    # Measured after a computer rename: the entry existed, the earlier check
+    # refused it, and the person was told to check the internet connection.
+    from amplifier_web import windows_installation, windows_service
+    shown = []
+    problem = {"not-confirmed": windows_service.TaskNotConfirmed(ENTRY),
+               "not-checked": windows_service.TaskNotConfirmed(ENTRY, retry=True),
+               "unreadable": windows_service.WindowsServiceError("Task Scheduler refused; private detail")}[cause]
+
+    async def failing(root, *, open_browser=True):
+        raise problem
+
+    def read(home):
+        assert home == tmp_path / "app"
+        raise problem
+    monkeypatch.setattr(consumer, "launch", failing)
+    monkeypatch.setattr(windows_service, "_read", read)
+    monkeypatch.setattr(windows_installation, "owner_notice", lambda message, **kw: shown.append(message))
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    with pytest.raises(SystemExit) as stopped:
+        consumer.main(["--root", str(tmp_path)])
+    assert stopped.value.code == 1
+    (text,) = shown
+    assert text.startswith("Amplifier could not start")
+    for wrong in ("internet", "first start", "private detail", "install it again"):
+        assert wrong not in text
+    assert "Start menu: Amplifier Unified" in text and "Restart this PC" in text
+    if cause == "not-confirmed":
+        # The cause without a claim that someone changed the entry, the exact
+        # entry, what deleting it does, and the case in which not to delete it.
+        assert "could not confirm that its start-at-sign-in entry in Windows belongs to this installation" in text
+        assert text.count(ENTRY) == 2 and "Task Scheduler Library" in text and "press the Delete key" in text
+        assert "no longer starts when you sign in, until it makes a new entry" in text
+        assert "another Amplifier installation" in text and "do not delete the entry" in text
+        assert "Your chats and settings stay." in text
+        assert "was changed" not in text and "tamper" not in text.lower()
+    elif cause == "not-checked":
+        # Windows gave no answer about the account. That can pass: nothing is deleted.
+        assert "Windows could not check the account of Amplifier's start-at-sign-in entry" in text
+        assert "Delete" not in text and "delete" not in text and ENTRY not in text
+    else:
+        assert "could not read its start-at-sign-in entry from Windows Task Scheduler" in text
+        assert "delete" not in text.lower() and ENTRY not in text
+
+
+@pytest.mark.parametrize("retry", [False, True])
+@pytest.mark.parametrize("operation,step,opening", [
+    ("uninstall", "task-read", "Amplifier was not uninstalled, and nothing was changed."),
+    ("stop", "stop-app", "Amplifier did not stop its background app.")])
+def test_stop_and_uninstall_name_an_entry_that_was_not_confirmed_and_a_next_step_that_fits(
+        tmp_path, monkeypatch, operation, step, opening, retry):
+    from amplifier_web import deployment, installation_health, windows_installation, windows_service
+    notices, written = [], []
+    monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
+    monkeypatch.setattr(consumer, "environment", lambda *a: {})
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    monkeypatch.setattr(windows_installation, "owner_notice",
+                        lambda text, confirm=False: notices.append((text, confirm)) or True)
+    monkeypatch.setattr(deployment, "write_private", lambda path, raw, **kw: written.append(json.loads(raw)))
+
+    def refuse(*args, **kwargs):
+        if kwargs.get("progress"):
+            kwargs["progress"]("task-read")
+        raise windows_service.TaskNotConfirmed(ENTRY, retry=retry)
+
+    async def working(home):
+        return None
+    monkeypatch.setattr(windows_service, "command", refuse)
+    monkeypatch.setattr(windows_service, "uninstall", refuse)
+    monkeypatch.setattr(installation_health, "windows_working", working)
+    with pytest.raises(SystemExit) as stopped:
+        consumer.main(["--root", str(tmp_path), "--" + operation])
+    assert stopped.value.code == 1
+    (text,) = [text for text, confirm in notices if not confirm]
+    assert text.startswith(opening + "\n\n") and text.endswith(f"Reference: {step}, TaskNotConfirmed")
+    # The earlier texts for these steps name a wrong cause or a wrong next step.
+    for wrong in ("You can keep using it", "could not read its start-at-sign-in entry",
+                  "could not stop its background app", "Wait a few minutes"):
+        assert wrong not in text
+    if retry:
+        assert "Windows could not check the account" in text and "2. Restart this PC." in text
+        assert "delete" not in text.lower()
+        assert ("3. Uninstall Amplifier again." if operation == "uninstall" else "3. Select Stop Amplifier again.") in text
+    elif operation == "uninstall":
+        assert "could not confirm that its start-at-sign-in entry" in text and text.count(ENTRY) == 2
+        assert "Amplifier then no longer starts when you sign in.\n1. " in text
+        assert "4. Restart this PC.\n5. Uninstall Amplifier again.\n\nReference" in text
+        assert "makes a new entry" not in text
+    else:
+        assert "could not confirm that its start-at-sign-in entry" in text
+        assert "To stop the app now, sign out of Windows or restart this PC." in text and "delete" not in text.lower()
+    (record,) = written
+    assert (record["operation"], record["step"], record["errorType"]) == (operation, step, "TaskNotConfirmed")
+
+
+@pytest.mark.parametrize("entry", [None, {"name": ENTRY, "retry": False}, {"name": ENTRY, "retry": True}])
+def test_status_window_names_an_entry_that_was_not_confirmed(tmp_path, monkeypatch, entry):
+    from amplifier_web import installation_health, windows_installation
+    shown = []
+    result = {"ok": False, "service": "unavailable", "message": "Health text.", "nextStep": "Health step.",
+              **({"entry": entry} if entry else {})}
+
+    async def status(home):
+        return result
+    monkeypatch.setattr(consumer, "installation", lambda root: (root, {}))
+    monkeypatch.setattr(consumer, "environment", lambda *a: {})
+    monkeypatch.setattr(consumer.sys, "stdout", None)
+    monkeypatch.setattr(installation_health, "status", status)
+    monkeypatch.setattr(windows_installation, "owner_notice", lambda text, **kw: shown.append(text) or True)
+    assert asyncio.run(consumer.maintenance(tmp_path, "status")) == result
+    (text,) = shown
+    if entry is None:
+        assert text == "Health text."
+    else:
+        assert text == consumer.entry_notice("status", ENTRY, entry["retry"])
+        assert text.startswith("Amplifier could not read its status.\n\n")
+        assert ("delete" not in text.lower()) == entry["retry"]
+

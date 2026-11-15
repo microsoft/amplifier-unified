@@ -251,6 +251,48 @@ _UNFINISHED = {
 _UNFINISHED["apps-entry"] = _UNFINISHED["shortcuts"] = _UNFINISHED["entries"]
 
 
+def entry_notice(purpose, entry, retry):
+    """The person's text when Amplifier did not confirm its start-at-sign-in entry.
+
+    `purpose` is `start`, `status`, `stop` or `uninstall`; `entry` is the task's
+    name in Task Scheduler. The check cannot say why the entry differs (a
+    changed setting, another installation, a renamed Windows account), so the
+    text does not say that someone changed it. With `retry`, Windows gave no
+    answer about the entry's account: that can pass, and nothing is deleted.
+    """
+    opening = {"start": "Amplifier could not start.",
+               "status": "Amplifier could not read its status.",
+               "stop": "Amplifier did not stop its background app.",
+               "uninstall": "Amplifier was not uninstalled, and nothing was changed."}[purpose]
+    again = {"start": "Open Amplifier from the Start menu: Amplifier Unified.",
+             "status": "Open Amplifier from the Start menu: Amplifier Unified.",
+             "stop": "Select Stop Amplifier again.",
+             "uninstall": "Uninstall Amplifier again."}[purpose]
+    if retry:
+        return (opening + "\n\n"
+                "Windows could not check the account of Amplifier's start-at-sign-in entry, so "
+                "Amplifier could not confirm that the entry belongs to this installation.\n\n"
+                "1. If your work or school manages this PC, connect it to that network.\n"
+                "2. Restart this PC.\n"
+                "3. " + again)
+    cause = ("Amplifier could not confirm that its start-at-sign-in entry in Windows belongs to "
+             "this installation. It uses and changes only an entry that it can confirm.")
+    if purpose == "stop":
+        return opening + "\n\n" + cause + "\n\nTo stop the app now, sign out of Windows or restart this PC."
+    return (opening + "\n\n" + cause + "\n\n"
+            f"The entry is the task named {entry} in Windows Task Scheduler. If you have another "
+            "Amplifier installation for this Windows account, the entry can belong to it. Then do "
+            "not delete the entry.\n\n"
+            "Otherwise delete the entry. Amplifier then no longer starts when you sign in"
+            + (".\n" if purpose == "uninstall" else ", until it makes a new entry in step 5.\n") +
+            "1. Open the Start menu, type Task Scheduler and open it.\n"
+            "2. Select Task Scheduler Library.\n"
+            f"3. Select the task named {entry}, press the Delete key and confirm.\n"
+            "4. Restart this PC.\n"
+            "5. " + again
+            + ("" if purpose == "uninstall" else " It makes a new entry. Your chats and settings stay."))
+
+
 class Unfinished(RuntimeError):
     """A Status, Stop or Uninstall step that did not finish; `notice` is the person's text.
 
@@ -265,8 +307,14 @@ class Unfinished(RuntimeError):
 
     @property
     def notice(self):
+        from .windows_service import TaskNotConfirmed
         code = getattr(self.error, "winerror", None)
-        text = _UNFINISHED.get(self.step, "Amplifier could not finish this.\n\nRestart this PC, then try again.")
+        if isinstance(self.error, TaskNotConfirmed):
+            # The step's own text would name a wrong cause and a wrong next step.
+            text = entry_notice({"status": "status", "stop-app": "stop"}.get(self.step, "uninstall"),
+                                self.error.entry, self.error.retry)
+        else:
+            text = _UNFINISHED.get(self.step, "Amplifier could not finish this.\n\nRestart this PC, then try again.")
         return text + f"\n\nReference: {self.step}, {type(self.error).__name__}" + (f" {code}" if code else "")
 
 
@@ -427,7 +475,9 @@ async def maintenance(root, operation):
         if operation == "status":
             result = await status(checked / "app")
             if sys.stdout is None:
-                owner_notice(result["message"])
+                entry = result.get("entry")
+                owner_notice(entry_notice("status", entry["name"], entry["retry"]) if entry
+                             else result["message"])
             return result
         if operation == "uninstall":
             return await _uninstall(checked)
@@ -455,10 +505,20 @@ def integrate(root):
 
 def start_failure(root):
     """One plain cause and next step when the shortcut could not start the app."""
-    from .windows_service import managed
+    from .windows_service import TaskNotConfirmed, _read
+    try:
+        registered = _read(Path(root) / "app")[1] is not None
+    except TaskNotConfirmed as refused:
+        # The entry exists and Amplifier does not use it. Not a first start.
+        return entry_notice("start", refused.entry, refused.retry)
+    except (OSError, ValueError, RuntimeError):
+        # Task Scheduler gave no answer. Not a first start either.
+        return ("Amplifier could not start, because it could not read its start-at-sign-in entry "
+                "from Windows Task Scheduler.\n\n"
+                "Restart this PC. Then open Amplifier from the Start menu: Amplifier Unified.")
     # No start-at-sign-in task yet: this was the first start, which prepares
     # the app's remaining parts from the internet before it registers the task.
-    if not managed(Path(root) / "app"):
+    if not registered:
         return ("Amplifier could not finish its first start. On the first start it downloads "
                 "the remaining parts of the app from the internet.\n\n"
                 "Check that this PC is connected to the internet. Then open Amplifier from the "
