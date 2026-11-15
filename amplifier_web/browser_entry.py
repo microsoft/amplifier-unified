@@ -542,8 +542,9 @@ async def owner_browser_url(data_dir: Path, config: dict, *, wait=0.0, pause=1.0
 
     The first round asks every local address, as a call without a wait does.
     After it, a health request starts only before the end of the wait. A
-    request can take 5 seconds and the grant request 5 more. So a call whose
-    wait is longer than its first round ends at most 10 seconds after the wait.
+    request can take 5 seconds and the grant request 5 more, so the requests
+    need about 10 seconds after the wait. That is not a limit for the whole
+    call: a pause that ends late (a PC that slept) ends the call late.
     """
     origin, ticket = await _owner_post(data_dir, config, ISSUE_PATH, {}, "ticket", r"[A-Za-z0-9_-]{43}",
                                        wait=wait, pause=pause, waiting=waiting)

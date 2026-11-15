@@ -181,7 +181,7 @@ async def browser_opened(command, env, *, limit=None):
     this caller, whatever it did; a first start that updates the app is such a
     case. The command is never run a second time.
 
-    `open` itself waits for a host that is restarting, and needs at most 10
+    `open` itself waits for a host that is restarting, and needs about 10
     seconds more for its last two requests. The limit here adds 50 seconds
     for the start of the command (the check of the generation that takes it
     over has its own limit of 30 seconds) and for the browser call.

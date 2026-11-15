@@ -424,7 +424,9 @@ request, sends one grant request to the first host that matches, and starts the
 browser once. A refused or unconfirmed grant request ends the command; it is
 never sent again. After the first round of health requests, none starts at or
 after the end of the wait; one that started can take 5 seconds and the grant
-request 5 more.
+request 5 more. The typed-code command for another device
+(`amplifier-unified browsers code`) uses the same owner request without a
+wait: it asks each local address once.
 
 The launcher learns the result from one line of the command's output
 (`browser_entry.OPENED`), not from its exit status. On Windows a command that
@@ -456,13 +458,15 @@ person whose user name has a space would reach the app as two arguments.
 **Limit, not repaired here:** the hand-over is made by the launcher, and an
 installation keeps the launcher of its setup file. An installation that a
 setup file before this change made, in a folder with a space, keeps the plain
-list. From its first app update, no `amplifier-unified` command of that
-installation reaches the app: the Start-menu entry cannot open Amplifier, and
-a first start that updates the app opens no browser. The background app itself
-runs (the task does not use this hand-over). Such an installation needs its
-launcher replaced (`windows_launcher_refresh`); nothing does that
-automatically. This follows from the measured rule (a Windows runner shows the
-split for a plain list); it was not run on a real installation.
+list. From its first app update, the `amplifier-unified` commands that are
+handed to the app generation do not reach the app: the Start-menu entry cannot
+open Amplifier, and a first start that updates the app opens no browser. The
+task that starts the background app does not use this hand-over (read from
+source). Such an installation needs its launcher replaced
+(`windows_launcher_refresh`); nothing does that automatically. Measured on a
+Windows runner: a plain list splits an argument with a space, and with an
+interpreter under a folder with a space the command does not arrive. Not run:
+a real installation of an earlier setup file under such a user name.
 
 (In a clean-room run of 0.98.1 that updated itself to 0.98.4 at first start,
 `open` ran in 0.98.4 three seconds before the host restarted, found the 0.98.1

@@ -110,6 +110,13 @@ def test_an_argument_with_a_space_reaches_the_program_that_takes_over_as_one_arg
     venv.create(home / "generation", with_pip=False)
     python = home / "generation" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     assert " " in str(python) and received(handover, python) == values
+    if os.name == "nt":
+        # A launcher before this change with such an interpreter: the plain
+        # list splits the interpreter's own path, and the command does not
+        # arrive at all. No new app version can repair that launcher.
+        lost = subprocess.run([str(python), str(script(tmp_path, "earlier.py", EARLIER_HANDOVER)), str(show), "open"],
+                              capture_output=True, text=True, timeout=120, env=ENVIRONMENT)
+        assert lost.stdout.strip() != json.dumps(["open"])
     # The reason for the product's own list: Windows joins a plain exec list
     # with spaces and quotes nothing. Measured here, not assumed. This is also
     # what a launcher before this change still does in a folder with a space.
@@ -121,13 +128,36 @@ def test_an_argument_with_a_space_reaches_the_program_that_takes_over_as_one_arg
 
 
 def test_the_launcher_step_ends_at_its_limit_and_says_not_confirmed(tmp_path):
-    # Through the hand-over: on Windows the program that took over goes on
-    # after the launcher's limit, and the launcher cannot end it.
+    """The limit ends the step, and nothing else: the program that took the
+    command over had started, and it had not finished when the step returned."""
     handover = script(tmp_path, "handover.py", HANDOVER)
-    slow = script(tmp_path, "slow.py", f"import time\ntime.sleep(30)\nprint({entry.OPENED!r}, flush=True)\n")
-    started = time.monotonic()
-    assert asyncio.run(consumer.browser_opened((sys.executable, handover, slow), ENVIRONMENT, limit=2)) is False
-    assert time.monotonic() - started < 20  # The limit ended the step, not the program's own 30 seconds.
+    started, finished = tmp_path / "started.txt", tmp_path / "finished.txt"
+    slow = script(tmp_path, "slow.py", "import os, time\n"
+                  f"with open({str(started)!r}, 'w') as record:\n    record.write(str(os.getpid()))\n"
+                  "time.sleep(10)\n"
+                  f"with open({str(finished)!r}, 'w') as record:\n    record.write('done')\n"
+                  f"print({entry.OPENED!r}, flush=True)\n")
+    begun = time.monotonic()
+    result = asyncio.run(consumer.browser_opened((sys.executable, handover, slow), ENVIRONMENT, limit=4))
+    elapsed = time.monotonic() - begun
+    at_return = (started.exists(), finished.exists())
+    assert result is False
+    # Not a command that failed at once: the program ran. Not a step that
+    # waited for the program's end: the program was still in its 10 seconds.
+    assert at_return == (True, False)
+    assert elapsed >= 3.9  # The step waited for its limit of 4 seconds.
+    if os.name == "nt":
+        # The program that took over is another process there. The launcher
+        # cannot end it, so it goes on and reaches its end (in the product:
+        # `open` can still open the browser after the launcher's message).
+        until_end = time.monotonic() + 60
+        while not finished.exists() and time.monotonic() < until_end:
+            time.sleep(0.2)
+        assert finished.exists()
+    else:
+        # Elsewhere exec keeps the process, and the limit ended it.
+        with pytest.raises(ProcessLookupError):
+            os.kill(int(started.read_text()), 0)
 
 
 @pytest.fixture
