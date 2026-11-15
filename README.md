@@ -64,9 +64,10 @@ Limits of this preview:
 - **Folder:** everything is in `%LOCALAPPDATA%\Amplifier`.
 - **Uninstall:** open **Settings > Apps > Installed apps**, find
   **Amplifier Unified (unsigned preview)**, select **More options (…)**, then
-  **Uninstall**. In this version, uninstall stops Amplifier and removes it from
-  the Start menu and the Apps list. It leaves the folder with your chats,
-  settings and accounts, and the program files.
+  **Uninstall**. Amplifier asks you to confirm. In this version, uninstall
+  stops Amplifier and removes it from the Start menu and the Apps list. It
+  leaves the folder with your chats, settings and accounts, and the program
+  files.
 
 The [native Windows design and status](docs/design/native-windows-installation.md)
 records what is tested.
