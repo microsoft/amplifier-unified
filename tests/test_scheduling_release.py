@@ -521,28 +521,29 @@ def test_workspace_metadata_changed_asset_remains_an_immutable_conflict(tmp_path
 
 
 
-def test_operations_author_relocation_preserves_original_release_verification(tmp_path):
-    root, revision, dist, git = make_candidate(tmp_path, "operations")
-    before = (dist / "operations-source.json").read_bytes()
-    historical = release.verify(root, revision, dist, component="operations")
+@pytest.mark.parametrize("component", ["operations", "kernels"])
+def test_flat_author_relocation_preserves_original_release_verification(tmp_path, component):
+    root, revision, dist, git = make_candidate(tmp_path, component)
+    before = (dist / f"{component}-source.json").read_bytes()
+    historical = release.verify(root, revision, dist, component=component)
     (root / "components").mkdir()
-    git("mv", "amplifier_operations", "components/operations")
+    git("mv", f"amplifier_{component}", f"components/{component}")
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Relocate author only")
     current_revision = git("rev-parse", "HEAD")
     git("update-ref", "refs/remotes/origin/main", current_revision)
-    current = release.selection(root, current_revision, component="operations")
-    assert current["subdirectory"] == "components/operations"
+    current = release.selection(root, current_revision, component=component)
+    assert current["subdirectory"] == f"components/{component}"
     assert current["tree"] == historical["tree"]
     assert current["sourceFiles"] == historical["sourceFiles"]
-    assert release.verify(root, revision, dist, component="operations") == historical
-    assert (dist / "operations-source.json").read_bytes() == before
+    assert release.verify(root, revision, dist, component=component) == historical
+    assert (dist / f"{component}-source.json").read_bytes() == before
     assert release.artifact_names(current) == release.artifact_names(historical)
     # Two simultaneous author projects are ambiguous, never chosen by path order.
-    shutil.copytree(root / "components/operations", root / "amplifier_operations")
+    shutil.copytree(root / f"components/{component}", root / f"amplifier_{component}")
     git("add", ".")
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Ambiguous author fixture")
-    with pytest.raises(ValueError, match="one operations author"):
-        release.selection(root, git("rev-parse", "HEAD"), qualification=True, component="operations")
+    with pytest.raises(ValueError, match=f"one {component} author"):
+        release.selection(root, git("rev-parse", "HEAD"), qualification=True, component=component)
 
 
 def test_kernels_flat_python_and_node_payload_identity(tmp_path):

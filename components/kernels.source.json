@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "source": {
+    "schema": 1,
+    "repository": "microsoft/amplifier-unified",
+    "revision": "a1854e12bc9c0ba8ee4186e8968d34a37bb6cb37",
+    "subdirectory": "amplifier_kernels",
+    "tree": "0c01679b5ca699b211d9ce0e717a35c7a735d49e",
+    "version": "0.1.0",
+    "tag": "kernels-v0.1.0",
+    "sourceFiles": {
+      ".gitignore": "4a0c796331e18ff216fbcf3e2d1c02f58c08e4a7dce2ab41d36c65509ef92989",
+      "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "MANIFEST.in": "e8a9a959fecf9e775d58b31f81fac28b0a7fb8a5b51833a112e6eb854ee9dfaf",
+      "README.md": "06153a4e3d67612b63cc6e1fae7da0ae8c7b43e7446700fdb74c47eb65472e4f",
+      "__init__.py": "88dbc352e811be5002f1116b0cf75ebc0ccd19bb29a0c99811e5bee8c4e5b727",
+      "manager.py": "3ecb0cc276ac3639c7b1e276e519961ac335b2f47f28f58709363bb89e7fba48",
+      "node_runner.cjs": "77a11d877b7f670c1c97e3f62e5740812185c29b8dccdf5f56cde5051383f202",
+      "pyproject.toml": "e56b80a46feecbb5363c3d72aa6c3a8b590641ae1bf7b4ad68e60e6469a112f8",
+      "python_runner.py": "2b067e9a04ce6226a7af130acb472c7a49c67b8c316c9f46eb5c6a904fdf7515",
+      "tests/test_kernel_mechanism.py": "477de78f92f7f4e5446729288d3422d3bf7bd089211b5fb96e77ed2bcd203869"
+    },
+    "artifacts": {
+      "amplifier_kernels-0.1.0-py3-none-any.whl": {
+        "sha256": "ff709a59c79b88c9050770894d675ba4a3962a130149fb46578f201435b97b78",
+        "bytes": 13090
+      },
+      "amplifier_kernels-0.1.0.tar.gz": {
+        "sha256": "92b65e8da4a8d2bab0fe07361c775bad1dbc0d1df786ef33c64133ccb77b2273",
+        "bytes": 14244
+      }
+    }
+  },
+  "artifact": {
+    "url": "https://github.com/microsoft/amplifier-unified/releases/download/kernels-v0.1.0/amplifier_kernels-0.1.0-py3-none-any.whl",
+    "sha256": "ff709a59c79b88c9050770894d675ba4a3962a130149fb46578f201435b97b78",
+    "bytes": 13090
+  },
+  "sourceReceiptSha256": "b91949a3066196335b2ffbd967b1524d353405f80e5ef4d0ec7881e8e9ee6e11",
+  "runtimeRequirements": [],
+  "files": {
+    "__init__.py": "88dbc352e811be5002f1116b0cf75ebc0ccd19bb29a0c99811e5bee8c4e5b727",
+    "manager.py": "3ecb0cc276ac3639c7b1e276e519961ac335b2f47f28f58709363bb89e7fba48",
+    "node_runner.cjs": "77a11d877b7f670c1c97e3f62e5740812185c29b8dccdf5f56cde5051383f202",
+    "python_runner.py": "2b067e9a04ce6226a7af130acb472c7a49c67b8c316c9f46eb5c6a904fdf7515",
+    "LICENSE": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+  }
+}

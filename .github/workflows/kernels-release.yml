@@ -2,7 +2,7 @@ name: Kernels package
 on:
   pull_request:
     paths:
-      - amplifier_kernels/**
+      - components/kernels/**
       - scripts/scheduling_release.py
       - tests/test_scheduling_release.py
       - .github/workflows/kernels-release.yml
@@ -24,6 +24,7 @@ jobs:
     outputs:
       revision: ${{ steps.selection.outputs.revision }}
       version: ${{ steps.selection.outputs.version }}
+      subdirectory: ${{ steps.selection.outputs.subdirectory }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -47,11 +48,12 @@ jobs:
       - name: Build once from selected standalone source
         env:
           SELECTED_REVISION: ${{ steps.selection.outputs.revision }}
+          PROJECT_PATH: ${{ steps.selection.outputs.subdirectory }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
           mkdir "$RUNNER_TEMP/kernels-source"
-          git archive "$SELECTED_REVISION" amplifier_kernels | tar -x -C "$RUNNER_TEMP/kernels-source"
-          uv build --sdist --wheel --out-dir "$RUNNER_TEMP/kernels-dist" "$RUNNER_TEMP/kernels-source/amplifier_kernels"
+          git archive "$SELECTED_REVISION" "$PROJECT_PATH" | tar -x -C "$RUNNER_TEMP/kernels-source"
+          uv build --sdist --wheel --out-dir "$RUNNER_TEMP/kernels-dist" "$RUNNER_TEMP/kernels-source/$PROJECT_PATH"
           rm -f "$RUNNER_TEMP/kernels-dist/.gitignore" # uv output sentinel, not a release asset.
           flags=()
           if [ "$EVENT_NAME" = pull_request ]; then flags+=(--qualification); fi
@@ -88,6 +90,7 @@ jobs:
         env:
           SELECTED_REVISION: ${{ needs.build.outputs.revision }}
           PACKAGE_VERSION: ${{ needs.build.outputs.version }}
+          PROJECT_PATH: ${{ needs.build.outputs.subdirectory }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
           flags=()
@@ -105,7 +108,7 @@ jobs:
           uv pip install --python "$python_path" --only-binary amplifier-core "$RUNNER_TEMP/kernels-dist/amplifier_kernels-$PACKAGE_VERSION-py3-none-any.whl[test]" "$operations_wheel" "$core_wheel" 'amplifier-module-tool-bash @ git+https://github.com/microsoft/amplifier-module-tool-bash@d5bb46d24dcae8e260211bf8fb5c22de3a67f406'
           uv pip freeze --python "$python_path" > "$RUNNER_TEMP/kernels-peers/installed.txt"
           mkdir "$RUNNER_TEMP/kernels-tests"
-          git archive "$SELECTED_REVISION:amplifier_kernels" tests pyproject.toml | tar -x -C "$RUNNER_TEMP/kernels-tests"
+          git archive "$SELECTED_REVISION:$PROJECT_PATH" tests pyproject.toml | tar -x -C "$RUNNER_TEMP/kernels-tests"
           cd "$RUNNER_TEMP/kernels-tests"
           "$python_path" -I -c 'from pathlib import Path; import sys,importlib.util,amplifier_kernels; assert Path(amplifier_kernels.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()); assert all(importlib.util.find_spec(name) is None for name in ("amplifier_web","amplifier_foundation")); import amplifier_module_tool_bash,amplifier_core,amplifier_operations; assert (Path(amplifier_kernels.__file__).parent / "node_runner.cjs").is_file()'
           "$python_path" -I -m pytest -q tests --junitxml=installed-tests.xml

@@ -33,7 +33,7 @@ Before running the tests, install the public `operations-v0.1.0` wheel
 without declaring it; this is a test-peer requirement, not a kernels runtime
 dependency. Include the peers' declared dependencies. Do not install Unified to
 obtain these peers or build Core from source. The
-[kernels workflow](../.github/workflows/kernels-release.yml) pins the Linux
+[kernels workflow](../../.github/workflows/kernels-release.yml) pins the Linux
 publication-test wheels by SHA-256 and uses Node 22.23.3. It installs the original
 kernels wheel outside the checkout and requires all ten cases without skips.
 
@@ -53,18 +53,34 @@ also carries these tests. Standalone editable development uses this same source.
 
 ## Authoring and delivery
 
-This directory is the canonical authoring home. Unified still bundles these
-unchanged files in its ordinary wheel and editable installation. Its host tests
-retain mounted tool approval, question dependencies, conversation selection,
-recovery and execution authority. The in-place layout preserves its existing
-runtime bootstrap origin checks.
+This directory is the canonical authoring home. Unified bundles only the public
+artifact selected by `components/kernels.source.json`, in the generated root
+`amplifier_kernels/` snapshot. Its four runtime files and license are verified
+offline during ordinary wheel, source archive and editable builds. The root
+layout preserves existing runtime bootstrap origin checks; Unified remains the
+sole installed distribution owner. Never edit that snapshot by hand or coinstall
+the standalone distribution with Unified. Author changes and publications can
+advance independently without changing the app default.
+
+From the Unified root, a maintainer can explicitly select four downloaded public
+release assets using `python scripts/scheduling_delivery.py select --component
+kernels --dist <assets> --revision <published-commit> --receipt-sha256 <checksum>`.
+Review and qualify the resulting snapshot and receipt together. Ordinary builds
+never download or change the selection. Return to an earlier app through its
+normal rollback; saved observations remain, but terminated kernel variables are
+never reconstructed or replayed.
+
+Host tests retain mounted tool approval, question dependencies, conversation
+selection, recovery and execution authority. The standalone workflow runs this
+author project's tests against its own wheel outside the checkout; host test
+discovery does not run future author tests against an older app selection.
 
 Released [ACP 0.1.7](https://github.com/microsoft/amplifier-app-acp/releases/tag/v0.1.7)
 selects this public project at Git commit
 `8f4c05c53e5343a39433bc4a64f0d9e0104ce0e8`, subdirectory `amplifier_kernels`.
 Kernel changes originate here; each consumer selects and qualifies its own update.
-The standalone producer does not change that dependency or Unified's bundled
-source, fetch packages at runtime, or automatically synchronize consumers.
+The standalone producer does not change that dependency or Unified's selected
+artifact, fetch packages at runtime, or automatically synchronize consumers.
 
 ## Standalone publication
 
