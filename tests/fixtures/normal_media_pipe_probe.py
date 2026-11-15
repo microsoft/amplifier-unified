@@ -233,11 +233,17 @@ def bootstrap():
                 coordinator, binding = owner.session.coordinator, owner.canonical_binding
                 if delegate_journey:
                     from amplifier_module_provider_openai import _media
-                    provider_view = _media.CURRENT.get().provider.coordinator
+                    sdk_scope = _media.CURRENT.get()
+                    provider_view = sdk_scope.provider.coordinator
                     provider_bridge = provider_view.get_capability("web.media.hook_bridge")
                     assert provider_bridge is not None
                     coordinator = provider_bridge._coordinator  # read-only scope identity, not authority
                     assert coordinator.session_id == provider_view.session_id
+                    projection = coordinator.get_capability("web.media.projections")[id(sdk_scope.request)]
+                    assert projection.request is sdk_scope.request
+                    assert projection.capability is sdk_scope.cap and sdk_scope.cap.enabled is True
+                    assert projection.graph_lifetime is not None and projection.graph_lifetime.closed is False
+                    assert projection.graph_lifetime.validate() is True
                     if coordinator is not owner.session.coordinator:
                         from amplifier_web.host.children import ChildCheckpoint
                         from amplifier_web.host.canonical_bootstrap import _ChildFactory
@@ -309,7 +315,8 @@ def bootstrap():
                     "resumed": owner.canonical_resume,
                     **({"native_session_id": coordinator.session_id,
                         "native_resumed": coordinator.get_capability("web.child.resumed") is True,
-                        "native_child": coordinator is not owner.session.coordinator}
+                        "native_child": coordinator is not owner.session.coordinator,
+                        "actual_request_graph_lease": True}
                        if delegate_journey else {}),
                 })
                 self.dump(False)
