@@ -79,7 +79,9 @@ accepted execution -> runtime admission -> working -> safely evictable when idle
    read under its writer lock, without crossing an await or retaining the read
    after exit. Detached snapshots stay independent of later saves; existing live
    aliases retain their authority. Failure or cancellation clears the temporary
-   read without selecting a staged durable root.
+   read without selecting a staged durable root. Private native selection and
+   aggregation may read those verified rows without copying them; only the new
+   aggregate and activity diagnostics leave that read-only projection.
    Full catalog metadata reconciliation commits its changed owners and global
    records without checkpointing unchanged conversation histories. Pending progress
    still joins that commit, and failed commits remain recoverable.

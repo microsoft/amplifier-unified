@@ -63,7 +63,7 @@ class WorkingExecution:
     def _stored(self, *, detach=True):
         if self._legacy_read is not None and self._legacy_read[0] == self.reference:
             # Each public read used to receive an independent JSON value.
-            # Only the canonical projector may borrow this verified input.
+            # Only private read-only projections may borrow this verified input.
             return copy.deepcopy(self._legacy_read[1]) if detach else self._legacy_read[1]
         return _stored(self.db, self.reference)
 
@@ -85,14 +85,14 @@ class WorkingExecution:
             self.admitted[kind].add(identity)
         return value
 
-    def _complete(self, *, detach_current=False, collections=records.COLLECTIONS):
+    def _complete(self, *, detach_current=False, collections=records.COLLECTIONS, borrow_stored=False):
         current = copy.deepcopy(self.current) if detach_current else self.current
         value = {name: item for name, item in current.items() if name not in records.COLLECTIONS}
         if self.reference.get('executionProjection') == 2 and collections != records.COLLECTIONS:
             stored = {kind: records.read_collection(self.db, self.reference, kind, owner=self.owner)
                       for kind in collections}
         else:
-            stored = self._stored()
+            stored = self._stored(detach=not borrow_stored)
         for kind in collections:
             changes = {records.key(kind, row): row for row in current[kind]}
             rows = []
@@ -109,6 +109,12 @@ class WorkingExecution:
         # Durable JSON reads are already detached. Copy only the mutable current
         # overlay, preserving its internal aliases, not the completed ledger.
         return self._complete(detach_current=True)
+
+    def _native_activity_input(self):
+        # Native selection/rollup only read rows and replace the returned outer
+        # aggregate. No historical row escapes to a mutable caller or owner.
+        # Without a matching operation-local binding, the normal read detaches.
+        return self._complete(detach_current=True, borrow_stored=True)
 
     def usage_input(self):
         """Complete ordered accounting inputs, keeping current aliases live."""

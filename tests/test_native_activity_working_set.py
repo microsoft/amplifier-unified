@@ -187,6 +187,41 @@ def test_native_scope_detaches_snapshots_and_preserves_live_aliases(legacy_saved
     assert actual['nodes'][1]['detail']['values'][-1] == 'after commit'
 
 
+def test_native_read_only_selection_keeps_saved_rows_private(legacy_saved, monkeypatch):
+    from amplifier_web.execution_working_set import native_refresh
+    db, session, original = legacy_saved
+    activity = {'nodes': [], 'turns': [], 'diagnostics': ['read-only selection']}
+    with native_refresh(session):
+        owner = working(session)
+        borrowed = current(session)['nodes'][0]['detail']['values']
+        borrowed.append('current edit')
+        expected = {'execution': snapshot(session), 'messages': []}
+        apply_activity(expected, activity)
+        # This private read-only caller must not construct a public full copy.
+        # The public snapshot contract is still exercised below and separately.
+        with monkeypatch.context() as guard:
+            def no_full_snapshot():
+                pytest.fail('Native selection requested a detached full snapshot')
+            guard.setattr(owner, 'snapshot', no_full_snapshot)
+            apply_activity(session, activity)
+        assert owner._legacy_read[1] == original
+        assert snapshot(session) == expected['execution']
+        assert session['historyActivity'] == expected['historyActivity']
+        selected = snapshot(session)
+        selected['nodes'][1]['detail']['values'].append('snapshot only')
+        selected['extension']['nested'].append('snapshot only')
+        selected['aggregateUsage']['metricKnownCalls']['inputTokens'] = 99
+        assert owner._legacy_read[1] == original
+        assert snapshot(session) == expected['execution']
+        reference = save(db, session)
+    assert owner._legacy_read is None
+    assert records.materialize(db, reference)['nodes'][1] == original['nodes'][1]
+    borrowed.append('late current edit')
+    actual = records.materialize(db, save(db, session))
+    assert actual['nodes'][0]['detail']['values'] == [0, 'current edit', 'late current edit']
+    assert actual['extension'] == original['extension']
+
+
 @pytest.mark.parametrize('failure', [RuntimeError, asyncio.CancelledError])
 def test_native_scope_failure_keeps_selected_root_and_releases_read(legacy_saved, failure):
     from amplifier_web.execution_working_set import native_refresh

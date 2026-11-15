@@ -314,6 +314,9 @@ its synchronous merge and publication while holding the session writer lock.
 This operation-local binding is cleared on every exit; detached owners do not
 inherit it. The current overlay and public snapshots remain independently
 mutable, while the canonical projector only reads the verified original. The
+private native-selection input also borrows those rows for read-only selection
+and rollup; it returns only a new aggregate and activity diagnostics to the owner,
+never historical row aliases. Public snapshots still detach the complete graph. The
 normal logical-content check, stored projection, index import and successful
 commit still own validation and durable selection. No decoded history is cached
 between refreshes, and the first index-publication cost remains visible.
