@@ -151,6 +151,8 @@ def installed_target(profile, worker, *, bootstrap_app=False):
 def child_environment(bootstrap_dir, modules, root, target=None):
     """Installed mode discards overlays rather than trusting inherited PYTHONPATH."""
     env = dict(os.environ)
+    # Only this invocation's explicit CLI selector may choose the negative.
+    env.pop("NORMAL_MEDIA_CONTRACT_NEGATIVE", None)
     env["NORMAL_MEDIA_PIPE_ROOT"] = str(root)
     fixture_paths = [str(bootstrap_dir), str(Path(__file__).parent)]
     if target is None:
@@ -181,6 +183,7 @@ def bootstrap():
 
     root = Path(os.environ["NORMAL_MEDIA_PIPE_ROOT"]).resolve(strict=True)
     label = os.environ["NORMAL_MEDIA_PIPE_CHILD"]
+    contract_negative = os.environ.get("NORMAL_MEDIA_CONTRACT_NEGATIVE") == "1"
     report = root / (label + "-observer.json")
     stack = ExitStack()
     denied = deny_socket_connections(stack, root / (label + "-socket-denials.json"))
@@ -214,6 +217,8 @@ def bootstrap():
                 assert fixture.catalog_status() == catalog
                 if target:
                     target.check_origins()
+                if contract_negative:
+                    return await self.receive_contract_negative(owner, request)
                 assert owner.media_graph_selection is not None
                 assert owner.canonical_binding is not None
                 assert owner.canonical_resume is (label == "second")
@@ -246,12 +251,80 @@ def bootstrap():
                 self.dump(False)
                 raise
 
+        async def receive_contract_negative(self, owner, request):
+            """Observe the real refusal; never enable or substitute a graph."""
+            from amplifier_module_provider_openai import OpenAIProvider, _media
+            from amplifier_foundation.session.media import SessionMediaStore
+            from amplifier_web.host.canonical_bootstrap import _ChildFactory
+            from amplifier_web.host.children import Children
+            coordinator = owner.session.coordinator
+            children = coordinator.get_capability("live.children")
+            factory = owner.canonical_binding_factory
+            assert type(children) is Children and type(factory) is _ChildFactory
+            assert children.canonical_binding_factory is factory and factory.root is owner.canonical_binding
+            assert not children.rows, "This negative must stop before child dispatch"
+            assert owner.media_graph_selection is None
+            assert coordinator.get_capability("web.media.graph_selection") is None
+            media = coordinator.get_capability("web.media.store")
+            assert type(media) is SessionMediaStore, type(media).__name__
+            assert coordinator.get_capability(fixture.MEDIA).enabled is False
+            tool = coordinator.get("tools")["media_child"]
+            # Host wrappers remain intact. Diagnose their declared delegate
+            # chain read-only, rather than remounting the authored tool.
+            chain = []
+            for _ in range(8):
+                chain.append({"class": type(tool).__module__ + "." + type(tool).__qualname__,
+                              "source": tool.execute.__func__.__code__.co_filename})
+                if Path(chain[-1]["source"]).resolve() == root / "child-tool/__init__.py":
+                    break
+                tool = getattr(tool, "original", None)
+                assert tool is not None, chain
+            assert Path(chain[-1]["source"]).resolve() == root / "child-tool/__init__.py", chain
+            assert (root / "child-tool/__init__.py").read_text() == fixture.CHILD_TOOL
+            assert hashlib.sha256((root / "child-tool/__init__.py").read_bytes()).hexdigest() == fixture.CHILD_TOOL_SHA256
+            assert callable(coordinator.get_capability("session.spawn"))
+            assert callable(coordinator.get_capability("session.resume"))
+            scope = _media.CURRENT.get()
+            assert scope is not None and type(scope.provider) is OpenAIProvider
+            assert scope.provider.coordinator is coordinator and _media.standard_dispatch(scope.provider.client)
+            assert scope.cap is None or scope.cap.enabled is False
+            body = json.loads(request.content)
+            assert request.method == "POST" and request.headers["authorization"] == "Bearer " + fixture.DUMMY_KEY
+            assert str(request.url) in {"https://api.openai.com/v1/responses/input_tokens",
+                                        "https://api.openai.com/v1/responses"}
+            assert body["model"] == fixture.MODEL and body.get("stream") is not True
+            fixture.no_pixels(body, pixels)
+            assert "compatible media handling is not installed" in json.dumps(body)
+            rows = await coordinator.get("context").get_messages()
+            fixture.no_pixels(rows, pixels)
+            assert not any(fixture.MEDIA in (row.get("metadata") or {}) for row in rows)
+            if not self.owners:
+                self.owners.append(owner)
+            else:
+                assert self.owners == [owner]
+            phase = "count" if request.url.path.endswith("/input_tokens") else "send"
+            self.requests.append(scope.request)
+            self.records.append({"phase": phase, "request_id": id(scope.request),
+                                 "provider_id": id(scope.provider), "pixels_supplied": False})
+            self.snapshots.append({"recipe_selected": False, "media_store": type(media).__name__,
+                                   "real_child_factory": type(factory).__name__,
+                                   "filesystem_tool_loaded": True, "child_dispatched": False})
+            self.dump(False)
+            package = importlib.import_module(type(request).__module__.split(".")[0])
+            return package.Response(200, json=(
+                {"object": "response.input_tokens", "input_tokens": 30}
+                if phase == "count" else fixture.response(1)))
+
         def dump(self, final):
+            import traceback
             save_json(report, {
                 "final": final, "pid": os.getpid(), "records": self.records,
                 "snapshots": self.snapshots, "socket_denials": denied,
                 "typed_receipts": self.typed_receipts,
                 "failures": [type(item).__name__ + ": " + str(item) for item in self.failures],
+                "failure_frames": [[{"file": frame.filename, "line": frame.lineno, "name": frame.name}
+                                    for frame in traceback.extract_tb(item.__traceback__)]
+                                   for item in self.failures],
             })
 
     pixels = (root / "private.png").read_bytes()
@@ -273,12 +346,13 @@ def bootstrap():
         transport.expected_handles[package.AsyncHTTPTransport] = handle
         stack.enter_context(patch.object(package.AsyncHTTPTransport, "handle_async_request", handle))
 
-    declaration = fixture.authored_bundle(root)
+    declaration = fixture.authored_bundle(root, child_tool=contract_negative)
     modules = json.loads((root / "source-modules.json").read_text())
     paths = [root / "fixture.md", *modules.values(),
              declaration["session"]["context"]["source"],
              *[row["source"] for row in declaration["providers"]],
-             *[row["source"] for row in declaration["hooks"]]]
+             *[row["source"] for row in declaration["hooks"]],
+             *[row["source"] for row in declaration.get("tools", [])]]
     stack.enter_context(finite_sources(paths, modules, installed=target is not None))
     catalog = json.loads((root / "catalog-observed.json").read_text())
     assert not catalog["mismatches"], {"boundary": "unchanged packaged catalog", **catalog}
@@ -289,7 +363,12 @@ def bootstrap():
         try:
             assert not transport.failures
             assert not denied, "An unintercepted connection was attempted"
-            transport.check_pairs(2 if label == "first" else 1)
+            if contract_negative:
+                assert sum(row["phase"] == "send" for row in transport.records) == 1
+                assert any(row["phase"] == "count" for row in transport.records)
+                assert transport.snapshots and all(row == transport.snapshots[0] for row in transport.snapshots)
+            else:
+                transport.check_pairs(2 if label == "first" else 1)
             assert len(transport.owners) == 1
             owner = transport.owners[0]
             assert owner._cleanup_settled and owner.shared_handle is None
@@ -298,7 +377,7 @@ def bootstrap():
             assert fixture.catalog_status() == catalog, "Catalog or dependency source changed during the probe"
             transport.dump(True)
             value = json.loads(report.read_text())
-            value.update(private_requests_cleared=True, canonical_cleanup_joined=True,
+            value.update(private_requests_cleared=not contract_negative, canonical_cleanup_joined=True,
                          file_bootstrapped_app_without_outer_root=True,
                          source=fixture.source_evidence(),
                          transport_packages=[package.__name__ for package in packages])
@@ -338,8 +417,9 @@ def host_result(event):
 
 
 class Pipe:
-    def __init__(self, process, pixels):
+    def __init__(self, process, pixels, *, contract_negative=False):
         self.process, self.pixels = process, pixels
+        self.contract_negative = contract_negative
         self.events, self.commands = [], []
         self.changed, self.eof = asyncio.Event(), False
         self.eof_index = None
@@ -417,7 +497,9 @@ class Pipe:
         assert not any(text in stderr for text in forbidden), stderr
         allowed_naming_warning = (
             "Error generating name for session " + SESSION[:8] +
-            ": Naming cannot attribute the selected provider request; no call was sent.")
+            (": Private media request, selected connection or wire changed/expired/revoked; "
+             "prepare and fit a new request. Request not sent." if self.contract_negative else
+             ": Naming cannot attribute the selected provider request; no call was sent."))
         assert all(line == allowed_naming_warning for line in stderr.splitlines()), stderr
         assert sum(row.get("type") == "session.closed" for row in self.events) == 1
         reply_index = next(index for index, row in enumerate(self.events) if row is reply)
@@ -489,6 +571,8 @@ async def main():
     parser.add_argument("root")
     parser.add_argument("--installed-worker")
     parser.add_argument("--installed-profile")
+    parser.add_argument("--contract-negative", action="store_true",
+                        help="Reproduce the existing nonempty-tool recipe refusal; NOT child qualification")
     args = parser.parse_args()
     fixture = helpers()
     # This happens before application imports, fixture settings, or worker spawn.
@@ -511,7 +595,12 @@ async def main():
     workspace = root / "workspace"
     workspace.mkdir(mode=0o700)
     bundle = root / "fixture.md"
-    bundle.write_text("---\n" + json.dumps(fixture.authored_bundle(root)) + "\n---\nInspect the image.\n")
+    bundle.write_text("---\n" + json.dumps(fixture.authored_bundle(root, child_tool=args.contract_negative))
+                      + "\n---\nInspect the image.\n")
+    if args.contract_negative:
+        tool = root / "child-tool"
+        tool.mkdir(mode=0o700)
+        (tool / "__init__.py").write_text(fixture.CHILD_TOOL)
     modules = {name: str(fixture.origin(package).parent) for name, package in (
         ("loop-live", "amplifier_module_loop_live"),
         ("hook-context-intelligence", "amplifier_module_hook_context_intelligence"))}
@@ -535,16 +624,20 @@ async def main():
     python = target.python if target else Path(sys.executable).absolute()
     command, selected = manager_command(python, root, target)
     env = child_environment(bootstrap_dir, modules, root, target)
+    if args.contract_negative:
+        env["NORMAL_MEDIA_CONTRACT_NEGATIVE"] = "1"
     config = {"id": SESSION, "workspace": str(workspace), "bundle": str(bundle)}
     children, receipts, reports = [], [], []
     saved = ref = None
     try:
-        for label, turns in (("first", ("one", "two")), ("second", ("three",))):
+        journeys = (("first", ("one",)),) if args.contract_negative else (
+            ("first", ("one", "two")), ("second", ("three",)))
+        for label, turns in journeys:
             process = await asyncio.create_subprocess_exec(*command, cwd=workspace,
                 env={**env, "NORMAL_MEDIA_PIPE_CHILD": label},
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, limit=2_000_000)
-            pipe = Pipe(process, pixels)
+            pipe = Pipe(process, pixels, contract_negative=args.contract_negative)
             children.append(pipe)
             await pipe.write({"op": "start", "session": config})
             ready = await pipe.until(lambda row: row.get("type") == "runtime.ready")
@@ -566,6 +659,8 @@ async def main():
                 await asyncio.sleep(.05)
                 observed = json.loads(report_path.read_text())
                 assert not observed["failures"] and not observed["socket_denials"], observed
+                if args.contract_negative:
+                    continue
                 snapshot = observed["snapshots"][-1]
                 commit, messages, current_ref = checkpoint(snapshot["canonical_directory"], pixels)
                 if ref is None:
@@ -575,7 +670,18 @@ async def main():
             receipts.append(await pipe.retire("retire-" + label))
             report = json.loads(report_path.read_text())
             assert report["final"] and not report["failures"] and not report["socket_denials"], report
-            assert report["private_requests_cleared"] and report["canonical_cleanup_joined"]
+            assert report["canonical_cleanup_joined"]
+            if args.contract_negative:
+                assert report["snapshots"] and all(row["recipe_selected"] is False for row in report["snapshots"])
+                evidence = {"mode": "installed-offline-transport" if target else "source-only",
+                            "contract_blocker_reproduced": True, "root_child_hydration_qualified": False,
+                            "private_media_disabled_before_child_dispatch": True,
+                            "real_file_entry": command, "receipt": receipts[-1], "observer": report,
+                            "missing_contract": "Preconstruction source-known authored-tool recipe selection"}
+                fixture.no_pixels(evidence, pixels)
+                print(json.dumps(evidence))
+                return
+            assert report["private_requests_cleared"]
             reports.append(report)
             commit, saved, current_ref = checkpoint(snapshot["canonical_directory"], pixels)
             assert current_ref == ref

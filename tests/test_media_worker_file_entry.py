@@ -97,6 +97,59 @@ def test_pipe_finite_context_prepare_readback_and_unknown_service(probe):
         probe.host_result({"operation": "dispatch", "args": {"action": "anything"}})
 
 
+def test_child_fixture_uses_public_capabilities_and_actual_canonical_parent_rows(probe):
+    fixture = probe.helpers()
+    assert hashlib.sha256(fixture.CHILD_TOOL.encode()).hexdigest() == fixture.CHILD_TOOL_SHA256
+    tree = ast.parse(fixture.CHILD_TOOL)
+    calls = {node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+             for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and isinstance(node.func, (ast.Name, ast.Attribute))}
+    assert not calls & {"Worker", "NamedMediaGraph", "mint_owner", "bind_media", "create_session",
+                        "acknowledge_media", "create_new", "force_enabled"}
+    assert '"session.spawn"' in fixture.CHILD_TOOL and '"session.resume"' in fixture.CHILD_TOOL
+    assert "parent_messages=rows" in fixture.CHILD_TOOL and 'row.get("role") == "user"' in fixture.CHILD_TOOL
+    assert '"experimental.media.v1" in (row.get("metadata") or {})' in fixture.CHILD_TOOL
+    assert 'tool_inheritance={"inherit_tools": []}' in fixture.CHILD_TOOL
+
+
+def test_actual_file_entry_authored_child_tool_remains_neutral_contract_blocker(tmp_path):
+    """An actual negative, never an expected-success child-hydration test."""
+    if os.environ.get("NORMAL_MEDIA_FILE_ENTRY") != "1":
+        pytest.skip("set NORMAL_MEDIA_FILE_ENTRY=1 with an already prepared runtime/PYTHONPATH")
+    if sys.platform != "linux":
+        pytest.skip("Prospective canonical source custody is qualified on Linux only")
+    python = os.environ.get("UNIFIED_RUNTIME_PYTHON")
+    assert python
+    tmp_path.chmod(0o700)
+    profile, worker = (os.environ.get("NORMAL_MEDIA_INSTALLED_PROFILE"),
+                       os.environ.get("NORMAL_MEDIA_INSTALLED_WORKER"))
+    command = [python, str(PROBE), str(tmp_path), "--contract-negative"]
+    env = {**os.environ, "AMPLIFIER_RUNTIME_IMMUTABLE": "1", "UV_OFFLINE": "1"}
+    if profile or worker:
+        assert profile and worker
+        command.extend(["--installed-profile", profile, "--installed-worker", worker])
+        for key in ("WARM_LOOP_SOURCE", "PYTHONHOME", "PYTHONUSERBASE"):
+            env.pop(key, None)
+        env.update(PYTHONPATH=str(PROBE.parent), PYTHONNOUSERSITE="1")
+    result = subprocess.run(command, cwd=tmp_path if profile else ROOT, text=True,
+                            capture_output=True, timeout=120, env=env)
+    (tmp_path / "contract-negative-result.json").write_text(result.stdout)
+    assert result.returncode == 0, result.stdout + result.stderr
+    evidence = json.loads(result.stdout)
+    assert evidence["contract_blocker_reproduced"] is True
+    assert evidence["root_child_hydration_qualified"] is False
+    assert evidence["private_media_disabled_before_child_dispatch"] is True
+    assert evidence["receipt"]["reply_before_eof"] and evidence["receipt"]["exit_code"] == 0
+    observed = evidence["observer"]
+    assert observed["final"] and not observed["failures"] and not observed["socket_denials"]
+    assert observed["canonical_cleanup_joined"] is True
+    assert observed["snapshots"] and all(row == {
+        "recipe_selected": False, "media_store": "SessionMediaStore",
+        "real_child_factory": "_ChildFactory", "filesystem_tool_loaded": True,
+        "child_dispatched": False} for row in observed["snapshots"])
+    assert all(row["pixels_supplied"] is False for row in observed["records"])
+
+
 async def test_pipe_until_rejects_eof_instead_of_inventing_retirement_ack(probe):
     class Writer:
         def write(self, value):
@@ -309,15 +362,18 @@ def test_installed_child_environment_drops_all_inherited_dependency_overlays(
     monkeypatch.setenv("WARM_LOOP_SOURCE", "/unreviewed/loop")
     monkeypatch.setenv("PYTHONHOME", "/outer/runtime")
     monkeypatch.setenv("PYTHONUSERBASE", "/outer/user")
+    monkeypatch.setenv("NORMAL_MEDIA_CONTRACT_NEGATIVE", "1")
     bootstrap = tmp_path / "bootstrap"
     selected = probe.child_environment(bootstrap, {"loop-live": "/source-loop"}, tmp_path, target)
     assert selected["PYTHONPATH"].split(os.pathsep) == [str(bootstrap), str(PROBE.parent)]
     assert all(key not in selected for key in ("WARM_LOOP_SOURCE", "PYTHONHOME", "PYTHONUSERBASE"))
     assert selected["PYTHONNOUSERSITE"] == "1"
     assert selected["NORMAL_MEDIA_INSTALLED_PROFILE"] == str(profile)
+    assert "NORMAL_MEDIA_CONTRACT_NEGATIVE" not in selected
     # Original source mode keeps its deliberate source overlays.
     source = probe.child_environment(bootstrap, {"loop-live": "/source-loop"}, tmp_path)
     assert "/unreviewed/source" in source["PYTHONPATH"] and source["WARM_LOOP_SOURCE"] == "/source-loop"
+    assert "NORMAL_MEDIA_CONTRACT_NEGATIVE" not in source
 
 
 def test_installed_source_resolver_cannot_replace_the_production_loop_locator():

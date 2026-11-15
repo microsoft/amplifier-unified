@@ -201,9 +201,45 @@ def catalog_status():
             "mismatches": mismatches}
 
 
-def authored_bundle(root):
+# Fixed authored bytes for a real filesystem loader, not a media graph grant.
+CHILD_TOOL_SHA256 = "5fbd893bab0e9c8d672bed6d7b0369e35c705d86d5b1783701672275113daf08"
+CHILD_TOOL = '''from amplifier_core import ToolResult
+
+__amplifier_module_type__ = "tool"
+
+class MediaChild:
+    name = "media_child"
+    description = "Finite authored child lifecycle fixture."
+    input_schema = {"type": "object", "properties": {"resume": {"type": "boolean"}}}
+
+    def __init__(self, coordinator):
+        self.coordinator = coordinator
+
+    async def execute(self, input):
+        identity = "normal-media-native-child"
+        if input.get("resume"):
+            result = await self.coordinator.get_capability("session.resume")(
+                identity, "Inspect the inherited image.", parent_session=self.coordinator.session)
+        else:
+            rows = await self.coordinator.get("context").get_messages()
+            rows = [row for row in rows if row.get("role") == "user"
+                    and "experimental.media.v1" in (row.get("metadata") or {})]
+            if not rows:
+                raise ValueError("No canonical parent media rows; child was not dispatched")
+            result = await self.coordinator.get_capability("session.spawn")(
+                agent_name="self", instruction="Inspect the inherited image.",
+                parent_session=self.coordinator.session, parent_messages=rows,
+                sub_session_id=identity, tool_inheritance={"inherit_tools": []})
+        return ToolResult(success=True, output=result)
+
+async def mount(coordinator, config=None):
+    await coordinator.mount("tools", MediaChild(coordinator), name="media_child")
+'''
+
+
+def authored_bundle(root, *, child_tool=False):
     """Ordinary authored declaration, not a prepared/session-derived mount plan."""
-    return {
+    declaration = {
         "bundle": {"name": "normal-media-worker", "version": "0.0.1"},
         "session": {
             "orchestrator": {"module": "loop-live", "source": str(origin("amplifier_module_loop_live").parent)},
@@ -219,6 +255,9 @@ def authored_bundle(root):
                    "config": {"destinations": {}, "context_intelligence_server_url": "",
                               "context_intelligence_api_key": "", "base_path": str(root / "capture")}}],
     }
+    if child_tool:
+        declaration["tools"] = [{"module": "tool-media-child", "source": str(root / "child-tool")}]
+    return declaration
 
 
 def response(turn):
