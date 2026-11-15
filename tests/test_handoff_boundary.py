@@ -110,7 +110,8 @@ async def test_handoff_waits_for_tool_result_and_children_then_continues_once(tm
 
 async def test_stop_during_boundary_wait_cancels_unperformed_move(tmp_path, monkeypatch):
     app, runtime, root, sid = await fixture(tmp_path, monkeypatch)
-    runtime.handoff_boundary = AsyncMock(return_value={'ready': False})
+    runtime.handoff_boundary = AsyncMock(side_effect=lambda *args, **kwargs:
+        {'cancelled': True} if kwargs.get('cancel') else {'ready': False})
     try:
         target = await checkout(app, sid)
         receipt = (await app.dispatch('worktree.handoff', {'sessionId': sid,

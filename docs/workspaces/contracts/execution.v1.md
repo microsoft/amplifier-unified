@@ -42,6 +42,15 @@ An isolated working directory is not a security sandbox.
    Old processes must be quiesced or reconciled before reassignment. Stale writes
    must be refused for the new owner's safety. External editors remain observable
    participants; the service does not pretend to lock out unmanaged tools.
+   Handoff boundary issuance, returned boundary/cancellation results, physical
+   writer release and committed placement are separate evidence. A timeout,
+   disconnect or failed cancellation cannot establish rejection without effects.
+   Inspection preserves the original operation identities and never sends another
+   runtime request. Reconciliation requires terminal original boundary evidence
+   when issuance is uncertain, plus a fresh confirmed physical writer release.
+   Legacy rejected waiting receipts without typed evidence remain explicitly
+   blocked; diagnostic prose or an absent worker is not a terminal RPC result.
+   This repair does not extend human-finding authority to question or peer inputs.
 
 4. **Helpers inherit a bounded assignment.** A helper has a real parent, scope,
    result destination, and read/write mode. It cannot use workspace membership
