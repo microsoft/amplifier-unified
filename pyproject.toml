@@ -88,6 +88,8 @@ exclude = [
 [tool.hatch.build.targets.wheel.force-include]
 "components/outputs.source.json" = "amplifier_web/component_delivery/outputs.json"
 "components/outputs-delivery/LICENSE" = "amplifier_web/component_delivery/outputs-LICENSE"
+"components/publishing.source.json" = "amplifier_web/component_delivery/publishing.json"
+"components/publishing-delivery/LICENSE" = "amplifier_web/component_delivery/publishing-LICENSE"
 "components/kernels.source.json" = "amplifier_web/component_delivery/kernels.json"
 "amplifier_kernels/LICENSE" = "amplifier_web/component_delivery/kernels-LICENSE"
 "components/workspace-metadata.source.json" = "amplifier_web/component_delivery/workspace-metadata.json"
