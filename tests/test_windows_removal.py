@@ -1042,6 +1042,7 @@ def test_native_finish_never_clears_attributes_through_a_hard_link(finish_tree, 
     tree, root = finish_tree, finish_tree["root"]
     outside = tree["outside"] / "keep.txt"
     os.chmod(outside, stat.S_IREAD)
+    tree["outside_before"] = _outside_state(tree["outside"])
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.SetFileAttributesW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
     kernel.SetFileAttributesW.restype = ctypes.c_int
@@ -1061,7 +1062,6 @@ def test_native_finish_never_clears_attributes_through_a_hard_link(finish_tree, 
             before = {path: (path.read_bytes(), path.stat().st_file_attributes)
                       for path in (hardlink, readonly, hidden, system)}
             removal.finish_after_exit(root, TOKEN, **_finish_options(tree))
-    tree["outside_before"] = _outside_state(tree["outside"])
     result = _finish_report(tree["report"])
     assert result["reason"] == "" and not result["folderRemoved"], result
     assert {path: (path.read_bytes(), path.stat().st_file_attributes) for path in before} == before

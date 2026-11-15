@@ -144,6 +144,7 @@ class Disk:
             path.unlink()
 
     def remove(self, names, *, settle=0, wait=None, park=None):
+        assert plan.COMPLETE not in names, "Only the step after exit may delete setup's completion record."
         listed, left, parked = set(os.listdir(self.root)), [], []
         for name in names:
             if name in listed:  # The exact spelling of the listing, as the real walk; never a path lookup.
