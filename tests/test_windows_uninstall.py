@@ -117,8 +117,9 @@ class Disk:
             path.unlink()
 
     def remove(self, names, *, settle=0, wait=None):
+        listed = set(os.listdir(self.root))
         for name in names:
-            if os.path.lexists(self.root / name):
+            if name in listed:  # The exact spelling of the listing, as the real walk; never a path lookup.
                 # The rule that everything else rests on.
                 assert (self.root / plan.JOURNAL).is_file(), f"{name} would be deleted before the journal exists"
                 self.state["calls"].append(("delete", name))
@@ -126,7 +127,8 @@ class Disk:
         return {"removed": 0, "left": [], "leftCount": 0}
 
     def holding(self, names):
-        return sorted(name for name in names if os.path.lexists(self.root / name) and not (
+        listed = set(os.listdir(self.root))
+        return sorted(name for name in names if name in listed and not (
             (self.root / name).is_dir() and not any((self.root / name).iterdir())))
 
 
