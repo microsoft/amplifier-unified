@@ -230,6 +230,7 @@ jobs:
       # A skipped native case would hide the answer; on this lane it fails.
       AMPLIFIER_REQUIRE_PORT_RESERVATION_CHECK: '1'
       AMPLIFIER_REQUIRE_WINDOWS_TRUST_CHECKS: '1'
+      AMPLIFIER_REQUIRE_WINDOWS_SHELL_CHECKS: '1'
       AMPLIFIER_TEST_EDGE_WITH_MACHINE_ROOT: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -265,7 +266,7 @@ jobs:
       # Uninstall: real Start-menu shortcuts (ShellLink COM), the real HKCU
       # registry transaction, private files and NTFS sharing, in a throwaway
       # installation folder that the test removes. Task Scheduler is a stand-in.
-      - name: Check uninstall order, a failed stop and a second uninstall with the real Windows entries
+      - name: Check uninstall order, a failed stop and restored real Windows entries
         shell: pwsh
         run: |
           .\.native-test-venv\Scripts\python.exe -B -m pytest -q -ra -p no:cacheprovider tests/test_windows_consumer_shell.py

@@ -17,7 +17,7 @@ import pytest
 
 from amplifier_web import windows_removal as removal, windows_uninstall as plan
 
-from test_windows_consumer_shell import _seed_native_entries, model, shell, uninstaller  # noqa: F401  (two fixtures)
+from test_windows_consumer_shell import _install_native_entries, model, shell, uninstaller  # noqa: F401  (two fixtures)
 from test_windows_removal import _finish_report, file, folder, link, opened  # noqa: F401  (opened is a fixture)
 
 REPOSITORY = Path(__file__).resolve().parents[1]
@@ -544,13 +544,15 @@ def test_open_stop_and_status_refuse_while_any_journal_exists(deleter, monkeypat
 def test_a_journal_that_does_not_prove_a_delete_choice_never_deletes(deleter):
     # A record that this version did not write, or a damaged one: only an uninstall that keeps the folder.
     state, root = deleter.state, deleter.root
+    keep = '{"schema": 1, "choice": "keep", "token": "' + "b" * 32 + '", "store": "source-store"}'
     delete = '{"schema": 1, "choice": "delete", "token": "' + "c" * 32 + '"'
-    for text in ('{"schema": 1, "choice": "keep", "token": "' + "b" * 32 + '"}', "{",
+    for text in (keep, "{",
                  # A delete record that does not name the source store, or names it in another way.
                  delete + "}", delete + ', "store": "S"}', delete + ', "store": ["s"]}',
                  delete + ', "store": "cache"}', delete + ', "store": null}', '{"schema": 2}'):
-        assert plan.pending(root) is None or text.startswith('{"schema": 1, "choice": "keep"')
         (root / plan.JOURNAL).write_text(text)
+        # Only the first is this program's record at all, and it records another choice.
+        assert (plan.pending(root) is not None) == (text == keep)
         state["answers"] = [False]
         assert deleter.run() == {"ok": True, "cancelled": True}
         assert not state["questions"] and "stay in this folder" in state["notices"][-1][0]
@@ -1193,12 +1195,15 @@ def test_data_removal_gives_a_closing_program_time_and_then_stops(deleter):
 def launch(deleter, monkeypatch):
     from amplifier_web import windows_installation
     state, consumer = deleter.state, deleter.consumer
-    async def prepare(root, launcher, env, *, identity):
+    steps = []
+    async def prepare(root, launcher, env, *, identity, progress):
         assert state["locked"], "the start step runs under the installation's lock"
+        # The caller's own step record reaches the start step, as on main.
+        assert progress == steps.append
         state["calls"].append(("prepare",))
         return {"background": True, "created": False, "health": {"ok": True}}
     monkeypatch.setattr(windows_installation, "prepare_background", prepare)
-    return lambda: asyncio.run(consumer.launch(deleter.root, open_browser=False))
+    return lambda: asyncio.run(consumer.launch(deleter.root, open_browser=False, progress=steps.append))
 
 
 def test_open_takes_the_same_lock_around_its_start_step_and_refuses_when_it_is_taken(deleter, monkeypatch):
@@ -1469,7 +1474,7 @@ def native_installation(tmp_path, request):
     entries = shell.programs() / ("Amplifier Unified - " + shell.identity(root))
     links = []
     try:
-        registration = _seed_native_entries(root, entries)
+        registration = _install_native_entries(root)
         made = subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(root / "tools" / "amplifier-unified")],
                               capture_output=True, text=True, timeout=120)
         assert made.returncode == 0, made.stderr[-1500:]
@@ -1656,7 +1661,7 @@ def test_native_uninstall_deletes_the_python_it_runs_from_and_still_ends_cleanly
     with windows_files.directory(root, owned_root=root, create=True):
         pass
     try:
-        _seed_native_entries(root, entries)
+        _install_native_entries(root)
         base, venv = root / "python/cpython-self", root / "tools/amplifier-unified"
         shutil.copytree(sys.base_prefix, base, ignore=shutil.ignore_patterns(
             "test", "site-packages", "idlelib", "tkinter", "ensurepip", "tcl", "Doc",

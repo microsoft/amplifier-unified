@@ -14,6 +14,7 @@ from amplifier_web import deployment, windows_ports, windows_service, updates
 def installation(tmp_path, monkeypatch):
     calls = []
     state = {"task": {"exists": False}, "spec": None,
+             "status": {"ok": False, "prepared": False}, "events": [],
              "runtime": {"ok": True, "prepared": True, "connectionRequired": True,
                          "workerReady": False},
              "health": {"ok": True, "responding": True, "processVerified": True},
@@ -33,7 +34,14 @@ def installation(tmp_path, monkeypatch):
         assert kwargs["env"] == {"PUBLIC": "only"} and kwargs["cwd"] == tmp_path
         action = args[5:]
         calls.append(action)
+        state["events"].append(("command", action))
+        if action[:2] == ("runtime", "status"):
+            assert kwargs["timeout"] == 90
+            if isinstance(state["status"], Exception):
+                raise state["status"]
+            return state["status"] if isinstance(state["status"], str) else json.dumps(state["status"])
         if action[:2] == ("runtime", "prepare"):
+            assert kwargs["timeout"] == 1800
             return json.dumps(state["runtime"])
         if action[:2] == ("service", "status"):
             return json.dumps(state["health"])
@@ -52,7 +60,7 @@ def test_initial_setup_uses_cli_and_accountless_dependencies_before_registration
     # before the host's own listener claims it.
     assert calls == [
         ("config", "set", "bind", "[127.0.0.1]"),
-        ("setup-tls",), ("runtime", "prepare", "--json"),
+        ("setup-tls",), ("runtime", "status", "--json"), ("runtime", "prepare", "--json"),
         ("config", "set", "port", "23456", "public_origins", "[https://127.0.0.1:23456]"),
         ("service", "install"), ("service", "status", "--wait", "60", "--json")]
 
@@ -73,8 +81,78 @@ def test_saved_port_and_settings_are_kept_when_the_task_is_registered_again(inst
     value["saved"] = 8942
     result = run()
     assert result["created"] and value["kinds"] == [(8942, False)]
-    assert calls == [("setup-tls",), ("runtime", "prepare", "--json"),
+    assert calls == [("setup-tls",), ("runtime", "status", "--json"), ("runtime", "prepare", "--json"),
                      ("service", "install"), ("service", "status", "--wait", "60", "--json")]
+
+
+@pytest.mark.parametrize("saved", [None, 8942])
+def test_prepared_runtime_is_used_without_preparing_again(installation, saved):
+    _, value, calls, run = installation
+    value.update(saved=saved, status={"ok": True, "prepared": True, "generation": "kept"})
+    result = run()
+    assert result["runtime"] == value["status"] and result["created"]
+    expected = ([("config", "set", "bind", "[127.0.0.1]")] if saved is None else [])
+    expected += [("setup-tls",), ("runtime", "status", "--json")]
+    if saved is None:
+        expected += [("config", "set", "port", "23456", "public_origins", "[https://127.0.0.1:23456]")]
+    expected += [("service", "install"), ("service", "status", "--wait", "60", "--json")]
+    assert calls == expected
+
+
+@pytest.mark.parametrize("status", [
+    OSError("read"), ValueError("json"), RuntimeError("exit 1"), TimeoutError("wait"),
+    "not json", [], {"ok": False, "prepared": True}, {"ok": True, "prepared": False},
+    {"ok": 1, "prepared": True}, {"ok": True, "prepared": 1}])
+def test_unprepared_or_unreadable_status_still_prepares(installation, status):
+    _, value, calls, run = installation
+    value["status"] = status
+    assert run()["runtime"] == value["runtime"]
+    assert calls[2:4] == [("runtime", "status", "--json"), ("runtime", "prepare", "--json")]
+    assert calls[-2] == ("service", "install")
+
+
+@pytest.mark.parametrize("prepared", [False, True])
+def test_progress_is_reported_immediately_before_each_step(installation, prepared):
+    root, value, _, _ = installation
+    value["status"] = {"ok": True, "prepared": prepared}
+    events = value["events"]
+    asyncio.run(setup.prepare_background(
+        root, root / "host/Scripts/amplifier-unified.exe", {"PUBLIC": "only"},
+        identity=lambda: events.append(("identity",)),
+        progress=lambda name: events.append(("progress", name))))
+    expected = [
+        ("progress", "address"), ("command", ("config", "set", "bind", "[127.0.0.1]")),
+        ("progress", "tls"), ("identity",), ("command", ("setup-tls",)),
+        ("command", ("runtime", "status", "--json"))]
+    if not prepared:
+        expected += [("progress", "prepare"), ("command", ("runtime", "prepare", "--json"))]
+    expected += [
+        ("progress", "address"),
+        ("command", ("config", "set", "port", "23456", "public_origins", "[https://127.0.0.1:23456]")),
+        ("progress", "task"), ("command", ("service", "install")),
+        ("progress", "ready"), ("command", ("service", "status", "--wait", "60", "--json"))]
+    assert events == expected
+
+
+def test_a_failure_after_a_finished_preparation_is_not_reported_as_preparation(installation, monkeypatch):
+    root, value, calls, _ = installation
+    steps = []
+    def no_port():
+        raise RuntimeError("no free port")
+    monkeypatch.setattr(windows_ports, "select", no_port)
+    with pytest.raises(RuntimeError, match="no free port"):
+        asyncio.run(setup.prepare_background(
+            root, root / "host/Scripts/amplifier-unified.exe", {"PUBLIC": "only"}, progress=steps.append))
+    assert calls[-1] == ("runtime", "prepare", "--json") and steps == ["address", "tls", "prepare", "address"]
+
+
+def test_stopped_task_reports_start_then_health_without_preparation(installation):
+    owned(installation, state=3, instances=0)
+    root, value, _, _ = installation
+    steps = []
+    asyncio.run(setup.prepare_background(
+        root, root / "host/Scripts/amplifier-unified.exe", {"PUBLIC": "only"}, progress=steps.append))
+    assert steps == ["address", "task", "ready"]
 
 
 def test_explicit_port_keeps_the_fixed_prototype_address(installation):
