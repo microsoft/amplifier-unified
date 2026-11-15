@@ -175,6 +175,26 @@ def releases(root):
     return sum(child.is_dir() for child in path.iterdir()) if path.exists() else 0
 
 
+async def listener_answers(home):
+    """Check the pinned HTTPS listener even when no task is registered."""
+    import aiohttp
+    from amplifier_web import browser_entry
+    from amplifier_web.deployment import load_server_config
+    urls, pin = browser_entry._owner_probe_targets(home, load_server_config(home))
+    assert isinstance(pin, aiohttp.Fingerprint) and urls
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3), trust_env=False) as client:
+        for url in urls:
+            assert url.startswith("https://")
+            try:
+                async with client.get(url.replace("/api/health", "/login"), ssl=pin,
+                                      allow_redirects=False) as response:
+                    await response.read()
+                    return True
+            except aiohttp.ClientConnectorError:
+                pass
+    return False
+
+
 def run():
     report = {"status": "FAIL", "scheduledTask": "real", "stage": "records",
               "checks": [{"name": name, "status": "FAIL", "reason": "Not reached"} for name in CHECKS]}
@@ -220,9 +240,20 @@ def run():
             state, status = task_facts(home), cli(root, "service", "status", "--json")
             if first["exitCode"] or not state["managed"] or not healthy(status):
                 log = home / "config/services/task-output.log"
+                from amplifier_web.runtime_environment import receipt_directory
+                receipt = receipt_directory(home)
+                runtime_files = {}
+                for name in ("install-failure.json", "install-progress.json"):
+                    path = receipt / name
+                    if path.exists():
+                        runtime_files[name] = json.loads(path.read_text(encoding="utf-8"))
                 attempt = {"launcher": first, "task": state, "serviceStatus": status,
                            "hresult": None,
                            "hresultNote": "The public launcher does not expose the scheduler receipt.",
+                           "runtimeFiles": runtime_files,
+                           "privateGitHelper": execute([root / "git/cmd/git.exe", "remote-https"]),
+                           "runnerGitHelper": execute(["C:/Program Files/Git/bin/git.exe", "remote-https"]),
+                           "privateGitExecPath": execute([root / "git/cmd/git.exe", "--exec-path"]),
                            "taskOutput": "\n".join(log.read_text(encoding="utf-8", errors="replace")
                                                   .splitlines()[-40:])[-12000:] if log.exists() else None}
                 save("task-attempt.json", attempt)
@@ -264,11 +295,12 @@ def run():
             state, status = task_facts(home), cli(root, "service", "status", "--json")
             assert removed["ok"] and not state["managed"]
             assert not status["json"].get("responding", False) and not shell.listed(root)
+            assert not asyncio.run(listener_answers(home)), "The HTTPS listener still answers"
             assert json.loads((root / shell.FILE).read_text())["status"] == "removed"
             assert root.is_dir() and hashlib.sha256(marker.read_bytes()).hexdigest() == digest
             count = releases(root)
             passed(5, uninstall=removed, notices=notices, task=state, serviceStatus=status,
-                   releaseCount=count, folderPresent=True, markerUnchanged=True)
+                   releaseCount=count, folderPresent=True, markerUnchanged=True, listenerAnswers=False)
 
             begin(6)
             second = launcher(root, "--no-open")
@@ -300,6 +332,7 @@ def run():
             removed = uninstall(root, notices)
             assert removed["ok"] and not windows_service.managed(home) and not shell.listed(root)
             assert not cli(root, "service", "status", "--json")["json"].get("responding", False)
+            assert not asyncio.run(listener_answers(home)), "The final HTTPS listener still answers"
             # The cleanup step removes this Python environment after it exits.
             report["checks"][8].update(reason="Final uninstall passed; folder removal pending",
                                        uninstall=removed, notices=notices)
