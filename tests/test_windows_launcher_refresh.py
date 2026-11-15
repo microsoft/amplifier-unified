@@ -563,7 +563,8 @@ def test_a_pointer_of_another_launcher_is_never_rebound(installed):
 
 @pytest.mark.parametrize("held", ["the release file copy", "setup's receipt", "the receipt during a rollback"])
 def test_a_folder_that_a_closing_program_still_holds_is_waited_for(installed, monkeypatch, held):
-    # Measured in the clean room: while the app's workers are alive, a rename
+    # Measured in the clean room (worker Foundation before e37a946b): while the
+    # app's workers are alive, a rename
     # into the installation folder fails with "used by another process". They
     # end a moment after the task reports that it stopped.
     waits, service, pointer = [], Service(installed.root), installed.pointer.read_bytes()

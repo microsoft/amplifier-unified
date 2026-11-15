@@ -191,8 +191,13 @@ restore. The stable launcher keeps the code that setup installed; an in-app
 update cannot change it. `amplifier_web.windows_launcher_refresh` is the only
 supported replacement: it runs with the active generation's Python from outside
 the host's Job, and it rolls back fully on failure.
-While a conversation worker is alive, Windows refuses a new or replaced file
-directly in a consumer installation folder (error 32); `app\config\services`
+A live conversation worker holds Foundation's session ownership below
+`<installation folder>\ownership`. A worker whose Foundation is older than
+`e37a946b` makes Windows refuse a new, replaced or renamed entry directly in
+the installation folder (error 32). From `e37a946b` Windows refuses only a
+rename of a pinned folder itself and an arrival in `ownership` or below it
+(`tests/test_windows_live_worker_folders.py`). A running worker keeps the
+Foundation that it started with, so expect the refusal; `app\config\services`
 still accepts writes. Launcher maintenance stops the app before such a write
 and removes the person's Start-menu and Apps-list entries last.
 Task Scheduler expands percent-bearing executable/working-directory paths.
