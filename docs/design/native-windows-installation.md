@@ -1848,7 +1848,7 @@ with no lock between the two processes:
 A session that the host returns was therefore made before any record that is
 saved later, so it carries no later second than that record, and the host
 refuses it when it applies that sign-out. A session in the same second as a
-sign-out is refused. The owner signs in again one second later, with a new
+sign-out is refused. The owner signs in again a few seconds later, with a new
 ticket or code.
 
 The host tells a new record from the file's time, size and identity, not from
@@ -1856,16 +1856,25 @@ its content. Every save puts a new file in place while the record before it
 still exists, so two saves in a row never have the same identity. The command
 checks this for each save: a save that the host could not tell from the record
 before it is made again. After three saves that were too slow or not visible,
-and after a save that is not confirmed although the record changed, the
-command says that the sign-out is not complete and asks the owner to run it
-again. It says that nothing was changed only when the record is the same as
-before the command.
+and after a save that is not confirmed although the record may have changed,
+the command says that it could not confirm the sign-out and asks the owner to
+run it again. It says that nothing was changed only when it looked at the
+record before and after the attempt and found the same record.
+
+A look at the record can fail for another reason than a missing record. Such
+a look is never taken for "no record" and never for "unchanged". The host
+then opens no session for a ticket or code. The watcher applies nothing, keeps
+nothing, and says so once in the host log. The command does not report a
+finished sign-out.
 
 This holds while the PC clock does not go backward. One case is left open: the
 host looks every two seconds, and it misses a change when two or more saves
 between two looks end in a file with the same time, size and identity as the
 file that the host saw last. That needs a file time that does not change
 between saves and a reused identity. It is not measured on any file system.
+Two facts make it narrower. The Windows private store accepts only a local
+fixed NTFS volume. Tickets and codes exist on a Windows host only, so on the
+other systems a missed change can only delay the end of open streams.
 
 A ticket or code that is made after a sign-out and before the host has applied
 it is dropped as well. The owner waits a few seconds after the command.

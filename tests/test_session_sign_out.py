@@ -52,6 +52,29 @@ def session(issued):
     return auth._signed(SECRET, {"kind": "session", "issued": issued, "nonce": "n"})
 
 
+def changed_look(monkeypatch, home, result):
+    """Replace what a look at the saved record finds; return a function that ends it.
+
+    `result` gets the real file information. It returns what the look finds,
+    or it raises. Only the look is changed: saves and reads stay real.
+    """
+    record, real = auth._epoch_path(home), os.stat
+
+    def stat(path, *args, **kwargs):
+        if isinstance(path, (str, os.PathLike)) and Path(path) == record:
+            return result(lambda: real(path, *args, **kwargs))
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(auth.os, "stat", stat)
+    return lambda: monkeypatch.setattr(auth.os, "stat", real)
+
+
+def look_fails(monkeypatch, home):
+    """The look fails, for example because another program holds the file. Not: the record is missing."""
+    def fail(info):
+        raise PermissionError("in use")
+    return changed_look(monkeypatch, home, fail)
+
+
 def test_session_from_before_the_sign_out_is_refused_and_a_later_one_accepted(monkeypatch):
     now = 1_900_000_000
     monkeypatch.setattr(auth.time, "time", lambda: now)
@@ -240,7 +263,7 @@ def test_sign_out_that_is_never_saved_within_one_second_is_reported_as_uncertain
     with pytest.raises(SystemExit) as stopped:
         run_command(home, monkeypatch)
     assert "Run the command again" in str(stopped.value) and "Nothing was changed" not in str(stopped.value)
-    assert capsys.readouterr().out == ""
+    assert "could not confirm" in str(stopped.value) and capsys.readouterr().out == ""
 
 
 def test_save_that_fails_after_an_earlier_save_of_the_same_run_is_not_reported_as_no_change(home, monkeypatch, capsys):
@@ -261,7 +284,7 @@ def test_save_that_fails_after_an_earlier_save_of_the_same_run_is_not_reported_a
     saves.clear()
     with pytest.raises(SystemExit) as stopped:
         run_command(home, monkeypatch)
-    assert "not complete" in str(stopped.value) and "Run the command again" in str(stopped.value)
+    assert "could not confirm" in str(stopped.value) and "Run the command again" in str(stopped.value)
     assert "Nothing was changed" not in str(stopped.value) and capsys.readouterr().out == ""
 
 
@@ -280,7 +303,7 @@ def test_first_save_that_is_on_disk_but_not_confirmed_is_not_reported_as_no_chan
     assert read(home) == 1_900_000_100                      # The record did change.
     with pytest.raises(SystemExit) as stopped:
         run_command(home, monkeypatch)
-    assert "not complete" in str(stopped.value) and "Nothing was changed" not in str(stopped.value)
+    assert "could not confirm" in str(stopped.value) and "Nothing was changed" not in str(stopped.value)
     assert capsys.readouterr().out == ""
 
 
@@ -304,13 +327,104 @@ def test_second_sign_out_in_the_same_second_still_drops_a_ticket_and_a_code_made
     assert auth.valid_session(app, auth.sign_in(app))       # A sign-in after both works.
 
 
-def test_host_tells_two_saves_apart_by_the_file_itself_not_only_by_its_time(home):
+def test_host_tells_two_saves_apart_by_the_file_itself_when_time_and_size_are_the_same(home, monkeypatch):
+    # The file time never changes here. The size and the identity are the real ones.
+    changed_look(monkeypatch, home, lambda info: SimpleNamespace(
+        st_mtime_ns=5, st_size=info().st_size, st_ino=info().st_ino))
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_100)
+    codes = browser_entry.CodeStore()
+    app = application(home, browser_codes=codes, sessions=auth.Sessions.load(home))
     auth.sign_out_all(home)
     first = auth._epoch_hint(home)
-    auth._write_epoch(home, auth._read_epoch(home))         # The same content, saved again.
+    assert auth.refresh_sessions(app) is True
+    codes.issue(browser_entry.Binding("i", "d", "https://pc.example:1", "S-1-5-21-1-2-3-1001"))
+    assert auth.sign_out_all(home) == 1_900_000_100         # Again, in the same second.
     second = auth._epoch_hint(home)
-    assert len(first) == 3 and first[2] and second[2] and first[2] != second[2]
-    assert first[1] == second[1]                            # The size says nothing here.
+    assert first[:2] == second[:2] and first[2] and second[2] and first != second  # Only the file itself differs.
+    assert auth.sign_in(app) is None                        # The host has not looked yet.
+    assert auth.refresh_sessions(app) is False and not codes._codes
+
+
+def test_failed_save_with_a_record_that_cannot_be_looked_at_is_not_reported_as_no_change(home, monkeypatch, capsys):
+    auth.sign_out_all(home)
+    look_fails(monkeypatch, home)                           # Before the save and after it.
+    monkeypatch.setattr(auth, "_write_epoch", lambda *a: (_ for _ in ()).throw(PermissionError("denied")))
+    with pytest.raises(SystemExit) as stopped:
+        run_command(home, monkeypatch)
+    assert "could not confirm" in str(stopped.value) and "Nothing was changed" not in str(stopped.value)
+    assert capsys.readouterr().out == ""
+
+
+def test_look_at_the_record_that_fails_is_never_no_record_and_never_unchanged(home, monkeypatch):
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_100)
+    tickets, codes = browser_entry.GrantStore(), browser_entry.CodeStore()
+    app = application(home, browser_entry=tickets, browser_codes=codes, sessions=auth.Sessions.load(home))
+    assert auth._epoch_hint(home) is None and app["sessions"].hint is None      # No record: no sign-out yet.
+    binding = browser_entry.Binding("i", "d", "https://pc.example:1", "S-1-5-21-1-2-3-1001")
+    tickets.issue(binding)
+    codes.issue(binding)
+    auth.sign_out_all(home)                                 # The first sign-out of this installation.
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_101)
+    again = look_fails(monkeypatch, home)
+    assert auth._epoch_hint(home) is auth._UNSEEN
+    assert auth.sign_in(app) is None and auth.sign_in(app, remote=True) is None
+    # The watcher applies nothing and keeps nothing from a look that failed, and it says so.
+    with pytest.raises(OSError, match="could not be looked at"):
+        auth.refresh_sessions(app)
+    assert app["sessions"].hint is None and app["sessions"].epoch == 0 and tickets._grants and codes._codes
+    again()
+    assert auth.refresh_sessions(app) is True and app["sessions"].epoch == 1_900_000_100
+    assert not tickets._grants and not codes._codes
+    assert auth.valid_session(app, auth.sign_in(app))
+
+
+def test_host_that_could_not_look_at_the_record_at_its_start_opens_nothing_until_it_can(home, monkeypatch):
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_100)
+    auth.sign_out_all(home)
+    again = look_fails(monkeypatch, home)
+    app = application(home, sessions=auth.Sessions.load(home))
+    assert app["sessions"].hint is auth._UNSEEN and app["sessions"].epoch == 1_900_000_100
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_105)
+    assert auth.sign_in(app) is None                        # Two looks that failed are not "the same record".
+    again()
+    assert auth.sign_in(app) is None                        # Not yet: the host itself has not looked with success.
+    assert auth.refresh_sessions(app) is False and app["sessions"].hint == auth._epoch_hint(home)
+    assert auth.valid_session(app, auth.sign_in(app))
+
+
+def test_first_save_whose_read_back_and_look_both_fail_is_not_reported_as_no_change(home, monkeypatch, capsys):
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_100)
+    read, reads = auth._read_epoch, []
+
+    def read_back_fails(data_dir):
+        reads.append(1)
+        if len(reads) == 2:                                 # The read-back, after the save.
+            look_fails(monkeypatch, home)                   # The look after it fails as well.
+            raise PermissionError("in use")
+        return read(data_dir)
+    monkeypatch.setattr(auth, "_read_epoch", read_back_fails)
+    with pytest.raises(SystemExit) as stopped:              # There was no record before the command.
+        run_command(home, monkeypatch)
+    assert "could not confirm" in str(stopped.value) and "Nothing was changed" not in str(stopped.value)
+    assert read(home) == 1_900_000_100 and capsys.readouterr().out == ""    # The record was saved.
+
+
+def test_save_that_the_command_cannot_look_at_afterwards_is_not_reported_as_done(home, monkeypatch, capsys):
+    monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_100)
+    monkeypatch.setattr(auth.time, "sleep", lambda seconds: None)
+    auth.sign_out_all(home)                                 # A record is there.
+    write = auth._write_epoch
+
+    def look_fails_after_the_save(data_dir, value):
+        write(data_dir, value)
+        look_fails(monkeypatch, home)
+    monkeypatch.setattr(auth, "_write_epoch", look_fails_after_the_save)
+    # The save and the read-back work. The command cannot see what the host will see.
+    with pytest.raises(auth.SignOutUncertain):
+        auth.sign_out_all(home)
+    with pytest.raises(SystemExit) as stopped:
+        run_command(home, monkeypatch)
+    assert "could not confirm" in str(stopped.value) and capsys.readouterr().out == ""
 
 
 def test_save_that_the_host_could_not_tell_from_the_record_before_it_is_not_a_finished_sign_out(home, monkeypatch):
@@ -328,16 +442,18 @@ def test_save_that_the_host_could_not_tell_from_the_record_before_it_is_not_a_fi
 
 def test_record_that_cannot_be_read_signs_everyone_out_once_and_drops_tickets_and_codes(home, monkeypatch):
     monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_100)
-    codes = browser_entry.CodeStore()
-    app = application(home, browser_codes=codes, sessions=auth.Sessions.load(home))
-    codes.issue(browser_entry.Binding("i", "d", "https://pc.example:1", "S-1-5-21-1-2-3-1001"))
+    tickets, codes = browser_entry.GrantStore(), browser_entry.CodeStore()
+    app = application(home, browser_entry=tickets, browser_codes=codes, sessions=auth.Sessions.load(home))
+    binding = browser_entry.Binding("i", "d", "https://pc.example:1", "S-1-5-21-1-2-3-1001")
+    tickets.issue(binding)
+    codes.issue(binding)
     auth.sign_out_all(home)
     monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_500)
     monkeypatch.setattr(auth, "_read_epoch", lambda data_dir: (_ for _ in ()).throw(PermissionError("in use")))
     monkeypatch.setattr(auth, "_write_epoch", lambda *a: (_ for _ in ()).throw(PermissionError("in use")))
     # Not readable and not repairable: the present moment is the sign-out time.
     assert auth.refresh_sessions(app) is True and app["sessions"].epoch == 1_900_000_500
-    assert not codes._codes and not auth.valid_session(app, session(1_900_000_400))
+    assert not tickets._grants and not codes._codes and not auth.valid_session(app, session(1_900_000_400))
     assert auth.refresh_sessions(app) is False              # Once: the record did not change again.
     monkeypatch.setattr(auth.time, "time", lambda: 1_900_000_501)
     assert auth.valid_session(app, auth.sign_in(app))       # Sign-in is not closed for good.

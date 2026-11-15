@@ -266,9 +266,10 @@ def session_epoch(data_dir: Path) -> int:
 
 
 class SignOutUncertain(OSError):
-    """A sign-out time was saved, but the sign-out was not finished.
+    """The sign-out could not be confirmed.
 
-    A later save was too slow or failed. A sign-in at the same moment may
+    A save was too slow, failed after the record had changed, or could not be
+    looked at. The record may have changed. A sign-in at the same moment may
     have a session that this sign-out does not end.
     """
 
@@ -304,14 +305,15 @@ def sign_out_all(data_dir: Path) -> int:
             if _read_epoch(data_dir) != value:
                 raise OSError("The sign-out time was not saved.")
         except (OSError, ValueError):
-            if published or _epoch_hint(data_dir) != before:
-                # A save of this run is on disk, or the record changed all the
-                # same: something did change, so this is not "nothing happened".
-                raise SignOutUncertain("The saved sign-out time changed, but the save was not confirmed.") from None
+            if published or not _same_record(before, _epoch_hint(data_dir)):
+                # A save of this run is on disk, or the record is not known to
+                # be the one from before: this is not "nothing was changed".
+                raise SignOutUncertain("The sign-out time was not confirmed, and the record may have changed.") from None
             raise
         published = True
-        # Done when the host can see this save, and no later second began before it was there.
-        if _epoch_hint(data_dir) != before and int(time.time()) <= value:
+        # Done when the host can see this save (both looks worked and differ),
+        # and no later second began before the save was there.
+        if _new_record(before, _epoch_hint(data_dir)) and int(time.time()) <= value:
             return value
         saved = value
         time.sleep(0.05)
@@ -323,12 +325,32 @@ def _epoch_hint(data_dir: Path):
 
     Every save puts a new file in place, so the file identity changes with
     each save, also when two saves have the same file time and size.
+
+    None means that there is no record: no sign-out yet. A look that fails
+    for any other reason gives `_UNSEEN`. That is never "no record" and never
+    "the same record"; compare two looks only with `_same_record` and
+    `_new_record`.
     """
     try:
         info = os.stat(_epoch_path(data_dir))
-        return info.st_mtime_ns, info.st_size, info.st_ino
-    except OSError:
+    except FileNotFoundError:
         return None
+    except OSError:
+        return _UNSEEN
+    return info.st_mtime_ns, info.st_size, info.st_ino
+
+
+_UNSEEN = object()  # The saved record could not be looked at.
+
+
+def _same_record(first, second) -> bool:
+    """Both looks worked, and they found the same record or both found none."""
+    return first is not _UNSEEN and second is not _UNSEEN and first == second
+
+
+def _new_record(first, second) -> bool:
+    """Both looks worked, and the second found another record than the first."""
+    return first is not _UNSEEN and second is not _UNSEEN and first != second
 
 
 def refresh_sessions(app, streams=()) -> bool:
@@ -343,7 +365,10 @@ def refresh_sessions(app, streams=()) -> bool:
     """
     data_dir, state = app["service"].data_dir, app["sessions"]
     hint = _epoch_hint(data_dir)
-    if hint == state.hint:
+    if hint is _UNSEEN:
+        # Nothing is applied and nothing is kept from a look that failed.
+        raise OSError("The saved sign-out record could not be looked at.")
+    if _same_record(hint, state.hint):
         return False
     value = session_epoch(data_dir)
     # Kept only now: a record that could not be read is read again next time,
@@ -402,10 +427,11 @@ def sign_in(app, *, remote: bool = False) -> str | None:
     when it applies that later sign-out.
 
     The record is only looked at here. The watcher applies it, and it alone
-    ends the open streams.
+    ends the open streams. A look that fails opens no session: it is not
+    known then that no sign-out waits.
     """
     value = new_session(app["session_secret"], remote=remote)
-    if _epoch_hint(app["service"].data_dir) != app["sessions"].hint:
+    if not _same_record(_epoch_hint(app["service"].data_dir), app["sessions"].hint):
         return None
     return value
 

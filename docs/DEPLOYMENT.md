@@ -417,7 +417,7 @@ A sign-in ticket or code that is made or used during those few seconds opens
 no session, so that one from before the sign-out cannot outlast it. Wait a few
 seconds after the command. Then open Amplifier again on the PC, or make a new
 code for another device.
-If the command says that the sign-out is not complete, run it again.
+If the command says that it could not confirm the sign-out, run it again.
 Sign in again in the usual way for your platform.
 
 Limits: this signs out **all** browsers; there is no sign-out for one device.

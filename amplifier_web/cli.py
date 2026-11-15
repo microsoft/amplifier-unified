@@ -557,8 +557,8 @@ def main():
         try:
             sign_out_all(data_dir)
         except SignOutUncertain:
-            raise SystemExit("The sign-out is not complete. A sign-out time was saved, but a browser that signed in "
-                             "at the same moment may still be signed in. Run the command again.") from None
+            raise SystemExit("Amplifier could not confirm that every browser is signed out. "
+                             "Run the command again.") from None
         except (OSError, ValueError):
             raise SystemExit("Browsers were NOT signed out: the sign-out time could not be saved in "
                              f"{data_dir}. Nothing was changed.") from None

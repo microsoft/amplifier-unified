@@ -644,6 +644,27 @@ def test_code_or_ticket_opens_no_session_while_a_saved_sign_out_waits_for_the_ho
     assert "via" not in session_payload(opened.cookies[auth.SESSION_COOKIE].value)
 
 
+def test_failed_look_at_the_sign_out_record_is_not_taken_for_no_sign_out(host, monkeypatch):
+    """The first sign-out of an installation: the host has seen no record. Then its look at the record fails."""
+    code, ticket = make_code(host), local_ticket(host)
+    data_dir = host["service"].data_dir
+    assert host["sessions"].hint is None                    # No record when the host started.
+    auth.sign_out_all(data_dir)                             # The owner's command. The host has not looked yet.
+    record, real = auth._epoch_path(data_dir), os.stat
+
+    def in_use(path, *args, **kwargs):
+        if isinstance(path, (str, os.PathLike)) and Path(path) == record:
+            raise PermissionError("in use")                 # Not: the record is missing.
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(auth.os, "stat", in_use)
+    assert wrong(redeem(host, code)) and host["browser_codes"].failures == 0
+    refused = open_ticket(host, ticket)
+    assert refused.status == 403 and auth.SESSION_COOKIE not in refused.cookies
+    monkeypatch.setattr(auth.os, "stat", real)
+    assert auth.refresh_sessions(host) is True              # The host applies the sign-out.
+    assert signed_in(redeem(host, make_code(host))) and open_ticket(host, local_ticket(host)).status == 303
+
+
 def test_with_remote_access_off_no_code_can_be_made_or_used(host):
     """The default: only this computer's own addresses are configured."""
     host["server_config"]["public_origins"] = [LOCAL, "https://localhost:8941"]
