@@ -31,6 +31,7 @@ class Tree:
     """
     def __init__(self, root):
         self.rootnode, self.handles, self.opened, self.listed, self.before_open = root, {}, [], [], None
+        self.closed = []
 
     def root(self, path):
         self.handles[1] = (self.rootnode, None, None, False)
@@ -38,6 +39,7 @@ class Tree:
 
     def close(self, handle):
         node, parent, name, doomed = self.handles.pop(handle)
+        self.closed.append(name)
         if doomed and parent is not None and parent["children"].get(name) is node:
             del parent["children"][name]
 
@@ -229,11 +231,12 @@ def test_mapped_file_is_moved_and_its_empty_parents_go(opened):
     root = folder(tools=folder(sub=folder(running=mapped), plain=file()))
     tree = opened["use"](root)
     with removal.folder(opened["path"]) as owned:
-        with owned.aside(PARK) as park:
+        with owned.aside(PARK, TOKEN) as park:
             result = owned.remove(["tools"], park=park)
-            assert len(tree.handles) == 2
+            assert len(tree.handles) == 3
     assert result == {"removed": 3, "left": [], "leftCount": 0, "parked": 1}
-    assert root["children"] == {PARK: folder(**{"1": mapped})}
+    assert root["children"] == {PARK: folder(**{"1": mapped, TOKEN: folder()})}
+    assert tree.closed[-3:] == [TOKEN, PARK, None]
     assert not tree.handles
 
 
@@ -267,7 +270,7 @@ def test_aside_refuses_an_existing_name_and_leaves_no_handle(opened):
     tree = opened["use"](root)
     with removal.folder(opened["path"]) as owned:
         with pytest.raises(FileExistsError):
-            with owned.aside(PARK):
+            with owned.aside(PARK, TOKEN):
                 pytest.fail("An existing folder must never be used.")
         assert len(tree.handles) == 1 and root["children"][PARK] is old
     assert not tree.handles
@@ -278,7 +281,7 @@ def test_aside_tries_the_next_number_but_stops_after_ten_collisions(opened, take
     root = folder(tools=folder(running=file(mapped=True)))
     tree = opened["use"](root)
     with removal.folder(opened["path"]) as owned:
-        with owned.aside(PARK) as park:
+        with owned.aside(PARK, TOKEN) as park:
             children = root["children"][PARK]["children"]
             children.update({str(number): file(precious=True) for number in range(1, taken + 1)})
             result = owned.remove(["tools"], park=park)
@@ -287,6 +290,27 @@ def test_aside_tries_the_next_number_but_stops_after_ten_collisions(opened, take
     assert result["left"] == ([] if taken == 1 else [r"tools\running"])
     if taken == 1:
         assert children["2"] == file(mapped=True) and "tools" not in root["children"]
+    assert not tree.handles
+
+
+@pytest.mark.parametrize("changed", ["flat", "hold"])
+def test_aside_refuses_a_folder_changed_into_a_link_and_closes_both_handles(opened, changed):
+    root = folder()
+    tree = opened["use"](root)
+    make = tree.make
+    def altered(parent, name):
+        handle = make(parent, name)
+        if name == TOKEN:
+            node = tree.handles[parent if changed == "flat" else handle][0]
+            node["kind"] = "link"
+        return handle
+    tree.make = altered
+    with removal.folder(opened["path"]) as owned:
+        with pytest.raises(OSError, match="changed into a link"):
+            with owned.aside(PARK, TOKEN):
+                pytest.fail("A changed folder must never be used.")
+        assert len(tree.handles) == 1
+        assert tree.closed == [TOKEN, PARK]
     assert not tree.handles
 
 
@@ -330,7 +354,7 @@ def test_finish_static_program_and_stdin_only_payload(finish_start):
     token = TOKEN
     assert removal.finish_after_exit(
         r"C:\My [private]\Amplifier", token, park=PARK, folders=["workspace"],
-        files=["receipt.json"], wait_for=(12, 34), seconds=3, report=r"C:\proof.json",
+        wait_for=(12, 34), seconds=3, report=r"C:\proof.json",
     ) == 4321
     args, options = calls[0]
     assert args[1:5] == ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand"]
@@ -338,20 +362,21 @@ def test_finish_static_program_and_stdin_only_payload(finish_start):
     assert len(removal.FINISH_SCRIPT) < 9000
     code = "\n".join(line.split("#", 1)[0] for line in removal.FINISH_SCRIPT.splitlines())
     assert "-recurse" not in code.lower()
+    assert not re.search(r"Remove-Item[^\n]*-Force", code, re.I)
     assert removal.FINISH_SCRIPT.count("]::") == 3
     assert removal.FINISH_SCRIPT.count("[Environment]::CurrentDirectory") == 3
     assert re.findall(r"\$\w+\.\w+\s*\([^)]*\)", removal.FINISH_SCRIPT) == ["$entry.Delete()"]
     assert re.findall(r"\.\w+\s*\(", removal.FINISH_SCRIPT) == [".Delete("]
     assert token not in removal.FINISH_SCRIPT
-    assert options["cwd"] == r"C:\My [private]\Amplifier" + "\\" + PARK
+    assert options["cwd"] == r"C:\My [private]\Amplifier" + "\\" + PARK + "\\" + TOKEN
     assert options["creationflags"] == 0x09000200
     assert options["stdin"] == subprocess.PIPE
     assert options["stdout"] == subprocess.PIPE and options["stderr"] == subprocess.DEVNULL
     assert process.stdin.closed and process.stdout.closed
     assert process.stdin.payload == {
         "root": r"C:\My [private]\Amplifier", "token": token, "choice": "delete", "park": PARK,
-        "outside": r"C:\Windows\System32",
-        "folders": ["workspace"], "files": ["receipt.json"], "wait_for": [12, 34],
+        "parent": r"C:\My [private]", "outside": r"C:\Windows\System32",
+        "folders": ["workspace"], "wait_for": [12, 34],
         "seconds": 3, "report": r"C:\proof.json",
     }
 
@@ -363,7 +388,7 @@ def test_finish_static_program_and_stdin_only_payload(finish_start):
 def test_finish_refuses_nonlocal_or_nonabsolute_roots(finish_start, root):
     calls, _, _ = finish_start
     with pytest.raises(ValueError, match="absolute local drive"):
-        removal.finish_after_exit(root, TOKEN, park=PARK, folders=[], files=[])
+        removal.finish_after_exit(root, TOKEN, park=PARK, folders=[])
     assert not calls
 
 
@@ -374,7 +399,7 @@ def test_finish_refuses_nonlocal_or_nonabsolute_roots(finish_start, root):
 def test_finish_refuses_tokens_other_than_lowercase_32_hex(finish_start, token):
     calls, _, _ = finish_start
     with pytest.raises(ValueError, match="32 lowercase hex"):
-        removal.finish_after_exit(r"C:\Amplifier", token, park=PARK, folders=[], files=[])
+        removal.finish_after_exit(r"C:\Amplifier", token, park=PARK, folders=[])
     assert not calls
 
 
@@ -382,7 +407,7 @@ def test_finish_refuses_tokens_other_than_lowercase_32_hex(finish_start, token):
 def test_finish_refuses_unknown_choices(finish_start, choice):
     calls, _, _ = finish_start
     with pytest.raises(ValueError, match="Choice"):
-        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[], files=[], choice=choice)
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[], choice=choice)
     assert not calls
 
 
@@ -391,7 +416,7 @@ def test_finish_normalizes_the_absolute_root_and_sends_keep_choice(finish_start)
     name = "data, not code: ' ` $(&exit); \u2603".replace(":", "")
     removal.finish_after_exit(
         r"C:/My [private]/../Amplifier/.", TOKEN,
-        park=name, folders=[], files=[], choice="keep",
+        park=name, folders=[], choice="keep",
     )
     assert process.stdin.payload["root"] == r"C:\Amplifier"
     assert process.stdin.payload["choice"] == "keep"
@@ -400,11 +425,12 @@ def test_finish_normalizes_the_absolute_root_and_sends_keep_choice(finish_start)
 
 
 @pytest.mark.parametrize("name", ["", ".", "..", "a/b", "a\\b", "a:b", "a\0b",
-                                      "unified-uninstall.json", "UNIFIED-UNINSTALL.JSON", None, 2])
-@pytest.mark.parametrize("group", ["park", "folders", "files"])
+                                      "unified-uninstall.json", "UNIFIED-UNINSTALL.JSON",
+                                      "unified-setup-complete.json", "UNIFIED-SETUP-COMPLETE.JSON", None, 2])
+@pytest.mark.parametrize("group", ["park", "folders"])
 def test_finish_refuses_the_whole_payload_before_start(finish_start, name, group):
     calls, _, _ = finish_start
-    groups = dict(park=PARK, folders=["workspace"], files=["receipt.json"])
+    groups = dict(park=PARK, folders=["workspace"])
     if group == "park":
         groups[group] = name
     else:
@@ -422,14 +448,14 @@ def test_finish_retries_only_a_refused_process_start(finish_start, monkeypatch):
             raise OSError("Breakaway refused")
         return start(args, **kwargs)
     monkeypatch.setattr(removal.subprocess, "Popen", refuse_breakaway)
-    assert removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[], files=[]) == 4321
+    assert removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[]) == 4321
     assert [kwargs["creationflags"] for _, kwargs in calls] == [0x09000200, 0x08000200]
     assert calls[0][0] == calls[1][0]
     def refuse_both(*args, **kwargs):
         raise OSError("Cannot start")
     monkeypatch.setattr(removal.subprocess, "Popen", refuse_both)
     with pytest.raises(OSError, match="Cannot start"):
-        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[], files=[])
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[])
 
 
 def test_finish_reports_a_missing_system_powershell_as_an_os_error(finish_start, monkeypatch):
@@ -440,7 +466,7 @@ def test_finish_reports_a_missing_system_powershell_as_an_os_error(finish_start,
         raise windows_service.WindowsServiceError("No system folder")
     monkeypatch.setattr(windows_service, "_powershell", missing)
     with pytest.raises(OSError, match="Cannot locate Windows PowerShell"):
-        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[], files=[])
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[])
     assert not calls
 
 
@@ -459,7 +485,7 @@ def test_finish_moves_only_temporary_paths_inside_root(
     monkeypatch.setenv("TEMP", temp)
     monkeypatch.setenv("TMP", tmp)
     before = os.environ.copy()
-    removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[], files=[])
+    removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[])
     env = calls[0][1]["env"]
     assert (env["TEMP"], env["TMP"]) == (expected_temp, expected_tmp)
     assert os.environ == before and env is not os.environ
@@ -470,7 +496,7 @@ def test_finish_refuses_end_of_output_or_another_answer(finish_start, answer):
     calls, process, _ = finish_start
     process.stdout = io.BytesIO(answer)
     with pytest.raises(OSError, match="did not start in the held folder"):
-        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[], files=[])
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[])
     assert len(calls) == 1 and process.stdin.closed
 
 
@@ -485,7 +511,7 @@ def test_finish_stops_waiting_when_the_answer_does_not_arrive(finish_start):
     started = time.monotonic()
     try:
         with pytest.raises(OSError, match="did not start in the held folder"):
-            removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[], files=[], ready=0.2)
+            removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[], ready=0.2)
         assert 0.15 <= time.monotonic() - started < 2
         assert len(calls) == 1 and process.stdin.closed
     finally:
@@ -499,7 +525,7 @@ def test_finish_stops_waiting_when_the_answer_does_not_arrive(finish_start):
 def test_finish_refuses_bad_durations_and_process_ids_before_start(finish_start, options):
     calls, _, _ = finish_start
     with pytest.raises(ValueError):
-        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[], files=[], **options)
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[], **options)
     assert not calls
 
 
@@ -508,7 +534,15 @@ def test_finish_refuses_to_leave_temporary_files_inside_the_installation(finish_
     monkeypatch.setenv("TEMP", r"C:\Amplifier\temp")
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
     with pytest.raises(OSError, match="Cannot relocate"):
-        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[], files=[])
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[])
+    assert not calls
+
+
+@pytest.mark.parametrize("root", ["C:\\", "D:/", "C:/folder/.."])
+def test_finish_refuses_a_drives_top_folder(finish_start, root):
+    calls, _, _ = finish_start
+    with pytest.raises(ValueError, match="below a drive"):
+        removal.finish_after_exit(root, TOKEN, park=PARK, folders=[])
     assert not calls
 
 

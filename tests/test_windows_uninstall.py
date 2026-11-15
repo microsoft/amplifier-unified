@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import threading
 import time
 import uuid
 
@@ -158,10 +159,11 @@ class Disk:
         return result if park is None else {**result, "parked": len(parked)}
 
     @contextmanager
-    def aside(self, name):
+    def aside(self, name, hold):
         assert self.state["locked"] and self.state["pinned"] and self.state["holding"] is None
         held = self.root / name
         held.mkdir()
+        (held / hold).mkdir()
         self.state["calls"].append(("hold", name))
         self.state["holding"] = name
         count = 0
@@ -256,7 +258,9 @@ def deleter(uninstaller, monkeypatch):
     def finish_after_exit(folder, token, **options):
         assert folder == root and state["locked"] and state["pinned"]
         assert state["holding"] == plan.PARK
-        assert list((root / plan.PARK).iterdir()) == []
+        assert {path.name for path in (root / plan.PARK).iterdir()} == {token}
+        assert (root / plan.PARK / token).is_dir()
+        assert list((root / plan.PARK / token).iterdir()) == []
         if state["after_failure"]:
             raise state["after_failure"]
         state["calls"].append(("after-exit",))
@@ -332,8 +336,8 @@ def test_yes_twice_deletes_in_the_one_order_that_keeps_every_interruption_safe(d
     # 1. Lock, leave, prove and pin. 2. Stop, task, certificate. Nothing in the folder has changed.
     assert calls[:7] == [("lock",), ("outside",), ("pin",), ("stop",), ("task-remove",), ("certificate",),
                          ("write", plan.JOURNAL)]
-    # 3. After the journal: setup's mark of unfinished work, then its completion record, then the data, keys first.
-    assert deletes(state)[:9] == [plan.STARTED, plan.COMPLETE, "shared", "app", "capture", "ownership", "import",
+    # 3. After the journal: setup's unfinished mark, then the data, keys first. The completion record stays.
+    assert deletes(state)[:8] == [plan.STARTED, "shared", "app", "capture", "ownership", "import",
                                   "workspace", "export"]
     # 4. Caches and program files, then the Windows entries, then what the launcher's own check needs.
     program, entries = calls.index(("delete", "export")) + 1, calls.index(("registry-remove",))
@@ -346,13 +350,14 @@ def test_yes_twice_deletes_in_the_one_order_that_keeps_every_interruption_safe(d
         ("delete", "tools"), ("release", plan.PARK), ("unpin",), ("unlock",)]
     assert state["task"] == "absent" and state["registry"] is None and not deleter.folder.exists()
     # The program folders went through the walk. Only the held folder and journal stay.
-    assert {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL}
+    assert {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL, plan.COMPLETE}
+    assert plan.COMPLETE not in deletes(state) and plan.completed(root)
     journal = deleter.journal()
     assert journal == {"schema": 1, "choice": "delete", "token": journal["token"]}
     assert re.fullmatch("[0-9a-f]{32}", journal["token"])
     assert state["after"] == {
         "token": journal["token"], "park": plan.PARK,
-        "folders": plan.last_names()[0], "files": plan.last_names()[1],
+        "folders": plan.last_names(),
         "wait_for": (os.getpid(), os.getppid()), "seconds": 120, "choice": "delete", "notices": 1}
     # The result claims the start of the step after exit, never its end.
     assert result == {"ok": True, "operation": "uninstall", "userDataRetained": False, "certificate": "removed",
@@ -423,7 +428,8 @@ def test_nothing_in_the_folder_changes_before_the_journal(deleter, monkeypatch, 
     if failure not in {"proof", "entry"}:
         state.update(busy=False, lock_failure=None, pin_failure=None, refuse_write=None, task_failure=None,
                      choices=["yes", "yes"])
-        assert deleter.run()["afterExit"] and {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL}
+        assert deleter.run()["afterExit"]
+        assert {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL, plan.COMPLETE}
 
 
 def refusals(deleter, monkeypatch):
@@ -458,10 +464,10 @@ def test_data_that_stays_keeps_the_entries_and_the_journal_and_a_second_uninstal
     assert "uninstall Amplifier again to finish" in notice and "does not open" in notice
     assert notice.endswith("Reference: data, Held") and "message.txt" not in notice
     # The stored keys went first. The file in use and the journal are there.
-    assert deletes(state) == [plan.STARTED, plan.COMPLETE, *plan.DATA]
+    assert deletes(state) == [plan.STARTED, *plan.DATA]
     assert not (root / "shared").exists() and (root / "app/chats/one/message.txt").read_text() == "hello"
     first = deleter.journal()
-    assert first["choice"] == "delete" and not (root / plan.COMPLETE).exists()
+    assert first["choice"] == "delete" and plan.completed(root)
     # The Windows entries and the launcher are whole, so the person can uninstall again.
     assert state["registry"] == registration and {path.name for path in deleter.folder.iterdir()} == set(shell.LINKS)
     for group in (PROGRAM, LAST, RUNNING):
@@ -500,7 +506,8 @@ def test_data_that_stays_keeps_the_entries_and_the_journal_and_a_second_uninstal
     result = deleter.run()
     assert state["calls"][:6] == [("lock",), ("outside",), ("pin",), ("stop",), ("task-remove",),
                                   ("write", plan.JOURNAL)]
-    assert result["afterExit"] and {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL}
+    assert result["afterExit"]
+    assert {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL, plan.COMPLETE}
     assert deleter.journal()["token"] not in {first["token"], None}
     assert state["after"]["token"] == deleter.journal()["token"]
     assert state["registry"] is None and not deleter.folder.exists()
@@ -545,10 +552,10 @@ def test_foreign_top_level_entries_stay_and_then_the_folder_stays(deleter, monke
     result = deleter.run()
     names = sorted(top(foreign))
     assert result["kept"] == names and result["afterExit"]
-    assert {path.name for path in root.iterdir()} == {*names, plan.PARK, plan.JOURNAL}
+    assert {path.name for path in root.iterdir()} == {*names, plan.PARK, plan.JOURNAL, plan.COMPLETE}
     assert all((root / name).read_text() == text for name, text in foreign.items())
     # Not deleted here, and not handed to the step after exit.
-    handed = state["after"]["folders"] + state["after"]["files"]
+    handed = state["after"]["folders"]
     assert not set(names) & set(deletes(state)) and not set(names) & set(handed)
     confirmation = state["notices"][-1][0]
     assert "The folder itself stays" in confirmation and "They were not changed" in confirmation
@@ -574,7 +581,7 @@ def test_entry_that_differs_from_an_own_name_only_by_case_deletes_nothing(delete
     assert plan.altered(list(plan._EXACT)) == []
 
 
-@pytest.mark.parametrize("name,step", [(plan.STARTED, "setup-record"), (plan.COMPLETE, "setup-record"), ("app", "data")])
+@pytest.mark.parametrize("name,step", [(plan.STARTED, "setup-record"), ("app", "data")])
 def test_entry_renamed_only_by_case_after_the_check_counts_as_still_there(deleter, name, step):
     # A program renames the entry after the check. To Windows and to setup it is still the same entry.
     state, root, consumer = deleter.state, deleter.root, deleter.consumer
@@ -644,8 +651,8 @@ def test_emptied_folder_that_windows_keeps_is_not_data_and_a_program_file_in_use
     assert result["afterExit"] and result["userDataRetained"] is False
     assert list((root / "workspace").iterdir()) == [] and (root / "cache/wheels/x.whl").exists()
     # The step after exit can remove the cache only when it is empty.
-    assert state["after"]["folders"] == plan.last_names()[0]
-    assert state["after"]["files"] == plan.last_names()[1]
+    assert state["after"]["folders"] == plan.last_names()
+    assert "files" not in state["after"]
     assert state["registry"] is None
 
 
@@ -655,7 +662,7 @@ def test_mapped_program_file_is_moved_and_its_folders_go(deleter):
     result = deleter.run()
     assert result["afterExit"] and result["programLeft"] == []
     assert not (root / "python").exists() and not (root / "tools").exists()
-    assert snapshot(root / plan.PARK) == {"1": b"MZ"}
+    assert snapshot(root / plan.PARK) == {"1": b"MZ", deleter.journal()["token"] + "/": None}
 
 
 def test_program_file_held_without_delete_sharing_stays_in_its_folder(deleter):
@@ -664,7 +671,7 @@ def test_program_file_held_without_delete_sharing_stays_in_its_folder(deleter):
     result = deleter.run()
     assert result["afterExit"] and result["programLeft"] == [r"tools\amplifier-unified\Scripts\pythonw.exe"]
     assert (root / "tools/amplifier-unified/Scripts/pythonw.exe").read_text() == "MZ"
-    assert list((root / plan.PARK).iterdir()) == []
+    assert snapshot(root / plan.PARK) == {deleter.journal()["token"] + "/": None}
 
 
 def test_mapped_data_is_never_moved(deleter):
@@ -718,7 +725,7 @@ def test_finish_removes_an_earlier_flat_folder_before_making_a_new_one(deleter):
     (root / plan.PARK).mkdir()
     (root / plan.PARK / "old").write_text("old program file")
     plan.finish(root, token)
-    assert list((root / plan.PARK).iterdir()) == []
+    assert snapshot(root / plan.PARK) == {token + "/": None}
     assert state["calls"].index(("delete", plan.PARK)) < state["calls"].index(("hold", plan.PARK))
 
 
@@ -744,18 +751,18 @@ def test_finish_refuses_an_altered_name_before_it_deletes_anything(deleter):
     assert snapshot(root) == before and not deletes(state) and state["after"] is None
 
 
-def test_last_names_has_every_own_name_but_never_the_journal_or_flat_folder(deleter):
+def test_last_names_has_every_own_folder_but_never_a_file_or_the_flat_folder(deleter):
     root = deleter.root
     (root / "mine.txt").write_text("foreign")
     for owned in (None, Disk(root, deleter.state)):
-        folders, files = plan.last_names(owned)
+        folders = plan.last_names(owned)
         assert set(plan.DATA + plan.RUNNING + plan.CACHES + plan.LAST[:2]) <= set(folders)
-        assert set(plan.FILES + plan.LAST[2:] + (plan.STARTED, plan.COMPLETE)) <= set(files)
-        assert not {plan.JOURNAL, plan.PARK, "mine.txt"} & set(folders + files)
-        assert len(folders + files) == len(set(folders + files))
+        assert not set(plan.FILES + plan.LAST[2:] + (plan.STARTED, plan.COMPLETE)) & set(folders)
+        assert not {plan.JOURNAL, plan.PARK, "mine.txt"} & set(folders)
+        assert len(folders) == len(set(folders))
         if owned:
             assert "launcher-1.0.0-0a1b2c3d" in folders
-            assert "child-2.stderr.txt" in files
+            assert "child-2.stderr.txt" not in folders
     assert plan.sort([plan.PARK])["running"] == [plan.PARK] and plan._folder(plan.PARK)
 
 
@@ -776,7 +783,7 @@ def test_failed_entry_removal_after_the_data_is_gone_is_finished_by_a_second_uni
     assert json.loads((root / consumer.RECORD).read_text())["step"] == stopped.value.step
     state.update(commit_conflict=False, link_failure=None, choices=["yes", "yes"])
     assert deleter.run()["afterExit"] and state["registry"] is None and not deleter.folder.exists()
-    assert {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL}
+    assert {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL, plan.COMPLETE}
 
 
 def test_folder_that_still_cannot_be_listed_does_not_start_the_last_step(deleter, monkeypatch):
@@ -823,7 +830,7 @@ def test_journal_that_a_program_wrote_never_replaces_one_of_the_two_choices(dele
     # Only two answers of Yes, given now, delete.
     state["choices"] = ["yes", "yes"]
     assert deleter.run()["afterExit"] and len(state["questions"]) == 5
-    assert {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL}
+    assert {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL, plan.COMPLETE}
 
 
 def test_journal_write_waits_for_a_closing_app_and_then_refuses(model, monkeypatch):
@@ -952,7 +959,7 @@ def test_the_lock_is_this_persons_own_and_has_one_name_for_every_sign_in_session
     from types import SimpleNamespace
     from amplifier_web import windows_files
     person, other = "S-1-5-21-1-2-3-1001", "S-1-5-21-9-9-9-1002"
-    names, waits, owners = [], [0, 0x102], [person, person, other]
+    names, waits, owners = [], [0, 0x102, 0x80, 0xffffffff], [person, person, other, person, person]
 
     class API:
         sid = person
@@ -968,18 +975,18 @@ def test_the_lock_is_this_persons_own_and_has_one_name_for_every_sign_in_session
             names.append("freed")
     monkeypatch.setattr(windows_files, "_API", API)
     kernel = SimpleNamespace(
-        CreateSemaphoreW=lambda security, count, most, name: names.append((security is not None, count, most, name)) or 77,
+        CreateMutexW=lambda security, owned, name: names.append((security is not None, owned, name)) or 77,
         WaitForSingleObject=lambda handle, milliseconds: waits.pop(0),
-        ReleaseSemaphore=lambda handle, count, previous: names.append("released") or 1,
+        ReleaseMutex=lambda handle: names.append("released") or 1,
         CloseHandle=lambda handle: names.append("closed") or 1)
     monkeypatch.setattr(plan, "os", SimpleNamespace(name="nt"))
     monkeypatch.setattr(plan.C, "WinDLL", lambda name, **options: kernel, raising=False)
     with plan.single(tmp_path):
         pass
-    private, count, most, name = names[0]
+    private, owned, name = names[0]
     # One holder at a time, created as this person's own. The shared name space: a second session of this
     # person meets the same lock.
-    assert private and (count, most) == (1, 1)
+    assert private and owned == 0
     assert name == "Global\\AmplifierUnified-installation-" + shell.identity(tmp_path)
     assert names[1:] == ["freed", "released", "closed"]
     # Taken by another window: Busy, and this window releases nothing that it does not hold.
@@ -993,16 +1000,27 @@ def test_the_lock_is_this_persons_own_and_has_one_name_for_every_sign_in_session
     with pytest.raises(PermissionError):
         with plan.single(tmp_path):
             raise AssertionError("not entered")
-    assert names[1:] == ["freed", "closed"] and waits == []
+    assert names[1:] == ["freed", "closed"] and waits == [0x80, 0xffffffff]
+    # An abandoned mutex is taken and released by this thread.
+    del names[:]
+    with plan.single(tmp_path):
+        pass
+    assert names[1:] == ["freed", "released", "closed"]
+    del names[:]
+    monkeypatch.setattr(plan.C, "get_last_error", lambda: 6, raising=False)
+    monkeypatch.setattr(plan.C, "WinError", lambda code: OSError(code, "wait failed"), raising=False)
+    with pytest.raises(OSError, match="wait failed"):
+        with plan.single(tmp_path):
+            pytest.fail("A failed wait must not enter.")
+    assert names[1:] == ["freed", "closed"] and not waits
 
 
 def test_step_after_exit_removes_only_empty_named_folders():
     # There is no tree walk after exit. A non-empty folder must stay.
     script = removal.FINISH_SCRIPT
-    body = script.split("function Clear-Folder($entry) {")[1].split("\ntry {\n    # Enumerate")[0]
-    assert "Clear-Link $entry; return" in body
-    assert "-not @(Get-ChildItem -LiteralPath $entry.FullName -Force).Count" in body
-    assert "Remove-Item -LiteralPath $entry.FullName -Force" in body
+    body = script.split("function Clear-Folder($entry) {")[1].split("function Clear-Record")[0]
+    assert "if ($entry.PSIsContainer) { $entry.Delete() } else { Keep $entry.FullName }" in body
+    assert "Get-ChildItem" not in body and "Remove-Item" not in body
     assert "Clear-File" not in body
 
 
