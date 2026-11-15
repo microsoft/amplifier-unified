@@ -173,21 +173,26 @@ def environment(root, value):
     return env
 
 
-async def browser_opened(command, env, *, limit=90):
+async def browser_opened(command, env, *, limit=None):
     """Run the owner's `open` command once; True only when it confirmed the browser.
 
     The confirmation is a line of its output, never its exit status. On
     Windows a command that an app generation takes over ends with status 0 for
     this caller, whatever it did; a first start that updates the app is such a
-    case. `open` itself waits up to a minute for a host that is restarting
-    (at most 75 seconds with its last requests), so the limit here is longer.
-    The command is never run a second time.
+    case. The command is never run a second time.
+
+    `open` itself waits for a host that is restarting, and needs at most 10
+    seconds more for its last two requests. The limit here adds 50 seconds
+    for the start of the command (the check of the generation that takes it
+    over has its own limit of 30 seconds) and for the browser call.
 
     False means "not confirmed", not "not opened": after the limit, a command
     that a generation took over still runs and can open the browser later.
     """
     from . import browser_entry
     from .updates import process
+    if limit is None:
+        limit = browser_entry.HOST_WAIT + 60
     try:
         output = await process(*command, "open", env=env, timeout=limit)
     except (OSError, ValueError, RuntimeError, TimeoutError):

@@ -421,15 +421,18 @@ accepts only a host of its own package version. So `open` waits up to 60
 seconds for that host (`browser_entry.HOST_WAIT`): it repeats only the health
 request, sends one grant request to the first host that matches, and starts the
 browser once. A refused or unconfirmed grant request ends the command; it is
-never sent again.
+never sent again. After the first round of health requests, none starts at or
+after the end of the wait; one that started can take 5 seconds and the grant
+request 5 more.
 
 The launcher learns the result from one line of the command's output
 (`browser_entry.OPENED`), not from its exit status. On Windows a command that
 a generation takes over ends with exit status 0 for its caller, whatever it
 did: `os.execv` starts a new process there and ends the calling one. The
-launcher allows the command 90 seconds; `open` needs at most 75 (the wait, then
-5 seconds for a last health request to each of two local addresses, then 5 for
-the grant request). Without the confirmation line the launcher knows only that
+launcher allows the command 120 seconds: the wait, 10 seconds for the last two
+requests, and 50 for the start of the command and the browser call (the check
+of the generation that takes the command over has its own limit of 30
+seconds). Without the confirmation line the launcher knows only that
 the browser was not confirmed: after its limit, a command that a generation
 took over still runs and can open the browser. So its one message says that
 Amplifier may not have opened in the browser, to look for an Amplifier tab
@@ -448,6 +451,17 @@ The hand-over also keeps each argument whole. The Windows C runtime joins an
 `os.execv` list with spaces and quotes nothing, so the installation folder of a
 person whose user name has a space would reach the app as two arguments.
 `application_generations.exec_arguments` quotes each argument on Windows.
+
+**Limit, not repaired here:** the hand-over is made by the launcher, and an
+installation keeps the launcher of its setup file. An installation that a
+setup file before this change made, in a folder with a space, keeps the plain
+list. From its first app update, no `amplifier-unified` command of that
+installation reaches the app: the Start-menu entry cannot open Amplifier, and
+a first start that updates the app opens no browser. The background app itself
+runs (the task does not use this hand-over). Such an installation needs its
+launcher replaced (`windows_launcher_refresh`); nothing does that
+automatically. This follows from the measured rule (a Windows runner shows the
+split for a plain list); it was not run on a real installation.
 
 (In a clean-room run of 0.98.1 that updated itself to 0.98.4 at first start,
 `open` ran in 0.98.4 three seconds before the host restarted, found the 0.98.1

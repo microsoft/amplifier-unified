@@ -474,20 +474,27 @@ async def test_launcher_package_mismatch_never_issues(tmp_path, monkeypatch, loc
     assert calls == ["get"]
 
 
-def restarting_host(monkeypatch, tmp_path, answers, *, post=None):
+class Calls(list):
+    """The requests and pauses in their order; `starts` holds the time at which each health request began."""
+    starts = ()
+
+
+def restarting_host(monkeypatch, tmp_path, answers, *, post=None, cost=0.0, late=0.0, addresses=1):
     """A host that changes under the owner request. Each health answer is a
     package version, or an exception for a listener that is away. Time is the
-    test's own: one second for each pause, none for a request."""
+    test's own: a pause takes its seconds plus `late`, a health request `cost`."""
     from amplifier_web import update_readiness
     pin = aiohttp.Fingerprint(bytes(range(32)))
-    monkeypatch.setattr(entry, "_owner_probe_targets", lambda *a: ([ORIGIN + "/api/health"], pin))
+    targets = [ORIGIN + "/api/health", "https://[::1]:8941/api/health"][:addresses]
+    monkeypatch.setattr(entry, "_owner_probe_targets", lambda *a: (targets, pin))
     monkeypatch.setattr(entry, "current_owner_sid", lambda: SID)
     monkeypatch.setattr(entry, "read_owner_control_token", lambda *a: "c" * 64)
     monkeypatch.setattr(update_readiness, "running_identity", lambda: {"version": __version__, "revision": None})
-    calls, clock, pending = [], [0.0], list(answers)
+    calls, clock, pending = Calls(), [0.0], list(answers)
+    calls.starts = []
     async def pause(seconds):
         calls.append(("pause", seconds))
-        clock[0] += seconds
+        clock[0] += seconds + late
     monkeypatch.setattr(entry.asyncio, "sleep", pause)
     monkeypatch.setattr(entry.time, "monotonic", lambda: clock[0])
     class Response:
@@ -506,12 +513,14 @@ def restarting_host(monkeypatch, tmp_path, answers, *, post=None):
             assert kwargs["ssl"] is pin and kwargs["allow_redirects"] is False
             answer = pending.pop(0) if len(pending) > 1 else pending[0]
             calls.append(("get", answer if isinstance(answer, str) else type(answer).__name__))
+            calls.starts.append(clock[0])
+            clock[0] += cost
             if not isinstance(answer, str):
                 raise answer
             return Response({"ok": True, "app": "amplifier-unified", "version": answer, "revision": None,
                              "instanceId": "b" * 32, "dataIdentity": auth.data_identity(tmp_path)})
         def post(self, url, **kwargs):
-            assert kwargs["ssl"] is pin and kwargs["headers"]["Origin"] == ORIGIN
+            assert kwargs["ssl"] is pin and kwargs["headers"]["Origin"] in {ORIGIN, "https://[::1]:8941"}
             calls.append(("post", kwargs["json"]["version"]))
             if post is not None:
                 return post(Response)
@@ -524,7 +533,6 @@ async def test_open_waits_for_the_host_that_an_update_brings_up_and_asks_for_one
     # The clean-room first start of November 15: the new generation is active,
     # the earlier host still answers for some seconds, then no host answers,
     # then the host of this package version listens.
-    away = aiohttp.ClientConnectionError("refused")
     calls = restarting_host(monkeypatch, tmp_path, ["0.0.1", "0.0.1", away, away, __version__])
     announced = []
     url = await entry.owner_browser_url(tmp_path, {}, wait=entry.HOST_WAIT, waiting=lambda: announced.append(1))
@@ -540,7 +548,8 @@ async def test_open_stops_at_its_limit_without_a_grant_request(tmp_path, monkeyp
     calls = restarting_host(monkeypatch, tmp_path, [answer])
     with pytest.raises(entry.BrowserEntryUnavailable, match="not reachable or its identity"):
         await entry.owner_browser_url(tmp_path, {}, wait=3)
-    assert [name for name, _ in calls] == ["get", "pause"] * 3 + ["get"]  # 3 seconds, then one last look.
+    # Health requests at 0, 1 and 2 seconds. At 3 seconds the wait is over: none starts.
+    assert [name for name, _ in calls] == ["get", "pause"] * 3 and calls.starts == [0.0, 1.0, 2.0]
     assert sum(seconds for name, seconds in calls if name == "pause") == 3
 
 
@@ -550,7 +559,47 @@ async def test_open_never_pauses_past_its_limit(tmp_path, monkeypatch):
         await entry.owner_browser_url(tmp_path, {}, wait=2.5)
     # The last pause is the rest of the limit, not a whole second.
     assert [seconds for name, seconds in calls if name == "pause"] == [1.0, 1.0, 0.5]
-    assert calls[-1] == ("get", "0.0.1")  # No health request starts after the limit.
+    assert calls.starts == [0.0, 1.0, 2.0]
+
+
+away = aiohttp.ClientConnectionError("refused")
+
+
+@pytest.mark.parametrize("wait,cost,late,starts", [
+    # Requests that take time, two local addresses. First round at 0 and 2
+    # seconds. After the pause it is second 5: the first address is asked, the
+    # request ends at second 7, and the second address is not asked any more.
+    (6, 2.0, 0.0, [0.0, 2.0, 5.0]),
+    # The same, with a limit that the pause itself reaches: no second round.
+    (5, 2.0, 0.0, [0.0, 2.0]),
+    # A pause that ends late (a PC that was asleep): no request after it.
+    (3, 0.0, 10.0, [0.0, 0.0]),
+    # The first round is complete even when its first request uses the whole wait.
+    (1, 4.0, 0.0, [0.0, 4.0]),
+])
+async def test_after_the_first_round_no_health_request_starts_at_or_after_the_limit(
+        tmp_path, monkeypatch, wait, cost, late, starts):
+    calls = restarting_host(monkeypatch, tmp_path, [away], cost=cost, late=late, addresses=2)
+    with pytest.raises(entry.BrowserEntryUnavailable, match="not reachable or its identity"):
+        await entry.owner_browser_url(tmp_path, {}, wait=wait)
+    assert calls.starts == starts
+    assert all(start < wait for start in calls.starts[2:])  # Every request after the first round.
+    assert not any(name == "post" for name, _ in calls)
+
+
+async def test_open_without_a_wait_asks_every_local_address_once_and_never_pauses(tmp_path, monkeypatch):
+    # The foreground start is its own host: one look, as before this wait existed.
+    calls = restarting_host(monkeypatch, tmp_path, [away], cost=2.0, addresses=2)
+    with pytest.raises(entry.BrowserEntryUnavailable, match="not reachable or its identity"):
+        await entry.owner_browser_url(tmp_path, {})
+    assert calls == [("get", "ClientConnectionError")] * 2 and calls.starts == [0.0, 2.0]
+
+
+async def test_a_host_on_the_second_local_address_gets_the_one_grant_request(tmp_path, monkeypatch):
+    calls = restarting_host(monkeypatch, tmp_path, [away, __version__], addresses=2)
+    url = await entry.owner_browser_url(tmp_path, {}, wait=entry.HOST_WAIT)
+    assert url == "https://[::1]:8941/login#ticket=" + "t" * 43
+    assert calls == [("get", "ClientConnectionError"), ("get", __version__), ("post", __version__)]
 
 
 @pytest.mark.parametrize("failure,phrase", [("timeout", "no retry"), ("refused", "refused browser entry"),
@@ -567,8 +616,9 @@ async def test_a_refused_or_unconfirmed_grant_request_is_never_repeated_while_wa
     assert calls == [("get", "0.0.1"), ("pause", 1.0), ("get", __version__), ("post", __version__)]
 
 
-def test_the_wait_is_longer_than_a_measured_restart_and_the_confirmation_text_is_fixed():
-    # 16 seconds from the new generation to its listening host in the clean room.
+def test_the_wait_and_the_confirmation_text_are_fixed_values():
+    # A guard on two values, not a measurement. In the clean room the new
+    # host listened 16 seconds after its generation became active.
     assert entry.HOST_WAIT == 60
     # Launchers that setup installed read this exact line. Do not change it.
     assert entry.OPENED == "Amplifier opened in your browser."

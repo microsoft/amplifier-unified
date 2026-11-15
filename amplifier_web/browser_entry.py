@@ -325,8 +325,10 @@ async def owner_browser_url(data_dir: Path, config: dict, *, wait=0.0, pause=1.0
     The grant request is sent once, to the first host that matches; a refused
     or unconfirmed grant request ends the call.
 
-    No health request starts after `wait` seconds. One that started before can
-    take 5 more seconds for each local address, and the grant request 5 more.
+    The first round asks every local address, as a call without a wait does.
+    After it, a health request starts only before the end of the wait. A
+    request can take 5 seconds and the grant request 5 more. So a call whose
+    wait is longer than its first round ends at most 10 seconds after the wait.
     """
     import aiohttp
     from .auth import data_identity
@@ -346,9 +348,12 @@ async def owner_browser_url(data_dir: Path, config: dict, *, wait=0.0, pause=1.0
     version, revision = package
     headers = {"Authorization": "Bearer " + token}
     deadline = time.monotonic() + wait
+    again = False
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5), trust_env=False) as client:
         while True:
             for url in urls:
+                if again and time.monotonic() >= deadline:
+                    break  # The wait is over: no further health request starts.
                 origin = url.removesuffix("/api/health")
                 try:
                     async with client.get(url, ssl=pin, allow_redirects=False, headers=headers) as response:
@@ -377,6 +382,7 @@ async def owner_browser_url(data_dir: Path, config: dict, *, wait=0.0, pause=1.0
                 except (aiohttp.ClientError, OSError, TimeoutError, ValueError):
                     raise BrowserEntryUnavailable("Browser entry response was not confirmed; no retry was made. " + REOPEN) from None
                 return origin + "/login#ticket=" + ticket
+            again = True
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break

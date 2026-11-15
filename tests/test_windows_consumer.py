@@ -383,10 +383,11 @@ def test_first_start_reports_the_browser_on_the_open_commands_own_confirmation(t
     # Trust first, then the one command; no message.
     assert events == [("trust",), ("command", (launcher, "--data-dir", tmp_path / "app", "--workspace",
                                                tmp_path / "workspace", "open"),
-                                   {"private": "environment"}, 90)]
-    # `open` waits for a restarting host, then makes its last requests (at
-    # most 15 seconds more). The launcher's limit must be longer than both.
-    assert events[1][3] > browser_entry.HOST_WAIT + 15
+                                   {"private": "environment"}, 120)]
+    # `open` waits for a restarting host and then needs at most 10 seconds for
+    # its last two requests. The launcher adds 50 seconds for the start of the
+    # command (the generation check alone may take 30) and the browser call.
+    assert events[1][3] == browser_entry.HOST_WAIT + 60 > browser_entry.HOST_WAIT + 10 + 30
 
 
 def unconfirmed():
@@ -396,7 +397,7 @@ def unconfirmed():
         # no confirmation. This was the silent first start of November 15.
         CommandOutput(""),
         CommandOutput("Browser opening disabled; no browser grant was issued."),
-        CommandFailure({"returncode": 1}), CommandTimeout(90.0), OSError("launcher missing"),
+        CommandFailure({"returncode": 1}), CommandTimeout(120.0), OSError("launcher missing"),
     ]
 
 

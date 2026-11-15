@@ -10,8 +10,19 @@ real private files, the real pinned HTTPS request, the real grant handler and
 store. A recorder stands in for the browser (the BROWSER variable of Python's
 webbrowser module), so no browser starts.
 
+Two launchers exist on people's PCs, because an installation keeps the
+launcher of its setup file. The launcher of this change quotes the hand-over
+and reads the command's confirmation line. A launcher before this change makes
+a plain hand-over and reads the exit status; with the new `open` it is the
+case of the two clean-room runs. Both are run here. A launcher before this
+change in a folder with a space is not repaired by any new version: its plain
+hand-over splits the folder, and the command never reaches the app (measured
+below for the argument list).
+
 Not shown here: Task Scheduler, the update itself, the Windows certificate
-question and a real browser. Those are clean-room steps.
+question, a real browser, and the installed launcher's own hand-over code
+(application_generations.delegate with an active generation and `-I`). Those
+are clean-room steps.
 """
 import asyncio
 import hmac
@@ -38,6 +49,8 @@ HANDOVER = """import os, sys
 from amplifier_web.application_generations import exec_arguments
 os.execv(sys.executable, exec_arguments([sys.executable, *sys.argv[1:]]))
 """
+# The hand-over of a launcher before this change: the plain list.
+EARLIER_HANDOVER = "import os, sys\nos.execv(sys.executable, [sys.executable, *sys.argv[1:]])\n"
 REFUSED = ("import sys\n"
            "sys.stderr.write('The owned local host is not reachable or its identity does not match.')\n"
            "raise SystemExit(1)\n")
@@ -98,9 +111,9 @@ def test_an_argument_with_a_space_reaches_the_program_that_takes_over_as_one_arg
     python = home / "generation" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     assert " " in str(python) and received(handover, python) == values
     # The reason for the product's own list: Windows joins a plain exec list
-    # with spaces and quotes nothing. Measured here, not assumed.
-    plain = script(tmp_path, "plain.py", "import os, sys\n"
-                   "os.execv(sys.executable, [sys.executable, *sys.argv[1:]])\n")
+    # with spaces and quotes nothing. Measured here, not assumed. This is also
+    # what a launcher before this change still does in a folder with a space.
+    plain = script(tmp_path, "plain.py", EARLIER_HANDOVER)
     if os.name == "nt":
         assert received(plain) == ["C:\\Users\\Jane", "Doe\\AppData\\Local\\Amplifier\\app", "say", "hello", "open"]
     else:
@@ -108,22 +121,26 @@ def test_an_argument_with_a_space_reaches_the_program_that_takes_over_as_one_arg
 
 
 def test_the_launcher_step_ends_at_its_limit_and_says_not_confirmed(tmp_path):
-    slow = script(tmp_path, "slow.py", "import time\ntime.sleep(60)\n")
+    # Through the hand-over: on Windows the program that took over goes on
+    # after the launcher's limit, and the launcher cannot end it.
+    handover = script(tmp_path, "handover.py", HANDOVER)
+    slow = script(tmp_path, "slow.py", f"import time\ntime.sleep(30)\nprint({entry.OPENED!r}, flush=True)\n")
     started = time.monotonic()
-    assert asyncio.run(consumer.browser_opened((sys.executable, slow), dict(os.environ), limit=2)) is False
-    assert time.monotonic() - started < 20  # The limit ended it, not the program's own 60 seconds.
+    assert asyncio.run(consumer.browser_opened((sys.executable, handover, slow), ENVIRONMENT, limit=2)) is False
+    assert time.monotonic() - started < 20  # The limit ended the step, not the program's own 30 seconds.
 
 
 @pytest.fixture
-def installation():
+def installation(request):
     """A private installation folder with the app's real HTTPS identity and credentials."""
     from amplifier_web import auth, deployment, tls
     from amplifier_web.windows_files import address, directory
     # The runner's temp folder has a broad inherited ACL, which the private
     # boundary refuses. Use a new private child of the profile, as the app does.
-    # A space in the name: every path of the command then has one, as for a
-    # person whose user name has one.
-    root = address(Path.home() / (".unified first open " + uuid.uuid4().hex))
+    # A space in the name (the default): every path of the command then has
+    # one, as for a person whose user name has one.
+    name = ".unified first open " if getattr(request, "param", True) else ".unified-first-open-"
+    root = address(Path.home() / (name + uuid.uuid4().hex))
     with directory(root, owned_root=root, create=True):
         pass
     try:
@@ -195,11 +212,27 @@ async def until(condition, limit=60):
         await asyncio.sleep(0.1)
 
 
+async def step_before_this_change(command, environment):
+    """The launcher's open step as setup files before this change have it:
+    the command once, 30 seconds, and the exit status as the result."""
+    from amplifier_web.updates import process
+    await process(*command, "open", env=environment, timeout=30)
+    return True  # No error: that launcher shows nothing.
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows private files, the owner token and os.execv as Windows has it")
-def test_native_first_open_waits_for_the_restarting_host_and_opens_the_browser_once(installation):
+@pytest.mark.parametrize("installation,launcher", [(True, "this change"), (False, "before this change")],
+                         indirect=["installation"],
+                         ids=["launcher of this change, folder with a space",
+                              "launcher before this change, folder without a space"])
+def test_native_first_open_waits_for_the_restarting_host_and_opens_the_browser_once(installation, launcher):
     from amplifier_web import auth
     root = installation.root
-    handover = script(root, "handover.py", HANDOVER)
+    earlier_launcher = launcher == "before this change"
+    if earlier_launcher and " " in str(root) + sys.executable:
+        pytest.skip("This PC's profile or Python folder has a space: a launcher before this change cannot work there")
+    handover = script(root, "handover.py", EARLIER_HANDOVER if earlier_launcher else HANDOVER)
+    step = step_before_this_change if earlier_launcher else consumer.browser_opened
     opened = root / "opened.txt"
     recorder = script(root, "browser.py", "import sys\n"
                       "with open(sys.argv[1], 'a', encoding='utf-8') as record:\n"
@@ -214,25 +247,25 @@ def test_native_first_open_waits_for_the_restarting_host_and_opens_the_browser_o
 
     async def first_start():
         await earlier.start()
-        step = asyncio.create_task(consumer.browser_opened(command, environment))
+        running = asyncio.create_task(step(command, environment))
         try:
             # The earlier version still serves. `open` finds it, opens nothing
             # and asks again: it waits.
             await until(lambda: earlier.asked >= 2)
-            assert not step.done() and not opened.exists()
+            assert not running.done() and not opened.exists()
             await earlier.stop()
             await asyncio.sleep(3)  # No host: the restart for the update.
-            assert not step.done() and not opened.exists()
+            assert not running.done() and not opened.exists()
             await current.start()
-            return await asyncio.wait_for(step, 120)
+            return await asyncio.wait_for(running, 120)
         finally:
-            step.cancel()
+            running.cancel()
             for host in (earlier, current):
                 await host.stop()
 
     started = time.monotonic()
     assert asyncio.run(first_start()) is True
-    print(f"\nfirst open: browser recorded after {time.monotonic() - started:.1f} s; "
+    print(f"\nfirst open, launcher {launcher}: browser recorded after {time.monotonic() - started:.1f} s; "
           f"health requests: earlier host {earlier.asked}, new host {current.asked}")
     # Compare facts only. A failed comparison prints its values, and the
     # address holds a grant: neither it nor the credential may reach a CI log.
