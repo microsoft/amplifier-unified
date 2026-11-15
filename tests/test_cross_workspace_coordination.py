@@ -203,12 +203,13 @@ async def test_queued_send_keeps_indexed_owners_and_passes_one_detached_snapshot
 
     app = cross_app
     source, target = app.state['sessions']
+    # The scripted runtime is busy; its retained execution is already terminal.
+    # The real idle event can run finish_execution without rewriting this oracle.
     target['status'] = 'working'
     owners, expected = {}, {}
     for session in (source, target):
-        tree = {'currentTurnId': 'current',
-                'turns': [{'id': 'old', 'phase': 'completed', 'anchorMessageId': None},
-                          {'id': 'current', 'phase': 'running', 'anchorMessageId': None}],
+        tree = {'currentTurnId': 'old',
+                'turns': [{'id': 'old', 'phase': 'completed', 'anchorMessageId': None}],
                 'nodes': [{'id': f'saved-{i}', 'kind': 'tool', 'phase': 'completed', 'turnId': 'old',
                            'output': f"{session['id']} output {i}", 'detail': {'values': [i]}}
                           for i in range(400)], 'retiredUsageNodes': []}
