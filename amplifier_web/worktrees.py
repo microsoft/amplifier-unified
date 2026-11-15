@@ -202,7 +202,7 @@ class Worktrees:
         return paths
 
     def execution_state(self, sid):
-        session = self.app._session(sid)
+        session = self.app._session(sid, hydrate=False)
         host = session.get('executionHost')
         host_matches = not host or (host.get('scope') == 'local' and host.get('id') == local_host_identity()['id'])
         return {'hostMatches': host_matches, 'executionHost': copy.deepcopy(host), 'directory': session.get('workingDirectory') or session['workspace'],

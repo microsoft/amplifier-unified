@@ -281,6 +281,16 @@ neither completion nor an object identity is evidence that borrowed values stopp
 changing. Public full mutable reads transfer to the conservative complete owner,
 and deliberate borrowed aliases can keep admitted records resident.
 
+Placement checks, task controls and model catalog reads use metadata without
+exposing that mutable history. A worker preparation request still receives its
+complete detached snapshot. Canonical native refresh still verifies the source
+revision and reads native files. Empty activity, or activity fully shadowed by
+existing web anchors, retains the cold execution owner after one complete
+detached read and the existing usage rollup. Real unshadowed native activity keeps
+the complete mutable compatibility path, preserving its ordering and borrowed
+aliases. That fallback still has history-sized later saves; it is not a claim that
+all native-history presentation has been made bounded.
+
 Each ordered page owns complete record bodies once. A full accounting rebuild
 reads the required nodes and turns, without the separate admission ledger; ordinary
 current updates continue the bounded ordered fold described below. A changed

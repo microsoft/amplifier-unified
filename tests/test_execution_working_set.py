@@ -500,3 +500,89 @@ async def test_empty_collaboration_drain_keeps_current_execution_owner(tmp_path,
         assert records.materialize(app.db, reference) == tree
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize('restriction', ['none', 'foreign-host', 'pending', 'unknown',
+                                        'moved', 'stopped', 'stopped-before-write'])
+async def test_real_runtime_send_placement_guard_keeps_execution_cold(tmp_path, monkeypatch, restriction):
+    from amplifier_web.runtime import RuntimeManager
+    from amplifier_web.service import AppService
+    monkeypatch.setenv('AMPLIFIER_HOME', str(tmp_path / 'native'))
+    runtime = RuntimeManager()
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    started, sent = [], []
+    try:
+        await app.dispatch('session.create', {}, include_state=False)
+        session = app._session(hydrate=False)
+        sid = session['id']
+        tree = {'currentTurnId': 'old-turn', 'turns': [
+            {'id': 'old-turn', 'phase': 'completed', 'anchorMessageId': None}],
+            'nodes': [{'id': str(i), 'kind': 'tool', 'turnId': 'old-turn',
+                       'phase': 'completed', 'detail': {'values': [i]}} for i in range(160)],
+            'retiredUsageNodes': [{'id': 'receipt-' + str(i), 'sessionId': sid,
+                                  'kind': 'llm', 'phase': 'completed', 'usage': {'inputTokens': i}}
+                                 for i in range(80)]}
+        reference = records.import_tree(app.db, (sid,), tree)
+        app.db.commit()
+        dict.pop(session, 'execution', None)
+        dict.setdefault(session, MARKER, {})['execution'] = reference
+        owner = working(session)
+        owner.current['nodes'].append({'id': 'current', 'kind': 'tool', 'phase': 'running',
+                                       'turnId': 'old-turn', 'detail': {'values': ['before']}})
+        alias = owner.current['nodes'][0]['detail']['values']
+        # Native startup gets its complete detached request; reading it must
+        # not transfer historical mutation authority from the host owner.
+        request = copy.deepcopy(session)
+        assert len(request['execution']['nodes']) == 161
+        assert len(request['execution']['retiredUsageNodes']) == 80
+        assert runtime._execution_state.__self__ is app.worktrees
+        if restriction == 'foreign-host':
+            session['executionHost'] = {'scope': 'local', 'id': 'different-fixture-host'}
+            reason = 'execution host differs'
+        elif restriction in {'pending', 'unknown'}:
+            session['worktreeHandoffs'] = [{'phase': restriction}]
+            reason = 'handoff is pending or unconfirmed'
+        elif restriction == 'moved':
+            session['executionRevision'] = request.get('executionRevision', 0) + 1
+            reason = 'execution folder changed'
+        elif restriction in {'stopped', 'stopped-before-write'}:
+            reason = 'input was stopped'
+            if restriction == 'stopped':
+                session['interruptionRevision'] = request.get('interruptionRevision', 0) + 1
+
+        async def prepare(selected, emit, *, admission_check):
+            admission_check()
+            started.append(selected['id'])
+            if restriction == 'stopped-before-write':
+                session['interruptionRevision'] = request.get('interruptionRevision', 0) + 1
+            return None
+
+        async def write(identity, operation, *, guard, **arguments):
+            guard()
+            sent.append((identity, operation, arguments['input_id']))
+            return {'accepted': True}
+
+        async def emit(*args):
+            pytest.fail('The admission-only fixture must not start a native worker')
+
+        # Only the final process preparation/IPC endpoints are replaced. The
+        # production Send, placement binding, fences and Stop guards all run.
+        monkeypatch.setattr(runtime, '_start_for_input', prepare)
+        monkeypatch.setattr(runtime, '_request', write)
+        if restriction == 'none':
+            assert await runtime.send(request, 'synthetic input', 'input', emit) == {'accepted': True}
+            assert started == [sid] and sent == [(sid, 'send', 'input')]
+        else:
+            with pytest.raises((ValueError, RuntimeError), match=reason):
+                await runtime.send(request, 'synthetic input', 'input', emit)
+            assert sent == []
+            assert started == ([sid] if restriction == 'stopped-before-write' else [])
+        assert not dict.__contains__(session, 'execution')
+        assert getattr(session, '_working_execution', None) is owner
+        assert len(owner.current['nodes']) == 1 and owner.current['retiredUsageNodes'] == []
+        alias.append('late edit')
+        assert snapshot(session)['nodes'][-1]['detail']['values'] == ['before', 'late edit']
+        assert request['execution']['nodes'][-1]['detail']['values'] == ['before']
+        assert records.materialize(app.db, reference) == tree
+    finally:
+        await app.close()
