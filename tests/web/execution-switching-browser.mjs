@@ -101,16 +101,25 @@ try {
  // expansion claim. Navigation releases interest, so reopen on the last return.
  const oldTool=initialFacts.oldTool;
  const admitOld=async()=>{
+  try{
   // Explicit /api/state?sessionId is the full compatibility projection and
   // hydrates history. The attached client's stream owns bounded Work pages.
   const revision=(await facts()).revision;
-  await page.waitForFunction(([sid,revision])=>{
+  const usable=await page.waitForFunction(([sid,revision,turnId])=>{
    const state=window.amplifier.getState();
-   return state.selectedSessionId===sid&&!state.navigationPending&&state.revision>=revision;
-  },[ready.ids[0],revision]);
-  const selected=await page.evaluate(sid=>window.amplifier.getState().sessions.find(row=>row.id===sid),ready.ids[0]);
-  let group=selected?.execution?.segments?.find(row=>row.turnId===oldTool.turnId);
-  let before=selected?.executionWindow?.before;
+   const selected=state.sessions.find(row=>row.id===sid),work=selected?.workProjection,workWindow=selected?.executionWindow;
+   const groups=(selected?.execution?.segments||[]).map(({id,turnId})=>({id,turnId}));
+   const earlier=workWindow?.mode==='cursor'&&workWindow.hasEarlier===true&&typeof workWindow.before==='string'&&workWindow.before.length>0;
+   // Selection/revision can arrive while Work is still loading. Wait for the
+   // accepted projection and either the actual group or its public cursor.
+   if(state.selectedSessionId===sid&&!state.navigationPending&&state.revision>=revision&&
+      work?.status==='ready'&&work.current===true&&(groups.some(row=>row.turnId===turnId)||earlier))
+    return {groups,before:earlier?workWindow.before:null};
+   return false;
+  },[ready.ids[0],revision,oldTool.turnId]);
+  let selected;try{selected=await usable.jsonValue()}finally{await usable.dispose()}
+  let group=selected.groups.find(row=>row.turnId===oldTool.turnId);
+  let before=selected.before;
   // The fixed eight appended nodes move this old group just beyond the tail.
   // Use at most two real discovery pages; never invent a group or lease token.
   for(let count=0;!group&&before&&count<2;count++){
@@ -124,6 +133,17 @@ try {
   const row=detail.items.find(row=>row.id===oldTool.id);
   assert.ok(row?.outputDetail?.windowKey?.startsWith('resident-work:'));
   return {group:group.id,page:detail,reference:row.outputDetail,detailVersion:row.detailVersion};
+  }catch(error){
+   try{report.workDiscoveryFailure=await page.evaluate(sid=>{
+    const state=window.amplifier.getState(),selected=state.sessions.find(row=>row.id===sid);
+    const work=selected?.workProjection,workWindow=selected?.executionWindow;
+    return {selectedSessionId:state.selectedSessionId,revision:state.revision,navigationPending:state.navigationPending,
+     work:{status:work?.status??null,current:work?.current??null,reason:work?.reason??null},
+     window:{mode:workWindow?.mode??null,before:workWindow?.before??null,hasEarlier:workWindow?.hasEarlier??null},
+     groups:(selected?.execution?.segments||[]).map(({id,turnId})=>({id,turnId}))};
+   },ready.ids[0])}catch(observationError){report.workDiscoveryObservationError=observationError.message}
+   throw error;
+  }
  };
  const readOld=async reference=>{
   const query=new URLSearchParams(reference);
