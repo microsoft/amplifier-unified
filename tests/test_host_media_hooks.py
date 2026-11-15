@@ -124,6 +124,69 @@ def test_registration_view_is_explicit_and_keeps_execution_coordinator_identity(
     assert calls == ["unified-host", "unified-host"]
     assert registration_hooks(SimpleNamespace(hooks=raw)) is raw
 
+
+def test_host_registration_attribute_writes_reach_native_through_issuer_policy():
+    from amplifier_web.host.media import HostRegistrationView
+    native = SimpleNamespace()
+    writes = []
+    class Participant:
+        def __getattr__(self, name):
+            return getattr(native, name)
+        def __setattr__(self, name, value):
+            writes.append(name)
+            setattr(native, name, value)
+    participant = Participant()
+    view = HostRegistrationView(native, SimpleNamespace(participant=lambda _: participant))
+    dispatch = {}
+    view._tool_dispatch_contexts = dispatch
+    assert native._tool_dispatch_contexts is dispatch
+    assert view._tool_dispatch_contexts is dispatch
+    assert "_tool_dispatch_contexts" not in vars(view)
+    view.config = {"sentinel": True}
+    assert writes == ["_tool_dispatch_contexts", "config"]
+    for name in ("native", "bridge", "participant", "_host_mounts"):
+        with pytest.raises(AttributeError, match="association is fixed"):
+            setattr(view, name, object())
+
+
+@pytest.mark.asyncio
+async def test_host_control_remount_is_owned_not_a_fake_loader_adapter():
+    from amplifier_web.host.media import HostRegistrationView
+    slots, operations = {}, []
+    async def mount(kind, value, name=None):
+        slots[kind, name] = value
+        operations.append(("mount", value))
+    async def adapter(kind, value, *, previous, name=None):
+        operations.append(("adapter", previous, value))
+        raise ValueError("No module-loader predecessor")
+    participant = SimpleNamespace(mount=mount, mount_adapter=adapter)
+    native = SimpleNamespace(get_capability=lambda _: None, get=lambda kind, name: slots.get((kind, name)))
+    view = HostRegistrationView(native, SimpleNamespace(participant=lambda _: participant))
+    control, wrapped, foreign = object(), object(), object()
+    await view.mount("tools", control, name="live_worker")
+    await view.mount_adapter("tools", wrapped, previous=control, name="live_worker")
+    assert slots["tools", "live_worker"] is wrapped
+    assert [row[0] for row in operations] == ["mount", "mount"]
+    slots["tools", "live_worker"] = foreign
+    with pytest.raises(ValueError, match="No module-loader"):
+        await view.mount_adapter("tools", object(), previous=wrapped, name="live_worker")
+    assert operations[-1][0] == "adapter" and slots["tools", "live_worker"] is foreign
+
+
+@pytest.mark.asyncio
+async def test_configured_delegate_keeps_exact_module_adapter_predecessor():
+    from amplifier_web.host.media import HostRegistrationView
+    original, wrapped = object(), object()
+    calls = []
+    async def adapter(kind, value, *, previous, name=None):
+        calls.append((kind, value, previous, name))
+    participant = SimpleNamespace(mount_adapter=adapter)
+    native = SimpleNamespace(get_capability=lambda _: None, get=lambda *_: original)
+    view = HostRegistrationView(native, SimpleNamespace(participant=lambda _: participant))
+    await view.mount_adapter("tools", wrapped, previous=original, name="delegate")
+    assert calls == [("tools", wrapped, original, "delegate")]
+    assert view._host_mounts == {}
+
 @pytest.mark.asyncio
 async def test_failed_store_binding_releases_original_construction_on_session_cleanup():
     from amplifier_core import AmplifierSession

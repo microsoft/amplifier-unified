@@ -233,7 +233,11 @@ def bootstrap():
                 coordinator, binding = owner.session.coordinator, owner.canonical_binding
                 if delegate_journey:
                     from amplifier_module_provider_openai import _media
-                    coordinator = _media.CURRENT.get().provider.coordinator
+                    provider_view = _media.CURRENT.get().provider.coordinator
+                    provider_bridge = provider_view.get_capability("web.media.hook_bridge")
+                    assert provider_bridge is not None
+                    coordinator = provider_bridge._coordinator  # read-only scope identity, not authority
+                    assert coordinator.session_id == provider_view.session_id
                     if coordinator is not owner.session.coordinator:
                         from amplifier_web.host.children import ChildCheckpoint
                         from amplifier_web.host.canonical_bootstrap import _ChildFactory
@@ -263,6 +267,29 @@ def bootstrap():
                         if not any(row[0] is binding for row in self.native_children):
                             self.native_children.append((binding, coordinator.get_capability("web.media.store"), coordinator))
                 self.typed_receipts.append(typed_checkpoint_facts(binding))
+                if delegate_journey and coordinator is not owner.session.coordinator:
+                    graph = coordinator.get_capability("web.media.hook_graph")
+                    selection = owner.media_graph_selection
+                    evidence = graph.participants_evidence() if graph else {}
+                    bridge = coordinator.get_capability("web.media.hook_bridge")
+                    state = sys.modules["amplifier_web.host.media"]._CONSTRUCTIONS.get(id(coordinator))
+                    join = coordinator.get_capability("web.media.source_join")
+                    capability = coordinator.get_capability(fixture.MEDIA)
+                    save_json(root / (label + "-native-graph-diagnosis.json"), {
+                        "session_id": coordinator.session_id,
+                        "plan_accepted": selection.accepts_plan(coordinator.config),
+                        "construction_accepted": selection.accepts_construction(graph) if graph else False,
+                        "capability_enabled": coordinator.get_capability(fixture.MEDIA).enabled,
+                        "source_join": coordinator.get_capability("web.media.source_join") is not None,
+                        "receipt_valid": bridge.validate_receipt(bridge.graph_receipt),
+                        "state_join_identity": state is not None and state[4] is join[2],
+                        "consumer_state": {key: value for key, value in vars(capability).items()
+                                           if "consumer" in key},
+                        "callbacks": [{"kind": kind, "accepted": selection.accepts_callable(row[field]),
+                                       "name": getattr(row[field], "__qualname__", type(row[field]).__name__)}
+                                      for kind, field in (("loads", "mount"), ("ready", "callback"),
+                                                          ("registrations", "original"), ("contributions", "original"))
+                                      for row in evidence.get(kind, ())]})
                 if not self.owners:
                     self.owners.append(owner)
                 else:
@@ -296,15 +323,14 @@ def bootstrap():
         def delegate_response(self, owner, coordinator, request, result):
             if request.url.path.endswith("/input_tokens") or coordinator is not owner.session.coordinator:
                 return result
-            body = json.loads(request.content)
-            users = [row for row in body["input"] if isinstance(row, dict) and row.get("role") == "user"]
-            turn = next((name for name in ("three", "two", "one") if name in json.dumps(users[-1:])), None)
-            assert turn
+            inputs = [value for value in owner.runtime.generation["input_ids"] if value in {"one", "two", "three"}]
+            assert len(inputs) == 1
+            turn = inputs[0]
             if getattr(self, "delegated_turn", None) == turn:
                 return result
             self.delegated_turn = turn
             arguments = {"agent": "self", "instruction": "Inspect the inherited image.",
-                         "context_depth": "all", "context_scope": "conversation"}
+                         "context_depth": "all", "context_scope": "conversation", "async": False}
             if turn != "one":
                 previous = (json.loads((root / "first-observer.json").read_text())["snapshots"]
                             if label == "second" else self.snapshots)
@@ -559,7 +585,10 @@ def host_result(event, *, child_ids=()):
             assert args["toolInput"]["instruction"] == "Inspect the inherited image."
             assert args["toolInput"]["context_depth"] == "all"
             assert args["toolInput"]["context_scope"] == "conversation"
-            assert set(args["toolInput"]) <= {"agent", "instruction", "context_depth", "context_scope", "session_id"}
+            # loop-live consumes its explicit async:false execution selector
+            # before passing public delegate arguments to the guarded tool.
+            assert "async" not in args["toolInput"]
+            assert set(args["toolInput"]) <= {"agent", "instruction", "context_depth", "context_scope", "session_id", "async"}
             assert args["toolCallId"] in {"call_delegate_one", "call_delegate_two", "call_delegate_three"}
         assert args["_runtimeSessionId"] == SESSION
         # Finite synthetic host permits this sole local fixture call. No host
@@ -911,6 +940,8 @@ async def main():
             await asyncio.gather(pipe.reader, pipe.stderr, return_exceptions=True)
             stderr = pipe.stderr.result()
             fixture.no_pixels(stderr.decode(errors="replace"), pixels)
+            fixture.no_pixels(pipe.events, pixels)
+            save_json(root / ("child-" + str(pipe.process.pid) + "-protocol.json"), pipe.events)
             save_json(root / ("child-" + str(pipe.process.pid) + "-stderr.json"),
                       {"stderr": stderr.decode(errors="replace")})
 

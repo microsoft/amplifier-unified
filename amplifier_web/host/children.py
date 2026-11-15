@@ -478,8 +478,14 @@ class Children:
         coordinator.register_capability("live.host", self.host_adapter)
         delegate = (coordinator.get("tools") or {}).get("delegate")
         if delegate and not isinstance(delegate, PersistentDelegate):
-            await coordinator.mount("tools", PersistentDelegate(delegate, self, coordinator), name="delegate")
-            await coordinator.mount("tools", WorkerControl(self), name="live_worker")
+            from .media import registration_coordinator
+            view = registration_coordinator(coordinator)
+            wrapped = PersistentDelegate(delegate, self, coordinator)
+            if coordinator.get_capability("web.media.hook_bridge") is not None:
+                await view.mount_adapter("tools", wrapped, previous=delegate, name="delegate")
+            else:
+                await view.mount("tools", wrapped, name="delegate")
+            await view.mount("tools", WorkerControl(self), name="live_worker")
 
     async def spawn(self, agent_name, instruction, parent_session, agent_configs=None, sub_session_id=None,
                     tool_inheritance=None, hook_inheritance=None, orchestrator_config=None,

@@ -24,11 +24,21 @@ _CONSTRUCTIONS = {}
 class HostRegistrationView:
     """Apply owned host decorators before the issuer records the mounted object."""
     def __init__(self, coordinator, bridge):
-        self.native, self.bridge = coordinator, bridge
-        self.participant = bridge.participant(_HOST_PARTICIPANT)
+        object.__setattr__(self, "native", coordinator)
+        object.__setattr__(self, "bridge", bridge)
+        object.__setattr__(self, "participant", bridge.participant(_HOST_PARTICIPANT))
+        object.__setattr__(self, "_host_mounts", {})
 
     def __getattr__(self, name):
         return getattr(self.participant, name)
+
+    def __setattr__(self, name, value):
+        # The loop's task-local dispatch map belongs to its actual native
+        # coordinator. Shadowing it on a registration view loses host guards'
+        # call identity. Forward through the issuer's assignment policy, too.
+        if name in {"native", "bridge", "participant", "_host_mounts"}:
+            raise AttributeError("The host registration association is fixed")
+        setattr(self.participant, name, value)
 
     def _prepared(self, kind, module, name):
         if kind == "tools":
@@ -45,9 +55,20 @@ class HostRegistrationView:
         return module
 
     async def mount(self, kind, module, name=None):
-        return await self.participant.mount(kind, self._prepared(kind, module, name), name=name)
+        prepared = self._prepared(kind, module, name)
+        result = await self.participant.mount(kind, prepared, name=name)
+        if kind == "tools" and name is not None:
+            self._host_mounts[(kind, name)] = prepared
+        return result
 
     async def mount_adapter(self, kind, module, *, previous, name=None):
+        # Host-added controls have an owned mount receipt, not a module-loader
+        # source edge. Preserve that distinction when decorating our exact
+        # endpoint later; a foreign/rebound tool cannot borrow this route.
+        slot = (kind, name)
+        if (slot in self._host_mounts and self._host_mounts[slot] is previous
+                and self.native.get(kind, name) is previous):
+            return await self.mount(kind, module, name=name)
         return await self.participant.mount_adapter(
             kind, self._prepared(kind, module, name), previous=previous, name=name)
 
