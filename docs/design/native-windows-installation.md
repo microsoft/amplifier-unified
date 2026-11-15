@@ -1303,6 +1303,13 @@ This is read from the source of both programs; the combination was not run.
 In none of these states can Amplifier start, and in none of them does setup
 delete anything.
 
+The program that adds the entries again does not take the installation's
+lock. So a second setup run that the person answers with Yes in the seconds
+between an uninstall's removal of its entries and its deletion of the
+launcher's records can leave Start-menu and Apps-list entries for an
+installation that is then deleted. No file of the person is involved. Not
+changed here.
+
 **A second setup run after an uninstall.** What the delete choice changes:
 
 - After No (keep the folder): nothing. The folder is whole, with setup's
