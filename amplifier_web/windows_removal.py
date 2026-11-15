@@ -175,11 +175,11 @@ try {
         if (-not (Authorized)) { throw 'Root or token refused' }
         if (-not (Real-Folder (Get-Item -LiteralPath $hold -Force)) -or
             -not (Real-Folder (Get-Item -LiteralPath $park -Force))) { throw 'Held folder refused' }
-        # One open file in the flat folder. Nobody else can delete or move it;
-        # Windows deletes it when this handle closes.
+        # One unshared file keeps the flat folder nonempty until its handle closes.
         $own = @($p.token, ($p.token + '.hold'))
         $anchor = New-Object System.IO.FileStream -ArgumentList (Join-Path $park $own[1]),
-            'CreateNew', 'Write', 'None', 1, ([System.IO.FileOptions]'DeleteOnClose')
+            ([System.IO.FileMode]'CreateNew'), ([System.IO.FileAccess]'Write'),
+            ([System.IO.FileShare]'None'), 1, ([System.IO.FileOptions]'DeleteOnClose')
         Write-Host 'ready'
         $until = (Get-Date) + (New-TimeSpan -Seconds $p.seconds)
         $done = $false
@@ -224,9 +224,7 @@ try {
             Start-Sleep -Seconds 1
         } while ((Get-Date) -lt $until)
         if (-not (Authorized)) { throw 'Root or token refused' }
-        # 2. An open handle on the journal: the installation folder cannot be
-        #    emptied. If only the flat folder and the two records are left,
-        #    that handle also deletes the journal when it closes.
+        # 2. Keep the journal open; delete on close only when nothing else is left.
         $both = @('unified-uninstall.json', 'unified-setup-complete.json')
         $last = ($done -and (Only (@($p.park) + $both)))
         $journal = Get-Record $both[0]
@@ -234,7 +232,8 @@ try {
         $option = 'None'
         if ($last) { $option = 'DeleteOnClose' }
         $lock = New-Object System.IO.FileStream -ArgumentList $journal.FullName,
-            'Open', 'Read', 'Read', 1, ([System.IO.FileOptions]$option)
+            ([System.IO.FileMode]'Open'), ([System.IO.FileAccess]'Read'),
+            ([System.IO.FileShare]'Read'), 1, ([System.IO.FileOptions]$option)
         # 3. The inner folder goes while the open file keeps the flat folder;
         #    the flat folder while the journal handle keeps the installation.
         [Environment]::CurrentDirectory = $p.parent
