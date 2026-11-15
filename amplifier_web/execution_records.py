@@ -253,14 +253,14 @@ def read_record(db, reference, kind, identity, *, owner=None):
     return row['value'] if row is not None else None
 
 
-def read_entry(db, reference, kind, identity, *, owner=None):
+def read_entry(db, reference, kind, identity, *, owner=None, read=None):
     """Exact identity plus its stable ordinal for an admitted historical read."""
-    root = _root(db, reference, owner)
+    root = _root(db, reference, owner, read=read)
     collection = root['collections'][kind]
-    return _ordered_entry(db, collection, identity, _find(db, collection['root'], identity))
+    return _ordered_entry(db, collection, identity, _find(db, collection['root'], identity, read=read), read)
 
 
-def read_window(db, reference, kind, *, start=0, limit=100, owner=None, max_bytes=4 * 1024 * 1024):
+def read_window(db, reference, kind, *, start=0, limit=100, owner=None, max_bytes=4 * 1024 * 1024, read=None):
     """Seek an ordered live range directly, skipping arbitrarily large gaps.
 
     A same-ID correction retains its ordinal. Deletion removes membership;
@@ -268,7 +268,7 @@ def read_window(db, reference, kind, *, start=0, limit=100, owner=None, max_byte
     """
     if type(start) is not int or type(limit) is not int or start < 0 or not 0 <= limit <= PAGE_ROWS:
         raise ValueError('Choose a bounded execution window.')
-    read = _bounded_reader(db, max_bytes)
+    read = read or _bounded_reader(db, max_bytes)
     collection = _root(db, reference, owner, read=read)['collections'][kind]
     selected = _order_window(db, collection['order'], start, start + limit, read)
     rows = []
@@ -285,19 +285,19 @@ def read_fields(db, reference, *, owner=None):
     return _root(db, reference, owner)['fields']
 
 
-def selection_metadata(db, reference, kind, *, owner=None):
-    root = _root(db, reference, owner)
+def selection_metadata(db, reference, kind, *, owner=None, read=None):
+    root = _root(db, reference, owner, read=read)
     collection = root['collections'][kind]
     return {'fields': root['fields'], 'next': collection['next'],
             'count': collection['order']['count'] if collection['order'] else 0}
 
 
-def rank(db, reference, kind, ordinal, *, owner=None):
+def rank(db, reference, kind, ordinal, *, owner=None, read=None):
     """Current ordered position of an exact ordinal, without walking gaps."""
-    collection = _root(db, reference, owner)['collections'][kind]
+    collection = _root(db, reference, owner, read=read)['collections'][kind]
     reference, height, position = collection['order'], collection['orderHeight'], 0
     while reference:
-        page = _read(db, reference)
+        page = (read or _read)(db, reference)
         if height == 0:
             return next((position + i for i, (value, _) in enumerate(page['order']) if value == ordinal), None)
         digit = (ordinal // (PAGE_ROWS * 16 ** (height - 1))) % 16
