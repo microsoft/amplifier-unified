@@ -834,34 +834,45 @@ def test_repeated_move_out_of_its_own_finished_set_never_sets_it_aside(tmp_path)
     assert done["state"] == "complete" and kept.read(folder)[0] == "complete"
 
 
-def test_continued_fill_accepts_nothing_that_it_did_not_move(tmp_path, monkeypatch, notices):
+@pytest.mark.parametrize("saved", ["names", "digest"])
+def test_continued_fill_accepts_nothing_that_it_did_not_move(tmp_path, monkeypatch, notices, saved):
     root, folder, expected = kept_then_installed(tmp_path)
     refuse(monkeypatch, "rmdir", root / "workspace")  # The launcher's current folder: it is filled.
+    if saved == "digest":
+        monkeypatch.setattr(kept, "LIMIT", 16)  # Too many names for the record: it holds their digest.
     notices.answers.append(True)
     restore = crash_after(monkeypatch, "rename", 6)  # Five folders, then one entry of the filled folder.
     with pytest.raises(Crash):
         kept.first_start(root, VERSION, ask=True)
     restore()
+    entries = kept.read(folder)[1]["entries"]
+    assert entries["folder"] == "workspace" and (saved in entries) and len(entries) == 2
     (root / "workspace" / "new.txt").write_text("another program wrote this")  # A name that the set does not hold.
     snapshot = tree(tmp_path)
     result = kept.first_start(root, VERSION, ask=False)
-    assert result["reason"] == "take-back-not-empty" and "by itself" in result["message"]
-    assert "Do not uninstall Amplifier" in result["message"] and tree(tmp_path) == snapshot
+    assert result["reason"] == "take-back-not-empty" and tree(tmp_path) == snapshot
+    if saved == "names":  # The entry is named, with the next step.
+        assert str(root / "workspace" / "new.txt") in result["message"] and "in the way" in result["message"]
+    else:
+        assert "by itself" in result["message"] and "Do not uninstall Amplifier" in result["message"]
     os.remove(root / "workspace" / "new.txt")
+    if saved == "names":  # An entry that the person removed in between is not in the way.
+        os.remove(root / "workspace" / "notes.txt")
+        expected = {key: value for key, value in expected.items() if key != "workspace/notes.txt"}
     assert kept.first_start(root, VERSION, ask=False) is None and person(data(root)) == expected
 
 
 def test_entry_that_appears_after_the_last_check_is_never_replaced(tmp_path, monkeypatch, notices):
     root, folder, _ = kept_then_installed(tmp_path)
     refuse(monkeypatch, "rmdir", root / "workspace")
-    real = kept._filling
+    real = kept._foreign
 
-    def filling(record, name, source, target):
+    def foreign(record, name, source, target):
         result = real(record, name, source, target)
-        if result and not os.listdir(target):  # The check passed. Then another program writes the same name.
+        if result is None and not os.listdir(target):  # The check passed. Then a program writes the same name.
             (target / "notes.txt").write_text("appeared after the check")
         return result
-    monkeypatch.setattr(kept, "_filling", filling)
+    monkeypatch.setattr(kept, "_foreign", foreign)
     notices.answers.append(True)
     result = kept.first_start(root, VERSION, ask=True)
     assert result["taken"] is False and result["reason"] == "take-back-not-empty"
@@ -895,6 +906,10 @@ def test_link_that_takes_a_folders_place_at_the_last_moment_is_never_used(tmp_pa
         assert result["taken"] is False and result["reason"] == "take-back-link"
         assert "Do not uninstall Amplifier" in notices.shown[-1][1] and kept.read(folder)[0] == "adopting"
         assert kept._kind(root / "ownership") == "link"
+        monkeypatch.setattr(os, "rename", real)
+        again = kept.first_start(root, VERSION, ask=False)  # The link is never passed over.
+        assert again["reason"] == "take-back-not-empty" and str(root / "ownership") in again["message"]
+        assert kept.read(folder)[0] == "adopting"
     else:
         result = kept.move_out(root, version=VERSION, transfer=T1, remove=shutil.rmtree, wait=0)
         assert result["state"] == "moving" and kept.read(folder)[0] == "moving"
@@ -934,7 +949,8 @@ def test_installation_knows_that_a_take_back_began_also_when_the_record_is_lost(
     assert person(data(root)) == expected and not (root / kept.MARKER).exists() and not folder.exists()
 
 
-def test_note_that_outlives_a_finished_take_back_is_settled_and_removed(tmp_path, monkeypatch, notices):
+def test_note_that_outlives_a_finished_take_back_is_removed_and_the_database_is_not_touched(
+        tmp_path, monkeypatch, notices):
     root, folder, expected = kept_then_installed(tmp_path)
     notices.answers.append(True)
     real = kept._drop_marker
@@ -942,11 +958,11 @@ def test_note_that_outlives_a_finished_take_back_is_settled_and_removed(tmp_path
     assert kept.first_start(root, VERSION, ask=True) is None
     monkeypatch.setattr(kept, "_drop_marker", real)
     assert (root / kept.MARKER).exists() and not folder.exists()
+    # The app can be running at the next start. Its database is never opened then.
+    monkeypatch.setattr(sqlite3, "connect", lambda *args, **kwargs: pytest.fail("The database was opened."))
     assert kept.first_start(root, VERSION, ask=False) is None
     assert not (root / kept.MARKER).exists() and person(data(root)) == expected
-    backups = sorted(path.name for path in (root / "app" / "reset-backups").iterdir())
-    assert len(backups) == 2 and saved_state(root / "app" / "reset-backups" / backups[0])[0]  # Two folders.
-    assert any(saved_state(root / "app" / "reset-backups" / name)[0].get("updates") == FENCE for name in backups)
+    assert len(list((root / "app" / "reset-backups").iterdir())) == 1
     # A note that cannot be read, with no kept data left: the app starts, and the note goes.
     (root / kept.MARKER).write_text("{")
     assert kept.first_start(root, VERSION, ask=False) is None and not (root / kept.MARKER).exists()

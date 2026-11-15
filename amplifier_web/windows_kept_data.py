@@ -278,9 +278,12 @@ def read(kept):
             raise ValueError("The kept-data record is invalid.")
         if "entries" in record:
             entries = record["entries"]
-            if (not isinstance(entries, dict) or set(entries) != {"folder", "digest"}
-                    or entries["folder"] not in FOLDERS or not isinstance(entries["digest"], str)
-                    or not re.fullmatch("[a-f0-9]{64}", entries["digest"])):
+            if (not isinstance(entries, dict) or entries.get("folder") not in FOLDERS
+                    or set(entries) not in ({"folder", "names"}, {"folder", "digest"})):
+                raise ValueError("The kept-data record is invalid.")
+            names, digest = entries.get("names", []), entries.get("digest", "0" * 64)
+            if (not isinstance(names, list) or not all(isinstance(name, str) for name in names)
+                    or not isinstance(digest, str) or not re.fullmatch("[a-f0-9]{64}", digest)):
                 raise ValueError("The kept-data record is invalid.")
         time.strptime(record["keptAt"], "%Y-%m-%dT%H:%M:%SZ")
     except (OSError, ValueError, RecursionError):
@@ -341,16 +344,33 @@ def _fresh(root):
     return _used(root) is None
 
 
-def _filling(record, name, source, target):
-    """Whether `target` holds only entries that this take-back moved there from `source`.
+def _planned(name, names):
+    """What a take-back saves before it fills a folder entry by entry: the names, or their digest if too long."""
+    if len(json.dumps(names)) <= LIMIT // 2:
+        return {"folder": name, "names": names}
+    return {"folder": name, "digest": _digest(names)}
 
-    The record names the one folder that is filled entry by entry and holds a
-    digest of the entry names that the kept folder had at the start.
+
+def _foreign(record, name, source, target):
+    """The first entry in `target` that this take-back did not move there from `source`, else None.
+
+    The record names the one folder that is filled entry by entry and the
+    entries that the kept folder had at the start. An entry that was removed
+    since then is not in the way. When only a digest of the names was saved
+    and it does not match, `target` itself is returned: which entry, is not known.
     """
     entries = record.get("entries")
     here, there = set(_names(target)), set(_names(source))
-    return bool(entries and entries["folder"] == name and not here & there
-                and _digest(here | there) == entries["digest"])
+    if not here:
+        return None
+    if not entries or entries["folder"] != name:
+        return target / min(here)
+    if here & there:
+        return target / min(here & there)  # An entry never replaces an entry.
+    if "names" in entries:
+        extra = here - set(entries["names"])
+        return target / min(extra) if extra else None
+    return None if _digest(here | there) == entries["digest"] else target
 
 
 def _obstacle(root, kept, record):
@@ -360,12 +380,15 @@ def _obstacle(root, kept, record):
     if alias is not None:
         return root / alias
     for name in FOLDERS:
-        if name not in names or _kind(kept / name) is None:
+        if name not in names:
             continue
         if _kind(root / name) != "folder":
-            return root / name
-        if _names(root / name) and not _filling(record, name, kept / name, root / name):
-            return root / name
+            return root / name  # A link or a file with a data folder's name is never used or passed over.
+        if _kind(kept / name) is None:
+            continue
+        foreign = _foreign(record, name, kept / name, root / name)
+        if foreign is not None:
+            return foreign
     return None
 
 
@@ -662,6 +685,7 @@ def take_back(root, version, *, settle=True):
     (the current folder of the launcher), the kept entries are moved into it
     one by one; the record first names that folder and the entries, so that an
     interrupted fill can continue and accepts nothing else in that folder.
+    The lock does not stop a program that is not Amplifier; the checks do.
 
     Last it retires the removed program's saved update status. If that fails,
     the take-back is not finished and the next start tries again. A move-out
@@ -716,14 +740,16 @@ def _take_back(root, kept, version, settle):
                 if (record.get("entries") or {}).get("folder") != name:
                     if _names(target):
                         raise Refused("take-back-not-empty", _IN_THE_WAY.format(path=target))
-                    record = {**record, "entries": {"folder": name, "digest": _digest(_names(source))}}
+                    record = {**record, "entries": _planned(name, _names(source))}
                     _write(kept, RECORD, record)
                 with _held(source), _held(target):
-                    if not _filling(record, name, source, target):
-                        raise Refused("take-back-not-empty", blocked)  # Something else is in that folder.
+                    foreign = _foreign(record, name, source, target)
+                    if foreign is not None:  # Something else is in that folder.
+                        raise Refused("take-back-not-empty",
+                                      blocked if foreign == target else _IN_THE_WAY.format(path=foreign))
                     for entry in _names(source):
-                        if _kind(target / entry) is not None:
-                            raise Refused("take-back-not-empty", blocked)  # An entry never replaces an entry.
+                        if _kind(target / entry) is not None:  # An entry never replaces an entry.
+                            raise Refused("take-back-not-empty", _IN_THE_WAY.format(path=target / entry))
                         os.rename(source / entry, target / entry)
                 if _kind(source) == "folder":
                     os.rmdir(source)
@@ -779,9 +805,7 @@ def _first(root, kept, version, ask, owner_notice, waiting):
         take_back(root, version)  # The person already said Yes. Never start before it is finished.
         return None
     if returning == "finished":
-        marker = _marker(root)  # Everything is back. Only the last step can be missing.
-        if _settle(root, marker["transfer"] if isinstance(marker, dict) else "unknown") == "unchanged":
-            raise Refused("take-back-prepare", _PREPARE)
+        # Only the note of a finished take-back is left. The app can be running now: its database is not touched.
         _drop_marker(root)
         return None
     if not _fresh(root):
@@ -797,7 +821,7 @@ def _first(root, kept, version, ask, owner_notice, waiting):
         if owner_notice(_OFFER.format(date=_date(record["keptAt"]), kept=kept), confirm=True):
             take_back(root, version)
         else:
-            with suppress(OSError):  # The answer is saved with the set: no installation asks again.
+            with suppress(OSError, ValueError, RuntimeError):  # Saved with the set: no installation asks again.
                 _write(kept, RECORD, {**record, "declined": True})
     # Every kept set that is not offered is named once, at this first start.
     named = [f"{kept}\n{_WHY[reason].format(version=record['version'])}"] if reason in _WHY else []
