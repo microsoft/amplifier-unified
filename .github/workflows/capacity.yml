@@ -21,11 +21,16 @@ on:
       - 'amplifier_web/response_completion.py'
       - 'tests/test_response_completion.py'
       - 'amplifier_web/task_continuity.py'
+      - 'amplifier_web/conversation_models.py'
+      - 'amplifier_web/management.py'
+      - 'amplifier_web/worktrees.py'
+      - 'amplifier_web/native_activity.py'
       - 'amplifier_web/service.py'
       - 'components/web-client/src/capacity.jsx'
       - 'components/web-client/src/runtime-settings.jsx'
       - 'tests/test_capacity.py'
       - 'tests/test_execution*.py'
+      - 'tests/test_native_activity_working_set.py'
       - 'tests/test_cross_workspace_coordination.py'
       - 'tests/test_collaborative_workspaces.py'
       - 'tests/test_resident_work_pages.py'
@@ -81,6 +86,9 @@ jobs:
             tests/test_execution_working_set.py::test_failed_save_keeps_original_root_and_current_changes_for_retry \
             tests/test_execution_working_set.py::test_stop_and_late_tool_correction_keep_completed_history_and_unknown_outcomes \
             tests/test_execution_working_set.py::test_ordinary_model_admission_preserves_indexed_history_budget_and_replay_refusal \
+            tests/test_execution_working_set.py::test_real_runtime_send_placement_guard_keeps_execution_cold \
+            tests/test_execution_metadata_callers.py \
+            tests/test_native_activity_working_set.py \
             tests/test_cross_workspace_coordination.py::test_queued_send_keeps_indexed_owners_and_passes_one_detached_snapshot \
             tests/test_cross_workspace_coordination.py::test_queued_send_waits_for_idle_and_exact_retry_executes_once \
             tests/test_cross_workspace_coordination.py::test_recipient_stop_after_cross_workspace_queue_suppresses_without_replay \
