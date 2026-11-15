@@ -361,10 +361,14 @@ class Wrapper(unittest.TestCase):
         self.assertEqual(wrapper.selected_scenarios(wrapper.parse_args(['--markdown-only'])),
                          ['markdown-composer', 'multi-quote', 'compact-composer'])
         self.assertEqual(wrapper.selected_scenarios(wrapper.parse_args(['--optimize-only'])), ['optimize-storage'])
+        self.assertEqual(wrapper.parse_args(['--optimize-only']).canonical_format, 'legacy')
+        self.assertEqual(wrapper.parse_args(['--optimize-only', '--canonical-format', 'committed']).canonical_format,
+                         'committed')
 
     def test_ambiguous_modes_and_candidate_flags_rejected(self):
         for argv in (['--header-only', '--optimize-only'], ['--header-only', '--markdown-only'],
-                     ['--candidate-wheel-manifest', 'missing.json'], ['--expected-client-commit', 'a' * 40]):
+                     ['--candidate-wheel-manifest', 'missing.json'], ['--expected-client-commit', 'a' * 40],
+                     ['--canonical-format', 'committed']):
             with self.subTest(argv=argv), patch('sys.stderr', new=io.StringIO()):
                 with self.assertRaises(SystemExit):
                     wrapper.parse_args(argv)
@@ -504,6 +508,29 @@ class Wrapper(unittest.TestCase):
         result = wrapper.optimize_proof(output, {'assets/app.js': 'bytes', 'client-component.json': 'component'},
                                         '/venv/app', {'verified': True}, 'pinned')
         self.assertEqual(result['packageRoot'], '/venv/app')
+
+    def test_committed_browser_requires_checked_held_canonical_outcome(self):
+        output, path, value = self.proof()
+        static = {'assets/app.js': 'bytes', 'client-component.json': 'component'}
+        with self.assertRaisesRegex(ValueError, 'Committed Optimize'):
+            wrapper.optimize_proof(output, static, '/venv/app', {'verified': True}, 'pinned',
+                                   canonical_format='committed')
+        value['provenance']['canonicalFormat'] = 'committed'
+        row = {'owner': 'foundation', 'sessionId': 'native', 'status': 'held',
+               'canonicalRecords': 1, 'canonicalInlineImages': 1, 'bytes': 368,
+               'reason': 'Original image provenance and retention admission are unavailable; legacy pixels were preserved'}
+        value['committedCanonicalHold'] = row
+        path.write_text(json.dumps(value))
+        wrapper.optimize_proof(output, static, '/venv/app', {'verified': True}, 'pinned',
+                               canonical_format='committed')
+        for key, invalid in [('owner', 'capture'), ('sessionId', ''), ('status', 'completed'),
+                             ('canonicalRecords', True), ('canonicalInlineImages', 0),
+                             ('bytes', None), ('bytes', 0), ('reason', 'Unverified source')]:
+            with self.subTest(key=key, invalid=invalid):
+                path.write_text(json.dumps({**value, 'committedCanonicalHold': {**row, key: invalid}}))
+                with self.assertRaisesRegex(ValueError, 'Committed Optimize'):
+                    wrapper.optimize_proof(output, static, '/venv/app', {'verified': True}, 'pinned',
+                                           canonical_format='committed')
 
     def test_missing_or_incomplete_browser_never_passes(self):
         output, path, value = self.proof()

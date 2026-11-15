@@ -55,6 +55,8 @@ def parse_args(argv=None):
                         help='Markdown/GFM input and quote journeys plus served-asset parity.')
     modes.add_argument('--optimize-only', action='store_true',
                        help='Only real-host Optimize; no provider/CLI/campaign acceptance.')
+    parser.add_argument('--canonical-format', choices=('legacy', 'committed'), default='legacy',
+                        help='Optimize fixture source format; committed requires actual T2 inventory evidence.')
     parser.add_argument('--candidate-wheel-manifest', type=Path,
                         help='Optimize only: bounded offline Foundation+CI wheel selections.')
     parser.add_argument('--server-provenance', type=Path,
@@ -64,7 +66,8 @@ def parse_args(argv=None):
                         help='Optimize only: independently selected accepted client revision (or existing environment ABI).')
     args = parser.parse_args(argv)
     if not args.optimize_only and any((args.candidate_wheel_manifest, args.server_provenance,
-                                       args.server_provenance_sha256, args.expected_client_commit)):
+                                       args.server_provenance_sha256, args.expected_client_commit,
+                                       args.canonical_format != 'legacy')):
         parser.error('Candidate wheels and server provenance are only for --optimize-only')
     return args
 
@@ -109,7 +112,7 @@ def candidate_install_args(python, candidates):
             *[row['wheelPath'] for row in candidates['candidates']]]
 
 
-def optimize_proof(output, static, package, candidates, packet_sha):
+def optimize_proof(output, static, package, candidates, packet_sha, *, canonical_format='legacy'):
     paths = list(output.glob('optimize-storage-browser-*/result.json'))
     require(len(paths) == 1, 'Require exactly one actual Optimize browser receipt')
     proof = json.loads(paths[0].read_text())
@@ -125,6 +128,17 @@ def optimize_proof(output, static, package, candidates, packet_sha):
     require(served and all(row['status'] == 200 and static.get(row['path'].lstrip('/')) == row['sha256']
                            for row in served), 'Positive installed served-byte join missing')
     require(candidates.get('verified') is True, 'Installed component identities are missing')
+    if canonical_format == 'committed':
+        row = proof.get('committedCanonicalHold', {})
+        require(provenance.get('canonicalFormat') == 'committed'
+                and row.get('owner') == 'foundation' and row.get('status') == 'held'
+                and type(row.get('canonicalRecords')) is int and row['canonicalRecords'] == 1
+                and type(row.get('canonicalInlineImages')) is int and row['canonicalInlineImages'] == 1
+                and type(row.get('bytes')) is int and row['bytes'] > 0
+                and type(row.get('sessionId')) is str and bool(row['sessionId'])
+                and type(row.get('reason')) is str
+                and 'Original image provenance and retention admission are unavailable' in row['reason'],
+                'Committed Optimize requires an actual checked canonical held outcome')
     return {'receipt': str(paths[0]), 'packageRoot': package, 'servedScripts': served,
             'installedComponents': candidates, 'browserReceiptSha256': sha(paths[0].read_bytes())}
 
@@ -244,6 +258,7 @@ print(json.dumps({'packageRoot':str(root),'verified':True,'fileCount':len(expect
             if args.optimize_only:
                 scenario_env.update(AMPLIFIER_TEST_INSTALLED_PACKAGE=package,
                     PYTHONHOME='',
+                    AMPLIFIER_OPTIMIZE_FIXTURE_CANONICAL_FORMAT=args.canonical_format,
                     AMPLIFIER_TEST_SERVER_PROVENANCE=str(OUT / 'server-provenance.json'),
                     AMPLIFIER_TEST_SERVER_PROVENANCE_SHA256=packet_sha,
                     AMPLIFIER_OPTIMIZE_EXPECTED_CLIENT_COMMIT=client_commit)
@@ -255,7 +270,8 @@ print(json.dumps({'packageRoot':str(root),'verified':True,'fileCount':len(expect
         result.update(status='passed' if code == 0 else 'failed', browserExit=code, packageRoot=package, wheelSha256=identity['wheelSha256'], staticCount=len(static))
         if code == 0 and args.optimize_only:
             result['optimize'] = optimize_proof(OUT / 'optimize-storage', static, package,
-                                               component_identity, packet_sha)
+                                               component_identity, packet_sha,
+                                               canonical_format=args.canonical_format)
         elif code == 0:
             proof = json.loads((OUT / 'compact-composer/compact-composer.json').read_text())
             served = proof.get('installedServedAssets')
