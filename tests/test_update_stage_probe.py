@@ -33,7 +33,7 @@ def test_the_real_probe_completes_in_a_stage_and_writes_only_there_and_in_the_ca
     project = probe.expected_project(stage)
     assert [path.name for path in (stage.shared / 'projects').iterdir()] == [project]
     session = probe.session_of(stage, project)
-    assert probe.names(stage.stage, project, session) == probe.STAGE_AFTER_A_PROBE
+    assert probe.left_in_stage(stage, project, session) == probe.STAGE_AFTER_A_PROBE
     assert probe.names(layout.capture, project, session) == probe.CAPTURE_AFTER_A_PROBE
     # The app home has the stage and nothing else; the other folders of the installation are untouched.
     assert probe.created(layout.app)[:3] == ['updates/', 'updates/releases/', f'updates/releases/{stage.stage.name}/']

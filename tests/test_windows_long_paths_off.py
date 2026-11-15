@@ -439,7 +439,7 @@ def test_the_real_update_probe_completes_in_a_stage_with_long_paths_off(stage, m
     assert os.listdir(made.shared / 'projects') == [PROJECT]
     session = update_stage_probe.session_of(made, PROJECT)
     # The complete list of what the probe left: in its stage and below the capture folder.
-    assert update_stage_probe.names(made.stage, PROJECT, session) == update_stage_probe.STAGE_AFTER_A_PROBE
+    assert update_stage_probe.left_in_stage(made, PROJECT, session) == update_stage_probe.STAGE_AFTER_A_PROBE
     assert update_stage_probe.names(install.root / 'capture', PROJECT, session) == \
         update_stage_probe.CAPTURE_AFTER_A_PROBE
     # Nothing else in the installation changed: the person's shared home, the ownership store, the source store.

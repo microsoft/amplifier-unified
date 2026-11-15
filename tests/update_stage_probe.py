@@ -206,6 +206,10 @@ def expected_project(stage):
     return 'update-' + stage.stage.name[:12] if os.name == 'nt' else cli_name(stage.workspace)
 
 
+# The lock beside a session folder, held while the session record is written.
+# On Windows the lock library removes its file after release, so it is not left
+# there (seen on the native runner); it stays when Windows refuses the removal.
+METADATA_LOCK = 'shared-config/projects/<project>/sessions/.<session>.metadata.lock'
 # What one passing probe leaves in its stage, and below the capture folder.
 STAGE_AFTER_A_PROBE = sorted([
     'foundation/', 'foundation/cache/', 'foundation/cache/install-state.json',
@@ -216,13 +220,12 @@ STAGE_AFTER_A_PROBE = sorted([
     'runtime-reports/<session>/provider-choices.json',
     'shared-config/', 'shared-config/settings.yaml', 'shared-config/projects/',
     'shared-config/projects/<project>/', 'shared-config/projects/<project>/sessions/',
-    'shared-config/projects/<project>/sessions/.<session>.metadata.lock',
     'shared-config/projects/<project>/sessions/<session>/',
     'shared-config/projects/<project>/sessions/<session>/live-jobs/',
     'shared-config/projects/<project>/sessions/<session>/live-jobs/owner.lock',
     'shared-config/projects/<project>/sessions/<session>/metadata.json',
     'shared-config/projects/<project>/sessions/<session>/transcript.jsonl',
-])
+] + ([] if os.name == 'nt' else [METADATA_LOCK]))
 CAPTURE_AFTER_A_PROBE = [
     '<project>/', '<project>/sessions/', '<project>/sessions/<session>/',
     '<project>/sessions/<session>/context-intelligence/',
@@ -246,3 +249,8 @@ def session_of(stage, project):
 
 def names(root, project, session):
     return sorted(name.replace(project, '<project>').replace(session, '<session>') for name in created(root))
+
+
+def left_in_stage(stage, project, session):
+    """Every entry of the stage, to compare with STAGE_AFTER_A_PROBE."""
+    return [name for name in names(stage.stage, project, session) if os.name != 'nt' or name != METADATA_LOCK]
