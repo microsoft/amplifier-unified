@@ -164,7 +164,9 @@ class Disk:
         assert self.state["locked"] and self.state["pinned"] and self.state["holding"] is None
         held = self.root / name
         held.mkdir()
-        (held / hold).mkdir()
+        kept = [self.root / (hold + ".hold"), held / (hold + ".hold")]
+        for path in kept:
+            path.touch(exist_ok=False)
         self.state["calls"].append(("hold", name))
         self.state["holding"] = name
         count = 0
@@ -172,9 +174,15 @@ class Disk:
             nonlocal count
             count += 1
             path.rename(held / str(count))
+        park.keep = (101, 202)
         try:
             yield park
         finally:
+            # After ready the helper's stand-in keeps both files open.
+            # Without that hand-over they vanish when this owner lets go.
+            if self.state["after"] is None:
+                for path in reversed(kept):
+                    path.unlink()
             self.state["holding"] = None
             self.state["calls"].append(("release", name))
 
@@ -259,9 +267,9 @@ def deleter(uninstaller, monkeypatch):
     def finish_after_exit(folder, token, **options):
         assert folder == root and state["locked"] and state["pinned"]
         assert state["holding"] == plan.PARK
-        assert {path.name for path in (root / plan.PARK).iterdir()} == {token}
-        assert (root / plan.PARK / token).is_dir()
-        assert list((root / plan.PARK / token).iterdir()) == []
+        assert {path.name for path in (root / plan.PARK).iterdir()} == {token + ".hold"}
+        assert (root / (token + ".hold")).is_file()
+        assert options["keep"] == (101, 202)
         if state["after_failure"]:
             raise state["after_failure"]
         state["calls"].append(("after-exit",))
@@ -274,6 +282,10 @@ def deleter(uninstaller, monkeypatch):
 
 def deletes(state):
     return [call[1] for call in state["calls"] if call[0] == "delete"]
+
+
+def kept_names(deleter):
+    return {plan.PARK, plan.JOURNAL, plan.COMPLETE, deleter.journal()["token"] + ".hold"}
 
 
 def test_no_keeps_the_whole_folder_as_an_uninstall_did_before(deleter, monkeypatch):
@@ -351,13 +363,14 @@ def test_yes_twice_deletes_in_the_one_order_that_keeps_every_interruption_safe(d
         ("delete", "tools"), ("release", plan.PARK), ("unpin",), ("unlock",)]
     assert state["task"] == "absent" and state["registry"] is None and not deleter.folder.exists()
     # The program folders went through the walk. Only the held folder and journal stay.
-    assert {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL, plan.COMPLETE}
+    assert {path.name for path in root.iterdir()} == kept_names(deleter)
     assert plan.COMPLETE not in deletes(state) and plan.completed(root)
     journal = deleter.journal()
     assert journal == {"schema": 1, "choice": "delete", "token": journal["token"]}
     assert re.fullmatch("[0-9a-f]{32}", journal["token"])
     assert state["after"] == {
         "token": journal["token"], "park": plan.PARK,
+        "keep": (101, 202),
         "folders": plan.last_names(),
         "wait_for": (os.getpid(), os.getppid()), "seconds": 120, "choice": "delete", "notices": 1}
     # The result claims the start of the step after exit, never its end.
@@ -430,7 +443,7 @@ def test_nothing_in_the_folder_changes_before_the_journal(deleter, monkeypatch, 
         state.update(busy=False, lock_failure=None, pin_failure=None, refuse_write=None, task_failure=None,
                      choices=["yes", "yes"])
         assert deleter.run()["afterExit"]
-        assert {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL, plan.COMPLETE}
+        assert {path.name for path in root.iterdir()} == kept_names(deleter)
 
 
 def refusals(deleter, monkeypatch):
@@ -508,7 +521,7 @@ def test_data_that_stays_keeps_the_entries_and_the_journal_and_a_second_uninstal
     assert state["calls"][:6] == [("lock",), ("outside",), ("pin",), ("stop",), ("task-remove",),
                                   ("write", plan.JOURNAL)]
     assert result["afterExit"]
-    assert {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL, plan.COMPLETE}
+    assert {path.name for path in root.iterdir()} == kept_names(deleter)
     assert deleter.journal()["token"] not in {first["token"], None}
     assert state["after"]["token"] == deleter.journal()["token"]
     assert state["registry"] is None and not deleter.folder.exists()
@@ -553,7 +566,7 @@ def test_foreign_top_level_entries_stay_and_then_the_folder_stays(deleter, monke
     result = deleter.run()
     names = sorted(top(foreign))
     assert result["kept"] == names and result["afterExit"]
-    assert {path.name for path in root.iterdir()} == {*names, plan.PARK, plan.JOURNAL, plan.COMPLETE}
+    assert {path.name for path in root.iterdir()} == set(names) | kept_names(deleter)
     assert all((root / name).read_text() == text for name, text in foreign.items())
     # Not deleted here, and not handed to the step after exit.
     handed = state["after"]["folders"]
@@ -663,7 +676,7 @@ def test_mapped_program_file_is_moved_and_its_folders_go(deleter):
     result = deleter.run()
     assert result["afterExit"] and result["programLeft"] == []
     assert not (root / "python").exists() and not (root / "tools").exists()
-    assert snapshot(root / plan.PARK) == {"1": b"MZ", deleter.journal()["token"] + "/": None}
+    assert snapshot(root / plan.PARK) == {"1": b"MZ", deleter.journal()["token"] + ".hold": b""}
 
 
 def test_program_file_held_without_delete_sharing_stays_in_its_folder(deleter):
@@ -672,7 +685,7 @@ def test_program_file_held_without_delete_sharing_stays_in_its_folder(deleter):
     result = deleter.run()
     assert result["afterExit"] and result["programLeft"] == [r"tools\amplifier-unified\Scripts\pythonw.exe"]
     assert (root / "tools/amplifier-unified/Scripts/pythonw.exe").read_text() == "MZ"
-    assert snapshot(root / plan.PARK) == {deleter.journal()["token"] + "/": None}
+    assert snapshot(root / plan.PARK) == {deleter.journal()["token"] + ".hold": b""}
 
 
 def test_mapped_data_is_never_moved(deleter):
@@ -726,7 +739,7 @@ def test_finish_removes_an_earlier_flat_folder_before_making_a_new_one(deleter):
     (root / plan.PARK).mkdir()
     (root / plan.PARK / "old").write_text("old program file")
     plan.finish(root, token)
-    assert snapshot(root / plan.PARK) == {token + "/": None}
+    assert snapshot(root / plan.PARK) == {token + ".hold": b""}
     assert state["calls"].index(("delete", plan.PARK)) < state["calls"].index(("hold", plan.PARK))
 
 
@@ -750,6 +763,19 @@ def test_finish_refuses_an_altered_name_before_it_deletes_anything(deleter):
     with pytest.raises(ValueError, match="differs"):
         plan.finish(root, token)
     assert snapshot(root) == before and not deletes(state) and state["after"] is None
+
+
+def test_finish_removes_earlier_kept_files_but_not_a_foreign_hold_name(deleter):
+    state, root = deleter.state, deleter.root
+    token = plan.begin(root)
+    earlier = "b" * 32 + ".hold"
+    (root / earlier).write_text("earlier")
+    (root / "X.hold").write_text("foreign")
+    plan.finish(root, token)
+    assert not (root / earlier).exists() and (root / "X.hold").read_text() == "foreign"
+    assert state["calls"].index(("delete", earlier)) < state["calls"].index(("hold", plan.PARK))
+    assert plan.sort([earlier])["program"] == [earlier]
+    assert plan.sort(["X.hold", "B" * 32 + ".hold"])["foreign"] == ["X.hold", "B" * 32 + ".hold"]
 
 
 def test_last_names_has_every_own_folder_but_never_a_file_or_the_flat_folder(deleter):
@@ -784,7 +810,7 @@ def test_failed_entry_removal_after_the_data_is_gone_is_finished_by_a_second_uni
     assert json.loads((root / consumer.RECORD).read_text())["step"] == stopped.value.step
     state.update(commit_conflict=False, link_failure=None, choices=["yes", "yes"])
     assert deleter.run()["afterExit"] and state["registry"] is None and not deleter.folder.exists()
-    assert {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL, plan.COMPLETE}
+    assert {path.name for path in root.iterdir()} == kept_names(deleter)
 
 
 def test_folder_that_still_cannot_be_listed_does_not_start_the_last_step(deleter, monkeypatch):
@@ -831,7 +857,7 @@ def test_journal_that_a_program_wrote_never_replaces_one_of_the_two_choices(dele
     # Only two answers of Yes, given now, delete.
     state["choices"] = ["yes", "yes"]
     assert deleter.run()["afterExit"] and len(state["questions"]) == 5
-    assert {path.name for path in root.iterdir()} == {plan.PARK, plan.JOURNAL, plan.COMPLETE}
+    assert {path.name for path in root.iterdir()} == kept_names(deleter)
 
 
 def test_journal_write_waits_for_a_closing_app_and_then_refuses(model, monkeypatch):

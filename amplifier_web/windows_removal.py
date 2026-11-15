@@ -690,6 +690,15 @@ class Folder:
                 raise OSError(17, "no free name in the held folder")
             park.keep = tuple(kept)
             yield park
+        except BaseException:
+            for file in reversed(kept):
+                self._api.close(file)
+            kept.clear()
+            try:
+                self._api.delete(handle)  # Only this new entry; a nonempty folder refuses.
+            except OSError:
+                pass
+            raise
         finally:
             for file in reversed(kept):
                 self._api.close(file)

@@ -74,6 +74,16 @@ class Tree:
         children[name] = folder()
         return self.open(parent, name, enter=True, delete=False)
 
+    def keep(self, parent, name):
+        children = self.handles[parent][0]["children"]
+        if name in children:
+            raise FileExistsError(17, "already there")
+        node = file(held=True)
+        children[name] = node
+        handle = max(self.handles) + 1
+        self.handles[handle] = (node, self.handles[parent][0], name, True)
+        return handle
+
     def park(self, handle, destination, name):
         node, parent, old, _ = self.handles[handle]
         target = self.handles[destination][0]
@@ -224,6 +234,8 @@ def test_entry_names_are_single_components(opened):
         with pytest.raises(OSError):
             removal._Native.make(native, 1, name)
         with pytest.raises(OSError):
+            removal._Native.keep(native, 1, name)
+        with pytest.raises(OSError):
             removal._Native.park(native, 1, 2, name)
 
 
@@ -234,10 +246,12 @@ def test_mapped_file_is_moved_and_its_empty_parents_go(opened):
     with removal.folder(opened["path"]) as owned:
         with owned.aside(PARK, TOKEN) as park:
             result = owned.remove(["tools"], park=park)
-            assert len(tree.handles) == 3
+            assert len(tree.handles) == 4
+            assert park.keep == (3, 4)
+            assert root["children"][TOKEN + ".hold"] == file(held=True)
     assert result == {"removed": 3, "left": [], "leftCount": 0, "parked": 1}
-    assert root["children"] == {PARK: folder(**{"1": mapped, TOKEN: folder()})}
-    assert tree.closed[-3:] == [TOKEN, PARK, None]
+    assert root["children"] == {PARK: folder(**{"1": mapped})}
+    assert tree.closed[-4:] == [TOKEN + ".hold", TOKEN + ".hold", PARK, None]
     assert not tree.handles
 
 
@@ -294,24 +308,52 @@ def test_aside_tries_the_next_number_but_stops_after_ten_collisions(opened, take
     assert not tree.handles
 
 
-@pytest.mark.parametrize("changed", ["flat", "hold"])
-def test_aside_refuses_a_folder_changed_into_a_link_and_closes_both_handles(opened, changed):
+@pytest.mark.parametrize("changed", ["flat", "root-file", "flat-file"])
+def test_aside_refuses_a_changed_folder_or_kept_file_and_closes_every_handle(opened, changed):
     root = folder()
     tree = opened["use"](root)
-    make = tree.make
+    keep = tree.keep
     def altered(parent, name):
-        handle = make(parent, name)
-        if name == TOKEN:
-            node = tree.handles[parent if changed == "flat" else handle][0]
+        handle = keep(parent, name)
+        if parent == 2:
+            target = {"flat": 2, "root-file": 3, "flat-file": 4}[changed]
+            node = tree.handles[target][0]
             node["kind"] = "link"
         return handle
-    tree.make = altered
+    tree.keep = altered
     with removal.folder(opened["path"]) as owned:
         with pytest.raises(OSError, match="changed into a link"):
             with owned.aside(PARK, TOKEN):
                 pytest.fail("A changed folder must never be used.")
         assert len(tree.handles) == 1
-        assert tree.closed == [TOKEN, PARK]
+        assert tree.closed == [TOKEN + ".hold", TOKEN + ".hold", PARK]
+    assert not tree.handles
+
+
+@pytest.mark.parametrize("where", ["root", "flat"])
+def test_aside_refuses_an_existing_kept_name_and_closes_what_it_created(opened, where):
+    root = folder()
+    tree = opened["use"](root)
+    old = file(precious=True)
+    if where == "root":
+        root["children"][TOKEN + ".hold"] = old
+    else:
+        make = tree.make
+        def occupied(parent, name):
+            handle = make(parent, name)
+            tree.handles[handle][0]["children"][TOKEN + ".hold"] = old
+            return handle
+        tree.make = occupied
+    with removal.folder(opened["path"]) as owned:
+        with pytest.raises(FileExistsError):
+            with owned.aside(PARK, TOKEN):
+                pytest.fail("An existing entry must never be used.")
+        assert len(tree.handles) == 1
+        assert root["children"].get(TOKEN + ".hold") is (old if where == "root" else None)
+        if where == "root":
+            assert PARK not in root["children"]
+        else:
+            assert root["children"][PARK]["children"][TOKEN + ".hold"] is old
     assert not tree.handles
 
 
@@ -341,9 +383,18 @@ def finish_start(monkeypatch):
             self.stdout = io.BytesIO(b"ready\r\n")
 
     calls, process = [], Process()
+    process.inheritance, process.startup = [], []
+    monkeypatch.setattr(removal.os, "set_handle_inheritable",
+                        lambda handle, value: process.inheritance.append((handle, value)), raising=False)
+    def startup(**options):
+        process.startup.append(options)
+        return options
+    monkeypatch.setattr(removal.subprocess, "STARTUPINFO", startup, raising=False)
     monkeypatch.setattr(windows_service, "_powershell",
                         lambda: r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
     def start(args, **kwargs):
+        assert process.inheritance[-2:] == [(101, True), (202, True)]
+        assert kwargs["startupinfo"] == {"lpAttributeList": {"handle_list": [101, 202]}}
         calls.append((args, kwargs))
         return process
     monkeypatch.setattr(removal.subprocess, "Popen", start)
@@ -354,7 +405,7 @@ def test_finish_static_program_and_stdin_only_payload(finish_start):
     calls, process, _ = finish_start
     token = TOKEN
     assert removal.finish_after_exit(
-        r"C:\My [private]\Amplifier", token, park=PARK, folders=["workspace"],
+        r"C:\My [private]\Amplifier", token, park=PARK, keep=(101, 202), folders=["workspace"],
         wait_for=(12, 34), seconds=3, report=r"C:\proof.json",
     ) == 4321
     args, options = calls[0]
@@ -364,28 +415,23 @@ def test_finish_static_program_and_stdin_only_payload(finish_start):
     code = "\n".join(line.split("#", 1)[0] for line in removal.FINISH_SCRIPT.splitlines())
     assert "-recurse" not in code.lower()
     assert not re.search(r"Remove-Item[^\n]*-Force", code, re.I)
-    assert removal.FINISH_SCRIPT.count("]::") == 2
-    assert removal.FINISH_SCRIPT.count("[Environment]::CurrentDirectory") == 2
-    # One call removes a folder; the others close the two files that the step keeps open.
-    assert re.findall(r"\$\w+\.\w+\s*\([^)]*\)", removal.FINISH_SCRIPT) == [
-        "$entry.Delete()", "$anchor.Close()"]
-    # The step opens exactly one file, a new one of its own. It opens no existing file.
-    assert removal.FINISH_SCRIPT.count("New-Object ") == 1 and "'Open'" not in removal.FINISH_SCRIPT
-    # Each option of that one file is typed: Windows PowerShell ignores "delete on close" as plain text.
-    for name in ("FileOptions", "FileMode", "FileAccess", "FileShare"):
-        assert removal.FINISH_SCRIPT.count("[System.IO." + name + "]") == 1
+    assert "]::" not in code and "CurrentDirectory" not in code and "'CreateNew'" not in code
+    assert re.findall(r"\$\w+(?:\[\d+\])?\.\w+\s*\([^)]*\)", code) == [
+        "$entry.Delete()", "$kept[1].Close()", "$kept[0].Close()"]
+    assert code.count("New-Object ") == 2
     assert token not in removal.FINISH_SCRIPT
-    assert options["cwd"] == r"C:\My [private]\Amplifier" + "\\" + PARK + "\\" + TOKEN
+    assert options["cwd"] == r"C:\Windows\System32"
     assert options["creationflags"] == 0x09000200
     assert options["stdin"] == subprocess.PIPE
     assert options["stdout"] == subprocess.PIPE and options["stderr"] == subprocess.DEVNULL
     assert process.stdin.closed and process.stdout.closed
     assert process.stdin.payload == {
         "root": r"C:\My [private]\Amplifier", "token": token, "choice": "delete", "park": PARK,
-        "parent": r"C:\My [private]", "outside": r"C:\Windows\System32",
+        "parent": r"C:\My [private]", "keep": [101, 202],
         "folders": ["workspace"], "wait_for": [12, 34],
         "seconds": 3, "report": r"C:\proof.json",
     }
+    assert process.inheritance == [(101, True), (202, True), (101, False), (202, False)]
 
 
 @pytest.mark.parametrize("root", [
@@ -395,7 +441,7 @@ def test_finish_static_program_and_stdin_only_payload(finish_start):
 def test_finish_refuses_nonlocal_or_nonabsolute_roots(finish_start, root):
     calls, _, _ = finish_start
     with pytest.raises(ValueError, match="absolute local drive"):
-        removal.finish_after_exit(root, TOKEN, park=PARK, folders=[])
+        removal.finish_after_exit(root, TOKEN, park=PARK, keep=(101, 202), folders=[])
     assert not calls
 
 
@@ -406,7 +452,7 @@ def test_finish_refuses_nonlocal_or_nonabsolute_roots(finish_start, root):
 def test_finish_refuses_tokens_other_than_lowercase_32_hex(finish_start, token):
     calls, _, _ = finish_start
     with pytest.raises(ValueError, match="32 lowercase hex"):
-        removal.finish_after_exit(r"C:\Amplifier", token, park=PARK, folders=[])
+        removal.finish_after_exit(r"C:\Amplifier", token, park=PARK, keep=(101, 202), folders=[])
     assert not calls
 
 
@@ -414,7 +460,7 @@ def test_finish_refuses_tokens_other_than_lowercase_32_hex(finish_start, token):
 def test_finish_refuses_unknown_choices(finish_start, choice):
     calls, _, _ = finish_start
     with pytest.raises(ValueError, match="Choice"):
-        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[], choice=choice)
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, keep=(101, 202), folders=[], choice=choice)
     assert not calls
 
 
@@ -423,7 +469,7 @@ def test_finish_normalizes_the_absolute_root_and_sends_keep_choice(finish_start)
     name = "data, not code: ' ` $(&exit); \u2603".replace(":", "")
     removal.finish_after_exit(
         r"C:/My [private]/../Amplifier/.", TOKEN,
-        park=name, folders=[], choice="keep",
+        park=name, keep=(101, 202), folders=[], choice="keep",
     )
     assert process.stdin.payload["root"] == r"C:\Amplifier"
     assert process.stdin.payload["choice"] == "keep"
@@ -437,7 +483,7 @@ def test_finish_normalizes_the_absolute_root_and_sends_keep_choice(finish_start)
 @pytest.mark.parametrize("group", ["park", "folders"])
 def test_finish_refuses_the_whole_payload_before_start(finish_start, name, group):
     calls, _, _ = finish_start
-    groups = dict(park=PARK, folders=["workspace"])
+    groups = dict(park=PARK, keep=(101, 202), folders=["workspace"])
     if group == "park":
         groups[group] = name
     else:
@@ -455,14 +501,15 @@ def test_finish_retries_only_a_refused_process_start(finish_start, monkeypatch):
             raise OSError("Breakaway refused")
         return start(args, **kwargs)
     monkeypatch.setattr(removal.subprocess, "Popen", refuse_breakaway)
-    assert removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[]) == 4321
+    assert removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, keep=(101, 202), folders=[]) == 4321
     assert [kwargs["creationflags"] for _, kwargs in calls] == [0x09000200, 0x08000200]
     assert calls[0][0] == calls[1][0]
     def refuse_both(*args, **kwargs):
         raise OSError("Cannot start")
     monkeypatch.setattr(removal.subprocess, "Popen", refuse_both)
     with pytest.raises(OSError, match="Cannot start"):
-        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[])
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, keep=(101, 202), folders=[])
+    assert finish_start[1].inheritance[-2:] == [(101, False), (202, False)]
 
 
 def test_finish_reports_a_missing_system_powershell_as_an_os_error(finish_start, monkeypatch):
@@ -473,7 +520,7 @@ def test_finish_reports_a_missing_system_powershell_as_an_os_error(finish_start,
         raise windows_service.WindowsServiceError("No system folder")
     monkeypatch.setattr(windows_service, "_powershell", missing)
     with pytest.raises(OSError, match="Cannot locate Windows PowerShell"):
-        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[])
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, keep=(101, 202), folders=[])
     assert not calls
 
 
@@ -492,7 +539,7 @@ def test_finish_moves_only_temporary_paths_inside_root(
     monkeypatch.setenv("TEMP", temp)
     monkeypatch.setenv("TMP", tmp)
     before = os.environ.copy()
-    removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[])
+    removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, keep=(101, 202), folders=[])
     env = calls[0][1]["env"]
     assert (env["TEMP"], env["TMP"]) == (expected_temp, expected_tmp)
     assert os.environ == before and env is not os.environ
@@ -502,8 +549,8 @@ def test_finish_moves_only_temporary_paths_inside_root(
 def test_finish_refuses_end_of_output_or_another_answer(finish_start, answer):
     calls, process, _ = finish_start
     process.stdout = io.BytesIO(answer)
-    with pytest.raises(OSError, match="did not start in the held folder"):
-        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[])
+    with pytest.raises(OSError, match="did not take over the kept files"):
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, keep=(101, 202), folders=[])
     assert len(calls) == 1 and process.stdin.closed
 
 
@@ -517,8 +564,8 @@ def test_finish_stops_waiting_when_the_answer_does_not_arrive(finish_start):
     process.stdout = Blocked()
     started = time.monotonic()
     try:
-        with pytest.raises(OSError, match="did not start in the held folder"):
-            removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[], ready=0.2)
+        with pytest.raises(OSError, match="did not take over the kept files"):
+            removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, keep=(101, 202), folders=[], ready=0.2)
         assert 0.15 <= time.monotonic() - started < 2
         assert len(calls) == 1 and process.stdin.closed
     finally:
@@ -532,7 +579,7 @@ def test_finish_stops_waiting_when_the_answer_does_not_arrive(finish_start):
 def test_finish_refuses_bad_durations_and_process_ids_before_start(finish_start, options):
     calls, _, _ = finish_start
     with pytest.raises(ValueError):
-        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[], **options)
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, keep=(101, 202), folders=[], **options)
     assert not calls
 
 
@@ -541,7 +588,7 @@ def test_finish_refuses_to_leave_temporary_files_inside_the_installation(finish_
     monkeypatch.setenv("TEMP", r"C:\Amplifier\temp")
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
     with pytest.raises(OSError, match="Cannot relocate"):
-        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, folders=[])
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, keep=(101, 202), folders=[])
     assert not calls
 
 
@@ -549,51 +596,54 @@ def test_finish_refuses_to_leave_temporary_files_inside_the_installation(finish_
 def test_finish_refuses_a_drives_top_folder(finish_start, root):
     calls, _, _ = finish_start
     with pytest.raises(ValueError, match="below a drive"):
-        removal.finish_after_exit(root, TOKEN, park=PARK, folders=[])
+        removal.finish_after_exit(root, TOKEN, park=PARK, keep=(101, 202), folders=[])
     assert not calls
 
 
-def test_step_after_exit_keeps_its_own_file_open_until_every_file_is_deleted():
+@pytest.mark.parametrize("keep", [[], [1], [1, 2, 3], [1, 1], [0, 2], [-1, 2],
+                                  [True, 2], ["1", 2], [1.0, 2]])
+def test_finish_requires_two_different_positive_integer_handles(finish_start, keep):
+    calls, process, _ = finish_start
+    with pytest.raises(ValueError, match="Two different open file handles"):
+        removal.finish_after_exit(r"C:\Amplifier", TOKEN, park=PARK, keep=keep, folders=[])
+    assert not calls and not process.inheritance
+
+
+def test_step_after_exit_keeps_both_inherited_files_open_until_path_deletion_is_over():
     script = removal.FINISH_SCRIPT
     start = script.split("Write-Host 'ready'")[0]
-    # The step refuses to answer when its own folder or the flat folder is a link.
-    assert "-not (Real-Folder (Get-Item -LiteralPath $hold -Force))" in start
-    assert "-not (Real-Folder (Get-Item -LiteralPath $park -Force))) { throw 'Held folder refused' }" in start
-    # Before it answers, it creates one NEW file in the flat folder and keeps it open: no sharing at all,
-    # and Windows deletes the file when the handle closes. The flat folder is then never empty.
-    assert ("$anchor = New-Object System.IO.FileStream -ArgumentList (Join-Path $park $own[1]),\n"
-            "            ([System.IO.FileMode]'CreateNew'), ([System.IO.FileAccess]'Write'),\n"
-            "            ([System.IO.FileShare]'None'), 1, ([System.IO.FileOptions]'DeleteOnClose')") in start
-    assert "$own = @($p.token, ($p.token + '.hold'))" in start
+    assert "$handle = New-Object Microsoft.Win32.SafeHandles.SafeFileHandle -ArgumentList ([IntPtr][long]$_), $true" in start
+    assert "New-Object System.IO.FileStream -ArgumentList $handle, ([System.IO.FileAccess]'Write')" in start
+    assert "$kept.Count -ne 2" in start
+    assert "-not (Plain (Join-Path $p.root $own))" in start
+    assert "-not (Plain (Join-Path $park $own))" in start
+    assert "$own = $p.token + '.hold'" in start
     # The wait ends when waiting cannot help: no program left, no parked file, no named folder.
     assert "$idle = (-not $alive.Count -and -not $inside.Count -and -not $named.Count)" in script
     assert "if ($idle -or (Get-Date) -ge $until) { break }" in script
     tail, order = script.split("} while ((Get-Date) -lt $until)")[1], [0]
     for part in (
             # Both records are checked before anything of the end happens.
-            "if (-not (Authorized))", "$journal = Get-Record $both[0]", "$complete = Get-Record $both[1]",
-            # The inner folder goes while the open file keeps the flat folder.
-            "[Environment]::CurrentDirectory = $p.parent", "$folder = Get-Item -LiteralPath $hold",
-            # The records go only when nothing but the step's own file and the two records is left.
-            "$mine = @($p.park) + $both",
-            "$last = ($done -and (Only $park @($own[1])) -and (Only $p.root $mine))",
+            "if (-not (Authorized))", "$journal = Get-Record $mine[2]", "$complete = Get-Record $mine[3]",
+            "$last = ($done -and (Only $park @($own)) -and (Only $p.root $mine))",
             "if ($last) {",
             # The journal first. Setup's completion record only if nothing appeared meanwhile.
             "Remove-Item -LiteralPath $journal.FullName",
-            "$last = (Only $p.root @($p.park, $both[1]))",
+            "$last = (Only $p.root @($p.park, $own, $mine[3]))",
             "if ($last -and $null -ne $complete) { Remove-Item -LiteralPath $complete.FullName }",
             # Every file is deleted. Only now does the step close its file; then two empty folders go.
-            "$anchor.Close()", "$folder = Get-Item -LiteralPath $park",
-            "if ($last) {", "$folder = Get-Item -LiteralPath $p.root"):
+            "$kept[1].Close()", "$folder = Get-Item -LiteralPath $park",
+            "if ($last -and @(Get-ChildItem -LiteralPath $p.parent -Force).Count -gt 1) {",
+            "$kept[0].Close()", "$folder = Get-Item -LiteralPath $p.root"):
         order.append(tail.index(part, order[-1] + 1))  # Each part follows the one before; a missing part fails.
     # A record that is a link, a folder or a protected file is refused before anything of the end happens.
     assert ("    if ($null -ne $file -and ($file.PSIsContainer -or\n"
             "        \"$($file.Attributes)\" -match 'ReparsePoint|ReadOnly|Hidden|System')) { throw 'Record refused' }"
             ) in script
     # No file is deleted after the step closed its own file.
-    assert "Remove-Item" not in tail.split("$anchor.Close()")[1]
+    assert "Remove-Item" not in tail.split("$kept[1].Close()")[1]
     # The step leaves its inner folder once, for the folder above the installation, and stays there.
-    assert re.findall(r"\[Environment\]::CurrentDirectory = (\S+)", script) == ["$p.parent"]
+    assert "CurrentDirectory" not in script
     # Three commands delete a file by its path: a parked file, the journal, setup's record. Never with -Force.
     deleting = [line.strip() for line in script.splitlines() if "Remove-Item " in line and not line.strip().startswith("#")]
     assert len(deleting) == 3 and not any("-Force" in line or "-Recurse" in line for line in deleting)
