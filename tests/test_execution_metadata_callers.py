@@ -1,6 +1,5 @@
 """Real host controls retain cold execution ownership and complete worker requests."""
 import asyncio
-import copy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
